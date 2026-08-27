@@ -14,8 +14,12 @@ const registry = vi.hoisted(() => ({ apps: [] as { name: string; url: string; la
 vi.mock("../models/AgentManager", () => ({ getApps: () => registry.apps }));
 
 import { MAX_ICON_LENGTH, appIconMarkup, sanitizeIconMarkup, serviceIconMarkup } from "./appIcon";
+import { icon } from "./icons";
 
 const FALLBACK = '<svg class="generic-glyph"></svg>';
+
+// A perfectly good registered icon, for the cases about an icon being IGNORED.
+const SQUARE_ICON = '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6h12v12H6z"/></svg>';
 
 /** Parse sanitized markup back into an element, so assertions read attributes
  *  and elements rather than substrings of a serialization. */
@@ -340,6 +344,28 @@ describe("serviceIconMarkup", () => {
 
   it("falls back when the row addresses no service at all", () => {
     expect(serviceIconMarkup(null, 16, FALLBACK)).toBe(FALLBACK);
+  });
+
+  it("draws the History primitive with the shell's own clock, not the registry's icon", () => {
+    // A History pane is a piece of the workspace rather than an app the user
+    // installed, so the glyph is the shell's -- the same one the History rows
+    // in every menu wear -- whether or not the versioning service happened to
+    // register one, and identically at whatever size the surface asks for.
+    registry.apps = [
+      { name: "versioning", url: "http://localhost:8082", label: "versioning-gh78", icon: SQUARE_ICON },
+    ];
+    const markup = serviceIconMarkup("versioning", 16, FALLBACK);
+    expect(markup).toBe(icon("history", { size: 16 }));
+    expect(markup).not.toContain("M6 6h12v12H6z");
+    expect(serviceIconMarkup("versioning", 14, FALLBACK)).toBe(icon("history", { size: 14 }));
+  });
+
+  it("draws the History primitive's clock even with no registry row for it", () => {
+    // The rail draws a row before the first ``apps_updated`` lands, and a
+    // History pane restored from a saved layout must not flash a dead-ref
+    // glyph on the way in.
+    registry.apps = [];
+    expect(serviceIconMarkup("versioning", 16, FALLBACK)).toBe(icon("history", { size: 16 }));
   });
 });
 

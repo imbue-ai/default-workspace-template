@@ -43,6 +43,8 @@
 
 import DOMPurify from "dompurify";
 import { getApps } from "../models/AgentManager";
+import { isHistoryService } from "./appHistory";
+import { icon } from "./icons";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
@@ -345,9 +347,16 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
  *
  * An unknown name (an app that has since been deregistered, a ref from a
  * hand-edited layout) has no icon to draw and takes the fallback.
+ *
+ * The History primitive is the one service whose glyph is the SHELL's rather
+ * than the registry's: a History pane is a piece of the workspace, so it wears
+ * the built-in clock wherever it is drawn -- the rail, the launcher, the dock
+ * tab -- whether or not the versioning service happened to register an icon of
+ * its own (see appHistory.ts).
  */
 export function serviceIconMarkup(serviceName: string | null, sizePx: number, fallbackMarkup: string): string {
   if (serviceName === null) return fallbackMarkup;
+  if (isHistoryService(serviceName)) return icon("history", { size: sizePx });
   const app = getApps().find((candidate) => candidate.name === serviceName);
   // A name the machine no longer registers keeps the caller's generic glyph:
   // there is no app to monogram, and inventing one would dress up a dead ref as

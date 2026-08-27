@@ -48,6 +48,14 @@ describe("appServiceDisplayName", () => {
     expect(appServiceDisplayName("files")).toBe("File Viewer");
   });
 
+  it("calls the versioning service History, which is what its panes are", () => {
+    // It is the shell's History primitive rather than an app anyone installed,
+    // so no surface should ever print its registration -- and the name is
+    // DERIVED, so a pane reads right from the moment it opens with nothing
+    // filed in the machine-wide title store to prop it up.
+    expect(appServiceDisplayName("versioning")).toBe("History");
+  });
+
   it("shows every other app as its registered name", () => {
     expect(appServiceDisplayName("docs")).toBe("docs");
     expect(appServiceDisplayName("my-files")).toBe("my-files");

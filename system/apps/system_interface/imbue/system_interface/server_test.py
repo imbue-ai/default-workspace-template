@@ -78,6 +78,7 @@ from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.testing import build_stub_versioning_backend
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
@@ -3695,20 +3696,22 @@ def _build_stub_browser_backend() -> Flask:
     return stub
 
 
-def _client_with_browser_service(url: str | None) -> FlaskClient:
-    """Build a workspace app test client whose ``browser`` service points at ``url``.
+def _client_with_registered_service(name: str, url: str | None) -> FlaskClient:
+    """Build a workspace app test client whose ``name`` service points at ``url``.
 
-    ``None`` leaves the apps registry empty (browser service not registered).
+    What every passthrough test needs: a registry holding exactly the one row
+    the endpoint under test resolves its backend from. ``None`` leaves the
+    registry empty instead, which is the "service not registered" branch.
     """
     agent_manager = AgentManager.build(WebSocketBroadcaster())
-    agent_manager._apps = [AppEntry(name="browser", url=url)] if url is not None else []
+    agent_manager._apps = [AppEntry(name=name, url=url)] if url is not None else []
     return create_application(build_test_state(agent_manager=agent_manager)).test_client()
 
 
 def test_get_browsers_passthrough_relays_backend_fleet() -> None:
     """``GET /api/browsers`` forwards to the browser daemon and relays its JSON."""
     with serve_app(_build_stub_browser_backend()) as backend:
-        test_client = _client_with_browser_service(backend.http_url)
+        test_client = _client_with_registered_service("browser", backend.http_url)
         response = test_client.get("/api/browsers")
         assert response.status_code == 200
         assert response.get_json() == {"browsers": [{"name": "main", "controller": None}]}
@@ -3717,7 +3720,7 @@ def test_get_browsers_passthrough_relays_backend_fleet() -> None:
 def test_post_browsers_passthrough_forwards_body_and_relays_success() -> None:
     """``POST /api/browsers`` forwards the JSON body and relays the daemon's response."""
     with serve_app(_build_stub_browser_backend()) as backend:
-        test_client = _client_with_browser_service(backend.http_url)
+        test_client = _client_with_registered_service("browser", backend.http_url)
         response = test_client.post("/api/browsers", json={"name": "research"})
         assert response.status_code == 200
         assert response.get_json() == {"name": "research"}
@@ -3726,7 +3729,7 @@ def test_post_browsers_passthrough_forwards_body_and_relays_success() -> None:
 def test_post_browsers_passthrough_relays_backend_rejection() -> None:
     """A daemon rejection (409 + error body) passes through status and body verbatim."""
     with serve_app(_build_stub_browser_backend()) as backend:
-        test_client = _client_with_browser_service(backend.http_url)
+        test_client = _client_with_registered_service("browser", backend.http_url)
         response = test_client.post("/api/browsers", json={"name": "taken"})
         assert response.status_code == 409
         assert response.get_json() == {"error": "name already in use"}
@@ -3735,7 +3738,7 @@ def test_post_browsers_passthrough_relays_backend_rejection() -> None:
 def test_delete_browser_passthrough_forwards_and_relays_success() -> None:
     """``DELETE /api/browsers/<name>`` forwards to the daemon and relays its success."""
     with serve_app(_build_stub_browser_backend()) as backend:
-        test_client = _client_with_browser_service(backend.http_url)
+        test_client = _client_with_registered_service("browser", backend.http_url)
         response = test_client.delete("/api/browsers/research")
         assert response.status_code == 200
         assert response.get_json() == {"closed": "research"}
@@ -3744,7 +3747,7 @@ def test_delete_browser_passthrough_forwards_and_relays_success() -> None:
 def test_delete_browser_passthrough_relays_backend_rejection() -> None:
     """A daemon 404 (unknown browser) passes through status and body verbatim."""
     with serve_app(_build_stub_browser_backend()) as backend:
-        test_client = _client_with_browser_service(backend.http_url)
+        test_client = _client_with_registered_service("browser", backend.http_url)
         response = test_client.delete("/api/browsers/missing")
         assert response.status_code == 404
         assert response.get_json() == {"error": "no such browser"}
@@ -3752,7 +3755,7 @@ def test_delete_browser_passthrough_relays_backend_rejection() -> None:
 
 def test_browsers_passthrough_returns_503_when_service_not_registered() -> None:
     """Without a registered ``browser`` service, every method returns a 503 JSON error."""
-    test_client = _client_with_browser_service(None)
+    test_client = _client_with_registered_service("browser", None)
     for response in (
         test_client.get("/api/browsers"),
         test_client.post("/api/browsers", json={"name": "x"}),
@@ -3764,8 +3767,49 @@ def test_browsers_passthrough_returns_503_when_service_not_registered() -> None:
 
 def test_browsers_passthrough_returns_503_when_backend_is_unreachable() -> None:
     """A registered but dead backend surfaces as a 503 JSON error, not a raised exception."""
-    test_client = _client_with_browser_service("http://127.0.0.1:1")
+    test_client = _client_with_registered_service("browser", "http://127.0.0.1:1")
     response = test_client.get("/api/browsers")
+    assert response.status_code == 503
+    assert "unreachable" in response.get_json()["detail"]
+
+
+# What the stub versioning backend below says it serves: one ordinary app, plus
+# the workspace shell under its hyphenated name -- which nothing registers, and
+# which is the whole reason this list is asked for rather than derived from the
+# port registry.
+_VERSIONING_SERVES = ("curio", "system-interface")
+
+
+def test_versioned_apps_passthrough_relays_the_versioning_apps_own_list() -> None:
+    """``GET /api/versioned-apps`` forwards to the versioning app and relays its JSON.
+
+    The list is what gates every History row in the shell, and it is the
+    versioning app's answer rather than the shell's: note ``system-interface``,
+    a name nothing registers, and the absence of any registered port with no
+    package behind it.
+    """
+    with serve_app(build_stub_versioning_backend(_VERSIONING_SERVES)) as backend:
+        test_client = _client_with_registered_service("versioning", backend.http_url)
+        response = test_client.get("/api/versioned-apps")
+        assert response.status_code == 200
+        assert [app["name"] for app in response.get_json()["apps"]] == list(_VERSIONING_SERVES)
+
+
+def test_versioned_apps_passthrough_returns_503_when_service_not_registered() -> None:
+    """Without a registered ``versioning`` service there is no list to relay.
+
+    A 503 rather than an empty list: the frontend reads no-answer as "keep
+    whatever you had", while an empty list would mean "nothing has a history"
+    and would silently take every History row away.
+    """
+    response = _client_with_registered_service("versioning", None).get("/api/versioned-apps")
+    assert response.status_code == 503
+    assert "not registered" in response.get_json()["detail"]
+
+
+def test_versioned_apps_passthrough_returns_503_when_backend_is_unreachable() -> None:
+    """A registered but stopped versioning service surfaces as a 503, not an exception."""
+    response = _client_with_registered_service("versioning", "http://127.0.0.1:1").get("/api/versioned-apps")
     assert response.status_code == 503
     assert "unreachable" in response.get_json()["detail"]
 
@@ -4005,7 +4049,7 @@ def test_delete_project_never_touches_its_members(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    test_client = _client_with_browser_service(None)
+    test_client = _client_with_registered_service("browser", None)
     assert (
         test_client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
     )

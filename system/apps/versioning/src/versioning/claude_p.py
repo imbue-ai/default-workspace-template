@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pydantic>=2"]
+# ///
+"""Copyable helper for calling headless ``claude -p`` from a service.
+
+COPY THIS FILE into your service and adapt it -- it is a reference snippet, not an
+importable package. It is the **keyless** path for an AI-driven service: when an
+``ANTHROPIC_API_KEY`` is configured for the workspace, call ``litellm`` directly
+instead (cheaper for non-agentic work; see the use-ai-integration skill). With no
+key, ``claude -p`` runs on the local Claude subscription's programmatic pool.
+
+Workspace credentials live in the ``env`` block of the shared
+``~/.claude/settings.json`` (claude's default config dir -- resolved via
+``$CLAUDE_CONFIG_DIR`` only when that var is explicitly set, which a minds
+workspace never does; written by the in-UI Claude sign-in
+modal), NOT in the process environment -- long-lived services inherit a
+frozen env from supervisord, so an env-var check would go stale the moment
+the user changes auth. Keyed (API key) integrations additionally snapshot
+the key + base URL into ``data/.secrets/anthropic.env`` at setup time
+(``write_anthropic_env_snapshot``): the workspace's sign-in can change
+after a service is built, and a keyed service keeps billing against the
+key it was set up with rather than silently switching. The user removes or
+re-snapshots that file (via the agent) to change an integration's key.
+``read_workspace_ai_credentials`` resolves the snapshot first, then the
+settings file, then the process env (the last for non-workspace contexts);
+every fresh ``claude -p`` subprocess reads the shared settings itself, so
+the keyless path always uses current auth with no service restarts. The
+subscription ``CLAUDE_CODE_OAUTH_TOKEN`` is never snapshotted -- it cannot
+authenticate direct API (litellm) calls.
+
+Two entry points cover the two non-agent scenarios; both share one core that
+handles the things that are easy to get wrong by hand:
+
+- ``claude_p_completion(prompt, *, system, model=...)`` -- a non-agentic
+  completion (classify / summarize / extract / rewrite / answer-from-context).
+  Disables all tools (``--tools ""``) **and** runs from an isolated temp directory
+  so ``claude -p`` does not auto-discover the repo's ``CLAUDE.md`` / ``.claude``
+  hooks (which otherwise bleed into -- and intermittently hijack -- the answer).
+  ``system`` is required: it frames the task and is the neutralizing instruction.
+  (``--bare`` would also strip that project context, but it cannot authenticate
+  without an API key, so the isolated cwd is the keyless workaround.)
+
+- ``claude_p_task(prompt, *, append_system=None, system=None, model=...,
+  permission_mode="bypassPermissions")`` -- a one-shot agentic task that needs
+  tools / file access. Tools stay enabled and it runs in the current working
+  directory (the repo). ``bypassPermissions`` is load-bearing: a headless run has
+  no human to approve tool use, so otherwise Read/Write/Bash are auto-denied.
+
+Both unset ``MAIN_CLAUDE_SESSION_ID`` in the child environment (an inherited value
+makes the child look like mngr's managed main session and trips its
+stop/readiness hooks), request ``--output-format json``, run the blocking
+subprocess synchronously, and raise on a non-zero exit or a ``claude -p`` error
+result rather than silently returning empty text.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+from collections.abc import Mapping, Sequence
+
+from imbue.imbue_common.frozen_model import FrozenModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+_MAIN_CLAUDE_SESSION_ID = "MAIN_CLAUDE_SESSION_ID"
+# mngr identity vars its own subagent proxy strips; dropping them is defense in
+# depth (the session-hook fix only needs MAIN_CLAUDE_SESSION_ID unset).
+_MNGR_AGENT_VARS = ("MNGR_AGENT_STATE_DIR", "MNGR_AGENT_NAME", "MNGR_HOST_DIR")
+
+_DEFAULT_MODEL = "claude-haiku-4-5"
+
+
+class ClaudeCLIError(RuntimeError):
+    """A ``claude -p`` invocation failed or returned unparseable / error output."""
+
+
+class WorkspaceAICredentials(FrozenModel):
+    """The workspace's current Anthropic credentials, resolved at call time.
+
+    ``api_key`` present means the keyed (litellm-direct) path applies;
+    ``base_url`` accompanies it for proxy (Imbue/LiteLLM) setups. With no
+    key, use the keyless ``claude -p`` path (a subscription ``oauth_token``
+    may be present but is consumed by claude itself, not by litellm).
+    """
+
+    api_key: str | None = Field(
+        description="Direct API key, when the workspace has one"
+    )
+    base_url: str | None = Field(description="Proxy base URL that accompanies the key")
+    oauth_token: str | None = Field(
+        description="Subscription token, used by claude itself"
+    )
+
+
+# Where a keyed integration's snapshot of the workspace API key lives, written
+# at integration-setup time by ``write_anthropic_env_snapshot``. Relative to
+# the repo root, which is every service's working directory (supervisord runs
+# them from /home/user/workspace). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
+# subscription oauth token cannot authenticate direct API calls, so it is
+# never written here.
+ANTHROPIC_ENV_SNAPSHOT_PATH = "data/.secrets/anthropic.env"
+
+
+def _read_env_file(path: str) -> dict[str, str]:
+    """Parse simple ``KEY=VALUE`` lines from an env file; {} if absent/unreadable."""
+    values: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key.strip() and value.strip():
+                    values[key.strip()] = value.strip()
+    except OSError:
+        return {}
+    return values
+
+
+def read_workspace_ai_credentials() -> WorkspaceAICredentials:
+    """Resolve current credentials: the snapshot file, then shared settings, then env.
+
+    ``data/.secrets/anthropic.env`` -- the key snapshot a keyed integration
+    writes at setup (``write_anthropic_env_snapshot``) -- wins for the API key
+    and base URL: a built service stays pinned to the key it was set up with
+    even after the user switches the workspace's sign-in in the modal. The
+    settings.json env block (written by the sign-in modal) is next; the
+    process env is only a fallback so this helper still works outside a
+    workspace (e.g. local development with an exported key). The oauth token
+    never comes from the snapshot (it is never written there).
+    """
+    snapshot_env = _read_env_file(ANTHROPIC_ENV_SNAPSHOT_PATH)
+    settings_env: dict[str, object] = {}
+    # Resolve the config dir the way claude itself does: $CLAUDE_CONFIG_DIR
+    # when explicitly set, else ~/.claude (the workspace never sets the var).
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or os.path.expanduser(
+        "~/.claude"
+    )
+    settings_path = os.path.join(config_dir, "settings.json")
+    try:
+        with open(settings_path, encoding="utf-8") as f:
+            settings = json.load(f)
+        if isinstance(settings, dict) and isinstance(settings.get("env"), dict):
+            settings_env = settings["env"]
+    except (OSError, ValueError):
+        settings_env = {}
+
+    def resolve(key: str, use_snapshot: bool = True) -> str | None:
+        if use_snapshot:
+            snapshot_value = snapshot_env.get(key, "").strip()
+            if snapshot_value:
+                return snapshot_value
+        settings_value = settings_env.get(key)
+        if isinstance(settings_value, str) and settings_value.strip():
+            return settings_value.strip()
+        env_value = os.environ.get(key, "").strip()
+        return env_value or None
+
+    return WorkspaceAICredentials(
+        api_key=resolve("ANTHROPIC_API_KEY"),
+        base_url=resolve("ANTHROPIC_BASE_URL"),
+        # The snapshot never legitimately holds a token (see the writer), so a
+        # hand-edited one is ignored rather than trusted.
+        oauth_token=resolve("CLAUDE_CODE_OAUTH_TOKEN", use_snapshot=False),
+    )
+
+
+def write_anthropic_env_snapshot() -> str:
+    """Snapshot the workspace's current API key (+ base URL) for a keyed integration.
+
+    Run once at integration-setup time (and again only to deliberately
+    re-key). Writes ``ANTHROPIC_API_KEY`` and, when present,
+    ``ANTHROPIC_BASE_URL`` to ``data/.secrets/anthropic.env`` with owner-only
+    permissions, creating ``data/.secrets/`` if needed. Deliberately never
+    writes ``CLAUDE_CODE_OAUTH_TOKEN`` -- a subscription token cannot
+    authenticate direct API calls. Raises when the workspace has no API key
+    configured (the integration should use the keyless ``claude -p`` path
+    instead). Returns the path written.
+    """
+    creds = read_workspace_ai_credentials()
+    if not creds.api_key:
+        raise ClaudeCLIError(
+            "No ANTHROPIC_API_KEY is configured for this workspace; there is nothing to snapshot. "
+            "Use the keyless claude -p path instead."
+        )
+    lines = [f"ANTHROPIC_API_KEY={creds.api_key}"]
+    if creds.base_url:
+        lines.append(f"ANTHROPIC_BASE_URL={creds.base_url}")
+    directory = os.path.dirname(ANTHROPIC_ENV_SNAPSHOT_PATH)
+    os.makedirs(directory, exist_ok=True)
+    fd = os.open(
+        ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+    )
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return ANTHROPIC_ENV_SNAPSHOT_PATH
+
+
+class Usage(FrozenModel):
+    """Token counts from a ``claude -p`` run, for cost / savings estimation."""
+
+    input_tokens: int = Field(description="Tokens sent in the prompt")
+    output_tokens: int = Field(description="Tokens produced in the response")
+    cache_read_tokens: int = Field(default=0, description="Tokens served from cache")
+    cache_write_tokens: int = Field(default=0, description="Tokens written to cache")
+
+
+class ClaudeResult(FrozenModel):
+    """The parsed result of a ``claude -p --output-format json`` run."""
+
+    text: str = Field(description="The response text")
+    cost_usd: float = Field(description="What this call cost, as claude -p reported it")
+    usage: Usage = Field(description="Token counts for the call")
+    raw: dict[str, object] = Field(
+        description="The verbatim JSON object claude -p emitted"
+    )
+
+
+def _child_env(strip_mngr_agent_vars: bool = False) -> dict[str, str]:
+    """Build the child environment: a copy of os.environ minus the session var."""
+    env = dict(os.environ)
+    env.pop(_MAIN_CLAUDE_SESSION_ID, None)
+    if strip_mngr_agent_vars:
+        for var in _MNGR_AGENT_VARS:
+            env.pop(var, None)
+    return env
+
+
+def _build_argv(
+    prompt: str,
+    *,
+    model: str,
+    system: str | None,
+    append_system: str | None,
+    tools: str | None,
+    permission_mode: str | None,
+) -> list[str]:
+    """Assemble the ``claude -p`` argv. Pure, so flag emission is unit-testable.
+
+    ``tools`` is checked against ``None`` (not falsiness): the empty string is the
+    meaningful "disable every tool" value, distinct from "leave the flag off and
+    inherit the default tool set".
+    """
+    argv = ["claude", "-p", prompt, "--output-format", "json"]
+    if model:
+        argv += ["--model", model]
+    if system is not None:
+        argv += ["--system-prompt", system]
+    if append_system is not None:
+        argv += ["--append-system-prompt", append_system]
+    if tools is not None:
+        argv += ["--tools", tools]
+    if permission_mode is not None:
+        argv += ["--permission-mode", permission_mode]
+    return argv
+
+
+class _UsageModel(BaseModel):
+    """The ``usage`` block of a ``claude -p`` result, with token counts validated.
+
+    Extra keys are ignored (the block carries fields we do not surface), and each
+    count defaults to 0 so an absent field is fine; a present value that cannot be
+    read as an integer fails validation rather than silently reading as 0.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+class _ResultModel(BaseModel):
+    """A ``claude -p --output-format json`` result message, typed and validated.
+
+    The fields are optional with defaults because the payload shape differs by arm:
+    the **success arm** (``subtype == "success"``) carries ``result`` and
+    ``total_cost_usd``, while the **error arm** (``is_error`` true, e.g.
+    ``error_max_turns`` / ``error_during_execution``) carries ``errors`` and no
+    ``result``. ``_parse_result`` decides the arm and rejects the error arm or a
+    success arm missing its text. pydantic enforces each field's *type*, so a
+    wrong-typed ``result`` or ``total_cost_usd`` (or a non-object payload) raises
+    instead of slipping through.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    subtype: str | None = None
+    is_error: bool = False
+    result: str | None = None
+    total_cost_usd: float | None = None
+    usage: _UsageModel = Field(default_factory=_UsageModel)
+    errors: list[object] = Field(default_factory=list)
+
+
+def _parse_result(data: object) -> ClaudeResult:
+    """Validate raw ``claude -p`` JSON into a ``ClaudeResult``, or raise.
+
+    ``data`` is the verbatim decoded JSON (any shape). It is validated into the
+    typed ``_ResultModel`` first -- a non-object payload or a wrong-typed field
+    raises ``ClaudeCLIError`` -- so the rest of this function reads typed
+    attributes rather than poking at an untyped object. The error arm and a
+    success arm with no ``result`` text both raise, so a maxed-out or failed run
+    surfaces instead of looking like an empty-text success.
+    """
+    try:
+        payload = _ResultModel.model_validate(data)
+    except ValidationError as exc:
+        raise ClaudeCLIError(
+            f"claude -p JSON did not match the expected result shape: {exc}"
+        ) from exc
+    if payload.is_error or payload.subtype != "success":
+        detail = "; ".join(str(error) for error in payload.errors)
+        raise ClaudeCLIError(
+            f"claude -p returned an error result (subtype={payload.subtype!r}): "
+            f"{detail or 'no error detail reported'}"
+        )
+    if payload.result is None:
+        raise ClaudeCLIError("claude -p success result was missing the 'result' text")
+    if payload.total_cost_usd is None:
+        raise ClaudeCLIError("claude -p result was missing a numeric 'total_cost_usd'")
+    usage = Usage(
+        input_tokens=payload.usage.input_tokens,
+        output_tokens=payload.usage.output_tokens,
+        cache_read_tokens=payload.usage.cache_read_input_tokens,
+        cache_write_tokens=payload.usage.cache_creation_input_tokens,
+    )
+    raw = dict(data) if isinstance(data, dict) else {}
+    return ClaudeResult(
+        text=payload.result, cost_usd=payload.total_cost_usd, usage=usage, raw=raw
+    )
+
+
+def _run_blocking(
+    argv: Sequence[str], *, env: Mapping[str, str], cwd: str | None
+) -> ClaudeResult:
+    """Run ``claude -p`` synchronously and parse its JSON. Raises on failure."""
+    proc = subprocess.run(
+        list(argv),
+        capture_output=True,
+        text=True,
+        env=dict(env),
+        check=False,
+        cwd=cwd,
+    )
+    if proc.returncode != 0:
+        raise ClaudeCLIError(
+            f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:500]}"
+        )
+    try:
+        decoded = json.loads(proc.stdout)
+    except ValueError as exc:
+        raise ClaudeCLIError(f"claude -p output was not valid JSON: {exc}") from exc
+    return _parse_result(decoded)
+
+
+def claude_p_completion(
+    prompt: str,
+    *,
+    system: str,
+    model: str = _DEFAULT_MODEL,
+    strip_mngr_agent_vars: bool = False,
+) -> ClaudeResult:
+    """One non-agentic completion. ``system`` is required (see module docstring)."""
+    env = _child_env(strip_mngr_agent_vars)
+    argv = _build_argv(
+        prompt,
+        model=model,
+        system=system,
+        append_system=None,
+        tools="",
+        permission_mode=None,
+    )
+    # Isolated cwd: claude -p auto-discovers CLAUDE.md / .claude hooks from the
+    # working directory, so a throwaway dir keeps that project context out of the
+    # answer. Credentials come from the env, not the cwd, so auth is unaffected.
+    with tempfile.TemporaryDirectory(prefix="claude_p_completion_") as cwd:
+        return _run_blocking(argv, env=env, cwd=cwd)
+
+
+def claude_p_task(
+    prompt: str,
+    *,
+    system: str | None = None,
+    append_system: str | None = None,
+    model: str = _DEFAULT_MODEL,
+    permission_mode: str | None = "bypassPermissions",
+    # None inherits the full default tool set; a comma-separated list restricts it.
+    tools: str | None = None,
+    strip_mngr_agent_vars: bool = False,
+) -> ClaudeResult:
+    """One agentic task: tools enabled, run in the current (repo) working dir.
+
+    ``append_system`` layers task instructions on Claude Code's default agent
+    prompt; pass ``system`` to replace it outright (rare -- you usually want the
+    default agent here).
+    """
+    env = _child_env(strip_mngr_agent_vars)
+    argv = _build_argv(
+        prompt,
+        model=model,
+        system=system,
+        append_system=append_system,
+        tools=tools,
+        permission_mode=permission_mode,
+    )
+    return _run_blocking(argv, env=env, cwd=None)

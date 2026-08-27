@@ -50,6 +50,7 @@ import type { MatchRange, MemberKind, ProjectInfo, ShortcutMode } from "../model
 import { AllAppsPicker, appDisplayName, pickableApps } from "./AllAppsPicker";
 import type { UnpinnedShortcutRow } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./appIcon";
+import { historyPaneMenuActions, isHistoryService } from "./appHistory";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
@@ -145,6 +146,17 @@ export interface SidebarAttrs {
   onRenameRow: (row: SidebarTabRow, title: string) => void;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
+  // What one app's "History" row runs -- open its version timeline -- or null
+  // where there is no timeline to open (see ``historyActionForService``, which
+  // the dock tab's own menu builds its row from too, so the two agree by
+  // construction). Passed as a resolver rather than a plain callback because
+  // whether the row exists at all is part of the same answer.
+  historyActionForService: (serviceName: string) => (() => void) | null;
+  // What the workspace menu's "System history" row runs -- open the shell's own
+  // version timeline -- or null where there is none to open. Same shape and
+  // same rule as ``historyActionForService`` above; separate because the shell
+  // is not a service this rail could name (see ``SYSTEM_HISTORY_APP_NAME``).
+  systemHistoryAction: () => (() => void) | null;
   // Open the membership dialog over this row's object (also show it in the
   // chosen projects). The workspace owns the dialog, as it owns the other
   // modals.
@@ -774,17 +786,38 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * against any open panel.
    */
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
-    // An instance row's menu carries the instance's own verbs plus the
-    // SERVICE's Share and Stop/Start (via serviceGroup) -- so the service
-    // stays reachable from any of its instances, Everything's rows included.
-    // A bare app row IS the service, and uses the ordinary slots.
+    // A History row is a shell primitive rather than an app the user made, so
+    // it never carries an app's verbs -- the same two survive here as on its
+    // own tab (see ``historyPaneMenuActions``), with the rail's own way of
+    // saying "stop showing this here" in place of the tab's Hide tab.
+    if (row.kind === "app" && isHistoryService(serviceNameFromRef(row.ref))) {
+      return historyPaneMenuActions({
+        refresh: () => attrs.onRefreshRow(row),
+        // The rail never hides a tab: that is what you want while looking AT
+        // the tab, and the tab's own menu carries it.
+        hideTab: null,
+        // Null in Everything, which is the home: nothing leaves it.
+        removeFromProject: isEverythingView(attrs.activeViewId) ? null : () => attrs.onRemoveFromView(row),
+      });
+    }
+    // An instance row's menu carries the instance's own verbs, with the
+    // SERVICE's Share and Stop/Start trailing in their own group -- so the
+    // service stays reachable from any of its instances, Everything's rows
+    // included. A bare app row IS the service, and keeps the flat menu.
     const instanceServiceName =
       row.kind === "app" && instanceNameFromRef(row.ref) !== null ? serviceNameFromRef(row.ref) : null;
     const serviceApp =
       instanceServiceName === null ? undefined : getApps().find((candidate) => candidate.name === instanceServiceName);
     const serviceLabel = serviceApp !== undefined ? appDisplayName(serviceApp) : (instanceServiceName ?? "");
+    // The app this row is about, instance row and bare app row alike: the
+    // timeline belongs to the app, not to one of its instances. Null for every
+    // other kind, and for the legacy ``url:`` row whose ref names no service.
+    const rowServiceName = row.kind === "app" ? serviceNameFromRef(row.ref) : null;
     return {
       refresh: () => attrs.onRefreshRow(row),
+      // A backgrounded row can ask for a history as readily as an open one:
+      // opening the timeline needs no pane of the app it is about.
+      history: rowServiceName === null ? null : attrs.historyActionForService(rowServiceName),
       share:
         row.kind === "app" && instanceServiceName === null
           ? // The row already carries the chosen name; the share label follows it
@@ -876,16 +909,35 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     isDisabled?: boolean;
   }
 
+  /**
+   * The registered service one shortcut row is about, or null when it is about
+   * something that is not an app at all.
+   *
+   * The Browser and Terminal rows are the interesting ones: what they create is
+   * a session in a fleet rather than a pane of a service, so it is easy to read
+   * them as not being apps -- but ``browser`` and ``terminal`` are registered
+   * services with folders of their own under ``system/apps``, versioned exactly
+   * like every other app, and it is that code the History row is about. The
+   * File Viewer's row is the built-in ``files`` service, and a pinned app's is
+   * the name in its ``app:<name>`` id. A chat is an mngr agent and is neither a
+   * service nor versioned code at all, so it has none.
+   */
+  function serviceNameForShortcutId(shortcutId: string): string | null {
+    if (shortcutId === "browser" || shortcutId === "terminal" || shortcutId === "files") return shortcutId;
+    if (shortcutId.startsWith("app:")) return shortcutId.slice("app:".length);
+    return null;
+  }
+
   /** Whether the active view currently shows an object of this shortcut's
    *  kind -- what "Focus last X" needs to be able to act. The built-in
    *  create-backed kinds match by row kind; the file viewer and apps match by
-   *  the backing service's ref. */
+   *  the backing service's ref, which is ``serviceNameForShortcutId``'s answer
+   *  for every id still standing once those have returned. */
   function viewShowsKindOf(shortcutId: string, rows: readonly SidebarTabRow[]): boolean {
     if (shortcutId === "chat" || shortcutId === "browser" || shortcutId === "terminal") {
       return rows.some((row) => row.kind === shortcutId);
     }
-    const serviceName =
-      shortcutId === "files" ? "files" : shortcutId.startsWith("app:") ? shortcutId.slice("app:".length) : null;
+    const serviceName = serviceNameForShortcutId(shortcutId);
     return serviceName !== null && rows.some((row) => serviceNameFromRef(row.ref) === serviceName);
   }
 
@@ -927,21 +979,44 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     return entries;
   }
 
-  /** The floating menu of one built-in shortcut row: the shortcut group, then
-   *  Unpin (the same act as the row's pin icon; absent under Everything). */
+  /** The floating menu of one built-in shortcut row: History (where the row's
+   *  own app has a timeline), then the shortcut group, then Unpin (the same act
+   *  as the row's pin icon; absent under Everything).
+   *
+   *  History leads for the same reason it does in an object's menu: it is about
+   *  what the row IS, ahead of the verbs about what the row DOES. This is the
+   *  only way into a fleet app's timeline -- the Browser and Terminal rows
+   *  create sessions rather than open the service, so no pane of either ever
+   *  carries an app menu -- and it is offered under the identical rule every
+   *  other surface uses (``historyActionForService``, which resolves to null
+   *  where there is no timeline to open). */
   function shortcutMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "shortcut" }>): m.Children {
     const rowDefinition = SHORTCUT_ROWS.find((candidate) => candidate.tabType === menu.shortcutId);
     if (rowDefinition === undefined) return null;
     const entries = shortcutMenuEntries(menu.shortcutId, rowDefinition.label, attrs);
     const isEverything = isEverythingView(attrs.activeViewId);
     const canUnpin = !isEverything && projectForViewId(attrs.projects, attrs.activeViewId) !== null;
-    if (entries.length === 0 && !canUnpin) return null;
+    const shortcutServiceName = serviceNameForShortcutId(menu.shortcutId);
+    const historyAction = shortcutServiceName === null ? null : attrs.historyActionForService(shortcutServiceName);
+    if (entries.length === 0 && !canUnpin && historyAction === null) return null;
     return floatingCard({
       anchor: menu.anchor,
       placement: "right",
       role: "menu",
       width: null,
       children: [
+        historyAction === null
+          ? null
+          : menuRow({
+              iconMarkup: icon("history", { size: ACTION_ICON_SIZE }),
+              label: "History",
+              onclick: () => pick(historyAction),
+            }),
+        // Earns its place only with rows on both sides -- a menu must not open
+        // or end on a rule.
+        historyAction !== null && (entries.length > 0 || canUnpin)
+          ? m("div", { class: "my-1 border-t border-border" })
+          : null,
         ...entries.map((entry) =>
           menuRow({
             iconMarkup: null,
@@ -1802,8 +1877,22 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     ]);
   }
 
+  /**
+   * The menu behind the rail's own header: the views, and the workspace-level
+   * verbs that belong to no view in particular.
+   *
+   * "System history" is the second kind. The workspace shell is versioned like
+   * everything else under ``system/apps`` -- the versioning app lists it as
+   * "System" -- but it is not an app anyone can open a pane of, so there is no
+   * object menu anywhere that could carry the row. This header is the shell's
+   * own control (it is what the whole workspace is named by), which makes its
+   * menu the one place a chrome-level verb reads as being about the chrome.
+   * Named "System history" rather than plain "History" because the rows above
+   * it are projects, and "History" beside them would read as one project's.
+   */
   function switcherMenu(attrs: SidebarAttrs, anchor: MenuAnchor): m.Vnode {
     const isEverythingActive = isEverythingView(attrs.activeViewId);
+    const systemHistory = attrs.systemHistoryAction();
     return floatingCard({
       anchor,
       placement: "below",
@@ -1861,6 +1950,17 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           trailing: switcherRowTrailing(isEverythingActive, null, null),
           onclick: () => pick(() => attrs.onSelectView(EVERYTHING_VIEW_ID)),
         }),
+        systemHistory === null ? null : m("div", { class: "my-1 border-t border-border" }),
+        systemHistory === null
+          ? null
+          : menuRow({
+              iconMarkup: icon("history", { size: ROW_ICON_SIZE }),
+              label: "System history",
+              isQuiet: true,
+              rowClass: SWITCHER_ROW_CLASS,
+              iconBoxClass: ICON_BOX_CLASS,
+              onclick: () => pick(systemHistory),
+            }),
       ],
     });
   }

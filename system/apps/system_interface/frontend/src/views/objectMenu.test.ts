@@ -8,6 +8,7 @@ function fullActions(overrides: Partial<ObjectMenuActions> = {}): ObjectMenuActi
   return {
     refresh: vi.fn(),
     share: { label: "Share web", run: vi.fn() },
+    history: vi.fn(),
     rename: vi.fn(),
     hideTab: vi.fn(),
     addToProjects: vi.fn(),
@@ -47,6 +48,15 @@ describe("objectMenuEntries", () => {
     expect(renameable("app")).toBe(false);
     expect(renameable("terminal")).toBe(false);
     expect(renameable("browser")).toBe(false);
+  });
+
+  it("withholds Rename from an object that supplies none, renameable kind or not", () => {
+    // The per-OBJECT half of the same question: a kind can be renameable while
+    // one particular object's name is still not the user's to choose, because
+    // the shell derives it (the History pane, always called "History"). Such a
+    // caller passes null, exactly as it does for every other verb it withholds
+    // -- so the row is genuinely absent rather than present and inert.
+    expect(labels(objectMenuEntries("chat", fullActions({ rename: null })))).not.toContain("Rename");
   });
 
   it("drops the divider when nothing would follow it", () => {
@@ -105,6 +115,44 @@ describe("objectMenuEntries", () => {
     expect(entries.some((entry) => entry !== OBJECT_MENU_DIVIDER && entry.iconName === "user-plus")).toBe(false);
   });
 
+  it("offers History only to an app -- the one kind that is versioned code", () => {
+    for (const kind of ["chat", "terminal", "browser"] as const) {
+      expect(labels(objectMenuEntries(kind, fullActions()))).not.toContain("History");
+    }
+    expect(labels(objectMenuEntries("app", fullActions()))).toContain("History");
+  });
+
+  it("omits History for an app whose row would not earn its place", () => {
+    // The versioning service is not registered, this app's timeline page would
+    // 404 (the workspace chrome), or it is the versioning app itself -- which
+    // the caller says by passing null, exactly as it does for an absent Share.
+    const entries = objectMenuEntries("app", fullActions({ history: null }));
+    expect(labels(entries)).not.toContain("History");
+    expect(entries.some((entry) => entry !== OBJECT_MENU_DIVIDER && entry.iconName === "history")).toBe(false);
+  });
+
+  it("puts History directly under Refresh, ahead of Share, with or without Share beside it", () => {
+    // The two rows about what the tab is SHOWING read together at the top;
+    // Share, which is about handing the service to someone else, follows. An
+    // instance pane's Share moves to the trailing service group, and History
+    // must not slide up or down when it does.
+    const withShare = labels(objectMenuEntries("app", fullActions()));
+    expect(withShare.slice(0, 3)).toEqual(["Refresh", "History", "Share web"]);
+    const withoutShare = labels(objectMenuEntries("app", fullActions({ share: null })));
+    expect(withoutShare.slice(0, 2)).toEqual(["Refresh", "History"]);
+  });
+
+  it("draws History behind the clock glyph and runs only the caller's callback", () => {
+    const actions = fullActions();
+    const entry = objectMenuEntries("app", actions).find(
+      (candidate) => candidate !== OBJECT_MENU_DIVIDER && candidate.label === "History",
+    );
+    expect((entry as { iconName: string }).iconName).toBe("history");
+    (entry as { run: () => void }).run();
+    expect(actions.history).toHaveBeenCalledOnce();
+    expect(actions.refresh).not.toHaveBeenCalled();
+  });
+
   it("omits Close tab for a backgrounded object with no open tab", () => {
     const entries = objectMenuEntries("chat", fullActions({ hideTab: null }));
     expect(labels(entries)).not.toContain("Close tab");
@@ -140,14 +188,9 @@ describe("objectMenuEntries", () => {
     const entries = objectMenuEntries("app", fullActions());
     expect(entries.filter((entry) => entry === OBJECT_MENU_DIVIDER)).toHaveLength(1);
     const dividerIndex = entries.indexOf(OBJECT_MENU_DIVIDER);
-    // Refresh, Share and the filing verb come before it; removal follows.
-    expect(labels(entries.slice(0, dividerIndex))).toEqual(["Refresh", "Share web", "Add to project..."]);
+    // Refresh, History, Share and the filing verb come before it; removal follows.
+    expect(labels(entries.slice(0, dividerIndex))).toEqual(["Refresh", "History", "Share web", "Add to project..."]);
     expect(entries[dividerIndex + 1]).not.toBe(OBJECT_MENU_DIVIDER);
-  });
-
-  it("puts Share directly under Refresh", () => {
-    const shown = labels(objectMenuEntries("app", fullActions()));
-    expect(shown.indexOf("Share web")).toBe(shown.indexOf("Refresh") + 1);
   });
 
   it("puts the reversible stop ahead of the delete, never as the destructive row", () => {
@@ -195,6 +238,7 @@ describe("objectMenuEntries", () => {
     ]);
     expect(labels(objectMenuEntries("app", fullActions({ stop: null })))).toEqual([
       "Refresh",
+      "History",
       "Share web",
       "Add to project...",
       OBJECT_MENU_DIVIDER,
@@ -222,6 +266,7 @@ describe("objectMenuEntries", () => {
     );
     expect(labels(entries)).toEqual([
       "Refresh",
+      "History",
       "Share web",
       "Add to project...",
       OBJECT_MENU_DIVIDER,

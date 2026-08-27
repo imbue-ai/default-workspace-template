@@ -191,6 +191,10 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onRenameRow: vi.fn(),
     onRemoveFromView: vi.fn(),
     onShareApp: vi.fn(),
+    // The default machine here runs no versioning service, so no row offers a
+    // history; the tests that care supply their own resolver.
+    historyActionForService: vi.fn(() => null),
+    systemHistoryAction: vi.fn(() => null),
     onAddRowToProjects: vi.fn(),
     onStopRow: vi.fn(),
     onServiceLifecycle: vi.fn(),
@@ -289,6 +293,36 @@ describe("Sidebar switcher dropdown", () => {
     expect(attrs.onSelectView).not.toHaveBeenCalled();
     const nameField = root.querySelector("input.custom-url-dialog-input") as HTMLInputElement | null;
     expect(nameField?.value).toBe("Beta");
+  });
+
+  it("offers System history below the views, and runs it", () => {
+    // The workspace shell is versioned like everything else under
+    // `system/apps`, but it is not an app anyone can open a pane of, so no
+    // object menu could carry the row. The rail's own header menu is the one
+    // place a chrome-level verb belongs -- and it is named "System history"
+    // rather than "History" because the rows above it are projects.
+    const ran: string[] = [];
+    const attrs = makeAttrs({ systemHistoryAction: vi.fn(() => () => ran.push("system")) });
+    const { root, redraw } = mountSidebar(attrs);
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+
+    click(switcherRow(root, "System history"));
+    expect(ran).toEqual(["system"]);
+    // Never mistaken for switching to a view.
+    expect(attrs.onSelectView).not.toHaveBeenCalled();
+  });
+
+  it("draws no System history row where there is no timeline to open", () => {
+    // Same rule as every other History surface: the resolver answers null (no
+    // versioning service registered, or its list not in hand yet) and nothing
+    // is drawn -- no row onto a page that would 404.
+    const { root, redraw } = mountSidebar(makeAttrs({ systemHistoryAction: vi.fn(() => null) }));
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+
+    const labels = Array.from(root.querySelectorAll(".project-rail-menu-item")).map((element) => element.textContent);
+    expect(labels).not.toContain("System history");
   });
 
   it("sizes the dropdown to its own fixed width rather than the header's -- a touch wider than the rail", () => {
@@ -705,6 +739,79 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     } finally {
       vi.mocked(getPrimaryAgentId).mockReturnValue("");
     }
+  });
+
+  it("offers History on an app row, keyed by the service rather than the instance", () => {
+    // The rail and the dock tab build their menus from the same definition, so
+    // a verb the tab offers has to reach the row too -- and the timeline
+    // belongs to the APP, so an instance row asks about "curio", not
+    // "curio-2".
+    const attrs = makeAttrs({
+      rows: [{ ref: "service:curio?instance=curio-2", kind: "app", label: "Curio 2", isOpen: true }],
+      historyActionForService: vi.fn((serviceName: string) => (serviceName === "curio" ? () => undefined : null)),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Curio 2"))).toContain("History");
+    expect(attrs.historyActionForService).toHaveBeenCalledWith("curio");
+  });
+
+  it("offers no History on a row whose app has no timeline, nor on any other kind", () => {
+    // The resolver answers null for the workspace chrome, for the versioning
+    // app itself, and for every app when no versioning service is registered
+    // (see isAppHistoryOffered); a chat is not versioned code at all, so its
+    // row must not even ask.
+    const attrs = makeAttrs({
+      rows: [
+        { ref: "service:curio?instance=curio-2", kind: "app", label: "Curio 2", isOpen: true },
+        { ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true },
+      ],
+      historyActionForService: vi.fn(() => null),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Curio 2"))).not.toContain("History");
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 1"))).not.toContain("History");
+    expect(attrs.historyActionForService).not.toHaveBeenCalledWith("agent-1");
+  });
+
+  it("leaves a History row exactly Refresh and Remove from project", () => {
+    // The user's complaint: a History pane carried the full app verb set --
+    // "Add to project...", "Share", "Stop versioning". A history is not an
+    // object anyone made, and above all is not one anyone should be offered a
+    // way to delete. Asserted as the WHOLE list, so a verb added to the app
+    // menu later cannot quietly reappear here.
+    const attrs = makeAttrs({
+      rows: [{ ref: "service:versioning?instance=versioning-1", kind: "app", label: "History", isOpen: true }],
+      historyActionForService: vi.fn(() => () => undefined),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "History"))).toEqual([
+      "Refresh",
+      "Remove from project",
+    ]);
+  });
+
+  it("leaves a History row in Everything just Refresh", () => {
+    // Everything is the home: nothing leaves it, so the one verb about where
+    // the pane shows falls away with it.
+    const attrs = makeAttrs({
+      activeViewId: EVERYTHING_VIEW_ID,
+      rows: [{ ref: "service:versioning?instance=versioning-1", kind: "app", label: "History", isOpen: true }],
+      historyActionForService: vi.fn(() => () => undefined),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "History"))).toEqual(["Refresh"]);
   });
 
   it("shows no one-click remove on a row whose menu carries the verb", () => {
@@ -1283,6 +1390,84 @@ describe("Sidebar shortcut menus (modes)", () => {
 
     const menu = openShortcutMenu(root, redraw, "Terminal");
     expect(menuLabels(menu)).toEqual(["New Terminal"]);
+  });
+
+  it("offers History on the Browser and Terminal rows, keyed by their own services", () => {
+    // Those two rows CREATE sessions rather than open a service, so no pane of
+    // either ever carries an app menu -- this is the only way into their
+    // timelines, and `browser` and `terminal` are versioned apps like any
+    // other. It leads the menu, ahead of the verbs about what the row does.
+    const ran: string[] = [];
+    const attrs = makeAttrs({
+      historyActionForService: vi.fn((serviceName: string) => () => ran.push(serviceName)),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const browserMenu = openShortcutMenu(root, redraw, "Browser");
+    expect(menuLabels(browserMenu)).toEqual(["History", "New Browser", 'Change shortcut to "New Browser"', "Unpin"]);
+    Array.from(browserMenu?.querySelectorAll('[role="menuitem"]') ?? [])
+      .find((element) => element.textContent === "History")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(ran).toEqual(["browser"]);
+    expect(attrs.historyActionForService).toHaveBeenCalledWith("browser");
+
+    redraw();
+    expect(menuLabels(openShortcutMenu(root, redraw, "Terminal"))[0]).toBe("History");
+    expect(attrs.historyActionForService).toHaveBeenCalledWith("terminal");
+  });
+
+  it("offers History on the File Viewer row, backed or not", () => {
+    // The third built-in row with a service behind it, and the only one with a
+    // second state: it renders disabled where no `files` app backs it, and its
+    // menu drops the complementary action with it. What is versioned is the
+    // file viewer's own code, which exists either way, so History is offered in
+    // both -- leading the menu, as it does everywhere else.
+    const attrs = makeAttrs({ historyActionForService: vi.fn(() => () => undefined) });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuLabels(openShortcutMenu(root, redraw, "File Viewer"))).toEqual([
+      "History",
+      'Change shortcut to "New File Viewer"',
+      "Unpin",
+    ]);
+    expect(attrs.historyActionForService).toHaveBeenCalledWith("files");
+
+    vi.mocked(getApps).mockReturnValue([{ name: "files", url: "http://files.test", label: "files-abc123" }]);
+    try {
+      redraw();
+      expect(menuLabels(openShortcutMenu(root, redraw, "File Viewer"))[0]).toBe("History");
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
+  });
+
+  it("asks for no History on the Chat row, which is not versioned code", () => {
+    // A chat is an mngr agent, not a folder under `system/apps`.
+    const attrs = makeAttrs({ historyActionForService: vi.fn(() => () => undefined) });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuLabels(openShortcutMenu(root, redraw, "Chat"))).not.toContain("History");
+    expect(attrs.historyActionForService).not.toHaveBeenCalledWith("chat");
+  });
+
+  it("leaves a shortcut menu unchanged where the app has no timeline", () => {
+    // The same rule as everywhere else: the resolver answers null and the row
+    // simply is not drawn -- and no divider is left hanging above the group.
+    const { root, redraw } = mountSidebar(makeAttrs({ historyActionForService: vi.fn(() => null) }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuLabels(openShortcutMenu(root, redraw, "Browser"))).toEqual([
+      "New Browser",
+      'Change shortcut to "New Browser"',
+      "Unpin",
+    ]);
   });
 
   it("stands a shortcut row down while its create is in flight", () => {

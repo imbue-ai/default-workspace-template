@@ -8,6 +8,7 @@ import {
   getAvailableProjects,
   getAwaitingShortcutIds,
   getSidebarRows,
+  historyActionForService,
   openAppShortcut,
   openMemberRow,
   openNewOfShortcut,
@@ -23,6 +24,7 @@ import {
   startProjectChat,
   stopChatRow,
   switchToView,
+  systemHistoryAction,
   toggleAppLifecycle,
 } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
@@ -124,6 +126,8 @@ export function App(): m.Component {
               onShareApp: (row: SidebarTabRow) => {
                 shareMemberRow(row);
               },
+              historyActionForService: (serviceName: string) => historyActionForService(serviceName),
+              systemHistoryAction: () => systemHistoryAction(),
               onAddRowToProjects: (row: SidebarTabRow) => {
                 addMemberRowToProjects(row);
               },

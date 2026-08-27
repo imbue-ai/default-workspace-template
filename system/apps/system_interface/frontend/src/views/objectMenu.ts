@@ -96,7 +96,10 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
  * ``objectMenuEntries`` below), with the rail also passing null
  * ``removeFromProject`` under Everything. ``quit``'s null is per-object: a
  * handful of them -- the workspace's own primary chat, a terminal or browser
- * still allocating its session -- have no destroy available yet.
+ * still allocating its session -- have no destroy available yet. ``rename``'s
+ * null is per-object as well, for the rare object whose name is not its
+ * owner's to choose even though its KIND's is (the History pane, whose name is
+ * derived from what the pane is -- see ``historyPaneMenuActions``).
  * ``share`` and ``quit`` each carry their own
  * label because "Share {name}" / "Quit {name}" always names the object the
  * way the surface calling this currently displays it, and only the caller
@@ -121,7 +124,17 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
 export interface ObjectMenuActions {
   refresh: () => void;
   share: { label: string; run: () => void } | null;
-  rename: () => void;
+  /**
+   * Open the app's version timeline. Read only when ``kind`` is "app" -- the
+   * other three kinds are not versioned code and never offer it, so a caller
+   * building a menu for one of them may simply pass null. Null for an app too
+   * wherever the row would not earn its place: the versioning service is not
+   * registered, this app's timeline page would 404, or it is the versioning app
+   * itself. ``isAppHistoryOffered`` in appHistory.ts is where that decision
+   * lives, case by case; nothing about it is restated here.
+   */
+  history: (() => void) | null;
+  rename: (() => void) | null;
   hideTab: (() => void) | null;
   addToProjects: (() => void) | null;
   removeFromProject: (() => void) | null;
@@ -158,11 +171,21 @@ export interface ObjectMenuActions {
  * session" for a terminal (see ``refreshPanelContent`` in DockviewWorkspace,
  * which is where that distinction actually lives -- this module only fixes
  * that the verb is offered, not what it does).
+ * Rename is offered for the kinds whose name is theirs to choose, which is
+ * what ``isRenameableKind`` decides and why -- and, within such a kind, only
+ * for an object that supplies the verb, since a null ``rename`` omits it the
+ * way a null omits any other verb here.
  * Share is an app-only affordance: the share surface is per registered
  * service, and the other three kinds have none. It renders from whichever
  * slot supplied it -- the bare app's own ``share`` or the instance menu's
  * ``serviceGroup`` -- and likewise the process verb comes from ``stop`` (a
  * chat) or ``serviceGroup.lifecycle`` (an app instance's service).
+ * History is app-only for the same shape of reason -- only an app is versioned
+ * code with a timeline -- and sits directly under Refresh, at the top of the
+ * group that is about what the row is SHOWING, ahead of Share, which is about
+ * handing the service to someone else. It stays in that one position whether
+ * or not Share is drawn beside it, so an instance pane (whose Share moves into
+ * the trailing service group) and a bare app pane read the same here.
  * Close tab and Remove from project are each one SURFACE's job, which the
  * two callers say by supplying only their own: closing is what you want
  * while looking at the tab, and unfiling is what you want while looking at
@@ -173,6 +196,9 @@ export interface ObjectMenuActions {
  */
 export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActions): ObjectMenuEntry[] {
   const opening: ObjectMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
+  if (kind === "app" && actions.history !== null) {
+    opening.push({ label: "History", iconName: "history", run: actions.history });
+  }
   const share = kind === "app" ? (actions.share ?? actions.serviceGroup?.share ?? null) : null;
   if (share != null) {
     opening.push({ label: share.label, iconName: "user-plus", run: share.run });
@@ -181,7 +207,7 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
     opening.push({ label: "Add to project...", iconName: "folder-plus", run: actions.addToProjects });
   }
   const closing: ObjectMenuEntry[] = [];
-  if (isRenameableKind(kind)) {
+  if (isRenameableKind(kind) && actions.rename !== null) {
     closing.push({ label: "Rename", iconName: "edit", run: actions.rename });
   }
   if (actions.hideTab !== null) {

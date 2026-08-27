@@ -370,6 +370,11 @@ _DEFAULT_TAIL_COUNT = 50
 # local backend URL from this registry entry.
 _BROWSER_SERVICE_NAME = "browser"
 
+# Name under which the Versioning app registers itself. The /api/versioned-apps
+# passthrough resolves its local backend URL from this registry entry to ask it
+# which apps it actually serves a timeline for.
+_VERSIONING_SERVICE_NAME = "versioning"
+
 # The name this shell registers itself under. It is an app like any other in
 # the registry, so the deregister endpoint has to refuse it explicitly -- pulling
 # its own row would leave the workspace with no origin to serve the UI from.
@@ -2316,6 +2321,22 @@ def _terminal_notify_endpoint() -> Response:
     return _json_response(error.model_dump(), status_code=400)
 
 
+def _relay_backend_response(backend_response: httpx.Response) -> Response:
+    """Hand one passthrough's backend answer straight back to the caller.
+
+    What every same-origin passthrough below means by "relay": the body and the
+    status verbatim -- a rejection is the backend's to make, so its 400/404/409
+    reaches the frontend as itself -- under the content type the backend named,
+    defaulting to JSON for a backend that named none. One function so the three
+    of them cannot drift into relaying different things.
+    """
+    return Response(
+        backend_response.content,
+        status=backend_response.status_code,
+        content_type=backend_response.headers.get("content-type", "application/json"),
+    )
+
+
 def _browser_backend_url(path: str) -> str | None:
     """The registered browser daemon's URL for ``path``, or None when unregistered.
 
@@ -2359,11 +2380,7 @@ def _browsers_passthrough() -> Response:
         _loguru_logger.warning("Browser service request to {} failed: {}", backend_url, e)
         error = ErrorResponse(detail="Browser service is unreachable")
         return _json_response(error.model_dump(), status_code=503)
-    return Response(
-        backend_response.content,
-        status=backend_response.status_code,
-        content_type=backend_response.headers.get("content-type", "application/json"),
-    )
+    return _relay_backend_response(backend_response)
 
 
 def _destroy_browser_passthrough(name: str) -> Response:
@@ -2388,11 +2405,40 @@ def _destroy_browser_passthrough(name: str) -> Response:
         _loguru_logger.warning("Browser service DELETE to {} failed: {}", backend_url, e)
         error = ErrorResponse(detail="Browser service is unreachable")
         return _json_response(error.model_dump(), status_code=503)
-    return Response(
-        backend_response.content,
-        status=backend_response.status_code,
-        content_type=backend_response.headers.get("content-type", "application/json"),
-    )
+    return _relay_backend_response(backend_response)
+
+
+def _versioned_apps_passthrough() -> Response:
+    """Same-origin passthrough for the Versioning app's list of what it serves.
+
+    Which names have a timeline is the versioning app's own question to answer:
+    it versions FOLDERS under ``system/apps``, which is neither a subset nor a
+    superset of this registry (a port registered with no package behind it has
+    no timeline; the shell's own folder has one under a name nothing registers).
+    Its ``GET /api/apps`` is the list it answers ``/app/<name>`` for, so the
+    shell's menus gate the History row on exactly that -- and reach it through
+    this server-side hop because sibling service origins are same-site but not
+    same-origin and the versioning app sends no CORS headers, the same reason
+    :func:`_browsers_passthrough` exists.
+
+    Relays the body and status verbatim. Returns a 503 JSON error when the
+    service is not registered or unreachable, which the frontend reads as "keep
+    whatever list you already had" rather than as an empty one -- a stopped
+    versioning service must not silently mean "nothing has a history".
+    """
+    state = get_state()
+    base_url = state.agent_manager.get_service_url(_VERSIONING_SERVICE_NAME)
+    if base_url is None:
+        error = ErrorResponse(detail="Versioning service is not registered")
+        return _json_response(error.model_dump(), status_code=503)
+    backend_url = f"{base_url.rstrip('/')}/api/apps"
+    try:
+        backend_response = state.http_client.get(backend_url)
+    except httpx.HTTPError as e:
+        _loguru_logger.warning("Versioning service request to {} failed: {}", backend_url, e)
+        error = ErrorResponse(detail="Versioning service is unreachable")
+        return _json_response(error.model_dump(), status_code=503)
+    return _relay_backend_response(backend_response)
 
 
 def _run_forward_port_removal(name: str) -> str | None:
@@ -3503,6 +3549,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/apps/<string:name>/stop", view_func=_stop_app_endpoint, methods=["POST"])
     application.add_url_rule("/api/apps/<string:name>/start", view_func=_start_app_endpoint, methods=["POST"])
     application.add_url_rule("/api/apps/instances", view_func=_list_app_instances_endpoint, methods=["GET"])
+    application.add_url_rule("/api/versioned-apps", view_func=_versioned_apps_passthrough, methods=["GET"])
     application.add_url_rule(
         "/api/apps/<string:name>/instances/allocate",
         view_func=_allocate_app_instance_endpoint,
