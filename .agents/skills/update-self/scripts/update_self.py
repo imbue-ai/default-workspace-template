@@ -1179,11 +1179,13 @@ MARKER_FILENAME = "marker.json"
 SNAPSHOTS_DIRNAME = "snapshots"
 # The run-status file: the whole machine-readable contract between an
 # update-self pass and the Minds app. The lead records the run's start here
-# (``run-status start``, once it holds the updating-workspace lease) and its
-# one terminal verdict (``run-status verdict``); the app's poll reads the file
-# over ``mngr exec`` alongside the apply marker and the run's chat agent, and
-# needs nothing else -- a run recorded here is visible to the app whoever
-# launched it. One file per workspace: a new run's ``start`` overwrites the
+# (``run-status start``, once it holds the updating-workspace lease), its one
+# mid-flight hold and its clearing (``run-status hold`` / ``resume``), and its
+# one terminal verdict (``run-status verdict``); the apply mirrors its marker's
+# phase and restamp in alongside. The app's poll reads this file over ``mngr
+# exec`` together with the run's chat agent, and needs nothing else -- it never
+# opens the marker, and a run recorded here is visible to it whoever launched
+# the run. One file per workspace: a new run's ``start`` overwrites the
 # previous run's record, which is exactly the app's model (the last run's
 # outcome stands until a new run supersedes it). The lease is what keeps that
 # single record honest, which is why the start waits for it -- and why a
