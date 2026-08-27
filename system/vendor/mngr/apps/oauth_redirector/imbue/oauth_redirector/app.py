@@ -17,6 +17,7 @@ from imbue.modal_app_kit.deploy import DEPLOY_ENV_VAR
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
+from imbue.modal_app_kit.log_format import configure_logging
 from imbue.modal_app_kit.sentry import init_sentry
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 from imbue.oauth_redirector.web import ALLOWED_HOST_REGEX_ENV
@@ -33,7 +34,8 @@ if not _ALLOWED_HOST_REGEX:
     # so a direct ``modal deploy`` that bypasses the just recipe shows the
     # misconfiguration in its output instead of shipping a redirector that
     # 503s every forward.
-    logging.getLogger(__name__).warning(
+    # Named under ``imbue`` because Modal mounts this entrypoint as module ``app``.
+    logging.getLogger("imbue.oauth_redirector.app").warning(
         "%s is not set: a deployed redirector will refuse every forward. "
         "Deploy via 'just deploy-oauth-redirector <tier>', which bakes the tier's allowlist.",
         ALLOWED_HOST_REGEX_ENV,
@@ -77,6 +79,8 @@ app = modal.App(name=f"oauth-redirector-{_DEPLOY_ENV}", image=image)
 @modal.concurrent(max_inputs=32)
 @modal.asgi_app()
 def fastapi_app() -> FastAPI:
-    # Error reporting to the dev/ci Bugsink instance; no-op without a DSN.
+    # JSON log lines, then error reporting to the dev/ci Bugsink instance
+    # (no-op without a DSN).
+    configure_logging()
     init_sentry("oauth-redirector", "OAUTH_REDIRECTOR_SENTRY_DSN")
     return web_app

@@ -56,9 +56,9 @@ def render_relay_install_script(frp_version: str) -> str:
     """The idempotent remote install script (runs under sudo): pinned frps, staged config, service restarts."""
     amd64_sha256 = _FRP_SHA256_BY_GOARCH["amd64"]
     arm64_sha256 = _FRP_SHA256_BY_GOARCH["arm64"]
-    # frps.toml embeds the connector plugin-auth secret (in the addr/path), so
-    # it is installed root-only (0640) rather than the world-readable 0644 the
-    # other artifacts get.
+    # frps.toml embeds the connector plugin-auth secret (in the plugin addr's
+    # userinfo), so it is installed root-only (0640) rather than the
+    # world-readable 0644 the other artifacts get.
     move_lines = "\n".join(
         f'install -m {"0640" if name == "frps.toml" else "0644"} "{REMOTE_STAGING_DIR}/{name}" "{destination}"'
         for name, destination in REMOTE_ARTIFACT_PATHS.items()

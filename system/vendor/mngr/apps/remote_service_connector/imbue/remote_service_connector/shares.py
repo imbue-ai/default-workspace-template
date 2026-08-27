@@ -17,6 +17,8 @@ without the truncation). Both are opaque and non-secret (they appear in
 Certificate Transparency logs).
 """
 
+import base64
+import binascii
 import functools
 import hashlib
 import hmac
@@ -848,19 +850,53 @@ def require_active_share_by_relay_token(request: Request) -> dict[str, Any]:
     return share
 
 
+def _accepted_frps_plugin_secrets() -> list[str]:
+    """The configured frps plugin secrets (empty when the plugin endpoint is disabled).
+
+    ``FRPS_AUTH_SECRET`` is a comma-separated set so a rotation can run with
+    zero tunnel downtime: the connector briefly accepts {old, new} while the
+    relay fleet redeploys onto the new secret, then the old value is removed.
+    """
+    return [secret.strip() for secret in os.environ.get("FRPS_AUTH_SECRET", "").split(",") if secret.strip()]
+
+
 def _require_frps_plugin_secret(provided: str) -> None:
-    """Authenticate an frps server-plugin callback against the fixed shared secret.
+    """Authenticate an frps server-plugin callback against the configured shared secret(s).
 
     The secret lives only in the relays' rendered ``frps.toml`` (delivered from
     Vault at provision time) and in the ``sharing-<env>`` Modal secret -- never
     in the desktop app or in workspaces. Raises 403 when the server has no
     secret configured (the plugin endpoint is disabled), 401 on mismatch.
     """
-    expected = os.environ.get("FRPS_AUTH_SECRET", "")
-    if not expected:
+    accepted_secrets = _accepted_frps_plugin_secrets()
+    if not accepted_secrets:
         raise HTTPException(status_code=403, detail="frps plugin auth is not enabled on this server")
-    if not hmac.compare_digest(provided.encode(), expected.encode()):
+    is_authorized = any(hmac.compare_digest(provided.encode(), accepted.encode()) for accepted in accepted_secrets)
+    if not is_authorized:
         raise HTTPException(status_code=401, detail="Invalid frps plugin secret")
+
+
+def _frps_secret_from_basic_auth(request: Request) -> str:
+    """The frps plugin secret from the ``Authorization: Basic`` header's username.
+
+    frp's ``httpPlugin`` cannot set custom headers, so the relay's rendered
+    plugin ``addr`` carries the secret as URL userinfo
+    (``https://<secret>@<connector>``), which frps's Go HTTP client delivers as
+    ``Basic base64(<secret>:)`` -- the username position, the only accepted
+    form. Raises 401 on a missing or malformed header.
+    """
+    auth_header = request.headers.get("authorization", "")
+    scheme, _, encoded = auth_header.partition(" ")
+    if scheme.lower() != "basic" or not encoded.strip():
+        raise HTTPException(status_code=401, detail="Missing Basic credentials")
+    try:
+        decoded = base64.b64decode(encoded.strip(), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=401, detail="Malformed Basic credentials") from exc
+    username, _, _password = decoded.partition(":")
+    if not username:
+        raise HTTPException(status_code=401, detail="Missing frps plugin secret")
+    return username
 
 
 # A service origin label: the hostname component in front of the workspace
@@ -1234,29 +1270,50 @@ def flush_frps_ping_metrics() -> None:
     _ping_metrics_aggregator.flush(time.monotonic())
 
 
-@router.post("/frps/auth/{plugin_secret}/{relay_id}")
-def frps_auth(request: Request, plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
+@router.post("/frps/auth/{relay_id}")
+def frps_auth(request: Request, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
     """Authorize an frps server-plugin operation (``Login`` / ``NewProxy`` / ``Ping``) for one relay.
 
     The relay's frps calls this for every workspace tunnel connect, hostname
-    claim, and heartbeat, authenticated by the shared secret embedded in its
-    rendered plugin URL path; the path's trailing relay id identifies WHICH
-    relay is calling, so tunnel logins are attributable per relay (the
-    fleet-convergence signal). The presented relay token must resolve to an
-    active share; a ``NewProxy`` may only claim single per-service labels
-    directly under that share's own domain (see ``decide_frps_new_proxy``),
-    and a ``Ping`` whose token no longer resolves to an active share is
-    rejected fail-open (see ``decide_frps_ping``) -- the live-tunnel kill
-    switch, effective within one heartbeat interval plus the ping allow-cache
-    TTL. Every operation must present a relay token resolving to an active
-    share (token-less bodies are rejected whatever the op); beyond that,
-    operations other than the ones we subscribe to are allowed unchanged --
-    frps should not be configured to send them, and constraining an
-    unexpected op further would break the tunnel for no security gain.
+    claim, and heartbeat, authenticated by the shared secret its rendered
+    plugin ``addr`` carries as URL userinfo -- delivered here as an
+    ``Authorization: Basic`` header (see ``_frps_secret_from_basic_auth``), so
+    the secret never appears in the access-logged URL path. The path's
+    trailing relay id identifies WHICH relay is calling, so tunnel logins are
+    attributable per relay (the fleet-convergence signal). The presented relay
+    token must resolve to an active share; a ``NewProxy`` may only claim
+    single per-service labels directly under that share's own domain (see
+    ``decide_frps_new_proxy``), and a ``Ping`` whose token no longer resolves
+    to an active share is rejected fail-open (see ``decide_frps_ping``) -- the
+    live-tunnel kill switch, effective within one heartbeat interval plus the
+    ping allow-cache TTL. Every operation must present a relay token resolving
+    to an active share (token-less bodies are rejected whatever the op);
+    beyond that, operations other than the ones we subscribe to are allowed
+    unchanged -- frps should not be configured to send them, and constraining
+    an unexpected op further would break the tunnel for no security gain.
 
     Allowed pings are not access-logged (see the aggregator above); every
-    other outcome logs one structured line, with the secret path segment
-    redacted.
+    other outcome logs one structured line.
+    """
+    with handle_endpoint_errors():
+        _require_frps_plugin_secret(_frps_secret_from_basic_auth(request))
+        return _authorize_frps_operation(request, relay_id, body)
+
+
+# CLEANUP: drop this path-secret route (with its tests and wire-compat route
+# entry) once every relay -- production, staging, AND every standing dev/ci
+# env (enumerate via `minds-admin relays list` per env) -- has been redeployed
+# onto the header form and FRPS_AUTH_SECRET has been rotated; until then the
+# old rendered frps.toml files keep calling this shape.
+@router.post("/frps/auth/{plugin_secret}/{relay_id}")
+def frps_auth_with_path_secret(
+    request: Request, plugin_secret: str, relay_id: str, body: FrpsAuthRequest
+) -> dict[str, object]:
+    """Legacy frps plugin callback with the shared secret as a URL path segment.
+
+    Same authorization as ``frps_auth``, but the secret arrives in the path --
+    which lands it in every access log (the leak issue #616 fixed). Kept only
+    so relays rendered before the userinfo form keep working during rollout.
     """
     with handle_endpoint_errors():
         # The path embeds the shared plugin secret, which must never reach the
@@ -1266,49 +1323,54 @@ def frps_auth(request: Request, plugin_secret: str, relay_id: str, body: FrpsAut
         # sanitized too.
         request.state.access_log_path_override = f"/frps/auth/<plugin-secret>/{relay_id}"
         _require_frps_plugin_secret(plugin_secret)
-        if body.op == _FRPS_PING_OP:
-            # Heartbeats skip the relay-row lookup: the plugin secret already
-            # authenticates the caller, and a DB read here would couple every
-            # live tunnel to the relays table (see decide_frps_ping's
-            # fail-open rationale).
-            ping_started_monotonic = time.monotonic()
-            decision = decide_frps_ping(
-                get_share_store().find_share_by_token_hash,
-                _extract_frps_relay_token(body.op, body.content),
-            )
-            if not decision.reject:
-                now = time.monotonic()
-                request.state.access_log_suppress_success = True
-                _ping_metrics_aggregator.record_authorized_ping(relay_id, (now - ping_started_monotonic) * 1000.0, now)
-            return decision.model_dump()
-        relay_row = next(
-            (row for row in active_relay_rows() if str(row["relay_id"]) == relay_id),
-            None,
+        return _authorize_frps_operation(request, relay_id, body)
+
+
+def _authorize_frps_operation(request: Request, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
+    """Decide one already-authenticated frps plugin op (shared by both route forms)."""
+    if body.op == _FRPS_PING_OP:
+        # Heartbeats skip the relay-row lookup: the plugin secret already
+        # authenticates the caller, and a DB read here would couple every
+        # live tunnel to the relays table (see decide_frps_ping's
+        # fail-open rationale).
+        ping_started_monotonic = time.monotonic()
+        decision = decide_frps_ping(
+            get_share_store().find_share_by_token_hash,
+            _extract_frps_relay_token(body.op, body.content),
         )
-        if relay_row is None:
-            return _frps_reject(f"unknown or retired relay id {relay_id!r}").model_dump()
-        relay_token = _extract_frps_relay_token(body.op, body.content)
-        if relay_token is None:
-            return _frps_reject("missing relay token").model_dump()
-        store = get_share_store()
-        share = store.find_share_by_token_hash(hash_relay_token(relay_token))
-        if share is None or share["state"] != "active":
-            return _frps_reject("unknown or inactive relay token").model_dump()
-        if body.op == _FRPS_LOGIN_OP:
-            store.record_tunnel_login(str(share["host_id"]), str(share["user_id"]))
-            relays_module.get_relay_store().record_relay_login(str(share["host_id"]), str(share["user_id"]), relay_id)
-            return _frps_allow().model_dump()
-        if body.op == _FRPS_NEW_PROXY_OP:
-            claimed_domains = _extract_frps_custom_domains(body.content)
-            claimed_subdomain = _extract_frps_subdomain(body.content)
-            decision = decide_frps_new_proxy(str(share["workspace_domain"]), claimed_domains, claimed_subdomain)
-            # An allowed claim carries the workspace's own service labels, so
-            # this is where the connector learns the chrome's entry origin --
-            # without ever reaching into the workspace. Recorded on every
-            # claim so a re-registered shell label self-heals the share row.
-            if not decision.reject:
-                entry_label = entry_label_from_claimed_domains(str(share["workspace_domain"]), claimed_domains)
-                if entry_label is not None:
-                    store.update_share_entry_label(str(share["host_id"]), str(share["user_id"]), entry_label)
-            return decision.model_dump()
+        if not decision.reject:
+            now = time.monotonic()
+            request.state.access_log_suppress_success = True
+            _ping_metrics_aggregator.record_authorized_ping(relay_id, (now - ping_started_monotonic) * 1000.0, now)
+        return decision.model_dump()
+    relay_row = next(
+        (row for row in active_relay_rows() if str(row["relay_id"]) == relay_id),
+        None,
+    )
+    if relay_row is None:
+        return _frps_reject(f"unknown or retired relay id {relay_id!r}").model_dump()
+    relay_token = _extract_frps_relay_token(body.op, body.content)
+    if relay_token is None:
+        return _frps_reject("missing relay token").model_dump()
+    store = get_share_store()
+    share = store.find_share_by_token_hash(hash_relay_token(relay_token))
+    if share is None or share["state"] != "active":
+        return _frps_reject("unknown or inactive relay token").model_dump()
+    if body.op == _FRPS_LOGIN_OP:
+        store.record_tunnel_login(str(share["host_id"]), str(share["user_id"]))
+        relays_module.get_relay_store().record_relay_login(str(share["host_id"]), str(share["user_id"]), relay_id)
         return _frps_allow().model_dump()
+    if body.op == _FRPS_NEW_PROXY_OP:
+        claimed_domains = _extract_frps_custom_domains(body.content)
+        claimed_subdomain = _extract_frps_subdomain(body.content)
+        decision = decide_frps_new_proxy(str(share["workspace_domain"]), claimed_domains, claimed_subdomain)
+        # An allowed claim carries the workspace's own service labels, so
+        # this is where the connector learns the chrome's entry origin --
+        # without ever reaching into the workspace. Recorded on every
+        # claim so a re-registered shell label self-heals the share row.
+        if not decision.reject:
+            entry_label = entry_label_from_claimed_domains(str(share["workspace_domain"]), claimed_domains)
+            if entry_label is not None:
+                store.update_share_entry_label(str(share["host_id"]), str(share["user_id"]), entry_label)
+        return decision.model_dump()
+    return _frps_allow().model_dump()
