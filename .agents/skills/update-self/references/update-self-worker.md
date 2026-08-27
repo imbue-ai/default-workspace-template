@@ -191,20 +191,21 @@ command). Build the impact set like this:
    the lead's results message repeats the error.
 
 **Provisioning files always count as impacted -- and you best-effort apply them.**
-A change to `system/scripts/setup_system.sh`, `system/scripts/install_secret_scanners.sh`,
-`system/scripts/_provision_guard.sh`, or `.mngr/**` (the `provisioner` change class) has
-no *running* consumer to grep for -- nothing imports it -- yet it installs and
-configures the global toolchain (the latchkey CLI, uv, claude, modal, the secret
-scanners) and the `mngr create` config every live agent, service, and future
-sub-agent runs on. So never conclude "nothing to apply" for one. Work each
-provisioning change through, most-live-applicable first, and record what you
-found in your report (you stay in your worktree -- you make the in-repo edits
-an apply implies; the apply script runs the provisioner and the restarts):
+A change to `system/scripts/setup_system.sh` or `.mngr/**` (the `provisioner`
+change class), or to an installer `setup_system.sh` chains (`install_*.sh`,
+`write_apt_sources.sh`, `_provision_guard.sh` -- `shared_runtime` by class),
+has no *running* consumer to grep for -- nothing imports it -- yet it installs
+and configures the global toolchain (the latchkey CLI, uv, claude, modal, the
+secret scanners) and the `mngr create` config every live agent, service, and
+future sub-agent runs on. So never conclude "nothing to apply" for one. Work
+each provisioning change through, most-live-applicable first, and record what
+you found in your report (you stay in your worktree -- you make the in-repo
+edits an apply implies; the apply script runs the provisioner and the restart):
 
-- **Toolchain-script pins** (`setup_system.sh` / `install_secret_scanners.sh`) --
+- **Toolchain-script pins** (`setup_system.sh` or an installer it chains) --
   a pinned-version bump (e.g. `LATCHKEY_VERSION`) is **live-applicable**: the
   apply re-runs the idempotent provisioner (`bash system/scripts/setup_system.sh`),
-  before any restart, to install the new version. A hunk only a fresh image
+  before the restart, to install the new version. A hunk only a fresh image
   build reproduces is **rebuild-only**.
 - **`.mngr/**` settings** -- `.mngr/settings.toml` only governs `mngr create`, so
   the merged file governs every *future* create automatically (a new workspace,
@@ -495,11 +496,10 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     validated is the one installed live. Omit the field when you did not
     build (the apply falls back to a live build).
   - **Impact analysis** -- the impacted services and skills from 4a, what you
-    checked and how, and any live service depending on a changed file that the
-    apply does not already restart. The apply restarts the services agent for
-    the system-interface backend, vendored-mngr source, `.mngr/settings.toml`,
-    supervisord and bootstrap; anything beyond that is the lead's to carry
-    out, and only your analysis can name it.
+    checked and how, and any *user-created* app or skill depending on a
+    changed file. The apply restarts the services agent (every supervisord
+    program) on every apply, so built-in services need no naming; a user's
+    own consumer is the lead's to check, and only your analysis can name it.
   - **Dockerfile split** (if it merged) -- each hunk as live-applicable or
     image-level (needs a manual rebuild). Version pins live in
     `setup_system.sh`, not the Dockerfile, so a pin bump is a provisioner

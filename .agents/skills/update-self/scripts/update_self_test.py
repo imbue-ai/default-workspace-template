@@ -530,12 +530,14 @@ def test_classify_path_reveal_classes() -> None:
         "system/scripts/forward_port.py": update_self.CLASS_SHARED_RUNTIME,
         ".agents/skills/update-self/SKILL.md": update_self.CLASS_SHARED_RUNTIME,
         "system/services/oom_priority/src/oom_priority/ledger.py": update_self.CLASS_SHARED_RUNTIME,
-        # Provisioning files: pinned-toolchain scripts (would otherwise read as
+        # Provisioning files: the toolchain entry point (would otherwise read as
         # shared_runtime under system/scripts/) and the .mngr/ create config (would
         # otherwise fall through to other) -- both need the provisioner reveal.
+        # The installers the entry point chains stay shared_runtime; the apply
+        # keys its provisioner re-run on them separately (read_provisioner_inputs).
         "system/scripts/setup_system.sh": update_self.CLASS_PROVISIONER,
-        "system/scripts/install_secret_scanners.sh": update_self.CLASS_PROVISIONER,
-        "system/scripts/_provision_guard.sh": update_self.CLASS_PROVISIONER,
+        "system/scripts/install_secret_scanners.sh": update_self.CLASS_SHARED_RUNTIME,
+        "system/scripts/_provision_guard.sh": update_self.CLASS_SHARED_RUNTIME,
         ".mngr/settings.toml": update_self.CLASS_PROVISIONER,
         "system/Dockerfile": update_self.CLASS_DOCKERFILE,
         "CLAUDE.md": update_self.CLASS_DOCS,
@@ -581,53 +583,6 @@ def test_classify_path_manifest_flag() -> None:
         "system/vendor/mngr/libs/mngr/pyproject.toml"
     ).is_manifest
     assert not update_self.classify_path("system/scripts/forward_port.py").is_manifest
-
-
-def test_classify_path_restart_flag() -> None:
-    # The classes whose change leaves a live process inconsistent with the
-    # merged tree until the services agent restarts. Vendored-mngr *source* is
-    # the geebspace lesson: the running system interface imports it in-process,
-    # so "picked up live" only ever held for a fresh process.
-    requires = [
-        "system/supervisord.conf",
-        "system/libs/bootstrap/src/bootstrap/manager.py",
-        "system/vendor/mngr/libs/mngr/imbue/mngr/config/loader.py",
-        "system/vendor/mngr/libs/mngr/pyproject.toml",
-        # The one provisioner path a live process re-reads on every request.
-        ".mngr/settings.toml",
-        # The two workspace libraries the system interface imports in-process
-        # (the staleness detector counts the same two trees).
-        "system/services/oom_priority/src/oom_priority/bands.py",
-        "system/libs/tk_command_parsing/src/tk_command_parsing/parser.py",
-    ]
-    for path in requires:
-        assert update_self.classify_path(path).requires_restart, path
-    does_not = [
-        # Tests and non-code under the imported libraries are never loaded by
-        # the running service.
-        "system/services/oom_priority/src/oom_priority/bands_test.py",
-        "system/services/oom_priority/bin/script_import_paths_test.py",
-        "system/libs/tk_command_parsing/README.md",
-        # A service that is not imported keeps the shared_runtime rule.
-        "system/services/host_backup/src/host_backup/runner.py",
-        # The system interface's own restart decision stays with the apply's
-        # finer frontend/backend split, not this flag.
-        "system/apps/system_interface/imbue/system_interface/server.py",
-        # Other provisioner paths shape create/build time, not a live reader.
-        "system/scripts/setup_system.sh",
-        ".mngr/apt-snapshot-timestamp",
-        "system/scripts/forward_port.py",
-        ".agents/skills/update-self/SKILL.md",
-        # Docs never restart anything, even under a restart-requiring prefix --
-        # including the non-README docs the README/changelog rule cannot catch.
-        "system/vendor/mngr/README.md",
-        "system/vendor/mngr/apps/minds/docs/desktop-app.md",
-        "system/libs/bootstrap/changelog/some-entry.md",
-        "system/libs/bootstrap/docs/notes.md",
-        "CLAUDE.md",
-    ]
-    for path in does_not:
-        assert not update_self.classify_path(path).requires_restart, path
 
 
 # --- classify_merge --------------------------------------------------------
@@ -1643,7 +1598,7 @@ def _plant_snapshotted_marker(repo_root: Path, **kwargs) -> list:
     The state a frontend apply killed after its snapshot step leaves behind,
     and the starting point of every recover test that has something to restore.
     """
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
     snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
     _plant_marker(repo_root, snapshots=snapshots, **kwargs)
     return snapshots
@@ -1668,9 +1623,17 @@ _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 
 # --- plan_apply ---------------------------------------------------------------
 
+# The real tree's provisioner inputs: the entry point, the apt snapshot
+# timestamp, and whatever setup_system.sh chains today.
+_PROVISIONER_INPUTS = update_self.read_provisioner_inputs(_WORKSPACE_ROOT)
+
+
+def _plan(paths: list[str]) -> update_self.ApplyPlan:
+    return update_self.plan_apply(paths, _PROVISIONER_INPUTS)
+
 
 def test_plan_apply_maps_each_change_class() -> None:
-    plan = update_self.plan_apply(
+    plan = _plan(
         [
             "system/apps/system_interface/frontend/src/views/Chat.ts",
             "system/apps/system_interface/imbue/system_interface/server.py",
@@ -1682,31 +1645,18 @@ def test_plan_apply_maps_each_change_class() -> None:
     assert plan.frontend_src and plan.frontend_manifest
     assert plan.backend_src and plan.backend_manifest
     assert plan.provisioner
-    assert plan.needs_restart  # the backend implies it
 
 
-def test_plan_apply_vendored_source_and_settings_require_restart() -> None:
-    vendored = update_self.plan_apply(["system/vendor/mngr/libs/mngr/imbue/x.py"])
-    assert vendored.requires_restart and vendored.needs_restart
-    assert not vendored.backend  # not a system-interface change
-    settings = update_self.plan_apply([".mngr/settings.toml"])
-    assert settings.requires_restart
+def test_plan_apply_keys_the_provisioner_run_on_what_it_reads() -> None:
     # The provisioner never reads the create config, so no re-run for it; the
     # apt snapshot timestamp is the one .mngr/ file it does read.
-    assert not settings.provisioner
-    assert update_self.plan_apply([".mngr/apt-snapshot-timestamp"]).provisioner
-    # An imported workspace library is in-process code of the service the
-    # restart bounces, so it restarts without being a system-interface change.
-    imported = update_self.plan_apply(
-        ["system/services/oom_priority/src/oom_priority/bands.py"]
-    )
-    assert imported.requires_restart and imported.needs_restart
-    assert not imported.backend
-
-
-def test_plan_apply_docs_only_needs_nothing() -> None:
-    plan = update_self.plan_apply(["README.md", ".agents/changelog/entry.md"])
-    assert not plan.any
+    assert not _plan([".mngr/settings.toml"]).provisioner
+    assert _plan([".mngr/apt-snapshot-timestamp"]).provisioner
+    # An installer the entry point chains counts even though the entry point
+    # itself did not change: a pin bump in it alone must reinstall the binary.
+    assert _plan(["system/scripts/install_secret_scanners.sh"]).provisioner
+    # A sibling script the provisioner never runs does not.
+    assert not _plan(["system/scripts/seed_home_skeleton.sh"]).provisioner
 
 
 @pytest.mark.parametrize(
@@ -1726,7 +1676,7 @@ def test_plan_apply_docs_only_needs_nothing() -> None:
 def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
     # Missing one of these means skipping `uv sync` and restarting the
     # workspace against an environment resolved for the pre-merge tree.
-    assert update_self.plan_apply([path]).backend_manifest
+    assert _plan([path]).backend_manifest
 
 
 @pytest.mark.parametrize(
@@ -1739,7 +1689,7 @@ def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
     ],
 )
 def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> None:
-    assert not update_self.plan_apply([path]).backend_manifest
+    assert not _plan([path]).backend_manifest
 
 
 @pytest.mark.parametrize(
@@ -1756,7 +1706,7 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
     ],
 )
 def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
-    plan = update_self.plan_apply([path])
+    plan = _plan([path])
     assert plan.frontend_src and not plan.frontend_manifest
 
 
@@ -1770,13 +1720,13 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
 def test_plan_apply_ignores_backend_test_files(path: str) -> None:
     # No running process imports these, so they cannot leave the live backend
     # stale -- and bouncing the services agent for one blips the user's UI.
-    assert not update_self.plan_apply([path]).backend_src
+    assert not _plan([path]).backend_src
 
 
 # --- apply: happy paths per change class ---------------------------------------
 
 
-def test_apply_frontend_only_builds_and_refreshes_without_restart(
+def test_apply_frontend_only_builds_refreshes_and_restarts(
     apply_repo: Path,
 ) -> None:
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
@@ -1786,7 +1736,8 @@ def test_apply_frontend_only_builds_and_refreshes_without_restart(
 
     assert code == 0
     assert runner.ran("npm", "run", "build")
-    assert not runner.ran(*_RESTART)
+    # Every apply restarts the services agent, a frontend-only one included.
+    assert runner.ran(*_RESTART)
     assert not runner.ran(*_PROVISION)
     assert _refreshed_the_view(runner, apply_repo)
     assert runner.ran("git", "merge", "--ff-only", _MERGE_REF)
@@ -1874,18 +1825,25 @@ def test_apply_backend_manifest_refreshes_all_three_environments(
     assert runner.ran(*_RESTART)
 
 
-def test_apply_docs_only_lands_with_nothing_live_to_change(apply_repo: Path) -> None:
+def test_apply_docs_only_still_preflights_restarts_and_probes(apply_repo: Path) -> None:
+    # Nothing to build, refresh or provision -- but the restart is not keyed
+    # on the diff (no per-path rule stays complete), so it happens anyway, with
+    # the pre-flight and the probes around it.
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
     http = _FakeHttp(_all_healthy)
+    spawner = _FakeSpawner()
 
-    code = _apply(runner, http, _FakeSpawner(), apply_repo)
+    code = _apply(runner, http, spawner, apply_repo)
 
     assert code == 0
     assert runner.ran("git", "merge", "--ff-only", _MERGE_REF)
-    # Nothing live: no build, no restart, no probes, no snapshots.
     assert not runner.ran("npm")
-    assert not runner.ran(*_RESTART)
-    assert http.get_urls == [] and http.page_urls == []
+    assert not runner.ran(*_PROVISION)
+    assert spawner.spawns == [[update_self.TOOL_NAME]]
+    assert runner.ran(*_RESTART)
+    assert any(
+        _is_live(url) and update_self.HEALTH_PATH in url for url in http.get_urls
+    )
     assert not _marker_exists(apply_repo)
 
 
@@ -2614,24 +2572,66 @@ def test_the_provisioner_runs_under_the_image_builds_environment(
     assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == [None, "1"]
 
 
-def test_every_script_setup_system_reads_is_a_provisioner_input() -> None:
-    # The live re-run is keyed on the files the provisioner reads. An installer
-    # setup_system.sh chains but this set omits means a pin bump in that
-    # installer alone lands without the binary being reinstalled.
-    setup_system = (
-        _WORKSPACE_ROOT / "system" / "scripts" / "setup_system.sh"
-    ).read_text()
-    # Every sibling script setup_system.sh runs or sources by path
-    # (`bash "$dir/x.sh"`, `. "$(dirname "$0")/x.sh"`), as opposed to one it
-    # only mentions in a comment.
-    chained = {
-        f"system/scripts/{name}"
-        for name in re.findall(
-            r'^\s*(?:bash|\.)\s+"[^"]*/([\w.-]+\.sh)"', setup_system, re.MULTILINE
-        )
+def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None:
+    # The live re-run is keyed on the files the provisioner reads, and which
+    # installers it chains is read off the script itself rather than kept in
+    # a list beside it: a release that adds or retires one is read as it ships.
+    scripts = tmp_path / "system" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "setup_system.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        '. "$(dirname "$0")/_provision_guard.sh"\n'
+        'bash "$sources_dir/write_apt_sources.sh"\n'
+        "# Keep the pins in sync with seed_home_skeleton.sh.\n"
+        'bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"\n'
+        'if [ -f "$setup_dir/install_dufs.sh" ]; then\n'
+        '    bash "$setup_dir/install_dufs.sh"\n'
+        "else\n"
+        '    bash "$setup_dir/default-workspace-template-install-dufs"\n'
+        "fi\n"
+    )
+    for name in (
+        "_provision_guard.sh",
+        "write_apt_sources.sh",
+        "seed_home_skeleton.sh",
+        "install_dufs.sh",
+    ):
+        (scripts / name).write_text("")
+
+    assert update_self.read_provisioner_inputs(tmp_path) == {
+        "system/scripts/setup_system.sh",
+        ".mngr/apt-snapshot-timestamp",
+        # Sourced and run, respectively.
+        "system/scripts/_provision_guard.sh",
+        "system/scripts/write_apt_sources.sh",
+        # Run, inside a branch.
+        "system/scripts/install_dufs.sh",
+        # Not: mentioned only in a comment (seed_home_skeleton.sh), a /tmp
+        # download (install_claude.sh), an image-baked name without a sibling.
+    }
+
+
+def test_provisioner_inputs_on_a_tree_without_the_entry_point() -> None:
+    # The apply may run against a tree that predates the script (or a test
+    # repo without one): the fixed two still count, nothing else does.
+    assert update_self.read_provisioner_inputs(Path("/nonexistent")) == {
+        "system/scripts/setup_system.sh",
+        ".mngr/apt-snapshot-timestamp",
+    }
+
+
+def test_the_real_provisioner_chains_more_than_its_entry_point() -> None:
+    # A parse that silently matched nothing in the real script would key every
+    # installer pin bump off the list of two, exactly the gap this exists to
+    # close.
+    inputs = update_self.read_provisioner_inputs(_WORKSPACE_ROOT)
+    chained = inputs - {
+        "system/scripts/setup_system.sh",
+        ".mngr/apt-snapshot-timestamp",
     }
     assert chained != set()
-    assert chained <= update_self._PROVISIONER_SCRIPTS
+    for path in chained:
+        assert (_WORKSPACE_ROOT / path).is_file(), path
 
 
 def test_a_hung_forward_step_rolls_back_naming_the_step(
@@ -2723,10 +2723,12 @@ def test_emergency_when_rollback_cannot_restore_health(
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
 
-    def never_healthy(url: str) -> int | None:
-        return 500
+    # The merged backend pre-flights fine; it is the live service that never
+    # comes back after the rollback's restart.
+    def live_never_healthy(url: str) -> int | None:
+        return 500 if _is_live(url) else 200
 
-    code = _apply(runner, _FakeHttp(never_healthy), _FakeSpawner(), apply_repo)
+    code = _apply(runner, _FakeHttp(live_never_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 3
     # The pre-apply copies are the operator's way back: kept, and named.
@@ -3993,7 +3995,7 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     )
     (repo_root / ".venv").mkdir()
     (repo_root / ".venv" / "marker.txt").write_text("old-venv")
-    plan = update_self.plan_apply(
+    plan = _plan(
         [
             "system/apps/system_interface/frontend/src/App.ts",
             "system/apps/system_interface/frontend/package.json",
@@ -4025,7 +4027,7 @@ def test_existing_snapshot_copies_are_reused_not_overwritten(tmp_path: Path) -> 
     # part-destroyed, and re-copying would overwrite the good copy with wreckage.
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
     runner = _RecordingRunner()
     first = update_self.take_snapshots(plan, repo_root, runner, [])
     (repo_root / update_self.FRONTEND_BUILD_INDEX).write_text("wrecked mid-apply")
@@ -4039,7 +4041,7 @@ def test_existing_snapshot_copies_are_reused_not_overwritten(tmp_path: Path) -> 
 
 def test_a_missing_snapshot_target_degrades_to_a_note(tmp_path: Path, capsys) -> None:
     repo_root = _make_apply_repo(tmp_path)  # no bundle was ever built
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
 
     snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
 
@@ -4061,7 +4063,7 @@ def test_a_copy_that_cannot_be_taken_degrades_to_a_warning(
     (repo_root / update_self.STATE_DIR_REL / update_self.SNAPSHOTS_DIRNAME).write_text(
         "not a directory"
     )
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
 
     snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
 
