@@ -163,11 +163,7 @@ def allocate_app_instance(layout_dir: Path, service_name: str) -> str:
     they show up as real references, so the set cannot grow without bound.
     """
     with _instance_allocate_lock:
-        used_names = {
-            instance_name
-            for names in list_app_instances(layout_dir).values()
-            for instance_name in names
-        }
+        used_names = {instance_name for names in list_app_instances(layout_dir).values() for instance_name in names}
         reserved_names = _recently_allocated_names_by_layout_dir.setdefault(layout_dir.resolve(), set())
         # Drop reservations that have since become real references so the set
         # cannot grow without bound.

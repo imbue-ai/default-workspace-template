@@ -25,13 +25,25 @@ _STRANDED_REPRO = _TESTDATA_DIR / "stranded_queue_repro.jsonl"
 
 def _enqueue_line(content: str, *, timestamp: str = "2026-08-07T00:00:00.000Z", session_id: str = _SESSION) -> str:
     return json.dumps(
-        {"type": "queue-operation", "operation": "enqueue", "timestamp": timestamp, "sessionId": session_id, "content": content}
+        {
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "timestamp": timestamp,
+            "sessionId": session_id,
+            "content": content,
+        }
     )
 
 
 def _pop_all_line(content: str, *, session_id: str = _SESSION) -> str:
     return json.dumps(
-        {"type": "queue-operation", "operation": "popAll", "timestamp": "t", "sessionId": session_id, "content": content}
+        {
+            "type": "queue-operation",
+            "operation": "popAll",
+            "timestamp": "t",
+            "sessionId": session_id,
+            "content": content,
+        }
     )
 
 
@@ -41,7 +53,13 @@ def _dequeue_line(*, session_id: str = _SESSION) -> str:
 
 def _remove_line(content: str, *, session_id: str = _SESSION) -> str:
     return json.dumps(
-        {"type": "queue-operation", "operation": "remove", "timestamp": "t", "sessionId": session_id, "content": content}
+        {
+            "type": "queue-operation",
+            "operation": "remove",
+            "timestamp": "t",
+            "sessionId": session_id,
+            "content": content,
+        }
     )
 
 

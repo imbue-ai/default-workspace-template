@@ -194,10 +194,7 @@ def test_parse_credential_lines_strips_quotes_and_whitespace() -> None:
 def test_derive_auth_mode_covers_all_shapes() -> None:
     assert auth.derive_auth_mode({}) is auth.AuthMode.NONE
     assert auth.derive_auth_mode({"ANTHROPIC_API_KEY": "k"}) is auth.AuthMode.API_KEY
-    assert (
-        auth.derive_auth_mode({"ANTHROPIC_API_KEY": "k", "ANTHROPIC_BASE_URL": "u"})
-        is auth.AuthMode.IMBUE
-    )
+    assert auth.derive_auth_mode({"ANTHROPIC_API_KEY": "k", "ANTHROPIC_BASE_URL": "u"}) is auth.AuthMode.IMBUE
     assert auth.derive_auth_mode({"CLAUDE_CODE_OAUTH_TOKEN": "t"}) is auth.AuthMode.SUBSCRIPTION
 
 
@@ -296,22 +293,34 @@ def test_resolution_honors_explicit_config_dir_env(isolated_claude_config: Path)
     assert auth._resolve_claude_json_path() == isolated_claude_config / ".claude.json"
 
 
-# ----- workspace host id -----
+# ----- workspace id -----
 
 
-def test_read_workspace_host_id_from_data_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_workspace_id_prefers_the_services_agents_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     (tmp_path / "data.json").write_text(json.dumps({"host_id": "host-123"}))
-    assert auth.read_workspace_host_id() == "host-123"
+    services_dir = tmp_path / "agents" / "agent-abc"
+    services_dir.mkdir(parents=True)
+    (services_dir / "data.json").write_text(
+        json.dumps({"id": "agent-abc", "name": "system-services", "labels": {"is_primary": "true"}})
+    )
+    chat_dir = tmp_path / "agents" / "agent-chat"
+    chat_dir.mkdir(parents=True)
+    (chat_dir / "data.json").write_text(json.dumps({"id": "agent-chat", "labels": {}}))
+    assert auth.read_workspace_id() == "agent-abc"
 
 
-def test_read_workspace_host_id_tolerates_missing_env_and_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
-    assert auth.read_workspace_host_id() is None
+def test_read_workspace_id_falls_back_to_the_machines_host_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    assert auth.read_workspace_host_id() is None
+    (tmp_path / "data.json").write_text(json.dumps({"host_id": "host-123"}))
+    assert auth.read_workspace_id() == "host-123"
+
+
+def test_read_workspace_id_tolerates_missing_env_and_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
+    assert auth.read_workspace_id() is None
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    assert auth.read_workspace_id() is None
 
 
 # ----- agent snapshot / restart -----

@@ -72,7 +72,9 @@ def test_reads_serve_history_without_the_thread_having_run(tmp_path: Path) -> No
     ``start()`` is deliberately never called, which is the whole point -- this is the
     state the very first request after a restart sees.
     """
-    _write_rollout(tmp_path, [_user_line("first", "2026-08-03T00:00:01Z"), _user_line("second", "2026-08-03T00:00:02Z")])
+    _write_rollout(
+        tmp_path, [_user_line("first", "2026-08-03T00:00:01Z"), _user_line("second", "2026-08-03T00:00:02Z")]
+    )
     watcher, _ = _build_watcher(tmp_path)
 
     assert watcher.get_total_event_count() == 2
@@ -161,7 +163,9 @@ def test_marker_takes_precedence_over_newest_rollout(tmp_path: Path) -> None:
     marked = _write_rollout(tmp_path, [_user_line("marked", "2026-08-03T00:00:01Z")])
     # A second, newer rollout with no bearing on the marker must NOT be picked while the marker points elsewhere.
     other = _write_rollout_without_marker(
-        tmp_path, [_user_line("unmarked-newer", "2026-08-03T00:00:09Z")], name="rollout-2026-08-03T00-00-09-other.jsonl"
+        tmp_path,
+        [_user_line("unmarked-newer", "2026-08-03T00:00:09Z")],
+        name="rollout-2026-08-03T00-00-09-other.jsonl",
     )
     # Force it newest by mtime.
     os.utime(other, (10**10, 10**10))
@@ -283,9 +287,7 @@ def test_multibyte_char_split_across_reads_is_preserved(tmp_path: Path) -> None:
     watcher, _ = _build_watcher(tmp_path)
     # ensure_ascii=False so the emoji is raw UTF-8 in the file, as codex writes it
     # (serde_json does not escape non-ASCII -- real rollouts carry raw multi-byte bytes).
-    data = (json.dumps(_user_line("hi\U0001f389", "2026-08-03T00:00:01Z"), ensure_ascii=False) + "\n").encode(
-        "utf-8"
-    )
+    data = (json.dumps(_user_line("hi\U0001f389", "2026-08-03T00:00:01Z"), ensure_ascii=False) + "\n").encode("utf-8")
     # Split in the middle of the four-byte emoji, straddling the read boundary.
     split = data.index("\U0001f389".encode("utf-8")) + 2
     sessions_dir = tmp_path / _SESSIONS_RELATIVE / "2026" / "08" / "03"
