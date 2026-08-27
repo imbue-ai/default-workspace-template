@@ -478,3 +478,26 @@ last painted, which was the spinner, and no later redraw could replace it.
 Worth noting for the next one of these: a render that throws does not look like an error, it
 looks like something slow. Nothing appears in a server log, because nothing was asked of the
 server. The browser console named it in one line.
+
+# Every provider pi takes a key for, behind the mockup's dropdown
+
+The API-key lane offered eight providers, which was a list someone wrote down rather than a
+list pi actually has. Reading pi's own registry -- `pi-ai/dist/providers/<id>.models.js` names
+each provider, and the module beside it names the environment variable its key is read from
+-- gives 37, of which 28 take a plain API key. That is what the lane offers now, sorted by
+name, taken from the registry rather than curated.
+
+The nine left out are left out for a reason, recorded beside the list: amazon-bedrock and the
+cloudflare pair want cloud credentials rather than one key, azure needs an endpoint and a
+deployment alongside it, google-vertex a project and a location, github-copilot and
+openai-codex are OAuth only, and opencode-go already has its own lane.
+
+The provider id is the load-bearing part. `auth.json` is keyed by it, so a display name we
+invent is cosmetic while an id we invent is a credential pi will never find -- every id here
+is the name of a file in pi's registry.
+
+Twenty-eight rows do not belong in a `select`, so the picker is now the mockup's
+`ProviderKeyDropdown`: a trigger showing the chosen provider and its env var, and a menu
+pinned under it with its own scroll region. It renders at overlay level rather than inside
+the panel, because the panel is `overflow-hidden` and would clip it -- the same reason the
+mockup portals it to `<body>`.
