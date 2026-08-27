@@ -155,7 +155,14 @@ uv run python3 "$REPO_ROOT/system/scripts/forward_port.py" --name terminal --url
 if [ -n "${MNGR_AGENT_STATE_DIR:-}" ]; then
     mkdir -p "$MNGR_AGENT_STATE_DIR/events/servers"
     _TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000000000Z")
-    _EID="evt-$(echo -n "terminal:http://localhost:$TTYD_PORT" | sha256sum | cut -c1-32)"
+    # The event id is deterministic on purpose (restarts re-register the same
+    # server, and dedup collapses them to one fact) but MUST be salted with
+    # this workspace's identity: analytics aggregates events fleet-wide and
+    # dedupes by event id, so an id derived only from the service name+URL is
+    # identical in every workspace and collapses the whole fleet to one event.
+    _HOST_ID=$(jq -r '.host_id // empty' "${MNGR_HOST_DIR:-$HOME/.mngr}/data.json" 2>/dev/null || true)
+    _AGENT_ID="${MNGR_AGENT_ID:-$(basename "$MNGR_AGENT_STATE_DIR")}"
+    _EID="evt-$(echo -n "$_HOST_ID:$_AGENT_ID:terminal:http://localhost:$TTYD_PORT" | sha256sum | cut -c1-32)"
     printf '{"timestamp":"%s","type":"server_registered","event_id":"%s","source":"servers","server":"terminal","url":"http://localhost:%s"}\n' \
         "$_TS" "$_EID" "$TTYD_PORT" \
         >> "$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl"
