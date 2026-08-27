@@ -20,6 +20,7 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface import welcome_resend
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import ProcessSetupError
 from imbue.system_interface.harnesses.claude.auth import RestartPhase
@@ -95,9 +96,9 @@ def _build_welcome_resender(host_dir: Path, welcome_calls: list[str]) -> Welcome
     skill_path = host_dir / "SKILL.md"
     skill_path.write_text("---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n")
 
-    def _record_welcome_send(agent_id: str, _message: str) -> bool:
+    def _record_welcome_send(agent_id: str, _message: str) -> SendFailure | None:
         welcome_calls.append(agent_id)
-        return True
+        return None
 
     return WelcomeResender(
         resolve_agent=lambda _id: _fake_chat_agent(),
@@ -243,9 +244,7 @@ def test_poll_rejects_unknown_session() -> None:
 
 def test_submit_code_rejects_unknown_session() -> None:
     with _client() as client:
-        response = client.post(
-            "/api/claude-auth/setup-token/submit-code", json={"session_id": "nope", "code": "x"}
-        )
+        response = client.post("/api/claude-auth/setup-token/submit-code", json={"session_id": "nope", "code": "x"})
     assert response.status_code == 400
 
 

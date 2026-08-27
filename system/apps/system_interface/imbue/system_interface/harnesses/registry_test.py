@@ -16,10 +16,21 @@ def _notice_popups(harness: HarnessType) -> list[HarnessPopup]:
     ]
 
 
+def _can_launch_fast(harness: HarnessType) -> bool:
+    """Whether this harness has a fast mode at all, read off the ONE place that declares it:
+    the fast-mode grace-period prompt. Derived rather than listed, so a harness that gains
+    (or loses) fast mode cannot end up declining a /fast it does not have."""
+    return any(popup.action is PopupAction.FAST_MODE_PROMPT for popup in HARNESS_SPECS[harness].popups)
+
+
 def test_every_harness_declines_the_model_bar_commands_with_the_picker_notice() -> None:
-    # The model bar owns /model, /effort and /fast on every harness, so typing one into
-    # the composer is declined everywhere -- and with its OWN body, because the reason is
-    # not the usual "it takes over the terminal" (they send fine; that is the problem).
+    # The model bar owns /model and /effort on every harness, so typing one into the
+    # composer is declined everywhere -- and with its OWN body, because the reason is not
+    # the usual "it takes over the terminal" (they send fine; that is the problem).
+    #
+    # /fast is NOT universal: only the fast-capable harnesses declare it. Declining it
+    # elsewhere would point the user at a picker control that is not rendered for that
+    # harness, which is worse than letting the text through.
     for harness in HARNESS_SPECS:
         bodies = {
             command: popup.notice_body
@@ -27,7 +38,8 @@ def test_every_harness_declines_the_model_bar_commands_with_the_picker_notice() 
             for command in popup.commands
             if command in ("/model", "/effort", "/fast")
         }
-        assert set(bodies) == {"/model", "/effort", "/fast"}, harness
+        expected = {"/model", "/effort", "/fast"} if _can_launch_fast(harness) else {"/model", "/effort"}
+        assert set(bodies) == expected, harness
         for command, body in bodies.items():
             assert body is not None, f"{harness} {command} falls back to the terminal notice"
             assert "model picker" in body, f"{harness} {command}: {body!r}"

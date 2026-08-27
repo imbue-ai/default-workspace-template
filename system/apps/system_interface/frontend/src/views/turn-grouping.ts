@@ -52,9 +52,14 @@
  * and treats the notification as a turn boundary (the agent blocked on the
  * request and is now resuming), so any open step carries over and continues in
  * the new turn rather than the same node resuming beneath the card. The raw text
- * isn't shown (its verdict is on the card). The notification carries no request
- * id, so it resolves the oldest still-open request (the agent blocks on a
- * request until answered, so in practice only one is open at a time).
+ * isn't shown (its verdict is on the card). The notification carries the
+ * resolved request's own id (see message-classification's resolutionRequestIdOf),
+ * so a card looks up its verdict by that id rather than by arrival order: two
+ * requests resolved out of the order they were created never swap their
+ * cards' verdicts, and a message that batches more than one permission request
+ * resolves each of its cards independently. A notification with no id (recorded
+ * before minds embedded ids) attributes nothing here -- an embedded page
+ * recovers such verdicts from the response log via the card's hydration query.
  *
  * This module reads no timestamps. Pending placeholders are ordered by
  * transcript position; grouping and the positioning of any transitioned step
@@ -70,7 +75,12 @@ import type {
 } from "../models/Response";
 import type { PermissionResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
-import { isNonBoundaryUserMessage, isSystemChipUserMessage, resolutionOf } from "./message-classification";
+import {
+  isNonBoundaryUserMessage,
+  isSystemChipUserMessage,
+  resolutionOf,
+  resolutionRequestIdOf,
+} from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
 
@@ -109,10 +119,16 @@ export type TimelineItem =
   | { kind: "ungrouped"; key: string; events: AssistantMessageEvent[] }
   /** An agent permission request, lifted out of any open step so it always
    *  renders inline as a thread-breaking block. The user must be able to see and
-   *  act on it without expanding a step. `resolution` is set once a later
-   *  granted/denied notification is correlated to this request (see
-   *  buildSections); null while still awaiting a decision. */
-  | { kind: "permission"; event: AssistantMessageEvent; resolution: PermissionResolution | null }
+   *  act on it without expanding a step. `event` may carry more than one
+   *  permission-request tool call (a batched request); each card resolves its
+   *  own verdict by looking up its own request id in `resolutionsByRequestId`
+   *  (shared across the whole transcript, built once in buildSections), which
+   *  has no entry while the request still awaits a decision. */
+  | {
+      kind: "permission";
+      event: AssistantMessageEvent;
+      resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
+    }
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
   | { kind: "chip"; event: UserMessageEvent };
 
@@ -182,16 +198,24 @@ function hasPermissionRequest(e: AssistantMessageEvent, toolResults: Map<string,
   return e.tool_calls.some((tc) => isFiledPermissionRequest(tc, toolResults.get(tc.tool_call_id) ?? null));
 }
 
-/** The Bash command string for a tool call, or null if not a Bash call (or its
- *  input_preview is not parseable -- e.g. a truncated non-tk command). tk
- *  lifecycle inputs are exempt from input truncation, so they parse cleanly. */
+/** The shell command string for a tool call, or null if its input carries none. tk
+ *  lifecycle inputs are exempt from input truncation, so they parse cleanly.
+ *
+ *  Deliberately NOT gated on tool name. It used to accept only claude's `Bash` and pi's
+ *  `bash`, which was the single piece of harness knowledge left in this file -- and it meant
+ *  agy (`run_command`) was the one harness with no input fallback at all when output
+ *  decoration was missing. The decoration regexes below are already tk-anchored and
+ *  TK_CREATE_OR_CLOSE_RAW pre-filters, so any tool whose input happens to carry a "command"
+ *  key is safe to read here. */
 function tkCommand(tc: ToolCall): string | null {
-  // claude's `Bash` and pi's `bash` both carry the command under the "command" key;
-  // codex's `exec` is handled via its own tk-input path, not here.
-  if (tc.tool_name !== "Bash" && tc.tool_name !== "bash") return null;
   try {
-    const obj = JSON.parse(tc.input_preview) as { command?: unknown };
-    return typeof obj.command === "string" ? obj.command : null;
+    const obj = JSON.parse(tc.input_preview) as Record<string, unknown>;
+    // claude and pi spell it "command"; agy spells it "CommandLine". Both are read, so this
+    // stays a property of the INPUT rather than of which harness produced it.
+    for (const key of ["command", "CommandLine"]) {
+      if (typeof obj[key] === "string") return obj[key] as string;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -404,14 +428,12 @@ export function buildSections(
   let current: SectionBuilder | null = null;
   // Steps open at the end of the prior section, to re-open as carryover.
   let carryover: string[] = [];
-  // Permission requests awaiting a decision, in transcript (creation) order, by
-  // the event id of the message that issued each. A granted/denied notification
-  // carries no request id, so it resolves the oldest still-open request -- the
-  // agent blocks on a request until it is answered, so in practice only one is
-  // open at a time. Resolutions are keyed by the resolved request's event id.
-  const unresolvedPermissions: string[] = [];
-  const resolutions = new Map<string, PermissionResolution>();
-
+  // The primary correlation path: every id-keyed verdict, keyed by the resolved
+  // request's own id (PermissionRequestDetails.requestId) -- shared across the
+  // whole transcript and looked up per-card at render time, so it is immune to
+  // requests being resolved out of the order they were created, and to more
+  // than one permission request being batched into one message.
+  const resolutionsByRequestId = new Map<string, PermissionResolution>();
   const ensureSection = (user_event: UserMessageEvent | null, key: string): SectionBuilder => {
     const section = newSection(user_event, key);
     // Re-open carried-over steps at the top of the new section.
@@ -426,20 +448,24 @@ export function buildSections(
   for (const e of events) {
     if (e.type === "user_message") {
       // A granted/denied notification for an earlier permission request. Record
-      // the verdict against the oldest open request (it reflects on that
-      // request's card, not as a user prompt), then treat the notification as
-      // the turn boundary it naturally is: the agent blocked on the request and
-      // is now resuming, so close the current section -- carrying any open step
-      // over -- and open a fresh one. The step then continues in the normal
-      // carryover way rather than the same node resuming inline beneath the
-      // card. The raw text is not shown (its verdict is on the card), so the new
-      // section has no user bubble. If no request is open to claim it (e.g. the
-      // request scrolled out of the visible transcript), fall through and let it
-      // render as an ordinary user message.
+      // the verdict (it reflects on that request's card, not as a user prompt),
+      // then treat the notification as the turn boundary it naturally is: the
+      // agent blocked on the request and is now resuming, so close the current
+      // section -- carrying any open step over -- and open a fresh one. The step
+      // then continues in the normal carryover way rather than the same node
+      // resuming inline beneath the card. The raw text is not shown (its verdict
+      // is on the card), so the new section has no user bubble.
+      //
+      // The notification's own request id is the correlation key. A
+      // notification with NO id (recorded before minds embedded ids)
+      // attributes nothing -- guessing by arrival order is what swapped
+      // verdicts between cards, and an embedded page recovers the verdict
+      // from the response log instead (the card's hydration query). The
+      // break-with-no-bubble applies either way.
       const resolution = resolutionOf(e);
-      if (resolution !== null && unresolvedPermissions.length > 0) {
-        const resolvedEventId = unresolvedPermissions.shift() as string;
-        resolutions.set(resolvedEventId, resolution);
+      if (resolution !== null) {
+        const requestId = resolutionRequestIdOf(e);
+        if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
         carryover = current === null ? [] : openStepsAtEnd(current);
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
@@ -499,9 +525,6 @@ export function buildSections(
           // open (current_step_id is untouched), so work resumed after the user
           // responds keeps grouping under it.
           current.entries.push({ kind: "permission", event: parsed.render });
-          // Track it as awaiting a decision so a later granted/denied
-          // notification can be correlated back to this card by order.
-          unresolvedPermissions.push(parsed.render.event_id);
         } else {
           routeMessage(current, parsed.render, lastOpened ?? stepBefore);
         }
@@ -521,7 +544,7 @@ export function buildSections(
 
   const lastBuilder = builders[builders.length - 1];
   return builders.map((b) =>
-    finalizeSection(b, deco, resolutions, b === lastBuilder ? pending : [], agentIsIdle, b === lastBuilder),
+    finalizeSection(b, deco, resolutionsByRequestId, b === lastBuilder ? pending : [], agentIsIdle, b === lastBuilder),
   );
 }
 
@@ -647,7 +670,7 @@ function collectEjectedProse(section: SectionBuilder, frontierId: string | null)
 function finalizeSection(
   section: SectionBuilder,
   deco: Map<string, Decoration>,
-  resolutions: Map<string, PermissionResolution>,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
   pending: { id: string; title: string }[],
   agentIsIdle: boolean,
   is_tail: boolean,
@@ -757,14 +780,10 @@ function finalizeSection(
       }
     } else if (entry.kind === "permission") {
       // A permission break ends any in-flight ungrouped run and stands as its
-      // own always-visible item at its transcript position. Attach the verdict
-      // if a later notification resolved this request.
+      // own always-visible item at its transcript position. Each card looks up
+      // its own verdict in resolutionsByRequestId by its own request id.
       flushUngrouped();
-      items.push({
-        kind: "permission",
-        event: entry.event,
-        resolution: resolutions.get(entry.event.event_id) ?? null,
-      });
+      items.push({ kind: "permission", event: entry.event, resolutionsByRequestId });
     } else if (entry.kind === "chip") {
       // Likewise a chip: it ends any in-flight ungrouped run and stands at its
       // own transcript position.

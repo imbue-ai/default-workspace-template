@@ -7,7 +7,7 @@ strings, and a name that no longer resolves fails *silently*: the hook never run
 the guard is simply gone. So a rename that misses one of these files, or a guard added
 to one harness and forgotten on another, is invisible without this test.
 
-See POLICY_HOOKS.md; "Keeping the three in step" is the invariant asserted here.
+See tool-call-policies.md; "Keeping the three in step" is the invariant asserted here.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def test_every_wired_hook_script_exists() -> None:
 def test_claude_and_codex_run_the_same_pretooluse_guards() -> None:
     """The safety/workflow guards are cross-harness by design, so the two configs must
     name the same set. (Only PreToolUse: claude also wires SessionStart and Stop hooks
-    that have no codex counterpart -- see POLICY_HOOKS.md, category C.)"""
+    that have no codex counterpart -- see tool-call-policies.md, category C.)"""
     claude = json.loads(_CLAUDE_SETTINGS.read_text())
     codex = json.loads(_CODEX_HOOKS.read_text())
     claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse"))

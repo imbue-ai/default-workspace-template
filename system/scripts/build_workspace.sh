@@ -50,12 +50,16 @@ uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
 uv tool install -e "$REPO_ROOT/system/apps/system_interface" \
     --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_claude" \
     --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_codex" \
-    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_pi_coding"
+    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_pi_coding" \
+    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_opencode" \
+    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_antigravity"
 
 mngr plugin add \
     --path system/vendor/mngr/libs/mngr_claude \
     --path system/vendor/mngr/libs/mngr_codex \
     --path system/vendor/mngr/libs/mngr_pi_coding \
+    --path system/vendor/mngr/libs/mngr_opencode \
+    --path system/vendor/mngr/libs/mngr_antigravity \
     --path system/vendor/mngr/libs/mngr_wait
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen

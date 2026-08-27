@@ -1,14 +1,17 @@
 """Live browser fleet: headful Chromium on a private Xvfb, streamed via pixelflux, with a per-browser ownership state machine.
 
 Each :class:`LiveBrowser` owns one headful Chromium on its OWN private Xvfb display,
-launched and driven by a SINGLE ``browser_use.BrowserSession`` -- there is no second
-(Playwright) connection. browser-use is the single source of truth: it drives the agent
-(``Agent.run``), runs the direct verbs (state/click/type/navigate), owns the tab list,
-and tracks the current tab (``agent_focus_target_id``). The pixel view is streamed by
-pixelflux capturing the display's foreground window as damage-driven H.264 (see
-videopipe.py / mediastream.py); human input is XTEST at that display (xinput.py). The
-fleet's only job on top of browser-use is to foreground browser-use's current tab so
-pixelflux shows it. The human sees exactly what the agent does and vice versa.
+launched by ``chrome_launcher`` and observed over the fleet's own ``CdpClient``; the
+agent drives it through ``cdp_proxy`` with ``@playwright/cli``.
+
+The fleet owns the browser; it does not own the driving. It launches Chromium, holds the
+ownership lease, keeps its own CDP channel for the tab list / foregrounding / crash
+detection, and hands the agent a gated CDP endpoint. Everything about *how to click a
+button* is the CLI's business. The pixel view is streamed by pixelflux capturing the
+display's foreground window as damage-driven H.264 (see videopipe.py / mediastream.py);
+human input is XTEST at that display (xinput.py). The fleet's one job on top of the
+agent's driving is to foreground the tab it is acting on, so pixelflux shows it -- the
+human sees exactly what the agent does and vice versa.
 
 Ownership is a small per-browser state machine, and it is the heart of this
 module. Many agents (a chat agent plus its sub-agents, each a distinct
@@ -42,40 +45,33 @@ Cloud / litellm proxy (``ANTHROPIC_BASE_URL``) path is intentionally unsupported
 """
 
 import asyncio
-import base64
-import ipaddress
 import json
 import os
 import queue
+import secrets
 import shutil
 import subprocess
 import threading
 import time
 from collections import deque
-from urllib.parse import urlparse
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Literal
 
-from browser_use import Agent, BrowserSession, ChatAnthropic
-from browser_use.skill_cli.actions import ActionHandler
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
 
+from browser import chrome_launcher
 from browser import manifest as fleet_manifest
+from browser.cdp_client import CdpClient
+from browser.cdp_proxy import BrowserProxy, ProxyServer
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 
-# browser-use phones home anonymized telemetry by default; disable it (the
-# compute has no business making that call, and it spams connection-error logs
-# where egress is restricted). setdefault so an explicit opt-in still wins.
-os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
-
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
-# navigation, browser killed). browser-use drives Chromium over cdp-use, whose
-# failures surface as these built-ins; the bounded CDP helpers additionally catch
-# broadly (best-effort, must never wedge the loop).
+# navigation, browser killed). The bounded CDP helpers additionally catch broadly
+# (best-effort, must never wedge the loop).
 _BROWSER_ERRORS = (RuntimeError, ConnectionError, OSError)
 
 ControlOwner = Literal["human", "agent"]
@@ -88,12 +84,6 @@ ControlOwner = Literal["human", "agent"]
 # ``running``; the viewer renders deterministically off this field.
 Lifecycle = Literal["init", "running", "crashed"]
 
-# An event emitted by a running task: thinking / action / status / done / error /
-# preempted. The runner streams these to the agent's CLI as line-delimited JSON.
-TaskEvent = dict[str, Any]
-EventSink = Callable[[TaskEvent], Awaitable[None]]
-
-
 # Fortress's fixed install path (see the env.d unit
 # system/scripts/env.d/1000-playwright-fortress.sh). A stealth, C++-patched
 # Chromium fork -- replaces vanilla Chromium as the engine for every browser
@@ -104,11 +94,33 @@ EventSink = Callable[[TaskEvent], Awaitable[None]]
 # runs; those gate on the Xvfb binary the same way.
 _FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
 
-# Default model. browser-use's own default LLM is ChatBrowserUse (its hosted
-# model), so to drive with the user's Anthropic key we pass ChatAnthropic
-# explicitly. Overridable via env for easy iteration; the string is sent to the
-# API as-is (browser-use accepts an arbitrary model string).
-_DEFAULT_MODEL = os.environ.get("BROWSER_USE_MODEL", "claude-sonnet-4-6")
+# Vendored, version-pinned unpacked extensions installed beside Fortress by the same
+# env.d unit. Each subdirectory holding a manifest.json is passed via --load-extension.
+_EXTENSIONS_DIR = "/opt/fortress/extensions"
+
+# The fleet's CDP proxy: ONE websocket server for every browser, addressed by
+# ``/<browser-name>/<token>``. Deliberately its own loopback port and deliberately NOT
+# mounted on the Flask app -- that app's port is registered with ``forward_port.py`` and
+# published to the desktop client, which would expose an unauthenticated CDP endpoint
+# outside the workspace. Started once by the runner; None in unit tests that never
+# launch a browser.
+# Held in a tiny mutable holder rather than rebound as a module global: the repo's
+# ratchets forbid the `global` keyword, and an attribute write is the same thing without
+# it.
+class _ProxyHolder:
+    server: "ProxyServer | None" = None
+
+
+_PROXY = _ProxyHolder()
+
+
+def set_proxy_server(server: "ProxyServer | None") -> None:
+    """Install the process-wide proxy server (called by the runner at startup)."""
+    _PROXY.server = server
+
+
+def proxy_server() -> "ProxyServer | None":
+    return _PROXY.server
 
 # Headful on a per-browser virtual display (Xvfb) by default: pixelflux films a real
 # X11 window and XTEST injects human input at it, so Chromium must render into a real
@@ -267,7 +279,19 @@ def _unload_pulse_sink(sink_name: str) -> None:
 
 
 # Page the browser opens on, and the default for "New tab".
-_HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
+# The landing page for a fresh browser, and the fallback when a restore has no saved tabs.
+#
+# Blank on purpose. It used to be google.com, which meant the FIRST thing anyone saw on a new
+# browser was Google's consent interstitial -- and in French, because Google picks both the
+# language and the "you look like the EU" decision from IP geolocation, and this workspace's
+# egress is an OVH range that is physically in Oregon but registered to OVH SAS in Roubaix.
+#
+# `?hl=en` would only have translated that wall, not removed it: the interstitial appears
+# because Google thinks the client is in the EU, which a language parameter does not change.
+# A blank page has nothing to geolocate and nothing to consent to. The agent navigates
+# somewhere the moment it attaches, so this page is only ever seen by a human glancing at a
+# fresh pane. Set BROWSER_HOME_URL to override (e.g. "https://www.google.com/?hl=en").
+_HOME_URL = os.environ.get("BROWSER_HOME_URL", "about:blank")
 
 # Server-side cast keepalive: the /cast control socket can sit silent for long
 # stretches, so without traffic the system_interface WS proxy closes the idle stream
@@ -288,31 +312,6 @@ _MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "2"))
 _ALLOWED_NAV_SCHEMES = frozenset({"http", "https"})
 
 
-def _unsafe_navigation_reason(url: str) -> "str | None":
-    """Reason a caller-supplied URL must not be navigated to (SSRF guard), or None if allowed.
-
-    Blocks non-web schemes (``file:``/``chrome:``/``data:``...) and loopback/link-local hosts
-    (including the cloud-metadata IP 169.254.169.254), so a caller can't make the browser read a
-    local file -- e.g. the Anthropic key at ``file:///home/user/.mngr/env`` -- or hit an internal
-    service and exfiltrate it back through the state/screenshot channel. Literal-IP based; a
-    hostname that DNS-rebinds to a blocked IP is a residual this minimal guard does not resolve."""
-    parsed = urlparse((url or "").strip())
-    scheme = parsed.scheme.lower()
-    if scheme not in _ALLOWED_NAV_SCHEMES:
-        return f"scheme {scheme or '(none)'!r} is not allowed (only http/https)"
-    host = (parsed.hostname or "").lower()
-    if not host:
-        return "URL has no host"
-    if host == "localhost" or host.endswith(".localhost"):
-        return "loopback host is not allowed"
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return None  # a regular hostname
-    if address.is_loopback or address.is_link_local:
-        return f"internal address {host} is not allowed"
-    return None
-
 # Names whose background launch FAILED are remembered briefly so a late/retrying optimistic
 # viewer (still in 1013 reconnect-backoff when the launch failed, so it never registered a
 # cast queue and missed the launch_failed broadcast) is closed terminally (1008) instead of
@@ -320,16 +319,10 @@ def _unsafe_navigation_reason(url: str) -> "str | None":
 # outlive a viewer's reconnect backoff (a few seconds). See BrowserSessionManager.
 _FAILED_LAUNCH_MEMORY = int(os.environ.get("BROWSER_FAILED_LAUNCH_MEMORY", "32"))
 
-# Hard ceilings on a single browser-use task so a hung or non-cancel-safe run can
-# never pin a browser forever (the connection-disconnect path is the primary
-# release; these are the backstop). Both env-tunable.
-_TASK_MAX_STEPS = int(os.environ.get("BROWSER_TASK_MAX_STEPS", "100"))
-_TASK_MAX_SECONDS = float(os.environ.get("BROWSER_TASK_MAX_SECONDS", "900"))
-
-# Direct-control ownership is a STICKY LEASE: an agent acquires a browser on its
-# first command and holds it across subsequent commands. Unlike a `task` (whose
-# ownership is bound to the long run), a lease has no live connection to detect a
-# dead/wandered-off owner, so it auto-releases after this many seconds with no
+# Ownership is a STICKY LEASE: an agent acquires a browser on its first command and holds
+# it across subsequent commands. A lease has no live connection to detect a
+# dead/wandered-off owner (an ATTACHED-but-silent CDP socket looks identical to an
+# abandoned one), so it auto-releases after this many seconds with no
 # command (the keepalive loop sweeps it). The human take-control is the instant
 # escape hatch; this TTL is the backstop. Env-tunable. Kept at 60s (was 90s): short
 # enough that a browser a done agent forgot to release frees up promptly for the human,
@@ -378,10 +371,6 @@ def _repo_root() -> Path:
     return Path.cwd()
 
 
-# Where `screenshot` writes PNGs (relative to the daemon's cwd = repo root). The
-# CLI prints the path and the agent reads the file; agent + daemon share the FS.
-_SCREENSHOT_DIR = Path(os.environ.get("BROWSER_SCREENSHOT_DIR", "data/.state/browser-screenshots"))
-
 # Sentinel the fleet wraps its agent-facing nudges in before sending them via
 # `mngr message` (see `_message_agent`). These nudges land in the agent's
 # transcript as an ordinary user turn; without a marker the system_interface
@@ -426,14 +415,11 @@ _MANIFEST_CHECKPOINT_SECONDS = float(os.environ.get("BROWSER_CHECKPOINT_SECONDS"
 # Lock files Chromium leaves in a profile; a hard kill (crash/OOM/container stop)
 # orphans them and the next launch on that profile would refuse to start. Safe to
 # remove because restore is sequential and the prior Chromium for this dir is dead.
-_SINGLETON_LOCK_NAMES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
-
-
 def _profile_dir(browser_id: str) -> Path:
     """The persistent Chromium ``user_data_dir`` for a browser name.
 
     The ``browser-use-user-data-dir-`` prefix in the final path component is
-    LOAD-BEARING, not cosmetic: browser_use's ``BrowserProfile._copy_profile()``
+    HISTORICAL, and the path must NOT change: browser_use's ``BrowserProfile._copy_profile()``
     (profile.py) treats any other path as a "real" profile to COPY into a throwaway
     temp dir (because the bundled binary is "Google Chrome for Testing", so its
     is_chrome check is True) -- which would silently defeat persistence and recopy
@@ -445,82 +431,9 @@ def _profile_dir(browser_id: str) -> Path:
     return _PROFILE_ROOT / f"browser-use-user-data-dir-{browser_id}"
 
 
-def _clear_stale_singleton(profile_dir: Path) -> None:
-    """Remove Chromium's Singleton* lock files left behind by a hard kill, so a
-    relaunch on this persistent profile isn't refused. Called only at launch, never
-    while a browser is live (one live Chromium per profile dir)."""
-    for name in _SINGLETON_LOCK_NAMES:
-        try:
-            (profile_dir / name).unlink(missing_ok=True)
-        except OSError as e:
-            logger.debug("could not clear {} in {} ({})", name, profile_dir, e)
-
-
 def _is_restorable_url(url: str | None) -> bool:
     """Whether a tab URL is worth persisting/reopening (skip blank and internal pages)."""
     return bool(url) and not url.startswith(("about:", "chrome:", "chrome-error:", "devtools:"))
-
-
-def _action_summary(action: Any) -> str:
-    """One-line label for a browser-use action dict (e.g. ``switch: {"tab_id": "230B"}``)."""
-    if isinstance(action, dict):
-        for key, value in action.items():
-            if key == "interacted_element":
-                continue
-            if value is None or (isinstance(value, dict) and not value):
-                return str(key)
-            return f"{key}: {json.dumps(value, default=str)}"
-    return str(action)[:80]
-
-
-def _parse_env_file(text: str) -> dict[str, str]:
-    """Parse a ``KEY=VALUE`` env file (the format claude_auth writes), tolerating quotes."""
-    result: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1].replace('\\"', '"')
-        if key:
-            result[key] = value
-    return result
-
-
-def resolve_anthropic_key() -> str | None:
-    """Return a direct Anthropic API key from the process env or ``$MNGR_HOST_DIR/env``.
-
-    Anthropic API only: we deliberately do NOT read ``ANTHROPIC_BASE_URL`` / support
-    the Imbue Cloud / litellm proxy path. The fallback re-reads the host env file fresh
-    so a key submitted after this service started is still found without a restart.
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        host_dir = os.environ.get("MNGR_HOST_DIR")
-        if host_dir:
-            env_path = Path(host_dir) / "env"
-            if env_path.exists():
-                api_key = _parse_env_file(env_path.read_text()).get("ANTHROPIC_API_KEY")
-    return api_key
-
-
-def anthropic_key_status() -> tuple[bool, str]:
-    """Return ``(available, reason)`` for the optional, key-only ``task``/``extract``
-    verbs. Direct control (state/click/input/scroll/...) is keyless and always
-    available, so this never gates starting or driving a browser -- only those two
-    verbs, which the daemon checks at call time."""
-    if resolve_anthropic_key():
-        return True, "Anthropic API key available"
-    return (
-        False,
-        "The 'task' and 'extract' verbs need an Anthropic API key (create the workspace "
-        "with the 'Anthropic API key' provider; the 'Claude subscription' option has no "
-        "usable key). Direct control -- state/click/input/scroll/screenshot/tab -- works "
-        "without one.",
-    )
 
 
 def deferred_install_ready() -> tuple[bool, str]:
@@ -580,7 +493,7 @@ class _AcquireWaiter:
 
 
 class LiveBrowser(MutableModel):
-    """One headless Chromium streamed to the user, optionally driven by a browser-use agent."""
+    """One headful Chromium streamed to the user and driven by an agent over gated CDP."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -598,10 +511,27 @@ class LiveBrowser(MutableModel):
     owner_agent_name: str | None = None
     human_pinned: bool = False
 
-    # browser-use is the SINGLE handle to Chromium: it launches it, drives
-    # state/click/type/navigate, owns the tab list, and tracks the current tab
-    # (agent_focus_target_id). There is no second (Playwright) connection.
-    _bu_session: BrowserSession = PrivateAttr()
+    # The Chromium process this browser owns, and the fleet's OWN CDP connection to it
+    # (tab list, foregrounding, crash detection). The agent never touches either: it
+    # talks to ``_proxy``, which holds a separate upstream socket. Three simultaneous CDP
+    # clients on one browser were measured to coexist without interference.
+    _chrome: "chrome_launcher.ChromeProcess | None" = PrivateAttr(default=None)
+    _cdp: CdpClient | None = PrivateAttr(default=None)
+    _proxy: BrowserProxy | None = PrivateAttr(default=None)
+    # The capability token in the agent's attach URL. A generic CDP client sends no
+    # ``x-mngr-agent-id`` header, so the token -- not the header -- is how the proxy tells
+    # the lease-holder from any other attacher. Rotated on every ownership write and on
+    # every Chromium launch, which makes revocation race-free and makes a client that
+    # reconnects across a restart fail cleanly instead of driving a different browser.
+    _token: str = PrivateAttr(default="")
+    # The agent the current token was minted for. A CDP client sends no identity header, so
+    # the token IS the identity: it is issued to one agent, and it stops matching the moment
+    # anyone else takes the browser.
+    _token_owner: str = PrivateAttr(default="")
+    _token_owner_name: str | None = PrivateAttr(default=None)
+    # The tab the pane is showing. Was browser-use's ``agent_focus_target_id``; now the
+    # fleet's own notion, updated wherever we foreground.
+    _active_target_id: str = PrivateAttr(default="")
     # Pixelflux media path: this browser's private Xvfb display (":50"..) and its
     # Xvfb process, allocated in start() and torn down in close().
     _display: str = PrivateAttr(default="")
@@ -612,9 +542,6 @@ class LiveBrowser(MutableModel):
     # else "" -- mediastream reads it via the ``audio_capture_device`` property.
     _audio_sink: str = PrivateAttr(default="")
     _audio_source: str = PrivateAttr(default="")
-    _agent: Agent | None = PrivateAttr(default=None)
-    _agent_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
-    _run_on_event: EventSink | None = PrivateAttr(default=None)
     _input_enabled: asyncio.Event = PrivateAttr(default_factory=_enabled_event)
     # Thread-safe mirror of _input_enabled for the /stream receive thread (which runs
     # OFF the loop and so can't read the asyncio.Event). Written on the loop wherever
@@ -641,13 +568,10 @@ class LiveBrowser(MutableModel):
     # Serializes ALL ownership changes -- the single mutual-exclusion primitive.
     _control_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
     _wait_queue: list[_AcquireWaiter] = PrivateAttr(default_factory=list)
-    # Direct-control: browser-use's own action executor (lazily bound to _bu_session),
-    # the last `state`'s numbered elements (so `click <index>` resolves a node), and
-    # the sticky-lease activity timestamp the idle-TTL sweep checks.
-    _action_handler: ActionHandler | None = PrivateAttr(default=None)
-    _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
+    # The sticky-lease activity timestamp the idle-TTL sweep checks. Touched by a
+    # FORWARDED CDP frame, never by a merely-open proxy socket -- so a session that is
+    # attached but silent still ages out exactly as a silent agent did before.
     _lease_touched_at: float = PrivateAttr(default=0.0)
-    _screenshot_seq: int = PrivateAttr(default=0)
     # Direct-control resume queue: agents whose command was rejected (a human or
     # another agent held the browser). They ended their turns; when the browser
     # frees they are handed it FIFO and messaged to resume (see _wake_agent). This
@@ -664,7 +588,7 @@ class LiveBrowser(MutableModel):
     # The single explicit lifecycle field (see ``Lifecycle``). A browser is registered
     # in ``init`` (Chromium not yet up), flips to ``running`` once Chromium is up and the
     # active tab is foregrounded, and to ``crashed`` if Chromium dies unexpectedly (OS/OOM
-    # kill, segfault) -- detected via the keepalive poll of browser-use's connection, or
+    # kill, segfault) -- detected via the keepalive poll of the fleet's CDP client, or
     # lazily when an action finds the connection gone. A crashed browser reports
     # "crashed" to agents and the viewer rather than silently freezing; its name is never
     # reused (a new browser gets a new random name), so the dead one stays clearly
@@ -714,78 +638,18 @@ class LiveBrowser(MutableModel):
         set once in start(), so a plain attribute read is thread-safe."""
         return self._audio_source or None
 
-    def _build_bu_session(self, profile_dir: Path, chromium_path: str, *, chromium_sandbox: bool) -> BrowserSession:
-        """Construct (don't start) the browser-use session for this browser's persistent
-        profile. ``chromium_sandbox`` is False when Chromium's in-process sandbox must be
-        disabled (see _NO_SANDBOX / the start() fallback); browser-use then injects
-        ``--no-sandbox`` itself."""
-        # Capture Chrome's OWN window on this browser's private Xvfb, so the window
-        # must drive layout. no_viewport => the page fills the real OS window and
-        # reflows when a pane-resize grows it (a pinned viewport would render at a
-        # fixed size regardless, letterboxing the capture). --window-position=0,0 maps
-        # the (0,0,w,h) capture region 1:1 to window pixels so input coords stay
-        # correct. Always headful (it needs a real display to capture). The flags are
-        # the cheap-CPU set, minus the three browser-use supplies
-        # itself: --no-sandbox (chromium_sandbox), --user-data-dir, --window-size.
-        return BrowserSession(
-            headless=False,
-            executable_path=chromium_path,
-            user_data_dir=str(profile_dir),
-            args=[
-                # Chromium blocklists --no-sandbox (which we must pass as root: see
-                # _should_disable_sandbox) and pins a permanent "You are using an
-                # unsupported command-line flag" infobar above every page for it. We film
-                # Chrome's real window, so the human sees that bar for the life of the
-                # browser. --test-type is the only supported suppression that does not
-                # break stealth: infobar_utils.cc skips the whole bad-flags prompt when it
-                # (or --enable-automation, which sets navigator.webdriver -- not an option
-                # for Fortress) is present. It also disables Chrome's own background
-                # *component* extensions; unpacked ones (browser-use's uBlock/ClearURLs)
-                # are unaffected, and nothing about it is visible to page JS.
-                "--test-type",
-                "--disable-gpu-compositing",
-                "--disable-smooth-scrolling",
-                "--wm-window-animations-disabled",
-                "--force-prefers-reduced-motion",
-                "--renderer-process-limit=4",
-                "--no-first-run",
-                "--disable-session-crashed-bubble",
-                "--hide-crash-restore-bubble",
-                "--disable-dev-shm-usage",
-                "--window-position=0,0",
-            ],
-            chromium_sandbox=chromium_sandbox,
-            keep_alive=True,
-            no_viewport=True,
-            # Initial window inside the 1920x1080 framebuffer; the connect-URL size
-            # resizes it to the pane on first view.
-            window_size={"width": _INIT_WINDOW_W, "height": _INIT_WINDOW_H},
-        )
-
-    async def _start_bu_session(self, profile_dir: Path, chromium_path: str) -> BrowserSession:
-        """Launch the browser-use session. The Chromium sandbox is disabled up front when
-        we run as root or BROWSER_NO_SANDBOX is set (see _should_disable_sandbox) -- so on
-        the bare-VM Lima case we never make the doomed sandboxed attempt that browser-use
-        turns into a 30s hang. As a backstop, if a *sandboxed* launch still fails we retry
-        once with the sandbox off (the only thing the retry changes), covering any non-root
-        runtime that also can't sandbox."""
-        disable_sandbox = _should_disable_sandbox()
-        session = self._build_bu_session(profile_dir, chromium_path, chromium_sandbox=not disable_sandbox)
-        try:
-            await session.start()
-        except (BrowserStartupError, *_BROWSER_ERRORS) as e:
-            if disable_sandbox:  # sandbox was already off -> the failure is something else
-                raise
-            logger.warning(
-                "browser {} failed to launch ({}); retrying without the Chromium sandbox", self.browser_id, e
-            )
-            _clear_stale_singleton(profile_dir)
-            session = self._build_bu_session(profile_dir, chromium_path, chromium_sandbox=False)
-            await session.start()
-        return session
+    def _extension_paths(self) -> "tuple[str, ...]":
+        """Vendored, version-pinned unpacked extensions to load, if the env.d unit put
+        them there. browser-use used to download these from the Chrome Web Store at
+        runtime, unpinned, into the browser holding the human's real logins; they are now
+        pinned alongside Fortress (see the env.d unit) and simply passed as a flag."""
+        root = Path(os.environ.get("BROWSER_EXTENSIONS_DIR", _EXTENSIONS_DIR))
+        if not root.is_dir():
+            return ()
+        return tuple(str(d) for d in sorted(root.iterdir()) if (d / "manifest.json").is_file())
 
     async def start(self, restore_tabs: list[str] | None = None, active_tab: int = 0) -> None:
-        """Launch the headful Chromium via browser-use (the single Chrome connection).
+        """Launch the headful Chromium and bring up the fleet's own CDP channel.
 
         Uses a persistent ``user_data_dir`` per browser name so cookies/logins/history
         survive a restart (Chromium's own persistence; we serialize none of it). When
@@ -795,26 +659,19 @@ class LiveBrowser(MutableModel):
         """
         self._input_enabled.set()
         self._input_gate.set()  # thread-safe mirror for the /stream input path
-        # Fortress is the fleet's engine (a stealth Chromium fork), passed explicitly
-        # to browser-use as the executable to launch.
         chromium_path = _FORTRESS_EXECUTABLE
         profile_dir = _profile_dir(self.browser_id)
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        _clear_stale_singleton(profile_dir)  # a prior hard kill may have orphaned a lock
         # Bring up this browser's private Xvfb BEFORE Chromium, then point THIS
-        # process's DISPLAY at it right before the launch: browser-use launches
-        # Chromium via a subprocess that inherits this process's env (it does not
-        # forward an env= kwarg), so DISPLAY must be set on os.environ here. The
+        # process's DISPLAY at it right before the launch: the Chromium subprocess
+        # inherits this process's env, so DISPLAY must be set on os.environ here. The
         # manager holds _startup_lock across the whole launch, so this process-global
         # write can't race another launch. Xvfb readiness blocks, so spawn off the loop.
         self._display, self._xvfb = await asyncio.to_thread(_spawn_xvfb)
         os.environ["DISPLAY"] = self._display
         logger.info("LiveBrowser {} private display {} up", self.browser_id, self._display)
         # Bring up this browser's own audio sink and route Chromium into it the same way
-        # as DISPLAY: PULSE_SERVER/PULSE_SINK go on os.environ (inherited by browser-use's
-        # Chromium subprocess) under the manager's _startup_lock, so the process-global
-        # write can't race another launch. Best-effort -- on failure we clear the vars so
-        # this browser never inherits a stale sink, and it just streams video.
+        # as DISPLAY. Best-effort -- on failure we clear the vars so this browser never
+        # inherits a stale sink, and it just streams video.
         self._audio_sink = _pulse_sink_name(self.browser_id)
         audio_ok = await asyncio.to_thread(_ensure_pulse_sink, self._audio_sink)
         if audio_ok:
@@ -824,164 +681,235 @@ class LiveBrowser(MutableModel):
         else:
             os.environ.pop("PULSE_SINK", None)
             self._audio_sink = ""
-        self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
+        first_url = next((u for u in (restore_tabs or []) if _is_restorable_url(u)), _HOME_URL)
+        try:
+            self._chrome = await asyncio.to_thread(
+                lambda: chrome_launcher.launch_with_sandbox_retry(
+                    no_sandbox=_should_disable_sandbox(),
+                    executable=chromium_path,
+                    profile_dir=profile_dir,
+                    start_url=first_url,
+                    window_size=(_INIT_WINDOW_W, _INIT_WINDOW_H),
+                    extensions=self._extension_paths(),
+                )
+            )
+        except chrome_launcher.ChromeStartupError as e:
+            raise BrowserStartupError(str(e)) from e
         # The Chromium tree just spawned (and its processes self-write their
         # oom_score_adj moments later): have the OOM sweep re-band it.
         notify_chromium_processes_expected()
-        # close() may have run while we were suspended in _start_bu_session (it holds no
-        # lock and pops the browser before this resumes). If so, abort -- and kill the
-        # Chromium we just brought up, so we don't leak a second handle behind a browser
-        # that's already been torn down / removed.
         if await self._abort_start_if_torn_down():
             return
-        cdp_url = self._bu_session.cdp_url
-        if not cdp_url:
-            raise BrowserStartupError("browser-use BrowserSession did not expose a cdp_url after start")
-        # browser-use is the single Chrome connection -- no Playwright observer. It comes
-        # up with one starting tab; point the initial tabs at their URLs and foreground
-        # the active one (pixelflux films the foreground window on this browser's :N).
+        self._cdp = CdpClient(self._chrome.http_endpoint)
+        try:
+            await self._cdp.connect()
+        except Exception as e:  # noqa: BLE001  (websockets/JSON errors are outside _BROWSER_ERRORS)
+            # Anything here means we have a live Chromium we cannot talk to. Raising the
+            # fleet's own startup error is what gets the browser torn down and removed --
+            # otherwise it strands in `init`, holding its name and a slot against the cap
+            # forever, with Chromium and Xvfb still up and the viewer stuck on "Starting".
+            await self._teardown_chrome()
+            raise BrowserStartupError(f"could not open a CDP connection to Chromium: {e}") from e
+        # A fresh token per launch: a CLI session that reconnects across a service restart
+        # is rejected rather than silently driving a different Chromium (§4.1).
+        self._mint_token()
+        if _PROXY.server is not None:
+            self._proxy = BrowserProxy(
+                name=self.browser_id,
+                upstream_http=self._chrome.http_endpoint,
+                public_base=f"ws://127.0.0.1:{_PROXY.server.port}",
+                is_allowed=self._token_may_drive,
+                on_attach=self._on_proxy_attach,
+                on_activity=self._on_proxy_activity,
+                page_count=self._page_count,
+            )
+            _PROXY.server.register(self._proxy)
         await self._open_initial_tabs(restore_tabs, active_tab)
         # Re-check ONE more time right before the terminal flip: a close() or a crash may
-        # have landed during any of the awaits above (_start_bu_session / _open_initial_tabs).
-        # Without this we'd flip a torn-down / removed browser to "running" and broadcast a
-        # stale live state.
+        # have landed during any of the awaits above.
         if await self._abort_start_if_torn_down():
             return
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-        # Chromium is up and the active tab is foregrounded: flip init -> running and tell
-        # every connected viewer, so an optimistic pane's "Starting browser…" overlay comes
-        # down and the live canvas shows. Done last so a viewer that sees ``running`` is
-        # guaranteed the stream is on its way.
         self._lifecycle = "running"
         self._broadcast(self._control_message())
-        logger.info("LiveBrowser {} started (cdp_url={})", self.browser_id, cdp_url)
+        logger.info("LiveBrowser {} started (cdp={})", self.browser_id, self._chrome.http_endpoint)
+
+    # --- the proxy's callbacks into ownership --------------------------------
+
+    async def _token_may_drive(self, token: str) -> bool:
+        """Whether a frame bearing ``token`` may be forwarded right now.
+
+        The per-frame replacement for ``run_action``'s compare-and-set, and the entire
+        human-wins guarantee: the instant a human takes control the token is re-minted, so
+        every subsequent frame is refused.
+
+        It also carries what ``run_action`` did on its FIRST call -- acquiring the browser.
+        Without that, the URL ``new`` prints could never drive anything: a fresh browser
+        rests with the human, and nothing else auto-acquires any more. The sticky lease
+        that SKILL.md promises starts here, on the agent's first frame.
+        """
+        if not token or token != self._token or not self._token_owner:
+            return False
+        if self._crashed or not self._is_running:
+            return False
+        if self.controller == "agent" and self.owner_agent_id == self._token_owner and not self.human_pinned:
+            self.touch_lease()
+            return True
+        if self.controller == "human" and not self.human_pinned:
+            # Resting browser: take it, exactly as the first direct command used to.
+            if await self.acquire(self._token_owner, self._token_owner_name, wait=False) == "acquired":
+                self.touch_lease()
+                return True
+        return False
+
+    async def _on_proxy_attach(self) -> None:
+        """Surface the pane on an agent's FIRST attach.
+
+        ``fleet.py``'s ``_action`` used to do this off ``newly_acquired``; that call site
+        goes away with the drive verbs, and an agent attaching to a RESTORED browser calls
+        neither ``new`` nor ``acquire``, so without this the pane would never come up.
+        """
+        self._broadcast(self._control_message())
+
+    async def _on_proxy_activity(self, target_id: str | None) -> None:
+        """Foreground the target the agent just addressed (debounced by the proxy).
+
+        The whole 'agent acts -> pane follows' behavior.
+
+        Only ever foregrounds a target the agent NAMED. It deliberately does not fall back
+        to ``_foreground_active()``: that re-asserts ``_active_target_id``, which is the
+        fleet's cache of the last tab *it* foregrounded. A human switching tabs does it
+        inside Chrome via XTEST, which never reaches our CDP connection, so that cache goes
+        stale the moment they browse -- and re-asserting it yanked the human off the tab
+        they had chosen and back onto the agent's old one. If we cannot tell which tab the
+        agent is acting on, the right move is to leave the view alone.
+        """
+        if target_id:
+            await self._focus_and_foreground(target_id)
+        else:
+            logger.debug("pane-follow: frame named no target for {}; leaving the view alone", self.browser_id)
+
+    async def _page_count(self) -> int:
+        """Number of real page targets, for the proxy's last-page close guard."""
+        if self._cdp is None:
+            return 0
+        try:
+            return len(await self._cdp.page_targets())
+        except Exception as e:  # noqa: BLE001  (guard must fail open, not wedge the socket)
+            logger.debug("page count for {} failed ({})", self.browser_id, e)
+            return 0
 
     async def _abort_start_if_torn_down(self) -> bool:
         """If close() or a crash landed while ``start`` was suspended at an await, abort the
         launch: kill the Chromium we already brought up (so a close()-during-launch can't
         leak a second handle) and report True so ``start`` returns without flipping to
-        ``running``. Returns False (and does nothing) on the normal path. Idempotent and
-        cheap; called at start()'s yield points after the bu_session exists."""
+        ``running``. Returns False (and does nothing) on the normal path."""
         if not (self._closed or self._crashed):
             return False
-        bu_session = getattr(self, "_bu_session", None)
-        if bu_session is not None:
-            try:
-                await bu_session.kill()
-            except _BROWSER_ERRORS as e:
-                logger.debug("aborted-launch kill ignored ({})", e)
+        await self._teardown_chrome()
         return True
 
     async def _open_initial_tabs(self, restore_tabs: list[str] | None, active_tab: int = 0) -> None:
-        """Point browser-use's tabs at the initial URLs: the saved tabs on restore, else
-        the single home page, then foreground the tab that was active before the restart.
+        """Open the initial URLs: the saved tabs on restore, else the single home page,
+        then foreground the tab that was active before the restart.
 
-        browser-use is up with one starting tab; navigate it to the first URL and open the
-        rest as new CDP targets (``createTarget`` navigates each directly). Every step is
-        bounded by ``_RESTORE_NAV_TIMEOUT`` so one slow/hung URL can't stall startup, and
-        failures are swallowed (a tab that won't load just comes up blank -- the profile's
-        cookies are already attached either way)."""
+        Chromium already came up on the FIRST url (it was passed on the command line), so
+        only the remaining ones need targets. Every step is bounded by
+        ``_RESTORE_NAV_TIMEOUT`` so one slow/hung URL can't stall startup, and failures are
+        swallowed (a tab that won't load just comes up blank -- the profile's cookies are
+        already attached either way)."""
+        if self._cdp is None:
+            return
         urls = [u for u in (restore_tabs or []) if _is_restorable_url(u)] or [_HOME_URL]
-        # First URL reuses browser-use's existing starting tab.
-        try:
-            await asyncio.wait_for(self._ensure_action_handler().navigate(urls[0]), timeout=_RESTORE_NAV_TIMEOUT)
-        except Exception as e:  # noqa: BLE001  (best-effort restore; a dead URL must not stall startup)
-            logger.debug("restore nav to {} ignored ({})", urls[0], e)
-        # Remaining URLs each open a fresh tab; createTarget navigates it directly.
         for url in urls[1:]:
             notify_chromium_processes_expected()  # a new renderer self-writes its oom_score_adj
             try:
-                await asyncio.wait_for(
-                    self._bu_session._cdp_client_root.send.Target.createTarget(params={"url": url}),
-                    timeout=_RESTORE_NAV_TIMEOUT,
-                )
+                await asyncio.wait_for(self._cdp.create_target(url), timeout=_RESTORE_NAV_TIMEOUT)
             except Exception as e:  # noqa: BLE001
                 logger.debug("restore new-tab for {} ignored ({})", url, e)
-        # Foreground the tab that was active before the restart (browser-use doesn't
-        # foreground on its own, and pixelflux films the foreground window).
         try:
-            tabs = await self._bu_session.get_tabs()
+            targets = await self._cdp.page_targets()
         except Exception as e:  # noqa: BLE001
-            logger.debug("restore get_tabs ignored ({})", e)
+            logger.debug("restore target list ignored ({})", e)
             return
-        if tabs:
-            index = active_tab if 0 <= active_tab < len(tabs) else 0
-            await self._focus_and_foreground(tabs[index].target_id)
+        if targets:
+            index = active_tab if 0 <= active_tab < len(targets) else 0
+            await self._focus_and_foreground(targets[index]["targetId"])
 
-    # --- tabs (browser-use is the single source of truth) --------------------
+    # --- tabs (the fleet's own CDP client is the single source of truth) --------
 
     def _active_target(self) -> str | None:
-        """browser-use's current tab id -- the single source of truth for 'the active tab'.
-        None before the browser has launched (``_bu_session`` not yet assigned)."""
-        session = getattr(self, "_bu_session", None)
-        return getattr(session, "agent_focus_target_id", None) if session is not None else None
+        """The tab the pane is showing. Was browser-use's ``agent_focus_target_id``;
+        now the fleet's own notion, written wherever we foreground."""
+        return self._active_target_id or None
 
     async def _active_url(self) -> str | None:
         """The current tab's URL (best-effort), for the handoff-request notice."""
         active = self._active_target()
-        if not active:
+        if not active or self._cdp is None:
             return None
         try:
-            tabs = await self._bu_session.get_tabs()
+            targets = await self._cdp.page_targets()
         except Exception as e:  # noqa: BLE001
-            logger.debug("active-url get_tabs ignored ({})", e)
+            logger.debug("active-url targets ignored ({})", e)
             return None
-        return next((t.url for t in tabs if t.target_id == active), None)
+        return next((t["url"] for t in targets if t["targetId"] == active), None)
 
     async def _focus_and_foreground(self, target_id: str) -> None:
-        """The one tab primitive: make ``target_id`` browser-use's working tab (so
-        state/click follow it) AND foreground it in Chrome (so pixelflux, which films
-        the foreground window, shows it). Bounded so a CDP stall can never wedge the
-        loop; best-effort (a dead/closed target just logs)."""
+        """The one tab primitive: foreground ``target_id`` in Chrome so pixelflux, which
+        films the foreground window, shows it -- and record it as the active tab. Bounded
+        so a CDP stall can never wedge the loop; best-effort (a dead/closed target just
+        logs)."""
+        if self._cdp is None:
+            return
         try:
-            session = await asyncio.wait_for(
-                self._bu_session.get_or_create_cdp_session(target_id=target_id, focus=True), timeout=5.0
-            )
-            await asyncio.wait_for(
-                session.cdp_client.send.Target.activateTarget(params={"targetId": target_id}), timeout=5.0
-            )
+            await asyncio.wait_for(self._cdp.activate(target_id), timeout=5.0)
+            self._active_target_id = target_id
         except Exception as e:  # noqa: BLE001  (CDP best-effort; must never wedge the loop)
             logger.debug("focus+foreground {} ignored ({})", target_id, e)
 
     async def _foreground_active(self) -> None:
-        """Foreground browser-use's CURRENT tab so the pane shows what the agent is on.
-        browser-use does NOT foreground the tab it acts on (verified), so call this after
-        each action -- this single call is the whole 'agent acts -> pane follows'."""
+        """Foreground the current tab so the pane shows what the agent is on."""
         target = self._active_target()
         if target:
             await self._focus_and_foreground(target)
 
     async def _tab_list(self) -> list[dict[str, Any]]:
-        """The real tabs from browser-use (the single source of truth) -- ONE ordering,
-        the one ``switch <index>`` indexes, so list/state/switch can't disagree."""
+        """The real tabs -- ONE ordering, the one the agent's ``tab-select`` indexes, so
+        ``ls`` and the CLI can't disagree. ``page_targets`` applies exactly the filter
+        ``playwright-cli tab-list`` applies (real pages only), which is what keeps the two
+        views aligned."""
+        if self._cdp is None:
+            return []
         try:
-            tabs = await self._bu_session.get_tabs()
+            targets = await self._cdp.page_targets()
         except Exception as e:  # noqa: BLE001
-            logger.debug("get_tabs ignored ({})", e)
+            logger.debug("tab list ignored ({})", e)
             return []
         active = self._active_target()
         return [
-            {"index": i, "title": t.title or "", "url": t.url, "active": t.target_id == active}
-            for i, t in enumerate(tabs)
+            {"index": i, "title": t.get("title", ""), "url": t.get("url", ""), "active": t["targetId"] == active}
+            for i, t in enumerate(targets)
         ]
 
     async def tab_urls(self) -> tuple[list[str], int]:
-        """The restorable tab URLs + the active tab's index, for the manifest -- from
-        browser-use's tab list. Async now (``get_tabs`` is a light targets query); the
-        checkpoint runs it every ~10s on the loop, which is fine."""
+        """The restorable tab URLs + the active tab's index, for the manifest. The
+        checkpoint runs it every ~10s on the loop, which is fine (a light targets query)."""
+        if self._cdp is None:
+            return [], 0
         try:
-            tabs = await self._bu_session.get_tabs()
+            targets = await self._cdp.page_targets()
         except Exception as e:  # noqa: BLE001
-            logger.debug("tab_urls get_tabs ignored ({})", e)
+            logger.debug("tab_urls ignored ({})", e)
             return [], 0
         active_target = self._active_target()
         urls: list[str] = []
         active = 0
-        for t in tabs:
-            if _is_restorable_url(t.url):
-                if t.target_id == active_target:
+        for t in targets:
+            if _is_restorable_url(t.get("url")):
+                if t["targetId"] == active_target:
                     active = len(urls)
-                urls.append(t.url)
+                urls.append(t["url"])
         return urls, active
 
     async def _keepalive_loop(self) -> None:
@@ -994,12 +922,13 @@ class LiveBrowser(MutableModel):
             self._broadcast({"type": "ping"})
             if not self._is_running:
                 continue  # init (no ownership yet) or crashed (dead): no sweeps/handoffs
-            # Backstop crash detection: no one may be issuing commands (that's the fast
-            # path in run_action), so poll browser-use's connection. Two consecutive
-            # misses to debounce the sub-millisecond window between a WS drop and
-            # browser-use flagging the reconnect (is_reconnecting keeps _bu_alive True
-            # for the whole reconnect, so this only fires on a real death).
-            if not self._bu_alive():
+            # Crash detection, and it must NOT depend on anyone being attached: an agent
+            # may be between tasks and the human may just be reading, in which case the
+            # proxy has no upstream socket at all. The fleet's own CDP client always does,
+            # so poll that. Two consecutive misses debounce a transient drop the client is
+            # still retrying (``alive`` stays True across a reconnect, exactly as
+            # browser-use's ``is_reconnecting`` did).
+            if not await self._chrome_alive():
                 dead_polls += 1
                 if dead_polls >= 2:
                     self._on_disconnected()  # mark crashed + announce (idempotent)
@@ -1018,22 +947,23 @@ class LiveBrowser(MutableModel):
 
     async def _sweep_idle_lease(self) -> bool:
         """Release a direct-control lease whose owner has gone quiet (dead/wandered-off
-        agent). A running ``task`` (``_agent_task`` set) is connection-bound and exempt;
-        the CAS keeps this from clobbering a freshly-handed-off lease. Returns True if it
-        released one.
+        agent). Returns True if it released one.
 
-        Snapshot the control fields (controller / _agent_task / owner_agent_id /
-        _lease_touched_at) under ``_control_lock`` so the idle check and the expect-tuple
-        it builds are taken from one consistent view -- otherwise a concurrent ownership
-        change between the reads could yield a torn expect-tuple. The CAS in
-        ``_transition`` then re-validates against the live state before mutating.
+        An agent that is ATTACHED to the CDP proxy but silent is treated exactly like a
+        silent agent was before: the lease ages out. Only a forwarded frame touches
+        ``_lease_touched_at``; merely holding the socket open does not.
+
+        Snapshot the control fields (controller / owner_agent_id / _lease_touched_at)
+        under ``_control_lock`` so the idle check and the expect-tuple it builds are taken
+        from one consistent view -- otherwise a concurrent ownership change between the
+        reads could yield a torn expect-tuple. The CAS in ``_transition`` then re-validates
+        against the live state before mutating.
         """
         async with self._control_lock:
             controller = self.controller
-            agent_running = self._agent_task is not None
             owner_agent_id = self.owner_agent_id
             lease_touched_at = self._lease_touched_at
-        if controller == "agent" and not agent_running and time.monotonic() - lease_touched_at > _LEASE_IDLE_TTL:
+        if controller == "agent" and time.monotonic() - lease_touched_at > _LEASE_IDLE_TTL:
             return await self._transition(to="human", expect=("agent", owner_agent_id, False))
         return False
 
@@ -1042,13 +972,12 @@ class LiveBrowser(MutableModel):
         hasn't sent a command within ``_CLAIM_WINDOW`` (it was interrupted/killed, or
         never woke). Revoke the grant so the browser passes to the next waiter instead
         of sitting idle for the full idle-TTL on a no-show. ``_granted_at`` is set only
-        for a pending grant and cleared the instant the agent sends its first command
-        (``run_action``)."""
+        for a pending grant and cleared the instant the agent's first CDP frame is
+        forwarded (``touch_lease``)."""
         async with self._control_lock:
             if (
                 self.controller == "agent"
                 and self._granted_at
-                and self._agent_task is None
                 and self._lease_touched_at < self._granted_at
                 and time.monotonic() - self._granted_at > _CLAIM_WINDOW
             ):
@@ -1082,7 +1011,28 @@ class LiveBrowser(MutableModel):
         synchronous fan-out (no ``await``), so the four-field write + broadcast run
         with no intervening yield -- the input gate can never be observed mid-write.
         Late joiners get the same state via ``register_cast_queue``'s initial seed.
+
+        Also rotates the CDP capability token. That is what makes lease revocation
+        race-free: the moment control moves, every frame bearing the old token is refused,
+        with no socket to hunt down and no window in which a stale attacher can act.
         """
+        # Re-mint ONLY when the browser passes to a different agent. Two things must both
+        # hold and they pull in opposite directions:
+        #
+        #  * A human taking control must NOT invalidate the token. The agent's live socket
+        #    carries the token it attached with, so re-minting here would kill that socket
+        #    permanently -- and after the human hands back the agent could not resume on it.
+        #    Re-attaching is not a way out either: a playwright-cli slug is poisoned once its
+        #    session is torn down. Handing control back has to leave the agent able to carry
+        #    on, which is the whole point of the takeover flow.
+        #  * A DIFFERENT agent taking the browser must invalidate it, or the previous holder
+        #    could keep driving. That is the rotation that matters.
+        #
+        # The moment-to-moment guarantee does not depend on rotation at all: `_token_may_drive`
+        # refuses every frame while the controller is not the token's own agent. The token is
+        # identity, not authority.
+        if self._token and to == "agent" and agent_id and agent_id != self._token_owner:
+            self._mint_token(agent_id, agent_name)
         self.controller = to
         self.owner_agent_id = agent_id
         self.owner_agent_name = agent_name
@@ -1119,10 +1069,10 @@ class LiveBrowser(MutableModel):
             # Agents queued (monitor-and-wait) behind the current owner, in FIFO order.
             "waiting": self._waiting_names(),
         }
-        # While an agent holds a sticky direct-control lease (not a connection-bound
-        # task), tell the viewer how long it has been idle and when the idle-TTL will
-        # auto-release it, so a watching human knows the browser will free itself.
-        if self.controller == "agent" and self._agent_task is None and self._lease_touched_at:
+        # While an agent holds a sticky lease, tell the viewer how long it has been idle
+        # and when the idle-TTL will auto-release it, so a watching human knows the
+        # browser will free itself.
+        if self.controller == "agent" and self._lease_touched_at:
             idle = time.monotonic() - self._lease_touched_at
             msg["idle_seconds"] = max(0, int(idle))
             msg["idle_release_seconds"] = max(0, int(_LEASE_IDLE_TTL - idle))
@@ -1204,7 +1154,7 @@ class LiveBrowser(MutableModel):
         self._spawn(self._wake_agent(agent_id, agent_name))
 
     def _on_disconnected(self, _source: object | None = None) -> None:
-        """Mark the browser crashed and tell the viewer. Called when browser-use's
+        """Mark the browser crashed and tell the viewer. Called when the fleet's
         Chromium connection is found dead -- lazily on the agent's next command (see
         run_action) or proactively by the keepalive poll. During our own teardown
         (``_closed``) a dead connection is expected, so it's a no-op then. The agent
@@ -1230,16 +1180,23 @@ class LiveBrowser(MutableModel):
             # snapshot), so a kill right after the crash doesn't restore it as healthy.
             self._crash_save_hook()
 
-    def _bu_alive(self) -> bool:
-        """Whether browser-use's Chromium connection is up (cheap, no round-trip). A
-        transient WebSocket drop that browser-use is auto-reconnecting is NOT a crash --
-        only a connection that is both down and not reconnecting counts as dead."""
-        session = self._bu_session
-        if session is None:
+    async def _chrome_alive(self) -> bool:
+        """Whether this browser's Chromium is still up.
+
+        Two independent signals, and both matter. The PROCESS handle catches a kill
+        (earlyoom, segfault) even while nothing is attached -- something browser-use could
+        only infer from its socket. The CDP ping catches a browser that is alive but no
+        longer serving, and gives the client one reconnect attempt so a transient drop is
+        not reported as death.
+        """
+        chrome = self._chrome
+        if chrome is None or not chrome.alive:
             return False
-        if session.is_reconnecting:
-            return True  # give browser-use's auto-reconnect its grace window
-        return session.is_cdp_connected
+        if self._cdp is None:
+            return False
+        if self._cdp.alive:
+            return True
+        return await self._cdp.ping()
 
     def _crashed_payload(self) -> dict[str, Any]:
         return {"ok": False, "status": "crashed", **self._control_state()}
@@ -1369,19 +1326,16 @@ class LiveBrowser(MutableModel):
 
         Returns False (and changes nothing) if ``expect`` is given and the current
         state differs -- this is how a stale finally / double-release no-ops safely.
-        When ``preempt`` is set, the displaced agent's run is cancelled OUTSIDE the
-        lock and never awaited here: the cancelled run's own finally re-enters this
-        method, CAS-fails (state already moved on), and no-ops -- so there is no
-        lock cycle (the deadlock the audit warned about).
+
+        Preemption no longer cancels anything in-process: the agent drives over its own
+        CDP socket, and losing the lease means its next FRAME is refused by the proxy
+        (the socket deliberately stays open -- dropping it poisons the CLI session for
+        good). All ``preempt`` still does is queue the displaced agent to resume first.
         """
-        displaced_agent: Agent | None = None
-        displaced_task: "asyncio.Task[None] | None" = None
         async with self._control_lock:
             if expect is not None and self._state_tuple() != expect:
                 return False
             if preempt:
-                displaced_agent = self._agent
-                displaced_task = self._agent_task
                 # A human taking control of a browser an agent is DRIVING queues that agent
                 # at the FRONT of the resume queue, so it resumes first when the human hands
                 # back -- regardless of what it runs next. Without this, a preempted agent
@@ -1395,10 +1349,6 @@ class LiveBrowser(MutableModel):
                     self._enqueue_resume_front_locked(self.owner_agent_id, self.owner_agent_name)
             await self._write_control_locked(to, agent_id, agent_name, pinned)
             await self._settle_queue_locked()
-        if displaced_agent is not None:
-            displaced_agent.stop()
-        if displaced_task is not None and displaced_task is not asyncio.current_task() and not displaced_task.done():
-            displaced_task.cancel()
         return True
 
     async def acquire(
@@ -1432,7 +1382,7 @@ class LiveBrowser(MutableModel):
         turn, and the daemon will message it to resume when the browser frees.
         """
         # Ownership/driving only applies once the browser is running. An init browser
-        # has no Chromium yet (and no _bu_session to drive); a crashed one is gone. Both
+        # has no Chromium yet (nothing to drive); a crashed one is gone. Both
         # are reported here so task/hold/acquire don't park a waiter on (or try to drive)
         # a browser that can't be driven. run_action gates on lifecycle before it calls
         # acquire, so this is the guard for the task/hold/explicit-acquire paths.
@@ -1549,336 +1499,6 @@ class LiveBrowser(MutableModel):
         """Human hands control back: un-pin (only if currently pinned). Frees any waiter."""
         return await self._transition(to="human", pinned=False, expect=("human", None, True))
 
-    async def run_agent(self, agent_id: str, prompt: str, on_event: EventSink) -> None:
-        """Run a browser-use task against this (already-acquired) browser, streaming steps.
-
-        The caller (the task endpoint) acquires the browser in one submitted coroutine
-        and submits this run as a SEPARATE coroutine; between the two the loop is free to
-        run a human ``take_control`` (or an idle-lease sweep). So registering this run's
-        cancellable handle (``_agent_task``/``_agent``) MUST be atomic with ownership:
-        we take ``_control_lock`` and re-check that ``agent_id`` still owns the browser
-        (``controller == "agent"`` and ``owner_agent_id == agent_id``, unpinned) BEFORE
-        registering the handle and driving. This mirrors the pre-refactor design, where
-        acquire and the ``run_agent`` task lived in one coroutine on the loop with no
-        intervening preemption -- the invariant being that the cancellable handle and
-        ownership move together.
-
-        If ownership was lost in that gap (a human preempted, or the lease was swept),
-        we emit ``lost_control`` and return WITHOUT touching the browser -- we never
-        drive a browser the human (or another agent) now owns. Once the handle is
-        registered under the lock, a subsequent ``take_control`` sees ``_agent_task``
-        and cancels this run via the bridge.
-        """
-        api_key = resolve_anthropic_key()
-        if not api_key:
-            await on_event({"type": "error", "text": anthropic_key_status()[1]})
-            return
-        # Key is passed straight to ChatAnthropic -- never into os.environ, which would
-        # leak across the manager's concurrent sessions and race between runs. Build the
-        # Agent BEFORE taking the lock (it mutates no shared state); only the handle
-        # registration below must be atomic with the ownership re-check.
-        agent = Agent(
-            task=prompt,
-            llm=ChatAnthropic(model=_DEFAULT_MODEL, api_key=api_key),
-            browser_session=self._bu_session,
-        )
-        async with self._control_lock:
-            if self._state_tuple() != ("agent", agent_id, False):
-                # A human took control (or the lease was swept) between the caller's
-                # acquire and this run starting. Do not register the handle or drive --
-                # the browser is no longer ours.
-                await on_event({"type": "lost_control", **self._control_state()})
-                return
-            self._run_on_event = on_event
-            self._agent_task = asyncio.current_task()
-            self._agent = agent
-        try:
-            await asyncio.wait_for(
-                agent.run(on_step_end=self._on_agent_step, max_steps=_TASK_MAX_STEPS),
-                timeout=_TASK_MAX_SECONDS,
-            )
-            summary = agent.history.final_result()
-            await on_event({"type": "done", "result": summary or "Done."})
-        except asyncio.CancelledError:
-            await on_event({"type": "preempted"})
-            raise
-        except TimeoutError:
-            agent.stop()
-            await on_event({"type": "error", "text": f"Task exceeded {_TASK_MAX_SECONDS:.0f}s and was stopped."})
-        except Exception as e:  # noqa: BLE001 -- surface any agent failure to the caller's stream
-            logger.opt(exception=e).error("browser-use agent run failed for browser {}", self.browser_id)
-            await on_event({"type": "error", "text": f"Agent error: {e}"})
-        finally:
-            if self._agent is agent:
-                self._agent = None
-                self._agent_task = None
-                self._run_on_event = None
-
-    async def _on_agent_step(self, agent: Agent) -> None:
-        """browser-use per-step hook: stream the latest thought + action as separate events."""
-        emit = self._run_on_event
-        if emit is None:
-            return
-        history = agent.history
-        thoughts = history.model_thoughts()
-        actions = history.model_actions()
-        if thoughts:
-            thought = thoughts[-1]
-            summary = str(
-                getattr(thought, "next_goal", "")
-                or getattr(thought, "evaluation_previous_goal", "")
-                or "Thinking"
-            ).strip()
-            detail = str(getattr(thought, "thinking", "") or thought).strip()
-            await emit({"type": "thinking", "text": summary, "detail": detail})
-        if actions:
-            action = actions[-1]
-            await emit(
-                {"type": "action", "text": _action_summary(action), "detail": json.dumps(action, indent=2, default=str)}
-            )
-        # Keep the streamed view on whatever tab the agent is now focused on.
-        await self._foreground_active()
-
-    async def _stop_active_agent(self) -> None:
-        """Stop any running agent and wait for its run task to unwind (used by close())."""
-        agent = self._agent
-        task = self._agent_task
-        if agent is not None:
-            agent.stop()
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, *_BROWSER_ERRORS):
-                pass
-
-    # --- direct control (Claude drives the browser itself, one command at a time) ---
-
-    def _ensure_action_handler(self) -> ActionHandler:
-        """browser-use's own action executor, bound once to our held BrowserSession."""
-        if self._action_handler is None:
-            self._action_handler = ActionHandler(self._bu_session)
-        return self._action_handler
-
-    async def run_action(
-        self,
-        agent_id: str,
-        agent_name: str | None,
-        action: Callable[[ActionHandler], Awaitable[dict[str, Any]]],
-        enqueue_on_busy: bool = True,
-    ) -> dict[str, Any]:
-        """Run one direct-control action for an agent, returning a result + owner snapshot.
-
-        ``enqueue_on_busy`` (default True) queues the agent to resume when a busy browser
-        frees. The read-only ``state`` passes False: merely *looking* at a browser a
-        human/another agent is driving must not silently enrol the agent as a waiter.
-
-        Ownership is a sticky lease: the first action acquires the browser (CAS, no
-        wait -- a busy browser fails fast rather than blocking a click), later actions
-        refresh it. The CRITICAL guard is the per-command compare-and-set: right before
-        the browser action we re-check ``(agent, me, unpinned)`` under ``_control_lock``,
-        so a human take-control between two commands makes the next one a clean no-op
-        (``lost_control``) instead of touching the human's browser. The action itself
-        runs under ``_lock`` (serialized with tab-switch foregrounding), NOT under
-        ``_control_lock`` -- so a human take-control stays instant (at worst one
-        in-flight action lands before the next command sees it).
-        """
-        # The browser died (OS/OOM kill, crash): don't try to acquire or drive a
-        # corpse -- tell the agent it's gone so it starts a fresh one.
-        if self._crashed:
-            return self._crashed_payload()
-        # Still launching (registered but Chromium not up yet): driving/ownership only
-        # applies once running. Return a clear, non-fatal "starting" so the CLI/agent
-        # waits and retries instead of erroring on a half-built browser.
-        if not self._is_running:
-            return self._starting_payload()
-        # Did I already hold the lease, or does this command newly take the browser?
-        # The client uses this to surface the browser pane exactly once -- on the
-        # first command for a browser (and again after a human hands it back) --
-        # rather than on every click.
-        was_mine = self._state_tuple() == ("agent", agent_id, False)
-        status = await self.acquire(agent_id, agent_name, wait=False, enqueue_on_busy=enqueue_on_busy)
-        if status != "acquired":
-            # ``enqueued`` tells the CLI whether the agent was actually enrolled to be woken
-            # so it only promises "you're queued ... messaged when it frees" when true. The
-            # read-only `state` peek passes enqueue_on_busy=False, so a busy `state` must NOT
-            # over-promise a resume that will never come.
-            return {
-                "ok": False,
-                "status": status,
-                "enqueued": enqueue_on_busy and status in ("busy_human", "busy_agent"),
-                **self._control_state(),
-            }
-        async with self._control_lock:
-            if self._state_tuple() != ("agent", agent_id, False):
-                # A human grabbed control in the tiny window between acquire and here.
-                # Queue this agent to resume (same as the busy_human path) so the
-                # daemon messages it back when the human hands the browser over -- but
-                # only for state-changing commands, not a passive `state` peek.
-                if enqueue_on_busy:
-                    self._enqueue_resume_locked(agent_id, agent_name)
-                    self._broadcast(self._control_message())
-                return {"ok": False, "status": "lost_control", "enqueued": enqueue_on_busy, **self._control_state()}
-            self._lease_touched_at = time.monotonic()
-            self._granted_at = 0.0  # the agent claimed (sent a command); cancel the claim window
-        async with self._lock:
-            if self._closed or getattr(self, "_bu_session", None) is None:
-                return {"ok": False, "status": "closed", **self._control_state()}
-            # Proactive crash check: browser-use's get_state/navigate don't reliably raise
-            # on a dead browser (a killed Chromium yields a blank about:blank rather than an
-            # error), so the except-path check below would miss it. Classify a dead
-            # connection up front so the agent gets a clean "crashed" on its next command.
-            if not self._bu_alive():
-                self._on_disconnected()  # idempotent: marks + announces once
-                return self._crashed_payload()
-            try:
-                result = await action(self._ensure_action_handler())
-            except _BROWSER_ERRORS as e:
-                logger.debug("direct action failed on browser {} ({})", self.browser_id, e)
-                # If browser-use's connection is gone, the browser crashed (the keepalive
-                # poll may not have caught it yet) -- classify it so the agent gets a
-                # clear "crashed, start a new one" rather than a raw CDP exception.
-                if not self._bu_alive():
-                    self._on_disconnected()  # idempotent: marks + announces once
-                    return self._crashed_payload()
-                return {"ok": False, "status": "error", "error": str(e), **self._control_state()}
-            # The action may have moved browser-use's current tab (a click that opened or
-            # switched a tab, a navigate). Foreground browser-use's current tab so the
-            # pane follows what the agent is now on -- this single call is the whole
-            # "agent acts -> pane follows" behavior (browser-use doesn't foreground on its
-            # own). Only reached when the agent holds control, so it never steals a
-            # human's view.
-            await self._foreground_active()
-        return {"ok": True, "status": "ok", "newly_acquired": not was_mine, **result, **self._control_state()}
-
-    def _node(self, index: int) -> Any:
-        """Resolve an element index from the last ``state`` snapshot to its DOM node."""
-        return self._selector_map.get(index)
-
-    async def act_state(self, agent_id: str, agent_name: str | None) -> dict[str, Any]:
-        async def _do(handler: ActionHandler) -> dict[str, Any]:
-            summary = await handler.get_state()
-            self._selector_map = dict(getattr(summary.dom_state, "selector_map", {}) or {})
-            elements = summary.dom_state.llm_representation()
-            return {"url": summary.url, "title": summary.title, "elements": elements, "tabs": await self._tab_list()}
-
-        # state is a read-only peek: don't enqueue the agent as a waiter on a busy browser.
-        return await self.run_action(agent_id, agent_name, _do, enqueue_on_busy=False)
-
-    async def act_navigate(self, agent_id: str, agent_name: str | None, url: str) -> dict[str, Any]:
-        reason = _unsafe_navigation_reason(url)
-        if reason is not None:
-            return {"ok": False, "status": "blocked", "error": f"navigation blocked: {reason}"}
-
-        async def _do(handler: ActionHandler) -> dict[str, Any]:
-            await handler.navigate(url)
-            self._selector_map = {}  # page changed -- old element indices are void
-            return {"navigated": url}
-
-        return await self.run_action(agent_id, agent_name, _do)
-
-    async def act_click(self, agent_id: str, agent_name: str | None, index: int) -> dict[str, Any]:
-        async def _do(handler: ActionHandler) -> dict[str, Any]:
-            node = self._node(index)
-            if node is None:
-                return {"ok": False, "status": "stale_index", "error": f"no element {index}; run `state` first (the page may have changed)"}
-            await handler.click_element(node)
-            self._selector_map = {}  # a click may navigate/mutate -- force a re-`state`
-            return {"clicked": index}
-
-        return await self.run_action(agent_id, agent_name, _do)
-
-    async def act_input(self, agent_id: str, agent_name: str | None, index: int, text: str) -> dict[str, Any]:
-        async def _do(handler: ActionHandler) -> dict[str, Any]:
-            node = self._node(index)
-            if node is None:
-                return {"ok": False, "status": "stale_index", "error": f"no element {index}; run `state` first"}
-            await handler.type_text(node, text)
-            return {"typed_into": index}
-
-        return await self.run_action(agent_id, agent_name, _do)
-
-    async def act_select(self, agent_id: str, agent_name: str | None, index: int, value: str) -> dict[str, Any]:
-        async def _do(handler: ActionHandler) -> dict[str, Any]:
-            node = self._node(index)
-            if node is None:
-                return {"ok": False, "status": "stale_index", "error": f"no element {index}; run `state` first"}
-            await handler.select_dropdown(node, value)
-            return {"selected": value, "index": index}
-
-        return await self.run_action(agent_id, agent_name, _do)
-
-    async def act_scroll(self, agent_id: str, agent_name: str | None, direction: str, amount: int) -> dict[str, Any]:
-        async def _do(handler: ActionHandler) -> dict[str, Any]:
-            await handler.scroll(direction, amount)
-            self._selector_map = {}
-            return {"scrolled": direction}
-
-        return await self.run_action(agent_id, agent_name, _do)
-
-    async def act_keys(self, agent_id: str, agent_name: str | None, keys: str) -> dict[str, Any]:
-        async def _do(handler: ActionHandler) -> dict[str, Any]:
-            await handler.send_keys(keys)
-            return {"keys": keys}
-
-        return await self.run_action(agent_id, agent_name, _do)
-
-    async def act_screenshot(self, agent_id: str, agent_name: str | None) -> dict[str, Any]:
-        async def _do(_handler: ActionHandler) -> dict[str, Any]:
-            data = await self._bu_session.take_screenshot()
-            raw = data if isinstance(data, (bytes, bytearray)) else base64.b64decode(data)
-            _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-            self._screenshot_seq += 1
-            path = _SCREENSHOT_DIR / f"browser-{self.browser_id}-{self._screenshot_seq}.png"
-            path.write_bytes(raw)
-            return {"screenshot_path": str(path.resolve())}
-
-        return await self.run_action(agent_id, agent_name, _do)
-
-    async def act_tab(self, agent_id: str, agent_name: str | None, action: str, index: int | None, url: str | None) -> dict[str, Any]:
-        async def _do(_handler: ActionHandler) -> dict[str, Any]:
-            # ONE tab model: browser-use. switch/new move the REAL tab AND foreground it
-            # (via _focus_and_foreground), so state/click and the pane all follow. "list"
-            # is a read-only no-op; the fresh tab list is returned below. Index refers to
-            # get_tabs() order -- the same list `state`/`tab list` show.
-            i = index or 0
-            # "switch" is the CLI's tab verb (fleet.py: choices list/switch/new/close) and
-            # the only caller -- the old cast-socket "activate" path went out with the HTML
-            # tab bar, so there's nothing else to accept.
-            if action == "switch":
-                tabs = await self._bu_session.get_tabs()
-                if 0 <= i < len(tabs):
-                    await self._focus_and_foreground(tabs[i].target_id)
-                self._selector_map = {}
-            elif action == "new":
-                root = getattr(self._bu_session, "_cdp_client_root", None)
-                if root is not None:
-                    try:
-                        res = await asyncio.wait_for(
-                            root.send.Target.createTarget(params={"url": url or _HOME_URL}), timeout=10.0
-                        )
-                        new_id = res.get("targetId")
-                        if new_id:
-                            await self._focus_and_foreground(new_id)
-                    except Exception as e:  # noqa: BLE001  (best-effort new tab)
-                        logger.debug("tab new ignored ({})", e)
-                self._selector_map = {}
-            elif action == "close":
-                tabs = await self._bu_session.get_tabs()
-                root = getattr(self._bu_session, "_cdp_client_root", None)
-                if root is not None and 0 <= i < len(tabs):
-                    try:
-                        await asyncio.wait_for(
-                            root.send.Target.closeTarget(params={"targetId": tabs[i].target_id}), timeout=10.0
-                        )
-                    except Exception as e:  # noqa: BLE001  (best-effort close)
-                        logger.debug("tab close ignored ({})", e)
-                    await self._foreground_active()  # browser-use re-points; show its new tab
-                self._selector_map = {}
-            return {"tab_action": action, "tabs": await self._tab_list()}
-
-        return await self.run_action(agent_id, agent_name, _do)
-
     # --- socket bookkeeping ---------------------------------------------------
 
     async def register_cast_queue(self) -> "queue.Queue[str | None]":
@@ -1988,6 +1608,67 @@ class LiveBrowser(MutableModel):
                 except (queue.Empty, queue.Full):
                     pass
 
+    async def _teardown_chrome(self) -> None:
+        """Drop the proxy registration, the fleet's CDP client, and Chromium itself.
+
+        Order matters: unregister first so no new agent socket can attach to a browser
+        that is going away, then close our own client, then kill the process.
+        """
+        if self._proxy is not None and _PROXY.server is not None:
+            _PROXY.server.unregister(self.browser_id)
+        self._proxy = None
+        if self._cdp is not None:
+            await self._cdp.close()
+            self._cdp = None
+        chrome = self._chrome
+        self._chrome = None
+        if chrome is not None:
+            await asyncio.to_thread(chrome.kill)
+
+    def _mint_token(self, agent_id: str = "", agent_name: str | None = None) -> str:
+        """Fresh capability token, issued to ``agent_id``.
+
+        Minted on every Chromium launch (so a client reconnecting across a service restart
+        is rejected rather than silently driving a DIFFERENT Chromium with stale target
+        ids) and re-minted whenever the browser changes hands. Rotation is what makes
+        revocation race-free: the old token simply stops matching, with no socket to chase.
+        """
+        self._token = secrets.token_urlsafe(18)
+        self._token_owner = agent_id
+        self._token_owner_name = agent_name
+        return self._token
+
+    @property
+    def attach_url(self) -> str:
+        """The URL the current token-holder points `playwright-cli attach --cdp=` at."""
+        if _PROXY.server is None or not self._token:
+            return ""
+        return f"http://127.0.0.1:{_PROXY.server.port}/{self.browser_id}/{self._token}"
+
+    async def attach_for(self, agent_id: str, agent_name: str | None) -> dict[str, Any]:
+        """Issue ``agent_id`` an attach URL, or say why it can't have one.
+
+        This is where agent-vs-agent exclusion is enforced. The proxy cannot read the
+        ``X-Mngr-Agent-Id`` header (a generic CDP client sends none), so identity has to be
+        bound here, at the one place that still sees it, and carried by the token.
+        """
+        if self._crashed:
+            return self._crashed_payload()
+        if not self._is_running:
+            return self._starting_payload()
+        async with self._control_lock:
+            if self.human_pinned:
+                return {"ok": False, "status": "busy_human", **self._control_state()}
+            if self.controller == "agent" and self.owner_agent_id not in (None, agent_id):
+                return {"ok": False, "status": "busy_agent", **self._control_state()}
+            self._mint_token(agent_id, agent_name)
+        return {"ok": True, "attach_url": self.attach_url, **self._control_state()}
+
+    def touch_lease(self) -> None:
+        """Record agent activity. Called for a FORWARDED frame only (see _sweep_idle_lease)."""
+        self._lease_touched_at = time.monotonic()
+        self._granted_at = 0.0
+
     async def close(self) -> None:
         self._closed = True
         if self._keepalive_task is not None:
@@ -2005,16 +1686,7 @@ class LiveBrowser(MutableModel):
         # it's gone and cleared.
         async with self._control_lock:
             await self._abandon_queues_locked("closed")
-        await self._stop_active_agent()
-        # browser-use is the only Chrome connection now: kill it (idempotent; a crash may
-        # already have taken it down). getattr guards a close() that races a launch which
-        # never reached the _bu_session assignment.
-        bu_session = getattr(self, "_bu_session", None)
-        if bu_session is not None:
-            try:
-                await bu_session.kill()
-            except _BROWSER_ERRORS as e:
-                logger.debug("browser kill ignored ({})", e)
+        await self._teardown_chrome()
         # Unload this browser's PulseAudio null sink AFTER Chromium is gone (nothing is
         # routing into it anymore), so closing a browser doesn't leak its sink. The shared
         # daemon stays up for the rest of the fleet. Off the loop; best-effort.
@@ -2350,7 +2022,7 @@ class BrowserSessionManager(MutableModel):
     async def _entry_for(self, browser: LiveBrowser) -> fleet_manifest.ManifestEntry:
         """A manifest entry for a live browser: its tab URLs + active tab. Topology
         ONLY -- never ownership/queues (process-scoped) or profile bytes. Reads
-        browser-use's ``tab_urls()`` (async: a light targets query)."""
+        ``LiveBrowser.tab_urls()`` (async: a light targets query)."""
         urls, active_tab = await browser.tab_urls()
         return fleet_manifest.ManifestEntry(id=browser.browser_id, tabs=urls, active_tab=active_tab)
 

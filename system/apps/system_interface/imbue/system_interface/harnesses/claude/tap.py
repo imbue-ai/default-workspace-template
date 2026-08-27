@@ -1,6 +1,6 @@
 """Claude's native shoulder tap: flush the parked message queue into the live turn.
 
-The shoulder-tap contract (docs/design/harness-message-lifecycle-contract.md, Part B) for
+The shoulder-tap contract (system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract.md, Part B) for
 claude, WITHOUT the SIGKILL-restart the base ``/flush-queue`` path uses. Cancelling
 claude's live turn makes it flush its parked queue through immediately -- the same auto-flush it performs at natural turn end. We
 trigger that flush early by delivering a Chat-only ``meta+q`` -> ``chat:cancel`` chord

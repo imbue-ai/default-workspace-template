@@ -14,13 +14,14 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
-from tk_command_parsing.parser import parse_command
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
 from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
 from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
+from imbue.system_interface.harnesses.claude.tool_labels import keeps_full_tool_input
+from imbue.system_interface.harnesses.claude.tool_labels import shell_command
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
@@ -30,14 +31,6 @@ from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_co
 from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
 logger = _loguru_logger
-
-# The tk subcommands whose Bash calls carry the step titles/summaries that the
-# chat progress view's historical input-preview fallback reads -- a command
-# invoking one of these is exempted from the 200-char `input_preview` truncation
-# below so batched `tk create --step` forms and long `tk close <id> "<summary>"`
-# calls survive intact. Recognition is delegated to the shared
-# `tk_command_parsing` parser (see `_is_tk_lifecycle_call`).
-_TK_LIFECYCLE_VERBS = frozenset({"create", "start", "close"})
 
 _SOURCE = "claude/common_transcript"
 
@@ -195,28 +188,6 @@ def _make_event_id(uuid: str, suffix: str) -> str:
     return f"{uuid}-{suffix}"
 
 
-def _is_tk_lifecycle_call(tool_name: str, tool_input: Any) -> bool:
-    """True for a Bash call whose command invokes a tk/ticket create|start|close.
-    Their `input_preview` is exempted from truncation so batched multi-create
-    commands and long close summaries survive intact for the chat progress
-    view's historical input-preview fallback.
-
-    Recognition uses the shared `tk_command_parsing` shlex parser rather than a
-    regex, so a `tk close ...` merely *mentioned* inside another command's quoted
-    argument (e.g. `echo "remember to tk close s1"`) is not mistaken for a real
-    tk lifecycle call -- the same shell-awareness the standalone-command gate
-    hook relies on."""
-    if tool_name != "Bash" or not isinstance(tool_input, dict):
-        return False
-    command = tool_input.get("command", "")
-    if not isinstance(command, str):
-        return False
-    parsed = parse_command(command)
-    if parsed is None:
-        return False
-    return any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments)
-
-
 def _is_resume_no_response_reply(message: dict[str, Any]) -> bool:
     """True if ``message`` is the synthetic reply half of the resume turn-pair.
 
@@ -339,10 +310,10 @@ def _parse_assistant_message(
             tool_input = block.get("input", {})
             raw_input = json.dumps(tool_input, separators=(",", ":"))
             input_preview = raw_input
-            if len(input_preview) > MAX_TOOL_INPUT_PREVIEW_LENGTH and not _is_tk_lifecycle_call(tool_name, tool_input):
+            if len(input_preview) > MAX_TOOL_INPUT_PREVIEW_LENGTH and not keeps_full_tool_input(tool_name, raw_input):
                 input_preview = input_preview[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
-            command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-            is_hidden_tk = tool_name == "Bash" and isinstance(command, str) and is_pure_tk_lifecycle_command(command)
+            command = shell_command(tool_name, raw_input)
+            is_hidden_tk = command is not None and is_pure_tk_lifecycle_command(command)
 
             if call_id and tool_name:
                 tool_name_by_call_id[call_id] = tool_name

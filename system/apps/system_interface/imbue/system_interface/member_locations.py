@@ -91,7 +91,9 @@ def _read_unlocked(layout_dir: Path) -> dict[str, str]:
     try:
         stored = json.loads(locations_path.read_text())
     except (json.JSONDecodeError, OSError) as e:
-        _loguru_logger.opt(exception=e).warning("Failed to read {}; treating every object as unlocated", locations_path)
+        _loguru_logger.opt(exception=e).warning(
+            "Failed to read {}; treating every object as unlocated", locations_path
+        )
         return {}
     location_by_ref: object = stored.get("location_by_ref") if isinstance(stored, dict) else None
     if not isinstance(location_by_ref, dict):

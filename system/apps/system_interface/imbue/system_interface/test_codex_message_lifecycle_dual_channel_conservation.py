@@ -206,7 +206,12 @@ class _CodexDualChannelWorld:
                 "jsonrpc": "2.0",
                 "method": "item/completed",
                 "params": {
-                    "item": {"type": "userMessage", "id": f"item-{client_id}", "clientId": client_id, "content": [{"type": "text", "text": content}]},
+                    "item": {
+                        "type": "userMessage",
+                        "id": f"item-{client_id}",
+                        "clientId": client_id,
+                        "content": [{"type": "text", "text": content}],
+                    },
                     "completedAtMs": self._commit_clock,
                 },
             }
@@ -288,7 +293,9 @@ class _CodexDualChannelWorld:
             return
         assert result.status == "tapped", f"an available tap must tap, got {result.status!r}\n{self.note()}"
         # A successful resend hands nothing back to the composer (that is only on a resend-submit failure).
-        assert result.returned_block == "", f"a successful tap returns no composer block, got {result.returned_block!r}"
+        assert result.returned_block == "", (
+            f"a successful tap returns no composer block, got {result.returned_block!r}"
+        )
         # The interrupt cleared the turn; the combined resend opened a fresh one.
         self._current_turn_id = self.ledger.client.active_turn_id
         # The re-sent messages are now in-flight Sending resend chips (still visible, not Delivered).
@@ -300,7 +307,11 @@ class _CodexDualChannelWorld:
     def commit_resend(self) -> None:
         """The combined resend turn commits: every member Delivered via ONE committed turn (Fix 3)."""
         members = sorted(
-            (entry for entry in self.ledger.entries.values() if entry.resend_visible and entry.state == MessageState.SENDING),
+            (
+                entry
+                for entry in self.ledger.entries.values()
+                if entry.resend_visible and entry.state == MessageState.SENDING
+            ),
             key=lambda entry: entry.send_seq,
         )
         if not members:
@@ -557,7 +568,9 @@ def _assert_combined_resend_a3b_chip_removed_before_transcript_turn(world: _Code
     _turn_kind, ledger_event_id = next((k, p) for k, p in world.channel_log if k == "turn")
     assert ledger_event_id == codex_user_turn_event_id(combined_id, None, "")
     file_event_ids = {e["event_id"] for e in world.watcher.get_all_events() if e.get("type") == "user_message"}
-    assert ledger_event_id in file_event_ids, "the combined resend's live user-turn must be backed by the file reader's copy"
+    assert ledger_event_id in file_event_ids, (
+        "the combined resend's live user-turn must be backed by the file reader's copy"
+    )
 
 
 # =============================================================================

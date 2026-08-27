@@ -20,8 +20,21 @@ ENV CODEX_VERSION=${CODEX_VERSION}
 # with the defaults there. Bump deliberately, not by accident.
 ARG NODE_VERSION=22.23.2
 ENV NODE_VERSION=${NODE_VERSION}
+# Playwright's own CLI: the agent's entire browser-driving interface. The fleet
+# (agentic-browser-fleet) owns browsers; this drives them, over the gated CDP endpoint
+# the fleet prints. NOTE it is "@playwright/cli" -- the bare "playwright-cli" package on
+# npm is a deprecated stub.
+ARG PLAYWRIGHT_CLI_VERSION=0.1.18
+ENV PLAYWRIGHT_CLI_VERSION=${PLAYWRIGHT_CLI_VERSION}
 ARG PI_VERSION=0.83.0
 ENV PI_VERSION=${PI_VERSION}
+ARG OPENCODE_VERSION=1.18.19
+ENV OPENCODE_VERSION=${OPENCODE_VERSION}
+
+# Antigravity (agy) has no version pin here -- upstream publishes a release only
+# under an opaque build id that its "latest" manifest alone reveals, so the lock
+# (URL + per-arch sha512) lives inside system/scripts/agy_install-1.1.16.sh.
+# Bumping agy means adding a new agy_install-<version>.sh, not editing an ARG.
 
 # Pin the pi extension packages baked into the image at /opt/pi-extensions
 # (setup_system.sh); seed_home_skeleton.sh copies the tree into ~/.pi/agent at
@@ -63,7 +76,8 @@ RUN chmod +x /usr/local/bin/default-workspace-template-write-apt-sources \
 COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-system
 COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
-RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners && default-workspace-template-setup-system
+COPY system/scripts/agy_install-1.1.16.sh /usr/local/bin/default-workspace-template-install-agy
+RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy && default-workspace-template-setup-system
 
 # Install the pinned owner-exec static binary (the in-container "inner" exec
 # service; supervisord runs it via system/scripts/run_owner_exec.sh). Pin +
@@ -119,6 +133,8 @@ COPY system/vendor/mngr/libs/mngr/pyproject.toml /home/user/workspace/system/ven
 COPY system/vendor/mngr/libs/mngr_claude/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_claude/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_codex/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_codex/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_opencode/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_opencode/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_antigravity/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_antigravity/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_modal/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_wait/pyproject.toml
 COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml

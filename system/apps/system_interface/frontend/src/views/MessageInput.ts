@@ -1,5 +1,6 @@
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { makeNoticeDialog } from "./NoticeDialog";
+import type { SendFailureKind } from "../models/request-error";
 import {
   clearComposerAttachments,
   getComposerAttachments,
@@ -12,9 +13,9 @@ import {
 } from "../models/ComposerAttachments";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
-import { drainToComposer, sendMessage } from "../models/Response";
+import { drainToComposer, interruptAgent, sendMessage } from "../models/Response";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
-import { describeRequestError } from "../models/request-error";
+import { describeRequestError, describeRequestErrorKind } from "../models/request-error";
 import { openAgentAuth } from "../models/AgentAuth";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
 import { getAgentById } from "../models/AgentManager";
@@ -37,6 +38,34 @@ function messageTextKey(agentId: string): string {
 // merge-not-drop rule Stop's drain-to-composer uses. Persisted to localStorage regardless, so the text
 // survives even if the composer is not currently mounted -- never swallowed (contract A1a).
 const pendingComposerPrepends = new Map<string, string>();
+
+/** A failure raised from OUTSIDE this component, waiting for the composer to show it. */
+interface PendingFailureNotice {
+  title: string;
+  detail: string;
+  /** mngr's classification, so a sibling's failure earns the same buttons the composer's would. */
+  kind?: SendFailureKind;
+  /** Repeated by Retry. Omitted when the operation cannot be repeated. */
+  retry?: () => Promise<void>;
+}
+const pendingFailureNotices = new Map<string, PendingFailureNotice>();
+
+/**
+ * Raise the chat's failure notice for ``agentId`` from a sibling view.
+ *
+ * The composer owns the notice because it owns the composer -- Cancel means "the message is back
+ * in the box, go look at it". A sibling that fails a send hands the failure here rather than
+ * putting up its own dialog, so one shape of failure gets one shape of answer no matter which
+ * button started it.
+ */
+export function raiseFailureNotice(agentId: string, notice: PendingFailureNotice): void {
+  // Only ever one pending per agent, and only for the agent it concerns: a composer that is not
+  // mounted cannot show this, and a stale entry would otherwise surface as a modal about
+  // something that failed long ago the next time the user opened that chat.
+  pendingFailureNotices.clear();
+  pendingFailureNotices.set(agentId, notice);
+  m.redraw();
+}
 
 /** Hand ``block`` back to ``agentId``'s composer (prepended above any draft), from a sibling view. */
 export function prependToComposer(agentId: string, block: string): void {
@@ -84,6 +113,39 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   // A slash command the chat declines to deliver, because it would change the agent's terminal
   // rather than start a turn. It still works from that terminal, which the notice says.
   let declinedSlashCommand: { command: string; body: string | null } | null = null;
+  // Why the last send or interrupt failed, in the harness's own words, shown as a notice.
+  // Component state like the notices above, NOT module state: every open chat panel mounts its
+  // own MessageInput, and a module-level value would raise the notice in all of them at once.
+  // `recovery` is what makes the notice actionable, and it is carried by the OPERATION rather
+  // than the failure: a send can be repeated, so it offers Cancel / Retry / Force, while a
+  // failed interrupt has nothing to repeat and gets a plain OK. Any send failure qualifies --
+  // a dialog holding the input, a readiness timeout, a transport error -- because the ways out
+  // are the same whatever the reason; only the text differs.
+  // `text` is what the user typed, for putting back in the composer; `sentText` is what was
+  // actually sent (attachment references appended), for repeating the send. They differ whenever
+  // the message carried attachments, and sending the typed text alone would silently drop them.
+  type SendRecovery = {
+    agentId: string;
+    text: string;
+    sentText: string;
+    attachments: readonly ComposerAttachment[];
+  };
+  let actionFailureDetail: string | null = null;
+  // A failed Stop shares this notice, and telling the user their message could not be sent when
+  // they clicked Stop is simply wrong copy.
+  let actionFailureTitle = "Couldn't send your message";
+  let actionFailureRecovery: SendRecovery | null = null;
+  // Which recovery action is mid-flight, so the buttons disable rather than fire twice.
+  let actionFailureInFlight: "retry" | "force" | null = null;
+  // One notice instance each: the component closes over its own dismiss handler, so sharing one
+  // between notices would let whichever rendered last answer the others' Escape.
+  const actionFailureNotice = makeNoticeDialog();
+  const declinedCommandNotice = makeNoticeDialog();
+  const authCommandNotice = makeNoticeDialog();
+  // mngr's classification of the failure, which decides which recoveries are worth offering.
+  let actionFailureKind: SendFailureKind = "unknown";
+  // Retry for a failure raised by a sibling view, which knows how to repeat its own operation.
+  let externalRetry: (() => Promise<void>) | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
 
@@ -91,16 +153,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
     messageTextareaElement?.focus();
   }
 
-  // The declined-command notice has nothing focusable to hang an onkeydown off, so Escape comes
-  // from a document listener while it is open (as the image lightbox does). Stable reference, for
-  // the same reason as the dropdown handler below.
-  function handleDeclinedNoticeKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      declinedSlashCommand = null;
-      m.redraw();
-    }
-  }
-
+  // Its own handler rather than the one above: each notice clears only its own state, and
+  // registering one shared function reference from two overlays would be de-duplicated by
+  // addEventListener and then torn down by whichever overlay closed first.
   function renderComposerAttachment(agentId: string, attachment: ComposerAttachment): m.Vnode {
     const isReadyImage = attachment.status === "ready" && attachment.isImage && attachment.uploaded !== undefined;
     const thumbnail = isReadyImage
@@ -168,10 +223,28 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // user to the next one.
         declinedSlashCommand = null;
         interceptedAuthCommand = null;
+        // Safe to drop: the failed message was put back in that agent's composer when the send
+        // failed, so nothing is lost by closing its notice unanswered.
+        actionFailureDetail = null;
+        actionFailureRecovery = null;
+        actionFailureInFlight = null;
+        actionFailureKind = "unknown";
+        externalRetry = null;
       }
 
       // A sibling view (a native tap whose resend failed) merged a returned block into this agent's
       // persisted draft; adopt it into the live composer so it is visible at once, then clear the flag.
+      // A sibling view raised a failure for this agent; adopt it into the notice.
+      const pendingNotice = pendingFailureNotices.get(agentId);
+      if (pendingNotice !== undefined) {
+        pendingFailureNotices.delete(agentId);
+        clearActionFailureNotice();
+        actionFailureTitle = pendingNotice.title;
+        actionFailureDetail = pendingNotice.detail;
+        actionFailureKind = pendingNotice.kind ?? "unknown";
+        externalRetry = pendingNotice.retry ?? null;
+      }
+
       const pendingPrepend = pendingComposerPrepends.get(agentId);
       if (pendingPrepend !== undefined) {
         pendingComposerPrepends.delete(agentId);
@@ -211,7 +284,33 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
         const attachmentPaths = getReadyAttachmentPaths(agentId);
         const text = messageText;
+
+        // An upload that failed is dropped by getReadyAttachmentPaths and its chip is cleared
+        // below, so without this the file would leave the message silently and the only clue
+        // would be a small label that then disappears. Refuse the send and say which file.
+        const failedAttachments = getComposerAttachments(agentId).filter(
+          (attachment) => attachment.status === "error",
+        );
+        if (failedAttachments.length > 0) {
+          // Same guard as the send-failure path: the upload wait above is awaited, so the user
+          // may have switched agents, and a notice about this agent's files must not land on
+          // another agent's chat.
+          if (currentAgentId !== agentId) {
+            return;
+          }
+          const names = failedAttachments.map((attachment) => attachment.fileName).join(", ");
+          actionFailureTitle =
+            failedAttachments.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload";
+          actionFailureDetail = `${names} could not be uploaded, so the message was not sent. Remove the attachment, or try again.`;
+          actionFailureRecovery = null;
+          externalRetry = null;
+          m.redraw();
+          return;
+        }
+
         if (!text.trim() && attachmentPaths.length === 0) {
+          // Nothing to send. Reachable by clicking Send with an empty box, which needs no
+          // explanation -- the button simply does nothing.
           return;
         }
 
@@ -245,27 +344,28 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           const detail = describeRequestError(err);
           console.error(`Failed to send message to agent ${agentId}: ${detail}`);
           dropOutgoing(agentId, outgoingId);
-          // Restore the user's text and attachments so the send is not silently
-          // lost -- but only if they have not already started a new draft for this
-          // agent (the input was cleared at send time, so during the in-flight
-          // request the user may have typed or attached something new; blindly
-          // restoring would clobber that newer draft).
-          const currentDraft =
-            currentAgentId === agentId ? messageText : (localStorage.getItem(messageTextKey(agentId)) ?? "");
-          const isComposerEmpty = currentDraft.trim().length === 0 && getComposerAttachments(agentId).length === 0;
-          if (isComposerEmpty) {
-            localStorage.setItem(messageTextKey(agentId), sentText);
-            restoreComposerAttachments(agentId, sentAttachments);
-            if (currentAgentId === agentId) {
-              messageText = sentText;
-            }
+          // Back in the composer immediately: the recovery record is closure state, so a reload
+          // would take the message with it (contract A1a). A repeat send removes that copy once
+          // it has landed.
+          restoreFailedMessageToComposer(agentId, sentText, sentAttachments);
+          // Actions only if they are still on the agent that failed -- this catch runs after an
+          // await, so they may have switched and the switch-clear has already gone by.
+          if (currentAgentId === agentId) {
+            actionFailureTitle = "Couldn't send your message";
+            actionFailureDetail = detail;
+            actionFailureKind = describeRequestErrorKind(err);
+            actionFailureRecovery = { agentId, text: sentText, sentText: finalText, attachments: sentAttachments };
           }
           m.redraw();
-          alert(`Failed to send message: ${detail}`);
         }
 
         requestAnimationFrame(() => {
-          focusMessageTextarea();
+          // Not while a notice is open: this rAF lands after mithril has mounted the notice and
+          // focused its OK button, so refocusing the composer would steal it -- leaving a modal
+          // the keyboard cannot dismiss, and an Enter that re-sends the just-restored text.
+          if (actionFailureDetail === null) {
+            focusMessageTextarea();
+          }
         });
       }
 
@@ -306,9 +406,13 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           const detail = describeRequestError(err);
           console.error(`Failed to interrupt agent ${agentId}: ${detail}`);
           // Surface the failure: they deliberately clicked Stop, and on failure
-          // the agent is still running. Matches the alert-based feedback
-          // convention for user-initiated mutations (see executeDestroy).
-          alert(`Failed to interrupt agent: ${detail}`);
+          // the agent is still running. Same notice as a failed send -- leaving this one as a
+          // system alert while its neighbour is a styled notice is worse than either.
+          // Never inherit a previous send's recovery: an interrupt has nothing to repeat, and
+          // leaving one attached would offer Retry bound to an unrelated message.
+          clearActionFailureNotice();
+          actionFailureTitle = "Couldn't stop the agent";
+          actionFailureDetail = detail;
         } finally {
           isInterruptInFlight = false;
           m.redraw();
@@ -351,83 +455,295 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         m.redraw();
       }
 
-      function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Vnode {
-        return m(
-          "div.custom-url-dialog-overlay",
-          {
-            oncreate() {
-              document.addEventListener("keydown", handleDeclinedNoticeKeydown);
-            },
-            onremove() {
-              document.removeEventListener("keydown", handleDeclinedNoticeKeydown);
-            },
-            ...backdropDismissAttrs(dismissDeclinedCommandNotice),
-          },
-          m(
-            "div.custom-url-dialog",
-            {
-              onclick(e: MouseEvent) {
-                e.stopPropagation();
-              },
-            },
-            [
-              m("h3.custom-url-dialog-title", `${declined.command} can't be sent from chat`),
-              m("p.logout-notice-body", declined.body ?? "You can still send it from the agent's terminal."),
-              m("div.custom-url-dialog-actions", [
-                m(
-                  "button.custom-url-dialog-cancel",
-                  {
-                    // Focus it so Enter and Space dismiss too, and so the notice is reachable
-                    // without a mouse.
-                    oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
-                    onclick: () => dismissDeclinedCommandNotice(),
-                  },
-                  "OK",
-                ),
-              ]),
-            ],
-          ),
-        );
+      /** Put a failed message back in the composer, in FRONT of whatever is already there. */
+      function restoreFailedMessageToComposer(
+        forAgentId: string,
+        text: string,
+        attachments: readonly ComposerAttachment[],
+      ): void {
+        // Reuses the module-level prepend that Stop's drain and QueuedMessageView already hand
+        // blocks back through: it persists to localStorage (so the message survives a reload or
+        // an unmounted composer) and merges the same way, rather than this path inventing a
+        // second set of rules for the same job. Prepending is what lets it run unconditionally:
+        // put the failed message first and any draft typed during the send after it, and neither
+        // is lost.
+        prependToComposer(forAgentId, text);
+        // Merge rather than replace: restoreComposerAttachments overwrites, and anything attached
+        // while the send was in flight would go with it.
+        const existingAttachments = getComposerAttachments(forAgentId);
+        const existingIds = new Set(existingAttachments.map((attachment) => attachment.localId));
+        restoreComposerAttachments(forAgentId, [
+          ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
+          ...existingAttachments,
+        ]);
+        if (currentAgentId === forAgentId) {
+          messageText = localStorage.getItem(messageTextKey(forAgentId)) ?? text;
+        }
       }
 
-      function renderAuthCommandNotice(command: string): m.Vnode {
-        const title = command === "/logout" ? "Sign-out is managed here" : "Sign-in is managed here";
-        const explanation =
-          `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +
-          "outside this workspace's managed sign-in. Use the agent auth screen instead.";
-        return m(
-          "div.custom-url-dialog-overlay",
-          {
-            ...backdropDismissAttrs(dismissAuthCommandNotice),
-          },
-          m(
-            "div.custom-url-dialog",
+      /** Drop the first occurrence of ``block`` from ``text``, tidying the separator it left. */
+      function removeFirstBlock(text: string, block: string): string {
+        if (!block) {
+          // An attachments-only message has no text to remove, and indexOf("") matches at 0 --
+          // which would reformat a draft this never touched.
+          return text;
+        }
+        const at = text.indexOf(block);
+        if (at === -1) {
+          return text;
+        }
+        const before = text.slice(0, at);
+        const after = text.slice(at + block.length);
+        return `${before}${after}`
+          .replace(/^\n+/, "")
+          .replace(/\n{3,}/g, "\n\n")
+          .trimEnd();
+      }
+
+      /** Remove just the restored copy once a repeat send has landed, leaving the rest alone. */
+      function clearRestoredMessage(
+        forAgentId: string,
+        restoredText: string,
+        deliveredAttachments: readonly ComposerAttachment[],
+      ): void {
+        const deliveredIds = new Set(deliveredAttachments.map((attachment) => attachment.localId));
+        // Emphatically NOT "clear the composer". By this point the box can also hold a draft
+        // typed while the send was failing, and -- after Force -- the queue block drained out of
+        // the harness so the restart would not destroy it. Wiping it wholesale would throw away
+        // the very messages this feature exists to protect. Remove the one copy that was just
+        // delivered, and leave everything else exactly where it is.
+        // Removed wherever it sits, not just at the front: Force drains the harness queue back
+        // into the composer BEFORE sending, so by now the delivered message usually has that
+        // block above it and a prefix-only strip would leave it behind -- sent, and still in the
+        // box. Only the first occurrence goes, so a user who genuinely typed the same text twice
+        // keeps their copy.
+        const current = localStorage.getItem(messageTextKey(forAgentId)) ?? "";
+        const withoutRestored = removeFirstBlock(current, restoredText);
+        if (withoutRestored) {
+          localStorage.setItem(messageTextKey(forAgentId), withoutRestored);
+        } else {
+          localStorage.removeItem(messageTextKey(forAgentId));
+        }
+        // The delivered attachments go regardless of whether text remains. Keying this off the
+        // text emptying meant a Retry after the user had typed something left the files behind,
+        // to be sent again with whatever they wrote next.
+        restoreComposerAttachments(
+          forAgentId,
+          getComposerAttachments(forAgentId).filter((attachment) => !deliveredIds.has(attachment.localId)),
+        );
+        if (currentAgentId === forAgentId) {
+          messageText = withoutRestored;
+        }
+      }
+
+      function clearActionFailureNotice(): void {
+        actionFailureDetail = null;
+        actionFailureRecovery = null;
+        actionFailureInFlight = null;
+        externalRetry = null;
+        actionFailureKind = "unknown";
+        actionFailureTitle = "Couldn't send your message";
+      }
+
+      /** Cancel: give the message back and close. Also what Escape and a backdrop press do. */
+      function dismissActionFailureNotice(): void {
+        // Never dismiss out from under a running action: the send it started is still in flight
+        // and will report its own outcome.
+        if (actionFailureInFlight !== null) {
+          return;
+        }
+        // The message went back to the composer when the send failed, so there is nothing to
+        // restore here -- Cancel just means "leave it there and let me look at it".
+        clearActionFailureNotice();
+        m.redraw();
+        // Hand focus back to where the user was typing, which the send path skipped while the
+        // notice was up.
+        focusMessageTextarea();
+      }
+
+      /** Retry: the ordinary send again, so it re-runs preflight and can fail again. */
+      async function retryFailedSend(): Promise<void> {
+        if (actionFailureInFlight !== null) {
+          return;
+        }
+        const recovery = actionFailureRecovery;
+        const retryExternal = externalRetry;
+        if (recovery === null && retryExternal === null) {
+          return;
+        }
+        actionFailureInFlight = "retry";
+        m.redraw();
+        if (recovery !== null) {
+          await repeatFailedSend(recovery);
+          return;
+        }
+        // A sibling's operation: it knows how to repeat itself, and reports its own failure the
+        // same way it reported the first one.
+        try {
+          await retryExternal!();
+          clearActionFailureNotice();
+        } catch (err) {
+          actionFailureDetail = describeRequestError(err);
+          actionFailureInFlight = null;
+        }
+        m.redraw();
+      }
+
+      /**
+       * Shared tail of Retry and Force: send the message again and settle the notice.
+       *
+       * Sends ``sentText`` -- what actually went to the agent, attachment references included --
+       * not the typed prose, which would drop the attachments silently.
+       */
+      async function repeatFailedSend(recovery: SendRecovery): Promise<void> {
+        // Paint the same optimistic bubble the normal send path paints, so a retried message is
+        // not simply absent from the transcript until the backend catches up.
+        const outgoingId = addOutgoing(recovery.agentId, recovery.text);
+        try {
+          await sendMessage(recovery.agentId, recovery.sentText);
+          // Landed, so take the restored copy back out of the composer.
+          clearRestoredMessage(recovery.agentId, recovery.text, recovery.attachments);
+          clearActionFailureNotice();
+          focusMessageTextarea();
+        } catch (err) {
+          dropOutgoing(recovery.agentId, outgoingId);
+          // Failed again. Only re-open the notice if they are still on that agent -- otherwise
+          // it would surface this agent's error over a different chat, with no way to act on it.
+          // The message is already back in that agent's composer either way.
+          if (currentAgentId === recovery.agentId) {
+            actionFailureDetail = describeRequestError(err);
+            // The reason can change between attempts -- a blocked input can become an agent that
+            // is gone -- and the buttons follow the kind, so it has to be re-read with the text.
+            actionFailureKind = describeRequestErrorKind(err);
+            actionFailureInFlight = null;
+          } else {
+            clearActionFailureNotice();
+          }
+        }
+        m.redraw();
+      }
+
+      /** Force: restart the agent, then send. Destructive -- it ends any in-progress turn. */
+      async function forceFailedSend(): Promise<void> {
+        const recovery = actionFailureRecovery;
+        if (recovery === null || actionFailureInFlight !== null) {
+          return;
+        }
+        actionFailureInFlight = "force";
+        m.redraw();
+        // Rescue anything queued inside the harness first. The restart below SIGKILLs the agent,
+        // which drops that queue -- and a feature whose rule is "never lose the message" must not
+        // have a button that quietly loses other people's. Best-effort on purpose: the agent we
+        // are about to force is often the one that is stuck, so a drain that fails or is refused
+        // must not stop the restart the user actually asked for.
+        try {
+          const drained = await drainToComposer(recovery.agentId);
+          if (drained.block) {
+            prependToComposer(recovery.agentId, drained.block);
+          }
+        } catch {
+          // Nothing to do: the restart still goes ahead, and anything queued is lost with it.
+        }
+        try {
+          // The restart itself, unconditionally: the drain does not guarantee one. Claude's
+          // empty-queue path is a native chord, and pi/codex hand back a block without ever
+          // restarting -- so a non-empty block is not evidence the process was replaced, and a
+          // wedged agent is exactly what Force is for. If this is refused (the services agent
+          // carries is_primary=true, say) that refusal becomes the notice's text, nothing is sent.
+          await interruptAgent(recovery.agentId);
+        } catch (err) {
+          actionFailureDetail = describeRequestError(err);
+          actionFailureInFlight = null;
+          m.redraw();
+          return;
+        }
+        await repeatFailedSend(recovery);
+      }
+
+      function renderActionFailureNotice(detail: string): m.Children {
+        const recovery = actionFailureRecovery;
+        // A pane that is gone is not going to be there on the next attempt, so Retry is not
+        // offered at all rather than offered and guaranteed to fail. Every other kind -- and
+        // anything unclassified -- keeps it.
+        const canRetryHelp = actionFailureKind !== "agent_unreachable";
+        const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
+        return m(actionFailureNotice, {
+          title: actionFailureTitle,
+          body: [
+            detail,
+            // Only when the detail does not already say what to do. An input_blocked reason is
+            // the dialog's own advice ("press Enter in its terminal to run it") -- following it
+            // with a vaguer paraphrase of the same instruction is the third time one screen has
+            // told the reader to go look at their terminal.
+            actionFailureKind === "agent_unreachable"
+              ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
+              : isRepeatable && actionFailureKind !== "input_blocked"
+                ? "You can open the agent's terminal, fix it there, then Retry."
+                : null,
+          ],
+          dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
+          isDismissable: actionFailureInFlight === null,
+          onDismiss: dismissActionFailureNotice,
+          actions: [
+            ...(isRepeatable
+              ? [
+                  {
+                    label: actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
+                    tooltip: "Tries the same thing again",
+                    isDisabled: actionFailureInFlight !== null,
+                    run: () => void retryFailedSend(),
+                  },
+                ]
+              : []),
+            // Force needs a message to send afterwards, so it is offered only for our own send --
+            // and never for an agent that is merely still starting, where restarting would
+            // discard the session it was about to finish bringing up. It is the only thing that
+            // helps an agent that is GONE, which is why it survives Retry being withheld.
+            ...(recovery === null || actionFailureKind === "not_ready"
+              ? []
+              : [
+                  {
+                    label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
+                    tooltip: "Restarts agent to reset it & resends message",
+                    isDestructive: true,
+                    isDisabled: actionFailureInFlight !== null,
+                    run: () => void forceFailedSend(),
+                  },
+                ]),
+          ],
+        });
+      }
+
+      function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Children {
+        return m(declinedCommandNotice, {
+          title: `${declined.command} can't be sent from chat`,
+          body: [declined.body ?? "You can still send it from the agent's terminal."],
+          dismissLabel: "OK",
+          onDismiss: dismissDeclinedCommandNotice,
+        });
+      }
+
+      function renderAuthCommandNotice(command: string): m.Children {
+        return m(authCommandNotice, {
+          title: command === "/logout" ? "Sign-out is managed here" : "Sign-in is managed here",
+          body: [
+            `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +
+              "outside this workspace's managed sign-in. Use the agent auth screen instead.",
+          ],
+          dismissLabel: "Cancel",
+          onDismiss: dismissAuthCommandNotice,
+          actions: [
             {
-              onclick(e: MouseEvent) {
-                e.stopPropagation();
+              label: "Open agent auth",
+              run: () => {
+                dismissAuthCommandNotice();
+                if (agentId) {
+                  openAgentAuth(agentId);
+                }
               },
             },
-            [
-              m("h3.custom-url-dialog-title", title),
-              m("p.logout-notice-body", explanation),
-              m("div.custom-url-dialog-actions", [
-                m("button.custom-url-dialog-cancel", { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
-                m(
-                  "button.custom-url-dialog-open",
-                  {
-                    onclick: () => {
-                      dismissAuthCommandNotice();
-                      if (agentId) {
-                        openAgentAuth(agentId);
-                      }
-                    },
-                  },
-                  "Open agent auth",
-                ),
-              ]),
-            ],
-          ),
-        );
+          ],
+        });
       }
 
       const attachments = getComposerAttachments(agentId);
@@ -443,6 +759,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       return m("div", { class: "message-input mx-auto w-full" }, [
         interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
         declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
+        actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
         m("input", {
           type: "file",
           multiple: true,

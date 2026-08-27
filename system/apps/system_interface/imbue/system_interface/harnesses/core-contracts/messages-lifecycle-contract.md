@@ -1,12 +1,21 @@
 # The message-lifecycle contract (CANONICAL)
 
 The single source of truth for what happens to a user's message across every harness
-(claude, codex, pi): send, queue, shoulder-tap, interrupt, and return-to-composer. Harness
+(claude, codex, pi, antigravity): send, queue, shoulder-tap, interrupt, and return-to-composer. Harness
 implementations differ; **the observable behavior is identical**. If an implementation
 disagrees with this doc, the implementation is wrong.
 
-Part E records where reality falls short of it: the per-harness conformance gaps, the upstream
+`messages-lifecycle-contract-state-of-things.md` records where reality falls short of it: the
+per-harness conformance gaps, the upstream
 behavior we do not control, and what we chose not to build.
+
+---
+
+This file is the TIMELESS half: the invariants and per-operation contracts every
+harness must satisfy. It says nothing about how any particular harness satisfies them,
+and nothing about what is currently broken -- both of those live in
+`messages-lifecycle-contract-state-of-things.md` beside it, so this file only changes
+when the CONTRACT changes.
 
 ---
 
@@ -75,6 +84,17 @@ state; the frontend removes "Sending…" on that report, not before.
 
 Beyond "Sending…", the only other allowance is briefly HOLDING the last state the backend
 reported during a round-trip (lag, not invention) until the next update arrives.
+
+**Optimism is a symptom, not a feature.** A placeholder exists only because the send beneath it
+is not robust: if delivery were certain and immediate there would be nothing to paint over. So
+the amount of optimism a harness needs is a direct measure of how unreliable its send path is,
+and the way to reduce it is to make sending robust -- not to make the placeholder cleverer.
+Treat every optimistic state as debt owed by the layer below it.
+
+That is also why the frontend is forbidden from resolving it. A self-timer would hide the debt
+rather than pay it: the message stops being visible while the underlying send is still just as
+unreliable, which trades a confusing UI for a lost message. See E16 in the state-of-things file for what this costs when
+the send path does fail catastrophically.
 
 Keep both sides as simple as possible; push every decision down.
 
@@ -160,6 +180,8 @@ rollout-poll.
 
 ---
 
+---
+
 ## Part B — Per-operation contracts
 
 ### Send
@@ -216,26 +238,6 @@ Delivered. The backend decides per id (A4); the frontend asks the backend what t
 
 ---
 
-## Part C — Harness implementations (differ in mechanism, identical in behavior)
-
-- **claude (today, heuristic — works but is the messy path):**
-  - *Shoulder-tap:* press the chord keybind to interrupt, check whether it is still running,
-    then send the new message afterward. Heuristic, but functional.
-  - *UI interrupt:* the backend checks the queue; if empty → the same chord interrupt; if
-    non-empty → determine the queued messages from the backend, return them to the composer (in
-    order, on top), then a full restart.
-  - *Known gap:* claude does not yet reliably honor Interrupt §return (in-flight/queued messages
-    are not always returned to the composer). This is the bug to fix so claude matches this
-    contract.
-- **codex + pi (in-house — the clean path):** shoulder-tap and interrupt are native (control
-  line / sentinel today; JSON-RPC for codex next), so they are faster and always go down the
-  same single code path — no heuristic branch. codex on the app-server is the cleanest: send =
-  `turn/start`/`turn/steer`, stop = `turn/interrupt`, queue = pending steers observed via
-  events, delivered = the committed `userMessage`, reconciliation by the minted `clientId`.
-
-The target is to make all three converge on the clean, single-path shape; claude's heuristic
-path is what most needs to move toward it.
-
 ---
 
 ## Part D — Enforcement
@@ -248,127 +250,3 @@ nothing double-shown or left stale (A3b). **Interrupt-during-flush is a required
 harness conforms to this contract only when its test is green.
 
 ---
-
-## Part E — Known limitations
-
-Where the implementations do not fully meet Parts A–D, and why. E1–E3 are conformance gaps
-against the contract itself; E4–E8 are upstream behavior we do not control; E9–E10 are the test
-quirks and what we chose not to build.
-
-### E1. claude and pi — queued chips blink out during a restart-based shoulder-tap (A1a)
-**A visual blip, not a lost message.** The shoulder-tap never returns anything to the composer —
-it drains the queue and **resends it**. On claude and pi that goes through `restart_drain`: the
-queue block is captured, the agent is restarted, and the block is resent as one merged turn.
-
-The restart clears the harness's own queue, so the chips disappear at that instant — but the
-resent block is not a frontend POST, so no "Sending…" bubble covers the window. The messages are
-briefly in no visible state, then reappear a moment later as a committed turn. They are never
-lost; A1a's "not even momentarily" is what this misses.
-
-**codex does not have this.** Its atomic shoulder-tap merges into the live turn with no restart,
-and the ledger marks each chip `is_sending=True` while it re-sends, so the chip stays
-continuously visible and renders as "Sending…" instead of blinking out. Closing the gap on
-claude/pi means the same thing: keep the captured block visible as sending chips across the
-restart window rather than letting the queue snapshot go empty.
-
-### E2. claude — a send holding `message.lock` past the bounded wait (stop, not shoulder-tap)
-**Rare, and stop wins by design.** This is the **stop button**, not the shoulder-tap. Stop takes
-mngr's per-agent `message.lock` with a bounded wait, then refreshes the mirror and captures the
-block under it — so a message that parked between the caller's last mirror read and the SIGKILL
-rides the returned block instead of dying silently with the process.
-
-When that wait **expires** — an idle-start send holding the lock through its turn-confirm — stop
-must still win, so it refreshes and hammers anyway. That message is **stopped and never runs**.
-Whether it also comes back to the composer depends on a race: if its enqueue landed before the
-best-effort re-capture it rides the returned block; if it landed after, in the dead epoch, it does
-not. `conservation_storm_test.py` accepts **both** shapes deliberately on its slow-send branch,
-because on a heavily stalled machine the lock holder can release just inside the wait and the base
-drain then captures the message under the lock.
-
-So on this one branch a message can end neither Delivered nor Returned — it is stopped. That is
-the deliberate "stop must win" posture (matching pi and codex, which never hold the lock at all),
-not an accident.
-
-### E3. pi and claude — the queue and the transcript ride different transports (A3b ordering)
-A3b requires depart-before-arrive: the chip is removed **first**, then the transcript turn
-appears. Both harnesses emit in that order — it is the ordering we control.
-
-But the two updates reach the browser over **different transports**: the queue snapshot goes over
-the agents WebSocket, the turn over the per-agent event stream. A rare transport reordering can
-still land them out of order, so a single redraw can briefly show the message as both a chip and
-a turn. Millisecond-scale and self-correcting on the next update; there is no double-delivery,
-only a momentary double-show. Closing it fully would need both updates on one transport, or a
-sequence number the frontend orders on — neither is built.
-
-### E4. pi — `ctx.abort()` drains the queue into an unreadable editor
-`ctx.abort` routes to `_extensionAbortHandler` →
-`restoreQueuedMessagesToEditor({abort: true})`. It empties pi's native steer queue into the TUI
-editor buffer **unsent**, then aborts. The extension's pi API (`sendUserMessage`, `setModel`,
-`setThinkingLevel`) cannot read that editor buffer, and the extension keeps no copy of the steer
-text — it fire-and-forgets from `pi_inbox`. So "abort, then resubmit the queued steers" has
-nothing to resubmit.
-
-Consequence: pi's interrupt cannot be payload-free. The extension must own the payload — re-read
-the specific `pi_inbox` lines for the parked steers and resubmit them once the abort settles to
-idle, without double-submitting the copy already sitting in the editor. `agent.ts` also re-queues
-via `prompt()` while `isStreaming` is still true, so a naive resubmit immediately after abort just
-re-parks the steers, stranded until the next user prompt.
-
-A turn counter used for ABA-safety must be **persisted across restart**: a fresh process resets
-it, and a naive reset re-aliases turn id N onto a different turn.
-
-### E5. codex — the daemon does not enforce service tiers
-`thread/settings/update` keeps whatever `serviceTier` is set, even on a model that does not
-support `priority`. The daemon will not reject or clear it. So the guarantee "a no-fast model has
-no fast, and clearing it works" is **frontend-enforced**:
-
-- `supports_fast` must come from `model/list`'s per-model `service_tiers`, never a static table.
-- A model switch must write **all three axes** (`model` + `effort` + `fast`) together, not only
-  the diffed ones, so a stale `priority` cannot survive a model change.
-
-Related: `model/list` is per-account *and* per-model. Efforts differ per model (some `low→ultra`,
-some `low→max`, some `low→xhigh`) and `service_tiers` is non-empty only on some families. **A
-static uniform catalog cannot represent this** — which is why the catalog is daemon-sourced.
-
-### E6. codex — hook trust is not bypassable on the resume path
-`codex resume <id> --remote` stops on a "Hooks need review" screen and **ignores**
-`--dangerously-bypass-hook-trust`. Until trust is granted, no hooks fire on any turn, typed or
-programmatic. `wait_for_ready_signal` therefore selects "Trust all and continue" once at create
-time (send-keys `2` on the primary window); codex persists that under `CODEX_HOME`, so it is
-one-time and `start`/`connect` never see the screen.
-
-The daemon must also launch as `codex --dangerously-bypass-hook-trust --enable hooks app-server`
-— hooks are a default-off feature flag, so a bare `app-server` fires none.
-
-### E7. codex — programmatic turns fire no transcript hook
-`codex_transcript_path` is written by mngr rather than derived from a hook, because a
-programmatic `turn/start` does not fire the hook that would otherwise record it.
-
-### E8. codex — `turn/started` / `turn/completed` are not emitted by 0.147
-The app-server stopped emitting those notifications; only `thread/status/changed` remains. The
-activity dot therefore follows mngr's authoritative RUNNING state via `CodexActivityTracker` (the
-same lifecycle+transcript path as claude and pi), not the ledger's turn notifications. The ledger
-stays the queue/message-lifecycle authority. Deriving the dot from the ledger's notifications is
-what stuck it on "Thinking".
-
-### E9. Test-environment quirks (not product bugs)
-- `test_codex_agent_full_lifecycle` is functionally green end-to-end but exits non-zero locally on
-  the resource-guard mark check (`@pytest.mark.tmux` / `rsync` "marked but never invoked"): in a
-  sandbox those binaries do not route through the guard's PATH wrapper. In CI the wrappers are
-  active and the marks pass. The same cause makes several `adopt`/`destroy` unit tests "fail"
-  locally.
-
-### E10. Deliberately not closed
-- **claude model/effort switches do not survive restart.** Launch settings re-pin the model every
-  relaunch; only `fastMode` is recorded per-agent. Fix is to record model+effort in the same
-  per-agent settings file. (The restart precedence here was inferred, not observed — verify
-  against a real restart before acting on it.)
-- **pi has no create-time model/effort knobs**, and its switch can report success even when the
-  extension drops the model.
-- **Create-time model selection is three unrelated mechanisms** across the harnesses with no
-  shared mngr abstraction. Unify when next touching this area.
-- **codex switch durability across `codex resume` is unverified.**
-- **`initial_message` delivery as a first `turn/start` is unimplemented** for codex. Rarely
-  exercised.
-- **AGENTS.md injection renders as a giant fake user message** in codex common transcripts;
-  instruction-injection turns are not yet tagged or skipped by the converter.

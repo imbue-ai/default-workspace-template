@@ -1,11 +1,13 @@
 """Unit tests for the Claude model resolver's switch side (the live read is shared)."""
 
+import json
 from pathlib import Path
 
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.harnesses.claude.model import _CLAUDE_EFFORTS
 from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
+from imbue.system_interface.harnesses.claude.model import _CLAUDE_EFFORTS
+from imbue.system_interface.harnesses.claude.model import _get_agent_fast_mode_write_path
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import match_option
@@ -28,11 +30,7 @@ def test_offered_options_carry_suffix_free_reported_ids() -> None:
     # The matcher keys off harness_reported_model_id; the statusline reports suffix-free
     # API ids, so an offered option's switch alias and its reported id are NOT the same
     # string. This is the mapping the picker promises.
-    reported = {
-        option.id: option.harness_reported_model_id
-        for option in CLAUDE_CATALOG.options
-        if option.in_picker
-    }
+    reported = {option.id: option.harness_reported_model_id for option in CLAUDE_CATALOG.options if option.in_picker}
     assert reported == {
         "fable[1m]": "claude-fable-5",
         "opus[1m]": "claude-opus-5",
@@ -76,9 +74,7 @@ def test_hidden_options_are_the_models_the_picker_cannot_reach() -> None:
     ]
     # Each of them actually resolves, rather than merely being declared.
     for model_id in hidden:
-        matched = match_option(
-            ModelIdentity(model_id=model_id, effort="high", fast=False), CLAUDE_CATALOG.options
-        )
+        matched = match_option(ModelIdentity(model_id=model_id, effort="high", fast=False), CLAUDE_CATALOG.options)
         assert matched is not None, f"hidden option {model_id} does not match itself"
         assert matched.id == model_id
 
@@ -175,10 +171,7 @@ def test_every_binary_model_id_resolves() -> None:
     unresolved = [
         model_id
         for model_id in _BINARY_MODEL_IDS
-        if match_option(
-            ModelIdentity(model_id=model_id, effort="high", fast=False), CLAUDE_CATALOG.options
-        )
-        is None
+        if match_option(ModelIdentity(model_id=model_id, effort="high", fast=False), CLAUDE_CATALOG.options) is None
     ]
     assert unresolved == [], f"these reported ids would shrug: {unresolved}"
 
@@ -188,9 +181,7 @@ def test_binary_model_ids_resolve_to_their_own_family() -> None:
     # option and still report zero shrugs. Pin the family instead of each exact label, so
     # adding a point release does not churn this test.
     for model_id in _BINARY_MODEL_IDS:
-        matched = match_option(
-            ModelIdentity(model_id=model_id, effort="high", fast=False), CLAUDE_CATALOG.options
-        )
+        matched = match_option(ModelIdentity(model_id=model_id, effort="high", fast=False), CLAUDE_CATALOG.options)
         assert matched is not None
         family = matched.label.split()[0].lower()
         assert family in model_id, f"{model_id} resolved to {matched.label}, a different family"
@@ -215,9 +206,7 @@ def test_live_statusline_model_ids_match_their_catalog_option() -> None:
         # A dated legacy id reaches its hidden option the same way.
         ("claude-opus-4-5-20251101", "Opus 4.5"),
     ):
-        matched = match_option(
-            ModelIdentity(model_id=reported_id, effort="high", fast=False), CLAUDE_CATALOG.options
-        )
+        matched = match_option(ModelIdentity(model_id=reported_id, effort="high", fast=False), CLAUDE_CATALOG.options)
         assert matched is not None, f"the live statusline id {reported_id} matches no catalog option"
         assert matched.label == expected_label
 
@@ -302,3 +291,11 @@ def test_switch_records_fast_off_durably(tmp_path: Path) -> None:
         lambda _line: True,
     )
     assert result.ok
+
+
+def _recorded_fast_mode(tmp_path: Path) -> object:
+    """The ``fastMode`` the switch persisted, or ``"absent"`` when it wrote no settings at all."""
+    settings = _get_agent_fast_mode_write_path(tmp_path / "claude_config", tmp_path / "state")
+    if not settings.exists():
+        return "absent"
+    return json.loads(settings.read_text()).get("fastMode", "absent")

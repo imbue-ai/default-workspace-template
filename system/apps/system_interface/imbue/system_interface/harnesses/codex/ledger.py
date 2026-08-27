@@ -479,7 +479,9 @@ class CodexMessageLedger(MutableModel):
         items_view = turn.get("itemsView")
         committed = self._committed_ids_from_items(turn.get("items")) if items_view == "full" else set()
 
-        owned = [entry for entry in self.entries.values() if entry.bound_turn_id == turn_id and entry.state in _LIVE_STATES]
+        owned = [
+            entry for entry in self.entries.values() if entry.bound_turn_id == turn_id and entry.state in _LIVE_STATES
+        ]
         unresolved = self._settle_committed(owned, committed)
         if unresolved:
             if status in _ABORTED_TURN_STATUSES:
@@ -922,4 +924,3 @@ class CodexMessageLedger(MutableModel):
             return
         self._last_queue_snapshot = snapshot
         self.on_queue_snapshot(snapshot)
-

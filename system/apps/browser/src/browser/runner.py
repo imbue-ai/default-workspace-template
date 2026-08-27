@@ -1,4 +1,4 @@
-"""Live-browser fleet web service: spawn headless Chromium, stream it, drive it with browser-use.
+"""Live-browser fleet web service: spawn headful Chromium, stream it, hand agents gated CDP.
 
 Served at its own workspace origin (``browser.host-<hex>.localhost`` locally;
 share hostnames follow the same prefix rule). Serves one
@@ -15,19 +15,18 @@ Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 * ``GET  /browsers``            -- list every browser, its owner, and its tabs.
 * ``POST /browsers``            -- start a new browser (body ``{"name": ...}`` optional;
   returns ``{"name": ...}``). 400 invalid name, 409 duplicate name or fleet full.
-* ``POST /browsers/{name}/task``  -- acquire-or-wait, run a browser-use task, stream
-  the thinking/action trace as line-delimited JSON, release on completion.
-* ``POST /browsers/{name}/hold``  -- acquire-or-wait and hold the browser until the
-  request disconnects (the ``lock`` verb); release on disconnect.
+* ``GET  /browsers/{name}/attach`` -- the gated CDP URL to point `playwright-cli` at.
+* ``POST /browsers/{name}/acquire`` -- reserve a browser (and get the exit code an agent
+  branches on; see ``fleet._render_action``).
 * ``POST /browsers/{name}/release`` -- give a browser back (only its owner can).
 
-For ``task`` and ``hold`` the request connection IS the lease: if it drops, the
-run is cancelled and the browser is released.
+The service does NOT drive browsers. Agents drive with ``@playwright/cli`` over the
+gated CDP endpoint in cdp_proxy.py, which enforces the ownership lease per frame.
 
 ARCHITECTURE: this is a synchronous Flask + flask-sock service (thread-per-
-connection, served by a threaded Werkzeug HTTP/1.1 server). browser_use,
-Playwright (async), and the per-browser ownership state machine in session.py
-are all async and run on ONE background asyncio event loop, quarantined behind a
+connection, served by a threaded Werkzeug HTTP/1.1 server). The CDP client, the CDP
+proxy, and the per-browser ownership state machine in session.py are all async and
+run on ONE background asyncio event loop, quarantined behind a
 single :class:`~browser.loop_bridge.AsyncLoopBridge`. Every route handler reaches
 the async world only through ``bridge.run(coro)`` (blocking) or ``bridge.submit``
 (fire-and-forget, returns the in-loop asyncio.Task). This mirrors the proven
@@ -40,7 +39,6 @@ import os
 import queue
 import signal
 import threading
-from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import FrameType
 from typing import Any
@@ -51,7 +49,8 @@ from loguru import logger
 from simple_websocket import ConnectionClosed
 
 from browser import mediastream, telemetry
-from browser.loop_bridge import AsyncLoopBridge, cancel_task
+from browser.cdp_proxy import ProxyServer
+from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
 from browser.session import (
@@ -61,35 +60,25 @@ from browser.session import (
     FleetFullError,
     InvalidBrowserNameError,
     LiveBrowser,
-    anthropic_key_status,
     deferred_install_ready,
+    set_proxy_server,
 )
 from browser.wsgi import make_threaded_server
+
+# The agent-facing CDP proxy port. Fixed by default so an attach URL an agent already
+# holds keeps resolving across a service restart; 0 picks an ephemeral port (tests).
+_PROXY_PORT = int(os.environ.get("BROWSER_CDP_PROXY_PORT", "8083"))
 
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
-# browser-use drives Chromium over cdp-use, whose failures surface as these built-ins.
+# CDP failures surface as these built-ins.
 _STARTUP_ERRORS = (BrowserStartupError, RuntimeError, OSError, ConnectionError)
 
 # How long a state-changing route's bridge.run waits before giving up and (via the
 # bridge) cancelling the orphaned coroutine. The acquire/hold/task streaming paths
 # legitimately block until granted/disconnected and pass timeout=None instead.
 _ROUTE_TIMEOUT = float(os.environ.get("BROWSER_ROUTE_TIMEOUT", "120"))
-
-# Direct-control browser ACTIONS (navigate/click/input/.../tab) can legitimately run long
-# on a heavy page -- a navigation to a slow site can easily exceed the 120s _ROUTE_TIMEOUT,
-# and the old FastAPI path had NO server-side timeout at all (finding [9]). Cancelling such
-# an action mid-flight would surface a spurious 500 for a request that was about to succeed,
-# so direct actions get their own generous timeout. A timeout cancellation is still SAFE for
-# the ownership state machine: run_action sets the lease (and clears the claim window) BEFORE
-# the action and runs the action under _lock, so a cancellation only unwinds the in-flight
-# action + the _lock frame -- the lease stays held and no ownership field is left half-written
-# (control mutations are atomic under _control_lock, which the action body never holds). The
-# backstop against a truly-wedged action is still the idle-lease sweep. Env-tunable; set to 0
-# for no timeout (the action then runs to completion or until the agent's own client drops).
-_DIRECT_ACTION_TIMEOUT_RAW = float(os.environ.get("BROWSER_DIRECT_ACTION_TIMEOUT", "600"))
-_DIRECT_ACTION_TIMEOUT: float | None = _DIRECT_ACTION_TIMEOUT_RAW if _DIRECT_ACTION_TIMEOUT_RAW > 0 else None
 
 # Outbound-drain / inbound-poll cadence for the cast handler and the NDJSON
 # generators. The 0.5s NDJSON poll both flushes a heartbeat (so a dead client
@@ -240,11 +229,6 @@ def init_status() -> Response:
     return jsonify(_read_init_status())
 
 
-def key_status() -> Response:
-    available, reason = anthropic_key_status()
-    return jsonify({"available": available, "reason": reason})
-
-
 def list_browsers() -> Response:
     """List the fleet (read-only; works during init). The fleet starts EMPTY -- there is
     no default browser, so nothing is materialized here.
@@ -254,7 +238,6 @@ def list_browsers() -> Response:
     ``can_create`` is NOT gated on ``_init_done``: create works DURING restore (it queues
     behind the serialized relaunches), so the button must stay enabled during init. Only
     a missing Chromium install or the cap disables it."""
-    available, _ = anthropic_key_status()
     ready, install_reason = deferred_install_ready()
     # capacity() reads the manager's _browsers dict, which is mutated on the loop
     # thread; reading it directly from this Flask worker thread can KeyError mid
@@ -270,7 +253,6 @@ def list_browsers() -> Response:
     return jsonify(
         {
             "browsers": bridge.run(manager.list_browsers(), timeout=_ROUTE_TIMEOUT),
-            "key_available": available,
             "can_create": can_create,
             "create_reason": create_reason,
             "browser_count": count,
@@ -297,12 +279,12 @@ def create_browser() -> Response:
 
     Body ``{"name": "<name>"}`` is optional; omitted -> the first free ``browser-<N>``
     is minted (the canonical form of the "Browser N" display name the UI derives).
-    Response ``{"name": <chosen-name>, "key_available": <bool>}``. Errors: 400 invalid
-    name, 409 duplicate name or fleet full, 503 Chromium installing."""
+    Response ``{"name": <chosen-name>}``. Errors: 400 invalid name, 409 duplicate name or
+    fleet full, 503 Chromium installing. The attach URL is NOT returned here: the launch is
+    still in flight, so the CLI polls for it (see ``fleet.cmd_new``)."""
     ready, reason = deferred_install_ready()
     if not ready:
         return _error({"error": reason}, 503)
-    available, _ = anthropic_key_status()
     name = _body().get("name")
     try:
         # Returns fast: registers init + spawns the serialized launch on the loop.
@@ -314,7 +296,7 @@ def create_browser() -> Response:
     except _STARTUP_ERRORS as e:
         logger.error("failed to register browser: {}", e)
         return _error({"error": f"Could not start browser: {e}"}, 503)
-    return jsonify({"name": session.browser_id, "key_available": available})
+    return jsonify({"name": session.browser_id})
 
 
 def close_browser(browser_id: str) -> Response:
@@ -353,241 +335,16 @@ def release_browser(browser_id: str) -> Response:
     return jsonify({"released": bridge.run(resolved.release(agent_id), timeout=_ROUTE_TIMEOUT)})
 
 
-def _stream_acquire(
-    gen_queue: "queue.Queue[dict[str, Any] | None]",
-    acquire_task: Any,
-    status_out: list[str],
-) -> Iterator[str]:
-    """Drain ``waiting`` events while a submitted ``acquire`` runs on the loop.
-
-    ``acquire`` is submitted (returns the in-loop task immediately) so the Flask
-    generator can stream the ``waiting`` line(s) its ``on_wait`` callback pushes
-    onto ``gen_queue``. When the task finishes, its result is the final status; on
-    a client disconnect mid-wait the generator's outer ``finally`` cancels the task
-    (its existing CancelledError handler removes the waiter from ``_wait_queue`` on
-    the loop) and records ``"disconnected"``.
-
-    A parked acquire emits no events after the first ``waiting`` line, so without a
-    heartbeat the WSGI server never writes again and a client that drops mid-wait is
-    never noticed -- the waiter would hold its FIFO slot for the holder's whole lease
-    (up to ~15 min) and block everyone behind it. So on each idle poll we yield a
-    ``ping``: the forced socket write fails on a dead client, raising the
-    ``GeneratorExit`` whose ``finally`` cancels the acquire (its CancelledError handler
-    removes the waiter on the loop). This mirrors the run/hold loops' heartbeat -- the
-    only disconnect signal available on a sync Flask/WSGI stream (there is no
-    ``request.is_disconnected()``).
-    """
-    while not acquire_task.done():
-        try:
-            event = gen_queue.get(timeout=_NDJSON_POLL_SECONDS)
-        except queue.Empty:
-            # Heartbeat: force a write so a client that dropped while parked in the
-            # wait queue surfaces as a broken-pipe GeneratorExit in bounded time.
-            yield _ndjson({"type": "ping"})
-            continue
-        if event is not None:
-            yield _ndjson(event)
-    # Drain any events buffered after the task finished but before we noticed.
-    yield from _drain_ndjson(gen_queue)
-    # The acquire was submitted (fire-and-forget) so the wait-events could stream; now
-    # block for its final status on the loop via the bridge (no web-layer coroutine needed).
-    status_out.append(bridge.result(acquire_task))
-
-
-def _drain_ndjson(gen_queue: "queue.Queue[dict[str, Any] | None]") -> Iterator[str]:
-    """Yield every event currently buffered in ``gen_queue`` (until it is empty)."""
-    drained = False
-    while not drained:  # flag loop, not `while True` -- the daemon avoids while-true (ratchet)
-        try:
-            event = gen_queue.get_nowait()
-        except queue.Empty:
-            drained = True
-            continue
-        if event is not None:
-            yield _ndjson(event)
-
-
-def _make_on_wait(gen_queue: "queue.Queue[dict[str, Any] | None]") -> Callable[[str | None, str | None], Any]:
-    async def on_wait(busy_id: str | None, busy_name: str | None) -> None:
-        gen_queue.put_nowait({"type": "waiting", "busy_agent_id": busy_id, "busy_name": busy_name})
-
-    return on_wait
-
-
-def run_task(browser_id: str) -> Response:
-    """Acquire-or-wait, run a browser-use task, and stream the trace as line-delimited JSON.
-
-    The connection is the lease: a periodic heartbeat write surfaces a dead agent
-    (Ctrl-C or container kill drops the socket) as a broken-pipe ``GeneratorExit``,
-    whose ``finally`` cancels the run (via the in-loop task) and releases the
-    browser. A human take-control also cancels the run, surfacing a ``preempted``
-    event. The agent identity comes from the ``X-Mngr-Agent-*`` headers.
-    """
-    if (gate := _require_ready()) is not None:
-        return gate
-    agent_id, agent_name = _agent_identity()
-    if not agent_id:
-        return _error({"error": "X-Mngr-Agent-Id header required"}, 400)
-    resolved = _resolve_sync(browser_id)
-    if isinstance(resolved, Response):
-        return resolved
-    session = resolved
-    body = _body()
-    prompt = body.get("prompt")
-    if not prompt:
-        return _error({"error": "prompt is required"}, 400)
-    reclaim = bool(body.get("reclaim", False))
-    wait = bool(body.get("wait", True))
-    max_wait = body.get("max_wait")
-
-    def stream() -> Iterator[str]:
-        gen_queue: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
-        status_out: list[str] = []
-        acquire_task = bridge.submit(
-            session.acquire(
-                agent_id, agent_name, reclaim=reclaim, wait=wait, max_wait=max_wait,
-                on_wait=_make_on_wait(gen_queue),
-                # If a human has the browser pinned, acquire returns busy_human immediately
-                # (the connection-bound wait queue is only for waiting on another AGENT).
-                # Enrol the agent in the resume queue so it's messaged when the human hands
-                # back -- otherwise a task/lock blocked by a human pin is silently dropped.
-                enqueue_on_busy=True,
-            )
-        )
-        try:
-            yield from _stream_acquire(gen_queue, acquire_task, status_out)
-        except GeneratorExit:
-            # Client dropped during the acquire phase: cancel the acquire (its
-            # CancelledError handler removes the waiter on the loop), then release.
-            # release is a CAS no-op UNLESS a grant landed on the loop in the same poll
-            # window the client dropped -- the wakeup beats the cancel, so acquire runs
-            # to "acquired" and the cancel hits an already-done task. Without this that
-            # just-granted lease is orphaned (no run task, dead connection) until the 90s
-            # idle sweep, blocking everyone queued behind it. Mirrors the run finally.
-            cancel_task(bridge.loop, acquire_task)
-            bridge.run(session.release(agent_id), timeout=_ROUTE_TIMEOUT)
-            raise
-        status = status_out[0]
-        if status != "acquired":
-            if status != "disconnected":
-                yield _ndjson({"type": status})
-            return
-        yield _ndjson({"type": "acquired", "browser_id": browser_id})
-
-        async def emit(event: dict[str, Any]) -> None:
-            gen_queue.put_nowait(event)
-
-        run_task_handle = bridge.submit(session.run_agent(agent_id, prompt, emit))
-        try:
-            done = False
-            while not done:
-                try:
-                    event = gen_queue.get(timeout=_NDJSON_POLL_SECONDS)
-                except queue.Empty:
-                    # Heartbeat write: forces a socket write so a dead client surfaces
-                    # as a broken-pipe GeneratorExit in bounded time (no is_disconnected
-                    # equivalent on Flask). Then re-check whether the run finished.
-                    yield _ndjson({"type": "ping"})
-                    done = run_task_handle.done()
-                    continue
-                if event is None:
-                    continue
-                yield _ndjson(event)
-                # ``lost_control`` means a human took control (or the lease was swept)
-                # between acquire and the run starting -- run_agent declined to drive and
-                # returned, so end the stream just as for done/error.
-                if event.get("type") in ("done", "error", "lost_control"):
-                    done = True
-            # Drain anything the run emitted right as it finished.
-            yield from _drain_ndjson(gen_queue)
-        finally:
-            # Cancel the run on the loop (the existing run_agent finally CAS-no-ops the
-            # release) and then release this agent's lease. Cancel covers both the
-            # normal-finish path (a no-op: already done) and the disconnect path
-            # (GeneratorExit), so a dropped client never leaves the agent driving a
-            # "released" browser.
-            cancel_task(bridge.loop, run_task_handle)
-            bridge.run(session.release(agent_id), timeout=_ROUTE_TIMEOUT)
-
-    return Response(stream(), mimetype="application/x-ndjson")
-
-
-def hold_browser(browser_id: str) -> Response:
-    """Acquire-or-wait and hold the browser until the request disconnects (the ``lock`` verb).
-
-    Connection-bound, so a held lease always frees: when the holding client goes
-    away (Ctrl-C / death) the heartbeat write fails, the generator's ``finally``
-    runs, and the browser is released. No fire-and-forget lock exists.
-    """
-    if (gate := _require_ready()) is not None:
-        return gate
-    agent_id, agent_name = _agent_identity()
-    if not agent_id:
-        return _error({"error": "X-Mngr-Agent-Id header required"}, 400)
-    resolved = _resolve_sync(browser_id)
-    if isinstance(resolved, Response):
-        return resolved
-    session = resolved
-    body = _body()
-    reclaim = bool(body.get("reclaim", False))
-    wait = bool(body.get("wait", True))
-    max_wait = body.get("max_wait")
-
-    def stream() -> Iterator[str]:
-        gen_queue: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
-        status_out: list[str] = []
-        acquire_task = bridge.submit(
-            session.acquire(
-                agent_id, agent_name, reclaim=reclaim, wait=wait, max_wait=max_wait,
-                on_wait=_make_on_wait(gen_queue),
-                # If a human has the browser pinned, acquire returns busy_human immediately
-                # (the connection-bound wait queue is only for waiting on another AGENT).
-                # Enrol the agent in the resume queue so it's messaged when the human hands
-                # back -- otherwise a task/lock blocked by a human pin is silently dropped.
-                enqueue_on_busy=True,
-            )
-        )
-        try:
-            yield from _stream_acquire(gen_queue, acquire_task, status_out)
-        except GeneratorExit:
-            # See run_task: release after cancel so a grant that landed in the drop
-            # window isn't orphaned. CAS no-op when no grant landed.
-            cancel_task(bridge.loop, acquire_task)
-            bridge.run(session.release(agent_id), timeout=_ROUTE_TIMEOUT)
-            raise
-        status = status_out[0]
-        if status != "acquired":
-            if status != "disconnected":
-                yield _ndjson({"type": status})
-            return
-        yield _ndjson({"type": "held", "browser_id": browser_id})
-        try:
-            held = True
-            while held:  # flag loop, not `while True` -- the daemon avoids while-true (ratchet)
-                # No agent run; just heartbeat-ping until the client drops. The
-                # gen_queue is never written, so this always times out and pings --
-                # the write is what makes a dead client surface as GeneratorExit.
-                try:
-                    gen_queue.get(timeout=_NDJSON_POLL_SECONDS)
-                except queue.Empty:
-                    yield _ndjson({"type": "ping"})
-        finally:
-            bridge.run(session.release(agent_id), timeout=_ROUTE_TIMEOUT)
-
-    return Response(stream(), mimetype="application/x-ndjson")
-
-
-# --- direct control: Claude drives the browser itself, one command at a time ---
-
-
 def _direct_target(
     browser_id: str, gated: bool = True
 ) -> "tuple[LiveBrowser, str, str | None] | Response":
-    """Resolve (browser, agent_id, agent_name) for a direct command, or an error Response.
+    """Resolve (browser, agent_id, agent_name) for an ownership command, or an error Response.
 
-    ``gated`` (default True) blocks the command with 503 "initializing" while the fleet
-    is still restoring; read-only verbs (``state``) pass ``gated=False`` so the agent
-    can look at whatever has already come back."""
+    ``gated`` (default True) blocks the command with 503 "initializing" while the fleet is
+    still restoring. Note this is the ONLY place agent identity is read: it comes from the
+    ``X-Mngr-Agent-Id`` header the fleet CLI sets. A raw CDP client sends no such header,
+    which is exactly why the proxy authenticates with a capability token instead.
+    """
     if gated and (gate := _require_ready()) is not None:
         return gate
     agent_id, agent_name = _agent_identity()
@@ -597,6 +354,24 @@ def _direct_target(
     if isinstance(resolved, Response):
         return resolved
     return resolved, agent_id, agent_name
+
+
+def cmd_attach(browser_id: str) -> Response:
+    """Issue this agent an attach URL, or say why it can't have one.
+
+    Separate from ``POST /browsers`` because create returns while Chromium is still
+    launching -- the token only exists once the process is up, so the CLI polls this.
+
+    Goes through ``_direct_target`` for the agent identity: the token is minted FOR one
+    agent, and this route is the last place that identity is visible (the proxy sees a
+    generic CDP client with no header). Handing the live token to any caller would make
+    agent-vs-agent exclusion unenforceable.
+    """
+    target = _direct_target(browser_id)
+    if isinstance(target, Response):
+        return target
+    session, agent_id, agent_name = target
+    return jsonify(bridge.run(session.attach_for(agent_id, agent_name), timeout=_ROUTE_TIMEOUT))
 
 
 def cmd_acquire(browser_id: str) -> Response:
@@ -642,117 +417,6 @@ def cmd_handoff(browser_id: str) -> Response:
     # snapshot reads loop-mutated ownership fields, so it must not run on the Flask thread.
     result = bridge.run(session.handoff_with_state(agent_id, agent_name, reason), timeout=_ROUTE_TIMEOUT)
     return jsonify(result)
-
-
-def cmd_state(browser_id: str) -> Response:
-    # `state` is read-only -- allowed during init so the agent can look at the page
-    # even before the whole fleet has finished restoring.
-    target = _direct_target(browser_id, gated=False)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    # `state` does a CDP round-trip (get_state); use the generous direct-action timeout so a
-    # heavy page isn't cancelled mid-read (finding [9]).
-    return jsonify(bridge.run(session.act_state(agent_id, agent_name), timeout=_DIRECT_ACTION_TIMEOUT))
-
-
-def cmd_navigate(browser_id: str) -> Response:
-    target = _direct_target(browser_id)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    body = _body()
-    url = body.get("url")
-    if not url:
-        return _error({"error": "url is required"}, 400)
-    return jsonify(bridge.run(session.act_navigate(agent_id, agent_name, url), timeout=_DIRECT_ACTION_TIMEOUT))
-
-
-def cmd_click(browser_id: str) -> Response:
-    target = _direct_target(browser_id)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    body = _body()
-    return jsonify(
-        bridge.run(session.act_click(agent_id, agent_name, int(body.get("index", -1))), timeout=_DIRECT_ACTION_TIMEOUT)
-    )
-
-
-def cmd_input(browser_id: str) -> Response:
-    target = _direct_target(browser_id)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    body = _body()
-    return jsonify(
-        bridge.run(
-            session.act_input(agent_id, agent_name, int(body.get("index", -1)), str(body.get("text", ""))),
-            timeout=_DIRECT_ACTION_TIMEOUT,
-        )
-    )
-
-
-def cmd_select(browser_id: str) -> Response:
-    target = _direct_target(browser_id)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    body = _body()
-    return jsonify(
-        bridge.run(
-            session.act_select(agent_id, agent_name, int(body.get("index", -1)), str(body.get("value", ""))),
-            timeout=_DIRECT_ACTION_TIMEOUT,
-        )
-    )
-
-
-def cmd_scroll(browser_id: str) -> Response:
-    target = _direct_target(browser_id)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    body = _body()
-    return jsonify(
-        bridge.run(
-            session.act_scroll(agent_id, agent_name, str(body.get("direction", "down")), int(body.get("amount", 500))),
-            timeout=_DIRECT_ACTION_TIMEOUT,
-        )
-    )
-
-
-def cmd_keys(browser_id: str) -> Response:
-    target = _direct_target(browser_id)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    body = _body()
-    keys = body.get("keys")
-    if not keys:
-        return _error({"error": "keys is required"}, 400)
-    return jsonify(bridge.run(session.act_keys(agent_id, agent_name, str(keys)), timeout=_DIRECT_ACTION_TIMEOUT))
-
-
-def cmd_screenshot(browser_id: str) -> Response:
-    target = _direct_target(browser_id)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    return jsonify(bridge.run(session.act_screenshot(agent_id, agent_name), timeout=_DIRECT_ACTION_TIMEOUT))
-
-
-def cmd_tab(browser_id: str) -> Response:
-    target = _direct_target(browser_id)
-    if isinstance(target, Response):
-        return target
-    session, agent_id, agent_name = target
-    body = _body()
-    return jsonify(
-        bridge.run(
-            session.act_tab(agent_id, agent_name, str(body.get("action", "list")), body.get("index"), body.get("url")),
-            timeout=_DIRECT_ACTION_TIMEOUT,
-        )
-    )
 
 
 def cmd_clipboard_paste(browser_id: str) -> Response:
@@ -1057,24 +721,13 @@ def _register_routes() -> None:
     )
     application.add_url_rule("/health", view_func=health, methods=["GET"])
     application.add_url_rule("/init-status", view_func=init_status, methods=["GET"])
-    application.add_url_rule("/key-status", view_func=key_status, methods=["GET"])
     application.add_url_rule("/browsers", view_func=list_browsers, methods=["GET"])
     application.add_url_rule("/browsers", view_func=create_browser, methods=["POST"], endpoint="create_browser")
     application.add_url_rule("/browsers/<string:browser_id>", view_func=close_browser, methods=["DELETE"])
     application.add_url_rule("/browsers/<string:browser_id>/release", view_func=release_browser, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/task", view_func=run_task, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/hold", view_func=hold_browser, methods=["POST"])
+    application.add_url_rule("/browsers/<string:browser_id>/attach", view_func=cmd_attach, methods=["GET"])
     application.add_url_rule("/browsers/<string:browser_id>/acquire", view_func=cmd_acquire, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/handoff", view_func=cmd_handoff, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/state", view_func=cmd_state, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/navigate", view_func=cmd_navigate, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/click", view_func=cmd_click, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/input", view_func=cmd_input, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/select", view_func=cmd_select, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/scroll", view_func=cmd_scroll, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/keys", view_func=cmd_keys, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/screenshot", view_func=cmd_screenshot, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
     application.add_url_rule(
         "/browsers/<string:browser_id>/clipboard/paste", view_func=cmd_clipboard_paste, methods=["POST"]
     )
@@ -1102,8 +755,31 @@ def create_app() -> Flask:
     opens -- exactly as before.
     """
     bridge.start()
+    # The agent's gated CDP endpoint. Its OWN loopback port, deliberately not this Flask
+    # app's: that port is registered with forward_port.py and published to the desktop
+    # client, and an unauthenticated CDP endpoint must not travel with it.
+    bridge.run(_start_proxy(), timeout=_ROUTE_TIMEOUT)
     bridge.submit(_startup())
     return application
+
+
+async def _start_proxy() -> None:
+    """Bring up the fleet-wide CDP proxy and hand it to session.py.
+
+    Falls back to an ephemeral port if the fixed one is taken. A bind failure here would
+    otherwise propagate out of ``create_app`` and kill ``main``, which supervisord
+    (``autorestart=true``) would then crash-loop -- taking the whole fleet down over a
+    port conflict, when a different port works fine (the CLI reads the URL from
+    ``/attach``, it never assumes the number).
+    """
+    server = ProxyServer(port=_PROXY_PORT)
+    try:
+        await server.start()
+    except OSError as e:
+        logger.warning("CDP proxy could not bind port {} ({}); using an ephemeral port", _PROXY_PORT, e)
+        server = ProxyServer(port=0)
+        await server.start()
+    set_proxy_server(server)
 
 
 def _shutdown() -> None:

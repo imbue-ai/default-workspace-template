@@ -7,7 +7,7 @@ Used as a command prefix in ``system/supervisord.conf`` -- e.g.
 so a service lands in its priority band before it (and everything it spawns)
 exists. It sets its *own* ``oom_score_adj`` (the value survives ``execve`` and is
 inherited across fork/exec by children), then ``exec``s the real command with its
-arguments untouched. Mirrors ``claude_oom_launch.py`` (self-tag, then exec).
+arguments untouched. Mirrors ``agent_oom_launch.py`` (self-tag, then exec).
 
 The first argument is a service key from ``oom_priority.bands.SERVICE_BANDS``.
 Built-in services pass their own name (``system_interface``, ``share-gateway``,
