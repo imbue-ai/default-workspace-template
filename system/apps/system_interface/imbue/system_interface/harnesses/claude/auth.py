@@ -488,42 +488,6 @@ def read_managed_auth_env(settings_path_override: Path | None = None) -> dict[st
     return {key: str(value) for key, value in env.items() if key in MANAGED_AUTH_ENV_KEYS and isinstance(value, str)}
 
 
-def write_managed_auth_env(managed_env: Mapping[str, str], settings_path_override: Path | None = None) -> Path:
-    """Write the managed auth keys into the shared settings.json env block.
-
-    Fully controlled: every managed key absent from `managed_env` is DELETED
-    from the env block, so a mode switch can never leave a stale credential
-    behind to shadow the new one. Non-managed env keys and every other
-    setting are preserved untouched.
-    """
-    for key in managed_env:
-        if key not in MANAGED_AUTH_ENV_KEYS:
-            raise ClaudeAuthError(f"Refusing to write unmanaged settings env key {key!r}")
-    settings_path = settings_path_override or _resolve_claude_settings_path()
-    settings: dict[str, Any] = {}
-    if settings_path.exists():
-        try:
-            loaded = json.loads(settings_path.read_text())
-        except json.JSONDecodeError as e:
-            # A corrupt shared settings file would break every claude in the
-            # mind well beyond auth; refuse to silently replace it.
-            raise ClaudeAuthError(f"Shared Claude settings at {settings_path} are corrupt JSON: {e}") from e
-        if not isinstance(loaded, dict):
-            raise ClaudeAuthError(f"Shared Claude settings at {settings_path} are not a JSON object")
-        settings = loaded
-    env = settings.get("env")
-    if not isinstance(env, dict):
-        env = {}
-    preserved = {key: value for key, value in env.items() if key not in MANAGED_AUTH_ENV_KEYS}
-    updated_env = {**preserved, **dict(managed_env)}
-    if updated_env:
-        settings["env"] = updated_env
-    else:
-        settings.pop("env", None)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-    logger.info("Wrote managed auth env ({} mode) to {}", derive_auth_mode(managed_env).value, settings_path)
-    return settings_path
 
 
 def record_api_key_approval(managed_env: Mapping[str, str], claude_json_path_override: Path | None = None) -> None:
