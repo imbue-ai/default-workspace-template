@@ -13,34 +13,34 @@ import tomllib
 from pathlib import Path
 from typing import Sequence
 
-from update_apply_contract import SnapshotRecord, _snapshots_root
+from update_apply_contract import SnapshotRecord, snapshots_root
 from update_banding import ExpendWrapper
 from update_classification import ApplyPlan
 from update_layout import (
-    _MANIFEST_TOOL_NAMES,
-    _PROVISIONER_HOME,
-    _PROVISIONER_PATH,
-    _RECEIPT,
     FRONTEND_DIR,
+    MANIFEST_TOOL_NAMES,
     MNGR_DIR,
     MNGR_EXECUTABLE,
     MNGR_TOOL_NAME,
     PLUGIN_MANIFEST_PATH,
+    PROVISIONER_HOME,
+    PROVISIONER_PATH,
     PROVISIONER_SCRIPT,
+    RECEIPT,
     STATIC_DIR,
     SYSTEM_INTERFACE_DIR,
     TOOL_NAME,
 )
-from update_runtime import Runner, _run_checked, _tail
+from update_runtime import Runner, run_checked, tail
 
-_ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 1200.0
+ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 1200.0
 
 _PROVISIONER_TIMEOUT_SECONDS = 1800.0
 
 
 def provisioner_env(*, is_forced: bool = False) -> dict:
     """The canonical environment for a live provisioner run (see
-    :data:`_PROVISIONER_HOME`).
+    :data:`PROVISIONER_HOME`).
 
     ``is_forced`` sets ``PROVISION_FORCE=1``, which runs the script past its
     content-addressed skip guard (``system/scripts/_provision_guard.sh``).
@@ -52,14 +52,14 @@ def provisioner_env(*, is_forced: bool = False) -> dict:
     env = {
         key: value for key, value in os.environ.items() if not key.endswith("_VERSION")
     }
-    env["HOME"] = _PROVISIONER_HOME
-    env["PATH"] = _PROVISIONER_PATH
+    env["HOME"] = PROVISIONER_HOME
+    env["PATH"] = PROVISIONER_PATH
     if is_forced:
         env["PROVISION_FORCE"] = "1"
     return env
 
 
-def _run_provisioner(
+def run_provisioner(
     runner: Runner, repo_root: Path, *, is_forced: bool = False
 ) -> str | None:
     """Re-run the pinned-toolchain provisioner live; return why it failed, or
@@ -94,7 +94,7 @@ def _run_provisioner(
     returncode = getattr(result, "returncode", 0)
     if returncode == 0:
         return None
-    stderr = _tail((getattr(result, "stderr", "") or "").strip(), 20)
+    stderr = tail((getattr(result, "stderr", "") or "").strip(), 20)
     return f"bash {PROVISIONER_SCRIPT} failed (exit {returncode}): {stderr}"
 
 
@@ -153,7 +153,7 @@ def snapshot_targets(
 # environment still built from the rolled-back-away tree is the
 # ModuleNotFoundError-on-``mngr`` state that reads as recovered while nothing
 # works.
-_ENVIRONMENT_SNAPSHOT_NAMES = frozenset(
+ENVIRONMENT_SNAPSHOT_NAMES = frozenset(
     {"venv", f"tool-{MNGR_TOOL_NAME}", f"tool-{TOOL_NAME}"}
 )
 
@@ -180,7 +180,7 @@ def take_snapshots(
         record for record in existing if Path(record.copy).exists()
     ]
     already = {record.name for record in kept}
-    root = _snapshots_root(repo_root)
+    root = snapshots_root(repo_root)
     for name, source in snapshot_targets(plan, repo_root, runner):
         if name in already:
             continue
@@ -238,7 +238,7 @@ def restore_snapshots(snapshots: Sequence[SnapshotRecord]) -> list[str]:
 
 
 def discard_snapshots(repo_root: Path) -> None:
-    shutil.rmtree(_snapshots_root(repo_root), ignore_errors=True)
+    shutil.rmtree(snapshots_root(repo_root), ignore_errors=True)
 
 
 def _tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
@@ -261,7 +261,7 @@ def _tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     if len(parents) < 3:
         return None
     tool_dir = parents[2]
-    if not (tool_dir / tool_name / _RECEIPT).is_file():
+    if not (tool_dir / tool_name / RECEIPT).is_file():
         return None
     return tool_dir, script.parent
 
@@ -312,7 +312,7 @@ def _tool_extras(
             _warn_extras_lost(tool_name, f"'uv tool dir' exited {result.returncode}")
             return []
         tool_dir = (getattr(result, "stdout", "") or "").strip()
-    receipt = Path(tool_dir) / tool_name / _RECEIPT
+    receipt = Path(tool_dir) / tool_name / RECEIPT
     try:
         parsed = tomllib.loads(receipt.read_text())
     except (OSError, tomllib.TOMLDecodeError) as exc:
@@ -346,7 +346,7 @@ def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
     if not manifest_path.is_file():
         return []
     manifest = tomllib.loads(manifest_path.read_text())
-    tool = _MANIFEST_TOOL_NAMES.get(tool_name, tool_name)
+    tool = MANIFEST_TOOL_NAMES.get(tool_name, tool_name)
     extras: list[str] = []
     for entry in manifest.get("plugins", []):
         if tool in entry.get("tools", []):
@@ -410,7 +410,7 @@ def _reinstall_tool(
         ),
         "--reinstall",
     ]
-    _run_checked(
+    run_checked(
         runner,
         expend(argv),
         repo_root,
@@ -420,7 +420,7 @@ def _reinstall_tool(
     )
 
 
-def _refresh_backend_dependencies(
+def refresh_backend_dependencies(
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
@@ -437,7 +437,7 @@ def _refresh_backend_dependencies(
     _reinstall_tool(
         TOOL_NAME, TOOL_NAME, SYSTEM_INTERFACE_DIR, repo_root, runner, expend, timeout
     )
-    _run_checked(
+    run_checked(
         runner,
         expend(["uv", "sync", "--all-packages", "--frozen"]),
         repo_root,

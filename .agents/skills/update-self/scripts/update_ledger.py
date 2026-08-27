@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from update_runtime import ApplyError, Runner, _git_out
+from update_runtime import ApplyError, Runner, git_out
 
 _VERSION_HISTORY_REL = "docs/VERSION_HISTORY.md"
 
@@ -86,7 +86,7 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
     version uses ``git describe`` (reachability), never ``--points-at``: no tag
     is ever *on* a template base, only on an ancestor of it.
     """
-    log = _git_out(
+    log = git_out(
         runner, repo_root, ["log", "--first-parent", "--format=%H %s", "HEAD"]
     )
     creation = ""
@@ -95,12 +95,12 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
         if subject.startswith("update-self:") or subject == "Initial workspace commit":
             creation = sha  # keep walking: the log is newest-first, we want the oldest
     if not creation:
-        revs = _git_out(runner, repo_root, ["rev-list", "--first-parent", "HEAD"])
+        revs = git_out(runner, repo_root, ["rev-list", "--first-parent", "HEAD"])
         creation = revs.splitlines()[-1] if revs else "HEAD"
-    date = _git_out(
+    date = git_out(
         runner, repo_root, ["log", "-1", "--format=%ad", "--date=short", creation]
     )
-    short = _git_out(runner, repo_root, ["rev-parse", "--short=7", creation])
+    short = git_out(runner, repo_root, ["rev-parse", "--short=7", creation])
     describe = runner.run(
         ["git", "describe", "--tags", "--abbrev=0", "--match", "minds-v*", creation],
         cwd=str(repo_root),
@@ -146,7 +146,7 @@ def write_version_history_entry(
         lines.extend(["", _WORKSPACE_HEADING, ""])
     if not any("created from" in line for line in lines):
         _insert_under_workspace(lines, _origin_line(repo_root, runner), first=True)
-    short = _git_out(runner, repo_root, ["rev-parse", "--short=7", merge_sha])
+    short = git_out(runner, repo_root, ["rev-parse", "--short=7", merge_sha])
     note = f"updated to {target_ref}"
     if any(note in line and short in line for line in lines):
         return  # already recorded; a retried landing must be a no-op

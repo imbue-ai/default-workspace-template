@@ -2192,7 +2192,7 @@ def test_a_step_that_cannot_be_spawned_rolls_back_and_names_the_step(
 ) -> None:
     # A forward step whose executable is not on the PATH this apply inherited
     # raises FileNotFoundError out of subprocess, not a non-zero exit. Before
-    # `_run_checked` caught OSError it escaped the whole forward block (which
+    # `run_checked` caught OSError it escaped the whole forward block (which
     # catches only ApplyFailed), so the merge stayed landed with no rollback.
     # It must instead read as an ordinary failed step, named.
     runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, apply_repo)
@@ -2351,7 +2351,7 @@ def test_preflight_output_is_tailed_to_the_interesting_end() -> None:
     # under startup chatter, so keep the end and say what was dropped.
     limit = update_probes._PREFLIGHT_OUTPUT_TAIL_LINES
 
-    tailed = update_runtime._tail(
+    tailed = update_runtime.tail(
         "\n".join([f"chatter {index}" for index in range(limit + 10)] + ["the error"]),
         limit,
     )
@@ -3720,7 +3720,7 @@ def _with_receipt(
     """Point ``uv tool dir`` at ``tool_dir`` and give ``tool`` a receipt there."""
     runner.respond(("uv", "tool", "dir"), _Result(stdout=f"{tool_dir}\n"))
     (tool_dir / tool).mkdir(parents=True, exist_ok=True)
-    (tool_dir / tool / update_layout._RECEIPT).write_text(body)
+    (tool_dir / tool / update_layout.RECEIPT).write_text(body)
 
 
 def _install_argv(runner: _RecordingRunner, source_dir: str) -> list[str]:
@@ -3880,7 +3880,7 @@ def test_the_refresh_targets_the_installation_actually_on_path(
         f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
     )
     (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
-    (tools / update_layout.MNGR_TOOL_NAME / update_layout._RECEIPT).write_text(
+    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
         "[tool]\nrequirements = []\n"
     )
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
@@ -3970,7 +3970,7 @@ def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) ->
         "# -*- coding: utf-8 -*-\nimport sys\n"
     )
     (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
-    (tools / update_layout.MNGR_TOOL_NAME / update_layout._RECEIPT).write_text(
+    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
         "[tool]\nrequirements = []\n"
     )
 

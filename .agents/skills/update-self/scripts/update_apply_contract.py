@@ -216,7 +216,7 @@ def marker_path(repo_root: Path) -> Path:
     return repo_root / STATE_DIR_REL / MARKER_FILENAME
 
 
-def _snapshots_root(repo_root: Path) -> Path:
+def snapshots_root(repo_root: Path) -> Path:
     return repo_root / STATE_DIR_REL / SNAPSHOTS_DIRNAME
 
 
@@ -493,7 +493,7 @@ def write_emergency(
                     "reason": reason,
                     "recorded_at": now(),
                     "dri_agent": dri_agent,
-                    "snapshots_dir": str(_snapshots_root(repo_root)),
+                    "snapshots_dir": str(snapshots_root(repo_root)),
                 },
                 indent=2,
             )
@@ -562,7 +562,7 @@ def clear_provision_incomplete(repo_root: Path) -> None:
     provision_incomplete_path(repo_root).unlink(missing_ok=True)
 
 
-def _default_is_pid_a_live_apply(pid: int) -> bool:
+def default_is_pid_a_live_apply(pid: int) -> bool:
     """Whether ``pid`` is alive and is an ``update_self.py`` process.
 
     The cmdline check (Linux ``/proc``; on hosts without it, liveness alone)

@@ -70,7 +70,7 @@ def _load_bands(repo_root: Path):
     return bands
 
 
-def _protect_from_memory_shed(repo_root: Path) -> None:
+def protect_from_memory_shed(repo_root: Path) -> None:
     """Band this process into the near-exempt update-apply band.
 
     The apply orchestrator must outlive every agent, chat, and ordinary

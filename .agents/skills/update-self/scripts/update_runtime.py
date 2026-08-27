@@ -213,7 +213,7 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _diff_name_status(
+def diff_name_status(
     repo_root: Path, rollback_to: str, runner: Runner
 ) -> list[tuple[str, str]]:
     """Return ``(status, path)`` pairs for ``rollback_to..HEAD``.
@@ -239,7 +239,7 @@ def _diff_name_status(
     return pairs
 
 
-def _assert_clean_tree(repo_root: Path, runner: Runner) -> None:
+def assert_clean_tree(repo_root: Path, runner: Runner) -> None:
     result = runner.run(
         ["git", "status", "--porcelain"],
         cwd=str(repo_root),
@@ -254,7 +254,7 @@ def _assert_clean_tree(repo_root: Path, runner: Runner) -> None:
         )
 
 
-def _abort_in_progress_merge(repo_root: Path, runner: Runner) -> bool:
+def abort_in_progress_merge(repo_root: Path, runner: Runner) -> bool:
     """Undo a ``git merge`` that was killed before it committed; report whether
     there was one.
 
@@ -293,7 +293,7 @@ def _abort_in_progress_merge(repo_root: Path, runner: Runner) -> bool:
     return True
 
 
-def _run_checked(
+def run_checked(
     runner: Runner,
     argv: Sequence[str],
     cwd: Path,
@@ -338,11 +338,11 @@ def _run_checked(
         )
 
 
-def _detail_block(exc: ApplyFailed) -> str:
+def detail_block(exc: ApplyFailed) -> str:
     return f"--- {exc.detail_heading} ---\n{exc.detail}\n" if exc.detail else ""
 
 
-def _tail(text: str, limit: int) -> str:
+def tail(text: str, limit: int) -> str:
     lines = text.strip().splitlines()
     if len(lines) <= limit:
         return "\n".join(lines)
@@ -350,7 +350,7 @@ def _tail(text: str, limit: int) -> str:
     return "\n".join([f"[{dropped} earlier line(s) omitted]", *lines[-limit:]])
 
 
-def _git_out(runner: Runner, repo_root: Path, args: Sequence[str]) -> str:
+def git_out(runner: Runner, repo_root: Path, args: Sequence[str]) -> str:
     result = runner.run(
         ["git", *args],
         cwd=str(repo_root),
