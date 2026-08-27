@@ -22,6 +22,7 @@ from bootstrap.manager import (
     _build_create_chat_command,
     _configure_git_global,
     _fetch_user_timezone,
+    _ensure_git_identity,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
     _maybe_create_initial_chat,
@@ -498,6 +499,7 @@ def test_initialize_workspace_main_branch_commits_and_renames(
 ) -> None:
     """End-to-end: a real git repo on `mngr/foo` with uncommitted changes ends
     up on `main` with the working tree committed."""
+    monkeypatch.chdir(tmp_path)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     _git_in(work_dir, "init", "--initial-branch=main", "-q")
@@ -524,9 +526,10 @@ def test_initialize_workspace_main_branch_commits_and_renames(
 
 
 def test_initialize_workspace_main_branch_skips_when_work_dir_unset(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """If MNGR_AGENT_WORK_DIR isn't set, no git invocations happen."""
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
     stub = _StubSubprocess(returncode=0)
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
@@ -539,6 +542,7 @@ def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
 ) -> None:
     """Second invocation on an already-clean `main` branch is a no-op for
     the user (we make an empty allow-empty commit, but it's harmless)."""
+    monkeypatch.chdir(tmp_path)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     _git_in(work_dir, "init", "--initial-branch=main", "-q")
@@ -551,6 +555,81 @@ def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
     _initialize_workspace_main_branch()
     branch = _git_in(work_dir, "branch", "--show-current").stdout.strip()
     assert branch == "main"
+
+
+def test_initialize_workspace_main_branch_runs_once_per_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`git add -A` + commit is a once-ever operation: on a later boot it would sweep up
+    whatever the user happened to have in flight. Its own signal, separate from the chat's."""
+    monkeypatch.chdir(tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    _git_in(work_dir, "config", "user.email", "seed@test.local")
+    _git_in(work_dir, "config", "user.name", "seed")
+    (work_dir / "README.md").write_text("seed\n")
+    _git_in(work_dir, "add", "-A")
+    _git_in(work_dir, "commit", "-qm", "seed")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+    _initialize_workspace_main_branch()
+    assert (tmp_path / "data" / ".state" / "workspace_main_branch_initialized").exists()
+
+    # The user's work-in-progress, on a later boot.
+    (work_dir / "wip.txt").write_text("half-finished\n")
+    _initialize_workspace_main_branch()
+
+    assert _git_in(work_dir, "status", "--porcelain").stdout.strip() != "", (
+        "a second boot committed the user's working tree"
+    )
+
+
+# --- _ensure_git_identity ---
+
+
+def test_ensure_git_identity_sets_one_when_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workspace's only committer identity. `pool_bake` unsets it on finalize expecting
+    bootstrap to put it back, so this runs every boot rather than once."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+
+    _ensure_git_identity()
+
+    assert _git_in(work_dir, "config", "user.email").stdout.strip() == "bootstrap@minds.local"
+
+
+def test_ensure_git_identity_never_overwrites_the_users_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    _git_in(work_dir, "config", "user.email", "me@example.com")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+
+    _ensure_git_identity()
+
+    assert _git_in(work_dir, "config", "user.email").stdout.strip() == "me@example.com"
+
+
+def test_initialize_workspace_main_branch_no_longer_sets_an_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It moved to `_ensure_git_identity`. Leaving it here tied the workspace's only identity
+    to a one-shot signal, which is what broke an adopted pool workspace."""
+    monkeypatch.chdir(tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+
+    _initialize_workspace_main_branch()
+
+    assert _git_in(work_dir, "config", "user.email").returncode != 0
 
 
 # --- _install_runtime_cron_entries ---
