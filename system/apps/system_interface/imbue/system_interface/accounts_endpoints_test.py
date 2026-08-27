@@ -74,7 +74,11 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
     payload = response.get_json()
     assert set(payload) == {"accounts", "mru"}
     (row,) = payload["accounts"]
-    assert set(row) == {"id", "lane", "harness", "label"}
+    # `label` is the composed string for anything showing one; `provider` / `harness_label` /
+    # `seq` are its parts, which the combo card renders at different sizes on one row.
+    assert set(row) == {"id", "lane", "harness", "provider", "harness_label", "seq", "label"}
+    assert row["provider"] == "Anthropic"
+    assert row["harness_label"] == "Claude Code"
     assert row["label"] == "Anthropic (Claude Code)"
     assert payload["mru"] == account_id
 
