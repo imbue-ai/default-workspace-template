@@ -3621,8 +3621,7 @@ def test_a_bands_module_carrying_the_whole_surface_is_used(
 ) -> None:
     # The other side of the refusal, so it cannot be satisfied by refusing
     # everything: a module carrying the whole required surface is accepted and
-    # actually tagged with, even though this one predates UPDATE_APPLY -- which
-    # is deliberately left off the required list because it has a real fallback.
+    # actually tagged with.
     monkeypatch.delitem(sys.modules, "oom_priority", raising=False)
     monkeypatch.delitem(sys.modules, "oom_priority.bands", raising=False)
     _write_bands_package(
@@ -3647,6 +3646,37 @@ def test_a_bands_module_carrying_the_whole_surface_is_used(
         "npm",
         "ci",
     ]
+
+
+def test_the_apply_bands_itself_to_the_pre_merge_trees_system_interface_band(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The band is read off the *pre-merge* tree's own map rather than named by
+    # this script, which is what lets an apply staged onto an older release
+    # band itself the same way it does here. The fake tree deliberately puts
+    # the system interface somewhere it is not in this tree, so a band this
+    # script hardcoded -- its own constant, or the literal 20 -- would fail
+    # here rather than silently agreeing with the current map.
+    monkeypatch.delitem(sys.modules, "oom_priority", raising=False)
+    monkeypatch.delitem(sys.modules, "oom_priority.bands", raising=False)
+    monkeypatch.setattr(update_banding, "_BANDS", None)
+    _write_bands_package(
+        tmp_path,
+        "AGENT_SUBPROCESS = 900\n"
+        "SERVICE_BANDS = {'owner-exec': 5, 'system_interface': 33, 'cron': 55}\n"
+        "BANDED_AS = []\n"
+        "def set_oom_score_adj(pid, adj):\n"
+        "    BANDED_AS.append(adj)\n"
+        "    return True\n"
+        "def oom_tag_shell_prefix(adj):\n"
+        "    return f'tag {adj}; '\n",
+    )
+
+    update_banding.protect_from_memory_shed(tmp_path)
+
+    bands = update_banding._BANDS
+    assert bands is not None
+    assert bands.BANDED_AS == [33]
 
 
 def test_every_bands_attribute_the_script_reads_is_declared_required() -> None:

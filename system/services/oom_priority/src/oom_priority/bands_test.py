@@ -79,18 +79,6 @@ def test_user_created_services_are_shed_before_every_builtin_service() -> None:
         assert bands.SERVICE_BANDS[key] < user_band, key
 
 
-def test_the_update_apply_band_keeps_the_position_its_purpose_depends_on() -> None:
-    # UPDATE_APPLY's whole meaning is a relative position: the orchestrator has
-    # to outlive every service it may be replacing, while the authority paths
-    # that would repair a failed apply -- owner-exec's SSH-equivalent access
-    # and the terminal -- have to outlive it. A reshuffle of SERVICE_BANDS that
-    # moved either side across it would silently invert that.
-    assert bands.SERVICE_BANDS["owner-exec"] < bands.UPDATE_APPLY
-    assert bands.SERVICE_BANDS["terminal"] < bands.UPDATE_APPLY
-    assert bands.UPDATE_APPLY < bands.SERVICE_BANDS["system_interface"]
-    assert bands.PROTECTED < bands.UPDATE_APPLY
-
-
 def test_the_builtin_key_set_matches_the_documented_order() -> None:
     # Catch a service added to SERVICE_BANDS without being placed in the ordering
     # above (which would leave its rank unasserted).

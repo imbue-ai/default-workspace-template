@@ -21,7 +21,6 @@ _BANDS = None
 # of it is refused wholesale, because the alternative is an ``AttributeError``
 # mid-apply, past the merge and the snapshots, where nothing catches it and the
 # workspace is left half-applied. A new read belongs in this tuple.
-# ``UPDATE_APPLY`` is deliberately absent: it has a real fallback.
 _REQUIRED_BANDS_ATTRIBUTES = (
     "AGENT_SUBPROCESS",
     "SERVICE_BANDS",
@@ -71,20 +70,22 @@ def _load_bands(repo_root: Path):
 
 
 def protect_from_memory_shed(repo_root: Path) -> None:
-    """Band this process into the near-exempt update-apply band.
+    """Band this process into the system interface's own service band.
 
-    The apply orchestrator must outlive every agent, chat, and ordinary
+    The apply orchestrator must outlive every agent, chat, and more expendable
     service: losing a build is an ordinary failure the rollback absorbs, but
     losing the apply mid-motion is the half-applied state this design exists to
-    prevent. Only the authority paths that would repair a failed apply
-    (owner-exec, the terminal) stay below it. The write succeeds from any
-    launcher in the workspace -- a chat agent, the recovery cron, a terminal:
-    the kernel only refuses an ``oom_score_adj`` below the lowest value the
-    process has ever held (inherited across fork), and nothing in the
-    container has ``CAP_SYS_RESOURCE``, the one capability that raises that
-    floor, so it stays at 0 for every process tree (measured on the docker,
-    lima and imbue_cloud providers). Best-effort all the same: an apply that
-    cannot be protected is still an apply worth running. Called from
+    prevent. It takes the band of the system interface it is replacing rather
+    than one of its own, so an apply staged onto an older tree bands itself
+    exactly as it does here; the authority paths that would repair a failed
+    apply (owner-exec, the terminal) sit below it either way. The write
+    succeeds from any launcher in the workspace -- a chat agent, the recovery
+    cron, a terminal: the kernel only refuses an ``oom_score_adj`` below the
+    lowest value the process has ever held (inherited across fork), and nothing
+    in the container has ``CAP_SYS_RESOURCE``, the one capability that raises
+    that floor, so it stays at 0 for every process tree (measured on the
+    docker, lima and imbue_cloud providers). Best-effort all the same: an apply
+    that cannot be protected is still an apply worth running. Called from
     ``__main__`` rather than from the command functions so exercising them in
     a test cannot re-band the test runner.
     """
@@ -92,12 +93,7 @@ def protect_from_memory_shed(repo_root: Path) -> None:
     _BANDS = _load_bands(repo_root)
     if _BANDS is None:
         return
-    band = getattr(_BANDS, "UPDATE_APPLY", None)
-    if band is None:
-        # An older tree's bands module predates the update-apply band: use the
-        # system interface's own service band, which the pre-apply reveal
-        # flow this generalizes used for the same reason.
-        band = _BANDS.SERVICE_BANDS.get("system_interface", 20)
+    band = _BANDS.SERVICE_BANDS["system_interface"]
     if not _BANDS.set_oom_score_adj(os.getpid(), band):
         sys.stderr.write(
             "warning: could not lower this process's memory-shed priority; the apply "
