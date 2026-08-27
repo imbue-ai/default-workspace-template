@@ -507,7 +507,7 @@ def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path:
     (account,) = read_index(tmp_path).accounts
     path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
 
-    process = FakePexpectProcess([(0, "Visit https://example.com/auth")], drain_chunks=["Visit https://example.com/auth\r\n"])
+    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
     driving = AuthFlowService.create(
         home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=probe
     )
@@ -528,7 +528,7 @@ def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> No
     path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
     before = path.read_text()
 
-    process = FakePexpectProcess([(0, "Visit https://example.com/auth")], drain_chunks=["Visit https://example.com/auth\r\n"])
+    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
     driving = AuthFlowService.create(
         home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=lambda *_a: SignedIn.YES
     )
@@ -540,7 +540,7 @@ def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> No
 
 def test_a_first_sign_in_clears_nothing(tmp_path: Path) -> None:
     """There is nothing to take away, and nothing to put back if it fails."""
-    process = FakePexpectProcess([(0, "Visit https://example.com/auth")], drain_chunks=["Visit https://example.com/auth\r\n"])
+    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
     service = AuthFlowService.create(
         home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=lambda *_a: SignedIn.NO
     )

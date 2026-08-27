@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,7 @@ def _fake_chat_agent() -> AgentInfo:
 
 
 
+@contextmanager
 def _client(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
