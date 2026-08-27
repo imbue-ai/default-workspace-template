@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from imbue.mngr_claude.claude_config import check_claude_dialogs_dismissed
+from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.accounts import resolve_account
@@ -144,9 +145,11 @@ def _account(home: Path, lane: str, display: str) -> str:
     return account_id
 
 
-def test_no_accounts_leaves_the_agent_on_the_shared_login(tmp_path: Path) -> None:
-    """None is the pre-accounts behaviour, which is what lets binding land before any UI."""
-    assert resolve_binding(home=tmp_path) is None
+def test_no_accounts_is_refused_rather_than_bound_to_nothing(tmp_path: Path) -> None:
+    """There is no shared login to fall back to. Returning None here let a caller create an
+    agent anyway -- one that cannot take a turn, and says nothing about why."""
+    with pytest.raises(AccountError):
+        resolve_binding(home=tmp_path)
 
 
 def test_the_most_recently_used_account_wins(tmp_path: Path) -> None:
