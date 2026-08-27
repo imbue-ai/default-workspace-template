@@ -209,13 +209,17 @@ command = "sleep infinity"
 # (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- do not
 # reinstall/verify at provision.
 #
-# model / effort are the lateral of agent_types.claude's opus[1m] + effortLevel="high".
-# gpt-5.6-sol is the account's default slug (so no ChatGPT-account slug rejection),
-# pinned for reproducibility. model_reasoning_effort="medium": Opus-high and Sol-medium
-# are each their vendor's balanced *default* (both with tiers of headroom above), and
-# Sol is unusually capable at lower effort -- so medium is the honest match for
-# opus-high, and avoids xhigh's latency / rate-limit blowout. Bump to "high" only if
-# this agent routinely takes on unusually hard, long-horizon work.
+# NO model or effort is pinned, deliberately -- and claude is now the only agent type that
+# pins one. A codex slug is not a property of the workspace, it is a property of the ACCOUNT:
+# which models a ChatGPT plan may use varies by tier, so a slug that is one account's default
+# is another account's hard 400 ("The 'gpt-5.6-sol' model is not supported when using Codex
+# with a ChatGPT account"). That failure is doubly bad because it is not just a refused turn:
+# the model bar matches the live model against the account's own list, so an unusable pin
+# also shows as a shrug and hides every model the account CAN use.
+#
+# Leaving it unset lets codex pick its account's default, which the model bar then reads back
+# from model_state.json like every other harness. Claude keeps its pin because its auth is
+# single-account and its slugs do not vary by plan in the same way.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
 # sandboxes exec via bubblewrap, but the bundled bwrap cannot set up its network
@@ -234,8 +238,6 @@ command = "sleep infinity"
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py codex"
 auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
-model = "gpt-5.6-sol"
-model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 check_installation = false
 # config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
@@ -345,7 +347,7 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
 # provision.
 #
-# No model is pinned (unlike agent_types.codex's gpt-5.6-sol). OpenCode is a
+# No model is pinned -- as with every agent type but claude now. OpenCode is a
 # many-provider, many-auth harness: its model is a `provider/model` slug that comes
 # from the user's own opencode.json (synced from ~/.config/opencode by the plugin)
 # or the authenticated provider's default -- forcing a slug here could name a
