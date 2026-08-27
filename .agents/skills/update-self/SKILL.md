@@ -454,7 +454,8 @@ read the worker's liveness instead. It stays recorded through every re-arm of
 the poll (the worker is the same one), and the verdict clears it:
 
 ```bash
-python3 .agents/skills/update-self/scripts/update_self.py run-status delegate update-self
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    run-status delegate update-self
 ```
 
 Then background-poll:
@@ -528,7 +529,8 @@ Record the hold before you ask, so the app can say why the machine is
 waiting rather than only that its update agent has gone quiet:
 
 ```bash
-python3 .agents/skills/update-self/scripts/update_self.py run-status hold CUSTOMIZATION \
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    run-status hold CUSTOMIZATION \
     --detail "<one plain line: what they built that the update cannot keep>"
 ```
 
@@ -538,7 +540,8 @@ answer, clear it -- `run-status hold` is what put the machine on "waiting for
 you", and nothing short of the pass's verdict takes it off:
 
 ```bash
-python3 .agents/skills/update-self/scripts/update_self.py run-status resume
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    run-status resume
 ```
 
 If they choose to skip the update, that ends the pass: record `run-status
@@ -983,7 +986,8 @@ Record the success verdict first -- `UPDATED`, or
 `UPDATED_WITH_REBUILD_ITEMS` when §5c left something a person must finish:
 
 ```bash
-python3 .agents/skills/update-self/scripts/update_self.py run-status verdict UPDATED \
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    run-status verdict UPDATED \
     --resulting-ref "$REF" --detail "<one plain line for the app's modal>"
 ```
 
