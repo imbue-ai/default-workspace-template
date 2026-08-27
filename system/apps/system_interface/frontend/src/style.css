@@ -1401,29 +1401,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    copy uses .modal-message -- the same as every other dialog now on the shell. */
 
 /* ── Fast-mode grace-period prompt ── */
-/* The prompt is the shared .modal-* shell (see Modal primitive above and
-   views/FastModeModal.ts); only its icon chip and inline "learn more" link are
-   content-specific and kept here. */
-.fast-mode-modal-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-lg);
-  color: var(--c-accent);
-  background: var(--c-accent-light);
-  flex-shrink: 0;
-}
-
-.fast-mode-modal-link {
-  display: inline-flex;
-  align-items: center;
-  gap: --spacing(1);
-  color: var(--c-accent);
-  text-decoration: underline;
-  white-space: nowrap;
-}
+/* The prompt is the shared .modal-* shell (see Modal primitive above); its
+   icon chip and inline "learn more" link are utilities in
+   views/FastModeModal.ts. */
 
 /* Share modal uses the shared Modal shell (.modal-*) + .btn; its former
    bespoke overlay/card/title/footer/email-list CSS is deleted. */
@@ -1576,33 +1556,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* ─────────────────────────────────────────────────────────────────────
    ACTIVITY INDICATOR (replaces the generic "Running tool..." strip)
+   The strip is utilities in views/ActivityIndicator.ts; only the dot's pulse
+   keyframes live here (shared with the sub-agent card's status dot).
    ─────────────────────────────────────────────────────────────────── */
-
-.agent-activity-indicator {
-  /* `display: flex` (not inline-flex) so the auto side-margins can
-     horizontally center the indicator within the footer; an inline-flex
-     box's auto margins do not center, so on wide screens the indicator
-     would stick to the footer's left edge instead of sitting above the
-     centered input. */
-  display: flex;
-  align-items: center;
-  gap: --spacing(2);
-  margin: 0 auto --spacing(2) auto;
-  width: 100%;
-  max-width: var(--width-message-column);
-  padding: 0 --spacing(1);
-  font-size: var(--font-size-helper);
-  color: var(--c-text-secondary);
-}
-
-.agent-activity-indicator__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--c-accent);
-  animation: agent-activity-pulse 1.4s ease-in-out infinite;
-  flex-shrink: 0;
-}
 
 @keyframes agent-activity-pulse {
   0%,
@@ -1614,12 +1570,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
     opacity: 1;
     transform: scale(1.15);
   }
-}
-
-.agent-activity-indicator__label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* The inline image lightbox (src/lightbox.ts) and the terminal lifecycle

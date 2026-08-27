@@ -49,7 +49,14 @@ export function FastModeModal(): m.Component {
             "aria-label": "Keep fast mode on?",
           },
           header: [
-            m("span.fast-mode-modal-icon", m.trust(icon("zap", { size: 16 }))),
+            m(
+              "span",
+              {
+                class:
+                  "fast-mode-modal-icon inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-lg bg-accent-light text-accent",
+              },
+              m.trust(icon("zap", { size: 16 })),
+            ),
             m("h3", { class: MODAL_TITLE_CLASS }, "Keep fast mode on?"),
           ],
           actions: [
@@ -72,10 +79,16 @@ export function FastModeModal(): m.Component {
           m("p", { class: MODAL_MESSAGE_CLASS }, [
             promptingAgentName() !== null ? [m("strong", promptingAgentName()), " has Fast Mode on. "] : null,
             "Fast Mode is 2.5x faster and 2x more expensive (",
-            m("a.fast-mode-modal-link", { href: FAST_MODE_DOC_URL, target: "_blank", rel: "noopener noreferrer" }, [
-              m("span", "learn more"),
-              m.trust(icon("external-link", { size: 13 })),
-            ]),
+            m(
+              "a",
+              {
+                class: "fast-mode-modal-link inline-flex items-center gap-1 whitespace-nowrap text-accent underline",
+                href: FAST_MODE_DOC_URL,
+                target: "_blank",
+                rel: "noopener noreferrer",
+              },
+              [m("span", "learn more"), m.trust(icon("external-link", { size: 13 }))],
+            ),
             ")",
           ]),
           m("p", { class: MODAL_MESSAGE_CLASS }, [
