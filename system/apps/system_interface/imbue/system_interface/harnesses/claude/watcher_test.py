@@ -1829,8 +1829,7 @@ def test_poll_heals_active_marker_stranded_by_terminal_interrupt(tmp_path: Path)
     now = time.time()
     os.utime(marker, (now - 300.0, now - 300.0))
 
-    collected: list[dict[str, Any]] = []
-    watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
     watcher._discover_sessions()
 
     with open(session_file, "ab") as f:
