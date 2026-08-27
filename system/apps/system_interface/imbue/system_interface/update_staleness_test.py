@@ -9,8 +9,10 @@ import sys
 import tomllib
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import patch
 
 import pytest
+from pydantic import PrivateAttr
 
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.server import _inject_update_staleness_meta_tag
@@ -21,7 +23,6 @@ from imbue.system_interface.update_staleness import STALENESS_UPDATE_EMERGENCY
 from imbue.system_interface.update_staleness import STALENESS_UPDATE_INTERRUPTED
 from imbue.system_interface.update_staleness import UPDATE_APPLY_EMERGENCY_REL
 from imbue.system_interface.update_staleness import UPDATE_APPLY_MARKER_REL
-from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
@@ -291,54 +292,54 @@ def _tracking_state(repo: Path) -> SystemInterfaceState:
     return state
 
 
-def test_app_shell_carries_the_staleness_header(git_work_dir: Path) -> None:
-    # The header rides on every app-shell response -- the built app and the
-    # not-built placeholder alike -- so this needs no particular bundle state.
-    repo = git_work_dir
-    state = _tracking_state(repo)
-    _commit_files(repo, "moved after startup", _RELEVANT_PATH)
+class _CountingTracker(UpdateStalenessTracker):
+    """A tracker that counts how often the shell asks it, for the HEAD-poll test."""
 
-    client = create_application(state).test_client()
-    response = client.get("/")
+    _asks: list[None] = PrivateAttr(default_factory=list)
 
-    assert response.status_code == 200
-    assert response.headers[UPDATE_STALENESS_HEADER] == STALENESS_TREE_MOVED
+    def staleness(self) -> str | None:
+        self._asks.append(None)
+        return super().staleness()
+
+    @property
+    def ask_count(self) -> int:
+        return len(self._asks)
 
 
-def test_app_shell_names_the_interrupted_variant_from_the_marker(git_work_dir: Path) -> None:
+def test_the_built_app_shell_names_the_interrupted_variant_from_the_marker(git_work_dir: Path, tmp_path: Path) -> None:
     repo = git_work_dir
     state = _tracking_state(repo)
     _write_marker(repo)
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
 
-    client = create_application(state).test_client()
-    response = client.get("/")
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(state).test_client().get("/")
 
-    assert response.headers[UPDATE_STALENESS_HEADER] == STALENESS_UPDATE_INTERRUPTED
+    assert f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_UPDATE_INTERRUPTED}">' in response.text
 
 
-def test_the_placeholders_head_poll_does_not_ask_for_staleness(git_work_dir: Path) -> None:
+def test_the_shells_head_poll_does_not_ask_for_staleness(git_work_dir: Path, tmp_path: Path) -> None:
     # The "frontend not built" placeholder polls this same route with HEAD
-    # every ten seconds per open tab for the length of an outage, and that
-    # response is deliberately built without reading anything. An outage is
-    # exactly when the tree has moved, so asking here would fork git twice per
-    # poll per tab. A real GET still carries the header.
+    # every ten seconds per open tab for the length of an outage, and a built
+    # shell answers a HEAD without reading anything. An outage is exactly when
+    # the tree has moved, so asking there would fork git twice per poll per
+    # tab. A real GET still asks.
     repo = git_work_dir
-    state = _tracking_state(repo)
-    _commit_files(repo, "moved after startup", _RELEVANT_PATH)
-    client = create_application(state).test_client()
+    state = build_test_state()
+    tracker = _CountingTracker.capture(repo_root=repo)
+    state.update_staleness = tracker
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
 
-    assert UPDATE_STALENESS_HEADER not in client.head("/").headers
-    assert client.get("/").headers[UPDATE_STALENESS_HEADER] == STALENESS_TREE_MOVED
-
-
-def test_a_consistent_workspace_gets_no_header(git_work_dir: Path) -> None:
-    repo = git_work_dir
-    state = _tracking_state(repo)
-
-    client = create_application(state).test_client()
-    response = client.get("/")
-
-    assert UPDATE_STALENESS_HEADER not in response.headers
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        client = create_application(state).test_client()
+        client.head("/")
+        assert tracker.ask_count == 0
+        client.get("/")
+        assert tracker.ask_count == 1
 
 
 def test_the_built_app_shell_carries_the_staleness_meta_tag(git_work_dir: Path, tmp_path: Path) -> None:
@@ -353,13 +354,11 @@ def test_the_built_app_shell_carries_the_staleness_meta_tag(git_work_dir: Path, 
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
 
-    state.static_directory = static_dir
-    response = create_application(state).test_client().get("/")
-    # A workspace consistent with what it is serving gets no tag at all: the
-    # tag's presence is the difference between banner and no banner.
-    consistent_state = _tracking_state(repo)
-    consistent_state.static_directory = static_dir
-    consistent = create_application(consistent_state).test_client().get("/")
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(state).test_client().get("/")
+        # A workspace consistent with what it is serving gets no tag at all:
+        # the tag's presence is the difference between banner and no banner.
+        consistent = create_application(_tracking_state(repo)).test_client().get("/")
 
     assert response.status_code == 200
     assert f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">' in response.text

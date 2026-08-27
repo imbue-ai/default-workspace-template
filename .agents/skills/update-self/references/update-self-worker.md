@@ -150,8 +150,14 @@ local question of who depends on the file.
 
 No script can enumerate what depends on a changed file -- this is exploration
 work, and you must do it for every changed `system/scripts/**`, `system/libs/**`,
-`system/services/**`, `system/apps/**`, and `.agents/**` path. Build the impact
-set like this:
+`system/services/**`, `system/apps/**`, `system/vendor/**`, and `.agents/**`
+path. The vendored mngr is the single largest surface an update moves, and its
+own suite passing says only that *upstream* is healthy -- who in this workspace
+depends on a behavior it retired is the local question. Its changelog
+directories (`system/vendor/mngr/**/changelog/`) announce removed behavior in
+prose, which no test failure will surface; read the merged entries and grep the
+workspace for every name they retire (an environment variable, a port, a
+command). Build the impact set like this:
 
 1. **Enumerate the consumer universe** up front, independent of the diff: every
    `system/supervisord.conf` program (and everything its `command` invokes, directly or
@@ -367,7 +373,10 @@ tests, or exercise its scripts -- and called out in the report.
     customization -- "tried and failed", never "looks hard". This is the one
     verdict that stops the pass: raise it as a `question` gate (Step 6) with
     the evidence and the options you see; never let it ride into `done` as a
-    footnote.
+    footnote. A merge conflict lands here too when every resolution of it
+    breaks the creation -- both sides rewrote it incompatibly and neither
+    side's version works on the merged base; say so in the gate, since the
+    lead records that hold under its own reason.
 
 ### 4c. Review gates
 
@@ -447,7 +456,8 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
 - `question` (`type: gate`) -- three cases; say which it is in the first line.
   (a) A genuine, unresolvable merge conflict; body: the file, what each side
   did, the options. The lead answers this itself, defaulting to this
-  workspace's current behavior. (b) The 4c review-gate escape hatch, a
+  workspace's current behavior -- unless every option breaks something the
+  user built, which is case (c) with a conflict as its cause. (b) The 4c review-gate escape hatch, a
   *process* question rather than a conflict; body: the rule's conditions as
   you read them, what your situation is, and what you would do instead. The
   lead answers it by the §4c rule. (c) A **customization the update cannot

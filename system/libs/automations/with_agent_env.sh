@@ -53,6 +53,9 @@ for data_file in "$host_dir"/agents/*/data.json; do
 done
 set +a
 
-export PATH="/root/.local/bin:$PATH"
+# cron hands its jobs a bare PATH (typically /usr/bin:/bin), so anything installed
+# under /usr/local/bin -- latchkey included -- is invisible to a scheduled job
+# unless the wrapper names it. The same list bootstrap gives the recovery cron entry.
+export PATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
 cd /home/user/workspace
 exec "$@"
