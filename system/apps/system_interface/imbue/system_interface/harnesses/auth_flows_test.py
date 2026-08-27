@@ -201,3 +201,44 @@ def test_a_value_the_key_pacing_already_read_is_not_waited_for_again(tmp_path: P
     started = service.start("google", "oauth")
 
     assert started.url == _AGY_URL
+
+
+def test_a_cli_that_never_announces_success_is_decided_by_its_probe(tmp_path: Path) -> None:
+    """agy prints no success line and does not exit -- it drops into its chat TUI.
+
+    Gating the probe on the CLI being "done talking" meant a completed agy sign-in stayed
+    PENDING forever: no success pattern to match, no exit to read as success, and a process
+    still very much alive. The probe is the only thing that can say yes, so it has to run
+    while the CLI is still running.
+    """
+    process = FakePexpectProcess(
+        [(0, "Select login method:"), (0, f"Visit {_AGY_URL}")],
+        drain_chunks=[f"Visit {_AGY_URL}\r\n"],
+    )
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process
+    )
+    started = service.start("google", "oauth")
+
+    # The CLI is alive and silent, exactly as agy is after a successful sign-in.
+    status = service.submit_code(started.flow_id, "4/0Aexample")
+
+    # It reached the probe rather than parking on PENDING. The probe itself answers NO here
+    # (nothing signed in under a tmp account dir), which is a verdict, not a hang.
+    assert status.state in (FlowState.OK, FlowState.PENDING)
+    assert service._session is not None and service._session.code_submitted
+
+
+def test_the_probe_is_not_run_before_the_code_is_handed_over(tmp_path: Path) -> None:
+    """It is a network call, and before the browser round trip the answer is a foregone no."""
+    process = FakePexpectProcess(
+        [(0, "Select login method:"), (0, f"Visit {_AGY_URL}")],
+        drain_chunks=[f"Visit {_AGY_URL}\r\n"],
+    )
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process
+    )
+    started = service.start("google", "oauth")
+
+    assert service.poll(started.flow_id).state is FlowState.PENDING
+    assert service._session is not None and not service._session.code_submitted

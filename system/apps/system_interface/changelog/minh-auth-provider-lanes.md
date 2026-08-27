@@ -419,3 +419,25 @@ while the footer was still suppressed, so the chat rendered with nothing to type
 the footer, and whether the panel accepts file drops. The proto list is rebuilt from
 broadcasts and can name an agent that has since registered, so "has a proto entry" was never
 the same question as "is still being created"; conflating them is what produced the gap.
+
+# A submitted code goes straight to a waiting screen, and agy can finish at all
+
+Two faults, both on the path after you paste a code -- which is agy and anthropic, the two
+`url_then_code` lanes. Codex never hit either because its flow hands a code the other way and
+never submits one.
+
+**The flow could not finish.** The probe -- the harness's own "am I signed in" check -- only
+ran once the CLI was judged done talking: it had matched a success pattern, or exited, or
+died. agy does none of those. It prints no success line and drops straight into its chat TUI,
+so a completed sign-in sat at PENDING forever and no code could ever be accepted. A method
+that declares no success pattern has the probe as its ONLY possible verdict, so it now runs
+while the CLI is still alive -- and only once a code has actually been handed over, since
+before the browser round trip the answer is a foregone no and the probe is a network call.
+
+**And the UI fell back to the menu.** The waiting state was `busy`, which covers the request
+and not the answer: the server hands the code to the CLI, and the verdict arrives on a later
+poll. In between, the modal rendered its menu again -- which reads exactly like being bounced
+back to the start. Submitting now holds a "Signing in..." screen until the flow resolves.
+
+The deadline changes with it. The 15-minute budget is for a user away in a browser; once the
+code is in, nobody is away, so it drops to two minutes and says which thing timed out.

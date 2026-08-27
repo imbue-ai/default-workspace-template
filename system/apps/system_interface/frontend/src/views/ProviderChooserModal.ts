@@ -79,6 +79,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let activeStep: 1 | 2 = 1;
   let copied: "" | "link" | "code" = "";
   let copyFailed = false;
+  // Set once a credential has been handed over and we are waiting on the verdict. The
+  // request itself returns long before the answer does -- the server hands the code to the
+  // CLI and the harness's own probe decides, which the client learns from a later poll --
+  // so `busy` alone leaves a gap where the flow is still pending and nothing marks it. That
+  // gap rendered the menu again, which read as being bounced back to the start.
+  let awaitingVerdict = false;
 
   function reset(): void {
     mode = "chooser";
@@ -94,6 +100,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     activeStep = 1;
     copied = "";
     copyFailed = false;
+    awaitingVerdict = false;
     clearFlow();
   }
 
@@ -131,6 +138,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     copyFailed = false;
     codeInput = "";
     keyInput = "";
+    awaitingVerdict = false;
     reauthAccountId = options.accountId ?? null;
     keyProvider = chosen.key_providers.length === 1 ? chosen.key_providers[0].provider_id : null;
     busy = true;
@@ -145,14 +153,19 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     }
   }
 
-  async function send(action: () => Promise<void>): Promise<void> {
+  /** Run a credential handover. `holdUntilVerdict` keeps the waiting screen up after the
+   *  request returns, for the flows whose answer arrives on a later poll rather than in the
+   *  response body. */
+  async function send(action: () => Promise<void>, holdUntilVerdict = false): Promise<void> {
     busy = true;
     error = null;
+    if (holdUntilVerdict) awaitingVerdict = true;
     m.redraw();
     try {
       await action();
     } catch (e) {
       error = errorText(e);
+      awaitingVerdict = false;
     } finally {
       busy = false;
       m.redraw();
@@ -350,7 +363,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           onkeydown: (event: KeyboardEvent) => {
             if (event.key === "Enter" && codeInput.trim() !== "") {
               event.preventDefault();
-              void send(() => submitCode(codeInput.trim()));
+              void send(() => submitCode(codeInput.trim()), true);
             }
           },
         }),
@@ -360,7 +373,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             type: "button",
             class: `${css.PRIMARY_BTN} whitespace-nowrap`,
             disabled: busy || codeInput.trim() === "",
-            onclick: () => void send(() => submitCode(codeInput.trim())),
+            onclick: () => void send(() => submitCode(codeInput.trim()), true),
           },
           "Verify code",
         ),
@@ -552,7 +565,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       const isFailed = flow !== null && flow.status.state === "failed";
       // Spawning the CLI and scraping its first screen takes seconds, and so does checking
       // a submitted credential -- long enough that an empty panel reads as a missed click.
-      const isPending = busy && current !== null;
+      // A resolved flow wins: `isSuccess` / `isFailed` are tested before this, so holding
+      // for the verdict cannot outlive the verdict.
+      const isPending = current !== null && (busy || awaitingVerdict);
 
       const title = isSuccess
         ? "Signed in"
@@ -596,7 +611,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           ),
         ];
       } else if (isPending) {
-        body = statusScreen("pending", "Signing in...", "Preparing your sign-in.");
+        body = statusScreen(
+          "pending",
+          "Signing in...",
+          awaitingVerdict ? "Checking your code with the provider." : "Preparing your sign-in.",
+        );
       } else if (mode === "apiKey") {
         body = apiKeyBody(current);
       } else if (mode === "menu") {

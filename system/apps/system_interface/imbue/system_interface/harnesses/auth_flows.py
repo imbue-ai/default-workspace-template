@@ -71,6 +71,10 @@ logger = _loguru_logger
 _CODE_ECHO_QUIET_SECONDS: Final = 0.3
 _CODE_ECHO_DEADLINE_SECONDS: Final = 3.0
 _READY_WAIT_SECONDS: Final = 20.0
+# How long to keep asking whether a submitted code worked. The browser round trip is already
+# over by then, so this bounds only the CLI's own exchange with its provider -- long enough
+# for a slow network, short enough that a spinner cannot outlive the user's patience.
+_VERDICT_DEADLINE_SECONDS: Final = 120.0
 # How still a screen has to be before we call it drawn, when the method names no anchor to
 # expect. Short enough that a fast CLI is not held up; `settle_s` is the overall budget.
 _SETTLE_QUIET_SECONDS: Final = 0.2
@@ -149,6 +153,10 @@ class _Session:
     state: FlowState
     detail: str | None
     timer: threading.Timer | None
+    # Whether the user's code has been handed to the CLI. Only then is it worth asking the
+    # harness whether it worked -- the probe is a network call, and before the browser round
+    # trip its answer is a foregone "no".
+    code_submitted: bool
 
     def is_value_ready(self, buffer: str) -> bool:
         """Whether the scraped value can be read yet -- the drain loop's stop condition.
@@ -173,6 +181,7 @@ def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str) -
     session.state = FlowState.PENDING
     session.detail = None
     session.timer = None
+    session.code_submitted = False
     return session
 
 
@@ -319,6 +328,12 @@ class AuthFlowService:
                 session.process, session.output, _CODE_ECHO_QUIET_SECONDS, _CODE_ECHO_DEADLINE_SECONDS
             )
             session.process.send("\r")
+            session.code_submitted = True
+            # The generous deadline covers the user being away in a browser. Once the code
+            # is in, nobody is away any more: either the CLI accepts it in seconds or it
+            # never will, and the client is sitting on a spinner the whole time. Swap in the
+            # short budget so a flow that silently goes nowhere ends as a visible failure.
+            self._arm_deadline_locked(session, _VERDICT_DEADLINE_SECONDS)
             return self._settle_locked(session, method)
 
     def submit_key(self, flow_id: str, api_key: str, key_provider: str | None = None) -> FlowStatus:
@@ -377,7 +392,13 @@ class AuthFlowService:
         alive = bool(session.process is not None and session.process.isalive())
         said_success = method.success is not None and re.search(method.success, session.output) is not None
         exited_meaning_success = not alive and method.eof_policy is EofPolicy.SUCCESS
-        if not (said_success or exited_meaning_success or not alive):
+        # A CLI that never announces success and never exits leaves the probe as the ONLY
+        # thing that can say yes -- so it has to be allowed to run while the CLI is still
+        # alive. agy is exactly that: it prints no success line and drops straight into its
+        # chat TUI, so gating the probe on the CLI being "done talking" meant a completed
+        # sign-in stayed PENDING forever and the flow could never finish.
+        probe_is_the_only_verdict = method.success is None and session.code_submitted
+        if not (said_success or exited_meaning_success or not alive or probe_is_the_only_verdict):
             return FlowStatus(state=FlowState.PENDING)
 
         # The CLI is done talking. Its own probe, not the screen, decides.
@@ -425,7 +446,13 @@ class AuthFlowService:
         with self._lock:
             if self._session is session and session.state is FlowState.PENDING:
                 logger.info("Sign-in flow {} expired after {}s", session.flow_id, seconds)
-                self._fail_locked(session, "The sign-in timed out. Start over to get a fresh link.")
+                self._fail_locked(
+                    session,
+                    # Which deadline fired changes what the user should do about it.
+                    "The provider never confirmed that code. Try signing in again."
+                    if session.code_submitted
+                    else "The sign-in timed out. Start over to get a fresh link.",
+                )
 
     def _require_locked(self, flow_id: str) -> _Session:
         if self._session is None or self._session.flow_id != flow_id:
@@ -433,7 +460,13 @@ class AuthFlowService:
         return self._session
 
     def _arm_deadline_locked(self, session: _Session, seconds: float) -> None:
-        """Nothing else bounds a flow: the PTY only advances when a client polls."""
+        """Nothing else bounds a flow: the PTY only advances when a client polls.
+
+        Re-arming replaces the running timer, which is how the long browser-round-trip
+        budget gets swapped for the short verdict one the moment a code lands.
+        """
+        if session.timer is not None:
+            session.timer.cancel()
         session.timer = threading.Timer(seconds, self._expire, args=(session, seconds))
         session.timer.daemon = True
         session.timer.start()
