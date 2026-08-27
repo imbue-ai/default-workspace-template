@@ -70,11 +70,18 @@ export const EFFORT_VALUE = "text-[12px] text-primary";
 /** DIVERGES: wraps the track so tick marks can sit behind it -- the mockup's bare slider gives
  *  no clue where the levels are, which is exactly what makes it feel like guesswork. */
 export const SLIDER_WRAP = "relative flex h-4 w-32 items-center";
+/** Inset by half the thumb's width on each side.
+ *
+ *  A range input's thumb CENTER travels from `thumbWidth/2` to `width - thumbWidth/2`, never to
+ *  the track's actual edges -- so ticks spread across the full width put the first and last one
+ *  6px outside anywhere the ball can reach, and the ball sits off its own mark at both ends.
+ *  Spanning the thumb's real travel instead makes every tick a position the ball lands on. */
 export const SLIDER_TICKS =
-  "pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-between";
+  "pointer-events-none absolute left-1.5 right-1.5 top-1/2 flex -translate-y-1/2 justify-between";
 /** Taller than the 12px knob and dark enough to read through it: these are the delimiters
  *  that say where the levels ARE, so they have to survive the thumb passing over them. */
-export const SLIDER_TICK = "h-[15px] w-[2px] rounded-full bg-primary/55";
+/** Hairline, but dark and taller than the 12px thumb, so it reads through the ball. */
+export const SLIDER_TICK = "h-[15px] w-px bg-primary/70";
 export const SLIDER =
   "relative h-[3px] w-full cursor-pointer appearance-none rounded-full " +
   "[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full " +
