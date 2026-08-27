@@ -253,15 +253,31 @@ export function selectAccount(accountId: string): void {
  * accounts are mind-global, so there is nothing per-chat about picking one.
  */
 let chooserOpen = false;
+// Which account the chooser should open ON, when it is being opened to fix a specific one
+// rather than to add a provider. Module state rather than an attribute because every caller
+// reaches the modal through `openProviderChooser`, and threading an argument through a
+// 780-line component for two callers is the worse trade.
+let chooserAccountId: string | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
 }
 
-export function openProviderChooser(): void {
+/** Open the chooser. Pass an account id to re-authenticate THAT account rather than to add
+ *  a new provider -- what a dead-account notice and a per-provider card both need. */
+export function openProviderChooser(accountId?: string): void {
   if (chooserOpen) return;
   chooserOpen = true;
+  chooserAccountId = accountId ?? null;
   m.redraw();
+}
+
+/** The account the chooser was opened on, or null when it was opened to add a provider.
+ *  Read once by the modal at init; cleared so a later open starts from the lane list. */
+export function takeChooserAccountId(): string | null {
+  const accountId = chooserAccountId;
+  chooserAccountId = null;
+  return accountId;
 }
 
 export function closeProviderChooser(): void {
