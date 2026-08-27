@@ -22,3 +22,7 @@ Putting the work_dir on `main` gets its own one-shot signal and moves to `main()
 once-ever operation -- `git add -A` on a later boot would sweep up whatever the user had in
 flight -- but "does this workspace have a main branch" and "does it have a chat" are different
 questions and no longer share an answer.
+
+Remove the initial chat entirely. Bootstrap no longer creates one, no longer parses an agent id
+out of the create, and no longer writes the `initial_chat_agent_id` sidecar -- the workspace
+opens on the new-tab screen, and the first chat is whichever one the user starts.

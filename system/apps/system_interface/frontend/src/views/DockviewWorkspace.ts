@@ -2501,11 +2501,6 @@ function openInitialChatTab(): boolean {
   return true;
 }
 
-// `awaitingInitialChat` flips on when the initial mount runs against an empty
-// agent list -- a machine whose bootstrap is still creating its first chat --
-// and back off as soon as that tab opens. While true, an agents_updated
-// listener keeps retrying, and a launcher stands in until it lands.
-let awaitingInitialChat = false;
 let agentsUpdatedListener: AgentsUpdatedListener | null = null;
 
 /** Find the chat panel id to anchor an agent-initiated split against.
@@ -3944,10 +3939,10 @@ export function displayNameForView(viewId: string, projects: readonly ProjectInf
  *
  * ``null`` -- a view with no saved content, or none that could be fetched --
  * mounts the New Tab launcher, which is what a freshly-created project opens
- * on. ``isInitialMount`` is the one exception: a machine whose starter project
- * has never been saved is a machine that has just booted, and the chat its
- * bootstrap created is what the user came for, so that one opens instead (and
- * ``awaitingInitialChat`` waits for it when the bootstrap is still running).
+ * on. ``isInitialMount`` is the one exception: a machine whose starter project has never
+ * been saved has just booted, so if it already HAS a chat that is what the user came for and
+ * it opens instead. A fresh workspace has none -- a chat needs a provider account -- and gets
+ * the launcher like any other empty view.
  * Switching to an empty project never takes that branch -- it is a project the
  * user just made, and the launcher is exactly the "pick what to start with"
  * surface the design asks for there.
@@ -3965,7 +3960,6 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
   // ``dockview`` may have been torn down while awaiting; re-check before use.
   if (!dockview) return;
   const dv = dockview;
-  awaitingInitialChat = false;
   // Teardown removes every panel one by one; the dock-never-empty rule must not
   // fire a launcher into the middle of that.
   isApplyingLayout = true;
@@ -4076,10 +4070,10 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
   // all services-agent chats we just stripped above.
   const isDockEmpty = dv.panels.length === 0;
   if (isDockEmpty && isInitialMount && saved === null) {
-    // A freshly-booted machine: show the chat its bootstrap created, and keep
-    // waiting when that agent has not been registered yet.
+    // A machine that has run before opens on whatever chat it has. A fresh one has none --
+    // a chat needs a provider account and nothing creates one at boot -- so it opens on the
+    // launcher, where the provider chooser is. Nothing to wait for either way.
     if (!openInitialChatTab()) {
-      awaitingInitialChat = true;
       openLauncherPanel(null);
     }
   } else if (isDockEmpty) {
@@ -5184,18 +5178,10 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   // Every agents_updated event may carry a new name pair for an agent some tab
   // is showing (a rename lands as a changed name + display_name label), so the
-  // strip is re-synced from the live labels. While awaitingInitialChat is true,
-  // the event is also another chance for the bootstrap-created chat to show up.
+  // strip is re-synced from the live labels.
   agentsUpdatedListener = () => {
     syncTabTitlesFromStore();
     m.redraw();
-    if (!awaitingInitialChat) return;
-    const launcherPanelId = dv.panels.find((panel) => panelParams.get(panel.id)?.panelType === "launcher")?.id ?? null;
-    if (openInitialChatTab()) {
-      awaitingInitialChat = false;
-      // The launcher was only standing in until the chat arrived.
-      retireLauncher(launcherPanelId);
-    }
   };
   addAgentsUpdatedListener(agentsUpdatedListener);
 
