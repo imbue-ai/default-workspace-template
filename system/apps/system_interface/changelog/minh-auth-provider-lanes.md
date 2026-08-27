@@ -865,3 +865,12 @@ commits on release rather than per notch, because each notch is a live switch ty
 agent's pane and the switch queue chains rather than debounces; and a model with one effort
 stop gets no slider at all, because pi's non-reasoning models declare exactly one and an
 immovable full-green track labelled "Off" says the opposite of the truth.
+
+# Delete "Powered by"
+
+The card names the provider, so a separate credit line under the composer says the same thing
+twice -- and says it less usefully, since it named the harness rather than the account.
+
+`dropdown-position.ts` goes with it. It placed the old bar's dropdowns on one axis; the card's
+flyouts need both, a height cap and a side to flip to, which is `flyout-position.ts`, and
+nothing else wanted the old one.

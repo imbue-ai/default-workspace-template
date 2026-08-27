@@ -43,7 +43,6 @@ import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { PoweredByCredit } from "./PoweredByCredit";
 import { ModelBar } from "./ModelBar";
 import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
@@ -937,7 +936,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     ),
                   ]),
                   // The centered harness credit (may render nothing), overlaid on the bar.
-                  m(PoweredByCredit, { agentId }),
                 ]),
               ]),
         ],
