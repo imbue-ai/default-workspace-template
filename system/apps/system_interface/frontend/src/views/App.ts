@@ -25,28 +25,22 @@ import {
   switchToView,
   toggleAppLifecycle,
 } from "./DockviewWorkspace";
-import { ClaudeLoginModal } from "./ClaudeLoginModal";
 import { ProviderChooserModal } from "./ProviderChooserModal";
-import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
 import { FastModeModal } from "./FastModeModal";
 import { Sidebar } from "./Sidebar";
 import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import type { AppEntry } from "../models/AgentManager";
-import { checkAuthStatusOnLoad, isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
 import { closeProviderChooser, isProviderChooserOpen, loadAccounts } from "../models/Providers";
-import { getAuthInstructionsAgentId } from "../models/AgentAuth";
 import { getFastModePromptAgentId } from "../models/FastModePrompt";
 
 export function App(): m.Component {
   return {
     oninit() {
-      // One-shot page-load auth check: a freshly created mind has no
-      // credentials at all (the create flow injects none), so the sign-in
-      // modal is the designed first-boot step rather than an error path.
-      checkAuthStatusOnLoad();
       // The new-tab picker and the rail's Chat shortcut both read the account list,
       // and both can be the first thing a user clicks, so load it once at boot
-      // rather than on the chooser's own oninit.
+      // rather than on the chooser's own oninit. Nothing pops a modal off the back
+      // of it: signing in is something the user asks for, not something the app
+      // decides for them on page load.
       void loadAccounts().catch(() => undefined);
     },
     view() {
@@ -149,19 +143,10 @@ export function App(): m.Component {
             // overlays this dock rather than squeezing it.
             m("div", { class: "min-w-0 flex-1" }, m(DockviewWorkspace)),
           ]),
-          // Claude auth is mind-global, so the login modal is a single
-          // app-level instance driven by global auth state -- not one per
-          // ChatPanel. It opens on the load-time check, when any agent
-          // surfaces an auth-error, or from the chat footer's "Agent auth"
-          // entry.
-          isLoginModalOpen() ? m(ClaudeLoginModal, { onDismiss: closeLoginModal }) : null,
-          // The provider chooser: one app-level instance, for the same reason as the modal
-          // above -- accounts are mind-global, so there is nothing per-chat about picking
-          // one. It will take over from that modal once every lane's flow has landed.
+          // The provider chooser: one app-level instance rather than one per ChatPanel,
+          // because accounts are mind-global -- there is nothing per-chat about picking
+          // one. It is the only sign-in surface; nothing opens it but the user.
           isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
-          // The terminal-auth counterpart: harnesses whose sign-in runs in their
-          // own TUI raise this shared instructions notice instead (see AgentAuth.ts).
-          getAuthInstructionsAgentId() !== null ? m(AgentAuthInstructionsModal) : null,
           // One chat reaching the end of its fast-mode grace period raises a single
           // shared prompt here (see fast-mode-prompt.ts for when that happens).
           getFastModePromptAgentId() !== null ? m(FastModeModal) : null,

@@ -190,3 +190,16 @@ now checked against what we already hold before the stream is waited on.
 
 `AuthFlowService.create` takes an optional `spawner`, matching ClaudeAuthService's
 `pexpect_spawner`, so the case has a test instead of only a manual run.
+
+# Delete the old claude sign-in modal and everything that opened it
+
+The provider chooser is the only sign-in surface now. Gone with the modal: its models
+(`ClaudeAuth.ts`, `AgentAuth.ts`), the terminal-instructions notice that stood in for
+harnesses with no in-app flow, and every path that opened one without being asked -- the
+page-load status check, the live auth-error hook on the transcript stream, and the same
+check on snapshot load. Signing in is something the user asks for.
+
+The composer still refuses `/login` and `/logout`, for a better reason than before: sending
+one would run the agent's own auth flow inside its terminal, where we cannot see the result.
+The notice now offers the provider chooser, which signs in to a fresh account and leaves the
+agent's own credential alone.
