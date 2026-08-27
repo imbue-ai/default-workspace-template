@@ -211,6 +211,68 @@ def test_perform_restore_proceeds_when_only_the_startup_entry_differs(
     assert "--broken" not in (scratch_repo / SUPERVISORD_CONFIG_PATH).read_text()
 
 
+def test_perform_restore_saves_a_pending_startup_edit_before_overwriting_it(
+    scratch_repo: Path, commit_repo_files: Callable[[Mapping[str, str], str], str], tmp_path: Path
+) -> None:
+    target_sha = commit_repo_files(
+        {_NEWS_FILE: "v1", SUPERVISORD_CONFIG_PATH: _config_with_news_command("uv run news")},
+        "news: first build",
+    )
+    commit_repo_files(
+        {_NEWS_FILE: "v2", SUPERVISORD_CONFIG_PATH: _config_with_news_command("uv run news --newer")},
+        "news: second version",
+    )
+    (scratch_repo / SUPERVISORD_CONFIG_PATH).write_text(_config_with_news_command("uv run news --unsaved"))
+    repo = SubprocessGitRepo(repo_root=scratch_repo)
+
+    perform_restore(
+        git_repo=repo,
+        app=_SUPERVISED_NEWS_APP,
+        target_sha=target_sha,
+        lock_file=tmp_path / "restore.lock",
+        is_service_managed=False,
+    )
+
+    # The unsaved startup edit survives as its own version rather than vanishing under the restore.
+    config_by_version = [
+        repo.read_file_at_commit(commit.sha, SUPERVISORD_CONFIG_PATH) or ""
+        for commit in repo.read_commits_touching_path(SUPERVISORD_CONFIG_PATH)
+    ]
+    assert any("--unsaved" in config_text for config_text in config_by_version)
+
+
+def test_perform_restore_does_not_sweep_another_apps_pending_entry_into_the_restore(
+    scratch_repo: Path, commit_repo_files: Callable[[Mapping[str, str], str], str], tmp_path: Path
+) -> None:
+    target_sha = commit_repo_files(
+        {_NEWS_FILE: "v1", SUPERVISORD_CONFIG_PATH: _config_with_news_command("uv run news")},
+        "news: first build",
+    )
+    commit_repo_files(
+        {_NEWS_FILE: "v2", SUPERVISORD_CONFIG_PATH: _config_with_news_command("uv run news --newer")},
+        "news: second version",
+    )
+    # Another app is mid-edit in the same shared file.
+    (scratch_repo / SUPERVISORD_CONFIG_PATH).write_text(
+        _config_with_news_command("uv run news --newer").replace("uv run weather", "uv run weather --mid-edit")
+    )
+    repo = SubprocessGitRepo(repo_root=scratch_repo)
+
+    result = perform_restore(
+        git_repo=repo,
+        app=_SUPERVISED_NEWS_APP,
+        target_sha=target_sha,
+        lock_file=tmp_path / "restore.lock",
+        is_service_managed=False,
+    )
+
+    # The restore version carries this app's entry only; the neighbour's edit was kept, but
+    # as its own saved-work version rather than as part of going back.
+    restore_diff = repo.read_diff_of_commits([result.restore_commit_sha], SUPERVISORD_CONFIG_PATH)
+    assert "--mid-edit" not in restore_diff
+    assert "--mid-edit" in (scratch_repo / SUPERVISORD_CONFIG_PATH).read_text()
+
+
 def test_build_restore_preview_reports_a_changed_startup_entry(
     scratch_repo: Path, commit_repo_files: Callable[[Mapping[str, str], str], str]
 ) -> None:
