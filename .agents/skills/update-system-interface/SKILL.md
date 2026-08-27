@@ -55,7 +55,7 @@ is just the mechanism for that safe, separate place to work.
    frame -- for the user to click around. The user approves or rejects.
 4. **On approval**, you run the general **apply**: one command that lands the
    merge and reveals it (refresh dependencies, install the worker's built
-   bundle, restart as needed, verify the live UI is healthy, auto-rollback on
+   bundle, restart the services agent, verify the live UI is healthy, auto-rollback on
    failure -- with an interruption marker so even a hard kill is recoverable),
    then **tear down the preview**. On rejection, you tear down the preview and
    hand back -- nothing is merged.
