@@ -103,7 +103,8 @@ python3 .agents/skills/update-self/scripts/update_self.py run-status start
 
 Append `--unattended` when your dispatch message says the run is unattended
 (pre-authorized, nobody watching). This writes
-`data/.state/update-apply/run.json`, which the Minds app polls; the pass owes
+`data/.state/update-apply/run.json`, which the Minds app polls; besides the
+`hold`/`resume` pair around its one mid-flight question (Step 4), the pass owes
 that file exactly one more write -- a `run-status verdict` when it ends, from
 whichever section ends it. Each terminal path below names its verdict; a pass
 that ends without recording one shows the user "update failed" in the app over
