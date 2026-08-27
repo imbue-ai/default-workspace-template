@@ -136,3 +136,10 @@ an identical modal; the only additions are a back chevron and a style for the on
 The composer's "Agent auth" button is now "Providers" and opens the chooser. That is a
 temporary home -- the chooser's real entry points are the new-tab screen's picker and the
 model bar. The transcript auth-error paths still open the old modal for now.
+
+# Make committing an account idempotent so re-authenticating works
+
+Re-authenticating writes an existing account folder a second time. `commit_account`
+raised on that, so an expired account could never be revived in place. It now returns
+the existing row and only moves the most-recently-used pointer: the seq stays put, so
+every agent already bound to that account by label keeps resolving.

@@ -33,6 +33,7 @@ import { Sidebar } from "./Sidebar";
 import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import type { AppEntry } from "../models/AgentManager";
 import { checkAuthStatusOnLoad, isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
+import { closeProviderChooser, isProviderChooserOpen } from "../models/Providers";
 import { getAuthInstructionsAgentId } from "../models/AgentAuth";
 import { getFastModePromptAgentId } from "../models/FastModePrompt";
 

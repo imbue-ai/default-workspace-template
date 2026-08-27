@@ -40,7 +40,6 @@ export interface ProviderChooserModalAttrs {
 
 export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let lane: Lane | null = null;
-  let method: LaneMethod | null = null;
   let showAlternates = false;
   let codeInput = "";
   let keyInput = "";
@@ -50,7 +49,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
   function reset(): void {
     lane = null;
-    method = null;
     showAlternates = false;
     codeInput = "";
     keyInput = "";
@@ -61,7 +59,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
   async function begin(chosen: Lane, chosenMethod: LaneMethod): Promise<void> {
     lane = chosen;
-    method = chosenMethod;
     error = null;
     // A key flow needs a provider chosen before it can be written; default to the lane's
     // first so the common single-provider case needs no extra click.
@@ -164,11 +161,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return [
       m("p", "Open this link, sign in, and come back:"),
       flow.url !== null
-        ? m("a.claude-login-button.claude-login-button--primary.claude-login-button--block", {
-            href: flow.url,
-            target: "_blank",
-            rel: "noreferrer",
-          }, "Open the sign-in page")
+        ? m(
+            "a.claude-login-button.claude-login-button--primary.claude-login-button--block",
+            {
+              href: flow.url,
+              target: "_blank",
+              rel: "noreferrer",
+            },
+            "Open the sign-in page",
+          )
         : null,
       flow.shape === "code_then_wait" ? renderWaitForCode(flow.code) : renderPasteCode(),
     ];
@@ -277,36 +278,30 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             if (e.target === e.currentTarget) onClose();
           },
         },
-        m(
-          "div.claude-login-modal",
-          { role: "dialog", "aria-modal": "true", "aria-label": "Pick your AI provider" },
-          [
-            m("div.claude-login-header", [
-              lane !== null
-                ? m(
-                    "button.claude-login-close",
-                    { type: "button", onclick: back, "aria-label": "Back" },
-                    m.trust(icon("chevron-left", { size: 16 })),
-                  )
-                : null,
-              m("h2.claude-login-title", lane === null ? "Pick your AI provider" : lane.provider_name),
-              m(
-                "button.claude-login-close",
-                { type: "button", onclick: onClose, "aria-label": "Close" },
-                m.trust(icon("close", { size: 16 })),
-              ),
-            ]),
-            m("div.claude-login-body", [
-              error !== null || detail !== null
-                ? m("div.claude-login-error", error ?? detail)
-                : null,
-              lane === null ? renderChooser() : [renderSignIn(lane), renderAlternates(lane)],
-              lane === null && getAccounts().length > 0
-                ? m("p.claude-login-alt-desc", `${getAccounts().length} provider(s) already signed in.`)
-                : null,
-            ]),
-          ],
-        ),
+        m("div.claude-login-modal", { role: "dialog", "aria-modal": "true", "aria-label": "Pick your AI provider" }, [
+          m("div.claude-login-header", [
+            lane !== null
+              ? m(
+                  "button.claude-login-close",
+                  { type: "button", onclick: back, "aria-label": "Back" },
+                  m.trust(icon("chevron-left", { size: 16 })),
+                )
+              : null,
+            m("h2.claude-login-title", lane === null ? "Pick your AI provider" : lane.provider_name),
+            m(
+              "button.claude-login-close",
+              { type: "button", onclick: onClose, "aria-label": "Close" },
+              m.trust(icon("close", { size: 16 })),
+            ),
+          ]),
+          m("div.claude-login-body", [
+            error !== null || detail !== null ? m("div.claude-login-error", error ?? detail) : null,
+            lane === null ? renderChooser() : [renderSignIn(lane), renderAlternates(lane)],
+            lane === null && getAccounts().length > 0
+              ? m("p.claude-login-alt-desc", `${getAccounts().length} provider(s) already signed in.`)
+              : null,
+          ]),
+        ]),
       );
     },
   };
