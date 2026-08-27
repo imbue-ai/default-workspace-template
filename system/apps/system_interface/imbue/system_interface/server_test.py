@@ -2226,6 +2226,7 @@ def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> N
     fake_watcher = SimpleNamespace(
         set_queue_snapshot_callback=lambda _callback: None,
         notify_idle=lambda: [],
+        set_flush_hooks=lambda _send, _is_alive: None,
         get_all_events=_record_get_all_events,
         start=lambda: calls.append("start"),
     )

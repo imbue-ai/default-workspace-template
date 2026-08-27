@@ -266,7 +266,7 @@ def test_write_then_read_round_trips_the_raw_model_list(tmp_path: Path) -> None:
 
 def test_read_model_options_missing_or_non_list_is_empty(tmp_path: Path) -> None:
     # An absent sidecar, and a present-but-malformed payload, both read as () -> the chip falls back
-    # to logo-only rather than crashing.
+    # to rendering no slots rather than crashing.
     assert read_codex_model_options(get_codex_model_options_path(tmp_path)) == ()
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"models": "not-a-list"}))

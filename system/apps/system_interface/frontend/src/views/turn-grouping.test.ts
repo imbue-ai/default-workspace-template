@@ -383,6 +383,34 @@ describe("historical input fallback", () => {
     expect(pending.status).toBe("pending");
     expect(pending.title).toBe("Read the docs");
   });
+
+  // The fallback used to accept only claude's `Bash` and pi's `bash`, which was the last
+  // piece of harness knowledge in this file -- and it left agy (`run_command`, whose command
+  // lives under `CommandLine`) as the one harness with no fallback at all.
+  it("recovers decoration from an agy-shaped tool call", () => {
+    const agyMsg = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
+      ...tkMsg(ts, command, callId),
+      tool_calls: [
+        {
+          tool_call_id: callId,
+          tool_name: "run_command",
+          input_preview: JSON.stringify({ CommandLine: command, Cwd: "/work" }),
+          display: "hidden" as const,
+        },
+      ],
+    });
+    const events = [
+      userMsg("t0", "go"),
+      agyMsg("t1", 'S1=$(tk create --step "Build the app")\necho "S1=$S1"', "tc"),
+      result("t1", "tc", "S1=agy-step-aaaa"),
+      agyMsg("t2", 'tk close agy-step-aaaa "Shipped it."', "c1"),
+      result("t2", "c1", "Updated agy-step-aaaa -> closed"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const step = stepItems(sections[0].items).find((s) => s.ticket_id === "agy-step-aaaa")!;
+    expect(step.title).toBe("Build the app");
+    expect(step.summary).toBe("Shipped it.");
+  });
 });
 
 describe("narration and close-time ejection", () => {

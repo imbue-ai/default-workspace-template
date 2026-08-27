@@ -146,7 +146,7 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # the workspace terminal panel keeps its scrollback either way.
 settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
-# directly. The wrapper (system/services/oom_priority/bin/claude_oom_launch.py) sets its own
+# directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
 # agent-pid registry, then execs the real claude with the args mngr appends
 # (assemble_command splices --settings / --resume / --session-id after this
@@ -157,7 +157,7 @@ settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerou
 # spawned. ${MNGR_AGENT_WORK_DIR:-.} mirrors
 # the OOM Claude hooks' path form; the "main" type overrides command below so
 # its sleeping window-0 is unaffected.
-command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/claude_oom_launch.py"
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py claude"
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with CLAUDE_CODE_VERSION in the Dockerfile.
@@ -225,6 +225,13 @@ command = "sleep infinity"
 # --dangerously-skip-permissions -- so codex's nested sandbox is both redundant and
 # broken here. Turning it off lets exec actually run.
 [agent_types.codex]
+# Launch through the OOM band wrapper, exactly as claude does above -- without it an
+# agent runs unbanded and earlyoom sheds it by kernel score instead of by our tiering.
+# The wrapper execs `codex` in place, so process detection still matches `codex`.
+# Note codex uses this base for BOTH its visible `--remote` TUI and its `app-server`
+# daemon, so both are banded (the daemon is where turns run, so it is the one that
+# matters for memory).
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py codex"
 auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 model = "gpt-5.6-sol"
@@ -245,17 +252,30 @@ check_installation = false
 #   they close that hole (`code_mode_only` implies `code_mode`; it is Stage::UnderDevelopment,
 #   which only warns -- the suppress flag silences that). `code_mode_host` picks where the JS
 #   runs (standalone host vs embedded V8), unrelated to whether code mode is on.
+# - unified_exec = false: closes a TOTAL bypass of the PreToolUse guards. The unified-exec
+#   surface adds `write_stdin` (and a tty option to the shell tool); `write_stdin` fires NO
+#   PreToolUse event at all, so an agent can start a shell with one guarded call and then type
+#   anything into it -- `git rebase`, a piped `head`, a batched `tk start` -- with every guard
+#   skipped. Measured on codex-cli 0.147.0: the typed command ran and the hook log held a single
+#   `Bash`/`bash` entry. It is NOT closable via the tools table below: `ToolsToml` accepts only
+#   web_search / experimental_request_user_input / update_plan, and `write_stdin` there is
+#   silently ignored (verified -- the bypass still worked). With this flag the model reports
+#   "`write_stdin` does not exist in the available exec tools", ordinary shell calls still run
+#   AND still fire their hook. Cost: the interactive-tty affordance, which Minds does not use.
+#   (The older spelling `experimental_use_unified_exec_tool` is deprecated in 0.147.0.)
 # - features.goals = false, and tools.{update_plan, experimental_request_user_input,
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
 #   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
 #   so they never appear in the transcript.
-config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
+config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
 # Codex-only instructions, appended to every codex agent's system prompt.
 append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.""", """# The /welcome command
+The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.
+
+Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead.""", """# The /welcome command
 
 If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
 
@@ -286,6 +306,9 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # project-local files for the run) so an unattended agent is not blocked on the
 # first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs_at_startup.
 [agent_types.pi-coding]
+# Launch through the OOM band wrapper -- see the codex block above. The wrapper execs
+# `pi` in place, and mngr's own prelude/`-e <extension>` splice after this base.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py pi"
 auto_allow_permissions = true
 # Share the one ~/.pi/agent/npm dir (symlink) instead of copying it per agent. pi loads
 # its extensions as TypeScript through jiti, whose transpile cache is keyed by absolute
@@ -314,6 +337,73 @@ I can take on tasks for you, build custom apps and skills you can easily edit, c
 Already have something in mind? Tell me what you'd like to work on below. If not, I'm happy to suggest a few ways to get started.
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
+
+# the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
+# is its own base type (registered by the vendored imbue-mngr-opencode plugin via
+# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. The
+# opencode binary is baked into the image (system/scripts/setup_system.sh,
+# OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
+# provision.
+#
+# No model is pinned (unlike agent_types.codex's gpt-5.6-sol). OpenCode is a
+# many-provider, many-auth harness: its model is a `provider/model` slug that comes
+# from the user's own opencode.json (synced from ~/.config/opencode by the plugin)
+# or the authenticated provider's default -- forcing a slug here could name a
+# provider the user has not authenticated. The chat model bar reads the live value
+# from the harness's own model_state.json instead. "Effort" for opencode is its
+# variant system (provider.<p>.models.<m>.variants.<name>), likewise user-config
+# driven, so it is not pinned here either.
+#
+# auto_allow_permissions injects a wildcard permission-allow into the per-agent
+# opencode.json so the container agent runs unattended, matching
+# agent_types.codex's auto_allow_permissions posture.
+[agent_types.opencode]
+auto_allow_permissions = true
+check_installation = false
+# Launch through the OOM band wrapper, like every other harness. opencode is the one
+# harness whose `command` is not a launch PREFIX but the binary itself: the plugin passes
+# it through as MNGR_OPENCODE_BIN and opencode_launch.sh invokes it for BOTH the server
+# and the attached TUI, so both Bun processes land in the band (the same two-pids-per-agent
+# shape codex has). That script word-splits the value for exactly this reason.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py opencode"
+# Harness-only instructions, appended to every opencode agent's system prompt.
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
+
+# the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
+# claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
+# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
+# version-locked system/scripts/agy_install-1.1.16.sh), so check_installation is off.
+# auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
+# matching agent_types.codex (auto_allow adds agy's --dangerously-skip-permissions;
+# auto_dismiss silently trusts the source repo). update_policy = NEVER freezes the baked
+# build -- agy has no version field of its own, so NEVER sets AGY_CLI_DISABLE_AUTO_UPDATE
+# in the agent env and the pin in the installer script stays the only version authority.
+#
+# NO model is pinned, deliberately. agy is single-auth, so a slug WOULD be safe to force,
+# but the model bar is uniform across harnesses now: the harness writes its live model to
+# model_state.json over the session and the harness-agnostic code matches that against the
+# catalog. Pinning a slug here would add a second, competing source of truth that goes
+# stale the moment someone runs /model in the agent's terminal.
+#
+# settings_overrides is folded (last) into the per-agent settings.json -- the agy analog of
+# agent_types.codex's config_overrides. These turn off surfaces a headless chat does not
+# use: enableTerminalSandbox=false keeps run_command unrestricted (the container is already
+# the isolation boundary, same intent as codex's danger-full-access; agy's terminal sandbox
+# is opt-in anyway, so this is belt-and-suspenders), and telemetry / tips / feedback-survey
+# / notifications off keep the surface quiet.
+[agent_types.antigravity]
+auto_allow_permissions = true
+auto_dismiss_dialogs_at_startup = true
+check_installation = false
+update_policy = "NEVER"
+# Launch through the OOM band wrapper, like every other harness. agy takes it as a plain
+# prefix (its `command` is the base of assemble_command, which the plugin then wraps in
+# `env HOME=<per-agent>`), so this is the same shape as claude and pi -- one exec, one pid.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py agy"
+settings_overrides = { enableTerminalSandbox = false, enableTelemetry = false, showTips = false, showFeedbackSurvey = false, notifications = false }
+# Harness-only instructions, appended to every antigravity agent's system prompt.
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
 
 # --- Provider configurations ---
 
