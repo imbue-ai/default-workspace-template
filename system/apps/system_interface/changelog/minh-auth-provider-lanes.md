@@ -791,3 +791,20 @@ Every path that does not end in a fresh one puts it back -- failure, abort, a se
 displacing this one, the deadline -- because the credential the account had is more use than
 none, and the user asked to replace it rather than to lose it. The one exception is a check
 that could not run at all, where a sign-in may genuinely have landed.
+
+# Codex, pi and Antigravity can say when the credential is the problem
+
+All three reported `is_auth_error: False` unconditionally, each with a comment saying the error
+shape was unknown. Driving the pinned CLIs against a deliberately bogus credential answered it:
+
+- codex writes the failure to the transcript after all, as `task_complete.error.message` -- its
+  parser's comment said auth errors lived only in `logs_2.sqlite`;
+- pi ends the assistant message with `stopReason: "error"` and `errorMessage` carrying the
+  provider's raw body;
+- Antigravity already surfaced an error step; it just never asked what kind.
+
+One shared vocabulary rather than three copies, matching on what does not change when a
+provider rewords itself: the HTTP status, the structured error type, and the handful of phrases
+the CLIs use in their own words. It deliberately does not flag a rate limit, a network failure
+or a model refusal -- those end a turn too, and offering "sign in again" for them teaches the
+user to ignore the notice.

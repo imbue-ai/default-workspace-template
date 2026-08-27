@@ -55,6 +55,7 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
 from imbue.system_interface.harnesses.codex.tool_labels import is_single_delegated_call
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import shell_command
@@ -427,17 +428,27 @@ def parse_lines(
         if payload_type in ("task_started", "task_complete"):
             kind = SpecialEventKind.TURN_STARTED if payload_type == "task_started" else SpecialEventKind.TURN_COMPLETED
             event_id = _marker_event_id(payload, payload_type, line_index)
-            return [
-                {
-                    "timestamp": timestamp,
-                    "type": SPECIAL_EVENT_TYPE,
-                    "kind": kind.value,
-                    "event_id": event_id,
-                    "turn_id": _marker_turn_id(payload),
-                    "source": SOURCE,
-                    "message_uuid": event_id,
-                }
-            ]
+            marker: dict[str, Any] = {
+                "timestamp": timestamp,
+                "type": SPECIAL_EVENT_TYPE,
+                "kind": kind.value,
+                "event_id": event_id,
+                "turn_id": _marker_turn_id(payload),
+                "source": SOURCE,
+                "message_uuid": event_id,
+            }
+            # A turn that ended on a failure carries it here, and an auth failure is the one
+            # the user can act on. Measured: a bogus key ends the turn with
+            # `error.message = "unexpected status 401 Unauthorized: Incorrect API key
+            # provided: ... auth error code: invalid_api_key"`. It reaches the transcript
+            # after all, which is what the deferral comment on the assistant path assumed
+            # it did not.
+            error = payload.get("error")
+            detail = error.get("message", "") if isinstance(error, dict) else ""
+            if detail:
+                marker["error_text"] = detail
+                marker["is_auth_error"] = is_auth_error_text(detail)
+            return [marker]
         return []
 
     if outer != "response_item":
