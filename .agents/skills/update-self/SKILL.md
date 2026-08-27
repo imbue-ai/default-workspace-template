@@ -460,9 +460,12 @@ present each one with the alternative still on offer ("I kept your version;
 if you'd rather match the official release exactly there, I can do that").
 When a conflict genuinely has no safe default, still prefer the local side
 and make that decision a leading caveat of the results message rather than
-stopping the pass -- unless it rises to the customization hold below, which
-is judged on the outcome for the user's own creations, not on the merge
-mechanics.
+stopping the pass. The one conflict that *is* the user's to decide is one
+where every resolution breaks something they built -- both sides rewrote
+their creation incompatibly, and neither keeping theirs nor taking the
+release's leaves it working. That is not a merge-mechanics question, it is
+the hold below with a different cause, and it is handled exactly like it
+(reason `CONFLICT`).
 
 The third kind of `question` is the worker's **customization hold** (its §4b
 survival verdict): something the user built -- a widget, an app hooking into
@@ -481,14 +484,33 @@ A cosmetic shift -- the widget moved but still works -- is *not* a hold: that
 applies unattended and is named in the results message with an offer to
 restore the old arrangement.
 
+Record the hold before you ask, so the app can say why the machine is
+waiting rather than only that its update agent has gone quiet:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py run-status hold CUSTOMIZATION \
+    --detail "<one plain line: what they built that the update cannot keep>"
+```
+
+(`CONFLICT` for the breaking-conflict case above.) The detail line is shown
+in the app's modal, so write it for the user, not for the worker. When they
+answer, clear it -- `run-status hold` is what put the machine on "waiting for
+you", and nothing else takes it off:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py run-status resume
+```
+
 If they choose to skip the update, that ends the pass: record `run-status
 verdict REFUSED --detail "<what the update could not keep, and that they chose
-to keep it instead>"` before tearing down. The app files `REFUSED` as a failure
+to keep it instead>"` before tearing down (a verdict clears the hold on its
+own). The app files `REFUSED` as a failure
 either way -- it badges the machine and cancels its schedule -- but without the
 verdict it waits for this run's agent to vanish and then reports a run that
 stalled for no stated reason at all; the detail line is the only thing that
 tells the user the outcome was their own answer. The other two answers carry on
-into §5 and get their verdict there, so record nothing for those.
+into §5 and get their verdict there, so record nothing for those beyond the
+`resume`.
 
 ## 5. Terminal status
 

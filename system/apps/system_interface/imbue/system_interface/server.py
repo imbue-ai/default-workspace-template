@@ -109,7 +109,6 @@ from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
-from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -574,42 +573,25 @@ def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) 
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
-def _stamp_update_staleness(response: Response, staleness: str | None) -> Response:
-    if staleness is not None:
-        response.headers[UPDATE_STALENESS_HEADER] = staleness
-    return response
-
-
 def _shell_update_staleness() -> str | None:
-    """The staleness variant to stamp on this app-shell response, if any.
+    """The staleness variant to inject into this app shell, if any.
 
-    Asked per shell request, so a tree that moved -- or an apply marker that
-    appeared -- after this process started is still seen. Skipped for ``HEAD``:
-    that is the not-built placeholder's own poll, once every ten seconds per
-    open tab for the length of an outage (see
-    :func:`_frontend_not_built_response`, which short-circuits it for the same
-    reason). Reading staleness forks git, and an outage is precisely when the
-    tree has moved and both of its reads run.
+    Asked per built-shell request, so a tree that moved -- or an apply marker
+    that appeared -- after this process started is still seen. Skipped for
+    ``HEAD``: that is the not-built placeholder's own poll, once every ten
+    seconds per open tab for the length of an outage, and the placeholder
+    itself never asks (it carries no banner). Reading staleness forks git, and
+    an outage is precisely when the tree has moved and both of its reads run.
     """
     if request.method == "HEAD":
         return None
     return get_state().update_staleness.staleness()
 
 
-def _static_directory() -> Path:
-    """The bundle directory to serve from: the state's override, else the default.
-
-    The override exists so a test can serve a real built shell by pointing the
-    state at a directory it wrote, rather than rebinding the module global.
-    """
-    override = get_state().static_directory
-    return override if override is not None else STATIC_DIRECTORY
-
-
 def _index() -> Response:
-    index_path = _static_directory() / "index.html"
-    staleness = _shell_update_staleness()
+    index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
+        staleness = _shell_update_staleness()
         config: Config = get_state().config
         root_path = (request.script_root or "").rstrip("/")
         html_content = index_path.read_text()
@@ -620,8 +602,8 @@ def _index() -> Response:
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
-        return _stamp_update_staleness(_shell_response(html_content, is_frontend_built=True), staleness)
-    return _stamp_update_staleness(_frontend_not_built_response(), staleness)
+        return _shell_response(html_content, is_frontend_built=True)
+    return _frontend_not_built_response()
 
 
 def render_frontend_not_built_page(terminal_label: str | None) -> str:
@@ -669,7 +651,7 @@ def _frontend_not_built_response() -> Response:
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
     _loguru_logger.warning(
-        "Served the not-built placeholder: no frontend bundle at {}", _static_directory() / "index.html"
+        "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
     )
     return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
@@ -686,14 +668,14 @@ def _index_catch_all(path: str) -> Response:
 
 
 def _favicon() -> Response:
-    favicon_path = _static_directory() / "favicon.ico"
+    favicon_path = STATIC_DIRECTORY / "favicon.ico"
     if favicon_path.exists():
         return send_file(favicon_path, mimetype="image/x-icon")
     return Response(status=404)
 
 
 def _serve_asset(filename: str) -> Response:
-    assets_directory = _static_directory() / "assets"
+    assets_directory = STATIC_DIRECTORY / "assets"
     # A missing asset is a plain 404, as for the favicon above, rather than the
     # HTML error page ``send_from_directory`` would raise. Existence and safety
     # are both left to ``send_from_directory``: ``filename`` arrives with any

@@ -8,7 +8,7 @@ marker is still present), and a tree that advanced without an activation (an
 emergency-path apply, or a hand merge outside the flow). Both are exactly the
 skew the geebspace incident grew from, so the server says so instead of
 serving silently: it records the tree HEAD it started from, and the app shell
-gets a response header plus a meta tag whenever the live tree no longer
+gets a meta tag whenever the live tree no longer
 matches -- an informational banner for the user; acting on it stays with the
 agent.
 
@@ -54,16 +54,15 @@ UPDATE_APPLY_MARKER_REL = "data/.state/update-apply/marker.json"
 # person -- so it outranks both other variants.
 UPDATE_APPLY_EMERGENCY_REL = "data/.state/update-apply/emergency.json"
 
-# The three staleness variants, also the values of the response header and the
-# meta tag the frontend renders its banner from.
+# The three staleness variants, also the values of the meta tag the frontend
+# renders its banner from.
 STALENESS_UPDATE_EMERGENCY = "update-emergency"
 STALENESS_UPDATE_INTERRUPTED = "update-interrupted"
 STALENESS_TREE_MOVED = "updated-not-activated"
 
-# Stamped on app-shell responses whenever the live tree no longer matches the
-# code this process is running; absent when consistent.
-UPDATE_STALENESS_HEADER = "X-Workspace-Update-Staleness"
-# The meta tag the frontend reads (mirrors the header value at shell render).
+# The meta tag the built app shell carries, and the frontend renders its
+# banner from, whenever the live tree no longer matches the code this process
+# is running; absent when consistent.
 UPDATE_STALENESS_META_TAG = "system-interface-update-staleness"
 
 # Bound on the git reads. rev-parse/diff on a local repo are milliseconds; the

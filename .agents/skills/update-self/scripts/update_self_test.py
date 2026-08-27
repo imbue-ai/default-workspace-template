@@ -5029,3 +5029,123 @@ def test_read_run_status_ignores_a_corrupt_file(tmp_path, capsys) -> None:
     path.write_text("not json")
     assert update_self.read_run_status(tmp_path) is None
     assert "not a valid run status" in capsys.readouterr().err
+
+
+def test_run_status_hold_and_resume_round_trip(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    assert (
+        update_self.main(
+            [
+                "run-status",
+                "hold",
+                "CUSTOMIZATION",
+                "--detail",
+                "Your dashboard widget has no place in the new layout.",
+                "--repo-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    held = update_self.read_run_status(tmp_path)
+    assert held is not None
+    assert held.hold_reason == "CUSTOMIZATION"
+    assert held.hold_detail == "Your dashboard widget has no place in the new layout."
+    assert held.verdict is None
+
+    assert update_self.main(["run-status", "resume", "--repo-root", str(tmp_path)]) == 0
+    resumed = update_self.read_run_status(tmp_path)
+    assert resumed is not None
+    assert resumed.hold_reason is None
+    assert resumed.hold_detail == ""
+    assert resumed.chat_agent_name == "update-lead"
+
+
+def test_run_status_verdict_clears_a_hold(tmp_path, monkeypatch) -> None:
+    # Declining at the hold ends the pass with REFUSED; the record must not
+    # keep saying the run is waiting for an answer it already got.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    assert (
+        update_self.main(
+            ["run-status", "hold", "CONFLICT", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+    assert (
+        update_self.main(
+            ["run-status", "verdict", "REFUSED", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.verdict == "REFUSED"
+    assert status.hold_reason is None
+
+
+def test_run_status_rejects_an_unknown_hold_reason(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    with pytest.raises(SystemExit):
+        update_self.main(
+            ["run-status", "hold", "QUESTION", "--repo-root", str(tmp_path)]
+        )
+
+
+def test_the_marker_mirrors_the_apply_into_the_run_record(
+    tmp_path, monkeypatch
+) -> None:
+    """The app reads the apply's liveness from run.json alone, so every marker
+    restamp lands there and clearing the marker clears it."""
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+
+    _plant_marker(tmp_path, phase=update_self.PHASE_MERGED, updated_at=2000.0)
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.apply_phase == update_self.PHASE_MERGED
+    assert status.apply_updated_at == 2000.0
+    assert status.chat_agent_name == "update-lead"
+
+    _plant_marker(tmp_path, phase=update_self.PHASE_BUILT, updated_at=2100.0)
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.apply_phase == update_self.PHASE_BUILT
+    assert status.apply_updated_at == 2100.0
+
+    update_self.clear_marker(tmp_path)
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.apply_phase is None
+    assert status.apply_updated_at is None
+
+
+def test_the_marker_does_not_invent_a_run_record(tmp_path) -> None:
+    # An apply run by hand outside a pass has no run to report to; a record
+    # conjured here would name no chat and lock the app's row for good.
+    _plant_marker(tmp_path)
+    assert update_self.read_run_status(tmp_path) is None
+    update_self.clear_marker(tmp_path)
+    assert update_self.read_run_status(tmp_path) is None
+
+
+def test_a_failed_preflight_rejects_the_merge_before_the_bundle_is_touched(
+    apply_repo: Path,
+) -> None:
+    """A combined frontend+backend release whose backend cannot boot is
+    rejected while the live bundle is still the one that was serving, rather
+    than after the build has rewritten it."""
+    runner = _apply_runner(_FRONTEND_DIFF + _BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner(output="Traceback: ImportError boom", exited=True)
+
+    def only_live_healthy(url: str) -> int | None:
+        return 200 if _is_live(url) else None
+
+    code = _apply(runner, _FakeHttp(only_live_healthy), spawner, apply_repo)
+
+    assert code == 2
+    assert spawner.spawns == [[update_self.TOOL_NAME]]
+    assert not runner.ran("npm", "run", "build")
+    assert not runner.ran(*_RESTART)
+    assert _bundle_exists(apply_repo)

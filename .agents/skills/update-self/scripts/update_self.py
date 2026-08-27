@@ -1874,10 +1874,37 @@ def write_marker(
     scratch = path.with_suffix(".json.tmp")
     scratch.write_text(marker.to_json())
     scratch.replace(path)
+    _mirror_apply_into_run_status(marker.phase, marker.updated_at, repo_root, now)
 
 
 def clear_marker(repo_root: Path) -> None:
     marker_path(repo_root).unlink(missing_ok=True)
+    _mirror_apply_into_run_status(None, None, repo_root, time.time)
+
+
+def _mirror_apply_into_run_status(
+    phase: str | None,
+    apply_updated_at: float | None,
+    repo_root: Path,
+    now: Callable[[], float],
+) -> None:
+    """Keep the run record's apply fields equal to the marker's presence and phase.
+
+    The marker is the apply's own recovery record; the run record is what the
+    Minds app reads. Stamping the two together at the marker's chokepoints is
+    what lets the app size its apply window off this file alone -- the app
+    stands back while ``apply_phase`` is set and for the recovery grace after
+    its last restamp, exactly as it did off the marker. A workspace with no run
+    record (an apply run by hand outside a pass) has nothing to report to.
+    """
+    status = read_run_status(repo_root)
+    if status is None:
+        return
+    if status.apply_phase == phase and status.apply_updated_at == apply_updated_at:
+        return
+    status.apply_phase = phase
+    status.apply_updated_at = apply_updated_at
+    write_run_status(status, repo_root, now)
 
 
 # The terminal verdicts a run may record, mirrored by the Minds app's
@@ -1899,19 +1926,40 @@ RUN_VERDICTS = (
 )
 
 
+# Why a run is holding for the user mid-flight, mirrored by the app's
+# ``UpdateHoldReason``. Like the verdicts, the app drops a reason it does not
+# know, so adding one is a contract change that needs the app taught first.
+RUN_HOLD_CUSTOMIZATION = "CUSTOMIZATION"
+RUN_HOLD_CONFLICT = "CONFLICT"
+RUN_HOLD_REASONS = (RUN_HOLD_CUSTOMIZATION, RUN_HOLD_CONFLICT)
+
+
 @dataclass
 class RunStatus:
     """One update-self run's record for the Minds app: who is running, and how it ended.
 
-    ``started_at``/``verdict_at``/``updated_at`` are epoch seconds, matching
-    the marker's timestamps. ``verdict`` is ``None`` while the run is going;
-    the fields after it are only meaningful once it is set.
+    Every timestamp is epoch seconds. ``verdict`` is ``None`` while the run is
+    going; the fields after it are only meaningful once it is set.
+
+    Two in-flight facts ride alongside the start and the verdict, because they
+    are the two things a run does that the user can see or must answer:
+
+    * ``hold_reason``/``hold_detail`` -- the run has stopped to ask the user
+      something (``run-status hold``), and why; cleared by ``run-status resume``.
+    * ``apply_phase``/``apply_updated_at`` -- the apply is landing, and its last
+      completed phase. Mirrored from the apply marker on its every restamp and
+      cleared with it, so the app reads the apply's liveness from this one
+      file and never has to know the marker exists.
     """
 
     chat_agent_name: str
     is_unattended: bool
     started_at: float
     updated_at: float
+    hold_reason: str | None = None
+    hold_detail: str = ""
+    apply_phase: str | None = None
+    apply_updated_at: float | None = None
     verdict: str | None = None
     detail: str = ""
     resulting_ref: str = ""
@@ -1925,6 +1973,10 @@ class RunStatus:
                 "is_unattended": self.is_unattended,
                 "started_at": self.started_at,
                 "updated_at": self.updated_at,
+                "hold_reason": self.hold_reason,
+                "hold_detail": self.hold_detail,
+                "apply_phase": self.apply_phase,
+                "apply_updated_at": self.apply_updated_at,
                 "verdict": self.verdict,
                 "detail": self.detail,
                 "resulting_ref": self.resulting_ref,
@@ -1939,6 +1991,9 @@ class RunStatus:
         raw = json.loads(text)
         if not isinstance(raw, dict):
             raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
+        hold_reason = raw.get("hold_reason")
+        apply_phase = raw.get("apply_phase")
+        apply_updated_at = raw.get("apply_updated_at")
         verdict = raw.get("verdict")
         verdict_at = raw.get("verdict_at")
         return cls(
@@ -1946,6 +2001,12 @@ class RunStatus:
             is_unattended=bool(raw.get("is_unattended", False)),
             started_at=float(raw.get("started_at", 0.0)),
             updated_at=float(raw.get("updated_at", 0.0)),
+            hold_reason=str(hold_reason) if hold_reason is not None else None,
+            hold_detail=str(raw.get("hold_detail", "")),
+            apply_phase=str(apply_phase) if apply_phase is not None else None,
+            apply_updated_at=float(apply_updated_at)
+            if apply_updated_at is not None
+            else None,
             verdict=str(verdict) if verdict is not None else None,
             detail=str(raw.get("detail", "")),
             resulting_ref=str(raw.get("resulting_ref", "")),
@@ -3670,6 +3731,22 @@ def apply_update(
                     )
                 _advance(PHASE_PROVISIONED)
 
+            # The pre-flight runs before the bundle is touched: it needs only
+            # the merged tree and its refreshed environment, and a merged
+            # backend that cannot boot is then rejected while the live bundle
+            # is still the one that was serving, instead of after ``static/``
+            # has been rewritten and must be restored from its snapshot.
+            if plan.needs_restart:
+                preflight_output = _preflight(repo_root, http, spawner, sleeper, expend)
+                if preflight_output is not None:
+                    raise ApplyFailed(
+                        "merged backend failed to boot in a pre-flight check; live "
+                        "service not restarted",
+                        detail=preflight_output
+                        or "(the pre-flight boot wrote nothing at all)",
+                        detail_heading="pre-flight boot output",
+                    )
+
             if plan.frontend:
                 _install_or_build_bundle(
                     usable_worker_bundle,
@@ -3684,15 +3761,6 @@ def apply_update(
                 _advance(PHASE_BUILT)
 
             if plan.needs_restart:
-                preflight_output = _preflight(repo_root, http, spawner, sleeper, expend)
-                if preflight_output is not None:
-                    raise ApplyFailed(
-                        "merged backend failed to boot in a pre-flight check; live "
-                        "service not restarted",
-                        detail=preflight_output
-                        or "(the pre-flight boot wrote nothing at all)",
-                        detail_heading="pre-flight boot output",
-                    )
                 # Recorded before the restart is attempted, so a kill anywhere
                 # past this line leaves a marker that tells recovery to restart.
                 marker.live_service_restarted = True
@@ -4152,34 +4220,69 @@ def _cmd_run_status_verdict(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args).resolve()
     now = time.time
     recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    # A verdict with no record of its own start still deserves one: the app
+    # can at least report how the run ended, and the env names the agent.
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    status.verdict = args.verdict
+    status.detail = args.detail
+    status.resulting_ref = args.resulting_ref
+    status.in_place_compatible_ref = args.in_place_compatible_ref
+    status.verdict_at = now()
+    # A verdict ends the run, so a hold it was recorded under ends with it.
+    status.hold_reason = None
+    status.hold_detail = ""
+    write_run_status(status, repo_root, now)
+    print(f"Recorded the {args.verdict} verdict.")
+    return 0
+
+
+def _run_status_for_recorder(
+    repo_root: Path, recorder: str, now: Callable[[], float]
+) -> RunStatus:
+    """The current run record if it is ``recorder``'s, else a fresh one under that name.
+
+    Same rule as the verdict: the app matches a record to a workspace's row by
+    chat name, so writing this pass's facts onto another pass's record would
+    file them under a run the app is not watching.
+    """
     status = read_run_status(repo_root)
     if status is not None and recorder and status.chat_agent_name != recorder:
-        # The record on disk is some other pass's. The app matches a record to
-        # a workspace's row by chat name, so stamping this verdict onto that
-        # name would file it under a run the app is not watching -- and this
-        # run would end with no verdict at all, which the app reads as a
-        # failure.
         sys.stderr.write(
             f"warning: {run_status_path(repo_root)} records {status.chat_agent_name or '<unnamed>'}, "
-            f"not {recorder}; recording this verdict under {recorder} instead.\n"
+            f"not {recorder}; recording under {recorder} instead.\n"
         )
         status = None
     if status is None:
-        # A verdict with no record of its own start still deserves one: the app
-        # can at least report how the run ended, and the env names the agent.
         status = RunStatus(
             chat_agent_name=recorder,
             is_unattended=False,
             started_at=now(),
             updated_at=0.0,
         )
-    status.verdict = args.verdict
-    status.detail = args.detail
-    status.resulting_ref = args.resulting_ref
-    status.in_place_compatible_ref = args.in_place_compatible_ref
-    status.verdict_at = now()
+    return status
+
+
+def _cmd_run_status_hold(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    status.hold_reason = args.reason
+    status.hold_detail = args.detail
     write_run_status(status, repo_root, now)
-    print(f"Recorded the {args.verdict} verdict.")
+    print(f"Recorded the {args.reason} hold.")
+    return 0
+
+
+def _cmd_run_status_resume(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    status.hold_reason = None
+    status.hold_detail = ""
+    write_run_status(status, repo_root, now)
+    print("Cleared the hold.")
     return 0
 
 
@@ -4422,6 +4525,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         "applied in place, when one exists.",
     )
     verdict_parser.set_defaults(func=_cmd_run_status_verdict)
+    hold_parser = run_status_sub.add_parser(
+        "hold",
+        help="Record that the run has stopped to ask the user something, and why.",
+        parents=[common],
+    )
+    hold_parser.add_argument(
+        "reason",
+        choices=RUN_HOLD_REASONS,
+        help="CUSTOMIZATION: something they built cannot be kept; CONFLICT: a "
+        "merge conflict in something they built needs their decision.",
+    )
+    hold_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    hold_parser.add_argument(
+        "--detail",
+        default="",
+        help="One plain-language line naming what the run is waiting on.",
+    )
+    hold_parser.set_defaults(func=_cmd_run_status_hold)
+    resume_parser = run_status_sub.add_parser(
+        "resume",
+        help="Clear the hold: the user answered and the run is moving again.",
+        parents=[common],
+    )
+    resume_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    resume_parser.set_defaults(func=_cmd_run_status_resume)
 
     args = parser.parse_args(argv)
     try:

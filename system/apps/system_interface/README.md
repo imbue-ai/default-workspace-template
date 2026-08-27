@@ -212,10 +212,9 @@ over new on-disk state -- silently, which is the shape the geebspace incident
 took.
 
 So the server says so. It records the tree HEAD it started from and, when the
-live tree has moved *in a way that affects what this process runs*, stamps an
-`X-Workspace-Update-Staleness` header on the app shell and injects the same
-value as a `system-interface-update-staleness` meta tag, from which the
-frontend renders one dismissible informational line. Three values, checked in
+live tree has moved *in a way that affects what this process runs*, injects a
+`system-interface-update-staleness` meta tag into the built app shell, from
+which the frontend renders one dismissible informational line. Three values, checked in
 this order:
 
 - `update-emergency` when the apply's emergency record
