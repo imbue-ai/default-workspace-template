@@ -55,23 +55,25 @@
   --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-family-heading: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-family-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  /* Spacing scale — Tailwind's stock 0.25rem `--spacing` base is the SINGLE
-     source. Each --space-N is calc(var(--spacing) * N), the exact value the
-     `p-N` / `m-N` / `gap-N` utilities compile to, so a `var(--space-N)` in the
-     CSS and a `gap-N` in the markup can never drift: change the base once and
-     both move together. Steps 0.5/1/1.5/2/3/4/5/6/8 = 2/4/6/8/12/16/20/24/32px.
-     Off-grid strays (3/5/7/9/10/14/18/22px etc.) are migrated below or marked
-     design-system-exception. */
+  /* Spacing scale — Tailwind's own `--spacing-*` namespace IS the token layer.
+     Defining `--spacing-N` both backs the `p-N` / `m-N` / `gap-N` / `w-N`
+     utilities AND exposes `var(--spacing-N)` for hand-written CSS, so the utility
+     in the markup and the var() in the CSS reference the *same* custom property:
+     one name, one source, zero drift. Each step derives from the stock 0.25rem
+     base, so a single `--spacing` change moves everything. Steps
+     0.5/1/1.5/2/3/4/5/6/8 = 2/4/6/8/12/16/20/24/32px; other numeric steps
+     (`p-7`, `p-12`, ...) still resolve via the base multiplier. Off-grid strays
+     (3/5/7/9px etc.) stay raw as design-system-exceptions. */
   --spacing: 0.25rem;
-  --space-0_5: calc(var(--spacing) * 0.5);
-  --space-1: calc(var(--spacing) * 1);
-  --space-1_5: calc(var(--spacing) * 1.5);
-  --space-2: calc(var(--spacing) * 2);
-  --space-3: calc(var(--spacing) * 3);
-  --space-4: calc(var(--spacing) * 4);
-  --space-5: calc(var(--spacing) * 5);
-  --space-6: calc(var(--spacing) * 6);
-  --space-8: calc(var(--spacing) * 8);
+  --spacing-0_5: calc(var(--spacing) * 0.5);
+  --spacing-1: calc(var(--spacing) * 1);
+  --spacing-1_5: calc(var(--spacing) * 1.5);
+  --spacing-2: calc(var(--spacing) * 2);
+  --spacing-3: calc(var(--spacing) * 3);
+  --spacing-4: calc(var(--spacing) * 4);
+  --spacing-5: calc(var(--spacing) * 5);
+  --spacing-6: calc(var(--spacing) * 6);
+  --spacing-8: calc(var(--spacing) * 8);
   --width-message-column: 740px;
   /* Motion scale — one unit (ms). Durations back the common UI transitions.
      Off-scale durations (100/150/300/320ms, and the long looping animation
@@ -185,7 +187,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-1_5);
+  gap: var(--spacing-1_5);
   height: 34px;
   padding: 0 14px;
   font-family: var(--font-family-base);
@@ -203,7 +205,7 @@ body {
 }
 .btn--sm {
   height: 28px;
-  padding: 0 var(--space-3);
+  padding: 0 var(--spacing-3);
 }
 .btn:focus-visible {
   outline: 2px solid var(--color-accent);
@@ -329,8 +331,8 @@ body {
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-0_5) var(--space-2);
+  gap: var(--spacing-1);
+  padding: var(--spacing-0_5) var(--spacing-2);
   font-size: var(--font-size-helper);
   font-weight: var(--weight-regular);
   line-height: 1.4;
@@ -480,7 +482,7 @@ body {
   display: block;
   width: 100%;
   box-sizing: border-box;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--spacing-2) var(--spacing-3);
   font-family: var(--font-family-base);
   font-size: var(--font-size-body);
   color: var(--color-text-primary);
@@ -511,53 +513,6 @@ body {
   cursor: not-allowed;
 }
 
-/* ── Tooltip (simple text) primitive ─────────────────────────────────────────
- * One shared CSS bubble for simple text tooltips, fed by a `data-tooltip`
- * attribute (native `title=` is unreliable in the desktop webview). Every simple
- * tooltip shares this single chrome definition; the per-placement rules at the
- * call sites below only override POSITIONING (edge-anchoring, so a bubble never
- * clips a panel edge) and wrapping.
- *
- * This is the CSS half of a deliberate two-mechanism split: rich / cross-
- * container tooltips (dockview tabs, the project rail) instead use the JS
- * `.minds-tooltip` path in views/hoverTooltip.ts, a body-level fixed bubble that
- * escapes the tab strip's clipping and a CSS `::after` cannot. The two are not
- * merged, but share the same --color-inverse-surface / --color-text-on-accent
- * tokens so they look identical. */
-[data-tooltip] {
-  position: relative;
-}
-[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: var(--z-dropdown);
-  width: max-content;
-  max-width: 400px;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--color-inverse-surface);
-  color: var(--color-text-on-accent);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-helper);
-  font-weight: 400;
-  line-height: 1.4;
-  white-space: normal;
-  text-align: center;
-  box-shadow: var(--shadow-overlay);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity var(--dur-base) ease;
-}
-[data-tooltip]:hover::after,
-[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
-}
-
 /* Spacer for the Minds desktop client title bar. When running inside the
    Electron shell, --minds-titlebar-height is set to the title bar height
    (38px). Outside the shell the variable is unset and the spacer collapses
@@ -577,7 +532,7 @@ body {
   border-bottom: 1px solid var(--color-border);
   display: flex;
   align-items: baseline;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   flex-shrink: 0;
   background: var(--color-bg);
 }
@@ -607,7 +562,7 @@ body {
 
 /* ── User bubble ── */
 .message {
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--spacing-5);
 }
 
 .message-user {
@@ -646,8 +601,8 @@ body {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: var(--space-2);
-  margin-bottom: var(--space-5);
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-5);
 }
 
 /* Header row spanning the message column's left..right bounds: 'Queued messages'
@@ -659,7 +614,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 
 /* Left group: the 'Queued messages' label plus its (i) info icon, kept together
@@ -668,7 +623,7 @@ body {
 .queued-header-title {
   display: flex;
   align-items: center;
-  gap: var(--space-1_5);
+  gap: var(--spacing-1_5);
   min-width: 0;
 }
 
@@ -687,23 +642,11 @@ body {
 }
 
 /* Queued-action button now uses the shared .btn primitive (btn--secondary
-   btn--sm). The .queued-action class is retained only as the CSS-tooltip anchor
-   (position + [data-tooltip]::after below) and to hold its flex layout. */
+   btn--sm). The .queued-action class is retained only to hold its flex layout;
+   its tooltip is the shared JS hover bubble (views/hoverTooltip.ts), positioned
+   in JS and clamped to the viewport, so no CSS anchor is needed. */
 .queued-action {
-  position: relative;
   flex-shrink: 0;
-}
-
-/* Placement override for the [Shoulder tap] button's tooltip (chrome comes from
-   the shared [data-tooltip]::after primitive). Right-anchored so it never clips
-   the panel's right edge; wraps because the copy is a full sentence. */
-.queued-action[data-tooltip]::after {
-  bottom: calc(100% + 7px);
-  left: auto;
-  right: 0;
-  transform: none;
-  max-width: 260px;
-  white-space: normal;
 }
 
 /* A queued bubble reuses the user-bubble view but is marked as not-yet-sent: a
@@ -731,7 +674,6 @@ body {
 
 /* The (i) info affordance next to 'Queued messages'. */
 .queued-info {
-  position: relative;
   flex-shrink: 0;
   font-size: var(--font-size-helper);
   line-height: 1;
@@ -742,18 +684,6 @@ body {
 
 .queued-info:hover {
   opacity: 1;
-}
-
-/* Placement override for the (i) info tooltip (chrome comes from the shared
-   [data-tooltip]::after primitive). Left-anchored since the icon sits at the
-   column's left edge, so the tooltip does not clip off-screen; wraps because the
-   copy is a full sentence. */
-.queued-info[data-tooltip]::after {
-  bottom: calc(100% + 7px);
-  left: 0;
-  transform: none;
-  max-width: 300px;
-  white-space: normal;
 }
 
 /* Optimistic "Sending…" bubble: shown at the tail the instant the user sends,
@@ -784,12 +714,12 @@ body {
 
 /* ── Assistant message ── */
 .message-assistant {
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--spacing-5);
 }
 
 /* ── Lifted Composer ── */
 .app-footer {
-  padding: 0 var(--space-8) var(--space-6);
+  padding: 0 var(--spacing-8) var(--spacing-6);
   flex-shrink: 0;
   background: var(--color-bg-chat);
   border: none;
@@ -803,9 +733,9 @@ body {
 .composer-under-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-1);
-  padding: 0 var(--space-1);
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-1);
+  padding: 0 var(--spacing-1);
   max-width: calc(var(--width-message-column) + 2 * var(--radius-xl));
   margin-left: auto;
   margin-right: auto;
@@ -818,7 +748,7 @@ body {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: var(--space-0_5);
+  gap: var(--spacing-0_5);
 }
 
 /* Composer under-bar action buttons now use the shared .btn primitive
@@ -841,7 +771,7 @@ body {
   display: inline-flex;
   align-items: center;
   height: 30px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--spacing-2);
   font-family: var(--font-family-base);
   font-size: var(--font-size-body);
   color: var(--color-text-secondary);
@@ -893,16 +823,16 @@ body {
 .message-input-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding-right: var(--space-3);
+  gap: var(--spacing-2);
+  padding-right: var(--spacing-3);
   flex-shrink: 0;
 }
 
 /* Hover tooltips for the composer toolbar controls (model picker, fast-mode
    toggle, attach, interrupt, send) and the under-bar model/effort/fast slots
-   now use the shared [data-tooltip]::after primitive (see the Tooltip primitive
-   near the top): centered above the control, which is exactly this row's needs,
-   so no per-placement override is required here. */
+   use the shared JS hover tooltip (views/hoverTooltip.ts, hoverTooltipAttrs) --
+   the same body-level bubble as the chrome/tab tooltips, centered above the
+   control and clamped to the viewport in JS, so no CSS placement is needed. */
 
 /* The composer send / stop / attach buttons now use the shared .btn primitive
    (.btn--icon.btn--round, with --primary for send and --stop for interrupt).
@@ -943,16 +873,16 @@ body {
 .message-input-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-3) 0 var(--space-4);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-3) 0 var(--spacing-4);
 }
 
 .composer-attachment {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   max-width: 240px;
-  padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-1_5);
+  padding: var(--spacing-1_5) var(--spacing-2) var(--spacing-1_5) var(--spacing-1_5);
   background: var(--color-bg-sidebar);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -1036,7 +966,7 @@ body {
   background: color-mix(in srgb, var(--color-accent-light) 70%, transparent);
   border: 2px dashed var(--color-accent);
   border-radius: var(--radius-lg);
-  margin: var(--space-2);
+  margin: var(--spacing-2);
 }
 
 .chat-drop-overlay-label {
@@ -1055,14 +985,14 @@ body {
 .message-attachments {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
 }
 
 .message-attachment-images {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 .message-attachment-image {
@@ -1076,15 +1006,15 @@ body {
 .message-attachment-files {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1_5);
+  gap: var(--spacing-1_5);
 }
 
 .message-attachment-file {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   max-width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--spacing-2) var(--spacing-3);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -1129,14 +1059,14 @@ body {
 .model-bar {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-0_5);
+  gap: var(--spacing-0_5);
 }
 
 .model-bar-shrug {
   display: inline-flex;
   align-items: center;
   height: 30px;
-  padding: 0 var(--space-1_5);
+  padding: 0 var(--spacing-1_5);
   font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   user-select: none;
@@ -1150,7 +1080,7 @@ body {
 .model-selector-trigger {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   height: 30px;
   font-family: var(--font-family-base);
   font-size: var(--font-size-body);
@@ -1158,7 +1088,7 @@ body {
   background: none;
   border: none;
   border-radius: var(--radius-lg);
-  padding: 0 var(--space-2);
+  padding: 0 var(--spacing-2);
   cursor: pointer;
   transition:
     color var(--dur-base),
@@ -1211,9 +1141,9 @@ body {
 .model-selector-search {
   display: flex;
   align-items: center;
-  gap: var(--space-1_5);
-  margin: 0 var(--space-0_5) var(--space-1_5);
-  padding: 0 var(--space-2);
+  gap: var(--spacing-1_5);
+  margin: 0 var(--spacing-0_5) var(--spacing-1_5);
+  padding: 0 var(--spacing-2);
   height: 30px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -1256,13 +1186,13 @@ body {
   overscroll-behavior: contain;
   list-style: none;
   margin: 0;
-  padding-right: var(--space-1);
+  padding-right: var(--spacing-1);
   scrollbar-color: var(--color-border) transparent;
 }
 
 @supports (-moz-appearance: none) {
   .model-selector-dropdown-list {
-    padding-right: var(--space-3);
+    padding-right: var(--spacing-3);
   }
 }
 
@@ -1561,7 +1491,7 @@ body {
 .tool-call-header {
   display: flex;
   align-items: center;
-  gap: var(--space-1_5);
+  gap: var(--spacing-1_5);
   padding: 3px 10px;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-body);
@@ -1576,7 +1506,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--spacing-1);
 }
 
 .message-system-collapsed .tool-call-block {
@@ -1609,7 +1539,7 @@ body {
 
 .tool-call-input,
 .tool-call-output {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--spacing-2) var(--spacing-3);
 }
 
 .tool-call-input + .tool-call-output {
@@ -1663,17 +1593,17 @@ body {
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-md);
   background: var(--color-accent-light);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--spacing-3) var(--spacing-4);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 
 .subagent-card-header {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
   flex: 1;
 }
@@ -1759,7 +1689,7 @@ body {
 .permission-request-eyebrow {
   display: flex;
   align-items: center;
-  gap: var(--space-1_5);
+  gap: var(--spacing-1_5);
   font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
 }
@@ -1815,7 +1745,7 @@ body {
 }
 
 .permission-request-actions {
-  margin-top: var(--space-3);
+  margin-top: var(--spacing-3);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1825,7 +1755,7 @@ body {
 /* The raw toggle on its own row (unparsed and resolved states), kept subtle
    at the right edge. */
 .permission-request-toggle-row {
-  margin-top: var(--space-2);
+  margin-top: var(--spacing-2);
   display: flex;
   justify-content: flex-end;
 }
@@ -1855,7 +1785,7 @@ body {
   color: var(--color-text-secondary);
   background: var(--color-bg-sidebar);
   border-radius: var(--radius-md);
-  padding: var(--space-2);
+  padding: var(--spacing-2);
   overflow: auto;
   white-space: pre-wrap;
 }
@@ -1883,7 +1813,7 @@ body {
   margin-top: 10px;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 .permission-request-receipt-title {
@@ -2015,7 +1945,7 @@ body {
      a few pixels of canvas to hover into before it reaches the literal window
      edge -- flush there makes the reveal awkward to land the pointer on. Right
      and bottom stay flush against the viewport. */
-  padding: var(--space-1) 0 0 var(--space-1);
+  padding: var(--spacing-1) 0 0 var(--spacing-1);
   background: var(--si-canvas);
 }
 
@@ -2262,8 +2192,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    same chrome as every other floating card: primary surface, hairline border,
    8px radius, the overlay shadow, and 32px rows with the shared hover fill. */
 .dockview-theme-light .dv-tabs-overflow-dropdown-default {
-  gap: var(--space-1);
-  padding: 0 var(--space-1_5);
+  gap: var(--spacing-1);
+  padding: 0 var(--spacing-1_5);
   border-radius: var(--radius-md);
   color: var(--color-text-secondary);
   font-size: var(--font-size-helper);
@@ -2277,7 +2207,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .dockview-theme-light .dv-tabs-overflow-container {
   min-width: 160px;
-  padding: var(--space-1) 0;
+  padding: var(--spacing-1) 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background-color: var(--color-surface);
@@ -2291,7 +2221,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .dockview-theme-light .dv-tabs-overflow-container .dv-tab {
   width: auto;
   height: 32px;
-  padding: 0 var(--space-3);
+  padding: 0 var(--spacing-3);
   border: none;
   border-radius: 0;
   background-color: transparent;
@@ -2329,7 +2259,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-body);
   font-weight: 500;
   padding: var(--si-tab-padding);
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 .dockview-theme-light .dv-default-tab-action svg {
@@ -2411,7 +2341,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   /* Full height so align-items:center vertically centers the + within the tab
      bar (its parent .dv-left-actions-container is display:block, 35px tall). */
   height: 100%;
-  padding: 0 var(--space-1);
+  padding: 0 var(--spacing-1);
 }
 
 .dockview-add-tab-button {
@@ -2531,14 +2461,17 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* ── Hover tooltip ── */
 /* The one tooltip bubble in the workspace, built on <body> and positioned
-   (fixed) by views/hoverTooltip.ts. It stands in for native `title`
-   everywhere: dockview's draggable tabs suppress those, and a ::after bubble
-   is clipped by the tab strip's overflow.
+   (fixed) by views/hoverTooltip.ts. It is the single tooltip mechanism now:
+   every control uses it -- the composer toolbar and model bar, dockview's
+   draggable tabs (which suppress native `title`), the project rail. A CSS
+   `::after` bubble once handled the simple in-flow cases but is retired: it got
+   clipped by the tab strip's overflow and drifted from this one, so all callers
+   moved onto the shared hoverTooltipAttrs() helper.
 
    The appearance is the minds shell's `.minds-tooltip`, so chrome and
    workspace tooltips are indistinguishable -- inverse surface with matching
    inverse text, 12px helper type, 6px radius, 8px/4px padding, the overlay
-   elevation shadow, and centered text wrapping at 400px. `display` is toggled
+   elevation shadow, and centered text wrapping at 480px. `display` is toggled
    in JS (`inline-flex` when shown) and there is deliberately no transition:
    the bubble appears after the 250ms hover-intent delay and disappears
    instantly. It has to clear the modals, which sit at 10000.
@@ -2551,9 +2484,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   z-index: var(--z-tooltip);
   display: none;
   align-items: center;
-  gap: var(--space-1_5);
-  max-width: 400px;
-  padding: var(--space-1) var(--space-2);
+  gap: var(--spacing-1_5);
+  max-width: 480px;
+  padding: var(--spacing-1) var(--spacing-2);
   border-radius: var(--radius-md);
   background: var(--color-inverse-surface);
   color: var(--color-text-on-accent);
@@ -2593,8 +2526,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .dv-custom-tab-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-0_5);
-  margin-left: var(--space-1);
+  gap: var(--spacing-0_5);
+  margin-left: var(--spacing-1);
 }
 
 .dv-custom-tab-action {
@@ -2675,7 +2608,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-6);
+  padding: var(--spacing-6);
   width: 420px;
   max-width: 90vw;
   box-shadow: var(--shadow-overlay);
@@ -2685,8 +2618,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .modal-header {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin: 0 0 var(--space-4);
+  gap: var(--spacing-2);
+  margin: 0 0 var(--spacing-4);
 }
 
 .modal-title {
@@ -2710,7 +2643,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-body);
   color: var(--color-text-primary);
   line-height: 1.5;
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--spacing-4);
 }
 
 .modal-label {
@@ -2718,13 +2651,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-body);
   font-weight: 500;
   color: var(--color-text-secondary);
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--spacing-1);
 }
 
 .modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 /* ── Destroy confirmation dialog ── */
@@ -2752,7 +2685,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .fast-mode-modal-link {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   color: var(--color-accent);
   text-decoration: underline;
   white-space: nowrap;
@@ -2837,7 +2770,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 /* Chevron */
 .pv-chev {
   display: inline-block;
-  margin-left: var(--space-1_5);
+  margin-left: var(--spacing-1_5);
   font-size: 18px; /* design-system-exception: icon glyph (chevron), not text */
   color: var(--pv-fg-muted);
   transition: transform 0.15s ease;
@@ -2918,7 +2851,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .pv-tl-summary {
   margin-top: 3px;
-  padding-left: var(--space-0_5);
+  padding-left: var(--spacing-0_5);
   font-size: var(--font-size-body);
   color: var(--pv-fg-muted);
   line-height: 1.5;
@@ -2926,7 +2859,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .pv-tl-narration {
   margin-top: 3px;
-  padding-left: var(--space-0_5);
+  padding-left: var(--spacing-0_5);
   font-size: var(--font-size-body);
   font-style: italic;
   color: var(--pv-fg-muted);
@@ -2953,7 +2886,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    styling below is shared with .pv-tl-narration via the grouped selectors. */
 .pv-tl-narration--static {
   margin-top: 3px;
-  padding-left: var(--space-0_5);
+  padding-left: var(--spacing-0_5);
   font-size: var(--font-size-body);
   font-style: italic;
   color: var(--pv-fg-muted);
@@ -3028,7 +2961,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .pv-tl-expanded {
-  margin-top: var(--space-1_5);
+  margin-top: var(--spacing-1_5);
 }
 
 /* Expanded panel: matches the rest of the chat -- interleaved markdown +
@@ -3054,7 +2987,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* Final (trailing) assistant reply under the progress timeline */
 .pv-final {
-  margin-top: var(--space-4);
+  margin-top: var(--spacing-4);
   padding: 0;
   font-size: var(--font-size-body);
   line-height: 1.5;
@@ -3064,7 +2997,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 /* Leading prose: emitted before the first step, rendered ABOVE the timeline
    as plain chat-style prose. */
 .pv-lead {
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--spacing-4);
   padding: 0;
   font-size: var(--font-size-body);
   line-height: 1.5;
@@ -3095,7 +3028,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   /* Top space as padding, not margin, so the white background extends up and
      masks a bit of the timeline line above the ungrouped run. */
   margin: 0 0 14px 0;
-  padding-top: var(--space-1_5);
+  padding-top: var(--spacing-1_5);
   background: var(--color-bg-chat);
 }
 
@@ -3123,11 +3056,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
      centered input. */
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin: 0 auto var(--space-2) auto;
+  gap: var(--spacing-2);
+  margin: 0 auto var(--spacing-2) auto;
   width: 100%;
   max-width: var(--width-message-column);
-  padding: 0 var(--space-1);
+  padding: 0 var(--spacing-1);
   font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
 }
@@ -3169,7 +3102,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
+  padding: var(--spacing-4);
   animation: claude-login-overlay-in 150ms ease-out;
 }
 
@@ -3240,7 +3173,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   padding: 14px 22px 18px;
   border-top: 1px solid var(--color-border-faint);
 }
@@ -3259,7 +3192,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* Provider selection: prominent subscription block + collapsed alternatives */
 .claude-login-select {
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--spacing-2);
 }
 
 .claude-login-primary {
@@ -3267,21 +3200,21 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: var(--space-1) var(--space-1) var(--space-0_5);
+  padding: var(--spacing-1) var(--spacing-1) var(--spacing-0_5);
 }
 
 .claude-login-logo {
   width: 46px;
   height: 46px;
   fill: hsl(14.8, 63.1%, 59.6%);
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--spacing-3);
 }
 
 .claude-login-primary-headline {
   font-size: var(--font-size-heading);
   font-weight: 700;
   color: var(--color-text-primary);
-  margin: 0 0 var(--space-1);
+  margin: 0 0 var(--spacing-1);
   letter-spacing: -0.005em;
 }
 
@@ -3289,7 +3222,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   line-height: 1.5;
-  margin: 0 auto var(--space-4);
+  margin: 0 auto var(--spacing-4);
   max-width: 320px;
 }
 
@@ -3297,16 +3230,16 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-alts {
   margin-top: 14px;
   border-top: 1px solid var(--color-border-faint);
-  padding-top: var(--space-3);
+  padding-top: var(--spacing-3);
 }
 
 .claude-login-alts-toggle {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-1_5);
+  gap: var(--spacing-1_5);
   margin: 0 auto;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--spacing-1) var(--spacing-2);
   background: transparent;
   border: none;
   border-radius: var(--radius-md);
@@ -3338,7 +3271,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-alts-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   margin-top: 10px;
 }
 
@@ -3346,7 +3279,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   text-align: left;
   width: 100%;
   padding: 12px 14px;
@@ -3406,7 +3339,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* Numbered steps (OAuth flow) */
 .claude-login-step {
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--spacing-4);
 }
 
 .claude-login-step:last-child {
@@ -3416,11 +3349,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-step-label {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   font-size: var(--font-size-body);
   font-weight: 600;
   color: var(--color-text-primary);
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--spacing-2);
 }
 
 .claude-login-step-num {
@@ -3469,7 +3402,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* Raw OAuth URL fallback, shown when the clipboard write was rejected. */
 .claude-login-rawurl {
-  margin-top: var(--space-2);
+  margin-top: var(--spacing-2);
   padding: 8px 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -3510,7 +3443,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   transform: translateY(-50%);
   background: transparent;
   border: none;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--spacing-1) var(--spacing-2);
   font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -3525,7 +3458,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-helper {
   font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
-  margin-top: var(--space-1_5);
+  margin-top: var(--spacing-1_5);
   line-height: 1.4;
 }
 
@@ -3552,15 +3485,15 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-waiting {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   font-size: var(--font-size-body);
   color: var(--color-text-secondary);
-  padding: var(--space-1_5) 0;
+  padding: var(--spacing-1_5) 0;
 }
 
 /* Step checklist shown while the background agent restart runs */
 .claude-login-applying {
-  padding: var(--space-2) 0;
+  padding: var(--spacing-2) 0;
 }
 
 .claude-login-checklist {
@@ -3636,9 +3569,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .claude-login-subtle-body {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   align-items: center;
-  margin-top: var(--space-1_5);
+  margin-top: var(--spacing-1_5);
 }
 
 .claude-login-subtle-body .input {
@@ -3677,7 +3610,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: var(--space-4) var(--space-2) var(--space-2);
+  padding: var(--spacing-4) var(--spacing-2) var(--spacing-2);
 }
 
 .claude-login-status-icon {
@@ -3709,7 +3642,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--color-text-primary);
-  margin: 0 0 var(--space-1);
+  margin: 0 0 var(--spacing-1);
 }
 
 .claude-login-status-detail {
@@ -3774,7 +3707,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   right: 12px;
   transform: translateY(-50%);
   display: flex;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 /* Icon buttons on the dark lightbox overlay reuse .btn--icon for shape, size and
@@ -3816,7 +3749,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   flex: 0 0 auto;
   padding: 6px 10px;
   font-size: var(--font-size-body);
@@ -3837,7 +3770,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .terminal-banner-actions {
   display: flex;
-  gap: var(--space-1_5);
+  gap: var(--spacing-1_5);
   flex: 0 0 auto;
 }
 

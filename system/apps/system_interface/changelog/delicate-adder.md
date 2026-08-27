@@ -18,10 +18,12 @@ system, not a pixel-identical render.
   every token is referenced by the shipped CSS. Corner radii collapse onto a
   `--radius-*` scale, spacing onto a 4px `--space-*` scale, motion timing/easing,
   drop shadows onto an elevation scale, and the former magic z-index numbers onto
-  named tokens. The spacing scale is **unified with Tailwind**: each `--space-N`
-  is `calc(var(--spacing) * N)` off Tailwind's stock `--spacing` base — the exact
-  value the `p-N`/`m-N`/`gap-N` utilities compile to — so a `var(--space-N)` in
-  the CSS and a `gap-N` in the markup share one source and can never drift.
+  named tokens. The spacing scale uses **Tailwind's own `--spacing-*` namespace**:
+  defining `--spacing-N` (as `calc(var(--spacing) * N)` off the stock 0.25rem
+  base) both backs the `p-N`/`m-N`/`gap-N`/`w-N` utilities and exposes
+  `var(--spacing-N)` for hand-written CSS, so a utility in the markup and a
+  `var()` in the CSS reference the *same* custom property — one name, one source,
+  zero drift.
 
 - **Shared component primitives.** A unified `.btn` (with `round`/`filled`/`stop`
   and `ghost-destructive` variants), plus `.badge`, `.input`, `.toggle`, and a
