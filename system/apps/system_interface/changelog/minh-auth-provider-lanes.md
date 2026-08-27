@@ -741,3 +741,19 @@ enough. It does not: someone deciding between these rows wants to know whether t
 already pay for is usable here, and OpenAI in particular has a free tier with limited coding
 usage that is worth naming. Opencode Go's line carries its price, and OpenRouter's says "any
 model", which is what it actually offers.
+
+# Signing in from the new-tab screen opens a chat on what you signed into
+
+Adding a provider from the new-tab screen -- either through the picker's "+ Add provider" or by
+clicking New chat with nothing signed in -- now opens a chat on the account once the sign-in
+finishes. You asked for a chat and had to authenticate on the way; being returned to the
+launcher with a provider and no chat is not what was asked for.
+
+Adding a provider from inside a chat still just adds it. You were working, and a new chat
+appearing on top of that is the wrong answer.
+
+The workspace's very first chat carries the `first` template, which is what delivers `/welcome`.
+Bootstrap used to own that by creating a chat at boot; it cannot now, since a chat needs a
+provider account and a fresh workspace has none. The claim lives in the account store, is made
+once per workspace, and survives signing out of everything -- being welcomed a second time reads
+as the workspace having forgotten you.

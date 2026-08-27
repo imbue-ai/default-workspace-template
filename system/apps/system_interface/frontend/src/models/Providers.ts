@@ -174,6 +174,12 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
     // one, silently.
     if (status.account_id !== null) selectedAccountId = status.account_id;
     await loadAccounts();
+    // After `loadAccounts`, so a callback that opens a chat sees the account it will bind to.
+    if (status.account_id !== null && chooserOnSignedIn !== null) {
+      const run = chooserOnSignedIn;
+      chooserOnSignedIn = null;
+      run(status.account_id);
+    }
   } else if (status.state === "failed") {
     stopPolling();
   }
@@ -258,17 +264,29 @@ let chooserOpen = false;
 // reaches the modal through `openProviderChooser`, and threading an argument through a
 // 780-line component for two callers is the worse trade.
 let chooserAccountId: string | null = null;
+// What to do once a sign-in succeeds. Signing in from a NEW-TAB surface means the user was
+// trying to start a chat and had to authenticate on the way, so the chat opens on the account
+// they just added. Signing in from inside a chat means they were adding a provider for later
+// and should not be moved. The caller knows which it is; nothing here can tell.
+let chooserOnSignedIn: ((accountId: string) => void) | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
 }
 
-/** Open the chooser. Pass an account id to re-authenticate THAT account rather than to add
- *  a new provider -- what a dead-account notice and a per-provider card both need. */
-export function openProviderChooser(accountId?: string): void {
+export interface ProviderChooserIntent {
+  /** Re-authenticate THIS account rather than add a provider. */
+  accountId?: string;
+  /** Run once a sign-in succeeds, with the account it produced. */
+  onSignedIn?: (accountId: string) => void;
+}
+
+/** Open the chooser, optionally saying why it was opened. */
+export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   if (chooserOpen) return;
   chooserOpen = true;
-  chooserAccountId = accountId ?? null;
+  chooserAccountId = intent.accountId ?? null;
+  chooserOnSignedIn = intent.onSignedIn ?? null;
   m.redraw();
 }
 
@@ -283,5 +301,8 @@ export function takeChooserAccountId(): string | null {
 export function closeProviderChooser(): void {
   if (!chooserOpen) return;
   chooserOpen = false;
+  // Cleared on close as well as on open: a chooser dismissed without signing in must not
+  // leave a callback armed for whoever opens it next.
+  chooserOnSignedIn = null;
   m.redraw();
 }
