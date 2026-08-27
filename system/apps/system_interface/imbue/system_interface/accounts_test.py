@@ -3,6 +3,7 @@
 Every test passes an explicit `home` so nothing touches the real `~/.minds`.
 """
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.accounts import read_index
 from imbue.system_interface.accounts import resolve_account
 from imbue.system_interface.accounts import set_mru
-from imbue.system_interface.accounts import sweep_orphan_dirs
+from imbue.system_interface.accounts import reconcile
 
 
 def _add(home: Path, lane: str, display: str) -> Account:
@@ -147,22 +148,58 @@ def test_committing_a_folder_that_does_not_exist_raises(tmp_path: Path) -> None:
         commit_account("never-minted", "anthropic", "Anthropic", tmp_path)
 
 
-def test_sweep_removes_uncommitted_folders_and_keeps_committed_ones(tmp_path: Path) -> None:
-    """An interrupted sign-in leaves a folder with no row. It may hold real credentials,
-    but nothing can reach it -- no row means no id the UI can name."""
+def test_reconcile_removes_unreachable_folders_and_keeps_committed_ones(tmp_path: Path) -> None:
+    """A folder with no row is debris; one with a row is an account."""
     kept = _add(tmp_path, "anthropic", "Anthropic")
-    orphan_id, orphan_path = mint_account_dir(tmp_path)
-    (orphan_path / ".credentials.json").write_text("{}")
+    abandoned, abandoned_path = mint_account_dir(tmp_path)
 
-    swept = sweep_orphan_dirs(tmp_path)
+    removed, dropped = reconcile(tmp_path)
 
-    assert swept == (orphan_id,)
-    assert not orphan_path.exists()
+    assert removed == (abandoned,)
+    assert dropped == ()
+    assert not abandoned_path.exists()
     assert account_dir(kept.id, tmp_path).is_dir()
 
 
-def test_sweep_is_a_no_op_on_a_store_that_was_never_used(tmp_path: Path) -> None:
-    assert sweep_orphan_dirs(tmp_path) == ()
+def test_reconcile_drops_a_row_whose_folder_is_gone(tmp_path: Path) -> None:
+    """The dangerous direction: a row with no folder LOOKS usable and is not.
+
+    Seen in a real workspace -- codex reported `CODEX_HOME points to "..." but that path does
+    not exist` on every call, which reaches the user as an empty model bar rather than as a
+    signed-out account. Dropping the row is what turns it back into "sign in again".
+    """
+    survivor = _add(tmp_path, "anthropic", "Anthropic")
+    broken = _add(tmp_path, "openai", "OpenAI")
+    shutil.rmtree(account_dir(broken.id, tmp_path))
+
+    removed, dropped = reconcile(tmp_path)
+
+    assert removed == ()
+    assert dropped == (broken.id,)
+    assert [a.id for a in read_index(tmp_path).accounts] == [survivor.id]
+
+
+def test_reconcile_clears_an_mru_pointing_at_a_dropped_row(tmp_path: Path) -> None:
+    """Otherwise the next chat resolves an account that reconcile just removed."""
+    broken = _add(tmp_path, "openai", "OpenAI")
+    set_mru(broken.id, tmp_path)
+    shutil.rmtree(account_dir(broken.id, tmp_path))
+
+    reconcile(tmp_path)
+
+    assert read_index(tmp_path).mru is None
+
+
+def test_resolving_a_row_whose_folder_is_gone_is_refused(tmp_path: Path) -> None:
+    """Binding an agent to a directory that is not there fails every call instead of once."""
+    broken = _add(tmp_path, "openai", "OpenAI")
+    shutil.rmtree(account_dir(broken.id, tmp_path))
+
+    with pytest.raises(AccountError):
+        resolve_account(broken.id, tmp_path)
+
+def test_reconcile_is_a_no_op_on_a_store_that_was_never_used(tmp_path: Path) -> None:
+    assert reconcile(tmp_path) == ((), ())
 
 
 def test_discard_is_idempotent(tmp_path: Path) -> None:

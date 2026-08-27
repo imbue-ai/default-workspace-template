@@ -379,3 +379,16 @@ The rows were whole buttons, which made them look like they led somewhere. They 
 rows now, with two named actions beside them: "Sign in again" and remove. Re-auth stays
 because an expired credential is otherwise a dead end -- the only other way out is deleting
 the account, which orphans every chat bound to it instead of reviving them.
+
+# An account is a row AND a folder; boot makes the two agree
+
+The boot pass only removed folders with no index row. The opposite case turns out to be the
+dangerous one, and it happened in a real workspace: a row whose folder was gone. That
+account still appeared signed in, the picker still offered it, and a chat still bound to it
+-- pointing codex at a `CODEX_HOME` that did not exist, so every model call failed and the
+user saw an empty model bar rather than anything naming the real problem.
+
+`reconcile` now settles both directions at boot, and says what it did: unreachable folders
+are removed, and a row without a folder is dropped (clearing the most-recently-used pointer
+if it named one) so the provider is simply offered for sign-in again. `resolve_account`
+refuses such a row outright rather than binding an agent to a directory that is not there.
