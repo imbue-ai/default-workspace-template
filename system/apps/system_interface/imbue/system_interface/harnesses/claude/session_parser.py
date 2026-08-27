@@ -17,9 +17,9 @@ from pydantic import Field
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
-from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
-from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.claude.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.claude.tool_labels import shell_command
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels

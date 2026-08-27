@@ -359,3 +359,62 @@ def test_two_permission_requests_in_one_program_render_no_card() -> None:
 def test_ordinary_work_is_unaffected() -> None:
     assert _display(_exec("pytest -q")) is None
     assert _display(_exec("pytest -q") + "\n" + _exec("ruff check .")) is None
+
+
+_CODEX_401 = (
+    "unexpected status 401 Unauthorized: Incorrect API key provided: sk-bogus000., "
+    "auth error: 401, auth error code: invalid_api_key"
+)
+
+
+def _task_complete(error: dict[str, Any] | None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"type": "task_complete", "turn_id": "tid1"}
+    if error is not None:
+        payload["error"] = error
+    return {"timestamp": "2026-07-19T10:00:02Z", "type": "event_msg", "payload": payload}
+
+
+def test_a_failed_turn_surfaces_its_reason_as_a_message() -> None:
+    """`task_complete.error` is the ONLY durable copy of why a turn died.
+
+    codex classes its live `EventMsg::Error` non-persistent, so it never reaches the rollout.
+    Keeping the reason on the marker alone meant it existed and was never shown, and once the
+    turn ended it was unrecoverable.
+    """
+    events = parse_lines(_task_complete({"message": _CODEX_401}), 2, {})
+    # The failure is ordered BEFORE the marker: it happened first.
+    assert [event["type"] for event in events] == ["assistant_message", "special_event"]
+    failure = events[0]
+    assert failure["text"] == _CODEX_401
+    assert failure["is_auth_error"] is True
+    assert failure["is_api_error"] is False
+    # Two events out of one record need two ids, or the frontend dedupes one away.
+    assert failure["event_id"] != events[1]["event_id"]
+
+
+def test_a_failed_turn_classifies_off_the_structured_tag() -> None:
+    """The tag survives codex rewording its prose; the prose does not."""
+    events = parse_lines(
+        _task_complete({"message": "the model is busy", "codex_error_info": {"type": "server_error"}}), 2, {}
+    )
+    failure = events[0]
+    assert failure["api_error_kind"] == "api_error"
+    assert failure["is_provider_fault"] is True
+
+
+def test_a_spent_quota_is_an_auth_failure_not_a_provider_fault() -> None:
+    """Not an authentication failure in the HTTP sense, but the only way forward is different
+    credentials -- which is exactly what the auth subtext offers."""
+    events = parse_lines(
+        _task_complete({"message": "you have hit your usage_limit_exceeded", "codex_error_info": {"type": "quota"}}),
+        2,
+        {},
+    )
+    failure = events[0]
+    assert failure["is_auth_error"] is True
+    assert failure["is_api_error"] is False
+
+
+def test_a_clean_turn_still_yields_only_its_marker() -> None:
+    events = parse_lines(_task_complete(None), 2, {})
+    assert [event["type"] for event in events] == ["special_event"]
