@@ -6,6 +6,7 @@ from types import FrameType
 
 import httpx
 from flask import Flask
+from loguru import logger as _loguru_logger
 
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
@@ -13,6 +14,7 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.accounts import sweep_orphan_dirs
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -20,6 +22,8 @@ from imbue.system_interface.server import create_application
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
+
+logger = _loguru_logger
 
 
 def _exit_on_signal(signum: int, frame: FrameType | None) -> None:
@@ -117,6 +121,11 @@ def main() -> None:
     args = _parse_args(None)
 
     config = load_config()
+    # A sign-in that was abandoned -- browser tab closed, server restarted mid-flow -- leaves
+    # a minted folder with no index row, and nothing else will ever look at it. Sweeping at
+    # boot is safe precisely because a folder without a row is unreachable by definition.
+    for swept in sweep_orphan_dirs():
+        logger.info("Swept abandoned sign-in folder {}", swept)
     application = build_application(config, args)
     with application.app_context():
         state = get_state()

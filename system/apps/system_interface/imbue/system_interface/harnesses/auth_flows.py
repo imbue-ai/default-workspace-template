@@ -28,6 +28,7 @@ import threading
 import uuid
 from collections.abc import Callable
 from enum import StrEnum
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -39,6 +40,9 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface import accounts
 from imbue.system_interface.harnesses.binding import account_env
 from imbue.system_interface.harnesses.binding import seed_account
+from imbue.system_interface.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
+from imbue.system_interface.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
+from imbue.system_interface.harnesses.claude.auth import parse_credential_lines
 from imbue.system_interface.harnesses.lanes import DrainUntil
 from imbue.system_interface.harnesses.lanes import EofPolicy
 from imbue.system_interface.harnesses.lanes import Lane
@@ -325,6 +329,21 @@ class AuthFlowService:
             display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
             return self._commit_locked(session, display)
 
+    def adopt_claude_credentials(self, pasted: str) -> accounts.Account:
+        """Mint an account from a credential someone else obtained, with no flow involved.
+
+        The Imbue path: the Electron chrome sends what the keys page handed the user. There
+        is no terminal to drive and nothing to poll, so this skips the flow machinery and
+        goes straight to seed, write, commit -- the account existing IS the signed-in flag.
+        """
+        managed_env = claude_env_from_paste(pasted)
+        lane = get_lane("anthropic")
+        with self._lock:
+            account_id, path = accounts.mint_account_dir(self._home)
+            seed_account(lane.harness, path, self._work_dir)
+            write_claude_env(path, managed_env)
+            return accounts.commit_account(account_id, lane.id, lane.provider_name, self._home)
+
     def poll(self, flow_id: str) -> FlowStatus:
         with self._lock:
             session = self._require_locked(flow_id)
@@ -423,6 +442,33 @@ def _binary_for(lane: Lane) -> str:
     return {"pi-coding": "pi", "antigravity": "agy"}.get(lane.harness.value, lane.harness.value)
 
 
+def claude_env_from_paste(pasted: str) -> dict[str, str]:
+    """The managed settings-env block a claude paste means.
+
+    A bare key is the common case, but the same field takes an env-file paste -- which is
+    how a proxied setup arrives, since ANTHROPIC_BASE_URL only means anything alongside its
+    key. `parse_credential_lines` is what rejects an unmanaged key or a token mixed with a
+    key, so both shapes go through it rather than only the pasted-block one.
+    """
+    if "=" in pasted:
+        return dict(parse_credential_lines(pasted))
+    return {ANTHROPIC_API_KEY_ENV_VAR: pasted}
+
+
+def write_claude_env(account_path: Path, managed_env: Mapping[str, str]) -> None:
+    """Write an account's settings.json env block, replacing every managed key.
+
+    Replaced rather than merged: the block is fully controlled, so a second sign-in that
+    dropped a key would otherwise leave the old one behind to outrank the new one.
+    """
+    settings = account_path / "settings.json"
+    existing = json.loads(settings.read_text()) if settings.exists() else {}
+    kept = {k: v for k, v in dict(existing.get("env", {})).items() if k not in MANAGED_AUTH_ENV_KEYS}
+    existing["env"] = {**kept, **managed_env}
+    settings.write_text(json.dumps(existing, indent=2) + "\n")
+    settings.chmod(0o600)
+
+
 def _write_paste(
     sink: PasteSink, account_path: Path, api_key: str, key_provider: str | None, lane: Lane
 ) -> str:
@@ -440,12 +486,6 @@ def _write_paste(
         path.chmod(0o600)
         return display
     if sink is PasteSink.CLAUDE_ENV:
-        settings = account_path / "settings.json"
-        existing = json.loads(settings.read_text()) if settings.exists() else {}
-        env_block = dict(existing.get("env", {}))
-        env_block["ANTHROPIC_API_KEY"] = api_key
-        existing["env"] = env_block
-        settings.write_text(json.dumps(existing, indent=2) + "\n")
-        settings.chmod(0o600)
+        write_claude_env(account_path, claude_env_from_paste(api_key))
         return lane.provider_name
     raise FlowError(f"{sink} has no writer yet")
