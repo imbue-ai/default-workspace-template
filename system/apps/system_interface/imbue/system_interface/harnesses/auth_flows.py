@@ -39,6 +39,7 @@ from loguru import logger as _loguru_logger
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface import accounts
 from imbue.system_interface.harnesses.binding import account_env
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.binding import seed_account
 from imbue.system_interface.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.system_interface.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
@@ -193,6 +194,7 @@ class AuthFlowService:
     _lock: threading.Lock
     _session: _Session | None
     _spawner: Callable[..., Any]
+    _probe: Callable[[HarnessType, Path], SignedIn]
 
     @classmethod
     def create(
@@ -200,10 +202,13 @@ class AuthFlowService:
         home: Path | None = None,
         work_dir: Path | None = None,
         spawner: Callable[..., Any] | None = None,
+        probe: Callable[[HarnessType, Path], SignedIn] | None = None,
     ) -> "AuthFlowService":
-        """`spawner` stands in for `spawn_pty`, so a test can drive a scripted terminal.
+        """`spawner` stands in for `spawn_pty` and `probe` for `is_signed_in`.
 
-        Injected rather than patched, matching ClaudeAuthService's `pexpect_spawner`.
+        Both injected rather than patched, matching ClaudeAuthService's `pexpect_spawner`.
+        The probe in particular shells out to a real CLI, so a test that does not inject one
+        is quietly asserting on whatever this machine happens to have installed.
         """
         service = cls()
         service._home = home
@@ -211,6 +216,7 @@ class AuthFlowService:
         service._lock = threading.Lock()
         service._session = None
         service._spawner = spawner or spawn_pty
+        service._probe = probe or is_signed_in
         return service
 
     # -- lifecycle ------------------------------------------------------------------------
@@ -344,6 +350,17 @@ class AuthFlowService:
                 raise FlowError("this sign-in does not take a key")
             path = accounts.account_dir(session.account_id, self._home)
             display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
+            # Writing the file is not the same as the harness accepting it. Ask before
+            # committing, so a key the harness cannot use fails here -- where the user is
+            # looking at the field they just typed into -- rather than later, as a chat that
+            # silently cannot take a turn.
+            verdict = self._probe(session.lane.harness, path)
+            if verdict is SignedIn.NO:
+                self._fail_locked(session, f"{session.lane.provider_name} did not accept that key.")
+                return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+            # UNKNOWN means the check itself could not run (the CLI is missing, the network
+            # blinked). That is not evidence against a key the user just pasted, and throwing
+            # it away would be the worse mistake.
             return self._commit_locked(session, display)
 
     def adopt_claude_credentials(self, pasted: str) -> accounts.Account:
@@ -403,7 +420,7 @@ class AuthFlowService:
 
         # The CLI is done talking. Its own probe, not the screen, decides.
         path = accounts.account_dir(session.account_id, self._home)
-        verdict = is_signed_in(session.lane.harness, path)
+        verdict = self._probe(session.lane.harness, path)
         if verdict is SignedIn.YES:
             return self._commit_locked(session, session.lane.provider_name)
         if verdict is SignedIn.UNKNOWN:

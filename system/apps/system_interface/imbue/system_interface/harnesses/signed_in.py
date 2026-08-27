@@ -36,8 +36,7 @@ class SignedIn(StrEnum):
 
 
 # The command that answers, per harness, and the text that means "signed out" when the exit
-# code alone cannot say. pi is absent deliberately: both its lanes are plain file writes, so
-# there is nothing a probe could tell us that writing the file did not already.
+# code alone cannot say.
 _PROBES: Final[dict[HarnessType, tuple[tuple[str, ...], str | None]]] = {
     HarnessType.CLAUDE: (("claude", "auth", "status", "--json"), None),
     HarnessType.CODEX: (("codex", "login", "status"), None),
@@ -45,6 +44,13 @@ _PROBES: Final[dict[HarnessType, tuple[tuple[str, ...], str | None]]] = {
     # out OR the network blinked". Its text distinguishes the two, and the extra "Error"
     # guard keeps a transient failure from reading as a successful sign-in.
     HarnessType.ANTIGRAVITY: (("agy", "models"), "Please sign in"),
+    # pi's lanes are file writes, so this is not asking "did a browser flow finish" -- it is
+    # asking whether pi actually ACCEPTED the file we just wrote. `--list-models` scoped to
+    # the account answers that: it names the provider's models when the credential was read
+    # and says so plainly when it was not. It does not reach the provider, so it cannot tell
+    # a valid key from a well-formed one -- but a typo'd provider or a schema we got wrong
+    # would otherwise be discovered only by a chat that silently could not take a turn.
+    HarnessType.PI_CODING: (("pi", "--list-models"), "No usable API key is configured"),
 }
 
 

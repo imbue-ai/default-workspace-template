@@ -18,6 +18,7 @@ from imbue.system_interface.harnesses.auth_flows import FlowShape
 from imbue.system_interface.harnesses.auth_flows import FlowState
 from imbue.system_interface.harnesses.auth_flows import flow_shape
 from imbue.system_interface.harnesses.lanes import get_method
+from imbue.system_interface.harnesses.signed_in import SignedIn
 from imbue.system_interface.testing import FakePexpectProcess
 
 
@@ -25,7 +26,7 @@ from imbue.system_interface.testing import FakePexpectProcess
 def service(tmp_path: Path) -> AuthFlowService:
     work_dir = tmp_path / "workspace"
     work_dir.mkdir()
-    return AuthFlowService.create(home=tmp_path, work_dir=work_dir)
+    return AuthFlowService.create(home=tmp_path, work_dir=work_dir, probe=lambda *_a: SignedIn.YES)
 
 
 # Full length on purpose: the agy scrape sets a min_length floor precisely so a wrapped
@@ -195,7 +196,10 @@ def test_a_value_the_key_pacing_already_read_is_not_waited_for_again(tmp_path: P
         drain_chunks=[f"Visit {_AGY_URL}\r\n"],
     )
     service = AuthFlowService.create(
-        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.YES,
     )
 
     started = service.start("google", "oauth")
@@ -216,7 +220,10 @@ def test_a_cli_that_never_announces_success_is_decided_by_its_probe(tmp_path: Pa
         drain_chunks=[f"Visit {_AGY_URL}\r\n"],
     )
     service = AuthFlowService.create(
-        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.YES,
     )
     started = service.start("google", "oauth")
 
@@ -236,9 +243,44 @@ def test_the_probe_is_not_run_before_the_code_is_handed_over(tmp_path: Path) -> 
         drain_chunks=[f"Visit {_AGY_URL}\r\n"],
     )
     service = AuthFlowService.create(
-        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.YES,
     )
     started = service.start("google", "oauth")
 
     assert service.poll(started.flow_id).state is FlowState.PENDING
     assert service._session is not None and not service._session.code_submitted
+
+
+def test_a_key_the_harness_will_not_accept_fails_at_the_field(tmp_path: Path) -> None:
+    """Writing the file is not the harness accepting it.
+
+    A provider id we got wrong, or a schema that drifted, produces a file pi reads as "No
+    usable API key is configured" -- which used to commit anyway and surface later as a chat
+    that silently could not take a turn. It now fails while the user is still looking at the
+    field they typed into.
+    """
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.NO
+    )
+    started = service.start("api-key", "api_key")
+
+    status = service.submit_key(started.flow_id, "sk-wrong", "groq")
+
+    assert status.state is FlowState.FAILED
+    assert read_index(tmp_path).accounts == ()
+
+
+def test_a_probe_that_cannot_run_does_not_throw_the_key_away(tmp_path: Path) -> None:
+    """UNKNOWN is "the check failed", not "the key is bad" -- and the user just pasted it."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.UNKNOWN
+    )
+    started = service.start("api-key", "api_key")
+
+    status = service.submit_key(started.flow_id, "sk-probably-fine", "groq")
+
+    assert status.state is FlowState.OK
+    assert len(read_index(tmp_path).accounts) == 1
