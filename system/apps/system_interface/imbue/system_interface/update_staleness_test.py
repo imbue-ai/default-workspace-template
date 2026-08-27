@@ -9,7 +9,6 @@ import sys
 import tomllib
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
 
 import pytest
 from pydantic import PrivateAttr
@@ -281,14 +280,16 @@ def test_a_git_failure_after_startup_is_logged_not_swallowed(git_work_dir: Path,
     assert any("update-staleness" in record for record in loguru_records)
 
 
-def _tracking_state(repo: Path) -> SystemInterfaceState:
-    """A test state whose staleness tracker watches ``repo``.
+def _tracking_state(repo: Path, static_dir: Path | None = None) -> SystemInterfaceState:
+    """A test state whose staleness tracker watches ``repo``, serving ``static_dir`` if given.
 
     ``build_test_state`` captures against the developer's real checkout, which
     is never the tree a test moves.
     """
     state = build_test_state()
     state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
+    if static_dir is not None:
+        state.static_directory = static_dir
     return state
 
 
@@ -314,8 +315,8 @@ def test_the_built_app_shell_names_the_interrupted_variant_from_the_marker(git_w
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(state).test_client().get("/")
+    state.static_directory = static_dir
+    response = create_application(state).test_client().get("/")
 
     assert f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_UPDATE_INTERRUPTED}">' in response.text
 
@@ -334,12 +335,12 @@ def test_the_shells_head_poll_does_not_ask_for_staleness(git_work_dir: Path, tmp
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        client = create_application(state).test_client()
-        client.head("/")
-        assert tracker.ask_count == 0
-        client.get("/")
-        assert tracker.ask_count == 1
+    state.static_directory = static_dir
+    client = create_application(state).test_client()
+    client.head("/")
+    assert tracker.ask_count == 0
+    client.get("/")
+    assert tracker.ask_count == 1
 
 
 def test_the_built_app_shell_carries_the_staleness_meta_tag(git_work_dir: Path, tmp_path: Path) -> None:
@@ -354,11 +355,11 @@ def test_the_built_app_shell_carries_the_staleness_meta_tag(git_work_dir: Path, 
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(state).test_client().get("/")
-        # A workspace consistent with what it is serving gets no tag at all:
-        # the tag's presence is the difference between banner and no banner.
-        consistent = create_application(_tracking_state(repo)).test_client().get("/")
+    state.static_directory = static_dir
+    response = create_application(state).test_client().get("/")
+    # A workspace consistent with what it is serving gets no tag at all:
+    # the tag's presence is the difference between banner and no banner.
+    consistent = create_application(_tracking_state(repo, static_dir)).test_client().get("/")
 
     assert response.status_code == 200
     assert f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">' in response.text
