@@ -115,9 +115,6 @@ class _StubSubprocess:
         )
 
 
-@pytest.fixture
-
-
 # --- _initialize_workspace_main_branch ---
 
 
