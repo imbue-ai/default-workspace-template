@@ -41,7 +41,7 @@ import { apiUrl } from "../base-path";
 import { clearEmbedderMessageHandler, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import { claudeLogoIcon, icon, loginSpinnerIcon, warningIcon } from "./icons";
 import { Button, buttonClass } from "./Button";
-import { inputClass } from "./primitives";
+import { inputClass } from "./Input";
 
 interface ClaudeAuthStatus {
   logged_in: boolean;

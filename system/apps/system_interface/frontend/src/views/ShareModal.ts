@@ -9,10 +9,9 @@
  */
 
 import m from "mithril";
-import { Modal } from "./Modal";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, Modal } from "./Modal";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { Button } from "./Button";
-import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS } from "./primitives";
 
 interface ShareModalAttrs {
   serviceName: string;

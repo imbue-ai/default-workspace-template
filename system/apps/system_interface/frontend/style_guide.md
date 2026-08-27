@@ -49,11 +49,15 @@ say at the call site.
   confirming action is `variant: "primary"`; a lone dismiss/cancel stays quiet
   (the `secondary` default); a destructive confirm is `"destructive"` (quiet
   form: `"ghost-destructive"`).
-- **Other shared recipes** (a look used by more than one file) are class-string
-  builders/constants in `src/views/primitives.ts` — `inputClass()`,
-  `badgeClass()`, the `MODAL_*_CLASS` shell — or an exported constant next to
-  the owning view for feature-local sharing. Extend those rather than
-  hand-rolling a lookalike.
+- **Other shared recipes** (a look used by more than one file) live one file
+  per primitive: `inputClass()` in `src/views/Input.ts`, `badgeClass()` in
+  `src/views/Badge.ts`, and the `MODAL_*_CLASS` shell beside the Modal
+  component in `src/views/Modal.ts` (shared type-size fragments:
+  `src/views/typography.ts`). Feature-local sharing is an exported constant
+  next to the owning view. Extend these rather than hand-rolling a lookalike.
+  Input and badge stay class builders deliberately (5 and 2 call sites, no
+  invariants a wrapper would enforce); promote one to a component the way
+  Button was promoted if its usage grows.
 
 **Keep the semantic class names as bare markers.** Every element keeps a
 readable identity class (`queued-header`, `subagent-card--done`, `btn`,

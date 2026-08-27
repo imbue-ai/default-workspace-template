@@ -22,7 +22,7 @@ import { isWorkingActivityState } from "./ActivityIndicator";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon, stopIcon } from "./icons";
 import { Button } from "./Button";
-import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS } from "./primitives";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS } from "./Modal";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 

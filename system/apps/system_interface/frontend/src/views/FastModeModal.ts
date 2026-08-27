@@ -10,12 +10,11 @@
  */
 
 import m from "mithril";
-import { Modal } from "./Modal";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, Modal } from "./Modal";
 import { getAgentById } from "../models/AgentManager";
 import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
 import { icon } from "./icons";
 import { Button } from "./Button";
-import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS } from "./primitives";
 
 const FAST_MODE_DOC_URL = "https://code.claude.com/docs/en/fast-mode";
 

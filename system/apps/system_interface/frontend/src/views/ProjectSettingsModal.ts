@@ -30,7 +30,8 @@ import { deleteProjectRequest, updateProjectSettings } from "../models/Projects"
 import type { ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 import { Button } from "./Button";
-import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, inputClass } from "./primitives";
+import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS } from "./Modal";
+import { inputClass } from "./Input";
 
 export interface ProjectSettingsModalAttrs {
   project: ProjectInfo;
