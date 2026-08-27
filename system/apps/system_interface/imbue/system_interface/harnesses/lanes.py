@@ -430,6 +430,30 @@ LANE_OPENCODE_GO = Lane(
     ),
 )
 
+# Same shape as Opencode Go, because it is the same thing: a named provider that runs on pi
+# and signs in by pasting a key. Its own row rather than an entry in the generic API-key list
+# so it can carry a subtitle saying what the account gets you -- the generic row cannot, since
+# it speaks for twenty-eight providers at once.
+LANE_OPENROUTER = Lane(
+    id="openrouter",
+    provider_name="OpenRouter",
+    subtitle="One account, most open models -- pay per token with no subscription.",
+    harness=HarnessType.PI_CODING,
+    methods=(
+        PasteMethod(
+            id="api_key",
+            label="Paste your OpenRouter key",
+            description="From openrouter.ai/keys.",
+            sink=PasteSink.PI_AUTH_JSON,
+        ),
+    ),
+    key_providers=(
+        KeyProvider(
+            provider_id="openrouter", display="OpenRouter", env_var="OPENROUTER_API_KEY", hint="sk-or-..."
+        ),
+    ),
+)
+
 LANE_API_KEY = Lane(
     id="api-key",
     provider_name="API key",
@@ -453,6 +477,7 @@ LANES: Final[tuple[Lane, ...]] = (
     LANE_OPENAI,
     LANE_GOOGLE,
     LANE_OPENCODE_GO,
+    LANE_OPENROUTER,
     LANE_API_KEY,
 )
 

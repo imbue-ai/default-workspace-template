@@ -148,7 +148,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     awaitingVerdict = false;
     reauthAccountId = options.accountId ?? null;
     keyProvider = chosen.key_providers.length === 1 ? chosen.key_providers[0].provider_id : null;
-    busy = true;
+    // A terminal lane spends seconds spawning a CLI and scraping its first screen, so it
+    // gets the waiting screen. A paste lane has nothing to wait for -- minting a folder
+    // takes milliseconds -- so showing one would be a flash of a spinner between the click
+    // and a form that was always going to be there. Render the form and let the mint land
+    // behind it; the Save button needs the flow, and it cannot be clicked that fast.
+    busy = !isPaste(chosenMethod);
     m.redraw();
     try {
       await startFlow(chosen.id, chosenMethod.id, options.accountId);
