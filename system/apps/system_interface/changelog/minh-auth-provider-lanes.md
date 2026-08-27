@@ -52,3 +52,28 @@ documentation, which was wrong about several. The three shapes that fell out:
 Success is never scraped off the screen. agy and codex print no success line, so the
 harness's own signed-in probe is what decides. Failure IS a pattern, so a rejected code
 fails in seconds instead of waiting out a timeout.
+
+# Bind an agent to an account through `mngr create`
+
+`harnesses/binding.py` maps a harness to the one environment variable that scopes it to an
+account (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOME` for agy, `PI_CODING_AGENT_DIR`), the
+credential path provisioning writes, and the `mngr create` arguments that repoint it.
+
+The binding happens inside `mngr create` rather than after it, because `mngr create` starts
+the agent, waits for readiness, and delivers the first message before returning -- so a
+repoint afterwards would land after the first turn had already run on the shared credential.
+Two existing flags land at the right moments: `--env` writes the agent env file before
+provisioning, and `--extra-provision-command` runs after provisioning but before start.
+
+Two per-account files exist because provisioning only writes them for a per-agent config dir,
+and an account folder is ours:
+
+- **claude's `.claude.json`**, via mngr's own `auto_dismiss_claude_dialogs`. Setting
+  `CLAUDE_CONFIG_DIR` moves this file INSIDE the dir, so a fresh account folder has no
+  onboarding state and boots into the theme/trust dialogs -- which reads downstream as a
+  readiness timeout and gets the agent destroyed. Its `keybindings.json` goes with it, or the
+  agent silently loses the meta+q interrupt and falls back to a kill.
+- **codex's `config.toml`**, pinning `cli_auth_credentials_store = "file"`. Codex keys its
+  secret by a hash of the canonical `CODEX_HOME` when the store is a keyring, so without the
+  pin a sign-in can write nothing to `auth.json`, leave the bind symlink dangling, and still
+  have `codex login status` report success against that same dir.
