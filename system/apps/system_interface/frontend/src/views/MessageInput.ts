@@ -26,6 +26,25 @@ import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS } from "./Modal";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 
+/* ── Styling ──────────────────────────────────────────────────────────────────
+ * Utilities in the markup; the message-input and composer-attachment class
+ * names stay as bare markers (the e2e tests drive the textbox and send button
+ * by them). Attachment status looks are resolved in code, one utility per
+ * property. */
+
+/** The composer card. The two-layer shadows are design-system-exceptions: a
+ *  unique upward-cast composer shadow (negative y, Notion-charcoal base) with
+ *  an accent-tinted glow on focus, which no elevation-scale value expresses;
+ *  the border/shadow transition runs its two properties at different speeds,
+ *  hence the arbitrary transition property. */
+const INPUT_BOX_CLASS =
+  "message-input-box flex flex-col rounded-xl border bg-composer " +
+  "shadow-[0_-4px_20px_rgba(55,53,47,0.06),0_-1px_6px_rgba(55,53,47,0.04)] " +
+  "[transition:border-color_150ms,box-shadow_var(--dur-slow)] focus-within:border-accent " +
+  "focus-within:shadow-[0_-4px_24px_rgba(47,107,79,0.08),0_-1px_8px_rgba(47,107,79,0.06)]";
+
+const ATTACHMENT_DETAIL_BASE = "composer-attachment-detail text-(length:--font-size-helper)";
+
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 
 function messageTextKey(agentId: string): string {
@@ -107,34 +126,57 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
     const isReadyImage = attachment.status === "ready" && attachment.isImage && attachment.uploaded !== undefined;
     const thumbnail = isReadyImage
       ? m("img", {
-          class: "composer-attachment-thumb",
+          class: "composer-attachment-thumb h-9 w-9 shrink-0 rounded-md object-cover",
           src: attachment.uploaded?.url,
           alt: attachment.fileName,
         })
       : m(
           "span",
-          { class: "composer-attachment-icon" },
+          {
+            class: "composer-attachment-icon inline-flex h-9 w-9 shrink-0 items-center justify-center text-secondary",
+          },
           attachment.status === "uploading"
             ? m("span", { class: "spinner" })
             : m.trust(icon("file", { size: 18, strokeWidth: 1.8 })),
         );
     return m(
       "div",
-      { key: attachment.localId, class: `composer-attachment composer-attachment--${attachment.status}` },
+      {
+        key: attachment.localId,
+        // The status modifier is an interpolated marker; the one status the
+        // look distinguishes (a failed upload's red border) rides beside it.
+        class:
+          `composer-attachment composer-attachment--${attachment.status} ` +
+          "inline-flex max-w-[240px] items-center gap-2 rounded-lg border bg-sidebar py-1.5 pr-2 pl-1.5 " +
+          (attachment.status === "error" ? "border-danger-border" : ""),
+      },
       [
         thumbnail,
-        m("span", { class: "composer-attachment-info" }, [
+        m("span", { class: "composer-attachment-info flex min-w-0 flex-col" }, [
           m(
             "span",
-            { class: "composer-attachment-name", ...hoverTooltipAttrs(attachment.fileName) },
+            {
+              class: "composer-attachment-name truncate text-(length:--font-size-body) text-primary",
+              ...hoverTooltipAttrs(attachment.fileName),
+            },
             attachment.fileName,
           ),
           attachment.status === "ready" && attachment.uploaded !== undefined
-            ? m("span", { class: "composer-attachment-detail" }, formatFileSize(attachment.uploaded.size))
+            ? m(
+                "span",
+                { class: `${ATTACHMENT_DETAIL_BASE} text-secondary` },
+                formatFileSize(attachment.uploaded.size),
+              )
             : null,
-          attachment.status === "uploading" ? m("span", { class: "composer-attachment-detail" }, "Uploading…") : null,
+          attachment.status === "uploading"
+            ? m("span", { class: `${ATTACHMENT_DETAIL_BASE} text-secondary` }, "Uploading…")
+            : null,
           attachment.status === "error"
-            ? m("span", { class: "composer-attachment-detail composer-attachment-detail--error" }, "Upload failed")
+            ? m(
+                "span",
+                { class: `${ATTACHMENT_DETAIL_BASE} composer-attachment-detail--error text-danger` },
+                "Upload failed",
+              )
             : null,
         ]),
         attachment.status === "uploading"
@@ -143,7 +185,10 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               "button",
               {
                 type: "button",
-                class: "composer-attachment-remove",
+                class:
+                  "composer-attachment-remove inline-flex h-[18px] w-[18px] shrink-0 cursor-pointer items-center " +
+                  "justify-center rounded-full border-none bg-transparent p-0 text-secondary transition-colors " +
+                  "duration-(--dur-base) hover:bg-fill-active hover:text-primary",
                 "aria-label": "Remove attachment",
                 ...hoverTooltipAttrs("Remove attachment"),
                 onclick: () => removeComposerAttachment(agentId, attachment.localId),
@@ -434,109 +479,116 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       const isAgentWorking = isWorkingActivityState(getAgentById(agentId)?.activity_state ?? null);
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
 
-      return m("div", { class: "message-input mx-auto w-full" }, [
-        interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
-        declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
-        m("input", {
-          type: "file",
-          multiple: true,
-          class: "message-input-file-input",
-          oncreate: (inputVnode: m.VnodeDOM) => {
-            fileInputElement = inputVnode.dom as HTMLInputElement;
-          },
-          onremove: () => {
-            fileInputElement = null;
-          },
-          onchange: (event: Event) => {
-            const input = event.target as HTMLInputElement;
-            uploadFilesToComposer(agentId, input.files);
-            input.value = "";
-          },
-        }),
-        m("div", { class: "message-input-box flex flex-col" }, [
-          attachments.length > 0
-            ? m(
-                "div",
-                { class: "message-input-attachments" },
-                attachments.map((attachment) => renderComposerAttachment(agentId, attachment)),
-              )
-            : null,
-          m("div", { class: "message-input-row flex flex-row items-center" }, [
-            m("textarea", {
-              class: "message-input-textbox flex-1 resize-none focus:outline-none",
-              placeholder: isAgentWorking ? "Type to queue more messages..." : "Type a message...",
-              rows: 1,
-              value: messageText,
-              oncreate: (textareaVnode: m.VnodeDOM) => {
-                messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                autoResizeTextarea(messageTextareaElement);
-                focusMessageTextarea();
-              },
-              onupdate: (textareaVnode: m.VnodeDOM) => {
-                messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                autoResizeTextarea(messageTextareaElement);
-              },
-              onremove: () => {
-                messageTextareaElement = null;
-              },
-              oninput: (event: Event) => {
-                const textarea = event.target as HTMLTextAreaElement;
-                messageText = textarea.value;
-                localStorage.setItem(messageTextKey(agentId), messageText);
-                autoResizeTextarea(textarea);
-              },
-              onkeydown: handleKeydown,
-              onpaste: handlePaste,
-            }),
-            m("div", { class: "message-input-toolbar" }, [
-              m(
-                Button,
-                {
-                  variant: "ghost",
-                  icon: true,
-                  round: true,
-                  extra: "message-input-attach-button shrink-0",
-                  ...hoverTooltipAttrs("Attach files"),
-                  "aria-label": "Attach files",
-                  onclick: openFilePicker,
+      return m(
+        "div",
+        { class: "message-input mx-auto w-full max-w-[calc(var(--width-message-column)+2*var(--radius-xl))]" },
+        [
+          interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
+          declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
+          m("input", {
+            type: "file",
+            multiple: true,
+            class: "message-input-file-input hidden",
+            oncreate: (inputVnode: m.VnodeDOM) => {
+              fileInputElement = inputVnode.dom as HTMLInputElement;
+            },
+            onremove: () => {
+              fileInputElement = null;
+            },
+            onchange: (event: Event) => {
+              const input = event.target as HTMLInputElement;
+              uploadFilesToComposer(agentId, input.files);
+              input.value = "";
+            },
+          }),
+          m("div", { class: INPUT_BOX_CLASS }, [
+            attachments.length > 0
+              ? m(
+                  "div",
+                  { class: "message-input-attachments flex flex-wrap gap-2 pt-3 pr-3 pl-4" },
+                  attachments.map((attachment) => renderComposerAttachment(agentId, attachment)),
+                )
+              : null,
+            m("div", { class: "message-input-row flex flex-row items-center" }, [
+              m("textarea", {
+                class:
+                  "message-input-textbox flex-1 resize-none border-none bg-transparent pt-3.5 pr-2 pb-3.5 pl-5 " +
+                  "font-sans text-(length:--font-size-body) leading-normal text-primary focus:outline-none " +
+                  "placeholder:text-faint",
+                placeholder: isAgentWorking ? "Type to queue more messages..." : "Type a message...",
+                rows: 1,
+                value: messageText,
+                oncreate: (textareaVnode: m.VnodeDOM) => {
+                  messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                  autoResizeTextarea(messageTextareaElement);
+                  focusMessageTextarea();
                 },
-                m.trust(icon("attach", { size: 18 })),
-              ),
-              isStopButtonVisible
-                ? m(
-                    Button,
-                    {
-                      variant: "stop",
-                      icon: true,
-                      round: true,
-                      sm: true,
-                      extra: "message-input-stop-button shrink-0",
-                      ...hoverTooltipAttrs("Interrupt and bring queued messages to the composer"),
-                      "aria-label": "Interrupt and bring queued messages to the composer",
-                      onclick: handleStopToComposer,
-                    },
-                    m.trust(stopIcon(14)),
-                  )
-                : null,
-              canSend
-                ? m(
-                    Button,
-                    {
-                      variant: "primary",
-                      icon: true,
-                      round: true,
-                      extra: "message-input-send-button shrink-0",
-                      ...hoverTooltipAttrs("Send message"),
-                      "aria-label": "Send message",
-                      onclick: handleSend,
-                    },
-                    m.trust(icon("send", { size: 16, strokeWidth: 2.5 })),
-                  )
-                : null,
+                onupdate: (textareaVnode: m.VnodeDOM) => {
+                  messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                  autoResizeTextarea(messageTextareaElement);
+                },
+                onremove: () => {
+                  messageTextareaElement = null;
+                },
+                oninput: (event: Event) => {
+                  const textarea = event.target as HTMLTextAreaElement;
+                  messageText = textarea.value;
+                  localStorage.setItem(messageTextKey(agentId), messageText);
+                  autoResizeTextarea(textarea);
+                },
+                onkeydown: handleKeydown,
+                onpaste: handlePaste,
+              }),
+              m("div", { class: "message-input-toolbar flex shrink-0 items-center gap-2 pr-3" }, [
+                m(
+                  Button,
+                  {
+                    variant: "ghost",
+                    icon: true,
+                    round: true,
+                    extra: "message-input-attach-button shrink-0",
+                    ...hoverTooltipAttrs("Attach files"),
+                    "aria-label": "Attach files",
+                    onclick: openFilePicker,
+                  },
+                  m.trust(icon("attach", { size: 18 })),
+                ),
+                isStopButtonVisible
+                  ? m(
+                      Button,
+                      {
+                        variant: "stop",
+                        icon: true,
+                        round: true,
+                        sm: true,
+                        extra: "message-input-stop-button shrink-0",
+                        ...hoverTooltipAttrs("Interrupt and bring queued messages to the composer"),
+                        "aria-label": "Interrupt and bring queued messages to the composer",
+                        onclick: handleStopToComposer,
+                      },
+                      m.trust(stopIcon(14)),
+                    )
+                  : null,
+                canSend
+                  ? m(
+                      Button,
+                      {
+                        variant: "primary",
+                        icon: true,
+                        round: true,
+                        extra: "message-input-send-button shrink-0",
+                        ...hoverTooltipAttrs("Send message"),
+                        "aria-label": "Send message",
+                        onclick: handleSend,
+                      },
+                      m.trust(icon("send", { size: 16, strokeWidth: 2.5 })),
+                    )
+                  : null,
+              ]),
             ]),
           ]),
-        ]),
-      ]);
+        ],
+      );
     },
   };
 }

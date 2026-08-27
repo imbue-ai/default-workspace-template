@@ -860,8 +860,23 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           isFileDragActive && acceptsFileDrops
             ? m(
                 "div",
-                { class: "chat-drop-overlay absolute inset-0 flex items-center justify-center pointer-events-none" },
-                m("div", { class: "chat-drop-overlay-label" }, "Drop files to attach"),
+                {
+                  // z-50: design-system-exception -- a mid-layer overlay above
+                  // chat content but below the modal stack; the z scale has no
+                  // name for it.
+                  class:
+                    "chat-drop-overlay absolute inset-0 z-50 m-2 flex items-center justify-center rounded-lg " +
+                    "border-2 border-dashed border-accent bg-accent-light/70 pointer-events-none",
+                },
+                m(
+                  "div",
+                  {
+                    class:
+                      "chat-drop-overlay-label rounded-full border border-accent bg-surface px-4.5 py-2.5 " +
+                      "text-(length:--font-size-body) font-medium text-accent shadow-overlay",
+                  },
+                  "Drop files to attach",
+                ),
               )
             : null,
           m(
@@ -929,33 +944,43 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 // agent-terminal + harness-auth actions right-aligned. The "Powered by" credit is
                 // rendered last as a centered overlay (absolute, pointer-events:none) so it sits
                 // in the middle without reshaping the row. Shared font, no background of its own.
-                m("div", { class: "composer-under-bar" }, [
-                  m(ModelBar, { agentId }),
-                  m("div", { class: "composer-under-bar-actions" }, [
-                    m(
-                      Button,
-                      {
-                        variant: "ghost",
-                        sm: true,
-                        onclick: () => openAgentTerminalTab(agentId),
-                      },
-                      "Open agent terminal",
-                    ),
-                    // Persistent entry to the sign-in modal so the user can switch
-                    // auth modes without waiting for an auth error.
-                    m(
-                      Button,
-                      {
-                        variant: "ghost",
-                        sm: true,
-                        onclick: () => openAgentAuth(agentId),
-                      },
-                      "Agent auth",
-                    ),
-                  ]),
-                  // The centered harness credit (may render nothing), overlaid on the bar.
-                  m(PoweredByCredit, { agentId }),
-                ]),
+                m(
+                  "div",
+                  {
+                    // Same max-width as the composer card above it; relative as
+                    // the containing block for the centered credit overlay.
+                    class:
+                      "composer-under-bar relative mx-auto mt-1 flex w-full " +
+                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
+                  },
+                  [
+                    m(ModelBar, { agentId }),
+                    m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
+                      m(
+                        Button,
+                        {
+                          variant: "ghost",
+                          sm: true,
+                          onclick: () => openAgentTerminalTab(agentId),
+                        },
+                        "Open agent terminal",
+                      ),
+                      // Persistent entry to the sign-in modal so the user can switch
+                      // auth modes without waiting for an auth error.
+                      m(
+                        Button,
+                        {
+                          variant: "ghost",
+                          sm: true,
+                          onclick: () => openAgentAuth(agentId),
+                        },
+                        "Agent auth",
+                      ),
+                    ]),
+                    // The centered harness credit (may render nothing), overlaid on the bar.
+                    m(PoweredByCredit, { agentId }),
+                  ],
+                ),
               ]),
         ],
       );
