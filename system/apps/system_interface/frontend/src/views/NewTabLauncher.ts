@@ -47,6 +47,7 @@ import { Portal } from "./portal";
 import * as css from "./modelCardStyles";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
+import { SHORTCUT_TOOLTIPS } from "./Sidebar";
 
 /** What one "Open new" tile starts, as data rather than as an encoded name.
  *
@@ -803,13 +804,21 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                         "text-[13px] font-medium " +
                         (isDisabled ? "cursor-not-allowed" : "hover:bg-bg-hover cursor-pointer"),
                       onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
-                      // Keyed on the unbacked file viewer itself rather than on
-                      // `isDisabled`: every tile is disabled while a create is in
-                      // flight, and "a file viewer is coming" is not the reason
-                      // for any of the others.
-                      ...(isUnbackedFilesTile && attrs.isAwaitingCreate !== true
-                        ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP)
-                        : {}),
+                      // Every idle tile explains what it starts (the rail's own
+                      // copy for the same four kinds), except the unbacked file
+                      // viewer, whose tooltip says why it cannot act instead. No
+                      // tooltip at all while a create is in flight: every tile is
+                      // down then, and neither message would be the reason.
+                      //
+                      // On the BUTTON rather than the tile, which is a container on this
+                      // branch: the chat tile also holds the provider picker, and a tooltip
+                      // on the wrapper would follow the pointer onto the picker and describe
+                      // the wrong control.
+                      ...(attrs.isAwaitingCreate === true
+                        ? {}
+                        : hoverTooltipAttrs(
+                            isUnbackedFilesTile ? FILE_VIEWER_TOOLTIP : SHORTCUT_TOOLTIPS[tile.target.kind],
+                          )),
                     },
                     [
                       m(
