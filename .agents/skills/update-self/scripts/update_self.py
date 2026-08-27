@@ -509,8 +509,14 @@ CLASS_OTHER = "other"
 _PROVISIONER_SCRIPTS = frozenset(
     {
         "system/scripts/setup_system.sh",  # pinned global toolchain (latchkey, uv, claude, ...)
-        "system/scripts/install_secret_scanners.sh",  # pinned global scanner binaries
         "system/scripts/_provision_guard.sh",  # the guard that gates the above
+        "system/scripts/write_apt_sources.sh",
+        # The sibling installers setup_system.sh chains, each the single source
+        # of truth for its own pin.
+        "system/scripts/install_secret_scanners.sh",
+        "system/scripts/agy_install-1.1.16.sh",
+        "system/scripts/install_owner_exec.sh",
+        "system/scripts/install_dufs.sh",
     }
 )
 
@@ -931,7 +937,10 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     # Match every one of them at any depth with a single glob rather than one
     # dir alone, or the "what's new" digest silently drops everything landed
     # under the bucketed layout. Exclude the vendored subtree, which carries
-    # its own separate changelog system.
+    # its own separate changelog system. ``top`` anchors both pathspecs at the
+    # repository root: a git pathspec is otherwise relative to the cwd, so run
+    # from a subdirectory the glob matched nothing and the digest came back
+    # empty with no error.
     added = _list_names(
         _git(
             [
@@ -941,8 +950,8 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
                 args.base,
                 args.target,
                 "--",
-                ":(glob)**/changelog/*",
-                ":(exclude)system/vendor",
+                ":(top,glob)**/changelog/*",
+                ":(top,exclude)system/vendor",
             ],
             repo_root,
         )
@@ -2053,7 +2062,9 @@ def write_run_status(
     path = run_status_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     scratch = path.with_suffix(".json.tmp")
-    scratch.write_text(status.to_json())
+    # Newline-terminated so a reader that `cat`s the file and then echoes a
+    # sentinel (the Minds app's probe) sees the sentinel on its own line.
+    scratch.write_text(status.to_json() + "\n")
     scratch.replace(path)
 
 
@@ -2163,7 +2174,13 @@ def provisioner_env(*, is_forced: bool = False) -> dict:
     ``is_forced`` sets ``PROVISION_FORCE=1``, which runs the script past its
     content-addressed skip guard (``system/scripts/_provision_guard.sh``).
     """
-    env = dict(os.environ)
+    # The script's version pins are `:=` defaults, so an inherited *_VERSION
+    # (an image built when the Dockerfile still exported its pins as ENV) would
+    # win over the merged tree's and reinstall the old version while the
+    # script's own pin check passed. The pins are the tree's; drop them all.
+    env = {
+        key: value for key, value in os.environ.items() if not key.endswith("_VERSION")
+    }
     env["HOME"] = _PROVISIONER_HOME
     env["PATH"] = _PROVISIONER_PATH
     if is_forced:

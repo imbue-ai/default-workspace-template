@@ -38,8 +38,10 @@ else
         "$(cat /etc/default-workspace-template-apt-snapshot-timestamp)"
 fi
 
-# Pinned versions (single source of truth; override via env if needed). Keep
-# CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
+# Pinned versions (single source of truth; override via env if needed -- the
+# update apply's live re-run deliberately drops any *_VERSION it inherited, so
+# only an explicit by-hand override reaches here). Keep CLAUDE_CODE_VERSION in
+# sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
 : "${NODE_VERSION:=22.23.2}"
@@ -249,8 +251,7 @@ fi
 # /usr/local so node/npm/npx land on PATH). NOT the trixie apt nodejs (20.x): the
 # pi CLI ships an `undici` that calls `worker_threads.markAsUncloneable`, which is
 # absent on Node 20 and crashes pi at import -- so we pin Node 22 LTS. Installs like
-# gh/caddy/restic above: fixed version, checksummed download. Keep NODE_VERSION in
-# sync with the Dockerfile ARG.
+# gh/caddy/restic above: fixed version, checksummed download.
 node_arch="$(uname -m)"
 case "${node_arch}" in
     x86_64) node_goarch="x64"; node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" ;;
@@ -401,6 +402,22 @@ if [ -f "$setup_dir/install_secret_scanners.sh" ]; then
     bash "$setup_dir/install_secret_scanners.sh"
 else
     bash "$setup_dir/default-workspace-template-install-secret-scanners"
+fi
+
+# owner-exec (the in-container exec daemon) and dufs (the file-viewer server),
+# each a pinned, sha256-verified static binary with its own idempotent installer.
+# Invoked from here rather than as their own Dockerfile layers so that a live
+# re-provision (the update apply) and a non-Docker provider get them too: this
+# script is the only provisioning path every provider shares.
+if [ -f "$setup_dir/install_owner_exec.sh" ]; then
+    bash "$setup_dir/install_owner_exec.sh"
+else
+    bash "$setup_dir/default-workspace-template-install-owner-exec"
+fi
+if [ -f "$setup_dir/install_dufs.sh" ]; then
+    bash "$setup_dir/install_dufs.sh"
+else
+    bash "$setup_dir/default-workspace-template-install-dufs"
 fi
 
 # Playwright + Chromium is deliberately NOT installed here; the deferred-install

@@ -689,6 +689,13 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     --merge-ref mngr/update-self --ff-only --target-ref "$REF"
 ```
 
+Run it in the **foreground** (not `run_in_background`; that is for polling the
+worker, above). The apply takes the system interface down and its own output --
+the refusal and resume messages, any provisioner warning, the `apply phase
+timings:` line -- is what you read before recording a verdict; a backgrounded
+apply leaves the chat looking idle exactly while the workspace goes dark, and
+its warnings unread.
+
 When the worker's report names its **built system-interface bundle** (it built
 the frontend for validation), append `--worker-bundle <that path>` -- the
 apply then installs the exact build the worker validated instead of spending
@@ -844,12 +851,12 @@ the worker's impact analysis, so work the report:
   change actually touches, which the apply cannot infer from paths alone; until
   it can, that judgement is the report's and the restart is yours. Say so to
   the user rather than implying the merge alone made it live.
-- **`Dockerfile`** -- apply the live-applicable hunks the report calls out
-  (canonically a `CLAUDE_CODE_VERSION` bump -> `CLAUDE_CODE_VERSION=<v> bash
-  system/scripts/setup_system.sh`, keeping `agent_types.claude.version` in
-  `.mngr/settings.toml` in sync). Tell the user any image-level hunk (base
-  `FROM`, `apt-get` packages, build-time layout) needs a manual workspace
-  rebuild.
+- **`Dockerfile`** -- apply the live-applicable hunks the report calls out.
+  Version pins live in `system/scripts/setup_system.sh`, so a pin bump is a
+  provisioner change the apply already re-ran the script for (keep
+  `agent_types.claude.version` in `.mngr/settings.toml` in sync). Tell the
+  user any image-level hunk (base `FROM`, `apt-get` packages, build-time
+  layout) needs a manual workspace rebuild.
 - **Rebuild-only flags** -- anything the report classified rebuild-only (a
   `build_arg` / `start_arg` / runtime flag, a user-created dependent of a
   global bump) is surfaced to the user as needing a workspace recreate; never

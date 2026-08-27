@@ -23,11 +23,12 @@ Step 4a is your recipe for it.
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
-Sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, and `TARGET_REF`. Run every
-`update_self.py` call below from
-`data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/` (a fixed
-path -- reference it by literal each time rather than stashing it in a shell
-variable, since each bash invocation starts a fresh shell). If the worktree has no
+Sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, and `TARGET_REF`. Every
+`update_self.py` call below invokes the copy at
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py`
+(a fixed path -- reference it by literal each time rather than stashing it in a
+shell variable, since each bash invocation starts a fresh shell), run from your
+worktree root, not from that directory. If the worktree has no
 `.venv`, `uv sync --all-packages` once. Ensure the ref is present:
 
 ```bash
@@ -238,11 +239,11 @@ an apply implies; the apply script runs the provisioner and the restarts):
     process start picks it up. Do the mirror edit in your branch so it merges and
     is validated. Get it right rather than punting it to a rebuild.
   - A **toolchain/version pin** under `[agent_types.*]` (Claude version) -> mirror
-    into `setup_system.sh` / the `Dockerfile` pin so a provisioner re-run installs
-    it, and bounce the services agent. An `extra_provision_command` addition -> the
+    into the `setup_system.sh` default so a provisioner re-run installs it, and
+    bounce the services agent. An `extra_provision_command` addition -> the
     lead runs that command live. Keep lockstep pins (`agent_types.claude.version`
-    vs the Dockerfile `CLAUDE_CODE_VERSION` and the installed binary) consistent
-    across every file that carries them.
+    vs the `setup_system.sh` `CLAUDE_CODE_VERSION` default and the installed
+    binary) consistent across every file that carries them.
   - Only a **container build/launch parameter** an already-running container
     genuinely cannot adopt -- a `[create_templates.*]` / `[providers.*]`
     `build_arg`, a `start_arg` (`--security-opt`, `--tmpfs`, `--workdir`,
@@ -499,8 +500,10 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     the system-interface backend, vendored-mngr source, `.mngr/settings.toml`,
     supervisord and bootstrap; anything beyond that is the lead's to carry
     out, and only your analysis can name it.
-  - **Dockerfile split** (if it merged) -- each hunk as live-applicable (e.g. a
-    `CLAUDE_CODE_VERSION` bump) or image-level (needs a manual rebuild).
+  - **Dockerfile split** (if it merged) -- each hunk as live-applicable or
+    image-level (needs a manual rebuild). Version pins live in
+    `setup_system.sh`, not the Dockerfile, so a pin bump is a provisioner
+    change, not a Dockerfile hunk.
   - **Provisioning changes** (if any `provisioner`-class file changed) -- per the
     impact analysis above, each change classified: **live-applicable** (name the
     in-branch edits you made to mirror it, e.g. an env var or `[agent_types]`
