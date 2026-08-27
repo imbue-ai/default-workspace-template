@@ -26,6 +26,39 @@ import { icon } from "./icons";
  *  switched from the agent's own terminal (its native picker), not from this bar. */
 const READ_ONLY_TOOLTIP = "Use agent terminal to switch models";
 
+/* ── Styling ──────────────────────────────────────────────────────────────────
+ * Utilities in the markup; the model-* class names stay as bare markers
+ * (positionDropdown queries .model-selector-label/-dropdown-header, and the
+ * e2e tests find the bar by its markers). States are resolved in code, one
+ * utility per property. */
+
+/** The slot trigger. h-[30px] is the composer under-bar's control height. A
+ *  read-only slot is NOT `disabled` (that would suppress its hover tooltip):
+ *  it renders at normal weight/color with no hover brighten and a default
+ *  cursor, and no-ops on click. */
+const TRIGGER_BASE =
+  "model-selector-trigger inline-flex h-[30px] items-center gap-1 rounded-lg border-none bg-transparent px-2 " +
+  "font-sans text-(length:--font-size-body) whitespace-nowrap text-secondary select-none " +
+  "transition-colors duration-(--dur-base)";
+const TRIGGER_INTERACTIVE = "cursor-pointer hover:bg-fill-hover hover:text-primary";
+const TRIGGER_READONLY = "model-selector-trigger--readonly cursor-default";
+
+/** The popup card, anchored above the trigger; positionDropdown() then nudges
+ *  it with a translateX. min/max width bound it so a long provider/model tag
+ *  can't grow the menu off the screen edge; options past the max ellipsize. */
+const DROPDOWN_CLASS =
+  "model-selector-dropdown absolute bottom-[calc(100%+8px)] left-0 z-(--z-sticky) min-w-[200px] " +
+  "max-w-[min(92vw,460px)] overflow-hidden rounded-lg border bg-surface p-1.5 shadow-overlay";
+
+/** One option row: 29px tall, 8 of them visible before the list scrolls
+ *  (max-h below = 8 rows). */
+const OPTION_BASE =
+  "model-selector-option block h-[29px] cursor-pointer truncate rounded-md px-2.5 font-sans " +
+  "text-(length:--font-size-body) leading-[29px] transition-colors duration-(--dur-fast)";
+const LIST_CLASS =
+  "model-selector-dropdown-list max-h-[232px] overflow-y-auto overscroll-contain pr-1 " +
+  "supports-[-moz-appearance:none]:pr-3 [scrollbar-color:var(--c-border)_transparent]";
+
 /** The effort to carry when switching to `option`: keep the current one if the new
  *  model declares it, else the model's first shown (or first declared) effort. Null
  *  when the model has no effort axis. */
@@ -204,12 +237,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       : opts.items;
     const visible = opts.searchable ? filtered.slice(0, MODEL_SEARCH_CAP) : filtered;
     const hiddenCount = filtered.length - visible.length;
-    return m("div", { class: "model-selector-wrapper" }, [
+    return m("div", { class: "model-selector-wrapper relative inline-block" }, [
       m(
         "button",
         {
           type: "button",
-          class: "model-selector-trigger" + (opts.interactive ? "" : " model-selector-trigger--readonly"),
+          class: `${TRIGGER_BASE} ${opts.interactive ? TRIGGER_INTERACTIVE : TRIGGER_READONLY}`,
           // A read-only slot is NOT `disabled`: a disabled button suppresses hover events, which
           // would kill the tooltip. It renders normally, shows the switch-in-terminal tooltip,
           // and no-ops on click instead.
@@ -230,7 +263,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           m("span", { class: "model-selector-label" }, opts.triggerLabel),
           // No chevron on a read-only slot -- it isn't a dropdown.
           opts.interactive
-            ? m("span", { class: "model-selector-chevron" }, m.trust(icon("chevron-down", { size: 12 })))
+            ? m(
+                "span",
+                { class: "model-selector-chevron inline-flex items-center text-faint" },
+                m.trust(icon("chevron-down", { size: 12 })),
+              )
             : null,
         ],
       ),
@@ -238,7 +275,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         ? m(
             "div",
             {
-              class: "model-selector-dropdown",
+              class: DROPDOWN_CLASS,
               oncreate: (v: m.VnodeDOM) => {
                 document.addEventListener("mousedown", handleOutsideMousedown);
                 positionDropdown(v.dom as HTMLElement);
@@ -251,36 +288,61 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               },
             },
             [
-              m("div", { class: "model-selector-dropdown-header" }, opts.header),
+              m(
+                "div",
+                {
+                  class:
+                    "model-selector-dropdown-header px-2.5 pt-1 pb-1.5 font-sans text-(length:--font-size-helper) font-medium text-faint",
+                },
+                opts.header,
+              ),
               opts.searchable
-                ? m("div", { class: "model-selector-search" }, [
-                    m("span", { class: "model-selector-search-icon" }, m.trust(icon("search", { size: 14 }))),
-                    m("input", {
-                      class: "model-selector-search-input",
-                      type: "text",
-                      placeholder: "Search models…",
-                      value: modelQuery,
-                      oncreate: (v: m.VnodeDOM) => (v.dom as HTMLInputElement).focus(),
-                      oninput: (e: InputEvent) => {
-                        modelQuery = (e.target as HTMLInputElement).value;
-                      },
-                    }),
-                  ])
+                ? m(
+                    "div",
+                    {
+                      class:
+                        "model-selector-search mx-0.5 mb-1.5 flex h-[30px] items-center gap-1.5 rounded-lg border " +
+                        "bg-fill-hover px-2 transition-colors duration-(--dur-base) focus-within:border-accent focus-within:bg-surface",
+                    },
+                    [
+                      m(
+                        "span",
+                        { class: "model-selector-search-icon inline-flex flex-none items-center text-faint" },
+                        m.trust(icon("search", { size: 14 })),
+                      ),
+                      m("input", {
+                        class:
+                          "model-selector-search-input min-w-0 flex-auto border-none bg-transparent font-sans " +
+                          "text-(length:--font-size-body) text-primary outline-none placeholder:text-faint",
+                        type: "text",
+                        placeholder: "Search models…",
+                        value: modelQuery,
+                        oncreate: (v: m.VnodeDOM) => (v.dom as HTMLInputElement).focus(),
+                        oninput: (e: InputEvent) => {
+                          modelQuery = (e.target as HTMLInputElement).value;
+                        },
+                      }),
+                    ],
+                  )
                 : null,
               opts.loading
                 ? m("div", { class: "model-selector-more" }, "Loading models…")
                 : m(
                     "ul",
-                    { class: "model-selector-dropdown-list" },
+                    { class: LIST_CLASS },
                     visible.map((item) =>
                       m(
                         "li",
                         {
                           key: item.id,
                           title: item.label,
-                          class:
-                            "model-selector-option" +
-                            (opts.selectedId === item.id ? " model-selector-option--selected" : ""),
+                          // The selected row's accent tint persists under hover
+                          // (no hover restyle); unselected rows brighten.
+                          class: `${OPTION_BASE} ${
+                            opts.selectedId === item.id
+                              ? "model-selector-option--selected bg-accent-light font-medium text-accent"
+                              : "text-primary hover:bg-fill-hover"
+                          }`,
                           onclick: () => {
                             openDropdown = null;
                             if (opts.selectedId !== item.id) {
@@ -329,8 +391,16 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       const matched = choice.matched;
       if (matched === null) {
         // The current combo matches no catalog option: a shrug, no model/effort/fast.
-        return m("div", { class: "model-bar" }, [
-          m("span", { class: "model-bar-shrug", ...hoverTooltipAttrs("Unrecognized model") }, "\u{1F937}"),
+        return m("div", { class: "model-bar inline-flex items-center gap-0.5" }, [
+          m(
+            "span",
+            {
+              class:
+                "model-bar-shrug inline-flex h-[30px] items-center px-1.5 text-(length:--font-size-body) text-secondary select-none",
+              ...hoverTooltipAttrs("Unrecognized model"),
+            },
+            "\u{1F937}",
+          ),
         ]);
       }
 
@@ -441,7 +511,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       return m(
         "div",
         {
-          class: "model-bar",
+          class: "model-bar inline-flex items-center gap-0.5",
           oncreate: (barVnode: m.VnodeDOM) => {
             barElement = barVnode.dom as HTMLElement;
           },

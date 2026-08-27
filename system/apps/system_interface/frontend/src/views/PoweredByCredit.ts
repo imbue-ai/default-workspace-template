@@ -55,7 +55,19 @@ export const PoweredByCredit: m.Component<{ agentId: string }> = {
       return null;
     }
     // A static span (not a button): same font as the neighbouring action buttons, but not
-    // interactive and not focusable. The text is the harness's verbatim string.
-    return m("span", { class: "composer-under-bar-credit" }, label);
+    // interactive and not focusable. The text is the harness's verbatim string. Centered
+    // over the under-bar as an out-of-flow overlay: pointer-events-none so it never
+    // intercepts clicks on the model bar or buttons beneath it; max-w keeps it clear of
+    // the side groups, ellipsizing if it would collide.
+    return m(
+      "span",
+      {
+        class:
+          "composer-under-bar-credit pointer-events-none absolute top-1/2 left-1/2 inline-flex h-[30px] " +
+          "max-w-[60%] -translate-x-1/2 -translate-y-1/2 items-center overflow-hidden px-2 font-sans " +
+          "text-(length:--font-size-body) text-ellipsis whitespace-nowrap text-secondary select-none",
+      },
+      label,
+    );
   },
 };
