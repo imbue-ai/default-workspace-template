@@ -420,7 +420,21 @@ lease check in Step 1 rather than forcing past it:
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-self --template worker --destroy-existing \
     --runtime-dir data/.tasks/update-self/ --task-file data/.tasks/update-self/task.md
+```
 
+Then record the hand-off before you start waiting. From here until the worker
+reports, this chat is idle, and an idle update chat is what the Minds app
+reads as "waiting for you"; naming the worker in the run record lets the app
+read the worker's liveness instead. It stays recorded through every re-arm of
+the poll (the worker is the same one), and the verdict clears it:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py run-status delegate update-self
+```
+
+Then background-poll:
+
+```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```

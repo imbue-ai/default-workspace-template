@@ -1188,8 +1188,9 @@ MARKER_FILENAME = "marker.json"
 SNAPSHOTS_DIRNAME = "snapshots"
 # The run-status file: the whole machine-readable contract between an
 # update-self pass and the Minds app. The lead records the run's start here
-# (``run-status start``, once it holds the updating-workspace lease), its one
-# mid-flight hold and its clearing (``run-status hold`` / ``resume``), and its
+# (``run-status start``, once it holds the updating-workspace lease), the
+# worker it hands the merge to (``run-status delegate``), its one mid-flight
+# hold and its clearing (``run-status hold`` / ``resume``), and its
 # one terminal verdict (``run-status verdict``); the apply mirrors its marker's
 # phase and restamp in alongside. The app's poll reads this file over ``mngr
 # exec`` together with the run's chat agent, and needs nothing else -- it never
@@ -1952,9 +1953,15 @@ class RunStatus:
     Every timestamp is epoch seconds. ``verdict`` is ``None`` while the run is
     going; the fields after it are only meaningful once it is set.
 
-    Two in-flight facts ride alongside the start and the verdict, because they
-    are the two things a run does that the user can see or must answer:
+    Three in-flight facts ride alongside the start and the verdict, because
+    they are the things a run does that the user can see, must answer, or
+    would otherwise misread:
 
+    * ``worker_agent_name`` -- the background worker the lead has handed the
+      merge to (``run-status delegate``). The lead's own chat sits idle while
+      it waits on that worker, and idle is what the app reads as "waiting for
+      the user"; naming the worker lets the app read its liveness instead.
+      Cleared by the verdict (and by the next run's ``start``).
     * ``hold_reason``/``hold_detail`` -- the run has stopped to ask the user
       something (``run-status hold``), and why; cleared by ``run-status resume``.
     * ``apply_phase``/``apply_updated_at`` -- the apply is landing, and its last
@@ -1967,6 +1974,7 @@ class RunStatus:
     is_unattended: bool
     started_at: float
     updated_at: float
+    worker_agent_name: str | None = None
     hold_reason: str | None = None
     hold_detail: str = ""
     apply_phase: str | None = None
@@ -1984,6 +1992,7 @@ class RunStatus:
                 "is_unattended": self.is_unattended,
                 "started_at": self.started_at,
                 "updated_at": self.updated_at,
+                "worker_agent_name": self.worker_agent_name,
                 "hold_reason": self.hold_reason,
                 "hold_detail": self.hold_detail,
                 "apply_phase": self.apply_phase,
@@ -2002,6 +2011,7 @@ class RunStatus:
         raw = json.loads(text)
         if not isinstance(raw, dict):
             raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
+        worker_agent_name = raw.get("worker_agent_name")
         hold_reason = raw.get("hold_reason")
         apply_phase = raw.get("apply_phase")
         apply_updated_at = raw.get("apply_updated_at")
@@ -2012,6 +2022,9 @@ class RunStatus:
             is_unattended=bool(raw.get("is_unattended", False)),
             started_at=float(raw.get("started_at", 0.0)),
             updated_at=float(raw.get("updated_at", 0.0)),
+            worker_agent_name=str(worker_agent_name)
+            if worker_agent_name is not None
+            else None,
             hold_reason=str(hold_reason) if hold_reason is not None else None,
             hold_detail=str(raw.get("hold_detail", "")),
             apply_phase=str(apply_phase) if apply_phase is not None else None,
@@ -4247,9 +4260,11 @@ def _cmd_run_status_verdict(args: argparse.Namespace) -> int:
     status.resulting_ref = args.resulting_ref
     status.in_place_compatible_ref = args.in_place_compatible_ref
     status.verdict_at = now()
-    # A verdict ends the run, so a hold it was recorded under ends with it.
+    # A verdict ends the run, so a hold it was recorded under ends with it,
+    # and so does the worker it had delegated to.
     status.hold_reason = None
     status.hold_detail = ""
+    status.worker_agent_name = None
     write_run_status(status, repo_root, now)
     print(f"Recorded the {args.verdict} verdict.")
     return 0
@@ -4279,6 +4294,17 @@ def _run_status_for_recorder(
             updated_at=0.0,
         )
     return status
+
+
+def _cmd_run_status_delegate(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    status.worker_agent_name = args.worker
+    write_run_status(status, repo_root, now)
+    print(f"Recorded the hand-off to worker {args.worker}.")
+    return 0
 
 
 def _cmd_run_status_hold(args: argparse.Namespace) -> int:
@@ -4544,6 +4570,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         "applied in place, when one exists.",
     )
     verdict_parser.set_defaults(func=_cmd_run_status_verdict)
+    delegate_parser = run_status_sub.add_parser(
+        "delegate",
+        help="Record the background worker this run has handed its work to, so "
+        "the app reads the worker's liveness while this chat waits on it.",
+        parents=[common],
+    )
+    delegate_parser.add_argument(
+        "worker",
+        help="The worker agent's name (as `mngr list` shows it).",
+    )
+    delegate_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    delegate_parser.set_defaults(func=_cmd_run_status_delegate)
     hold_parser = run_status_sub.add_parser(
         "hold",
         help="Record that the run has stopped to ask the user something, and why.",
