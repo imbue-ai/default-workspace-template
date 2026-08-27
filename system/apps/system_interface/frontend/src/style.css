@@ -81,8 +81,9 @@
   --font-size-heading: 18px;
   --font-size-body: 14px;
   --font-size-helper: 12px;
+  /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type
+     role uses it -- see the type-roles note below.) */
   --weight-regular: 400;
-  --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
   /* Motion scale — one unit (ms). Durations back the common UI transitions.
@@ -163,19 +164,18 @@
      strays (3/5/7/9px etc.) stay raw as design-system-exceptions. */
   --spacing: 0.25rem;
   /* Radius scale -- aligned with the minds design system (apps/minds): four steps
-     sm 4 / md 6 / lg 8 / xl 16 (px) plus the pill. Names mirror minds and equal
-     Tailwind's own sm/md/lg defaults, so the rounded-* utilities used in the views
+     sm 4 / md 6 / lg 8 / xl 16 (px). Names mirror minds and equal Tailwind's own
+     sm/md/lg defaults, so the rounded-* utilities used in the views
      (rounded-md/lg = 6/8px) stay put; only xl (16 vs Tailwind's 12) differs, and no
      view uses that utility. md is the default control radius; lg carries inputs,
      cards and modals; xl is reserved for the largest surfaces (the composer and the
-     user bubble). The 12px pane/chrome frame keeps its own --si-pane-radius (defined
-     later in this file), matching minds' CONTENT_CORNER_RADIUS window-frame
-     exception. 50% circles stay the raw idiom (out of scope). */
+     user bubble); pills and circles are Tailwind's stock rounded-full. The 12px
+     pane/chrome frame keeps its own --si-pane-radius (defined later in this file),
+     matching minds' CONTENT_CORNER_RADIUS window-frame exception. */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 16px;
-  --radius-pill: 999px;
   /* Elevation -- aligned with the minds design system (apps/minds): two box-shadow
      steps. --shadow-raised is the subtle resting lift on interactive cards;
      --shadow-overlay is the one soft floating shadow shared by everything above the
@@ -257,12 +257,13 @@ body {
 
 /* ── Spinner primitive ───────────────────────────────────────────────────────
  * One CSS ring spinner (+ one @keyframes spin) replacing the near-identical
- * bespoke keyframes. Size via --spinner-size (or .spinner--sm / .spinner--lg);
- * the two-tone track/arc default to --c-border / --c-accent, overridable
- * via --spinner-track / --spinner-arc. .spinner--current makes it monochrome
- * (currentColor ring with a transparent gap) for use on coloured contexts.
- * (The login screen's fancier SVG arc keeps its own .claude-login-spinner hook
- * but shares this @keyframes.) */
+ * bespoke keyframes. Size via --spinner-size (or .spinner--sm; add a size
+ * step when a use exists); the two-tone track/arc default to --c-border /
+ * --c-accent, overridable via --spinner-track / --spinner-arc.
+ * .spinner--current makes it monochrome (currentColor ring with a transparent
+ * gap) for use on coloured contexts. (The login screen's fancier SVG arc is
+ * its own svg drawing -- see loginSpinnerIcon in views/icons.ts -- but shares
+ * this @keyframes.) */
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -280,9 +281,6 @@ body {
 }
 .spinner--sm {
   --spinner-size: 12px;
-}
-.spinner--lg {
-  --spinner-size: 32px;
 }
 .spinner--current {
   --spinner-track: currentColor;
