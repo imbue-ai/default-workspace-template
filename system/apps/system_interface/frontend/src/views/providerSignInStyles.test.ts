@@ -37,7 +37,8 @@ function usedColorTokens(module: Record<string, unknown>): Set<string> {
       const bare = cls.slice(cls.lastIndexOf(":") + 1);
       const match = /^(?:text|bg|border|ring|from|to|decoration|outline|divide)-(.+)$/.exec(bare);
       if (match === null) continue;
-      const token = match[1];
+      // `bg-primary/55` is the same token at an opacity; the suffix is not part of its name.
+      const token = match[1].split("/")[0];
       // Arbitrary values carry their own color; sizes and styles are not colors at all.
       if (token.startsWith("[") || /^(\d|xs$|sm$|base$|lg$|xl$|\dxl$)/.test(token)) continue;
       if (
@@ -103,10 +104,6 @@ describe("the ported styles", () => {
       "fill-active",
       "surface-primary",
       "surface-overlay",
-      // The card's tooltip chip is the only surface that needs the inverse pair; this app is
-      // light-only, so they are a fixed dark chip rather than a light/dark mirror.
-      "surface-inverse",
-      "inverse-primary",
       "important",
     ]) {
       expect(defined, `--color-${token} is missing`).toContain(token);

@@ -399,8 +399,6 @@ export interface NewTabLauncherAttrs {
 function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => void }> {
   let open = false;
   let anchor: DOMRect | null = null;
-  let triggerElement: HTMLElement | null = null;
-  let menuElement: HTMLElement | null = null;
   // Which account's trash has been armed into "Remove?"; see the model card's copy of this.
   let confirmingRemoval: string | null = null;
 
@@ -410,10 +408,13 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
     confirmingRemoval = null;
   }
 
+  /** A click outside the trigger and the menu closes it -- and only a click. See the combo
+   *  card's copy of this: `closest` rather than cached element references, because a stale
+   *  reference makes an inside click read as an outside one and the menu vanishes on mousedown
+   *  before the click it was meant to act on ever lands. */
   function handleOutsideMousedown(event: MouseEvent): void {
     if (!open) return;
-    const target = event.target as Node;
-    if (menuElement?.contains(target) === true || triggerElement?.contains(target) === true) return;
+    if ((event.target as Element | null)?.closest?.(`[${PICKER_ATTR}]`) != null) return;
     close();
     m.redraw();
   }
@@ -452,12 +453,7 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
             "cursor-pointer items-center gap-1 truncate bg-transparent py-0 pr-2 pl-3 text-[13px] focus:outline-none",
           "aria-label": "Provider for the new chat",
           "aria-expanded": open ? "true" : "false",
-          oncreate: (triggerVnode: m.VnodeDOM) => {
-            triggerElement = triggerVnode.dom as HTMLElement;
-          },
-          onremove: () => {
-            triggerElement = null;
-          },
+          [PICKER_ATTR]: "trigger",
           onclick: (event: MouseEvent) => {
             // The picker sits inside the New-chat tile, whose own click starts a chat.
             event.stopPropagation();
@@ -482,13 +478,8 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
         "div",
         {
           class: css.FLYOUT,
+          [PICKER_ATTR]: "menu",
           style: placement(anchor),
-          oncreate: (menuVnode: m.VnodeDOM) => {
-            menuElement = menuVnode.dom as HTMLElement;
-          },
-          onremove: () => {
-            menuElement = null;
-          },
         },
         [
           m(
@@ -567,6 +558,9 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
     },
   };
 }
+
+/** Marks the trigger and its menu as one stack, for the outside-click test. */
+const PICKER_ATTR = "data-provider-picker";
 
 /** The picker's own width, and the shortest it is worth opening downward. */
 const PICKER_WIDTH = 260;

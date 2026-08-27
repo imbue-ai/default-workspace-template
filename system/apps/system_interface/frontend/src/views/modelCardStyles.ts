@@ -22,8 +22,10 @@ export const FLYOUT_OVERLAP = 4;
 
 // --- the composer trigger ------------------------------------------------------------------
 export const TRIGGER =
-  "flex h-[30px] items-center gap-1 rounded-lg px-2 type-helper whitespace-nowrap " +
+  "flex h-[30px] items-center gap-1.5 rounded-lg px-2 type-helper whitespace-nowrap " +
   "text-tertiary transition-colors hover:bg-fill-hover hover:text-secondary cursor-pointer";
+/** The separators between the chip's three parts, a step quieter than the values. */
+export const TRIGGER_DOT = "text-tertiary/60";
 
 // --- the card ------------------------------------------------------------------------------
 export const CARD =
@@ -59,10 +61,12 @@ export const ROW_WRAP = "group/conn relative";
 export const EFFORT_VALUE = "text-[12px] text-primary";
 /** DIVERGES: wraps the track so tick marks can sit behind it -- the mockup's bare slider gives
  *  no clue where the levels are, which is exactly what makes it feel like guesswork. */
-export const SLIDER_WRAP = "relative flex h-3 w-32 items-center";
+export const SLIDER_WRAP = "relative flex h-4 w-32 items-center";
 export const SLIDER_TICKS =
   "pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-between";
-export const SLIDER_TICK = "h-[7px] w-px bg-strong";
+/** Taller than the 12px knob and dark enough to read through it: these are the delimiters
+ *  that say where the levels ARE, so they have to survive the thumb passing over them. */
+export const SLIDER_TICK = "h-[15px] w-[2px] rounded-full bg-primary/55";
 export const SLIDER =
   "relative h-[3px] w-full cursor-pointer appearance-none rounded-full " +
   "[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full " +
@@ -122,12 +126,14 @@ export const ROW_TRASH_ARMED =
   "absolute right-1 top-1/2 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center " +
   "justify-center rounded px-1 type-helper text-important hover:bg-fill-hover";
 
-/** The mockup's TOOLTIP_ABOVE_CONN: our own black chip rather than the OS title bubble,
- *  floated above the row it explains, with the mockup's hover delay ramp. */
-export const TOOLTIP_ABOVE_ROW =
-  "pointer-events-none absolute bottom-full left-1/2 z-[130] mb-0.5 -translate-x-1/2 " +
-  "whitespace-nowrap rounded-sm bg-surface-inverse px-1.5 py-0.5 text-xs text-inverse-primary " +
-  "opacity-0 transition-opacity duration-0 delay-0 group-hover/conn:opacity-100 " +
-  "group-hover/conn:delay-150 group-hover/conn:duration-100";
-/** The same chip, but wrapping: the read-only hint is a sentence, not a phrase. */
-export const TOOLTIP_ABOVE_ROW_WRAP = TOOLTIP_ABOVE_ROW.replace("whitespace-nowrap", "w-56 text-center");
+/* No tooltip classes live here on purpose.
+ *
+ * The mockup floats its own `bottom-full` chip inside the popover. That cannot work in this
+ * app: both the card and the flyout are `overflow-hidden`, so the chip is cut off mid-sentence,
+ * and both are `z-[120]` fixed boxes, so each one is its own stacking context and a chip inside
+ * the card can never rise above the flyout beside it. Both were visible in the shipped build.
+ *
+ * `hoverTooltip.ts` already solves exactly this -- a single fixed bubble on <body>, with
+ * hover-intent, viewport clamping and flip -- and it exists BECAUSE this app clips CSS bubbles.
+ * Rows spread `hoverTooltipAttrs(...)` instead.
+ */
