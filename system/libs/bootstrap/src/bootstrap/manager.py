@@ -53,6 +53,9 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under data/.state/, which persists with the container volume.
 INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
+# Its own signal, separate from the chat's. `git add -A` + commit is a once-per-workspace
+# operation: running it on a later boot would commit whatever the user had in flight.
+MAIN_BRANCH_SIGNAL = STATE_DIR / "workspace_main_branch_initialized"
 # Basename (under $MNGR_HOST_DIR) of the file holding the initial chat agent's id,
 # read by system_interface's welcome_resend to address the resend by id.
 INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
@@ -285,10 +288,42 @@ def _create_initial_chat_agent(labels: dict[str, str]) -> bool:
     return True
 
 
+def _touch(signal: Path) -> None:
+    """Create a signal file (and its parent), marking a once-per-workspace step done."""
+    signal.parent.mkdir(parents=True, exist_ok=True)
+    signal.touch()
+
+
 def _touch_signal() -> None:
-    """Write the data/.state/initial_chat_created signal file."""
-    INITIAL_CHAT_SIGNAL.parent.mkdir(parents=True, exist_ok=True)
-    INITIAL_CHAT_SIGNAL.write_text("")
+    """Mark the initial-chat decision as made."""
+    _touch(INITIAL_CHAT_SIGNAL)
+
+
+def _ensure_git_identity() -> None:
+    """Give the workspace repo a committer identity if it has none. Every boot.
+
+    Only-if-unset, so it costs two `git config` reads and never overwrites the user's own.
+
+    Unconditional rather than gated by a signal, because it is the workspace's ONLY committer
+    identity (nothing else in the repo sets `user.email` outside tests and vendored code) and
+    `pool_bake` deliberately unsets it on finalize, expecting the adopted workspace's bootstrap
+    to supply it again. Without an identity every non-agent commit fails -- the user's own
+    terminal, github-sync, any script. Agent tool calls survive only because the bash wrapper
+    exports GIT_AUTHOR_*/GIT_COMMITTER_*, which covers claude and codex and nothing else.
+    """
+    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
+    if not work_dir:
+        return
+
+    def _git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args], cwd=work_dir, capture_output=True, text=True, check=False
+        )
+
+    if _git("config", "user.email").returncode != 0:
+        _git("config", "user.email", "bootstrap@minds.local")
+    if _git("config", "user.name").returncode != 0:
+        _git("config", "user.name", "minds-bootstrap")
 
 
 def _initialize_workspace_main_branch() -> None:
@@ -305,10 +340,15 @@ def _initialize_workspace_main_branch() -> None:
     `main` branch the user can git-log / push from without having to
     reason about the per-host mngr/* branch. So before the chat agent
     is created, we:
-      1. set a minds-bootstrap committer identity if none is configured
-      2. `git add -A` + `git commit` everything currently uncommitted
-      3. `git branch -D main` (drop the stale shallow-clone main, if any)
-      4. `git checkout -b main` (rename the working tree's branch to main)
+      1. `git add -A` + `git commit` everything currently uncommitted
+      2. `git branch -D main` (drop the stale shallow-clone main, if any)
+      3. `git checkout -b main` (rename the working tree's branch to main)
+
+    The committer identity is NOT set here -- see `_ensure_git_identity`, which runs on every
+    boot. It used to live in this function, which meant it was gated behind the same one-shot
+    signal, and `pool_bake` unsets identity on finalize expecting the adopted workspace's
+    bootstrap to put it back. Anything that made this function run less often would have left
+    an adopted workspace unable to commit at all.
 
     Each step is best-effort: a failure here should not prevent the
     chat-agent create from running. We log a warning and continue. Hooks
@@ -316,6 +356,9 @@ def _initialize_workspace_main_branch() -> None:
     workspace yet and a misbehaving pre-commit hook on the rsynced
     template shouldn't gate boot.
     """
+    if MAIN_BRANCH_SIGNAL.exists():
+        logger.debug("Signal file {} present; work_dir is already on main", MAIN_BRANCH_SIGNAL)
+        return
     work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
     if not work_dir:
         logger.warning(
@@ -331,14 +374,6 @@ def _initialize_workspace_main_branch() -> None:
             text=True,
             check=False,
         )
-
-    # Set a committer identity scoped to this repo so the commit doesn't
-    # fail on a container with no global git identity. We don't overwrite
-    # an existing config -- only set if unset.
-    if _git("config", "user.email").returncode != 0:
-        _git("config", "user.email", "bootstrap@minds.local")
-    if _git("config", "user.name").returncode != 0:
-        _git("config", "user.name", "minds-bootstrap")
 
     _git("add", "-A")
     # --allow-empty so we end up with a commit even when the work_dir is
@@ -372,15 +407,16 @@ def _initialize_workspace_main_branch() -> None:
         )
     else:
         logger.info("work_dir {} is now on branch main", work_dir)
+    # Written whichever way the rename went: a failed rename is not worth re-committing the
+    # user's working tree over on every subsequent boot.
+    _touch(MAIN_BRANCH_SIGNAL)
 
 
 def _maybe_create_initial_chat() -> None:
     """Create the initial chat agent on first boot, gated by a signal file.
 
-    Also runs `_initialize_workspace_main_branch` immediately before the
-    chat-agent create so the chat agent inherits a clean `main` branch.
-    Both steps are gated by the same signal file, so they run exactly
-    once per workspace.
+    `main()` puts the work_dir on `main` before calling this, under its own signal, so a chat
+    created here still inherits a clean branch.
 
     Touches the signal file only on a successful create -- a failed create
     leaves the signal file absent so the next bootstrap run retries. The
@@ -401,7 +437,6 @@ def _maybe_create_initial_chat() -> None:
             "Could not resolve host_name; skipping initial chat agent create"
         )
         return
-    _initialize_workspace_main_branch()
     # A chat runs on a provider account, and a fresh workspace has none: auth is not part of
     # workspace creation any more. Creating one anyway produces a chat that cannot take a turn
     # no matter what the user later signs into -- the account is chosen when the agent is
@@ -784,6 +819,15 @@ def main() -> None:
     # Apply the global git config (https rewrites) before any service or
     # agent runs git.
     _configure_git_global()
+
+    # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the
+    # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.
+    _ensure_git_identity()
+
+    # Commit the rsynced template and put the work_dir on `main`. Its own one-shot signal:
+    # it used to share the initial chat's, which tied "does this workspace have a main
+    # branch" to "does it have a chat" -- two questions with different answers.
+    _initialize_workspace_main_branch()
 
     # Converge the workspace venv BEFORE the initial chat agent is created
     # (below) and before supervisord's `uv run` services start, so nothing
