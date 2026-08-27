@@ -13,6 +13,8 @@ import pytest
 
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import read_index
+from imbue.system_interface.harnesses.binding import account_credential_path
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.auth_flows import FlowError
 from imbue.system_interface.harnesses.auth_flows import FlowShape
@@ -486,56 +488,6 @@ def test_re_keying_does_not_overwrite_a_browser_sign_in(tmp_path: Path) -> None:
     assert settings["env"]["ANTHROPIC_API_KEY"].endswith("C" * 40)
 
 
-def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path: Path) -> None:
-    """The one thing re-auth exists for, and it could not fail.
-
-    A re-auth keeps the folder, and three of the four promote probes are presence checks --
-    `claude auth status --json` reports loggedIn for a bogus key, and so do codex and pi. So
-    a user whose account died, who hit re-auth and then declined in the browser, was told
-    "signed in again" on the strength of the credential that was already there.
-    """
-    saw: list[bool] = []
-
-    def probe(_harness: object, path: Path) -> SignedIn:
-        # What the CLI would see: is there a credential in this folder right now?
-        saw.append((path / "auth.json").exists())
-        return SignedIn.YES if saw[-1] else SignedIn.NO
-
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=probe)
-    started = service.start("opencode-go", "api_key")
-    service.submit_key(started.flow_id, "live-key", "opencode-go")
-    (account,) = read_index(tmp_path).accounts
-    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
-
-    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
-    driving = AuthFlowService.create(
-        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=probe
-    )
-    driving.start("google", "oauth", account_id=account.id)
-
-    assert not path.exists(), "the old credential is still there for the probe to answer with"
-
-
-def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> None:
-    """Taking it away is only safe if every exit restores it: the credential the account had
-    is more use than none, and the user asked to REPLACE it, not to lose it."""
-    service = AuthFlowService.create(
-        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
-    )
-    started = service.start("opencode-go", "api_key")
-    service.submit_key(started.flow_id, "live-key", "opencode-go")
-    (account,) = read_index(tmp_path).accounts
-    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
-    before = path.read_text()
-
-    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
-    driving = AuthFlowService.create(
-        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=lambda *_a: SignedIn.YES
-    )
-    again = driving.start("google", "oauth", account_id=account.id)
-    driving.abort(again.flow_id)
-
-    assert path.read_text() == before
 
 
 def test_a_first_sign_in_clears_nothing(tmp_path: Path) -> None:
@@ -591,3 +543,52 @@ def test_a_failed_re_auth_restarts_nothing(tmp_path: Path) -> None:
     assert service.submit_key(again.flow_id, "bad", "opencode-go").state is FlowState.FAILED
 
     assert restarted == []
+
+def _agy_account(tmp_path: Path, service: AuthFlowService) -> tuple[str, Path]:
+    """A committed google account with a credential file where agy keeps one."""
+    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
+    service._spawner = lambda *_a, **_k: process
+    started = service.start("google", "oauth")
+    service.submit_code(started.flow_id, "4/0Aexample")
+    (account,) = read_index(tmp_path).accounts
+    token = account_credential_path(HarnessType.ANTIGRAVITY, tmp_path / ".minds" / "accounts" / account.id)
+    assert token is not None
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_text("live-token")
+    return account.id, token
+
+
+def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path: Path) -> None:
+    """The one thing re-auth exists for, and it could not fail.
+
+    A re-auth keeps the folder, and three of the four promote probes are presence checks --
+    `claude auth status --json` reports loggedIn for a bogus key, and so do codex and pi. So a
+    user whose account died, who hit re-auth and then declined in the browser, was told
+    "signed in again" on the strength of the credential that was already there.
+    """
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
+    account_id, token = _agy_account(tmp_path, service)
+
+    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
+    service._spawner = lambda *_a, **_k: process
+    service.start("google", "oauth", account_id=account_id)
+
+    assert not token.exists(), "the old credential is still there for the probe to answer with"
+
+
+def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> None:
+    """Taking it away is only safe if every exit restores it: the credential the account had
+    is more use than none, and the user asked to REPLACE it, not to lose it."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
+    account_id, token = _agy_account(tmp_path, service)
+
+    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
+    service._spawner = lambda *_a, **_k: process
+    again = service.start("google", "oauth", account_id=account_id)
+    service.abort(again.flow_id)
+
+    assert token.read_text() == "live-token"

@@ -24,6 +24,8 @@ import pytest
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
@@ -246,6 +248,7 @@ def _running_e2e_server(
                 "MNGR_HOST_DIR": str(tmp_path),
                 "MNGR_AGENT_ID": primary_agent_id,
                 "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
+                "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
             },
         ),
         patch("imbue.system_interface.server.discover_agents", return_value=agents),
@@ -255,6 +258,12 @@ def _running_e2e_server(
         # message sends succeed without contacting mngr. The UI renders its agent
         # list from the WebSocket agents_updated snapshot, which the server sends
         # from this manager on connect.
+        # A signed-in provider. Creating a chat -- including the starter chat a new project
+        # gets -- opens the chooser instead when there is none, which is correct behaviour and
+        # would leave a modal over the rail these tests click through.
+        account_id, _ = mint_account_dir()
+        commit_account(account_id, "anthropic", "Anthropic")
+
         broadcaster = WebSocketBroadcaster()
         manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())
         with manager._lock:

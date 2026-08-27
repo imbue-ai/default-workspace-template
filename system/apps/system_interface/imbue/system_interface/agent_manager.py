@@ -742,7 +742,7 @@ class AgentManager:
             if result.returncode == 0:
                 restarted += 1
             else:
-                logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
+                _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
         return restarted
 
     def get_chat_agent_ids(self) -> list[str]:

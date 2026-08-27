@@ -74,6 +74,8 @@ from imbue.system_interface.server import _build_fast_mode_answered_label_comman
 from imbue.system_interface.server import _build_stop_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.testing import FakeSupervisorServer
@@ -97,7 +99,20 @@ def config() -> Config:
 
 
 @pytest.fixture
-def app(config: Config) -> Flask:
+def signed_in_account() -> str:
+    """One provider account, because creating a chat now requires one.
+
+    There is no shared login to fall back to -- `resolve_binding` raises rather than binding an
+    agent to nothing -- so a create with no account is refused with a 400. Tests about naming,
+    conflicts and projects all create chats and none of them are about that.
+    """
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    return account_id
+
+
+@pytest.fixture
+def app(config: Config, signed_in_account: str) -> Flask:
     return create_application(build_test_state(config=config))
 
 
