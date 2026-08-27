@@ -698,3 +698,26 @@ internals, so it should survive a faithful rewrite and fail on an unfaithful one
 
 Writing it found that a read-only slot is deliberately still a `<button>`: a disabled one
 suppresses `:hover` and would kill the tooltip explaining why the model cannot be switched.
+
+# Test what nothing was testing
+
+Three gaps let every bug above ship green.
+
+`FakePexpectProcess.isalive()` was hardcoded true, so every "the CLI has exited" arm was
+unreachable from tests -- including codex's device flow, whose only success signal IS process
+exit. It is scriptable now.
+
+The provider routes had no request-level tests: seven routes composing hand-written dicts
+against a hand-written TypeScript interface, with no codegen and no schema, so renaming a key
+passed the type checker, the linter and both suites while every row rendered `undefined`. The
+new tests pin the key sets and the status codes. They also caught that a bad lane id returned
+a double-quoted message, because the error subclasses `KeyError` and `str()` adds its own.
+
+The chooser and the model bar had no test files at all. Both now have render smoke tests, run
+under a real DOM: mithril validates the keyed/unkeyed fragment rule during its DOM diff, not
+while building vnodes, so walking the tree cannot see the crash that froze this exact component
+on a spinner. Verified by reintroducing it -- the test fails with mithril's own message.
+
+And a trap that would have bitten the first person to write one of those route tests: the test
+app was wired with the production sign-in probe, which shells out to whatever claude/codex/agy/
+pi the machine has, over the network. It defaults to "could not run" now.
