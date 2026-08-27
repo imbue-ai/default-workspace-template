@@ -137,15 +137,24 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   function openCard(trigger: HTMLElement): void {
     cardAnchor = trigger.getBoundingClientRect();
-    flyout = null;
+    setFlyout(null);
     modelQuery = "";
-    confirmingRemoval = null;
   }
 
   function closeCard(): void {
     cardAnchor = null;
-    flyout = null;
-    confirmingRemoval = null;
+    setFlyout(null);
+  }
+
+  /** The ONLY way the open flyout changes.
+   *
+   *  An armed "Remove?" belongs to the submenu it was armed in and must outlive everything
+   *  short of that submenu going away -- another row being pressed, the pointer wandering off,
+   *  a redraw. Routing every change through here is what makes "until the submenu closes"
+   *  true by construction rather than by remembering to clear it at four call sites. */
+  function setFlyout(next: "model" | "providers" | null): void {
+    if (next !== flyout) confirmingRemoval = null;
+    flyout = next;
   }
 
   /** A click outside the card, its flyout and its trigger closes the whole stack -- and only
@@ -200,8 +209,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           if (!opts.openable) return;
           flyoutRowTop = (event.currentTarget as HTMLElement).getBoundingClientRect().top - 6;
           const opening = flyout !== opts.which;
-          flyout = opening ? opts.which : null;
-          confirmingRemoval = null;
+          setFlyout(opening ? opts.which : null);
           if (opening) {
             modelQuery = "";
             opts.onOpen?.();
@@ -421,7 +429,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                       // time. Opening a new chat on it is the reachable version of the wish,
                       // but it is a different act, so it is the tooltip's offer -- not
                       // something a click on a disabled-looking row does by surprise.
-                      if (isCurrent) flyout = null;
+                      if (isCurrent) setFlyout(null);
                     },
                   },
                   [
@@ -530,7 +538,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                         fast: option.supports_fast ? currentIdentity.fast : false,
                       };
                       setModelChoice(agentId, next, option, changedAxes(currentIdentity, next), optimistic);
-                      flyout = null;
+                      setFlyout(null);
                     },
                   },
                   [

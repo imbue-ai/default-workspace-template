@@ -26,7 +26,7 @@ export function Portal(): m.Component<{ children: m.Children }> {
   return {
     onremove() {
       if (host !== null) {
-        for (const type of REDRAW_EVENTS) host.removeEventListener(type, redraw);
+        for (const type of REDRAW_EVENTS) host.removeEventListener(type, redraw, true);
         m.render(host, null);
         host.remove();
         host = null;
@@ -38,7 +38,12 @@ export function Portal(): m.Component<{ children: m.Children }> {
       if (host === null) {
         host = document.createElement("div");
         document.body.appendChild(host);
-        for (const type of REDRAW_EVENTS) host.addEventListener(type, redraw);
+        // CAPTURE phase. A handler is free to close the popover it lives in, which detaches
+        // the element the event was dispatched on -- and a bubble-phase listener on an
+        // ancestor is not reliably reached once that happens. Capture always runs, and
+        // `m.redraw` is frame-batched rather than synchronous, so the redraw still lands
+        // after the handler it is meant to reflect.
+        for (const type of REDRAW_EVENTS) host.addEventListener(type, redraw, true);
       }
       m.render(host, vnode.attrs.children);
       return null;

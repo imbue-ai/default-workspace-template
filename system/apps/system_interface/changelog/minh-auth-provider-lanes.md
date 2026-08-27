@@ -874,3 +874,41 @@ twice -- and says it less usefully, since it named the harness rather than the a
 `dropdown-position.ts` goes with it. It placed the old bar's dropdowns on one axis; the card's
 flyouts need both, a height cap and a side to flip to, which is `flyout-position.ts`, and
 nothing else wanted the old one.
+
+# Make the pickers actually respond
+
+The card and its flyouts are drawn through `Portal`, which uses `m.render`. That is mithril's
+manual API and it deliberately does not wire auto-redraw into event handlers -- only `m.mount`
+does. So every handler inside a portalled popover changed state and nothing re-rendered: a row
+click opened no flyout, a trash click armed no "Remove?", and the click after that read as
+outside and tore the whole stack down. It looked like a dozen separate bugs and was one.
+`Portal` now re-adds what `m.mount` would have.
+
+Outside-click asks the DOM (`closest` for a popover marker) instead of element references
+captured in `oncreate`. A reference that was stale or arrived late made an inside click read as
+outside, and the popover died on mousedown -- before the click it was meant to act on landed.
+
+Tooltips move to `hoverTooltip.ts`, the app's body-level bubble. The chip ported from the mockup
+sat inside two `overflow-hidden`, `z-[120]` boxes, so it was clipped mid-sentence and could
+never rise above the flyout beside it. That module exists precisely because this app clips CSS
+bubbles; not using it was the mistake.
+
+Every flyout change routes through one setter, so an armed "Remove?" outlives everything short
+of its own submenu closing.
+
+# Smaller corrections
+
+The composer chip separates model, effort and fast with dots rather than running the bolt onto
+the effort. Effort tick marks are dark, 2px, and taller than the knob, so they read as the
+delimiters they are. The stop button says "Interrupt agent" unless something is actually
+queued, rather than promising to hand back messages that do not exist. The code field loses its
+`CODE#STATE` placeholder, which described one lane's shape and misdescribed the others.
+
+# Greet a new workspace
+
+A workspace with nothing signed in cannot start a chat, so every affordance on the new tab is a
+dead end until a provider is added. The chooser opens once, the first time that is true -- not
+on reload, not on reboot, and not the next time the list happens to be empty, because someone
+who removed their last provider has already met the screen. The chooser itself is half again as
+big: it is the first thing a new workspace shows and it carries the decision the product hangs
+on.
