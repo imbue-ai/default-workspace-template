@@ -857,13 +857,11 @@ def _get_harnesses_endpoint() -> Response:
         except (OSError, ValueError) as e:
             logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
             continue
-        # The catalog model is the wire shape for the model bar; the popup and
-        # agent-auth declarations live on the HarnessSpec and are merged in here
-        # so one response carries everything the frontend keys by harness.
+        # The catalog model is the wire shape for the model bar; the popup declarations
+        # live on the HarnessSpec and are merged in here so one response carries
+        # everything the frontend keys by harness.
         spec = get_harness_spec(harness)
         catalog["popups"] = [popup.model_dump() for popup in spec.popups]
-        catalog["auth_modal"] = spec.auth_modal
-        catalog["auth_instructions"] = spec.auth_instructions
         catalogs[harness.value] = catalog
     return _json_response(catalogs)
 
@@ -2572,7 +2570,9 @@ def _create_chat_agent() -> Response:
         create_request = CreateChatRequest.model_validate(request_fields)
         created = agent_manager.create_chat_agent(
             create_request.name,
-            extra_role_templates=("first",) if create_request.first else (),
+            # The `first` create template belongs to the workspace's own first run, not to
+            # anything a client asks for -- bootstrap stacks it on its own `mngr create`.
+            extra_role_templates=(),
             project_id=project_id,
             extra_taken_names=titled_names,
             account_id=create_request.account_id,

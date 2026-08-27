@@ -3354,8 +3354,9 @@ function openTabOfTypeInGroup(
   // the name is auto-minted like every other create.
   if (target.kind === "chat") {
     // Nothing signed in means nothing to launch on, so send the user to the chooser
-    // rather than starting a chat that cannot take a turn. The first claude account
-    // adopts ~/.claude, so "no accounts" really does mean no credential.
+    // rather than starting a chat that cannot take a turn. Auth lives entirely in
+    // accounts now -- the shared settings-env writer is gone and `~/.claude` is left
+    // alone -- so "no accounts" really does mean no credential.
     if (target.accountId === "" && getAccounts().length === 0) {
       releaseLauncherCreate(launcherPanelId);
       openProviderChooser();

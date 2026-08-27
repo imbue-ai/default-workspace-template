@@ -133,8 +133,8 @@ def main() -> None:
     # Every other JSON reader in this app degrades with a warning; so does this one.
     try:
         reconcile()
-    except AccountError:
-        logger.exception("Could not reconcile the account store; continuing without it")
+    except AccountError as e:
+        logger.opt(exception=e).error("Could not reconcile the account store; continuing without it")
     application = build_application(config, args)
     with application.app_context():
         state = get_state()

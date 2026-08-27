@@ -1,80 +1,36 @@
-"""In-mind Claude authentication: settings-env credential writes, setup-token flow, agent restarts.
+"""What is left of the claude login modal's backend: reading and parsing claude's auth state.
 
-Implements the backend half of the in-UI Claude login modal. All credentials
-live in the ``env`` block of the shared ``~/.claude/settings.json`` (the
-config dir every claude in the mind resolves by claude's own default --
-``CLAUDE_CONFIG_DIR`` is deliberately unset workspace-wide), NEVER in the
-mngr host env file: the host env file is frozen into long-lived processes
-(supervisord and its services) at boot, so changing it would require tearing
-down the whole workspace, while a settings.json edit only requires
-restarting the claude agents themselves.
+Sign-in moved to the provider chooser, which is harness-agnostic and writes into a
+per-account folder (`accounts.py`, `harnesses/auth_flows.py`). The pieces that made this
+module the *writer* of the workspace's one shared credential went with it:
 
-Five sign-in paths:
+* `write_managed_auth_env` -- the shared `settings.json` env block. An account's own
+  settings.json is written by `auth_flows.write_claude_env` now.
+* `restart_all_claude_agents` and its snapshot/resume machinery -- a shared credential had
+  to be pushed into every running agent, since claude reads settings-env at process start.
+  An account is chosen at create time instead, so nothing needs restarting.
+* the setup-token PTY flow -- `harnesses/pty_auth.py` drives every harness's terminal
+  sign-in now, and `lanes.py` says which patterns each one needs.
 
-1. Subscription (primary): `claude auth login --claudeai` is driven via
-   pexpect. The CLI prints an `oauth/authorize` URL, the user approves in
-   the browser and pastes the shown code (the CLI can also complete on its
-   own via its polling). The credential is stored by the CLI itself and
-   running claudes re-read it on their next API call, so a fresh workspace
-   signs in with NO restart. Managed settings-env keys outrank this
-   credential, so when any are active the sign-in clears them and restarts
-   the agents (the switching case).
-2. Raw API key: written as ``ANTHROPIC_API_KEY`` into the settings env.
-3. Imbue (LiteLLM): an env-var-style blob pasted from the desktop app's
-   mint page, written as ``ANTHROPIC_API_KEY`` + ``ANTHROPIC_BASE_URL``.
-4. Long-lived token: `claude setup-token` via the same PTY machinery; the
-   minted 1-year token is written as ``CLAUDE_CODE_OAUTH_TOKEN``.
-5. Anthropic Console: `claude auth login --console`; its key lands inside
-   `.claude.json` (cached at claude process start), so it always clears
-   the managed keys and restarts the agents.
+What remains is the read side, still used by two callers:
 
-Paths 2 and 3 (and a subtle "paste an existing token" affordance) share one
-strict env-lines parser: only the three managed keys are accepted, and
-mixed-mode pastes (an OAuth token alongside an API key) are rejected so the
-written state is always unambiguous. The writer fully controls the managed
-keys -- switching modes deletes the other mode's keys.
-
-Every successful write restarts the mind's claude-binary agents (every
-claude-parented type: ``claude``, ``chat``, and ``worker``; the ``main``
-services agent is excluded -- its window 0 never runs a live claude, and
-restarting it would tear down supervisord and every background service).
-Settings-env values are read at claude process start, so a restart is what
-makes new credentials take effect. Agent states are snapshotted (via
-``mngr list``) before stopping:
-agents that were RUNNING mid-task get a "please continue" message after the
-restart so unattended workers resume instead of silently dying; WAITING
-agents need nothing (their next user message starts them with the fresh
-env); STOPPED agents are left stopped.
-
-Besides the settings env block, an apply that writes an
-``ANTHROPIC_API_KEY`` also records the key's approval in the shared
-`.claude.json` (``customApiKeyResponses.approved``): interactive claude
-challenges any unapproved key it sees in env -- settings-env keys
-included -- with a TUI dialog that would deadlock the restarted agent
-(mngr's claude plugin records approvals at agent-creation time only, and
-these keys arrive later). The other startup dialog dismissals in
-`.claude.json` are guaranteed by mngr's claude plugin at agent-creation
-time. There is deliberately no pre-restart credential probe: a bad
-credential surfaces on the agent's first request, where the transcript
-auth-error detection reopens the modal.
-
-Dependencies that touch the outside world (subprocess invocation and
-pexpect-driven PTY spawning) are injected into `ClaudeAuthService` at
-construction so tests can substitute deterministic fakes without
-`unittest.mock` or module-level monkeypatching.
+* `get_auth_status` backs `GET /api/claude-auth/status`, which mngr's own deployment test
+  drives, and answers "what is this claude authenticated as" for a given environment.
+* `parse_credential_lines` / `MANAGED_AUTH_ENV_KEYS` / `record_api_key_approval` are the
+  vocabulary of a claude credential -- what the three managed keys are, what a pasted
+  env-lines blob may contain, and how to stop claude challenging a key it has not seen.
+  The chooser's paste lane uses all three.
 """
 
 from __future__ import annotations
 
+
 import json
 import os
 import re
-import threading
 import time
-import uuid
 from collections.abc import Callable
 from collections.abc import Mapping
-from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -83,7 +39,6 @@ from typing import Final
 import pexpect
 from loguru import logger as _loguru_logger
 from pydantic import Field
-from pydantic import PrivateAttr
 
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
@@ -91,18 +46,12 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
-from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.mngr.utils.env_utils import parse_env_file
 from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
 from imbue.mngr_claude.claude_config import get_claude_config_dir
 from imbue.system_interface.harnesses.pty_auth import PtyAuthError
-from imbue.system_interface.harnesses.pty_auth import drain_pty_stream
-from imbue.system_interface.harnesses.pty_auth import drain_pty_stream_until_quiet
 from imbue.system_interface.harnesses.pty_auth import extract_hyperlink_value
 from imbue.system_interface.harnesses.pty_auth import extract_wrapped_value
-from imbue.system_interface.harnesses.pty_auth import safe_close
-from imbue.system_interface.harnesses.pty_auth import safe_terminate
-from imbue.system_interface.harnesses.pty_auth import spawn_pty
 
 logger = _loguru_logger
 
@@ -176,10 +125,6 @@ CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "chat", 
 # restart tore them down, so unattended work resumes instead of silently
 # stopping. WAITING agents are not messaged: their next user message starts
 # them under the fresh env anyway.
-RESTART_CONTINUE_MESSAGE: Final[str] = (
-    "Your Claude credentials were just updated and your session was restarted. "
-    "Please continue what you were working on."
-)
 
 
 class ClaudeAuthError(PtyAuthError):
@@ -193,17 +138,12 @@ class CredentialPasteError(ClaudeAuthError):
 # Public type aliases for dependency injection. Tests pass deterministic
 # fakes to `ClaudeAuthService`; production code uses the module defaults.
 CommandRunner = Callable[..., Any]
-PexpectSpawner = Callable[..., Any]
 
 
 def _default_command_runner(command: list[str], timeout: float, env: Mapping[str, str] | None = None) -> Any:
     return run_local_command_modern_version(command=command, is_checked=False, timeout=timeout, cwd=None, env=env)
 
 
-def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -> Any:
-    # Geometry, encoding and the expect-default timeout all live in spawn_pty,
-    # which pins the same dimensions the extraction replays the stream at.
-    return spawn_pty(executable, args, timeout)
 
 
 class AuthMode(str, Enum):
@@ -222,18 +162,8 @@ class AuthMode(str, Enum):
     NONE = "none"
 
 
-class OAuthProvider(str, Enum):
-    """Which `claude auth login` provider a browser sign-in session targets."""
-
-    CLAUDEAI = "claudeai"
-    CONSOLE = "console"
 
 
-class AuthFlowKind(str, Enum):
-    """Which PTY-driven auth flow an in-flight session is running."""
-
-    SETUP_TOKEN = "setup_token"
-    OAUTH_LOGIN = "oauth_login"
 
 
 
@@ -274,38 +204,12 @@ class AuthStatus(FrozenModel):
 
 
 
-class AuthFlowStartResult(FrozenModel):
-    """Result of spawning a PTY auth flow (`claude setup-token` or `claude auth login`)."""
-
-    session_id: str = Field(description="Opaque token for the in-flight session")
-    oauth_url: str = Field(description="URL the user opens to authorize the login")
 
 
-class AuthFlowPollResult(FrozenModel):
-    """Result of polling an in-flight PTY auth flow."""
-
-    is_complete: bool = Field(description="Whether the flow completed and was applied")
-    status: AuthStatus | None = Field(default=None, description="Auth status after completion; None while pending")
 
 
-class _AuthFlowSessionRecord(FrozenModel):
-    """Immutable handle for an in-flight PTY auth subprocess.
-
-    Pairs with a parallel non-frozen slot that holds the live pexpect
-    process object, since that object is not Pydantic-serializable.
-    """
-
-    session_id: str
-    kind: AuthFlowKind
-    provider: OAuthProvider | None
-    oauth_url: str
 
 
-class AgentSnapshot(FrozenModel):
-    """One claude-binary agent's name and lifecycle state at snapshot time."""
-
-    name: str = Field(description="Agent name (used to address mngr stop/start/message)")
-    state: str = Field(description="Lifecycle state string from mngr list (e.g. 'RUNNING', 'WAITING')")
 
 
 def _coerce_str_or_none(value: object) -> str | None:
@@ -584,30 +488,6 @@ class ClaudeAuthService(MutableModel):
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
     command_runner: CommandRunner = _default_command_runner
-    pexpect_spawner: PexpectSpawner = _default_pexpect_spawner
-    # Consulted just before an auth-apply restart: the name of the initial
-    # chat agent when it has never rendered the welcome (see
-    # WelcomeResender.never_welcomed_agent_name), or None. Such an agent is
-    # restarted idle even when it snapshots as RUNNING -- its only "work" is
-    # the failed pre-auth /welcome (whose API-error ending strands the active
-    # marker), and the post-restart welcome resend is its real resumption.
-    # None (the default) disables the suppression (tests, minimal setups).
-    resolve_never_welcomed_agent_name: Callable[[], str | None] | None = None
-
-    # Only one setup-token flow can be live at a time per instance, which
-    # matches the single-mind / single-user deployment model. The lock and
-    # the live subprocess are private runtime state, not configuration data.
-    _setup_token_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _current_setup_token_record: _AuthFlowSessionRecord | None = PrivateAttr(default=None)
-    _current_setup_token_process: Any = PrivateAttr(default=None)
-    _current_setup_token_output: str = PrivateAttr(default="")
-
-    # The post-auth agent restart runs on a background thread so the submit
-    # endpoints return in seconds (the proxied request path has a 30s
-    # ceiling, and a batch restart can take minutes). Single-flight: a new
-    # credential change is rejected while a restart is still running.
-    _restart_state_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _restart_thread: threading.Thread | None = PrivateAttr(default=None)
 
     def get_auth_status(self, extra_env: Mapping[str, str] | None = None) -> AuthStatus:
         """Invoke `claude auth status --json` and parse the result.

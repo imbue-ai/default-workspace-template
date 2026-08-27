@@ -61,8 +61,6 @@ export interface HarnessCatalog {
   // payload from the backend HarnessSpec. Optional so a stale backend without
   // them degrades to "no popups" rather than a parse failure.
   popups?: HarnessPopup[];
-  auth_modal?: "managed" | "terminal";
-  auth_instructions?: string | null;
 }
 
 const catalogByHarness = new Map<string, HarnessCatalog>();

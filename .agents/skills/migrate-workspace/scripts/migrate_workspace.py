@@ -555,10 +555,10 @@ def resolve_agent_sessions(
 
     ``history_text`` is that file's contents -- an append-only log of
     ``"<session_id> <source>"`` lines, oldest first. ``session_paths`` is the
-    flat listing of ``<session_id>.jsonl`` files in the shared ``projects/``
-    tree; this file is what makes the mapping possible at all, since every minds
-    chat agent shares one ``CLAUDE_CONFIG_DIR`` and so all of their sessions sit
-    in that one tree with nothing but the id to tell them apart.
+    flat listing of ``<session_id>.jsonl`` files in a ``projects/`` tree; this
+    file is what makes the mapping possible at all, since every chat created on
+    the same provider account shares that account's ``CLAUDE_CONFIG_DIR`` and so
+    their sessions sit in one tree with nothing but the id to tell them apart.
 
     Returns ``(session_files, unresolved_ids)`` with the files in history order
     and duplicates dropped, so passing them to ``--adopt`` in order resumes the

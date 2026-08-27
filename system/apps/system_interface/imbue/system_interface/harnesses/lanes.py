@@ -54,7 +54,6 @@ class EofPolicy(StrEnum):
 
     SUCCESS = "success"
     FAILURE = "failure"
-    RESCAN = "rescan"
 
 
 class Submit(StrEnum):
@@ -76,10 +75,6 @@ class PasteSink(StrEnum):
     CLAUDE_ENV = "claude_env"
     # A 0600 JSON map keyed by pi's provider id.
     PI_AUTH_JSON = "pi_auth_json"
-    # Fed to `codex login --with-api-key` on stdin; codex writes its own store. Not offered
-    # yet: every command runner in production system_interface pins stdin to DEVNULL, so this
-    # needs one that can write to a child before it can be a real method.
-    CODEX_STDIN = "codex_stdin"
 
 
 class Scrape(FrozenModel):
@@ -246,7 +241,7 @@ LANE_ANTHROPIC = Lane(
             scrape=_CLAUDE_URL_SCRAPE,
             success=r"Login successful",
             failures=_CLAUDE_FAILURES,
-            eof_policy=EofPolicy.RESCAN,
+            eof_policy=EofPolicy.FAILURE,
         ),
         PasteMethod(
             id="api_key",
@@ -273,7 +268,7 @@ LANE_ANTHROPIC = Lane(
             scrape=_CLAUDE_URL_SCRAPE,
             success=r"Login successful",
             failures=_CLAUDE_FAILURES,
-            eof_policy=EofPolicy.RESCAN,
+            eof_policy=EofPolicy.FAILURE,
         ),
     ),
 )

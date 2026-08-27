@@ -6,3 +6,8 @@ a cron job, nothing set it and `~/.claude` holds no credential now that auth liv
 so every AI-driven app the user built stopped working there. It reads the account index
 directly rather than importing the system-interface package, since it runs from whatever
 environment its caller has.
+
+`use-ai-integration` and `migrate-workspace` documented the shared `~/.claude` contract, which
+has not been true since credentials moved into per-account folders. `migrate-workspace` in
+particular claimed every chat agent shares one `projects/` tree; sessions are now spread across
+one tree per account, which a migration has to walk.

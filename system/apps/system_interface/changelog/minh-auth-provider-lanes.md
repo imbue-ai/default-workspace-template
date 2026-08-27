@@ -638,3 +638,28 @@ uses the shared backdrop helper, which keys off mouse down on the backdrop itsel
 - Accounts are numbered by what their label says, not by lane. Two lanes run on pi and could
   both mint an OpenRouter account, giving two rows reading "OpenRouter (Pi)"; meanwhile a lane
   offering many providers numbered its only Groq account "Groq (Pi) 2".
+
+# Delete what the old sign-in left behind
+
+`HarnessSpec.auth_modal` and `auth_instructions` are gone, along with `AuthModalKind` and the
+two `/api/harnesses` fields carrying them. They described a per-harness auth surface that no
+longer exists -- every harness signs in through the same chooser -- and they were still telling
+the client to send users to a terminal.
+
+`claude/auth.py` keeps only its read side: `get_auth_status`, and the vocabulary of a claude
+credential (the three managed keys, the env-lines parser, the API-key approval). The
+setup-token session record, the OAuth-provider and flow-kind enums, the restart snapshot and
+its continue message, and the pexpect spawner all left with the modal. Its docstring described
+a system that had been deleted; it now says what is left and where the rest went.
+
+`EofPolicy.RESCAN` never reached a terminal state -- the settle path tests success and failure
+only -- so its only effect was to hold a finished claude sign-in pending for its whole deadline.
+Both claude methods use `FAILURE`, which is what they were already relying on.
+
+`PasteSink.CODEX_STDIN` and `CreateChatRequest.first` had no producer at all.
+
+One default-account rule instead of three. `resolve_account` answers an explicit id only;
+"which account should a new agent use" belongs to `resolve_binding`, which knows which lanes
+this build has. The live path now also gets the folder check the explicit path always had, and
+it agrees with what the picker shows -- the launcher and a new project's starter chat could
+previously land on different providers with nothing saying so.
