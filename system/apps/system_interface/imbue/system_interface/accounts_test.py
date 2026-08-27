@@ -13,6 +13,7 @@ from imbue.system_interface.accounts import Account
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import account_dir
 from imbue.system_interface.accounts import accounts_root
+from imbue.system_interface.accounts import claim_first_chat
 from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import delete_account
 from imbue.system_interface.accounts import discard_account_dir
@@ -293,3 +294,25 @@ def test_the_lock_file_is_not_mistaken_for_an_account(tmp_path: Path) -> None:
 
     assert removed == () and dropped == ()
     assert (accounts_root(tmp_path) / "index.lock").exists()
+
+
+def test_the_first_chat_is_claimed_exactly_once(tmp_path: Path) -> None:
+    """It is what stacks the `first` template, and therefore what delivers `/welcome`.
+
+    Bootstrap used to own this by creating a chat at boot. It cannot now: a chat needs a
+    provider account and a fresh workspace has none.
+    """
+    assert claim_first_chat(tmp_path) is True
+    assert claim_first_chat(tmp_path) is False
+    assert claim_first_chat(tmp_path) is False
+
+
+def test_the_first_chat_marker_survives_deleting_every_account(tmp_path: Path) -> None:
+    """Signing out of everything does not make the next chat a first chat again -- the user
+    has already been welcomed, and being welcomed twice reads as the workspace forgetting."""
+    account_id, _ = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    assert claim_first_chat(tmp_path) is True
+    delete_account(account_id, tmp_path)
+
+    assert claim_first_chat(tmp_path) is False

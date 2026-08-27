@@ -52,6 +52,7 @@ from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.agent_discovery import delivered_or_raise
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.accounts import AccountError
+from imbue.system_interface.accounts import claim_first_chat
 from imbue.system_interface.accounts import account_dir
 from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.agent_discovery import get_host_dir
@@ -1220,6 +1221,13 @@ class AgentManager:
                 "--label",
                 f"account={account.id}",
             ]
+
+        # The workspace's very first chat gets the `first` template, which is what delivers
+        # `/welcome`. Bootstrap used to own this by creating a chat at boot; it cannot now,
+        # because a chat needs a provider account and a fresh workspace has none. Claimed
+        # here rather than by the caller so every path that starts a chat is covered.
+        if claim_first_chat():
+            extra_role_templates = (*extra_role_templates, "first")
 
         cmd = _build_chat_create_command(
             self._mngr_binary,

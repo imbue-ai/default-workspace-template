@@ -3359,7 +3359,13 @@ function openTabOfTypeInGroup(
     // alone -- so "no accounts" really does mean no credential.
     if (target.accountId === "" && getAccounts().length === 0) {
       releaseLauncherCreate(launcherPanelId);
-      openProviderChooser();
+      // They asked for a chat and had to sign in on the way, so finish what they asked for
+      // rather than leaving them back on the launcher with a provider and no chat.
+      openProviderChooser({
+        onSignedIn: (accountId) => {
+          void openNewChat(targetGroup, launcherPanelId, accountId).finally(() => m.redraw());
+        },
+      });
       return null;
     }
     return openNewChat(targetGroup, launcherPanelId, target.accountId).finally(() => {

@@ -383,7 +383,7 @@ export interface NewTabLauncherAttrs {
  *
  *  Cross-PROVIDER switching mid-chat is not supported yet, which is exactly why the choice
  *  belongs here, before the chat exists. */
-function providerSelect(): m.Vnode {
+function providerSelect(onOpenNew: (target: LaunchTarget) => void): m.Vnode {
   const account = getSelectedAccount();
   const accounts = getAccounts();
   return m(
@@ -404,7 +404,11 @@ function providerSelect(): m.Vnode {
       onchange: (event: Event) => {
         const chosen = (event.target as HTMLSelectElement).value;
         if (chosen === ADD_PROVIDER_VALUE) {
-          openProviderChooser();
+          // Adding a provider from the new-tab screen opens a chat on it: this picker exists
+          // to choose what the next chat runs on, so signing in IS choosing.
+          openProviderChooser({
+            onSignedIn: (accountId) => onOpenNew({ kind: "chat", accountId }),
+          });
           return;
         }
         if (chosen !== NO_PROVIDER_VALUE) selectAccount(chosen);
@@ -683,7 +687,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                     ],
                   ),
                   isChatTile ? m("span", { class: "bg-border w-px self-stretch" }) : null,
-                  isChatTile ? providerSelect() : null,
+                  isChatTile ? providerSelect(attrs.onOpenNew) : null,
                 ],
               );
             }),
