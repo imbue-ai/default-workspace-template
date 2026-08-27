@@ -162,8 +162,14 @@ def perform_restore(
     if app.name in UNRESTORABLE_APP_NAMES:
         raise RestoreError(f"{app.title} can be browsed here but not restored")
     with operation_lock(lock_file):
+        # Saving the dirty config here also keeps the restore commit clean, since staging a
+        # shared file sweeps up whatever else is pending in it -- another app's pending entry
+        # rides along in this save rather than being lost.
         dirty_paths = git_repo.read_dirty_paths_under(app.package_dir)
-        if len(dirty_paths) > 0:
+        is_startup_config_dirty = app.program is not None and (
+            len(git_repo.read_dirty_paths_under(SUPERVISORD_CONFIG_PATH)) > 0
+        )
+        if len(dirty_paths) > 0 or is_startup_config_dirty:
             logger.debug("Saving {} in-progress files before restore", len(dirty_paths))
             wip_trailers = serialize_trailer_block(
                 TrailerBlock(
@@ -172,8 +178,9 @@ def perform_restore(
                     kind=VersionKind.CHANGE,
                 )
             )
+            saved_paths = [app.package_dir] + ([SUPERVISORD_CONFIG_PATH] if is_startup_config_dirty else [])
             git_repo.commit_paths(
-                [app.package_dir],
+                saved_paths,
                 f"versioning: save work in progress on {app.name}\n\n{wip_trailers}",
             )
 
