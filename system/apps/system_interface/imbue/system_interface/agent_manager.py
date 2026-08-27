@@ -533,7 +533,7 @@ class AgentManager:
     # re-derives it when the agent's model_state.json changes. The live read is
     # harness-neutral (the shared reader + the harness's registered state-file path), so
     # there is no per-agent resolver to cache -- the switch endpoint builds one inline.
-    # None = the harness has recorded no model yet -> the bar renders logo-only.
+    # None = the harness has recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
     _model_watcher_by_agent: dict[str, PathWatcher]
     # Assist chats whose tab we have already auto-opened (or that existed at
@@ -773,6 +773,18 @@ class AgentManager:
         with self._lock:
             match = self._match_by_agent_id.get(agent_id)
             return [match] if match is not None else []
+
+    def is_agent_alive(self, agent_id: str) -> bool:
+        """Whether the agent's process is not POSITIVELY dead.
+
+        Same rule the activity gate uses: everything outside the dead states counts as alive,
+        and an unknown/unobservable lifecycle is non-evidence rather than death. An agent we
+        have no record of is treated as dead -- the safe direction for the one caller, the
+        antigravity flush, which must never resurrect a stopped agent to deliver its queue.
+        """
+        with self._lock:
+            agent_state = self._agents.get(agent_id)
+        return agent_state is not None and not is_lifecycle_dead(agent_state.state)
 
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> bool:
         """Send a message to the agent with ``agent_id``, using the live location cache.
@@ -1939,7 +1951,7 @@ class AgentManager:
             if agent_state is None:
                 return
             # identity is None when the harness has recorded no model yet (e.g. before a
-            # session's first statusline fire, or a remote agent) -> no choice, logo-only.
+            # session's first statusline fire, or a remote agent) -> no choice, no slots.
             if identity is None:
                 choice: ModelChoice | None = None
             else:
@@ -1985,16 +1997,23 @@ class AgentManager:
         """Return the agent's process-start mtime, resolving its marker by harness.
 
         The OOM prioritizer knows only an agent id, but the marker filename is
-        harness-specific (see ``_read_process_started_at``), so the agent's own
-        activity tracker supplies it -- which keeps the prioritizer's aging
-        correct for codex and pi agents, not just claude ones. Returns ``None``
-        when no tracker is registered yet (an agent seen but not yet wired up),
-        so the prioritizer falls back exactly as it does for a missing marker.
+        harness-specific (see ``_read_process_started_at``), so it comes from the
+        agent's ``HarnessSpec`` -- harness identity, known as soon as the agent is
+        known. This deliberately does NOT ask the agent's activity tracker: a
+        tracker is an instance registered by ``_ensure_activity_tracking``, which
+        skips any agent with no local state dir and has not necessarily run for a
+        just-discovered agent, so the prioritizer silently lost its aging for
+        exactly the agents it most needs to age. Returns ``None`` only when the
+        agent itself is unknown.
         """
-        tracker = self._activity_tracker_by_agent.get(agent_id)
-        if tracker is None:
+        # Lock-free ``dict.get`` (atomic under the GIL), matching what this method did
+        # before: it is injected as a callback into the OOM prioritizer and so can be
+        # invoked from a thread that already holds ``_lock``, which is not reentrant.
+        agent_state = self._agents.get(agent_id)
+        if agent_state is None:
             return None
-        return self._read_process_started_at(agent_id, tracker.marker_filename)
+        marker_filename = get_harness_spec(agent_state.harness).process_started_marker_filename
+        return self._read_process_started_at(agent_id, marker_filename)
 
     def _recompute_activity_state(self, agent_id: str, *, broadcast_on_change: bool) -> None:
         """Recompute activity state for ``agent_id`` from cached transcript signals.

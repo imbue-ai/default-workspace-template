@@ -133,6 +133,12 @@ class SwitchMode(StrEnum):
     # choice reads as instant while never showing a value the daemon has not accepted. The frontend
     # derives ``optimistic = switch_mode === "eager_then_reconcile"``, so this yields no overlay.
     ON_CHANGE = "on_change"
+    # Display-only: the bar REFLECTS the harness's model and cannot drive it. The frontend
+    # renders the slots non-interactive (a readonly trigger + "use the agent terminal"
+    # tooltip) and never opens a picker. antigravity uses it: agy's `/model` is an
+    # interactive TUI picker with no scriptable one-shot form, and its `--model` flag applies
+    # only at launch, so there is no mid-session switch to offer.
+    READ_ONLY = "read_only"
 
 
 class PickerMode(StrEnum):
@@ -203,7 +209,7 @@ def read_model_identity(state_path: Path) -> ModelIdentity | None:
 
     Reads the uniform ``{"model", "effort", "fast"}`` schema every harness writes. Returns
     None when the file is absent, unparseable, or records no model yet (the bar shows
-    logo-only). Unknown keys are ignored, so an older writer emitting a different effort/tier
+    no slots). Unknown keys are ignored, so an older writer emitting a different effort/tier
     schema still lights the model chip (``model`` is unchanged) with effort None / fast off
     rather than crashing.
     """
