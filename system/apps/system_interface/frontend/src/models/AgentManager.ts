@@ -878,18 +878,15 @@ export interface CreatedChatAgent {
  * chat started outside any project. Throws with the server's detail on
  * rejection.
  */
-export async function createChatAgent(
-  projectId: string,
-  harness: ChatHarness = "claude",
-  accountId: string = "",
-): Promise<CreatedChatAgent> {
+export async function createChatAgent(projectId: string, accountId: string = ""): Promise<CreatedChatAgent> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // No `first`: the `first` create template belongs to the workspace's own first
-    // run, not to anything a user clicks. An empty account_id lets the server pick
-    // the most recently used one on this harness.
-    body: JSON.stringify({ project_id: projectId, harness, account_id: accountId }),
+    // No harness: the account decides it, so naming one here could only ever
+    // contradict the credential the chat will actually run on. No `first` either --
+    // that create template belongs to the workspace's own first run, not to anything
+    // a user clicks. An empty account_id takes the most recently used account.
+    body: JSON.stringify({ project_id: projectId, account_id: accountId }),
   });
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as { detail?: string };

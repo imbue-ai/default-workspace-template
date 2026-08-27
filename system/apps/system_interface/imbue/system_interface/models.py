@@ -338,7 +338,6 @@ class CreateChatRequest(FrozenModel):
         description="Display name for the new chat agent; empty mints the first free "
         '"<word> N" for the harness server-side ("Chat 1", "Codex 2", ...)',
     )
-    harness: HarnessType = Field(default=HarnessType.CLAUDE, description="Harness to run the agent on")
     first: bool = Field(
         default=False,
         description="Stack the `first` create template: /welcome, the first=true label, and a fast-mode launch",

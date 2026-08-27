@@ -110,7 +110,6 @@ import {
   type MemberLocationListener,
   type MemberTitleListener,
   type ProjectSyncEvent,
-  type ChatHarness,
   type ProjectSyncListener,
   type TerminalSessionInfo,
   type TerminalSessionListener,
@@ -2855,14 +2854,13 @@ async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise
 async function openNewChat(
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
-  harness: ChatHarness = "claude",
   accountId: string = "",
 ): Promise<void> {
   const viewId = mountedViewId;
   const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
   let created: CreatedChatAgent;
   try {
-    created = await createChatAgent(projectId, harness, accountId);
+    created = await createChatAgent(projectId, accountId);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
@@ -3359,7 +3357,7 @@ function openTabOfTypeInGroup(
     // login and a boot chat, so a chat with no account behaves exactly as it did
     // before accounts existed. Once the first-run redesign removes both, this is
     // where "nothing signed in" starts sending the user to the chooser instead.
-    return openNewChat(targetGroup, launcherPanelId, target.harness, target.accountId).finally(() => {
+    return openNewChat(targetGroup, launcherPanelId, target.accountId).finally(() => {
       releaseLauncherCreate(launcherPanelId);
       m.redraw();
     });
@@ -3469,13 +3467,7 @@ function createNewForShortcut(shortcutId: FocusableTabType): void {
   // picker has selected, so the two cannot start chats on different accounts.
   const selected = getSelectedAccount();
   const pending = openTabOfTypeInGroup(
-    shortcutId === "chat"
-      ? {
-          kind: "chat",
-          harness: (selected?.harness as ChatHarness | undefined) ?? "claude",
-          accountId: selected?.id ?? "",
-        }
-      : { kind: shortcutId },
+    shortcutId === "chat" ? { kind: "chat", accountId: selected?.id ?? "" } : { kind: shortcutId },
     null,
     null,
   );

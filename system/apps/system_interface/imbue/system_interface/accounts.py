@@ -45,6 +45,8 @@ INDEX_VERSION: Final = 1
 _INDEX_FILENAME: Final = "index.json"
 _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 
+_ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
+
 _INDEX_LOCK = threading.Lock()
 
 
@@ -81,8 +83,19 @@ class AccountIndex(FrozenModel):
 
 
 def accounts_root(home: Path | None = None) -> Path:
-    """Where account folders live. Never under /tmp -- codex refuses a home there."""
-    return (home or Path.home()).joinpath(*_ACCOUNTS_RELATIVE_PATH)
+    """Where account folders live. Never under /tmp -- codex refuses a home there.
+
+    `MINDS_ACCOUNTS_ROOT` overrides the location outright. That exists for tests: the
+    resolvers that reach this are several calls below anything a test constructs (a chat
+    create resolves an account; the Imbue endpoint mints one), so without it a test run
+    writes into the developer's own store -- which is not a hypothetical, it happened.
+    """
+    if home is not None:
+        return home.joinpath(*_ACCOUNTS_RELATIVE_PATH)
+    override = os.environ.get(_ACCOUNTS_ROOT_ENV_VAR, "").strip()
+    if override:
+        return Path(override)
+    return Path.home().joinpath(*_ACCOUNTS_RELATIVE_PATH)
 
 
 def account_dir(account_id: str, home: Path | None = None) -> Path:

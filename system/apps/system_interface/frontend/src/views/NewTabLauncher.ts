@@ -33,7 +33,6 @@
 import m from "mithril";
 import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
 import { getApps } from "../models/AgentManager";
-import type { ChatHarness } from "../models/AgentManager";
 import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
@@ -43,17 +42,17 @@ import { icon } from "./icons";
 
 /** What one "Open new" tile starts, as data rather than as an encoded name.
  *
- *  A chat tile carries the account it launches on and that account's harness.
- *  Both come from the provider picker below the tiles rather than from the tile
- *  itself: there is one Chat tile now, and which provider it starts on is a
- *  separate choice the user makes once and rarely changes. An empty
- *  `accountId` means no provider is configured yet, and the click opens the
- *  chooser instead of creating anything.
+ *  A chat tile carries only the account it launches on, which comes from the
+ *  provider picker below the tiles rather than from the tile itself: there is
+ *  one Chat tile now, and which provider it starts on is a separate choice the
+ *  user makes once and rarely changes. Not the harness -- the server derives
+ *  that from the account, so naming it here could only ever contradict the
+ *  credential the chat will run on. An empty `accountId` means nothing is
+ *  signed in, which the server reads as the workspace's own login.
  *
  *  Distinct from MemberKind: "files" has no member ref yet (nothing backs it),
  *  and the tiles never start a URL tab. */
-export type LaunchTarget =
-  { kind: "chat"; harness: ChatHarness; accountId: string } | { kind: "files" | "browser" | "terminal" };
+export type LaunchTarget = { kind: "chat"; accountId: string } | { kind: "files" | "browser" | "terminal" };
 
 /** One "Open new" tile: what it starts, and what it is called. */
 export interface LaunchTile {
@@ -320,16 +319,7 @@ export function openNewTiles(): readonly LaunchTile[] {
   // always renders blank.
   const account = getSelectedAccount();
   return [
-    {
-      target: {
-        kind: "chat",
-        // claude is the fallback only so the type is satisfied; with no account the
-        // click opens the chooser and never reaches a create.
-        harness: (account?.harness as ChatHarness | undefined) ?? "claude",
-        accountId: account?.id ?? "",
-      },
-      label: "New chat",
-    },
+    { target: { kind: "chat", accountId: account?.id ?? "" }, label: "New chat" },
     { target: { kind: "files" }, label: "File viewer" },
     { target: { kind: "browser" }, label: "Browser" },
     { target: { kind: "terminal" }, label: "Terminal" },
@@ -413,15 +403,16 @@ function providerPickerView(): m.Children {
           if (chosen !== WORKSPACE_LOGIN_VALUE) selectAccount(chosen);
         },
       },
+      // Built as one list rather than with a conditional hole: mithril refuses a
+      // fragment that mixes keyed vnodes with a null, and every option here is keyed.
       [
         // Until something is signed in there is still the workspace's own login to
         // run on, so the picker names it rather than claiming nothing is available.
-        accounts.length === 0
-          ? m("option", { key: WORKSPACE_LOGIN_VALUE, value: WORKSPACE_LOGIN_VALUE }, "Claude Code (workspace login)")
-          : null,
-        ...accounts.map((candidate) => m("option", { key: candidate.id, value: candidate.id }, candidate.label)),
-        m("option", { key: ADD_PROVIDER_VALUE, value: ADD_PROVIDER_VALUE }, "+ Add provider"),
-      ],
+        ...(accounts.length === 0
+          ? [{ id: WORKSPACE_LOGIN_VALUE, label: "Claude Code (workspace login)" }]
+          : accounts.map((candidate) => ({ id: candidate.id, label: candidate.label }))),
+        { id: ADD_PROVIDER_VALUE, label: "+ Add provider" },
+      ].map((option) => m("option", { key: option.id, value: option.id }, option.label)),
     ),
   ]);
 }
