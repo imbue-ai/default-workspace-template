@@ -19,6 +19,30 @@ document is the durable hand-off so any agent can pick the work up cold.
 
 ### Progress log
 
+- **Tailwind-ification (architecture parity with apps/minds) — IN PROGRESS.**
+  The setup now mirrors the minds desktop client: styling belongs in the markup
+  as utilities; `style.css` is tokens + escape hatches. Landed: (1) explicit
+  source scanning (`source(none)` + `@source "./**/*.ts"`); (2) the six type
+  roles as `@utility type-*`; (3) a default border color in `@layer base`;
+  (4) colour tokens split into a `--c-*` value layer (`:root`) + an
+  `@theme inline` utility layer with clean semantic names (`text-primary`,
+  `bg-fill-hover`, `border-default`, `bg-danger-surface`, …) — SI's own palette
+  values, minds' architecture; font stacks moved onto `--font-sans`/`--font-mono`;
+  (5) the button/input/badge/modal recipes moved into
+  `views/primitives.ts` as class-string builders (markers like `btn`,
+  `btn--primary`, `modal-card` remain as bare hooks for tests and contextual
+  rules); (6) first dissolution batch: queued group, outgoing bubble, terminal
+  banner, sub-agent card, app shell now styled in their views.
+  **Remaining feature blocks still in CSS** (dissolve opportunistically, block
+  by block, checking cascade + JS/e2e hooks per the style guide): composer
+  internals (message-input-\*, composer-\*), attachment chips, model selector,
+  tool-call blocks, permission card, progress view (pv-\*), claude-login,
+  machine rail, project pickers, lightbox, streaming indicator, ~40
+  genuinely-dead or dynamic-state classes to audit. **Stays CSS by design**:
+  dockview/xterm vendor overrides, markdown content, scrollbars, keyframes,
+  spinner/toggle/tooltip pseudo-element machines, the chat message tree
+  (`.message*` — shared markup language, JS-queried), contextual rules.
+
 - **Elevation realigned to the minds design system — DONE.** Replaced the three
   value-heavy `--elevation-sm/-lg/-overlay` tokens with minds' two soft steps
   (`apps/minds`): `--shadow-raised` (`0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px -1px
