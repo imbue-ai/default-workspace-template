@@ -2,7 +2,7 @@
 
 ## Purpose and scope
 
-This spec defines the replacement executor for `ui_flows` in the minds_evals harbor persona evals: a box-side Playwright browser driving the delivered app's **forwarded origin** (`https://<label>.host-<hex>.localhost:<port>/`, the exact URL the client's app tab iframes), served by the `mngr forward` plugin.
+This spec defines the replacement executor for `ui_flows` in the minds_evals harbor persona evals: a box-side Playwright browser driving the delivered app's **forwarded origin** (`https://<label>.agent-<hex>.localhost:<port>/`, where the plugin serves it), served by the `mngr forward` plugin.
 It replaces the v1 executor -- the workspace's own browser fleet -- whose two structural defects are recorded in [outcome_verification.md](outcome_verification.md), Level 4: coupling the eval to the workspace's internal-tool security model, and reaching the app under the product (raw in-container socket) rather than through it.
 Everything around the executor is out of scope and unchanged: the host-side verification-agent LLM loop, the `ui_flows` schema, the evidence bundle shape, the failure taxonomy's failed-vs-error semantics, the judge pre-step, and scoring.
 
@@ -12,7 +12,7 @@ Ships as one PR stacked on the Phase 2 flows PR (#523), branch `maciek/minds-eva
 
 `mngr forward` (`libs/mngr_forward`) is a standalone mngr plugin; minds itself consumes it as a spawned subprocess, so nothing here depends on the Minds application.
 
-- It binds `127.0.0.1:<port>` (8421 by convention; minds runs it with TLS + HTTP/2) and routes by **Host header**: `<service>.host-<hex>.localhost:<port>` reaches that agent's registered service, the bare `host-<hex>.localhost:<port>` origin reaches the default service (system_interface).
+- It binds `127.0.0.1:<port>` (8421 by convention; minds runs it with TLS + HTTP/2) and routes by **Host header**, on origins keyed by **agent id**: `<service>.agent-<hex>.localhost:<port>` reaches that agent's registered service, the bare `agent-<hex>.localhost:<port>` origin reaches the default service (system_interface). Legacy `host-<hex>` coordinates still parse, but the plugin only redirects HTML navigations off them and refuses everything else.
 - The service labels are the values `forward_port.py` registers in the workspace's `data/.state/apps.toml` -- the registry the evidence collector already captures, so flow-target discovery reuses the delivered-apps resolution (internal rows and isolated-instance rows excluded).
 - Remote workspaces are reached over a **per-host SSH tunnel** -- mngr's own transport, the same one the eval's exec and rsync already ride, so Modal workspaces work by construction.
 - `*.localhost` needs no DNS (browsers hard-resolve it to loopback).
@@ -40,8 +40,8 @@ The instance is scoped to the trial's own `USER_ID` like everything else in the 
 ### Target resolution and auth choreography
 
 - Among several delivered apps, the flow target prefers one that **answered its root-path probe**; registry order decides only among equally reachable apps and is the fallback when nothing was probed -- a row whose port is dead serves the proxy's error page, and driving it would record the deliverable as broken without ever reaching it.
-- The flow target for surface `"origin"` is `https://<label>.host-<hex>.localhost:<forward-port>/`, where `<label>` comes from the delivered app's registry row (the `label` field) and `host-<hex>` is the mngr **host** id -- an independent identifier, not derivable from the agent id the driver holds, resolved via `mngr list --format json`.
-- Before the first navigation, the step script installs the pre-auth session cookie into the browser context (Playwright sets cookies programmatically, so the `/_bridge` redirect path is unnecessary).
+- The flow target for surface `"origin"` is `https://<label>.agent-<hex>.localhost:<forward-port>/`, where `<label>` comes from the delivered app's registry row (the `label` field) and `agent-<hex>` is the workspace's agent id, which the driver already holds.
+- Before the first navigation, the step script installs the pre-auth session cookie into the browser context (Playwright sets cookies programmatically, so the `/_bridge` redirect path is unnecessary). It is installed at the scope the plugin issues its own session at -- `Domain=agent-<hex>.localhost`, covering the bare origin and every service label under it -- so a flow that crosses labels stays authenticated.
 - One browser context per flow, fresh: flows must not leak state into each other; persistence-across-reload is exercised *within* a flow by reloading, and the origin-scoped cookie/session behavior of the app itself is part of what this executor newly makes testable.
 
 ### Evidence: same shape, simpler transport
@@ -49,11 +49,12 @@ The instance is scoped to the trial's own `USER_ID` like everything else in the 
 - The per-step DOM digest is Playwright's `page.aria_snapshot(mode="ai")` -- a YAML-shaped ARIA tree as a string -- plus URL and title, recorded verbatim in `flows/<name>/log.jsonl` exactly where the fleet's browser_use digest went.
   (The older `page.accessibility.snapshot()` API this spec first assumed is fully removed from Playwright, verified empirically at 1.59-1.62; the replacement reshaped the action vocabulary for the better -- elements are addressed by **ARIA role + accessible name**, which survives page changes, where the fleet's numeric indexes went stale on every mutation and forced a re-read before each action.)
 - Screenshots are written box-side by the step script and are already on the box filesystem -- no workspace staging or rsync leg at all; the collector moves them into `/logs/agent/verification/flows/` directly.
-- `manifest.json`, the judge pre-step (digest flattening, 8-screenshot selection), and `ui_flows_passed` are untouched.
+- `manifest.json` is untouched. The judge pre-step flattens the same evidence, now attaching each flow's last four screenshots (24 in all) and presenting each flow's declared steps, its `expect`, its completion and the agent's reading of the final page.
+- The trial-time outcome of a flow is COMPLETION -- `completed` or `incomplete` -- and the grade-time judge alone rules on the `expect`; the programmatic criterion is `ui_flows_completed`.
 
 ### Failure taxonomy: executor-level reasons replace fleet-level ones
 
-Status `error` (the harness could not find out) gains executor-specific reasons, each distinct so an infrastructure regression is diagnosable: `browser_launch_failed`, `cdp_connect_failed`, `forward_unreachable` (the proxy itself), `tunnel_down` (proxy up, workspace leg dead), `tls_refused`.
+Status `error` (the harness could not find out) gains executor-specific reasons, each distinct so an infrastructure regression is diagnosable: `browser_launch_failed`, `cdp_connect_failed`, `forward_unreachable` (the proxy itself), `tunnel_down` (proxy up, workspace leg dead), `tls_refused`, `workspace_unaddressable` (an agent id the plugin does not route, so no origin can be built).
 Status `failed` (the workspace fell short) is unchanged: the app not answering on its forwarded origin, an expect not met, a per-step deadline exhausted by a hanging app.
 The fleet-specific reasons (fleet CLI dead, Chromium first-boot missing, slot/lease contention) are deleted with the fleet layer.
 
@@ -62,7 +63,7 @@ The fleet-specific reasons (fleet CLI dead, Chromium first-boot missing, slot/le
 A `ui_flows` entry carries an optional `surface`:
 
 - `"origin"` (default, this spec): straight to the app's forwarded origin -- the iframe's `src`. One origin, the app's own DOM, no frame-piercing.
-- `"minds-ui"` (reserved, rejected-loudly until implemented): drive the Minds client UI at the bare `host-<hex>.localhost` origin and reach the app as an embedded iframe in the workspace chrome.
+- `"minds-ui"` (reserved, rejected-loudly until implemented): drive the Minds client UI at the bare `agent-<hex>.localhost` origin and reach the app as an embedded iframe in the workspace chrome.
   The same executor serves it -- only the entry URL and a frame-piercing layer differ -- and it is the only surface that can catch works-at-origin-but-broken-when-iframed failures or exercise minds-level login and tab UX.
   Deferred until an origin-surface run motivates it; note the bare-origin UI in a plain browser may diverge from the Electron composition, which is a verification item for that surface, not this one.
 
@@ -80,14 +81,13 @@ A `ui_flows` entry carries an optional `surface`:
 
 ## Verification plan
 
-1. Unit tests: forward-instance command construction (flag parity with minds' spawn asserted against the minds code that builds it), target-URL resolution from captured registry fixtures, step-script JSON contract, taxonomy classification per failure reason, cookie installation.
+1. Unit tests: forward-instance command construction (flag parity with minds' spawn asserted against the minds code that builds it), the minted origin parsed by the plugin's own Host-header pattern, target-URL resolution from captured registry fixtures, step-script JSON contract, taxonomy classification per failure reason, cookie scope and installation.
 2. Oracle: unchanged (the fabricated bundle carries flow verdicts, no browser involved) -- one run to confirm nothing regressed.
 3. Live proof trial, same bar as the fleet executor's: a real todo-app case on **dwt main**, at least one flow verdict recorded from a live run, per-step timings captured (establishing the new budget baseline), judge consuming digest and screenshots, and zero instrument-shaped errors.
 4. Smoke items, all settled during implementation (results folded into the sections above): the forward spawn lives in the desktop client's `forward_cli.py` with `--use-http2` as the TLS switch; the registry field is `label`; every Chromium system dep was already in the box image; and the assumed accessibility-snapshot API is removed from Playwright entirely -- `aria_snapshot(mode="ai")` with role+name addressing replaced it.
 
 ## Open questions
 
-0. **Cookie-scope fidelity gap (open, batch with the next live run).** The executor installs the pre-auth session cookie host-only (`url=<label origin>`), while `mngr forward` sets its own session cookie with `Domain=host-<hex>.localhost` covering the whole workspace-origin family. Matching production is a two-line change, but a rejected cookie shape would surface as `step_failed` -- charged to the agent -- so it needs a live trial to land safely; do it alongside the Phase 3 stability runs rather than as its own trial.
 1. **Forward-port reuse vs fresh port**: a driver-owned instance on a fresh port is the default here; if the backend's own instance proves discoverable and stable, reusing it would exercise one less divergence from production. Decide on evidence from the first live run.
 2. **Digest fidelity**: whether Playwright's accessibility snapshot matches browser_use's digest quality for the LLM loop; if flows get lost, an element-annotated DOM extraction becomes a follow-up.
 3. **Chromium-in-image vs first-boot install**: the image install is chosen for determinism; if image size becomes a problem, revisit -- but never with a skippable one-shot (the fleet's install mode was one of its unavailability classes).

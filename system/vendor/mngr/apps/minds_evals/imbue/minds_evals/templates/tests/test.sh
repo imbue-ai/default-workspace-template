@@ -4,9 +4,9 @@
 # all judging and scoring; finalize.py combines the dimension scores (reward =
 # quality, or an even split of quality and outcome, zeroed unless every gate
 # passed) and distinguishes a graded 0.0 from a grading-infrastructure failure
-# (judge API error / no parseable reward file / unmeasurable outcome evidence),
-# leaving no reward file in the latter case so harbor errors the trial instead
-# of scoring it 0.
+# (judge API error / no parseable reward file / unreadable case file /
+# unmeasurable outcome evidence), leaving no reward file in the latter case so
+# harbor errors the trial instead of scoring it 0.
 set -euo pipefail
 
 # Rebuild the judged transcript from the raw event stream at grade time (so
@@ -16,9 +16,14 @@ set -euo pipefail
 python3 /tests/render_judge_transcript.py
 
 # Cases that declare expectations get an outcome dimension; its judge grades against the case's
-# ground truth, rendered here for the same regrade reason.
+# ground truth, rendered here for the same regrade reason. The flow evidence is flattened here too:
+# rewardkit's judge expands a listed directory one level and never recurses, so the nested per-flow
+# screenshots and step logs have to be reduced to one flat digest file and one flat image directory.
+# Both are written unconditionally -- a path the judge lists but cannot find renders a "[not found]"
+# block into the prompt.
 if [ -d /tests/outcome ]; then
   python3 /tests/render_expectations.py
+  python3 /tests/render_flow_evidence.py
 fi
 
 # rewardkit exits nonzero on a hard judge failure and may not write reward.json;

@@ -4018,6 +4018,9 @@ def _make_share_test_client_with_fakes(
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
     monkeypatch.setenv("SHARE_CONTENT_DOMAIN", _CONTENT_DOMAIN)
     monkeypatch.setenv("FRPS_AUTH_SECRET", _FRPS_SECRET)
+    # Disable the Ping allow-cache so the kill-switch tests observe state
+    # changes on the very next heartbeat.
+    monkeypatch.setenv("MINDS_FRPS_PING_CACHE_TTL_SECONDS", "0")
     for name, fake_impl in session_fakes.items():
         monkeypatch.setattr(auth_mod, name, fake_impl)
     backend = make_fake_pool_backend()

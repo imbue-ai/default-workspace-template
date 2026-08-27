@@ -25,19 +25,20 @@ DEFAULT_AVG_WORD_COUNT_BASELINE: Final[float] = 120.0
 
 # Wall-clock the driver's evidence-collection phase gets after the conversation
 # ends; overridable per eval config via "verification_timeout_seconds".
-DEFAULT_VERIFICATION_TIMEOUT_SECONDS: Final[float] = 600.0
-
-# Apps every Minds workspace serves out of the box. A deliverable app is any
-# entry in the workspace's registry that is not one of these.
-BUILTIN_APP_NAMES: Final[tuple[str, ...]] = ("system_interface", "terminal", "browser")
+#
+# Sized for a case that declares UI flows, which dominate the phase: each flow is bounded
+# separately and the rest of the capture takes ~2 minutes. It is a deadline, not a reservation --
+# a case with no flows finishes in a couple of minutes and the rest is never spent -- so the
+# generous default costs nothing beyond a longer harbor agent timeout.
+DEFAULT_VERIFICATION_TIMEOUT_SECONDS: Final[float] = 1800.0
 
 # What "kind": "minds-app" implies when nothing refines it: one delivered app,
 # answering 200 on its root path.
 DEFAULT_MIN_REGISTERED_APPS: Final[int] = 1
 MINDS_APP_EXPECTED_HTTP_STATUS: Final[int] = 200
 
-# The http-check target that fans out to every registered non-builtin app rather
-# than naming one service.
+# The http-check target that fans out to every delivered app rather than naming
+# one service.
 REGISTERED_APPS_HTTP_TARGET: Final[str] = "registered-apps"
 
 
@@ -71,13 +72,36 @@ class DeliverableExpectation(FrozenModel):
     files: tuple[FilesExpectation, ...] = Field(description="Inventory globs added on top of the kind's implied ones")
 
 
+class FlowSurface(LowerCaseStrEnum):
+    """Where a flow enters the delivered app.
+
+    ORIGIN goes straight to the app's forwarded origin -- its own label on the workspace's
+    agent-keyed origin, where the proxy serves it -- which is one origin with no frame-piercing and
+    exercises the real serving path (forward proxy, tunnel, label origin, the proxy's family-scoped
+    session cookie).
+
+    The reserved `minds-ui` surface, which drives the Minds client UI and reaches the app as an
+    embedded iframe, has no member here on purpose: it is rejected by name at parse time, so it can
+    never be represented as a value the collector might try to act on.
+    """
+
+    ORIGIN = auto()
+
+
+# Spelled with a dash in the config, like the deliverable kinds. Rejected by name rather than
+# silently falling into "unknown surface", so a case author gets told it is coming rather than
+# misspelled.
+RESERVED_MINDS_UI_SURFACE: Final[str] = "minds-ui"
+
+
 class UiFlow(FrozenModel):
-    """One behavioral flow through the delivered UI. Parsed and carried, but not executed in phase 1."""
+    """One behavioral flow through the delivered UI, exactly as authored."""
 
     name: str = Field(description="Stable flow name; names the flow's evidence directory")
     steps: str = Field(description="Natural-language step sequence (empty when the flow carries a script)")
     expect: str = Field(description="The verifiable end condition (empty when the flow carries a script)")
     script: str = Field(description="Per-case script file for flows anchored in a known app (empty otherwise)")
+    surface: FlowSurface = Field(description="Where the flow enters the app; defaults to the forwarded origin")
 
 
 class Expectations(FrozenModel):
@@ -85,21 +109,21 @@ class Expectations(FrozenModel):
 
     outcome: str = Field(description="The prose the outcome judge grades the delivered artifact against")
     deliverable: DeliverableExpectation | None = Field(description="What the case commissions, if anything")
-    ui_flows: tuple[UiFlow, ...] = Field(description="Reserved for phase 2; validated but never executed")
+    ui_flows: tuple[UiFlow, ...] = Field(description="Behavioral flows the verification agent drives through the UI")
     test_commands: tuple[str, ...] = Field(description="Commands run in the delivered repo; recorded, never gated")
     is_fresh_env_enabled: bool = Field(description="Reserved: also boot the deliverable in a fresh workspace")
 
 
 class AppCheck(FrozenModel):
-    """A lowered registry/service check: enough delivered apps are registered and their services run."""
+    """An expanded registry/service check: enough delivered apps are registered and their services run."""
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id prefix")
-    min_registered_apps: int = Field(description="How many non-builtin apps must appear in the registry")
+    min_registered_apps: int = Field(description="How many delivered apps must appear in the registry")
     is_supervisord_service_required: bool = Field(description="Whether each registered app's service must be running")
 
 
 class HttpCheck(FrozenModel):
-    """A lowered HTTP probe. A 'registered-apps' target fans out to one probe per delivered app."""
+    """An expanded HTTP probe. A 'registered-apps' target fans out to one probe per delivered app."""
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id prefix")
     target: str = Field(description="'registered-apps' or a service name")
@@ -108,14 +132,28 @@ class HttpCheck(FrozenModel):
 
 
 class FilesCheck(FrozenModel):
-    """A lowered file-inventory check, evaluated at grade time against the captured inventory."""
+    """An expanded file-inventory check, evaluated at grade time against the captured inventory."""
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id")
     glob: str = Field(description="Glob matched against paths relative to the workspace home tree")
     min_count: int = Field(description="How many inventory entries the glob must match")
 
 
-class LoweredExpectations(FrozenModel):
+class UiFlowCheck(FrozenModel):
+    """An expanded UI flow: one natural-language flow the verification agent drives at trial time.
+
+    Only flows authored as `steps` + `expect` expand to a check; the reserved `script` and
+    `minds-ui` spellings are rejected at parse time and never reach here.
+    """
+
+    check_id: str = Field(description="Stable id, used as the manifest entry's id")
+    name: str = Field(description="The flow's name; names its evidence directory under flows/")
+    steps: str = Field(description="Natural-language step sequence the verification agent executes")
+    expect: str = Field(description="The verifiable end condition the agent judges the final state against")
+    surface: FlowSurface = Field(description="Where the flow enters the app; the forwarded origin in v1")
+
+
+class ExpandedExpectations(FrozenModel):
     """The expectations after the generator expands `deliverable.kind` into an explicit check list.
 
     Both consumers read this exact object -- the driver out of instruction.md, the verifier out of
@@ -128,7 +166,9 @@ class LoweredExpectations(FrozenModel):
     files_checks: tuple[FilesCheck, ...] = Field(description="Inventory globs; scored as files_expectations_met")
     test_commands: tuple[str, ...] = Field(description="Commands run in the delivered repo; recorded, never scored")
     is_deliverable_bundle_required: bool = Field(description="Whether to capture the delivered repo as a git bundle")
-    ui_flows: tuple[UiFlow, ...] = Field(description="Reserved for phase 2; carried but never executed")
+    ui_flow_checks: tuple[UiFlowCheck, ...] = Field(
+        description="Flows driven through the UI; scored as ui_flows_completed"
+    )
     is_fresh_env_enabled: bool = Field(description="Reserved: also boot the deliverable in a fresh workspace")
 
 
@@ -142,7 +182,7 @@ class CheckStatus(LowerCaseStrEnum):
 
 
 class CheckClass(LowerCaseStrEnum):
-    """Which lowered expectation class a manifest entry belongs to; the verifier registers one
+    """Which expanded expectation class a manifest entry belongs to; the verifier registers one
     programmatic criterion per scored class and ignores the rest."""
 
     APP = auto()
@@ -150,6 +190,7 @@ class CheckClass(LowerCaseStrEnum):
     FILES = auto()
     BUNDLE = auto()
     TEST_COMMAND = auto()
+    UI_FLOWS = auto()
 
 
 class EvidenceEnv(LowerCaseStrEnum):
@@ -164,7 +205,7 @@ class ManifestEntry(FrozenModel):
     """One recorded probe in the evidence manifest: what was checked, how it came out, and why."""
 
     entry_id: str = Field(description="Stable id within the trial, e.g. 'http_registered_apps_0'")
-    check_class: CheckClass = Field(description="The lowered expectation class this entry feeds")
+    check_class: CheckClass = Field(description="The expanded expectation class this entry feeds")
     status: CheckStatus = Field(description="Passed, fell short, or could not be determined")
     env: EvidenceEnv = Field(description="Which environment the entry was measured in")
     reason: str = Field(description="Why the entry is not PASSED (e.g. 'timeout'); empty when it passed")
@@ -188,7 +229,16 @@ class RegisteredApp(FrozenModel):
 
     name: str = Field(description="The registered service name")
     url: str = Field(description="The workspace-local origin the app is served on")
-    is_builtin: bool = Field(description="Whether this is one of the apps every workspace ships with")
+    # The unguessable `<name>-<rand>` origin label forward_port.py mints, and the component the
+    # forwarded origin is built from: `https://<label>.agent-<hex>.localhost:<port>/`. The forward
+    # proxy maps the label back to the service name itself, so the label -- not the name -- is what
+    # a URL must carry. Defaulted rather than required because "no label" is a real registry state
+    # and not an omission: a row written before labels existed has none, and forward routes it under
+    # its own name.
+    label: str = Field(default="", description="The service's origin label; empty when the row has none")
+    # Measured from the workspace before the first turn, not matched against a hand-kept name list
+    # (see `evidence_collection.resolve_preexisting_registrations` for how the set is read).
+    is_preexisting: bool = Field(description="Whether the workspace already served this row before the agent ran")
     # The registry's own `internal = true` marker: machinery that forwards a port but has no page of
     # its own to show, so the workspace never offers it as an app to open.
     is_internal: bool = Field(description="Whether the registry marks this row as not an openable app")
@@ -212,6 +262,13 @@ class EvidenceManifest(FrozenModel):
     # works because the eval-case commit is made with fixed dates and is therefore reproducible.
     base_sha: str = Field(description="HEAD of the prepared eval-case clone; the git bundle's base")
     dwt_tip_sha: str = Field(description="The workspace-template tip the base clone was made from")
+    # What the collector subtracted from the registry to arrive at the delivered set, so a reader
+    # can see the exclusion rather than infer it. The manifest itself has to keep "unknown" apart
+    # from "the workspace served nothing": a case with no expectations records no entry that would
+    # otherwise carry the `preexisting_unknown` reason.
+    preexisting_registrations: tuple[str, ...] | None = Field(
+        description="Sorted registry names the workspace already served before the agent ran; None if unknown"
+    )
     is_expectations_declared: bool = Field(description="Whether the case declared expectations at all")
     is_evidence_complete: bool = Field(description="True when no entry has status ERROR")
     started_at: str = Field(description="UTC ISO timestamp the collection phase began")
@@ -254,9 +311,9 @@ class CaseConfig(FrozenModel):
     dwt_branch: str = Field(description="Workspace template branch the SHA was resolved from")
     dwt_sha: str = Field(description="Exact workspace template SHA resolved at generation time")
     avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
-    # The lowered form is what both the collector and the verifier act on; the authored form rides
+    # The expanded form is what both the collector and the verifier act on; the authored form rides
     # along so a reader of instruction.md or case.json can see what the config actually said.
-    expectations: LoweredExpectations | None = Field(description="The lowered expectations, if the case has any")
+    expectations: ExpandedExpectations | None = Field(description="The expanded expectations, if the case has any")
     authored_expectations: Expectations | None = Field(description="The expectations exactly as authored")
 
 

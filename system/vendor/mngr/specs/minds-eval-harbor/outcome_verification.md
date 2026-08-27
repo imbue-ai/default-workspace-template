@@ -74,7 +74,7 @@ Check that the delivered app is running and answering, the way Minds itself defi
 - **Where it runs:** evidence collection.
   The workspace already has ground truth: apps built by the mind register their ports in `data/.state/apps.toml` (via `system/scripts/forward_port.py`) and run as supervised services.
   The driver captures, via `run_in_workspace`:
-  1. `data/.state/apps.toml` verbatim, and the derived list of **delivered** apps -- the "delivered is narrower than non-builtin" rules in the deliverable section apply here at capture, not just at scoring: boot-registered internal daemons (owner-exec on every workspace, vm-exec on cloud slices) and isolated-instance throwaway rows must not be probed, or every trial's judge-visible evidence carries a guaranteed-failed probe of something nobody shipped.
+  1. `data/.state/apps.toml` verbatim, and the derived list of **delivered** apps -- the "delivered is narrower than not pre-existing" rules in the deliverable section apply here at capture, not just at scoring: boot-registered internal daemons (owner-exec on every workspace, vm-exec on cloud slices) and isolated-instance throwaway rows must not be probed, or every trial's judge-visible evidence carries a guaranteed-failed probe of something nobody shipped.
   2. `supervisorctl status` output.
   3. For each **delivered** app, and for each explicitly declared `http` expectation: an in-workspace `curl` (status code, response-time, headers, body up to 256 KB) recorded under `verification/http/`.
 - **Important framing:** the harness probes the app **as delivered** -- it never starts the app itself.
@@ -97,14 +97,14 @@ Two sub-options were considered for who drives the browser:
   A host-side verification agent -- an LLM loop living in the driver, sibling to the decider -- executes each flow and emits a verdict plus evidence.
 
 Execution vehicle: a **box-side browser driving the app's forwarded origin** -- see [flow_executor_forwarded_origin.md](flow_executor_forwarded_origin.md) for the executor's own spec.
-The verification agent (the host-side LLM loop) is unchanged; what executes its actions is Playwright + Chromium in the box, navigating `https://<label>.host-<hex>.localhost:8421/` -- the exact URL the client's app tab iframes -- served by the `mngr forward` plugin over its per-host SSH tunnel.
+The verification agent (the host-side LLM loop) is unchanged; what executes its actions is Playwright + Chromium in the box, navigating `https://<label>.agent-<hex>.localhost:8431/` -- the app's own label on the workspace's agent-keyed origin -- served by the `mngr forward` plugin over its per-host SSH tunnel.
 Per-step evidence keeps the same shape: a textual DOM digest (Playwright's accessibility snapshot plus URL/title, standing in for the fleet's browser_use digest) recorded verbatim in the flow log, and a screenshot per step.
 
 Two target **surfaces** exist for a flow, both kept open in the schema (`surface` per flow, default `"origin"`):
 
 - `"origin"` (v1): navigate straight to the delivered app's forwarded origin -- the iframe's `src`.
-  Exercises the real product serving path (forward proxy, tunnel, label origin, origin-scoped cookies and auth) without the Minds chrome; simplest automation, one origin, no frame-piercing.
-- `"minds-ui"` (reserved): drive the full Minds client UI at the bare `host-<hex>.localhost` origin, reaching the app *as an embedded iframe* in the workspace chrome.
+  Exercises the real product serving path (forward proxy, tunnel, label origin, the proxy's family-scoped session cookie and auth) without the Minds chrome; simplest automation, one origin, no frame-piercing.
+- `"minds-ui"` (reserved): drive the full Minds client UI at the bare `agent-<hex>.localhost` origin, reaching the app *as an embedded iframe* in the workspace chrome.
   The only surface that can catch works-at-origin-but-broken-when-iframed failures and exercise minds-level login/tab UX; heavier automation (frame-piercing, chrome noise, a failure-attribution layer between chrome and app), deferred until an origin-surface run motivates it.
 
 **History: the v1 executor was the workspace's own browser fleet, and it was replaced deliberately.**
@@ -123,7 +123,8 @@ That is the right dependency (the eval and the plugin version together in this r
 
 - **Proves:** the delivered app performs the promised behaviors end to end, including persistence across reload.
 - **Cannot prove:** qualities not expressible as short flows (visual polish, responsiveness); and verdicts are LLM-judged, so they carry judge noise like every other judged criterion.
-- **Where it runs:** evidence collection (the flow execution and screenshots); the verdicts are re-examined at grade time by the outcome judge against the step log and screenshots, so regrade can overrule a lenient trial-time verdict.
+- **Where it runs:** evidence collection performs the flow and records what it saw -- the step log, the screenshots, whether the flow *completed* its declared steps, and the agent's own description of the final page.
+  Whether the flow's `expect` holds is decided at grade time by the outcome judge, from that evidence, and only there: one question, one ruling, and one that regrade can revisit.
 - **Needs:** the verification-agent loop in the driver (decider-shaped: same API-key plumbing, reported as harness spend under `metadata.verifier_agent_usage`), `ui_flows` in the schema, per-step evidence recording.
 
 ### Level 5: state-dump and vision judging
@@ -192,9 +193,15 @@ The accounting the design leans on, so nothing here is rebuilt.
 
 **The Minds workspace** (default-workspace-template):
 
-- `data/.state/apps.toml`: the authoritative registry of served apps and their ports/origins (written by `forward_port.py`); built-ins are the template's own apps (`system_interface`, `terminal`, `browser`, `files`, ...), which register through the same path a delivered app does.
-  A hand-maintained builtin list must track the template, and a live trial showed the cost of drift: `files`, missing from the list and in BACKOFF, was counted as the deliverable, so flows drove the forward proxy's own error page while the real app went unopened.
-  The robust derivation is the pinned template itself: the names under `system/apps/` in the prepared eval-base clone (already in the box) are exactly the builtins for that dwt SHA -- adopt that in place of the list (follow-up on the executor PR).
+- `data/.state/apps.toml`: the authoritative registry of served apps and their ports/origins (written by `forward_port.py`); the template's own apps (`system_interface`, `terminal`, `browser`, `files`, ...) register through the same path a delivered app does, so nothing about a row says which is which.
+  The **pre-existing** set -- what the workspace already served before the agent ran -- is measured from the workspace itself, not from a hand-maintained name list, which must track the template and had already drifted (`files`, missing from the list and in BACKOFF, was counted as the deliverable, so flows drove the forward proxy's own error page while the real app went unopened).
+  It is read from a single probe taken **before turn 1**, once the workspace has booted and been signed in -- the same `workspace_state` probe the evidence phase runs later -- which answers two questions at once, unioned, because neither is complete alone.
+  First, the **app registry as it actually stood**: a measurement rather than an inference, and the only source that sees a template app registering its port from inside the script its supervisord program runs -- `terminal` does exactly that (`system/apps/terminal/run_ttyd.sh`), as do `owner-exec` and the cloud slice's `vm-exec`, so a config-only derivation would score the workspace's own terminal as the case's deliverable.
+  Second, the **workspace's own `system/supervisord.conf`**, which the same probe cats and which at that moment is still the pinned template's file verbatim, parsed with the same `forward_port.py --name` join used for the live workspace's service health. This covers a template app whose service is slow enough that it had not registered its port yet: the file is on disk from the moment the workspace is cloned, whatever its services are doing.
+  Not the directory names under `system/apps/`: a registry name is a caller-supplied `--name` flag rather than a directory, and a multi-port app registers extra origin-label rows that correspond to no directory at all.
+  The union is correct for a dwt fork or branch that ships extra apps, which an eval config may point `dwt_repo`/`dwt_branch` at, and it costs nothing that internal daemons land in the set -- their rows are excluded as `internal` anyway.
+  The registry is the half that must be readable: without it the set is **unknown**, never empty, the delivered set is unresolvable, and every entry that depends on it is recorded `error` with reason `preexisting_unknown` rather than promoting every template app to a deliverable. A config section the probe came back without only means that half contributes nothing.
+  The manifest carries the resolved set as `preexisting_registrations` so a reader can see what was subtracted, and `null` when it is unknown -- the manifest itself keeps that apart from a workspace that served nothing, since a case with no expectations records no entry that would carry the `preexisting_unknown` reason.
 - supervisord: every app's serving process is a `[program:*]` entry; `supervisorctl status` is the process-level health truth.
 - The browser fleet (`agentic-browser-fleet`): real Chromium, direct-control CLI, screenshots -- the UI-automation vehicle, already in every workspace.
 - `system_interface` HTTP API on workspace-local port 8000, already bridged by `minds_bridge.workspace_curl_json`.
@@ -240,7 +247,7 @@ Field semantics:
   This is the piece the eval config has been missing: the task description *for the eval*, alongside the prompts *for the agent*.
 - `deliverable` (object, optional): what the case commissions, as a **kind with implied checks** rather than a hand-authored check list.
   `kind: "minds-app"` implies the standard shape of a Minds app: at least one *delivered* app registered in `apps.toml`, its supervisord service running, an HTTP 200 from each delivered app's root path, and the deliverable committed to the workspace repo (the bundle capture; whether commit *cleanliness* is scored is an open question below).
-  "Delivered" is narrower than "non-builtin", in two ways.
+  "Delivered" is narrower than "not pre-existing", in two ways.
   Rows the registry marks `internal = true` are machinery that forwards a port but has no page of its own to show (`forward_port.py`'s own wording; the owner-exec daemon is one and answers 404 on `/` by design) -- counting one both inflates the delivered count and fails the root-path probe on something nobody shipped, which a live trial demonstrated before the exclusion existed.
   And dwt's isolated-instance flow registers preview/throwaway rows through the same `forward_port.py` path -- detached processes with no `[program:*]` entry and no auto-cleanup -- so an abandoned throwaway would otherwise fail the agent on a row that was never the deliverable.
   Row names are caller-supplied flags, so pattern matching cannot identify them; the exclusion goes by the isolated-instance state records instead (`data/.state/isolated-instances/<name>/instance.json` names exactly the rows that runner registered, and `down` deletes the record along with the rows).
@@ -253,16 +260,16 @@ Field semantics:
 - `fresh_env` (bool, optional, default false): also boot the deliverable in a fresh workspace and repeat the deliverable and `ui_flows` checks there (see "Fresh-environment verification"; the feature is deferred -- the flag is reserved, and the Phase 1 bundle capture keeps old trials replayable once it lands).
 - Reserved fields fail loudly, never silently: until their execution semantics land, the generator rejects `fresh_env: true` and a `ui_flows` entry using `script` with a "known but unimplemented" error -- a case author must never get a green generation and a completed trial believing verification ran that never did.
 
-**One schema, both consumers, lowered once.**
+**One schema, both consumers, expanded once.**
 The evidence collector (driver) and the grade-time judge/checks read the same expectations by construction: the identical `CaseConfig` JSON travels in `instruction.md` (parsed by the driver) and `tests/case.json` (read by the verifier).
-The implied-check expansion happens exactly once, in `generate.py`: it **lowers** `deliverable.kind` plus refinements into the explicit per-class check list (`files`, `app`, `http`, commit capture) and writes the lowered form into both copies, keeping the authored form alongside as `authored_expectations` for readability.
-Lowering at generation time is what keeps the verifier free of expansion logic -- it is a stdlib+rewardkit container that cannot import this package -- and guarantees the collector can never probe a different set of checks than the judge scores.
+The implied-check expansion happens exactly once, in `generate.py`: it **expands** `deliverable.kind` plus refinements into the explicit per-class check list (`files`, `app`, `http`, commit capture) and writes the expanded form into both copies, keeping the authored form alongside as `authored_expectations` for readability.
+Expanding at generation time is what keeps the verifier free of expansion logic -- it is a stdlib+rewardkit container that cannot import this package -- and guarantees the collector can never probe a different set of checks than the judge scores.
 
 Cases without `expectations` (e.g. `greeting`) are untouched: no collection phase beyond the (cheap, unconditional) registry/service/inventory capture, no `outcome` dimension in scoring.
-An `expectations` block must lower to **at least one check class**: rewardkit only emits the pooled programmatic reward when criteria exist, so a prose-only block would silently make the outcome dimension 100% judge -- double the judge weight every other case has, breaking exactly the cross-case comparability the fixed split exists for.
-The v1 validator enforces this as "`deliverable` must be present" -- stricter than the rule itself, since a `ui_flows`-only block (the anchored-in-an-existing-app shape) also lowers to a scored class and satisfies the rationale; the validator is relaxed to admit it when the first such case lands.
+An `expectations` block must expand to **at least one check class**: rewardkit only emits the pooled programmatic reward when criteria exist, so a prose-only block would silently make the outcome dimension 100% judge -- double the judge weight every other case has, breaking exactly the cross-case comparability the fixed split exists for.
+The v1 validator enforces this as "`deliverable` must be present" -- stricter than the rule itself, since a `ui_flows`-only block (the anchored-in-an-existing-app shape) also expands to a scored class and satisfies the rationale; the validator is relaxed to admit it when the first such case lands.
 Prose-only expectations are therefore rejected at generation time until a degenerate composition is deliberately specified.
-Schema plumbing: `PersonaCase`/`CaseConfig` in `data_types.py` gain the parsed `expectations` model; `generate.py` validates it (unknown keys rejected, flows require `steps` + `expect` or `script`, `deliverable.kind` must be a known kind), and `verification_timeout_seconds` is lowered into `CaseConfig` -- the driver reads only the instruction's embedded JSON, so a knob that is not lowered does not exist for it.
+Schema plumbing: `PersonaCase`/`CaseConfig` in `data_types.py` gain the parsed `expectations` model; `generate.py` validates it (unknown keys rejected, flows require `steps` + `expect` or `script`, `deliverable.kind` must be a known kind), and `verification_timeout_seconds` is carried into `CaseConfig` -- the driver reads only the instruction's embedded JSON, so a knob that is not carried into it does not exist for it.
 
 ## The evidence bundle
 
@@ -311,13 +318,13 @@ Verification-agent spend is harness spend: reported as `metadata.verifier_agent_
 
 A third rewardkit dimension, `tests/outcome/`, present only in tasks whose case declares `expectations` (the generator omits the directory otherwise, so rewardkit never emits a partial score for it):
 
-- `checks.py` (programmatic, over the manifest): one criterion per lowered expectation class -- `files_expectations_met`, `app_registered`, `http_expectations_met`, `ui_flows_passed` (asserting the trial-time verdicts).
-  The file reads `case.json`'s lowered check list at import time and registers only the criteria for classes present in it (whether authored directly or implied by `deliverable.kind`), so an absent class contributes no score in either direction.
+- `checks.py` (programmatic, over the manifest): one criterion per expanded expectation class -- `files_expectations_met`, `app_registered`, `http_expectations_met`, `ui_flows_completed` (the fraction of measurable flows that carried out their declared steps, which is a fact about the run rather than a ruling on the `expect`).
+  The file reads `case.json`'s expanded check list at import time and registers only the criteria for classes present in it (whether authored directly or implied by `deliverable.kind`), so an absent class contributes no score in either direction.
   Manifest entries with status `error` are handled per the failure-semantics rules below.
-- `judge.toml` (LLM judge): files = the rendered `expectations.md` (the `outcome` prose plus the declared checks), `manifest.json`, `conversation.jsonl`, the flow logs, and up to 8 screenshots (any screenshot over rewardkit's 1 MB judge limit is dropped from the judge input but kept as a trial artifact).
+- `judge.toml` (LLM judge): files = the rendered `expectations.md` (the `outcome` prose plus the declared checks), `manifest.json`, `conversation.jsonl`, the flow digest, and each flow's last four screenshots up to 24 in all (any screenshot over rewardkit's 1 MB judge limit is dropped from the judge input but kept as a trial artifact).
   A grade-time pre-step in `test.sh` renders `expectations.md` from `case.json` (the same pattern as `render_judge_transcript.py`), so `harbor trial regrade` picks up rendering changes.
   One criterion, `works_as_expected`, likert 10: "given this evidence, how fully does the delivered artifact meet the stated expectations?".
-  The prompt instructs the judge that evidence marked `error` is the harness's failure and not the agent's, that the flow logs and screenshots outrank the trial-time verdicts if they disagree, and -- because `DECIDE_FROM_PERSONA` turns are free-form and the simulated client may legitimately redirect the build mid-conversation -- that the conversation is provided so a deliverable the client visibly steered away from the scripted expectations is graded against the evolved ask, not the original prose.
+  The prompt instructs the judge that evidence marked `error` is the harness's failure and not the agent's, that ruling on each flow's `expect` is its own call to make from the step log and the screenshots (the recorded completion says what was done, not whether it worked, and the agent's description of the final page is evidence rather than an answer), and -- because `DECIDE_FROM_PERSONA` turns are free-form and the simulated client may legitimately redirect the build mid-conversation -- that the conversation is provided so a deliverable the client visibly steered away from the scripted expectations is graded against the evolved ask, not the original prose.
   This judge is the "smarter LLM-as-judge": it grades against per-case ground-truth expectations and physical evidence, not vibes about the transcript.
   The judge carries half the dimension via `[judge].weight = 1.0`: rewardkit aggregates a dimension in two levels -- all `.py` criteria pool into ONE programmatic reward of weight 1.0, and each judge toml is a second reward carrying its `[judge].weight` -- so 1.0 yields exactly 50/50 regardless of how many programmatic criteria the case declares.
   (The quality dimension's `weight = 3.0` fits the same model: judge 3/4, wordiness guard 1/4.)
@@ -341,6 +348,11 @@ Failure semantics, extending finalize.py's existing rule:
 - The unmeasured-outcome detection signal is **`manifest.json`**, not the directory: the driver creates `verification/` unconditionally at setup (the regrade rule above), so the directory always exists and its absence can never be the signal.
   A case that declares expectations, whose `state.json` says the conversation finished, and whose `manifest.json` is absent or empty = grading-infrastructure failure: the collection phase never ran on a trial that needed it, so no reward file, harbor errors the trial (same path as a judge API failure today).
   On a timed-out or otherwise unfinished trial, partial-or-absent evidence is expected, not an error -- the structural gates already zero that trial's reward, exactly as they do today.
+- The case file is the other input `finalize.py` must be able to trust: `case.json` missing, unparseable, not a JSON object, or carrying an `expectations` that is neither an object nor `null` = grading-infrastructure failure.
+  The generator writes it into every task's tests directory, so a broken one is a harness invariant violation rather than agent behavior -- and every read of it degrades to "declared no expectations", which would grade a commissioned deliverable as a quality-only case at full weight, indistinguishable from a case that never asked for one.
+  Unlike the evidence rules, this one is unconditional: the case file is part of the task, not of the run, so neither a failed gate nor a timeout can make a broken one acceptable.
+  A valid case file whose `expectations` is absent or `null` is the legitimate bare case and stays quality-only.
+  `checks.py` cannot make this call -- an unreadable case file simply registers no criteria there, because raising would abort every dimension.
 - Structural gates are untouched: outcome verification never rescues a trial whose conversation gates failed.
 
 Oracle: `solve.sh` fabricates a green bundle -- a manifest with every declared check `passed`, a plausible `apps.toml`, canned flow logs, no screenshots (the judge prompt states screenshots may be absent) -- so `-a oracle` exercises generation, the new artifacts, both new criteria files, and the composition.
@@ -352,17 +364,17 @@ Note the existing caveat (improvements item 4.3) that oracle reward floors are j
 - **A static mock can fool screenshots and even naive flows.** The persistence flow (mutate, reload, re-check) is the standing countermeasure; every app-building case should include one.
 - **The decider never verifies.** Today's simulated client says "Sounds good." no matter what; the agent's claims go unchallenged in-conversation.
   This spec deliberately verifies *outside* the conversation instead of making the decider skeptical -- decider changes alter the thing being measured (the conversation) and belong to a separate discussion.
-- **Trial-time verdicts could be lenient.** The overrule channel is the judge half of the outcome score: it re-reads the step logs and screenshots at grade time, and regrade can tighten it retroactively.
-  The programmatic `ui_flows_passed` criterion, by contrast, is deliberately trial-time-frozen -- it replays the recorded verdict bit and regrade cannot change it -- so a lenient trial-time verdict survives in that half by design; the flow evidence is the ground truth for the judge, not for the frozen bit.
+- **Nothing at trial time rules on whether a flow worked.** The trial records completion and evidence; the judge decides satisfaction at grade time and regrade can revisit it, so there is no lenient trial-time verdict to survive into the score.
+  The programmatic `ui_flows_completed` criterion is trial-time-frozen, but what it freezes is whether the declared steps were carried out -- a fact about the run that regrade has no reason to revisit.
 - **The agent cannot see the probes coming.** Collection starts only after the final turn, so there is no in-conversation tell that this trial is instrumented, and nothing new lands in the workspace clone for the agent to read.
 - **Live probing alone cannot see durability.** An app started by hand and never committed or wired into supervisord passes every live check; the fresh-env boot is the countermeasure, and the `env` tag lets the judge see exactly which promise broke.
 - **Judge-input sizing is a real limit.** 1 MB per file, hard; body heads, log tails, and screenshot caps are load-bearing, not politeness.
 
 ## Phasing
 
-1. **Schema + evidence + static/liveness + judge** (the core): `expectations` parsing and the `deliverable.kind` lowering in the generator, the collection phase minus flows (inventory, registry, services, HTTP, test commands), the deliverable git bundle + repo-state capture (so deferred fresh-env verification stays retroactively possible), the `outcome` dimension with the lowered `files`/`app`/`http` criteria and the `works_as_expected` judge, finalize composition, oracle bundle.
+1. **Schema + evidence + static/liveness + judge** (the core): `expectations` parsing and the `deliverable.kind` expansion in the generator, the collection phase minus flows (inventory, registry, services, HTTP, test commands), the deliverable git bundle + repo-state capture (so deferred fresh-env verification stays retroactively possible), the `outcome` dimension with the expanded `files`/`app`/`http` criteria and the `works_as_expected` judge, finalize composition, oracle bundle.
    This alone catches ships-nothing and never-started failures and gives the judge real evidence.
-2. **UI flows**: the host-side verification agent, flow evidence, `ui_flows_passed`, screenshots feeding the judge (Level 5 comes along for free). Shipped first over the workspace browser fleet (PR #523, live-proven), then re-executed over the forwarded origin (see the executor spec and phase 2b below).
+2. **UI flows**: the host-side flow agent, flow evidence, `ui_flows_completed`, screenshots feeding the judge (Level 5 comes along for free). Shipped first over the workspace browser fleet (PR #523, live-proven), then re-executed over the forwarded origin (see the executor spec and phase 2b below).
 2b. **Executor swap to the forwarded origin** (PR stacked on #523, branch `maciek/minds-evals-forwarded-origin-flows`): box-side Playwright + `mngr forward`, deleting the fleet command layer and the eval's dependency on dwt #462's allowlist; details in [flow_executor_forwarded_origin.md](flow_executor_forwarded_origin.md).
 3. **Expectations for the existing dataset**: write `outcome` prose and flows for `todo-app` and `landing-page`; leave `greeting` bare; measure judge/flow stability across `-k` repeats before trusting the numbers (the same statistical discipline improvements item 2.5 demands).
 4. **Fresh-environment boots** (`fresh_env: true`, Minds-mode) -- deferred at review, not scheduled: the quiescence wait, repo harvest, second-workspace create, and the `env`-tagged second capture pass. The Phase 1 bundle capture keeps this applicable retroactively to trials run in the meantime. Requires the dwt SHA pin to have landed (being handled separately).

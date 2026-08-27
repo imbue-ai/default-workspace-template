@@ -39,10 +39,12 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
+from imbue.minds_evals import evidence_collection
+from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import proxy_config
+from imbue.minds_evals import ui_flows
 from imbue.minds_evals import usage as usage_accounting
-from imbue.minds_evals import verification
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
@@ -135,6 +137,63 @@ class SnapshotMode(UpperCaseStrEnum):
     PER_TURN = auto()
     FINAL = auto()
     OFF = auto()
+
+
+# Where the pinned workspace-template clone lives in the box: one per trial, shared by every
+# per-case clone taken from it.
+_EVAL_BASE_DIR: Final[str] = "/work/eval-base"
+# Where the per-case clones taken from it live; the workspace is created from its case's clone.
+_CLONES_DIR: Final[str] = "/work/clones"
+
+
+@pure
+def _case_clone_dir(case_id: str) -> str:
+    """The unquoted box path of one case's workspace-template clone: what clone prep populates and
+    what the workspace is then created from, so both must derive it the same way."""
+    return "{}/{}".format(_CLONES_DIR, case_id)
+
+
+@pure
+def build_case_clone_command(clone_dir: str) -> str:
+    """Take one case's own clone from the shared eval-base clone, replacing any earlier attempt."""
+    return "mkdir -p {clones} && rm -rf {clone} && git clone {base} {clone}".format(
+        clones=shlex.quote(_CLONES_DIR),
+        clone=shlex.quote(clone_dir),
+        base=shlex.quote(_EVAL_BASE_DIR),
+    )
+
+
+@pure
+def build_vendor_mngr_command(clone_dir: str) -> str:
+    """Overwrite the case clone's vendored mngr with the box's own tree, so the workspace runs the
+    mngr under test rather than whatever the template pinned."""
+    return (
+        "mkdir -p {clone}/system/vendor/mngr && rsync -a --delete {excludes} {mngr} {clone}/system/vendor/mngr/"
+    ).format(
+        clone=shlex.quote(clone_dir),
+        excludes=" ".join("--exclude='{}'".format(pattern) for pattern in _VENDOR_EXCLUDES),
+        # The trailing slash is rsync's "contents of", not "the directory itself", and is load-bearing.
+        mngr=shlex.quote("{}/".format(minds_bridge.BOX_MNGR_DIR)),
+    )
+
+
+@pure
+def build_clone_probe_command(clone_dir: str, eval_base_dir: str) -> str:
+    """Where the agent's own history starts and what the base was built from, in one box exec.
+
+    Both shas ride one round trip because both are needed to keep the captured deliverable
+    replayable: the bundle is based on the clone's HEAD, and regenerating that base from the dwt tip
+    is what proves it reproduces.
+    """
+    return (
+        "printf '{base_marker}\\n'; git -C {clone} rev-parse HEAD; "
+        "printf '{dwt_marker}\\n'; git -C {base} rev-parse HEAD"
+    ).format(
+        clone=shlex.quote(clone_dir),
+        base=shlex.quote(eval_base_dir),
+        base_marker=evidence_collection.section_marker("base_sha"),
+        dwt_marker=evidence_collection.section_marker("dwt_tip_sha"),
+    )
 
 
 @pure
@@ -330,18 +389,18 @@ EVAL_CASE_COMMIT_NAME: Final[str] = "minds-eval"
 
 
 @pure
-def build_eval_case_commit_command(quoted_clone_dir: str, quoted_commit_message: str) -> str:
+def build_eval_case_commit_command(clone_dir: str, commit_message: str) -> str:
     """The eval-case commit, made reproducibly: fixed identity and fixed author/committer dates."""
     return (
         "cd {clone} && git add -A && "
         "GIT_AUTHOR_DATE={date} GIT_COMMITTER_DATE={date} "
         "git -c user.email={email} -c user.name={name} commit -q -m {message}"
     ).format(
-        clone=quoted_clone_dir,
+        clone=shlex.quote(clone_dir),
         date=shlex.quote(EVAL_CASE_COMMIT_DATE),
         email=shlex.quote(EVAL_CASE_COMMIT_EMAIL),
         name=shlex.quote(EVAL_CASE_COMMIT_NAME),
-        message=quoted_commit_message,
+        message=shlex.quote(commit_message),
     )
 
 
@@ -363,9 +422,13 @@ class MindsPersonaDriver(BaseAgent):
         poll_seconds: float = 5.0,
         proxy_probe: object = False,
         proxy: object = False,
+        verifier_model: str = "",
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        # Flow driving is mechanical, so a cheaper tier may well do; until that is measured the
+        # verification agent runs on the decider's model, with this override to measure it.
+        self._verifier_model_override = verifier_model.strip()
         # Opt-in check that a box-local port is reachable from inside the workspace, which is what
         # an in-box LLM proxy would depend on. Off by default: it costs an extra bridge round trip.
         self._is_proxy_probe_enabled = parse_agent_flag(proxy_probe, "proxy_probe")
@@ -409,7 +472,11 @@ class MindsPersonaDriver(BaseAgent):
         # The dwt tip the base clone was made from, recorded so a replay can regenerate that base
         # and check it reproduces _clone_base_sha before unbundling the agent's commits onto it.
         self._dwt_tip_sha: str = ""
+        # What the workspace already served before the agent ran, so the evidence phase can tell the
+        # delivered apps from the ones that booted with the workspace.
+        self._preexisting_registrations: frozenset[str] | None = None
         self._verification_metadata: dict[str, Any] = {}
+        self._verifier_usage: ui_flows.VerifierUsage | None = None
 
     @staticmethod
     def name() -> str:
@@ -422,12 +489,16 @@ class MindsPersonaDriver(BaseAgent):
     def _decider_model(self) -> str:
         return self._parsed_model_name or decider.DEFAULT_DECIDER_MODEL
 
+    @property
+    def _verifier_model(self) -> str:
+        return self._verifier_model_override or self._decider_model
+
     async def setup(self, environment: BaseEnvironment) -> None:
         # Create the evidence directory before anything else can fail. harbor records a missing
         # declared artifact path as a failed entry, and `harbor trial regrade` refuses any trial
         # that has one -- an EMPTY directory is tolerated, an absent one is not. Without this, a
         # trial that dies before the collection phase would be permanently non-regradable.
-        await verification.ensure_evidence_dir(environment)
+        await evidence_collection.ensure_evidence_dir(environment)
         # The staged mngr clone's HEAD is the exact SHA the dataset was generated
         # at, so the box env can be built without seeing the instruction.
         self._mngr_sha = await minds_bridge.read_box_mngr_sha(environment)
@@ -468,6 +539,20 @@ class MindsPersonaDriver(BaseAgent):
             self._write_trajectory()
             await self._teardown(environment)
 
+    def _build_verification_agent(self) -> ui_flows.VerificationAgent | None:
+        """The UI-flow agent, or None when there is no key to run it with. The upstream key is used
+        rather than the trial's proxy key: this is the harness reasoning about the workspace, not
+        the workspace's own traffic, so it must not be metered as the agent under test's spend."""
+        api_key = self._get_env("ANTHROPIC_API_KEY") or ""
+        if not api_key:
+            logger.warning("No ANTHROPIC_API_KEY for the UI-flow verification agent; flows cannot be measured")
+            return None
+        return ui_flows.AnthropicVerificationAgent(
+            model=self._verifier_model,
+            api_key=SecretStr(api_key),
+            timeout_seconds=ui_flows.DEFAULT_CALL_TIMEOUT_SECONDS,
+        )
+
     async def _collect_verification_evidence(self, environment: BaseEnvironment) -> None:
         """Capture what the delivered workspace actually is, while it still exists.
 
@@ -479,17 +564,22 @@ class MindsPersonaDriver(BaseAgent):
         """
         if self._box_env is None or self._case is None or not self._workspace_agent_id:
             return
-        collector = verification.EvidenceCollector(
+        collector = evidence_collection.EvidenceCollector(
             environment=environment,
             box_env=self._box_env,
             workspace_agent_id=self._workspace_agent_id,
             case=self._case,
             clone_base_sha=self._clone_base_sha,
             dwt_tip_sha=self._dwt_tip_sha,
+            preexisting_registrations=self._preexisting_registrations,
             host_logs_dir=self.logs_dir,
             # Monotonic, unlike the conversation's own deadline: a clock step during a ten-minute
             # collection phase would otherwise truncate or extend it.
             deadline=time.monotonic() + self._case.verification_timeout_seconds,
+            verifier_model=self._verifier_model,
+            verification_agent=self._build_verification_agent(),
+            preauth_cookie=SecretStr(forward_instance.mint_forward_secret()),
+            browser_bridge_token=SecretStr(forward_instance.mint_forward_secret()),
         )
         logger.info("Collecting outcome-verification evidence from the workspace")
         try:
@@ -498,7 +588,10 @@ class MindsPersonaDriver(BaseAgent):
             )
         except Exception as exc:
             logger.opt(exception=exc).warning("Evidence collection failed; grading on what it managed to write")
+            # Whatever the flow agent spent before the failure is still spent, so keep the account.
+            self._verifier_usage = collector.verifier_usage()
             return
+        self._verifier_usage = collector.verifier_usage()
         self._verification_metadata = {
             "is_evidence_complete": manifest.is_evidence_complete,
             "entry_count": len(manifest.entries),
@@ -532,7 +625,7 @@ class MindsPersonaDriver(BaseAgent):
         await self._prepare_workspace_clone(case, environment)
         workspace_host_name = "EVAL-{}".format(self._user_id[:34])
         payload = minds_bridge.build_create_payload(
-            dwt_repo="/work/clones/{}".format(case.case_id),
+            dwt_repo=_case_clone_dir(case.case_id),
             dwt_branch="",
             host_name=workspace_host_name,
         )
@@ -562,6 +655,8 @@ class MindsPersonaDriver(BaseAgent):
         if not is_authenticated:
             await self._mark_timed_out(environment, "could not authenticate the workspace")
             return
+
+        await self._capture_preexisting_registrations(environment)
 
         sources = resolve_turn_sources(case, self._decider_model, self._get_env("ANTHROPIC_API_KEY") or "")
         self._persona_source = next((source for source in sources if isinstance(source, PersonaLLMTurnSource)), None)
@@ -878,13 +973,11 @@ class MindsPersonaDriver(BaseAgent):
         with the box's /work/mngr (ported from the old harness's launch clone prep, minus the retired
         eval worker's metadata file)."""
         assert self._box_env is not None
-        exclude_flags = " ".join("--exclude='{}'".format(pattern) for pattern in _VENDOR_EXCLUDES)
-        # Config-derived values are shell-quoted wherever they are interpolated
-        # into a box command -- the case id here, the dwt repo/branch/sha in
-        # build_eval_base_clone_command. They come from an author-controlled eval
-        # config, but a quote or space in one must not break out of the command.
-        clone_dir = shlex.quote("/work/clones/{}".format(case.case_id))
-        commit_message = shlex.quote("eval case {}".format(case.case_id))
+        # Paths and config-derived values travel unquoted and are shell-quoted where each command
+        # builder interpolates them. The case id and the dwt repo/branch/sha come from an
+        # author-controlled eval config, and a quote or space in one must not break out of a command.
+        clone_dir = _case_clone_dir(case.case_id)
+        commit_message = "eval case {}".format(case.case_id)
         logger.info(
             "Preparing the workspace template clone ({}@{}, pinned from {})",
             case.dwt_repo,
@@ -897,22 +990,20 @@ class MindsPersonaDriver(BaseAgent):
                 dwt_repo=case.dwt_repo,
                 dwt_branch=case.dwt_branch,
                 dwt_sha=case.dwt_sha,
-                eval_base_dir="/work/eval-base",
+                eval_base_dir=_EVAL_BASE_DIR,
             ),
             self._box_env,
             600,
         )
         await minds_bridge.check_run_in_box(
             environment,
-            "mkdir -p /work/clones && rm -rf {clone} && git clone /work/eval-base {clone}".format(clone=clone_dir),
+            build_case_clone_command(clone_dir),
             self._box_env,
             300,
         )
         await minds_bridge.check_run_in_box(
             environment,
-            "mkdir -p {clone}/system/vendor/mngr && rsync -a --delete {excludes} /work/mngr/ {clone}/system/vendor/mngr/".format(
-                clone=clone_dir, excludes=exclude_flags
-            ),
+            build_vendor_mngr_command(clone_dir),
             self._box_env,
             600,
         )
@@ -930,19 +1021,54 @@ class MindsPersonaDriver(BaseAgent):
         # inputs yields this exact base sha, and the bundle unbundles only onto it.
         base_result = await minds_bridge.check_run_in_box(
             environment,
-            "printf '{base_marker}\\n'; git -C {clone} rev-parse HEAD; "
-            "printf '{dwt_marker}\\n'; git -C /work/eval-base rev-parse HEAD".format(
-                clone=clone_dir,
-                base_marker=verification.section_marker("base_sha"),
-                dwt_marker=verification.section_marker("dwt_tip_sha"),
-            ),
+            build_clone_probe_command(clone_dir, _EVAL_BASE_DIR),
             self._box_env,
             120,
         )
-        sections = verification.split_sections(base_result.stdout or "")
+        sections = evidence_collection.split_sections(base_result.stdout or "")
         self._dwt_tip_sha = sections.get("dwt_tip_sha", "").strip()
         base_output = sections.get("base_sha", "").strip()
         self._clone_base_sha = base_output.splitlines()[-1].strip() if base_output else ""
+
+    async def _capture_preexisting_registrations(self, environment: BaseEnvironment) -> None:
+        """Snapshot what the workspace already serves, before the first turn can change it.
+
+        This is the last moment the workspace is purely the template's doing: it has booted and been
+        signed in, and the agent has not been asked for anything yet. Recording it here is what lets
+        the evidence phase attribute a registry row to the agent rather than guessing from names.
+
+        A probe that comes back failed, or a registry that is not there yet, leaves the set unknown,
+        which the collector records as unmeasured -- never as "the workspace served nothing", which
+        would credit the agent with every app the template booted. A transport-level failure
+        propagates like every other pre-turn step's does.
+        """
+        assert self._box_env is not None
+        is_success, output = await minds_bridge.run_in_workspace(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            evidence_collection.workspace_state_command(),
+            evidence_collection.PROBE_TIMEOUT_SECONDS,
+        )
+        self._preexisting_registrations = evidence_collection.parse_registry_snapshot(output) if is_success else None
+        if self._preexisting_registrations is None:
+            cause = (
+                "the probe ran but found no readable app registry"
+                if is_success
+                else "the bridged exec failed: {}".format(output.strip()[:300] or "no output")
+            )
+            logger.warning(
+                "Could not snapshot the workspace app registry before turn 1 ({}); the delivered apps "
+                "cannot be told from the ones the workspace booted with, so those checks will be "
+                "unmeasured",
+                cause,
+            )
+        else:
+            logger.info(
+                "The workspace already serves {} app(s) before turn 1: {}",
+                len(self._preexisting_registrations),
+                ", ".join(sorted(self._preexisting_registrations)) or "none",
+            )
 
     async def _mark_timed_out(self, environment: BaseEnvironment, reason: str) -> None:
         logger.warning("Marking the trial timed_out: {}", reason)
@@ -993,6 +1119,11 @@ class MindsPersonaDriver(BaseAgent):
             local_path.write_text(content)
             await environment.upload_file(local_path, "{}/{}".format(minds_bridge.BOX_LOGS_DIR, filename))
 
+    def _resolve_workspace_usage(self) -> usage_accounting.ResolvedWorkspaceUsage:
+        """The one resolution of the workspace agent's spend that every usage writer in this driver
+        reads from; the choice between the two accounts is ``resolve_workspace_usage``'s."""
+        return usage_accounting.resolve_workspace_usage(self._latest_events, self._proxy_usage_records)
+
     def _populate_context_metadata(self, context: AgentContext) -> None:
         turn_word_counts = _words_per_agent_turn(self._conversation)
         message_word_counts = self._agent_message_word_counts
@@ -1000,15 +1131,8 @@ class MindsPersonaDriver(BaseAgent):
         # Harbor's token/cost fields describe the agent under test, so they carry the workspace
         # agent's consumption. The decider is the harness's own spend and goes to metadata; putting
         # it here would report the simulated user's tokens as the agent's.
-        transcript_usage = usage_accounting.summarize_workspace_usage(self._latest_events)
-        proxy_usage = (
-            usage_accounting.summarize_proxy_usage(self._proxy_usage_records) if self._proxy_usage_records else None
-        )
-        # The proxy is the complete account when one ran: it is the boundary every call crosses, so
-        # it includes delegated work the transcript never sees. On a delegating case the two differ
-        # by that work -- measured at 45% of the real cost -- so preferring the transcript here would
-        # publish the understated figure.
-        workspace_usage = proxy_usage if proxy_usage is not None else transcript_usage
+        resolved_usage = self._resolve_workspace_usage()
+        workspace_usage = resolved_usage.reported
         decider_usage = usage_accounting.summarize_decider_usage(decider_results, self._decider_model)
         if workspace_usage.message_count:
             context.n_input_tokens = workspace_usage.n_input_tokens
@@ -1066,9 +1190,14 @@ class MindsPersonaDriver(BaseAgent):
             "workspace_usage": usage_accounting.workspace_usage_metadata(workspace_usage),
             # Both sources, so the two can be reconciled after the fact: they agree exactly when the
             # agent delegates nothing, and differ by the delegated spend when it does.
-            "usage_source": "proxy" if proxy_usage is not None else "transcript",
-            "transcript_usage": usage_accounting.workspace_usage_metadata(transcript_usage),
+            "usage_source": "proxy" if resolved_usage.is_from_proxy else "transcript",
+            "transcript_usage": usage_accounting.workspace_usage_metadata(resolved_usage.transcript),
             "decider_usage": usage_accounting.decider_usage_metadata(decider_usage),
+            # The UI-flow verification agent is harness spend just like the decider: it measures
+            # what the eval costs to run, never what the agent under test consumed.
+            "verifier_agent_usage": usage_accounting.verifier_usage_metadata(self._verifier_usage)
+            if self._verifier_usage is not None
+            else {},
             # Empty when no evidence phase ran (no workspace, or collection failed outright);
             # the grade reads the bundle itself, this is for scanning runs at a glance.
             "verification": self._verification_metadata,
@@ -1104,7 +1233,7 @@ class MindsPersonaDriver(BaseAgent):
             # ATIF requires at least one step; a trial that died before any
             # exchange has no conversation to render.
             return
-        workspace_usage = usage_accounting.summarize_workspace_usage(self._latest_events)
+        workspace_usage = self._resolve_workspace_usage().reported
         trajectory = Trajectory(
             schema_version="ATIF-v1.7",
             session_id=self.session_id,

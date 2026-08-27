@@ -8,6 +8,7 @@ import pytest
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
+from imbue.minds_evals.data_types import DEFAULT_VERIFICATION_TIMEOUT_SECONDS
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
@@ -128,7 +129,7 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
         assert task_config["metadata"]["dwt_repo"] == str(dwt_repo.repo_dir)
         # Case budget + verification budget + grace, so verification never competes with the
         # conversation for time and teardown keeps its grace.
-        assert task_config["agent"]["timeout_sec"] == 1800.0 + 600.0 + 300.0
+        assert task_config["agent"]["timeout_sec"] == 1800.0 + DEFAULT_VERIFICATION_TIMEOUT_SECONDS + 300.0
         assert task_config["verifier"]["environment_mode"] == "separate"
         assert task_config["verifier"]["env"]["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY}"
         assert set(task_config["artifacts"]) == {
@@ -201,10 +202,15 @@ def test_generate_dataset_emits_the_outcome_dimension_only_for_expectation_cases
     assert {path.name for path in outcome_dir.iterdir()} == {"checks.py", "judge.toml", "prompt.md"}
 
     judge = tomllib.loads((outcome_dir / "judge.toml").read_text())
+    # The last two are written by a grade-time pre-step and always exist: rewardkit renders a
+    # listed path it cannot find as a "[not found]" block, so a conditional entry would put noise
+    # into every flow-less trial's judge prompt.
     assert judge["judge"]["files"] == [
         "/logs/agent/expectations.md",
         "/logs/agent/verification/manifest.json",
         "/logs/agent/conversation.jsonl",
+        "/logs/agent/judge_flows_digest.txt",
+        "/logs/agent/judge_screenshots",
     ]
     # rewardkit averages all .py criteria into ONE reward of weight 1.0 and weighs each judge toml
     # separately, so weight 1.0 is what makes the judge exactly half the dimension.
@@ -212,7 +218,7 @@ def test_generate_dataset_emits_the_outcome_dimension_only_for_expectation_cases
     assert [criterion["name"] for criterion in judge["criterion"]] == ["works_as_expected"]
 
 
-def test_generate_dataset_lowers_expectations_identically_into_both_copies(tmp_path: Path) -> None:
+def test_generate_dataset_expands_expectations_identically_into_both_copies(tmp_path: Path) -> None:
     repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
     dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
     config = _valid_config(
@@ -227,12 +233,12 @@ def test_generate_dataset_lowers_expectations_identically_into_both_copies(tmp_p
     tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
     instruction_case = parse_case_config((task_dir / "instruction.md").read_text())
 
-    # The collector (instruction.md) and the judge (case.json) must read the identical lowered form.
+    # The collector (instruction.md) and the judge (case.json) must read the identical expanded form.
     assert tests_case == instruction_case.model_dump(mode="json")
-    lowered = tests_case["expectations"]
-    assert [check["min_registered_apps"] for check in lowered["app_checks"]] == [1]
-    assert [check["target"] for check in lowered["http_checks"]] == ["registered-apps"]
-    assert lowered["test_commands"] == ["uv run pytest -q"]
+    expectations = tests_case["expectations"]
+    assert [check["min_registered_apps"] for check in expectations["app_checks"]] == [1]
+    assert [check["target"] for check in expectations["http_checks"]] == ["registered-apps"]
+    assert expectations["test_commands"] == ["uv run pytest -q"]
     # The authored form rides along so a reader can see what the config actually said.
     assert tests_case["authored_expectations"]["deliverable"] == {
         "kind": "MINDS_APP",

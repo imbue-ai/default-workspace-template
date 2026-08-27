@@ -24,6 +24,8 @@ import logging
 import os
 import re
 import secrets
+import threading
+import time
 from collections.abc import Callable
 from collections.abc import Mapping
 from typing import Any
@@ -34,7 +36,9 @@ from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import PrivateAttr
 from pydantic import field_validator
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
@@ -393,25 +397,80 @@ def decide_frps_new_proxy(
     return _frps_allow()
 
 
+# Env var holding the TTL (in seconds) each *allowed* Ping decision is cached
+# for in-process. Heartbeats arrive per tunnel session (one per relay of the
+# region) every ~10s, so without a cache every live share costs a DB read per
+# ping; with it, reads per token drop to one per TTL per container. Only
+# allows are cached: a rejected ping severs its session (the token stops
+# pinging), and never caching rejects means a freshly re-authorized session
+# can never be re-severed by a stale entry. Set to ``0`` to disable (every
+# ping hits the DB). Unset falls back to the default below.
+_FRPS_PING_CACHE_TTL_ENV = "MINDS_FRPS_PING_CACHE_TTL_SECONDS"
+_DEFAULT_FRPS_PING_CACHE_TTL_SECONDS = 30.0
+
+# Process-local cache mapping a relay-token hash -> expiry (monotonic) of its
+# cached allow. Guarded by a lock since uvicorn serves requests from a thread
+# pool. Size is naturally bounded by the number of active shares (only tokens
+# that resolved to an active share are ever inserted).
+_ping_allow_cache: dict[str, float] = {}
+_ping_allow_cache_lock = threading.Lock()
+
+
+def _frps_ping_cache_ttl_seconds() -> float:
+    """Resolve the Ping allow-cache TTL from the environment.
+
+    Falls back to the default on an unset/empty value and on an unparseable
+    one (logging a warning in the latter case) so a typo'd Modal secret
+    degrades to "cache normally" rather than crashing the heartbeat path.
+    """
+    raw = os.environ.get(_FRPS_PING_CACHE_TTL_ENV)
+    if raw is None or not raw.strip():
+        return _DEFAULT_FRPS_PING_CACHE_TTL_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; falling back to %.0fs",
+            _FRPS_PING_CACHE_TTL_ENV,
+            raw,
+            _DEFAULT_FRPS_PING_CACHE_TTL_SECONDS,
+        )
+        return _DEFAULT_FRPS_PING_CACHE_TTL_SECONDS
+
+
 def decide_frps_ping(
-    share_lookup: Callable[[str], dict[str, Any] | None], relay_token: str | None
+    share_lookup: Callable[[str], dict[str, Any] | None],
+    relay_token: str | None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> FrpsAuthDecision:
     """Authorize an frps ``Ping`` heartbeat: reject only on an affirmative non-active share.
 
     Rejecting a ping makes frpc close its whole session (frps answers the
-    heartbeat with an error Pong), which is exactly how a suspended or
-    unshared workspace's LIVE tunnel is severed within one heartbeat interval
-    (~10s). But frp also fails closed on plugin errors, so this path fails
-    OPEN on the connector's own internal errors: tunnel uptime stays coupled
-    only to the connector being reachable, and a non-active share slips
-    through only until the next successful lookup. ``Login``/``NewProxy``
-    keep their fail-closed handling -- they are security decisions, while a
-    heartbeat merely continues an already-authorized session.
+    heartbeat with an error Pong), which is how a suspended or unshared
+    workspace's LIVE tunnel is severed. Allowed decisions are cached
+    in-process for ``MINDS_FRPS_PING_CACHE_TTL_SECONDS`` (see above), so the
+    sever guarantee is one heartbeat interval (~10s) plus at most that TTL --
+    a deliberate trade of kill-switch latency for O(shares/TTL) DB reads
+    instead of one per ping. frp also fails closed on plugin errors, so this
+    path fails OPEN on the connector's own internal errors (never cached):
+    tunnel uptime stays coupled only to the connector being reachable, and a
+    non-active share slips through only until the next successful lookup.
+    ``Login``/``NewProxy`` keep their fail-closed, uncached handling -- they
+    are security decisions, while a heartbeat merely continues an
+    already-authorized session.
     """
     if relay_token is None:
         return _frps_reject("missing relay token")
+    token_hash = hash_relay_token(relay_token)
+    ttl_seconds = _frps_ping_cache_ttl_seconds()
+    now = monotonic()
+    if ttl_seconds > 0:
+        with _ping_allow_cache_lock:
+            cached_expiry = _ping_allow_cache.get(token_hash)
+        if cached_expiry is not None and cached_expiry > now:
+            return _frps_allow()
     try:
-        share = share_lookup(hash_relay_token(relay_token))
+        share = share_lookup(token_hash)
     except psycopg2.Error as exc:
         emit_metric("frps_ping_fail_open", 1, {})
         logger.warning("Allowing frps ping despite a share lookup failure", exc_info=exc)
@@ -419,6 +478,9 @@ def decide_frps_ping(
     if share is None or share["state"] != "active":
         emit_metric("frps_ping_rejected", 1, {})
         return _frps_reject("unknown or inactive relay token")
+    if ttl_seconds > 0:
+        with _ping_allow_cache_lock:
+            _ping_allow_cache[token_hash] = now + ttl_seconds
     return _frps_allow()
 
 
@@ -515,49 +577,39 @@ class PostgresShareStore:
     """ShareStore backed by the connector's existing Neon DB."""
 
     def get_share_by_workspace(self, workspace_id: str, user_label: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_SHARE_COLUMNS} FROM shares WHERE workspace_id = %s AND user_id = %s",
                     (workspace_id, user_label),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return _share_row_to_dict(row) if row is not None else None
 
     def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_SHARE_COLUMNS} FROM shares WHERE host_id = %s AND user_id = %s",
                     (host_id, user_label),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return _share_row_to_dict(row) if row is not None else None
 
     def list_shares(self, user_label: str) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_SHARE_COLUMNS} FROM shares WHERE user_id = %s ORDER BY created_at",
                     (user_label,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_share_row_to_dict(row) for row in rows]
 
     def activate_share_and_rotate_token(
         self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str, entry_label: str | None
     ) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     # Serialize per-user activation so concurrent creates cannot
@@ -609,32 +661,24 @@ class PostgresShareStore:
                         "INSERT INTO relay_tokens (token_hash, host_id, user_id) VALUES (%s, %s, %s)",
                         (token_hash, coordinate.host_id, coordinate.user_label),
                     )
-        finally:
-            conn.close()
 
     def update_share_entry_label(self, host_id: str, user_label: str, entry_label: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE shares SET entry_label = %s, updated_at = NOW() WHERE host_id = %s AND user_id = %s",
                         (entry_label, host_id, user_label),
                     )
-        finally:
-            conn.close()
 
     def deactivate_share(self, host_id: str, user_label: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE shares SET state = 'inactive', updated_at = NOW() WHERE host_id = %s AND user_id = %s",
                         (host_id, user_label),
                     )
-        finally:
-            conn.close()
 
     def suspend_shares_for_user(self, user_label: str) -> int:
         """Flip every active share of one user to ``suspended``, keeping the relay tokens.
@@ -643,8 +687,7 @@ class PostgresShareStore:
         workspace still holds the plaintext token, so once the share is back
         to ``active`` its next tunnel login succeeds with no re-share.
         """
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -653,12 +696,9 @@ class PostgresShareStore:
                         (user_label,),
                     )
                     return cur.rowcount
-        finally:
-            conn.close()
 
     def unsuspend_shares_for_user(self, user_label: str) -> int:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -667,24 +707,18 @@ class PostgresShareStore:
                         (user_label,),
                     )
                     return cur.rowcount
-        finally:
-            conn.close()
 
     def delete_relay_tokens(self, host_id: str, user_label: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "DELETE FROM relay_tokens WHERE host_id = %s AND user_id = %s",
                         (host_id, user_label),
                     )
-        finally:
-            conn.close()
 
     def find_share_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT s.host_id, s.user_id, s.region, s.workspace_domain, s.state "
@@ -693,8 +727,6 @@ class PostgresShareStore:
                     (token_hash,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {
@@ -706,21 +738,17 @@ class PostgresShareStore:
         }
 
     def find_active_share_by_workspace_domain(self, workspace_domain: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_SHARE_COLUMNS} FROM shares WHERE workspace_domain = %s AND state = 'active'",
                     (workspace_domain,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return _share_row_to_dict(row) if row is not None else None
 
     def record_tunnel_login(self, host_id: str, user_label: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -728,40 +756,31 @@ class PostgresShareStore:
                         "WHERE host_id = %s AND user_id = %s",
                         (host_id, user_label),
                     )
-        finally:
-            conn.close()
 
     def get_pool_host_datacenter(self, host_id: str) -> str | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT region FROM pool_hosts WHERE host_id = %s ORDER BY created_at DESC LIMIT 1",
                     (host_id,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None or row[0] is None:
             return None
         return str(row[0])
 
     def get_latest_cert_not_after(self, workspace_domain: str) -> str | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT not_after FROM issued_certs WHERE workspace_domain = %s ORDER BY not_after DESC LIMIT 1",
                     (workspace_domain,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return str(row[0]) if row is not None else None
 
     def count_certs_issued_in_last_day(self, host_id: str, user_label: str) -> int:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT COUNT(*) FROM issued_certs "
@@ -769,8 +788,6 @@ class PostgresShareStore:
                     (host_id, user_label),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return int(row[0]) if row is not None else 0
 
     def record_issued_cert(
@@ -783,8 +800,7 @@ class PostgresShareStore:
         sans_json: str,
         not_after: str,
     ) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -793,8 +809,6 @@ class PostgresShareStore:
                         "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (workspace_domain, host_id, user_label, ca_name, cert_chain_pem, sans_json, not_after),
                     )
-        finally:
-            conn.close()
 
 
 @functools.cache
@@ -1148,8 +1162,80 @@ def get_share_status(request: Request, host_id: str) -> dict[str, object]:
         }
 
 
+# How often (seconds) accumulated successful-ping metrics are flushed as
+# metric records. Flushing piggybacks on request handling (no background
+# threads in this codebase) with a final flush from the app's lifespan
+# shutdown, so a gracefully scaled-down container loses nothing and a hard
+# kill loses at most one window.
+_FRPS_PING_METRICS_FLUSH_INTERVAL_SECONDS = 60.0
+
+
+class FrpsPingMetricsAggregator(BaseModel):
+    """Accumulates authorized-ping counts and duration sums per relay, emitting periodic metric records.
+
+    Successful heartbeats emit no per-request access-log line (they would be
+    the vast majority of connector log volume), so this is their
+    observability: a count and a duration-ms sum per relay per flush window.
+    Sums rather than averages, so any query can compute the exact weighted
+    average at any grouping.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    flush_interval_seconds: float
+    emit: Callable[[str, float, Mapping[str, str]], None]
+
+    _lock: Any = PrivateAttr(default_factory=threading.Lock)
+    _count_by_relay: dict[str, int] = PrivateAttr(default_factory=dict)
+    _duration_ms_sum_by_relay: dict[str, float] = PrivateAttr(default_factory=dict)
+    _window_started_monotonic: float | None = PrivateAttr(default=None)
+
+    def record_authorized_ping(self, relay_id: str, duration_ms: float, now: float) -> None:
+        with self._lock:
+            if self._window_started_monotonic is None:
+                self._window_started_monotonic = now
+            self._count_by_relay[relay_id] = self._count_by_relay.get(relay_id, 0) + 1
+            self._duration_ms_sum_by_relay[relay_id] = self._duration_ms_sum_by_relay.get(relay_id, 0.0) + duration_ms
+            if now - self._window_started_monotonic < self.flush_interval_seconds:
+                return
+            drained_window = self._drain_window(now)
+        self._emit_window(drained_window)
+
+    def flush(self, now: float) -> None:
+        """Emit whatever the current window holds (the lifespan-shutdown final flush)."""
+        with self._lock:
+            drained_window = self._drain_window(now)
+        self._emit_window(drained_window)
+
+    def _drain_window(self, now: float) -> list[tuple[str, int, float]]:
+        drained_window = [
+            (relay_id, count, self._duration_ms_sum_by_relay.get(relay_id, 0.0))
+            for relay_id, count in sorted(self._count_by_relay.items())
+        ]
+        self._count_by_relay.clear()
+        self._duration_ms_sum_by_relay.clear()
+        self._window_started_monotonic = now
+        return drained_window
+
+    def _emit_window(self, drained_window: list[tuple[str, int, float]]) -> None:
+        for relay_id, count, duration_ms_sum in drained_window:
+            self.emit("frps_ping_authorized", count, {"relay": relay_id})
+            self.emit("frps_ping_authorized_duration_ms_total", round(duration_ms_sum, 1), {"relay": relay_id})
+
+
+_ping_metrics_aggregator = FrpsPingMetricsAggregator(
+    flush_interval_seconds=_FRPS_PING_METRICS_FLUSH_INTERVAL_SECONDS,
+    emit=emit_metric,
+)
+
+
+def flush_frps_ping_metrics() -> None:
+    """Final flush of accumulated ping metrics; wired to the app's lifespan shutdown."""
+    _ping_metrics_aggregator.flush(time.monotonic())
+
+
 @router.post("/frps/auth/{plugin_secret}/{relay_id}")
-def frps_auth(plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
+def frps_auth(request: Request, plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
     """Authorize an frps server-plugin operation (``Login`` / ``NewProxy`` / ``Ping``) for one relay.
 
     The relay's frps calls this for every workspace tunnel connect, hostname
@@ -1161,23 +1247,40 @@ def frps_auth(plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[
     directly under that share's own domain (see ``decide_frps_new_proxy``),
     and a ``Ping`` whose token no longer resolves to an active share is
     rejected fail-open (see ``decide_frps_ping``) -- the live-tunnel kill
-    switch. Every operation must present a relay token resolving to an active
+    switch, effective within one heartbeat interval plus the ping allow-cache
+    TTL. Every operation must present a relay token resolving to an active
     share (token-less bodies are rejected whatever the op); beyond that,
     operations other than the ones we subscribe to are allowed unchanged --
     frps should not be configured to send them, and constraining an
     unexpected op further would break the tunnel for no security gain.
+
+    Allowed pings are not access-logged (see the aggregator above); every
+    other outcome logs one structured line, with the secret path segment
+    redacted.
     """
     with handle_endpoint_errors():
+        # The path embeds the shared plugin secret, which must never reach the
+        # log store; the structured access-log line carries this sanitized
+        # form instead (Modal's own native access line is not ours to scrub).
+        # Set before the secret check so a rejected attempt's line is
+        # sanitized too.
+        request.state.access_log_path_override = f"/frps/auth/<plugin-secret>/{relay_id}"
         _require_frps_plugin_secret(plugin_secret)
         if body.op == _FRPS_PING_OP:
             # Heartbeats skip the relay-row lookup: the plugin secret already
             # authenticates the caller, and a DB read here would couple every
             # live tunnel to the relays table (see decide_frps_ping's
             # fail-open rationale).
-            return decide_frps_ping(
+            ping_started_monotonic = time.monotonic()
+            decision = decide_frps_ping(
                 get_share_store().find_share_by_token_hash,
                 _extract_frps_relay_token(body.op, body.content),
-            ).model_dump()
+            )
+            if not decision.reject:
+                now = time.monotonic()
+                request.state.access_log_suppress_success = True
+                _ping_metrics_aggregator.record_authorized_ping(relay_id, (now - ping_started_monotonic) * 1000.0, now)
+            return decision.model_dump()
         relay_row = next(
             (row for row in active_relay_rows() if str(row["relay_id"]) == relay_id),
             None,

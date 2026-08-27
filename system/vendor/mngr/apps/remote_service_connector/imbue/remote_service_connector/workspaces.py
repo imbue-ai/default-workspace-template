@@ -143,8 +143,7 @@ def list_workspaces(request: Request) -> list[dict[str, object]]:
     """List every workspace the caller owns, in all lifecycle states."""
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_WORKSPACE_SELECT_COLUMNS} FROM pool_hosts "
@@ -153,8 +152,6 @@ def list_workspaces(request: Request) -> list[dict[str, object]]:
                     (user.user_id_prefix,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_workspace_info_from_row(row).model_dump(mode="json") for row in rows]
 
 
@@ -178,11 +175,8 @@ def get_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
     """One workspace's full lifecycle view (the poll target during stop/start)."""
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             row = _read_owned_workspace(conn, host_db_id, user.user_id_prefix)
-        finally:
-            conn.close()
         return _workspace_info_from_row(row).model_dump(mode="json")
 
 
@@ -222,8 +216,7 @@ def stop_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
         user = accounts_web_module.authenticate_web_request(request)
         storage.read_storage_config()
         transition_id = str(uuid4())
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             row = _read_owned_workspace(conn, host_db_id, user.user_id_prefix)
             already_stopped_response = _apply_stop_preconditions(host_db_id, str(row[1]))
             if already_stopped_response is not None:
@@ -232,8 +225,6 @@ def stop_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
                 cur.execute(_STOP_LEASED_WORKSPACE_SQL, (transition_id, str(host_db_id)))
                 updated = cur.rowcount
             conn.commit()
-        finally:
-            conn.close()
         if updated == 0:
             # Lost a race with another request; report whatever won.
             return get_workspace(request, host_db_id)
@@ -263,8 +254,7 @@ def start_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
         storage.read_storage_config()
         entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         transition_id = str(uuid4())
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             row = _read_owned_workspace(conn, host_db_id, user.user_id_prefix)
             current_db_status = row[1]
             if current_db_status in ("leased", "starting"):
@@ -300,8 +290,6 @@ def start_workspace(request: Request, host_db_id: UUID) -> dict[str, object]:
                         (transition_id, str(host_db_id)),
                     )
                     updated = cur.rowcount
-        finally:
-            conn.close()
         if updated == 0:
             return get_workspace(request, host_db_id)
         stop_start.spawn_supervisor(str(host_db_id), transition_id)
@@ -321,8 +309,7 @@ def admin_stop_workspace(request: Request, host_db_id: UUID) -> dict[str, object
         require_admin_key(request)
         storage.read_storage_config()
         transition_id = str(uuid4())
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT status FROM pool_hosts WHERE id = %s", (str(host_db_id),))
                 status_row = cur.fetchone()
@@ -335,8 +322,6 @@ def admin_stop_workspace(request: Request, host_db_id: UUID) -> dict[str, object
                 cur.execute(_STOP_LEASED_WORKSPACE_SQL, (transition_id, str(host_db_id)))
                 updated = cur.rowcount
             conn.commit()
-        finally:
-            conn.close()
         if updated == 0:
             raise HTTPException(status_code=409, detail="Workspace changed state concurrently; retry")
         stop_start.spawn_supervisor(str(host_db_id), transition_id)
@@ -355,8 +340,7 @@ def begin_stopping_all_leased_workspaces(user_id_prefix: str) -> dict[str, objec
     when the deployment cannot run stop transitions at all.
     """
     storage.read_storage_config()
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT {_WORKSPACE_SELECT_COLUMNS} FROM pool_hosts "
@@ -382,8 +366,6 @@ def begin_stopping_all_leased_workspaces(user_id_prefix: str) -> dict[str, objec
                 starting_ids.append(host_db_id)
             else:
                 already_inactive_count += 1
-    finally:
-        conn.close()
     for host_db_id, transition_id in stopping_transitions:
         stop_start.spawn_supervisor(host_db_id, transition_id)
     stopping_ids = [host_db_id for host_db_id, _transition_id in stopping_transitions]
@@ -412,8 +394,7 @@ def abandon_workspace(request: Request, host_db_id: UUID, body: AbandonWorkspace
     """
     with handle_endpoint_errors():
         require_admin_key(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 # A fresh transition_id fences out any supervisor still driving
                 # the row, so it can neither overwrite the operator's reason
@@ -425,8 +406,6 @@ def abandon_workspace(request: Request, host_db_id: UUID, body: AbandonWorkspace
                 )
                 updated = cur.rowcount
             conn.commit()
-        finally:
-            conn.close()
         if updated == 0:
             raise HTTPException(status_code=404, detail="No abandonable workspace with that id")
         # A deliberate operator action, not a fault -- log for the record

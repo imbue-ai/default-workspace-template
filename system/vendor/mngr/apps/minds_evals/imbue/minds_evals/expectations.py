@@ -1,8 +1,8 @@
-"""Parsing and lowering of a case's `expectations` block.
+"""Parsing and expansion of a case's `expectations` block.
 
 The eval config authors expectations as a deliverable *kind* with optional refinements; the driver's
-evidence collector and the verifier's criteria both need an explicit per-class check list. Lowering
-happens exactly once, here, at generation time: the lowered form is written into both copies of the
+evidence collector and the verifier's criteria both need an explicit per-class check list. Expansion
+happens exactly once, here, at generation time: the expanded form is written into both copies of the
 case config (instruction.md's embedded JSON and tests/case.json), which is what guarantees the
 collector can never probe a different set of checks than the judge scores -- and what keeps the
 verifier, a stdlib+rewardkit container that cannot import this package, free of expansion logic.
@@ -18,15 +18,18 @@ from imbue.minds_evals.data_types import AppCheck
 from imbue.minds_evals.data_types import DEFAULT_MIN_REGISTERED_APPS
 from imbue.minds_evals.data_types import DeliverableExpectation
 from imbue.minds_evals.data_types import DeliverableKind
+from imbue.minds_evals.data_types import ExpandedExpectations
 from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import FilesCheck
 from imbue.minds_evals.data_types import FilesExpectation
+from imbue.minds_evals.data_types import FlowSurface
 from imbue.minds_evals.data_types import HttpCheck
 from imbue.minds_evals.data_types import HttpExpectation
-from imbue.minds_evals.data_types import LoweredExpectations
 from imbue.minds_evals.data_types import MINDS_APP_EXPECTED_HTTP_STATUS
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
+from imbue.minds_evals.data_types import RESERVED_MINDS_UI_SURFACE
 from imbue.minds_evals.data_types import UiFlow
+from imbue.minds_evals.data_types import UiFlowCheck
 from imbue.minds_evals.errors import EvalConfigError
 
 _EXPECTATIONS_KEYS: Final[frozenset[str]] = frozenset(
@@ -35,7 +38,7 @@ _EXPECTATIONS_KEYS: Final[frozenset[str]] = frozenset(
 _DELIVERABLE_KEYS: Final[frozenset[str]] = frozenset({"kind", "min_registered_apps", "http", "files"})
 _HTTP_KEYS: Final[frozenset[str]] = frozenset({"target", "expect_status", "expect_body_regex"})
 _FILES_KEYS: Final[frozenset[str]] = frozenset({"glob", "min_count"})
-_UI_FLOW_KEYS: Final[frozenset[str]] = frozenset({"name", "steps", "expect", "script"})
+_UI_FLOW_KEYS: Final[frozenset[str]] = frozenset({"name", "steps", "expect", "script", "surface"})
 
 _DEFAULT_FILES_MIN_COUNT: Final[int] = 1
 
@@ -142,6 +145,37 @@ def _parse_deliverable(raw_entry: object, case_id: str) -> DeliverableExpectatio
 
 
 @pure
+def _parse_surface(raw: Mapping[str, Any], case_id: str, what: str) -> FlowSurface:
+    """Where a flow enters the app. Defaults to the forwarded origin: the app's own label on the
+    workspace's agent-keyed origin, where the proxy serves it."""
+    raw_surface = str(raw.get("surface") or FlowSurface.ORIGIN.value).strip().lower()
+    if raw_surface == RESERVED_MINDS_UI_SURFACE:
+        # Reserved, not implemented. Accepting it would drive the app's own origin while the case
+        # author believed the Minds chrome was being exercised -- so a works-at-origin-but-broken-
+        # when-iframed failure would be reported as a pass, which is the one outcome a reserved
+        # field must not produce.
+        raise EvalConfigError(
+            "case {!r}: {}.surface {!r} is a known but unimplemented surface -- flows would run "
+            "against the app's own origin instead, so the Minds chrome would go unexercised. Leave "
+            "it unset.".format(case_id, what, RESERVED_MINDS_UI_SURFACE)
+        )
+    # FlowSurface is a lower-case enum, so its values ARE the config spellings -- unlike
+    # DeliverableKind, whose values are upper-snake and need the dash translated.
+    try:
+        return FlowSurface(raw_surface)
+    except ValueError:
+        raise EvalConfigError(
+            "case {!r}: {} has unknown surface {!r} (known: {}, plus the reserved {!r})".format(
+                case_id,
+                what,
+                raw_surface,
+                ", ".join(sorted(member.value for member in FlowSurface)),
+                RESERVED_MINDS_UI_SURFACE,
+            )
+        ) from None
+
+
+@pure
 def _parse_ui_flow(raw_entry: object, case_id: str, index: int) -> UiFlow:
     what = "expectations.ui_flows[{}]".format(index)
     raw = _require_mapping(raw_entry, case_id, what)
@@ -166,7 +200,7 @@ def _parse_ui_flow(raw_entry: object, case_id: str, index: int) -> UiFlow:
             "case {!r}: {} uses 'script', which is a known but unimplemented field -- scripted flow "
             "execution has no semantics yet, so nothing would run it. Use 'steps' + 'expect'.".format(case_id, what)
         )
-    return UiFlow(name=name, steps=steps, expect=expect, script=script)
+    return UiFlow(name=name, steps=steps, expect=expect, script=script, surface=_parse_surface(raw, case_id, what))
 
 
 @pure
@@ -182,7 +216,7 @@ def parse_expectations(raw_entry: object, case_id: str) -> Expectations:
         )
     raw_deliverable = raw.get("deliverable")
     if raw_deliverable is None:
-        # An expectations block with no deliverable lowers to zero check classes, so its outcome
+        # An expectations block with no deliverable expands to zero check classes, so its outcome
         # dimension would hold nothing but the judge: rewardkit pools programmatic criteria into a
         # reward only when some exist, so the judge would silently carry the entire dimension rather
         # than the half it carries everywhere else, and this case's reward would not be comparable
@@ -208,10 +242,21 @@ def parse_expectations(raw_entry: object, case_id: str) -> Expectations:
             "case {!r}: expectations.fresh_env is a known but unimplemented field -- no fresh "
             "workspace is booted yet, so setting it would verify nothing. Leave it unset.".format(case_id)
         )
+    ui_flows = tuple(_parse_ui_flow(entry, case_id, index) for index, entry in enumerate(raw_flows))
+    # A flow's name is its evidence directory, so two flows sharing one would overwrite each other's
+    # screenshots and step log.
+    flow_names = [slugify(flow.name) for flow in ui_flows]
+    duplicate_names = sorted({name for name in flow_names if flow_names.count(name) > 1})
+    if duplicate_names:
+        raise EvalConfigError(
+            "case {!r}: expectations.ui_flows has flows whose names collide: {}".format(
+                case_id, ", ".join(duplicate_names)
+            )
+        )
     return Expectations(
         outcome=outcome,
         deliverable=_parse_deliverable(raw_deliverable, case_id),
-        ui_flows=tuple(_parse_ui_flow(entry, case_id, index) for index, entry in enumerate(raw_flows)),
+        ui_flows=ui_flows,
         test_commands=test_commands,
         is_fresh_env_enabled=raw_fresh_env,
     )
@@ -236,7 +281,7 @@ def _implied_http_expectations(kind: DeliverableKind) -> tuple[HttpExpectation, 
 
 
 @pure
-def _lower_deliverable(
+def _expand_deliverable(
     deliverable: DeliverableExpectation,
 ) -> tuple[tuple[AppCheck, ...], tuple[HttpCheck, ...], tuple[FilesCheck, ...]]:
     min_registered_apps = (
@@ -268,18 +313,40 @@ def _lower_deliverable(
 
 
 @pure
-def lower_expectations(expectations: Expectations) -> LoweredExpectations:
+def _expand_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
+    """The flows the verification agent drives, each with the id its manifest entry is keyed on.
+
+    Every flow reaching here is natural language: `parse_expectations` rejects the reserved `script`
+    field outright, because scripted execution has no semantics yet. The assertion holds that line
+    from this side -- if scripts are ever accepted at parse time again, expanding one into an
+    ordinary check would silently commission verification that nothing runs.
+    """
+    assert not any(flow.script for flow in flows), "scripted flows are rejected at parse time"
+    return tuple(
+        UiFlowCheck(
+            check_id="ui_flow_{}_{}".format(index, slugify(flow.name)),
+            name=flow.name,
+            steps=flow.steps,
+            expect=flow.expect,
+            surface=flow.surface,
+        )
+        for index, flow in enumerate(flows)
+    )
+
+
+@pure
+def expand_expectations(expectations: Expectations) -> ExpandedExpectations:
     """Expand `deliverable.kind` into the explicit per-class check list both consumers act on."""
-    # Guaranteed by parse_expectations, which rejects a block that would lower to no checks at all.
+    # Guaranteed by parse_expectations, which rejects a block that would expand to no checks at all.
     assert expectations.deliverable is not None, "expectations must commission a deliverable"
-    app_checks, http_checks, files_checks = _lower_deliverable(expectations.deliverable)
-    return LoweredExpectations(
+    app_checks, http_checks, files_checks = _expand_deliverable(expectations.deliverable)
+    return ExpandedExpectations(
         outcome=expectations.outcome,
         app_checks=app_checks,
         http_checks=http_checks,
         files_checks=files_checks,
         test_commands=expectations.test_commands,
         is_deliverable_bundle_required=True,
-        ui_flows=expectations.ui_flows,
+        ui_flow_checks=_expand_ui_flows(expectations.ui_flows),
         is_fresh_env_enabled=expectations.is_fresh_env_enabled,
     )

@@ -1,0 +1,3 @@
+The minds-eval flow-executor specs (`specs/minds-eval-harbor/flow_executor_forwarded_origin.md`, `outcome_verification.md`) describe the origin the executor drives as the app's label on the workspace's agent-keyed origin, and record the session cookie's family scope. The cookie-scope fidelity gap they carried as an open question is closed.
+
+The repo-root coverage-omit consistency check (`test_top_level_coverage_omit_covers_subproject_omits`) carries the same 60-second budget and offload retry as the other repo-wide tree walks in `test_meta_ratchets.py`, so sandbox I/O contention no longer fails a run at the default 10-second timeout.

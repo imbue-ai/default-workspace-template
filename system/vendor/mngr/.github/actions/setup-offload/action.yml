@@ -8,7 +8,7 @@ inputs:
       offload version to install. Keep in lockstep with OFFLOAD_VERSION in
       libs/mngr/imbue/mngr/resources/Dockerfile.
     required: false
-    default: "0.9.12"
+    default: "0.9.13"
 runs:
   using: composite
   steps:
