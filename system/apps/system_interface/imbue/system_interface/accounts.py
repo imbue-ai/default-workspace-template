@@ -343,8 +343,10 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
                 continue
             # A folder holding only what `discard_account_dir` keeps is not debris from a
             # half-finished sign-in -- it is a deleted account's chat history, deliberately
-            # left behind. Removing it here would undo that one boot later.
-            if {c.name for c in child.iterdir()} <= set(KEPT_ON_DISCARD):
+            # left behind. Removing it here would undo that one boot later. An EMPTY folder
+            # is debris and must still go, which is why this asks for a non-empty subset.
+            contents = {c.name for c in child.iterdir()}
+            if contents and contents <= set(KEPT_ON_DISCARD):
                 continue
             shutil.rmtree(child, ignore_errors=True)
             removed.append(child.name)
