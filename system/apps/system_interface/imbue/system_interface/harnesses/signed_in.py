@@ -12,8 +12,10 @@ CLIs that fetch over the network and a 20-second hiccup is not evidence of anyth
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from loguru import logger as _loguru_logger
@@ -21,6 +23,7 @@ from loguru import logger as _loguru_logger
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.system_interface.harnesses.binding import account_env
+from imbue.system_interface.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 
 logger = _loguru_logger
@@ -45,17 +48,26 @@ _PROBES: Final[dict[HarnessType, tuple[tuple[str, ...], str | None]]] = {
     # guard keeps a transient failure from reading as a successful sign-in.
     HarnessType.ANTIGRAVITY: (("agy", "models"), "Please sign in"),
     # pi's lanes are file writes, so this is not asking "did a browser flow finish" -- it is
-    # asking whether pi actually ACCEPTED the file we just wrote. `--list-models` scoped to
-    # the account answers that: it names the provider's models when the credential was read
-    # and says so plainly when it was not. It does not reach the provider, so it cannot tell
-    # a valid key from a well-formed one -- but a typo'd provider or a schema we got wrong
-    # would otherwise be discovered only by a chat that silently could not take a turn.
-    HarnessType.PI_CODING: (("pi", "--list-models"), "No usable API key is configured"),
+    # asking whether pi actually ACCEPTED the file we just wrote.
+    #
+    # The string matters: measured against 0.83.0 and 0.84.1, an empty dir, an unknown
+    # provider id and a malformed auth.json all print "No models available. Use /login ..."
+    # and exit 0. Matching anything else -- "No usable API key is configured", which pi
+    # prints when asked to take a TURN, not when asked to list -- makes NO unreachable and
+    # the probe a network round trip that always says yes.
+    HarnessType.PI_CODING: (("pi", "--list-models"), "No models available"),
 }
 
 
-def is_signed_in(harness: HarnessType, account_dir: Path) -> SignedIn:
-    """Ask the harness's own CLI whether this account folder is authenticated."""
+def is_signed_in(
+    harness: HarnessType, account_dir: Path, runner: Callable[..., Any] = run_local_command_modern_version
+) -> SignedIn:
+    """Ask the harness's own CLI whether this account folder is authenticated.
+
+    `runner` is injectable so the decision table can be exercised without four CLIs on PATH
+    and without a network round trip -- every arm below is a judgement about a command's
+    output, not about the command.
+    """
     probe = _PROBES.get(harness)
     if probe is None:
         # Nothing to ask. A file write either happened or raised.
@@ -65,9 +77,16 @@ def is_signed_in(harness: HarnessType, account_dir: Path) -> SignedIn:
     # The scoping variable is layered OVER the ambient environment, never used alone:
     # `Popen` replaces rather than merges, so a bare {"CODEX_HOME": ...} would drop PATH and
     # the probe would fail closed on every account.
-    env = {**os.environ, **account_env(harness, account_dir)}
+    #
+    # But the ambient environment is the SERVER's, and on a workspace upgraded from the
+    # shared-login era it can still carry ANTHROPIC_API_KEY. claude reports `loggedIn: true,
+    # apiKeySource: ANTHROPIC_API_KEY` on the strength of that alone -- so an empty account
+    # folder would commit as signed in, become the most-recently-used, and launch every later
+    # chat with no credential. The question is whether THIS FOLDER is authenticated.
+    env = {k: v for k, v in os.environ.items() if k not in MANAGED_AUTH_ENV_KEYS}
+    env.update(account_env(harness, account_dir))
     try:
-        finished = run_local_command_modern_version(
+        finished = runner(
             command=list(command),
             is_checked=False,
             timeout=_PROBE_TIMEOUT_SECONDS,

@@ -291,9 +291,17 @@ class FakePexpectProcess:
     against their wall-clock deadline.
     """
 
-    def __init__(self, expect_script: Sequence[tuple[int, str]], drain_chunks: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        expect_script: Sequence[tuple[int, str]],
+        drain_chunks: Sequence[str] = (),
+        is_alive: bool = True,
+    ) -> None:
         assert expect_script, "expect_script must have at least one entry"
         self._script = list(expect_script)
+        # Hardcoding this True made every "the CLI has exited" arm unreachable from tests --
+        # including the only success signal codex's device flow has, which is process exit.
+        self._is_alive = is_alive
         self._call_idx = 0
         self._drain_chunks = list(drain_chunks)
         self.sendline_calls: list[str] = []
@@ -328,7 +336,12 @@ class FakePexpectProcess:
         self.send_calls.append(s)
 
     def isalive(self) -> bool:
-        return True
+        return self._is_alive
+
+    def exit(self) -> None:
+        """Let the scripted CLI finish. `terminate` does not: the production teardown calls
+        it on paths where the process was already gone, so it cannot mean "now exited"."""
+        self._is_alive = False
 
     def terminate(self, force: bool = False) -> None:
         self.terminate_calls += 1
