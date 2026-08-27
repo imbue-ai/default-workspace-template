@@ -186,6 +186,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let cachedRenderVersion = -1;
   let heightsEpoch = 0;
   let geometryHeightsEpoch = -1;
+  // Append tracking for the FOLLOW pin: the loaded window's end index at the
+  // last rows refresh, and whether events appended since the last pin.
+  let lastSeenEndIndex = -1;
+  let hasUnfollowedAppend = false;
 
   // --- spacers --------------------------------------------------------------
   let estimatePxPerEvent = DEFAULT_SPACER_PX_PER_EVENT;
@@ -514,6 +518,28 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     return changed;
   }
 
+  /**
+   * Whether the FOLLOW pin has nothing left to chase: the agent is not
+   * generating, no fill or measurement is outstanding, the tail is fully
+   * loaded, and no append has landed since the last pin. While quiescent the
+   * pin must not pull the viewport down -- an idle transcript relayout
+   * (expanding a block at the tail) must not drag the user -- and the render
+   * plan windows around the CURRENT viewport rather than the theoretical
+   * bottom, so the two never disagree about where rows should be mounted.
+   */
+  function isFollowQuiescent(): boolean {
+    const totalEventsNow = dataSource.getTotalEvents();
+    return (
+      !isStreaming() &&
+      !fillInFlight &&
+      !hasUnfollowedAppend &&
+      spacerTopPx <= 0 &&
+      spacerBottomPx <= 0 &&
+      (geometry === null || geometry.unmeasuredCount === 0) &&
+      (totalEventsNow === null || extent().endIndex >= totalEventsNow)
+    );
+  }
+
   // --- geometry -------------------------------------------------------------
 
   function refreshGeometry(): void {
@@ -525,6 +551,14 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
     if (rowsChanged) {
       cachedWindowEventIds = dataSource.getWindowEventIds();
+      // New events past the previous end are an append the FOLLOW pin still
+      // owes a scroll for -- even if the agent already reads idle by the time
+      // the events land (a completed message often arrives as a late append).
+      const endIndexNow = dataSource.getFirstOffset() + cachedWindowEventIds.length;
+      if (lastSeenEndIndex !== -1 && endIndexNow > lastSeenEndIndex) {
+        hasUnfollowedAppend = true;
+      }
+      lastSeenEndIndex = endIndexNow;
       rowEventIndexes = buildRowEventIndexes(
         rows.map((row) => row.anchorEventId),
         cachedWindowEventIds,
@@ -937,18 +971,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       if (isPointerDown || (pendingUserDeltaPx < -0.01 && !isPendingClamp)) {
         trace?.record("follow-yield", { pendingUserDeltaPx, isPointerDown });
       }
-      // The pin only pulls the viewport down while the agent is generating or
-      // history is still filling/measuring in; a quiescent transcript's
-      // relayout (expanding a block at the tail) must not drag the user.
-      const totalEventsNow = dataSource.getTotalEvents();
-      const isQuiescent =
-        !isStreaming() &&
-        !fillInFlight &&
-        spacerTopPx <= 0 &&
-        spacerBottomPx <= 0 &&
-        (geometry === null || geometry.unmeasuredCount === 0) &&
-        (totalEventsNow === null || extent().endIndex >= totalEventsNow);
-      if (!isPointerDown && !isQuiescent && (pendingUserDeltaPx >= -0.01 || isPendingClamp)) {
+      if (!isPointerDown && !isFollowQuiescent() && (pendingUserDeltaPx >= -0.01 || isPendingClamp)) {
         const targetPx = element.scrollHeight - element.clientHeight;
         if (hasPendingUserScroll) {
           pendingEchoTops.push(element.scrollTop);
@@ -958,6 +981,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         } else {
           scrollTopPx = element.scrollTop;
         }
+        hasUnfollowedAppend = false;
       }
     } else if (geometry !== null) {
       let targetPx = scrollTopForAnchor(geometry, positionState.anchor, spacerTopPx);
@@ -1087,11 +1111,14 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       }
 
       // Window the rows around where the viewport will be after positioning.
+      // In quiescent FOLLOW the pin does not move the viewport, so the window
+      // must track the CURRENT position -- windowing the theoretical bottom
+      // there mounts rows the viewport is not over, painting blank space.
       const viewport = viewportNow();
       let windowScrollTopPx = viewport.scrollTopPx;
-      if (positionState.kind === "FOLLOW") {
+      if (positionState.kind === "FOLLOW" && !isFollowQuiescent()) {
         windowScrollTopPx = Math.max(0, spacerTopPx + physicalHeightPx() + spacerBottomPx - viewport.heightPx);
-      } else {
+      } else if (positionState.kind !== "FOLLOW") {
         const anchoredTopPx = scrollTopForAnchor(geometry, positionState.anchor, spacerTopPx);
         if (anchoredTopPx !== null) {
           windowScrollTopPx = anchoredTopPx;
@@ -1181,6 +1208,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       pendingJumpIndex = null;
       pendingJumpLandIndex = null;
       pendingTailIntent = false;
+      lastSeenEndIndex = -1;
+      hasUnfollowedAppend = false;
       freezeRange = null;
       lastPositionedKey = "";
       lastScrollbarFraction = null;
