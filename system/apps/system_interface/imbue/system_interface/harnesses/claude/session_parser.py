@@ -48,7 +48,11 @@ INTERRUPT_SENTINEL_TEXT = "[Request interrupted by user]"
 # (the dominant stop scenario). The plain constant is NOT a substring of it, so both are
 # recognized by anchoring on the shared opening rather than the plain string alone.
 MID_TOOL_INTERRUPT_SENTINEL_TEXT = "[Request interrupted by user for tool use]"
-_INTERRUPT_SENTINEL_PREFIX = "[Request interrupted by user"
+
+# The shared opening of both sentinel shapes. Public so raw-line consumers (e.g. the
+# watcher's stranded-marker heal) can use it as a cheap substring pre-filter before
+# JSON-parsing a line for :func:`is_interrupt_sentinel_record`.
+INTERRUPT_SENTINEL_PREFIX = "[Request interrupted by user"
 
 
 def is_interrupt_sentinel_text(text: str) -> bool:
@@ -59,7 +63,23 @@ def is_interrupt_sentinel_text(text: str) -> bool:
     the PARSED text of a user record (not a raw line), so a ``tool_result`` merely quoting the
     sentinel -- whose text is not extracted as user text -- can never be mistaken for one.
     """
-    return text.strip().startswith(_INTERRUPT_SENTINEL_PREFIX)
+    return text.strip().startswith(INTERRUPT_SENTINEL_PREFIX)
+
+
+def is_interrupt_sentinel_record(raw: dict[str, Any]) -> bool:
+    """True iff ``raw`` is a user record whose text is an interrupt sentinel (either shape).
+
+    The raw-record sibling of :func:`is_interrupt_sentinel_text`, for consumers that scan raw
+    session lines rather than parsed events (the parser suppresses the sentinel, so no parsed
+    event ever carries it). ``extract_text_content`` reads only ``text`` blocks, so a
+    ``tool_result`` merely quoting the sentinel yields empty text and cannot match.
+    """
+    if raw.get("type") != "user":
+        return False
+    message = raw.get("message")
+    if not isinstance(message, dict):
+        return False
+    return is_interrupt_sentinel_text(extract_text_content(message.get("content")))
 
 
 # Claude Code's resume bookkeeping. Whenever ``claude --resume`` reloads a

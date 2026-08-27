@@ -74,12 +74,18 @@ from typing import Callable
 from loguru import logger as _loguru_logger
 from watchdog.observers import Observer
 
+from imbue.concurrency_group.errors import ConcurrencyGroupError
+from imbue.mngr_claude.claude_config import mark_claude_agent_idle
+from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.claude.queue_tracker import ClaudeQueueTracker
+from imbue.system_interface.harnesses.claude.session_parser import INTERRUPT_SENTINEL_PREFIX
 from imbue.system_interface.harnesses.claude.session_parser import QueueSignal
 from imbue.system_interface.harnesses.claude.session_parser import QueueSignalKind
+from imbue.system_interface.harnesses.claude.session_parser import is_interrupt_sentinel_record
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.claude.session_parser import parse_queue_signals
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
@@ -95,6 +101,15 @@ logger = _loguru_logger
 # arbitrarily long transcript. Bodies evicted past this are re-parsed from disk
 # on demand via the locator byte ranges.
 _DEFAULT_BODY_CACHE_CAPACITY = 2000
+
+# How much older than an interrupt sentinel the ``active`` marker's mtime must be before
+# the watcher-side heal clears it. A stranded marker predates its interrupt by the whole
+# interrupted turn (seconds to minutes); a marker belonging to a turn started AFTER the
+# interrupt (an immediate resubmit, or claude flushing its parked queue) is touched at or
+# after the sentinel. The band absorbs marker-mtime vs. transcript-timestamp granularity
+# skew, erring toward NOT clearing: a wrongly skipped heal leaves the old stuck-indicator
+# behavior for one rare case, while a wrong clear would hide a live turn.
+_INTERRUPT_HEAL_GUARD_SECONDS = 1.0
 
 
 def _is_complete_json_object(fragment: bytes) -> bool:
@@ -344,6 +359,12 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         self._last_broadcast_queue_snapshot: list[dict[str, str]] = []
         self._queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None = None
 
+        # Epoch timestamp of the newest interrupt sentinel parsed from the latest main
+        # session, or None. Set under ``_lock`` in the forward-consume pass; taken (and
+        # cleared) by the poll loop's stranded-marker heal, which must run its subprocess
+        # outside the lock. See ``_heal_interrupt_stranded_marker``.
+        self._interrupt_heal_epoch: float | None = None
+
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
         self._observer: Any = None
@@ -550,6 +571,74 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
             return marker.stat().st_mtime
         except OSError:
             return None
+
+    def _note_interrupt_sentinel_locked(self, line: str) -> None:
+        """Record the timestamp of an interrupt-sentinel line from the latest main session (lock held).
+
+        Keeps only the newest sentinel epoch seen so far; the poll loop's heal takes and
+        clears it. A line that fails to parse, is not a sentinel record (the caller only
+        pre-filtered on a substring), or has no parseable timestamp is ignored -- the heal
+        only ever acts on positive evidence.
+        """
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError as e:
+            # parse_lines consumes this same line for event parsing; the sentinel scan just
+            # surfaces the corruption from its own angle rather than silently skipping it.
+            logger.warning("Skipping non-JSON session line while scanning for interrupt sentinels: {}", e)
+            return
+        if not isinstance(raw, dict) or not is_interrupt_sentinel_record(raw):
+            return
+        timestamp = raw.get("timestamp")
+        epoch = parse_iso_timestamp_to_epoch(timestamp if isinstance(timestamp, str) else None)
+        if epoch is None:
+            return
+        if self._interrupt_heal_epoch is None or epoch > self._interrupt_heal_epoch:
+            self._interrupt_heal_epoch = epoch
+
+    def _heal_interrupt_stranded_marker(self) -> None:
+        """Clear an ``active`` marker stranded by a terminal-native interrupt.
+
+        Claude fires NO hook when the user interrupts a turn, so an interrupt delivered in
+        the terminal (Esc) strands the ``active`` marker UserPromptSubmit created: the
+        lifecycle keeps reporting RUNNING and the chat indicator pins on "Thinking..." /
+        the dead tool call while the terminal sits idle at its prompt. The chat-side stop
+        button heals its own interrupts (``execute_claude_stop_to_composer`` calls
+        ``mark_claude_agent_idle`` after confirming the sentinel), but nothing watches for
+        terminal-side interrupts -- except this watcher, which parses every sentinel record
+        as it lands. Clear the markers exactly the way the hooks do
+        (``mark_claude_agent_idle``), whose emitted activity event makes ``mngr observe``
+        re-probe so the lifecycle -- and with it the chat indicator -- settles to idle.
+
+        Guarded so a live turn is never un-marked: heal only when the marker's mtime
+        predates the sentinel by more than ``_INTERRUPT_HEAL_GUARD_SECONDS`` -- a marker
+        touched at/after the interrupt belongs to a turn started after it (an immediate
+        resubmit, or claude flushing its parked queue on cancel). Best-effort: a heal
+        failure only means the indicator lags (the next interrupt or restart heals it), so
+        it logs rather than raises out of the poll loop.
+        """
+        with self._lock:
+            sentinel_epoch = self._interrupt_heal_epoch
+            self._interrupt_heal_epoch = None
+        if sentinel_epoch is None:
+            return
+        marker = self._agent_state_dir / ACTIVE_MARKER_FILENAME
+        try:
+            marker_mtime = marker.stat().st_mtime
+        except OSError:
+            # No marker: the turn already settled (Stop hook, idle notification, or the
+            # chat-side stop) and there is nothing stranded to heal.
+            return
+        if marker_mtime >= sentinel_epoch - _INTERRUPT_HEAL_GUARD_SECONDS:
+            return
+        try:
+            mark_claude_agent_idle(self._agent_state_dir, get_host_dir())
+        except (ConcurrencyGroupError, OSError) as e:
+            logger.opt(exception=e).warning(
+                "Failed to clear the active marker stranded by an interrupt for agent {}; "
+                "the activity indicator will lag until the next turn or restart",
+                self._agent_id,
+            )
 
     def _selected_states_current(self, session_id: str | None) -> list[SessionFileState]:
         """Discover sessions, bring the selected files' caches current, return them.
@@ -834,6 +923,14 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                     queue_signal = parse_queue_signals(decoded_line)
                     if queue_signal is not None and not _is_dead_epoch_enqueue(queue_signal, process_epoch_started_at):
                         self._queue_tracker.consume(queue_signal)
+                    # A terminal-native interrupt (Esc in the terminal) fires NO hook, so
+                    # its sentinel on disk is the only signal that the turn -- and the
+                    # ``active`` marker UserPromptSubmit created for it -- is dead. Note it
+                    # here (the single forward-consume pass over raw lines); the poll loop
+                    # heals the marker outside the lock. Substring pre-filter first: almost
+                    # no line contains the sentinel opening, and the JSON parse is not free.
+                    if INTERRUPT_SENTINEL_PREFIX in decoded_line:
+                        self._note_interrupt_sentinel_locked(decoded_line)
                 line_events = parse_lines(
                     decoded_line.splitlines(),
                     existing_event_ids=self._existing_event_ids,
@@ -1273,6 +1370,8 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
 
         for pending_events in pending_batches:
             self._on_events(self._agent_id, pending_events)
+
+        self._heal_interrupt_stranded_marker()
 
     def set_queue_snapshot_callback(self, callback: Callable[[list[dict[str, Any]]], None]) -> None:
         """Register the sink the watcher pushes each new queued-message snapshot to."""
