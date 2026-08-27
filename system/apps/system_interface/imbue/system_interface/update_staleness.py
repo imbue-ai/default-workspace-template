@@ -45,7 +45,7 @@ logger = _loguru_logger
 WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
 
 # The update apply's in-flight marker (see
-# ``.agents/skills/update-self/scripts/update_self.py``): present exactly while
+# ``.agents/skills/update-self/scripts/update_apply_contract.py``): present exactly while
 # an apply is mid-motion or was interrupted before recovery.
 UPDATE_APPLY_MARKER_REL = "data/.state/update-apply/marker.json"
 # The apply's emergency record: written when a rollback could not put a healthy
