@@ -4,3 +4,7 @@ Its two flags -- `FEATURE_FLAG_ENABLE_OTHER_HARNESSES` and
 `FEATURE_FLAG_ENABLE_INTRODUCTORY_AGENTS_IN_OTHER_HARNESSES` -- are gone, and they were the
 only ones. Both gated which tiles the new-tab screen offered; the provider picker carries
 that choice now, as a real user-facing one rather than a host-side toggle.
+
+supervisord.conf's flag block goes with it. There are no feature flags left in this
+workspace; which harnesses a user can launch is decided by which providers they have
+signed in to.

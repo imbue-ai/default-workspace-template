@@ -1016,23 +1016,17 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     assert claude["powered_by_text"] == ""
 
 
-def test_get_harnesses_includes_every_harness_regardless_of_the_flag(
-    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The catalogs are never gated: the flag hides launchers, not harness support.
+def test_get_harnesses_includes_every_harness(client: FlaskClient) -> None:
+    """Every harness is in the catalog, whatever the user has signed in to.
 
-    A codex or pi agent can exist without the launchers ever being shown (``mngr
-    create``, or a host that turned the flag off after the agent was made), and its
-    model bar resolves against this catalog -- so gating it here would strand that
-    agent's chip on an unrecognized model.
+    A codex or pi agent can exist without any account for it (made by ``mngr create``,
+    or left behind after its account was removed), and its model bar resolves against
+    this catalog -- so narrowing it to the signed-in harnesses would strand that agent's
+    chip on an unrecognized model.
     """
-    monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
-    without_flag = client.get("/api/harnesses").get_json()
-    assert "claude" in without_flag
-    assert "codex" in without_flag
-
-    monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
-    assert client.get("/api/harnesses").get_json() == without_flag
+    catalog = client.get("/api/harnesses").get_json()
+    assert "claude" in catalog
+    assert "codex" in catalog
 
 
 def test_powered_by_is_empty_for_a_harness_that_declares_no_credit(client: FlaskClient, tmp_path: Path) -> None:
@@ -2390,34 +2384,6 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         response = test_client.get("/")
         assert response.status_code == 200
         assert "system-interface-hostname" in response.text
-
-
-def test_index_enable_other_harnesses_meta_tag_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The alt-harness feature flag is injected and defaults to off (buttons hidden)."""
-    monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
-
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(build_test_state()).test_client().get("/")
-        assert response.status_code == 200
-        assert '<meta name="system-interface-enable-other-harnesses" content="false">' in response.text
-
-
-def test_index_enable_other_harnesses_meta_tag_on_when_flag_set(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Setting FEATURE_FLAG_ENABLE_OTHER_HARNESSES to a truthy value flips the injected flag on."""
-    monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
-
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(build_test_state()).test_client().get("/")
-        assert response.status_code == 200
-        assert '<meta name="system-interface-enable-other-harnesses" content="true">' in response.text
 
 
 def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> None:

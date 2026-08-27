@@ -833,11 +833,11 @@ def _get_harnesses_endpoint() -> Response:
     switch mode, picker mode, powered-by label, shoulder-tap capability); the
     frontend keys in by an agent's harness.
 
-    Every harness is always included, deliberately: ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``
-    gates only the "New <harness> agent" launchers in the new-tab menu, not harness support
-    itself. A codex or pi agent that exists some other way (``mngr create``, one made before
-    the flag was turned off) still needs its catalog for the model bar to resolve, so
-    filtering here would strand that agent's chip on an unrecognized model.
+    Every harness is always included, deliberately: what the user has signed in to
+    decides what they can LAUNCH, not what the app can render. A codex or pi agent that
+    exists some other way (``mngr create``, or one left behind after its account was
+    removed) still needs its catalog for the model bar to resolve, so narrowing this to
+    the signed-in harnesses would strand that agent's chip on an unrecognized model.
     """
     catalogs: dict[str, Any] = {}
     for harness in HARNESS_SPECS:
