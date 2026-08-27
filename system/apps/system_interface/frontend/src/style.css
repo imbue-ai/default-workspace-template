@@ -9,9 +9,10 @@
  *     via the type-* roles, shared recipes via views/primitives.ts builders.
  *   - Hand-written CSS here is only for what utilities cannot reach: vendor
  *     DOM (dockview/xterm), markdown-rendered content, keyframes and
- *     pseudo-element machines (spinner/toggle/tooltip), contextual rules over
- *     shared markup, and cascade-critical overrides. In those, reference the
- *     --c-* value tokens, never a raw hex.
+ *     pseudo-element machines (spinner/toggle), contextual rules over
+ *     shared markup, and cascade-critical overrides. In those, `@apply` the
+ *     semantic utilities where they cover the declarations; reference the
+ *     --c-* value tokens where no utility fits, never a raw hex.
  *
  * This is a convention for the default UI, not an enforced rule. If the user
  * wants their interface restyled to their own taste, build exactly that and
@@ -1278,43 +1279,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    clipped by the tab strip's overflow and drifted from this one, so all callers
    moved onto the shared hoverTooltipAttrs() helper.
 
-   The appearance is the minds shell's `.minds-tooltip`, so chrome and
-   workspace tooltips are indistinguishable -- inverse surface with matching
-   inverse text, 12px helper type, 6px radius, 8px/4px padding, the overlay
-   elevation shadow, and centered text wrapping at 480px. `display` is toggled
-   in JS (`inline-flex` when shown) and there is deliberately no transition:
-   the bubble appears after the 250ms hover-intent delay and disappears
-   instantly. It has to clear the modals, which sit at 10000.
-
-   This app has no theme tokens for an inverted surface, so both modes are
-   spelled out here off `prefers-color-scheme` -- the only theme signal that
-   reaches this iframe. */
-.minds-tooltip {
-  position: fixed;
-  z-index: var(--z-tooltip);
-  display: none;
-  align-items: center;
-  gap: --spacing(1.5);
-  max-width: 480px;
-  padding: --spacing(1) --spacing(2);
-  border-radius: var(--radius-md);
-  background: var(--c-inverse-surface);
-  color: var(--c-text-on-accent);
-  font-size: var(--font-size-helper);
-  font-weight: 400;
-  line-height: 1.4;
-  text-align: center;
-  white-space: normal;
-  pointer-events: none;
-  box-shadow: var(--shadow-overlay);
-}
-
-@media (prefers-color-scheme: dark) {
-  .minds-tooltip {
-    background: var(--c-surface);
-    color: var(--c-text-primary);
-  }
-}
+   Its skin is utilities at its creation site (TOOLTIP_CLASS in
+   views/hoverTooltip.ts), dark mode included -- nothing for it lives here. */
 
 /* The inline rename editor, swapped in for the title on a double-click. It
    takes the title's own box so the tab neither grows nor jumps as it opens,
