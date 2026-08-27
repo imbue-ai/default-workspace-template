@@ -146,8 +146,8 @@ def _parse_deliverable(raw_entry: object, case_id: str) -> DeliverableExpectatio
 
 @pure
 def _parse_surface(raw: Mapping[str, Any], case_id: str, what: str) -> FlowSurface:
-    """Where a flow enters the app. Defaults to the forwarded origin: the app's own label on the
-    workspace's agent-keyed origin, where the proxy serves it."""
+    """Where a flow enters the app. Defaults to the forwarded origin, which is what the client's
+    app tab iframes."""
     raw_surface = str(raw.get("surface") or FlowSurface.ORIGIN.value).strip().lower()
     if raw_surface == RESERVED_MINDS_UI_SURFACE:
         # Reserved, not implemented. Accepting it would drive the app's own origin while the case

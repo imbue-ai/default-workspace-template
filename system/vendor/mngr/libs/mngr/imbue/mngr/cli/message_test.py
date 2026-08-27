@@ -6,7 +6,6 @@ import pluggy
 import pytest
 from click.testing import CliRunner
 
-from imbue.mngr.api.message import AgentSendFailure
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.cli.message import MessageCliOptions
 from imbue.mngr.cli.message import _emit_human_output
@@ -17,7 +16,6 @@ from imbue.mngr.cli.message import _emit_output
 from imbue.mngr.cli.message import _get_message_content
 from imbue.mngr.cli.message import message
 from imbue.mngr.config.data_types import OutputOptions
-from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import OutputFormat
@@ -90,7 +88,7 @@ def test_emit_json_output_formats_successful_agents(capsys: pytest.CaptureFixtur
 def test_emit_json_output_formats_failed_agents(capsys: pytest.CaptureFixture[str]) -> None:
     """Test that _emit_json_output includes failed agents."""
     result = MessageResult()
-    result.failures = [AgentSendFailure(agent_name="agent1", reason="error message", kind=SendFailureKind.UNKNOWN)]
+    result.failed_agents = [("agent1", "error message")]
 
     _emit_json_output(result)
 
@@ -104,7 +102,7 @@ def test_emit_json_output_includes_counts(capsys: pytest.CaptureFixture[str]) ->
     """Test that _emit_json_output includes counts."""
     result = MessageResult()
     result.successful_agents = ["agent1", "agent2", "agent3"]
-    result.failures = [AgentSendFailure(agent_name="agent4", reason="error", kind=SendFailureKind.UNKNOWN)]
+    result.failed_agents = [("agent4", "error")]
 
     _emit_json_output(result)
 
@@ -248,10 +246,7 @@ def test_emit_human_output_successful_agents_with_count(capsys: pytest.CaptureFi
 def test_emit_human_output_only_failed_agents(capsys: pytest.CaptureFixture[str]) -> None:
     """Test _emit_human_output handles case with only failures."""
     result = MessageResult()
-    result.failures = [
-        AgentSendFailure(agent_name="agent-1", reason="error1", kind=SendFailureKind.UNKNOWN),
-        AgentSendFailure(agent_name="agent-2", reason="error2", kind=SendFailureKind.UNKNOWN),
-    ]
+    result.failed_agents = [("agent-1", "error1"), ("agent-2", "error2")]
     _emit_human_output(result)
     captured = capsys.readouterr()
     output = captured.out

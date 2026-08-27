@@ -532,6 +532,39 @@ def parse_agent_ssh_info(listed_json: str, agent_id: str) -> dict[str, str] | No
     return None
 
 
+@pure
+def parse_agent_host_id(listed_json: str, agent_id: str) -> str:
+    """The workspace's HOST id out of `mngr list --format json`; empty when it is not there.
+
+    Distinct from the agent id, and not derivable from it: both are independent uuid4s, and an
+    agent that moves keeps its id while getting a new host. The forwarded origin is built from the
+    HOST id (`<label>.host-<hex>.localhost`), which is why this has to be looked up rather than
+    formatted from the agent id the driver already holds.
+    """
+    try:
+        payload = json.loads(listed_json)
+    except ValueError:
+        return ""
+    agents = payload.get("agents") if isinstance(payload, dict) else payload
+    for entry in agents or []:
+        if not isinstance(entry, dict) or str(entry.get("id")) != agent_id:
+            continue
+        host = entry.get("host")
+        return str(host.get("id") or "") if isinstance(host, dict) else ""
+    return ""
+
+
+async def fetch_agent_host_id(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+) -> str:
+    result = await run_in_box(
+        environment, "cd {} && uv run mngr list --format json".format(BOX_MNGR_DIR), env, _QUICK_EXEC_TIMEOUT_SECONDS
+    )
+    return parse_agent_host_id(result.stdout or "", workspace_agent_id)
+
+
 async def fetch_agent_ssh_info(
     environment: BaseEnvironment,
     env: dict[str, str],

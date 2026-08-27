@@ -106,8 +106,7 @@ def _playwright_cookie(cookie: StepCookie) -> dict[str, Any]:
     return {
         "name": cookie.name,
         "value": cookie.value,
-        "domain": cookie.domain,
-        "path": cookie.path,
+        "url": cookie.url,
         "httpOnly": cookie.is_http_only,
         "secure": cookie.is_secure,
         "sameSite": cookie.same_site,
@@ -158,7 +157,7 @@ def run_step(request: StepRequest) -> StepResult:
                 return StepResult(is_ok=False, reason=REASON_CDP_CONNECT_FAILED, detail=_bounded(exc))
             if request.cookie is not None:
                 # Installed before the flow's first navigation, so the opening request is already
-                # authenticated.
+                # authenticated and never takes the proxy's login redirect.
                 context.add_cookies([_playwright_cookie(request.cookie)])
             page = context.pages[0] if context.pages else context.new_page()
             reason = ""

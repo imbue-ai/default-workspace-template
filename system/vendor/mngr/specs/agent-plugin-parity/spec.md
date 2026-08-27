@@ -753,7 +753,7 @@ untrusted code**.
 - **antigravity** (`plugin.py:629`): writes the **durable source-repo path** to the user's
   *global* `~/.gemini/.../settings.json` `trustedWorkspaces` (so re-trust isn't prompted
   across agents/worktrees) and the **transient per-agent workspace path** to the *per-agent*
-  settings only. Gating matrix: already-trusted -> no-op; `--yes`/`auto_dismiss_dialogs_at_startup` ->
+  settings only. Gating matrix: already-trusted -> no-op; `--yes`/`auto_dismiss_dialogs` ->
   silent; interactive -> `click.confirm` (defaults False); non-interactive without opt-in or
   declined -> `SystemExit(1)` (clean exit). Onboarding NUX is skipped via a seeded
   `cache/onboarding.json` with all completion flags True (consumer + enterprise -- PR #2022).
@@ -761,7 +761,7 @@ untrusted code**.
   -- the **durable** grant for the git *source repo* in the user's global
   `~/.pi/agent/trust.json`, the **transient** grant for the per-agent workspace in the
   per-agent dir. Same gating matrix as agy (already-trusted -> no-op;
-  `--yes`/`auto_dismiss_dialogs_at_startup` -> silent; interactive -> `click.confirm`;
+  `--yes`/`auto_dismiss_dialogs` -> silent; interactive -> `click.confirm`;
   non-interactive without opt-in or declined -> `SystemExit`). pi has no onboarding NUX.
 - **opencode**: nothing to seed -- opencode has **no** first-run trust dialog (verified
   live), so there is no trust state to write and no onboarding NUX to skip. The whole
@@ -772,7 +772,7 @@ untrusted code**.
   per-agent `config.toml` (the transient workspace) and persists the **durable** grant for the
   git *source repo* in the user's *global* `config.toml` (so re-trust isn't prompted across
   worktrees), with the same gating matrix as agy/pi (already-trusted -> no-op;
-  `--yes`/`auto_dismiss_dialogs_at_startup` -> silent; interactive -> `click.confirm` defaulting False;
+  `--yes`/`auto_dismiss_dialogs` -> silent; interactive -> `click.confirm` defaulting False;
   non-interactive without opt-in or declined -> `SystemExit(1)`). The path key is **canonical**
   (resolved over the host shell via `pwd -P`, `plugin.py:288`) because codex canonicalizes the
   cwd before its trust lookup. codex-specific twist: this single consent *also* covers the

@@ -233,7 +233,7 @@ describe("icon catalogs", () => {
       "inbox",
       "bell",
       "bug",
-      "user-plus",
+      "share",
       "settings",
       "close",
       "check",

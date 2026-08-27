@@ -9,12 +9,9 @@ schema_version = "1.4"
 # is still alive (registry, services, file inventory, HTTP probes, the
 # deliverable bundle). It is declared as a DIRECTORY: harbor's artifact source
 # is an exact path -- a file or a directory, never a glob -- and every artifact
-# re-materializes at its original absolute path in the verifier. The driver
-# creates the directory at setup, before anything can fail, because harbor
-# records a missing declared path as a failed artifact and then refuses to
-# regrade the trial. So the directory is always there and its presence says
-# nothing; a trial that never reached collection leaves it empty, and the
-# verifier reads the absent manifest.json as absent evidence.
+# re-materializes at its original absolute path in the verifier. A trial that
+# never reached collection simply has no such directory, which harbor records
+# as a failed (best-effort) artifact and the verifier reads as absent evidence.
 artifacts = [
     "/logs/agent/conversation.jsonl",
     "/logs/agent/full_transcript.jsonl",

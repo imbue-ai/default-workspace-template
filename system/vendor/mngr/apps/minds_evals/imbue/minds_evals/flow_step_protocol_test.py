@@ -15,7 +15,6 @@ from imbue.minds_evals.resources.flow_step_protocol import StepCookie
 from imbue.minds_evals.resources.flow_step_protocol import StepRequest
 from imbue.minds_evals.resources.flow_step_protocol import StepResult
 from imbue.minds_evals.resources.flow_step_protocol import request_error_reason
-from imbue.minds_evals.testing import FAKE_WORKSPACE_AGENT_ID
 
 
 def _request(cookie: StepCookie | None = None) -> StepRequest:
@@ -37,26 +36,15 @@ def test_a_request_survives_the_round_trip_it_actually_makes() -> None:
     assert restored.cookie is None
 
 
-def test_the_cookie_travels_with_the_scope_and_flags_the_proxy_needs() -> None:
-    # Scope and flags have to survive the trip to the box intact: this is what the browser is armed
-    # with, and a cookie that arrives shaped differently is one the proxy will not honour.
-    domain = ".{}.localhost".format(FAKE_WORKSPACE_AGENT_ID)
-    cookie = StepCookie(name="mngr_forward_session", value="tok", domain=domain)
+def test_the_cookie_travels_with_the_flags_the_proxy_needs() -> None:
+    # The proxy issues its session on a secure, cross-site cookie; one sent any other way would be
+    # dropped by the browser and the opening navigation would take the login redirect instead.
+    cookie = StepCookie(name="mngr_forward_session", value="tok", url="https://app.host-a.localhost:8431/")
 
     restored = StepRequest.model_validate_json(_request(cookie=cookie).model_dump_json())
 
     assert restored.cookie is not None
-    assert (restored.cookie.domain, restored.cookie.path) == (domain, "/")
     assert (restored.cookie.is_secure, restored.cookie.is_http_only, restored.cookie.same_site) == (True, True, "None")
-
-
-def test_a_cookie_with_no_domain_is_refused_before_it_ships() -> None:
-    # Playwright would reject it in the box, and that rejection would be recorded against the flow
-    # as an instrument failure; refusing it at construction keeps a harness bug a harness bug.
-    with pytest.raises(ValidationError) as caught:
-        StepCookie(name="mngr_forward_session", value="tok", domain="")
-
-    assert tuple(caught.value.errors()[0]["loc"]) == ("domain",)
 
 
 def test_an_action_kind_the_script_cannot_perform_fails_at_the_boundary() -> None:

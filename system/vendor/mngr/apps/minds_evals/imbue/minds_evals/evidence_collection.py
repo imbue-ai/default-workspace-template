@@ -37,6 +37,7 @@ from imbue.imbue_common.pure import pure
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
+from imbue.minds_evals.data_types import BUILTIN_APP_NAMES
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import CheckStatus
@@ -97,10 +98,8 @@ MAX_COMMAND_OUTPUT_CHARS: Final[int] = 4_000
 MAX_COMMAND_OUTPUT_BYTES: Final[int] = MAX_COMMAND_OUTPUT_CHARS
 MAX_TRACE_OUTPUT_CHARS: Final[int] = 2_000
 
-# Per-step bridge budgets, each additionally clamped to what is left of the phase deadline. The
-# probe budget is public because the driver's pre-turn-1 registry snapshot is the same bridged
-# exec the collector runs, against a workspace that has already booted.
-PROBE_TIMEOUT_SECONDS: Final[int] = 120
+# Per-step bridge budgets, each additionally clamped to what is left of the phase deadline.
+_PROBE_TIMEOUT_SECONDS: Final[int] = 120
 _INVENTORY_TIMEOUT_SECONDS: Final[int] = 300
 _BUNDLE_TIMEOUT_SECONDS: Final[int] = 300
 _TEST_COMMAND_TIMEOUT_SECONDS: Final[int] = 300
@@ -119,12 +118,6 @@ _FORWARD_READY_POLL_SECONDS: Final[float] = 3.0
 # fleet's ~30s/step, which was dominated by a workspace hop this executor does not make.
 _FLOW_DEADLINE_SECONDS: Final[float] = 600.0
 
-# What a probe prints in a `*_status` section when the file that section reports on was there to
-# read. Anything else -- including the empty section a probe that died mid-command leaves behind --
-# means the file could not be read, which is a different claim from a file that was read and lists
-# nothing.
-STATUS_PRESENT: Final[str] = "present"
-
 _SECTION_MARKER: Final[str] = "<<<MINDS_EVALS_SECTION:{}>>>"
 _SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"<<<MINDS_EVALS_SECTION:([a-z_]+)>>>\n?")
 
@@ -134,9 +127,6 @@ REASON_BRIDGE_FAILED: Final[str] = "bridge_failed"
 REASON_REPO_NOT_FOUND: Final[str] = "repo_not_found"
 REASON_REGISTRY_ABSENT: Final[str] = "registry_absent"
 REASON_REGISTRY_UNREADABLE: Final[str] = "registry_unreadable"
-# The pre-turn-1 registry snapshot could not be taken, so nothing in the registry can be told apart
-# from what the workspace was already serving before the agent ran.
-REASON_PREEXISTING_UNKNOWN: Final[str] = "preexisting_unknown"
 REASON_SERVICES_UNREADABLE: Final[str] = "services_unreadable"
 REASON_PROBE_UNAVAILABLE: Final[str] = "probe_unavailable"
 REASON_NO_REGISTERED_APPS: Final[str] = "no_registered_apps"
@@ -148,13 +138,7 @@ REASON_NO_SUPERVISED_PROGRAM: Final[str] = "no_supervised_program"
 REASON_TOO_FEW_APPS: Final[str] = "too_few_apps"
 REASON_NONZERO_EXIT: Final[str] = "nonzero_exit"
 
-# The name the oracle's fabricated evidence gives the app it pretends was delivered, and the
-# template rows it pretends were already there, so the fabricated bundle exercises the same
-# delivered-versus-pre-existing resolution a live trial does.
-_ORACLE_PREEXISTING_APPS: Final[tuple[tuple[str, str], ...]] = (
-    ("system_interface", "http://localhost:8000"),
-    ("terminal", "http://localhost:7681"),
-)
+# The name the oracle's fabricated evidence gives the app it pretends was delivered.
 _ORACLE_APP_NAME: Final[str] = "delivered-app"
 _ORACLE_APP_URL: Final[str] = "http://localhost:8080"
 _ORACLE_APP_LABEL: Final[str] = "delivered-app-o1r2a3c4"
@@ -231,7 +215,7 @@ async def ensure_evidence_dir(environment: BaseEnvironment) -> None:
     not produce.
     """
     await environment.exec(
-        "mkdir -p {}/{}".format(box_verification_dir(), HTTP_DIRNAME), timeout_sec=PROBE_TIMEOUT_SECONDS
+        "mkdir -p {}/{}".format(box_verification_dir(), HTTP_DIRNAME), timeout_sec=_PROBE_TIMEOUT_SECONDS
     )
 
 
@@ -268,19 +252,12 @@ def split_sections(output: str) -> dict[str, str]:
 
 
 @pure
-def parse_apps_registry(
-    registry_text: str, preexisting_registrations: frozenset[str]
-) -> tuple[RegisteredApp, ...] | None:
+def parse_apps_registry(registry_text: str) -> tuple[RegisteredApp, ...] | None:
     """The registered apps out of data/.state/apps.toml (an array of {name, url, label} tables).
 
     None means the registry could not be read at all (unparseable, or not the shape it should be),
     which the caller records as ERROR. An empty tuple is a different claim entirely: the registry was
     read and holds nothing, which counts against the agent.
-
-    ``preexisting_registrations`` is what the workspace already served before the agent ran (see
-    ``resolve_preexisting_registrations``); the rows it names are stamped as such. A caller that
-    could not determine that set must not pass an empty one and read every row as delivered;
-    ``EvidenceCollector`` leaves the registry unresolved instead.
     """
     try:
         parsed = tomllib.loads(registry_text)
@@ -305,53 +282,11 @@ def parse_apps_registry(
                 name=name,
                 url=str(raw_app.get("url") or ""),
                 label=str(raw_app.get("label") or ""),
-                is_preexisting=name in preexisting_registrations,
+                is_builtin=name in BUILTIN_APP_NAMES,
                 is_internal=bool(raw_app.get("internal")),
             )
         )
     return tuple(apps)
-
-
-@pure
-def parse_registry_names(registry_text: str) -> frozenset[str] | None:
-    """Just the names in an app registry, without resolving which of them were delivered.
-
-    What the driver's boot-time snapshot needs: at that point the question is only which rows exist
-    yet, and no pre-existing set is available to classify them against. None means the registry
-    could not be read, which is not the same claim as a registry that lists nothing.
-    """
-    apps = parse_apps_registry(registry_text, frozenset())
-    if apps is None:
-        return None
-    return frozenset(app.name for app in apps)
-
-
-@pure
-def is_registry_status_present(sections: Mapping[str, str]) -> bool:
-    """Whether the workspace-state probe found the app registry file at all."""
-    return sections.get("registry_status", "").strip() == STATUS_PRESENT
-
-
-@pure
-def parse_registry_snapshot(output: str) -> frozenset[str] | None:
-    """The apps a workspace already serves, out of one `workspace_state_command` run.
-
-    What the driver's pre-turn-1 snapshot reads. Both halves of the pre-existing set come out of
-    this single probe -- the registry it captured and the `system/supervisord.conf` it catted, which
-    before the first turn is still the pinned template's file verbatim -- so they are decoded here,
-    in the module that prints the probe's sections. See `resolve_preexisting_registrations` for why
-    one source is not enough.
-
-    None covers a registry that is not there yet as well as one that could not be parsed: either way
-    nothing in it can be called pre-existing.
-    """
-    sections = split_sections(output)
-    if not is_registry_status_present(sections):
-        return None
-    return resolve_preexisting_registrations(
-        parse_registry_names(sections.get("registry", "")),
-        frozenset(parse_supervised_registrations(sections.get("supervisord", ""))),
-    )
 
 
 # The states supervisord reports for a program. Used to tell its status listing apart from an error
@@ -392,8 +327,8 @@ def parse_supervised_registrations(supervisord_conf: str) -> dict[str, str]:
     The join goes through the `forward_port.py` invocations inside each `[program:*]` block rather
     than through name equality, because the two are not the same thing: a multi-port app registers
     extra origin-label rows (`<name>-admin`) that have no program of their own, and a program is
-    free to register a row under any name. The workspace template joins the two the same way, in
-    `.agents/skills/migrate-workspace/scripts/migrate_workspace.py`.
+    free to register a row under any name. This is the same join the workspace template's own
+    migration tooling uses.
     """
     program_by_registration: dict[str, str] = {}
     matches = list(_PROGRAM_SECTION_PATTERN.finditer(supervisord_conf))
@@ -403,35 +338,6 @@ def parse_supervised_registrations(supervisord_conf: str) -> dict[str, str]:
         for registration in _FORWARD_PORT_NAME_PATTERN.findall(block):
             program_by_registration.setdefault(registration, match.group(1).strip())
     return program_by_registration
-
-
-@pure
-def resolve_preexisting_registrations(
-    registry_names: frozenset[str] | None, config_registrations: frozenset[str]
-) -> frozenset[str] | None:
-    """What the workspace already served before the agent ran, or None if that cannot be told.
-
-    Both arguments are read from the same pre-turn-1 snapshot, because neither alone is complete:
-
-    - ``registry_names`` is the app registry as it actually stood. A measurement rather than an
-      inference, and the only source that sees a template app which registers from inside the script
-      its supervisord program runs rather than from a ``forward_port.py`` call in the config itself.
-      The terminal does exactly that, as do the owner-exec and vm-exec daemons, and counting one as
-      a deliverable is the failure this resolution exists to prevent.
-    - ``config_registrations`` is what the workspace's own ``system/supervisord.conf`` registers,
-      joined through its ``forward_port.py --name`` invocations. It covers a template app whose
-      service is slow enough that it had not registered its port yet when the snapshot was taken:
-      the file is on disk from the moment the workspace is cloned, whatever its services are doing.
-      Directory names under ``system/apps/`` would not do -- a registry name is a caller-supplied
-      ``--name`` flag, and a multi-port app registers extra origin-label rows that correspond to no
-      directory at all.
-
-    The registry is therefore the half that must be readable; the config half only ever adds names,
-    and contributes nothing when the probe came back without it.
-    """
-    if registry_names is None:
-        return None
-    return registry_names | config_registrations
 
 
 @pure
@@ -471,7 +377,7 @@ def resolve_delivered_apps(
 ) -> tuple[RegisteredApp, ...]:
     """The registry rows that represent the case's deliverable.
 
-    Narrower than "not pre-existing", in two ways a live trial proved matter:
+    Narrower than "not a builtin", in two ways a live trial proved matter:
 
     - Rows the registry marks ``internal`` are machinery that forwards a port but has no page of its
       own to show (the owner-exec daemon, for one). They answer 404 on ``/`` by design, so counting
@@ -483,7 +389,7 @@ def resolve_delivered_apps(
     return tuple(
         app
         for app in registered_apps
-        if not app.is_preexisting and not app.is_internal and app.name not in isolated_instance_services
+        if not app.is_builtin and not app.is_internal and app.name not in isolated_instance_services
     )
 
 
@@ -525,12 +431,7 @@ def _flow_entry(check: UiFlowCheck, status: CheckStatus, reason: str, detail: st
 @pure
 def workspace_state_command() -> str:
     """One command answering everything the always-on capture needs: where the delivered repo is,
-    what the app registry says, and what supervisord reports.
-
-    Two readers decode its sections: the collector's always-on capture, and the driver's pre-turn-1
-    snapshot of what the workspace already served (`parse_registry_snapshot`). A section added or
-    renamed here has to keep both in step.
-    """
+    what the app registry says, and what supervisord reports."""
     # Registry presence is reported separately from its contents: "the file is not there" is the
     # harness failing to measure, while "the file is there and lists no delivered app" is the agent
     # shipping nothing. Collapsing both into an empty capture would turn the very failure this eval
@@ -543,7 +444,7 @@ def workspace_state_command() -> str:
         'registry="$root/{registry_path}"; '
         "printf '{repo_marker}\\n'; printf '%s\\n' \"$root\"; "
         "printf '{registry_status_marker}\\n'; "
-        "if [ -n \"$root\" ] && [ -f \"$registry\" ]; then printf '{present}\\n'; else printf 'absent\\n'; fi; "
+        "if [ -n \"$root\" ] && [ -f \"$registry\" ]; then printf 'present\\n'; else printf 'absent\\n'; fi; "
         "printf '{registry_marker}\\n'; "
         'if [ -n "$root" ]; then cat "$registry" 2>/dev/null; fi; '
         "printf '{services_marker}\\n'; "
@@ -559,7 +460,6 @@ def workspace_state_command() -> str:
         "exit 0"
     ).format(
         default=DEFAULT_WORKSPACE_REPO_ROOT,
-        present=STATUS_PRESENT,
         repo_marker=_SECTION_MARKER.format("repo_root"),
         registry_status_marker=_SECTION_MARKER.format("registry_status"),
         registry_marker=_SECTION_MARKER.format("registry"),
@@ -712,18 +612,15 @@ def resolve_http_targets(check: HttpCheck, delivered_apps: Sequence[RegisteredAp
 def registration_entry(
     check_id: str,
     min_registered_apps: int,
-    # None when the delivered set could not be resolved at all, which is not the same claim as an
-    # empty one: a workspace that registered nothing is the agent shipping nothing, and must score
-    # against it.
+    # None when the registry could not be read at all, which is not the same claim as an empty one:
+    # a workspace that registered nothing is the agent shipping nothing, and must score against it.
     delivered_apps: Sequence[RegisteredApp] | None,
-    unresolved_reason: str,
+    is_registry_present: bool,
 ) -> ManifestEntry:
-    """One `min_registered_apps` verdict. `unresolved_reason` says why the delivered set is None,
-    and is non-empty exactly when it is."""
+    if not is_registry_present:
+        return _entry(check_id, CheckClass.APP, CheckStatus.ERROR, REASON_REGISTRY_ABSENT, "", "")
     if delivered_apps is None:
-        assert unresolved_reason, "an unresolved delivered set must name the reason it is unresolved"
-        return _entry(check_id, CheckClass.APP, CheckStatus.ERROR, unresolved_reason, "", "")
-    assert not unresolved_reason, "a resolved delivered set cannot also carry an unresolved reason"
+        return _entry(check_id, CheckClass.APP, CheckStatus.ERROR, REASON_REGISTRY_UNREADABLE, "", "")
     is_met = len(delivered_apps) >= min_registered_apps
     return _entry(
         check_id,
@@ -822,11 +719,6 @@ class EvidenceCollector(MutableModel):
     case: CaseConfig = Field(frozen=True, description="The case whose expanded expectations drive the probes")
     clone_base_sha: str = Field(frozen=True, description="HEAD of the prepared dwt clone; the git bundle's base")
     dwt_tip_sha: str = Field(frozen=True, description="The dwt tip the base clone was made from")
-    # Required rather than defaulted to None: an unmeasured trial must be a deliberate claim, never
-    # the result of a caller leaving the field out.
-    preexisting_registrations: frozenset[str] | None = Field(
-        frozen=True, description="Registry names the workspace already served before the agent ran"
-    )
     host_logs_dir: Path = Field(frozen=True, description="The trial's host-side logs dir")
     deadline: float = Field(frozen=True, description="Monotonic-clock deadline for the whole phase")
     # None when no key was available to build one; the flows are then recorded as unmeasurable
@@ -835,6 +727,9 @@ class EvidenceCollector(MutableModel):
         frozen=True, default=None, description="Decides each flow's next action and reads its final state"
     )
     verifier_model: str = Field(frozen=True, default="", description="Model the UI-flow agent reasons with")
+    workspace_host_id: str = Field(
+        frozen=True, default="", description="The workspace's mngr host id; the forwarded origin's host component"
+    )
     # Minted per trial. The driver owns the forward instance precisely so it knows this, rather
     # than having to discover a cookie the minds backend minted for itself.
     preauth_cookie: SecretStr = Field(
@@ -879,28 +774,9 @@ class EvidenceCollector(MutableModel):
         return box_verification_dir()
 
     @property
-    def _unresolved_reason(self) -> str:
-        """Why the delivered set cannot be resolved, or empty when it can.
-
-        Two distinct instrument failures land here, and the manifest keeps them apart: an app
-        registry that is absent or unreadable at collection time, and a pre-existing set the driver
-        could not determine before the first turn. Without the latter there is no way to tell what
-        the agent added from what booted with the workspace, so the answer is "unmeasured", never
-        "everything counts".
-
-        Non-empty exactly when ``registered_apps`` is None, which is what lets every caller decide
-        from the one it has to hand.
-        """
-        if self.preexisting_registrations is None:
-            return REASON_PREEXISTING_UNKNOWN
-        if self.registered_apps is None:
-            return REASON_REGISTRY_UNREADABLE if self.is_registry_present else REASON_REGISTRY_ABSENT
-        return ""
-
-    @property
     def _delivered_apps(self) -> tuple[RegisteredApp, ...] | None:
-        """The registry rows that count as the case's deliverable, or None if the set could not be
-        resolved. Both the app checks and the HTTP fan-out score exactly this set."""
+        """The registry rows that count as the case's deliverable, or None if the registry could not
+        be read. Both the app checks and the HTTP fan-out score exactly this set."""
         if self.registered_apps is None:
             return None
         return resolve_delivered_apps(self.registered_apps, self.isolated_instance_services)
@@ -976,9 +852,6 @@ class EvidenceCollector(MutableModel):
             case_id=self.case.case_id,
             base_sha=self.clone_base_sha,
             dwt_tip_sha=self.dwt_tip_sha,
-            preexisting_registrations=(
-                None if self.preexisting_registrations is None else tuple(sorted(self.preexisting_registrations))
-            ),
             is_expectations_declared=self.case.expectations is not None,
             is_evidence_complete=all(entry.status != CheckStatus.ERROR for entry in self.entries),
             started_at=self.started_at or utc_now_iso(),
@@ -1025,23 +898,16 @@ class EvidenceCollector(MutableModel):
         case with no expectations gets it, which is what makes a ships-nothing trial diagnosable."""
         started_at = time.monotonic()
         is_success, output = await self._run_in_workspace(
-            "workspace_state", workspace_state_command(), PROBE_TIMEOUT_SECONDS
+            "workspace_state", workspace_state_command(), _PROBE_TIMEOUT_SECONDS
         )
         sections = split_sections(output)
         self.repo_root = sections.get("repo_root", "").strip()
-        self.is_registry_present = is_registry_status_present(sections)
+        self.is_registry_present = sections.get("registry_status", "").strip() == "present"
         self.registry_text = sections.get("registry", "")
         self.services_text = sections.get("services", "")
         self.supervisord_conf = sections.get("supervisord", "")
         self.isolated_instance_services = parse_isolated_instance_services(sections.get("isolated_instances", ""))
-        # A row can only be stamped pre-existing-or-not against a known pre-existing set, so an
-        # unknown one leaves the registry unresolved even though it is captured verbatim just below.
-        preexisting = self.preexisting_registrations
-        self.registered_apps = (
-            parse_apps_registry(self.registry_text, preexisting)
-            if self.is_registry_present and preexisting is not None
-            else None
-        )
+        self.registered_apps = parse_apps_registry(self.registry_text) if self.is_registry_present else None
         await self._write_evidence(APPS_REGISTRY_FILENAME, self.registry_text)
         await self._write_evidence(SERVICES_FILENAME, self.services_text)
         if not is_success:
@@ -1191,22 +1057,21 @@ class EvidenceCollector(MutableModel):
         await self._flush_record()
 
     async def _run_one_http_check(self, check: HttpCheck) -> None:
-        delivered_apps = self._delivered_apps
-        if delivered_apps is None:
-            # Without a resolved delivered set there is no address to probe; that is the harness
-            # failing to measure, not the app refusing a connection.
+        if self.registered_apps is None:
+            # Without a readable registry there is no address to probe; that is the harness failing
+            # to measure, not the app refusing a connection.
             self.entries.append(
                 _entry(
                     check.check_id,
                     CheckClass.HTTP,
                     CheckStatus.ERROR,
-                    self._unresolved_reason,
-                    "the delivered apps could not be resolved, so target {!r} has no address".format(check.target),
+                    REASON_REGISTRY_UNREADABLE if self.is_registry_present else REASON_REGISTRY_ABSENT,
+                    "no readable app registry to resolve target {!r} against".format(check.target),
                     "",
                 )
             )
             return
-        targets = resolve_http_targets(check, delivered_apps)
+        targets = resolve_http_targets(check, self._delivered_apps or ())
         if not targets:
             reason = (
                 REASON_NO_REGISTERED_APPS
@@ -1317,7 +1182,7 @@ class EvidenceCollector(MutableModel):
             argv, minds_bridge.BOX_MNGR_DIR, forward_instance.BOX_FORWARD_LOG_PATH
         )
         # The cookie and the bridge token are arguments, so the command is never traced verbatim.
-        await minds_bridge.run_in_box(self.environment, start, self.box_env, self._budget(PROBE_TIMEOUT_SECONDS))
+        await minds_bridge.run_in_box(self.environment, start, self.box_env, self._budget(_PROBE_TIMEOUT_SECONDS))
         self.trace.append(
             TraceRecord(
                 timestamp=utc_now_iso(),
@@ -1328,13 +1193,13 @@ class EvidenceCollector(MutableModel):
             )
         )
         probe = forward_instance.forward_probe_command(
-            forward_instance.FORWARD_PORT, self.preauth_cookie.get_secret_value(), self.workspace_agent_id
+            forward_instance.FORWARD_PORT, self.preauth_cookie.get_secret_value(), self.workspace_host_id
         )
         for _attempt in range(_FORWARD_READY_ATTEMPT_COUNT):
             if self._remaining_seconds <= 0:
                 return REASON_TIMEOUT
             result = await minds_bridge.run_in_box(
-                self.environment, probe, self.box_env, self._budget(PROBE_TIMEOUT_SECONDS)
+                self.environment, probe, self.box_env, self._budget(_PROBE_TIMEOUT_SECONDS)
             )
             if (result.stdout or "").strip() == "200":
                 return ""
@@ -1346,7 +1211,7 @@ class EvidenceCollector(MutableModel):
         """Launch one flow's headless Chromium, and wait for its debug port to answer."""
         launch = ui_flows.browser_launch_command(flow_index)
         result = await minds_bridge.run_in_box(
-            self.environment, launch, self.box_env, self._budget(PROBE_TIMEOUT_SECONDS)
+            self.environment, launch, self.box_env, self._budget(_PROBE_TIMEOUT_SECONDS)
         )
         self.trace.append(
             TraceRecord(
@@ -1366,7 +1231,7 @@ class EvidenceCollector(MutableModel):
                 self.environment,
                 ui_flows.browser_probe_command(ui_flows.flow_browser_port(flow_index)),
                 self.box_env,
-                self._budget(PROBE_TIMEOUT_SECONDS),
+                self._budget(_PROBE_TIMEOUT_SECONDS),
             )
             if "webSocketDebuggerUrl" in (probe.stdout or ""):
                 return ""
@@ -1400,7 +1265,7 @@ class EvidenceCollector(MutableModel):
             self.environment,
             forward_instance.forward_stop_command(forward_instance.FORWARD_PORT),
             self.box_env,
-            PROBE_TIMEOUT_SECONDS,
+            _PROBE_TIMEOUT_SECONDS,
         )
 
     async def _run_ui_flows(self, expectations: ExpandedExpectations) -> None:
@@ -1423,23 +1288,24 @@ class EvidenceCollector(MutableModel):
             return
         delivered_apps = self._delivered_apps
         if delivered_apps is None:
-            # A delivered set we could not resolve tells us nothing about what was served, which is
-            # the harness failing to look -- quite unlike a registry that lists nothing.
+            # A registry we could not read tells us nothing about what was served, which is the
+            # harness failing to look -- quite unlike a registry that lists nothing.
             self._record_flow_error(
                 expectations.ui_flow_checks,
-                self._unresolved_reason,
-                "the delivered apps could not be resolved, so there is no origin to drive a flow against",
+                REASON_REGISTRY_UNREADABLE if self.is_registry_present else REASON_REGISTRY_ABSENT,
+                "no readable app registry, so there is no origin to drive a flow against",
             )
             await self._finish_flow_phase(started_at)
             return
-        if not forward_instance.is_agent_id(self.workspace_agent_id):
-            # The agent id is the origin coordinate, so one the proxy does not route on leaves no
-            # origin to build, whatever the workspace is serving.
+        if not forward_instance.is_host_id(self.workspace_host_id):
+            # Without the host id there is no origin to build, whatever the workspace is serving. That
+            # is the harness failing to look it up, so it must not be charged to the agent the way an
+            # empty registry is.
             self._record_flow_error(
                 expectations.ui_flow_checks,
-                ui_flows.REASON_WORKSPACE_UNADDRESSABLE,
-                "workspace agent id {!r} is not an origin coordinate, so no forwarded origin can be addressed".format(
-                    self.workspace_agent_id
+                ui_flows.REASON_HOST_ID_UNKNOWN,
+                "no usable workspace host id ({!r}), so no forwarded origin can be addressed".format(
+                    self.workspace_host_id
                 ),
             )
             await self._finish_flow_phase(started_at)
@@ -1476,10 +1342,11 @@ class EvidenceCollector(MutableModel):
         await self._flush_record()
 
     def _flow_target_url(self, delivered_apps: Sequence[RegisteredApp]) -> str:
-        """The forwarded origin of the app a flow drives: its label on the workspace's agent-keyed origin.
+        """The forwarded origin of the app a flow drives -- the URL the client's app tab iframes.
 
         Empty means the workspace registered nothing to drive, which is the agent's shortfall; the
-        caller has already established that the agent id is addressable.
+        caller has already established that the host id is usable, so that harness-side failure can
+        never reach this answer.
 
         An app that ANSWERED its root-path probe wins over one that merely holds a registry row.
         With more than one delivered row, taking the first would point the flow at whichever
@@ -1497,7 +1364,7 @@ class EvidenceCollector(MutableModel):
         serving = [app for app in addressable if app.name in self.serving_app_names]
         for app in serving or addressable:
             return forward_instance.forwarded_origin(
-                app.label or app.name, self.workspace_agent_id, forward_instance.FORWARD_PORT
+                app.label or app.name, self.workspace_host_id, forward_instance.FORWARD_PORT
             )
         return ""
 
@@ -1528,7 +1395,7 @@ class EvidenceCollector(MutableModel):
         endpoint = ui_flows.cdp_endpoint(ui_flows.flow_browser_port(flow_index))
 
         # The session cookie rides this first request, so the opening navigation is already
-        # authenticated (`forward_instance.session_cookie_domain` for the scope it carries).
+        # authenticated rather than bouncing off the proxy's login redirect.
         opening = ui_flows.FlowAction(
             kind=ui_flows.FlowActionKind.OPEN, role="", target="", text=target_url, amount=0, reasoning="open the app"
         )
@@ -1538,7 +1405,7 @@ class EvidenceCollector(MutableModel):
                 self._flow_screenshot_path(slug, 0),
                 cdp_endpoint_url=endpoint,
                 preauth_cookie=self.preauth_cookie.get_secret_value(),
-                cookie_domain=forward_instance.session_cookie_domain(self.workspace_agent_id),
+                origin=target_url,
             )
         )
         if not outcome.is_ok:
@@ -1605,7 +1472,7 @@ class EvidenceCollector(MutableModel):
                     self._flow_screenshot_path(slug, step_index),
                     cdp_endpoint_url=endpoint,
                     preauth_cookie="",
-                    cookie_domain="",
+                    origin=target_url,
                 )
             )
             if ui_flows.is_instrument_reason(outcome.reason):
@@ -1690,9 +1557,9 @@ class EvidenceCollector(MutableModel):
         program_by_registration = parse_supervised_registrations(self.supervisord_conf)
         for check in expectations.app_checks:
             self.entries.append(
-                registration_entry(check.check_id, check.min_registered_apps, delivered_apps, self._unresolved_reason)
+                registration_entry(check.check_id, check.min_registered_apps, delivered_apps, self.is_registry_present)
             )
-            # An unresolved delivered set tells us nothing about the services behind it either, so
+            # A registry we could not read tells us nothing about the services behind it either, so
             # there is no per-app entry to record; the registration entry already carries the error.
             if check.is_supervisord_service_required and delivered_apps is not None:
                 self.entries.extend(
@@ -1714,14 +1581,18 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
     booting a workspace. Every declared check is recorded as passed against a plausible registry."""
     expectations = case.expectations
     assert expectations is not None, "oracle evidence is only fabricated for cases that declare expectations"
-    oracle_apps = (*_ORACLE_PREEXISTING_APPS, (_ORACLE_APP_NAME, _ORACLE_APP_URL))
     apps_toml = "".join(
         '[[apps]]\nname = "{name}"\nurl = "{url}"\nlabel = "{name}-o1r2a3c4"\n\n'.format(name=name, url=url)
-        for name, url in oracle_apps
+        for name, url in (
+            ("system_interface", "http://localhost:8000"),
+            ("terminal", "http://localhost:7681"),
+            (_ORACLE_APP_NAME, _ORACLE_APP_URL),
+        )
     )
-    services = "".join(
-        "{:<32} RUNNING   pid {}, uptime 0:05:00\n".format(name, 101 + index)
-        for index, (name, _url) in enumerate(oracle_apps)
+    services = (
+        "system_interface                 RUNNING   pid 101, uptime 0:10:00\n"
+        "terminal                         RUNNING   pid 102, uptime 0:10:00\n"
+        "{:<32} RUNNING   pid 103, uptime 0:05:00\n".format(_ORACLE_APP_NAME)
     )
     inventory = "".join(
         json.dumps({"path": path, "size_bytes": 1024, "mtime": 0.0}) + "\n"
@@ -1732,7 +1603,6 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
         case_id=case.case_id,
         base_sha="0" * 40,
         dwt_tip_sha="d" * 40,
-        preexisting_registrations=tuple(sorted(name for name, _url in _ORACLE_PREEXISTING_APPS)),
         is_expectations_declared=True,
         is_evidence_complete=True,
         started_at="1970-01-01T00:00:00+00:00",
@@ -1870,11 +1740,11 @@ def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, 
                         name=_ORACLE_APP_NAME,
                         url=_ORACLE_APP_URL,
                         label=_ORACLE_APP_LABEL,
-                        is_preexisting=False,
+                        is_builtin=False,
                         is_internal=False,
                     ),
                 ),
-                unresolved_reason="",
+                is_registry_present=True,
             )
         )
         if check.is_supervisord_service_required:
@@ -1886,7 +1756,7 @@ def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, 
                             name=_ORACLE_APP_NAME,
                             url=_ORACLE_APP_URL,
                             label=_ORACLE_APP_LABEL,
-                            is_preexisting=False,
+                            is_builtin=False,
                             is_internal=False,
                         ),
                     ),

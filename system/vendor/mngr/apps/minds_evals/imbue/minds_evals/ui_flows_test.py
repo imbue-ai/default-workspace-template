@@ -7,7 +7,6 @@ import pytest
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
-from imbue.minds_evals.testing import FAKE_WORKSPACE_AGENT_ID
 
 
 def _action(
@@ -50,7 +49,7 @@ def test_parse_step_result_reads_the_scripts_json_contract() -> None:
                 "is_ok": True,
                 "reason": "",
                 "detail": "",
-                "url": "https://todo-x.agent-abc.localhost:8431/",
+                "url": "https://todo-x.host-abc.localhost:8431/",
                 "title": "Todo",
                 "snapshot": "- textbox 'Add a task'",
                 "screenshot_path": "/logs/agent/verification/flows/persistence/step_001.png",
@@ -62,7 +61,7 @@ def test_parse_step_result_reads_the_scripts_json_contract() -> None:
     assert outcome.screenshot_name == "step_001.png"
     # URL and title lead the state, because ruling on a flow can turn on them -- a reload that lost
     # the session lands somewhere else entirely.
-    assert outcome.state_text.startswith("page https://todo-x.agent-abc.localhost:8431/ (Todo)")
+    assert outcome.state_text.startswith("page https://todo-x.host-abc.localhost:8431/ (Todo)")
     assert "- textbox 'Add a task'" in outcome.state_text
 
 
@@ -83,7 +82,7 @@ def test_parse_step_result_keeps_the_page_when_the_action_failed() -> None:
                 "is_ok": False,
                 "reason": ui_flows.REASON_ACTION_TIMED_OUT,
                 "detail": "locator resolved to 0 elements",
-                "url": "https://todo-x.agent-abc.localhost:8431/",
+                "url": "https://todo-x.host-abc.localhost:8431/",
                 "title": "Todo",
                 "snapshot": "- heading 'Things to do'",
             }
@@ -100,8 +99,7 @@ def test_parse_step_result_keeps_the_page_when_the_action_failed() -> None:
 def test_build_step_request_installs_the_session_cookie_on_the_first_step_only() -> None:
     # It rides the request that opens the app, so the very first navigation is already
     # authenticated and never takes the proxy's login redirect.
-    origin = forward_instance.forwarded_origin("todo-x", FAKE_WORKSPACE_AGENT_ID, 8431)
-    domain = forward_instance.session_cookie_domain(FAKE_WORKSPACE_AGENT_ID)
+    origin = "https://todo-x.host-abc.localhost:8431/"
     endpoint = ui_flows.cdp_endpoint(ui_flows.flow_browser_port(0))
     opening = json.loads(
         ui_flows.build_step_request(
@@ -109,7 +107,7 @@ def test_build_step_request_installs_the_session_cookie_on_the_first_step_only()
             "/logs/shot.png",
             cdp_endpoint_url=endpoint,
             preauth_cookie="tok",
-            cookie_domain=domain,
+            origin=origin,
         )
     )
     later = json.loads(
@@ -118,20 +116,19 @@ def test_build_step_request_installs_the_session_cookie_on_the_first_step_only()
             "/logs/shot.png",
             cdp_endpoint_url=endpoint,
             preauth_cookie="",
-            cookie_domain=domain,
+            origin=origin,
         )
     )
 
     assert opening["cookie"]["name"] == forward_instance.SESSION_COOKIE_NAME
     assert opening["cookie"]["value"] == "tok"
-    # Every attribute the proxy's own session cookie carries, so the browser holds the same cookie.
-    assert (
-        opening["cookie"]["domain"],
-        opening["cookie"]["path"],
-        opening["cookie"]["is_secure"],
-        opening["cookie"]["is_http_only"],
-        opening["cookie"]["same_site"],
-    ) == (domain, "/", True, True, "None")
+    # Scoped to the origin and marked the way a cross-site iframe's cookie has to be, since that is
+    # how the client's app tab receives it.
+    assert (opening["cookie"]["url"], opening["cookie"]["is_secure"], opening["cookie"]["same_site"]) == (
+        origin,
+        True,
+        "None",
+    )
     # A later step lands in the same browser, which is still holding the session, and re-sends
     # nothing.
     assert later["cookie"] is None
@@ -145,7 +142,7 @@ def test_build_step_request_carries_role_and_name_rather_than_an_index() -> None
             "/logs/shot.png",
             cdp_endpoint_url=ui_flows.cdp_endpoint(ui_flows.flow_browser_port(0)),
             preauth_cookie="",
-            cookie_domain="",
+            origin="https://x/",
         )
     )
 

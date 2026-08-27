@@ -7,7 +7,6 @@
 import m from "mithril";
 import { HelpModel, setPendingHelpLaunch } from "../../models/help";
 import { Button } from "../components/Button";
-import { Icon16 } from "../components/Icon";
 import { Spinner } from "../components/Spinner";
 
 function closeHelpSurface(): void {
@@ -135,14 +134,15 @@ function workspaceDiagnosticsChoices(model: HelpModel): m.Children {
     diagnosticsChoice(model, {
       id: "help-include-logs",
       label: "Include workspace logs",
-      reason: "We'll need these to diagnose the issue.",
+      reason: "We'll need these to send a fix.",
       isChecked: model.isLogsIncluded,
       onChange: (value) => model.setLogsIncluded(value),
     }),
     diagnosticsChoice(model, {
       id: "help-include-transcript",
       label: "Include recent chats",
-      reason: "We'll need these to diagnose the issue.",
+      reason:
+        "We'll need these to diagnose the issue. We will never access them without your consent.",
       isChecked: model.isTranscriptIncluded,
       onChange: (value) => model.setTranscriptIncluded(value),
     }),
@@ -292,6 +292,17 @@ function agentErrorPhase(model: HelpModel): m.Children {
   ]);
 }
 
+/** Whether this report asked for anything that may still be uploading behind its ID.
+ *
+ * The ID arrives as soon as the report is filed; the machine's logs and chats are
+ * collected and uploaded after that, so a report that asked for either owes the
+ * user a word about it rather than looking finished when it is not.
+ */
+function isDiagnosticsUploadPending(model: HelpModel): boolean {
+  if (!model.launch.workspaceAgentId) return false;
+  return model.isLogsIncluded || model.isTranscriptIncluded;
+}
+
 export function sentPhase(model: HelpModel): m.Children {
   return m("div", { class: "p-4 text-center" }, [
     m("h2", { class: "type-heading text-primary mb-2" }, "Thanks!"),
@@ -300,40 +311,31 @@ export function sentPhase(model: HelpModel): m.Children {
       { class: "type-body text-secondary mb-4" },
       "Your report was sent to Imbue.",
     ),
+    isDiagnosticsUploadPending(model)
+      ? m(
+          "p",
+          {
+            id: "help-diagnostics-pending",
+            class: "type-helper text-tertiary mb-4",
+          },
+          "The logs and chats you included finish uploading in the background — your report is already filed.",
+        )
+      : null,
     model.sentEventId !== null
       ? m("div", { class: "mb-4 text-left" }, [
           m("p", { class: "type-label text-secondary mb-1" }, "Report ID"),
-          // The same click-to-copy chip as the share-link: the whole box is the
-          // button, and the icon flashes a check while the copy is fresh.
           m(
-            "button",
+            "code",
             {
-              id: "help-report-id",
-              type: "button",
               class:
-                "flex w-full items-center gap-2 rounded-md border border-default bg-fill-subtle " +
-                "px-2 py-1 type-label text-primary font-mono cursor-pointer hover:bg-fill-hover " +
-                "transition-colors",
-              style: model.isReportIdCopied
-                ? "border-color: var(--c-success); background-color: var(--c-success-surface);"
-                : "",
-              "aria-label": "Copy the report ID",
-              onclick: () => void model.copyReportId(),
+                "block truncate rounded-md border border-default bg-fill-subtle px-2 py-1 type-label text-primary font-mono",
             },
-            [
-              m("span", { class: "truncate" }, model.sentEventId),
-              m(Icon16, {
-                name: model.isReportIdCopied ? "check" : "copy",
-                extra: model.isReportIdCopied
-                  ? "shrink-0 text-primary"
-                  : "shrink-0 text-tertiary",
-              }),
-            ],
+            model.sentEventId,
           ),
           m(
             "p",
             { class: "type-helper text-tertiary mt-1" },
-            "Click to copy. Quote this ID when you follow up so we can find your report.",
+            "Quote this ID when you follow up so we can find your report.",
           ),
         ])
       : null,

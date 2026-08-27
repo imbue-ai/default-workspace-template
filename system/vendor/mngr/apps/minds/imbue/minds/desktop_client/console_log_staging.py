@@ -25,10 +25,12 @@ from loguru import logger
 # Written by electron/console-capture.js; kept in step with ``CONSOLE_TAIL_FILENAME`` there.
 ELECTRON_CONSOLE_TAIL_FILENAME: Final[str] = "console-tail.log"
 
-# How much of the file's end to read: the one bound on the report's console
-# excerpt, sized like a log-file cap rather than any count of lines or
-# per-message characters.
+# How much of the file's end to read, and how many of those records to keep. The byte ceiling is what
+# actually bounds the work; the line cap then holds the excerpt to roughly the message count the
+# capture used to bound the whole file at, so a report carries the same amount of console as before
+# the file started rotating.
 MAX_CONSOLE_TAIL_BYTES: Final[int] = 256 * 1024
+MAX_CONSOLE_TAIL_LINES: Final[int] = 2000
 
 
 def read_console_tail(logs_dir: Path) -> str | None:
@@ -62,7 +64,8 @@ def read_console_tail(logs_dir: Path) -> str | None:
     # fragment of a message rather than a message.
     if is_truncated and lines:
         lines = lines[1:]
-    if not lines:
+    kept = lines[-MAX_CONSOLE_TAIL_LINES:]
+    if not kept:
         logger.info("The captured console at {} is empty; this report attaches no console", tail_path)
         return None
-    return "\n".join(lines) + "\n"
+    return "\n".join(kept) + "\n"
