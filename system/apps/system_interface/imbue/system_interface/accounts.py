@@ -33,6 +33,7 @@ from typing import Final
 from loguru import logger as _loguru_logger
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 
 logger = _loguru_logger
 
@@ -43,10 +44,6 @@ INDEX_VERSION: Final = 1
 
 _INDEX_FILENAME: Final = "index.json"
 _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
-
-# Folder names are random and meaningless by design. Short enough to read in a path, long
-# enough that a collision is not a thing anyone needs to think about.
-_ACCOUNT_ID_LENGTH: Final = 12
 
 _INDEX_LOCK = threading.Lock()
 
@@ -143,7 +140,7 @@ def mint_account_dir(home: Path | None = None) -> tuple[str, Path]:
     is invisible to everything, and `sweep_orphan_dirs` will remove it if the flow never
     finishes.
     """
-    account_id = uuid.uuid4().hex[:_ACCOUNT_ID_LENGTH]
+    account_id = uuid.uuid4().hex
     path = account_dir(account_id, home)
     path.mkdir(parents=True, exist_ok=False)
     return account_id, path
@@ -163,7 +160,10 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
             raise AccountError(f"account {account_id} is already committed")
         account = Account(id=account_id, lane=lane, seq=_next_seq(index, lane), display=display)
         _write_index(
-            index.model_copy(update={"accounts": (*index.accounts, account), "mru": account_id}),
+            index.model_copy_update(
+                to_update(index.field_ref().accounts, (*index.accounts, account)),
+                to_update(index.field_ref().mru, account_id),
+            ),
             home,
         )
     logger.info("Committed account {} on lane {} (seq {})", account_id, lane, account.seq)
@@ -189,7 +189,13 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
         if len(remaining) == len(index.accounts):
             raise AccountError(f"no such account: {account_id}")
         mru = None if index.mru == account_id else index.mru
-        _write_index(index.model_copy(update={"accounts": remaining, "mru": mru}), home)
+        _write_index(
+            index.model_copy_update(
+                to_update(index.field_ref().accounts, remaining),
+                to_update(index.field_ref().mru, mru),
+            ),
+            home,
+        )
     discard_account_dir(account_id, home)
     logger.info("Deleted account {}", account_id)
 
@@ -199,7 +205,7 @@ def set_mru(account_id: str, home: Path | None = None) -> None:
         index = read_index(home)
         if not any(a.id == account_id for a in index.accounts):
             raise AccountError(f"no such account: {account_id}")
-        _write_index(index.model_copy(update={"mru": account_id}), home)
+        _write_index(index.model_copy_update(to_update(index.field_ref().mru, account_id)), home)
 
 
 def resolve_account(account_id: str, home: Path | None = None) -> Account:

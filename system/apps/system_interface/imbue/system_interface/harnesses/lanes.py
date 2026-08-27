@@ -28,6 +28,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.harnesses.harness_type import HarnessType
 
 
+class LaneNotFoundError(KeyError):
+    """No such lane, or no such method on it."""
+
+
 class DrainUntil(StrEnum):
     """When to stop reading the PTY while hunting for a scraped value.
 
@@ -412,7 +416,7 @@ _LANES_BY_ID: Final[dict[str, Lane]] = {lane.id: lane for lane in LANES}
 def get_lane(lane_id: str) -> Lane:
     lane = _LANES_BY_ID.get(lane_id)
     if lane is None:
-        raise KeyError(f"no such lane: {lane_id}")
+        raise LaneNotFoundError(f"no such lane: {lane_id}")
     return lane
 
 
@@ -421,7 +425,7 @@ def get_method(lane_id: str, method_id: str) -> PtyMethod | PasteMethod:
     for method in lane.methods:
         if method.id == method_id:
             return method
-    raise KeyError(f"lane {lane_id} has no method {method_id}")
+    raise LaneNotFoundError(f"lane {lane_id} has no method {method_id}")
 
 
 def account_label(provider_display: str, harness: HarnessType, seq: int) -> str:

@@ -16,6 +16,7 @@ from imbue.system_interface.harnesses.lanes import LANE_ANTHROPIC
 from imbue.system_interface.harnesses.lanes import LANE_API_KEY
 from imbue.system_interface.harnesses.lanes import LANE_GOOGLE
 from imbue.system_interface.harnesses.lanes import LANE_OPENAI
+from imbue.system_interface.harnesses.lanes import LaneNotFoundError
 from imbue.system_interface.harnesses.lanes import PasteMethod
 from imbue.system_interface.harnesses.lanes import PtyMethod
 from imbue.system_interface.harnesses.lanes import Submit
@@ -140,7 +141,7 @@ def test_account_label_numbers_from_the_second() -> None:
 
 
 def test_lookups_raise_on_unknown_ids() -> None:
-    with pytest.raises(KeyError):
+    with pytest.raises(LaneNotFoundError):
         get_lane("nope")
-    with pytest.raises(KeyError):
+    with pytest.raises(LaneNotFoundError):
         get_method("anthropic", "nope")
