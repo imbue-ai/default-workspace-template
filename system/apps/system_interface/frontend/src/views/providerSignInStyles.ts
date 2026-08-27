@@ -117,3 +117,29 @@ export const ACCOUNT_ROW =
 export const ROW_ACTION =
   "shrink-0 rounded-md px-2 py-1 text-[0.75rem] text-[#666666] transition-colors " +
   "hover:bg-[#edecea] hover:text-[#202020] cursor-pointer";
+
+// --- The API-key screen's provider dropdown (ProviderSignInModal's ProviderKeyDropdown) ---
+
+export const PICKER_TRIGGER =
+  "flex w-full items-center justify-between gap-2 rounded-lg border border-[#e4e3df] bg-white px-3 " +
+  "py-[9px] text-left text-sm transition-colors hover:border-[#2f6b4f] cursor-pointer";
+export const PICKER_TRIGGER_VALUE = "flex min-w-0 items-baseline gap-2";
+export const PICKER_TRIGGER_NAME = "truncate text-[#202020]";
+export const PICKER_TRIGGER_ENV = "shrink-0 font-mono text-[0.6875rem] text-[#8c8c8c]";
+export const PICKER_TRIGGER_EMPTY = "text-[#8c8c8c]";
+export const PICKER_CARET = "shrink-0 text-[#8c8c8c] transition-transform";
+export const PICKER_CARET_OPEN = "rotate-180";
+
+/** Swallows the outside click that closes the menu, so it never reaches the modal beneath. */
+export const PICKER_BACKDROP = "fixed inset-0 z-[210] cursor-default";
+/** Pinned under the trigger. The panel is overflow-hidden, so an in-panel popover would be
+ *  clipped -- the mockup portals this to <body> for the same reason. */
+export const PICKER_MENU =
+  "fixed z-[211] max-h-[280px] overflow-y-auto overscroll-contain rounded-lg border " +
+  "border-[#e4e3df] bg-white p-1 shadow-[0_2px_6px_rgba(0,0,0,0.08),0_12px_32px_rgba(0,0,0,0.16)]";
+export const PICKER_OPTION =
+  "flex w-full items-center justify-between gap-3 rounded-md px-1.5 py-1.5 text-left cursor-pointer";
+export const PICKER_OPTION_IDLE = "hover:bg-[#f4f3f0]";
+export const PICKER_OPTION_ACTIVE = "bg-[#e9f2ee]";
+export const PICKER_OPTION_NAME = "truncate text-sm";
+export const PICKER_OPTION_NAME_ACTIVE = "truncate text-sm text-[#2f6b4f]";

@@ -359,15 +359,54 @@ LANE_GOOGLE = Lane(
 # Both pi lanes are plain file writes. pi's auth.json is a map keyed by provider id, so
 # "one provider per account folder" is our rule, not pi's -- we simply never write two.
 
-_PI_KEY_PROVIDERS: Final = (
-    KeyProvider(provider_id="openrouter", display="OpenRouter", env_var="OPENROUTER_API_KEY", hint="sk-or-..."),
-    KeyProvider(provider_id="anthropic", display="Anthropic", env_var="ANTHROPIC_API_KEY", hint="sk-ant-..."),
-    KeyProvider(provider_id="openai", display="OpenAI", env_var="OPENAI_API_KEY", hint="sk-..."),
-    KeyProvider(provider_id="google", display="Google Gemini", env_var="GEMINI_API_KEY", hint="AIza..."),
-    KeyProvider(provider_id="xai", display="xAI", env_var="XAI_API_KEY", hint="xai-..."),
-    KeyProvider(provider_id="groq", display="Groq", env_var="GROQ_API_KEY", hint="gsk_..."),
-    KeyProvider(provider_id="deepseek", display="DeepSeek", env_var="DEEPSEEK_API_KEY", hint="sk-..."),
-    KeyProvider(provider_id="opencode", display="OpenCode Zen", env_var="OPENCODE_API_KEY", hint=""),
+# Every provider pi can be handed a plain API key for, taken from its own registry rather
+# than from a list we curated: `pi-ai/dist/providers/<id>.models.js` names each provider and
+# the module beside it names the environment variable its key is read from. The id is what
+# matters -- `auth.json` is keyed by it, so a display name we invent is cosmetic but an id we
+# invent is a credential pi will never find.
+#
+# Deliberately absent, and why:
+#   amazon-bedrock, cloudflare-*   need cloud credentials, not one key
+#   azure-openai-responses         needs an endpoint and a deployment alongside the key
+#   google-vertex                  needs a project and a location
+#   github-copilot, openai-codex   OAuth only (and codex is its own lane)
+#   opencode-go                    has its own lane, so listing it here would duplicate it
+#
+# Sorted by display name: this is a list you scan for a name you already have in mind.
+_PI_KEY_PROVIDERS: Final = tuple(
+    sorted(
+        (
+            KeyProvider(provider_id="ant-ling", display="Ant Ling", env_var="ANT_LING_API_KEY", hint=""),
+            KeyProvider(provider_id="anthropic", display="Anthropic", env_var="ANTHROPIC_API_KEY", hint="sk-ant-..."),
+            KeyProvider(provider_id="cerebras", display="Cerebras", env_var="CEREBRAS_API_KEY", hint="csk-..."),
+            KeyProvider(provider_id="deepseek", display="DeepSeek", env_var="DEEPSEEK_API_KEY", hint="sk-..."),
+            KeyProvider(provider_id="fireworks", display="Fireworks", env_var="FIREWORKS_API_KEY", hint="fw_..."),
+            KeyProvider(provider_id="google", display="Google Gemini", env_var="GEMINI_API_KEY", hint="AIza..."),
+            KeyProvider(provider_id="groq", display="Groq", env_var="GROQ_API_KEY", hint="gsk_..."),
+            KeyProvider(provider_id="kimi-coding", display="Kimi For Coding", env_var="KIMI_API_KEY", hint="sk-..."),
+            KeyProvider(provider_id="minimax", display="MiniMax", env_var="MINIMAX_API_KEY", hint="eyJ..."),
+            KeyProvider(provider_id="minimax-cn", display="MiniMax (China)", env_var="MINIMAX_CN_API_KEY", hint="eyJ..."),
+            KeyProvider(provider_id="mistral", display="Mistral", env_var="MISTRAL_API_KEY", hint=""),
+            KeyProvider(provider_id="moonshotai", display="Moonshot AI", env_var="MOONSHOT_API_KEY", hint="sk-..."),
+            KeyProvider(provider_id="moonshotai-cn", display="Moonshot AI (China)", env_var="MOONSHOT_API_KEY", hint="sk-..."),
+            KeyProvider(provider_id="nvidia", display="NVIDIA NIM", env_var="NVIDIA_API_KEY", hint="nvapi-..."),
+            KeyProvider(provider_id="openai", display="OpenAI", env_var="OPENAI_API_KEY", hint="sk-..."),
+            KeyProvider(provider_id="opencode", display="OpenCode Zen", env_var="OPENCODE_API_KEY", hint=""),
+            KeyProvider(provider_id="openrouter", display="OpenRouter", env_var="OPENROUTER_API_KEY", hint="sk-or-..."),
+            KeyProvider(provider_id="qwen-token-plan", display="Qwen Token Plan", env_var="QWEN_TOKEN_PLAN_API_KEY", hint=""),
+            KeyProvider(provider_id="qwen-token-plan-cn", display="Qwen Token Plan (China)", env_var="QWEN_TOKEN_PLAN_CN_API_KEY", hint=""),
+            KeyProvider(provider_id="together", display="Together AI", env_var="TOGETHER_API_KEY", hint=""),
+            KeyProvider(provider_id="vercel-ai-gateway", display="Vercel AI Gateway", env_var="AI_GATEWAY_API_KEY", hint=""),
+            KeyProvider(provider_id="xai", display="xAI", env_var="XAI_API_KEY", hint="xai-..."),
+            KeyProvider(provider_id="xiaomi", display="Xiaomi MiMo", env_var="XIAOMI_API_KEY", hint=""),
+            KeyProvider(provider_id="xiaomi-token-plan-ams", display="Xiaomi MiMo Token Plan (Amsterdam)", env_var="XIAOMI_TOKEN_PLAN_AMS_API_KEY", hint=""),
+            KeyProvider(provider_id="xiaomi-token-plan-cn", display="Xiaomi MiMo Token Plan (China)", env_var="XIAOMI_TOKEN_PLAN_CN_API_KEY", hint=""),
+            KeyProvider(provider_id="xiaomi-token-plan-sgp", display="Xiaomi MiMo Token Plan (Singapore)", env_var="XIAOMI_TOKEN_PLAN_SGP_API_KEY", hint=""),
+            KeyProvider(provider_id="zai", display="ZAI Coding Plan (Global)", env_var="ZAI_API_KEY", hint=""),
+            KeyProvider(provider_id="zai-coding-cn", display="ZAI Coding Plan (China)", env_var="ZAI_CODING_CN_API_KEY", hint=""),
+        ),
+        key=lambda provider: provider.display.lower(),
+    )
 )
 
 LANE_OPENCODE_GO = Lane(

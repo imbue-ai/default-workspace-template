@@ -79,6 +79,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let activeStep: 1 | 2 = 1;
   let copied: "" | "link" | "code" = "";
   let copyFailed = false;
+  // The provider dropdown's open state and where to pin it. It is rendered into the overlay
+  // rather than inline because the panel is overflow-hidden -- an in-panel popover of 28
+  // rows would simply be clipped. Same reason the mockup portals it to <body>.
+  let keyMenuOpen = false;
+  let keyMenuAnchor: DOMRect | null = null;
   // Set once a credential has been handed over and we are waiting on the verdict. The
   // request itself returns long before the answer does -- the server hands the code to the
   // CLI and the harness's own probe decides, which the client learns from a later poll --
@@ -101,6 +106,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     copied = "";
     copyFailed = false;
     awaitingVerdict = false;
+    keyMenuOpen = false;
+    keyMenuAnchor = null;
     clearFlow();
   }
 
@@ -420,6 +427,52 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
   /** ProviderSignInModal's apiKey case. With one provider it is just the field; with a
    *  list it is the two-step pick-then-paste, which is the interesting one. */
+  /** The dropdown itself, pinned under its trigger. Rendered by the overlay rather than the
+   *  panel, so the panel's `overflow-hidden` cannot clip a 28-row list. */
+  function keyProviderMenu(current: Lane): m.Children {
+    if (!keyMenuOpen || keyMenuAnchor === null) return null;
+    const anchor = keyMenuAnchor;
+    return [
+      m("button", {
+        type: "button",
+        class: css.PICKER_BACKDROP,
+        "aria-label": "Close provider menu",
+        onclick: (event: MouseEvent) => {
+          event.stopPropagation();
+          keyMenuOpen = false;
+        },
+      }),
+      m(
+        "div",
+        {
+          class: css.PICKER_MENU,
+          style: `left: ${anchor.left}px; top: ${anchor.bottom + 6}px; width: ${anchor.width}px;`,
+          onclick: (event: MouseEvent) => event.stopPropagation(),
+        },
+        current.key_providers.map((candidate) => {
+          const active = candidate.provider_id === keyProvider;
+          return m(
+            "button",
+            {
+              type: "button",
+              key: candidate.provider_id,
+              class: `${css.PICKER_OPTION} ${active ? css.PICKER_OPTION_ACTIVE : css.PICKER_OPTION_IDLE}`,
+              onclick: () => {
+                keyProvider = candidate.provider_id;
+                keyMenuOpen = false;
+                activeStep = 2;
+              },
+            },
+            [
+              m("span", { class: active ? css.PICKER_OPTION_NAME_ACTIVE : css.PICKER_OPTION_NAME }, candidate.display),
+              active ? m.trust(icon("check", { size: 15, strokeWidth: 2.5 })) : null,
+            ],
+          );
+        }),
+      ),
+    ];
+  }
+
   function apiKeyBody(current: Lane): m.Children {
     const choices = current.key_providers;
     const selected = choices.find((candidate) => candidate.provider_id === keyProvider) ?? null;
@@ -471,22 +524,28 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       stepBlock(1, false, [
         stepLabel("1", "Pick your provider"),
         m(
-          "select",
+          "button",
           {
-            class: css.INPUT,
-            value: keyProvider ?? "",
-            onchange: (event: Event) => {
-              keyProvider = (event.target as HTMLSelectElement).value || null;
-              activeStep = 2;
+            type: "button",
+            class: css.PICKER_TRIGGER,
+            "aria-expanded": keyMenuOpen ? "true" : "false",
+            onclick: (event: MouseEvent) => {
+              keyMenuAnchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
+              keyMenuOpen = !keyMenuOpen;
             },
           },
-          // Unkeyed, all of them. Mithril refuses a list where some children carry a key and
-          // some do not, and it refuses it by THROWING mid-render -- which aborts the redraw,
-          // leaves `busy` set on screen, and reads as a spinner that never resolves. The
-          // options are a fixed list rendered in order, so they never needed keys.
           [
-            m("option", { value: "", disabled: true }, "Choose a provider"),
-            ...choices.map((candidate) => m("option", { value: candidate.provider_id }, candidate.display)),
+            selected !== null
+              ? m("span", { class: css.PICKER_TRIGGER_VALUE }, [
+                  m("span", { class: css.PICKER_TRIGGER_NAME }, selected.display),
+                  m("span", { class: css.PICKER_TRIGGER_ENV }, selected.env_var),
+                ])
+              : m("span", { class: css.PICKER_TRIGGER_EMPTY }, "Choose a provider..."),
+            m(
+              "span",
+              { class: `${css.PICKER_CARET} ${keyMenuOpen ? css.PICKER_CARET_OPEN : ""}` },
+              m.trust(icon("chevron-down", { size: 15 })),
+            ),
           ],
         ),
       ]),
@@ -638,51 +697,54 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             if (event.target === event.currentTarget) onClose();
           },
         },
-        m(
-          "div",
-          { class: css.MODAL, role: "dialog", "aria-modal": "true", "aria-label": "Pick your AI provider" },
-          m("div", { class: css.PANEL }, [
-            m("div", { class: css.HEADER }, [
-              current !== null
+        [
+          current !== null && mode === "apiKey" ? keyProviderMenu(current) : null,
+          m(
+            "div",
+            { class: css.MODAL, role: "dialog", "aria-modal": "true", "aria-label": "Pick your AI provider" },
+            m("div", { class: css.PANEL }, [
+              m("div", { class: css.HEADER }, [
+                current !== null
+                  ? m(
+                      "button",
+                      { type: "button", class: css.BACK_BUTTON, onclick: back, "aria-label": "Back" },
+                      m.trust(icon("chevron-left", { size: 16 })),
+                    )
+                  : null,
+                m("h2", { class: css.TITLE }, title),
+                m(
+                  "button",
+                  { type: "button", class: css.CLOSE_BUTTON, onclick: onClose, "aria-label": "Close" },
+                  m.trust(icon("close", { size: 16 })),
+                ),
+              ]),
+              m(
+                "div",
+                {
+                  class: bodyClass,
+                  oncreate: (node: m.VnodeDOM) => {
+                    if (current === null) (node.dom as HTMLElement).scrollTop = savedScroll;
+                  },
+                  onscroll: (event: Event) => {
+                    if (current === null) savedScroll = (event.target as HTMLElement).scrollTop;
+                  },
+                },
+                body,
+              ),
+              isSuccess
                 ? m(
-                    "button",
-                    { type: "button", class: css.BACK_BUTTON, onclick: back, "aria-label": "Back" },
-                    m.trust(icon("chevron-left", { size: 16 })),
+                    "div",
+                    { class: css.FOOTER },
+                    m(
+                      "div",
+                      { class: css.FOOTER_ROW },
+                      m("button", { type: "button", class: css.PRIMARY_BTN, onclick: onClose }, "Done"),
+                    ),
                   )
                 : null,
-              m("h2", { class: css.TITLE }, title),
-              m(
-                "button",
-                { type: "button", class: css.CLOSE_BUTTON, onclick: onClose, "aria-label": "Close" },
-                m.trust(icon("close", { size: 16 })),
-              ),
             ]),
-            m(
-              "div",
-              {
-                class: bodyClass,
-                oncreate: (node: m.VnodeDOM) => {
-                  if (current === null) (node.dom as HTMLElement).scrollTop = savedScroll;
-                },
-                onscroll: (event: Event) => {
-                  if (current === null) savedScroll = (event.target as HTMLElement).scrollTop;
-                },
-              },
-              body,
-            ),
-            isSuccess
-              ? m(
-                  "div",
-                  { class: css.FOOTER },
-                  m(
-                    "div",
-                    { class: css.FOOTER_ROW },
-                    m("button", { type: "button", class: css.PRIMARY_BTN, onclick: onClose }, "Done"),
-                  ),
-                )
-              : null,
-          ]),
-        ),
+          ),
+        ],
       );
     },
   };
