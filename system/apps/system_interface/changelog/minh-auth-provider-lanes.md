@@ -272,3 +272,8 @@ provider configured" and the tile opens the chooser instead.
 **Breaking:** an existing workspace's `~/.claude` moves into an account the first time
 anyone signs in. Running chats keep the credential they started with; new ones use the
 account.
+
+The submit-credentials response keeps `auth_mode` and gains `account_id`. mngr's
+`test_litellm_via_workspace` asserts on the first and now creates its chat on the second,
+because the boot chat it used to reuse binds at create time and never sees a credential
+that arrives later. That mirror is imbue-ai/mngr-internal#688.

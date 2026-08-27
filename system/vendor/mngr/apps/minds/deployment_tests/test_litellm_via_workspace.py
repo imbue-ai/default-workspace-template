@@ -198,19 +198,37 @@ def _submit_credentials_via_workspace_endpoint(container_name: str, credential_b
     return body
 
 
-def _find_chat_agent_id(container_name: str) -> str:
-    listing = _exec_in_container(
+def _create_chat_on_account(container_name: str, account_id: str) -> str:
+    """Start a chat bound to the account the credential was just adopted into.
+
+    The workspace's boot chat cannot be reused: an agent binds to an account when it is
+    CREATED (the credential rides `mngr create`'s own flags), so a chat that already
+    existed when the blob arrived is still running on whatever it was created with. Only
+    a chat created afterwards runs on the minted key, which is what this test measures
+    spend against.
+    """
+    payload = json.dumps({"account_id": account_id})
+    created = _exec_in_container(
         container_name,
-        "cd /home/user/workspace && mngr list --format json --on-error continue",
+        "curl -s -X POST http://localhost:8000/api/agents/create-chat "
+        f"-H 'Content-Type: application/json' -d {shlex.quote(payload)}",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
-    assert listing.returncode == 0, f"in-container mngr list failed: {listing.stderr}"
-    agents = json.loads(listing.stdout).get("agents", [])
-    # The template's chat agents run the "chat" type (parent_type = "claude");
-    # older snapshots report plain "claude", so accept both.
-    chat_ids = [str(agent["id"]) for agent in agents if agent.get("type") in ("claude", "chat")]
-    assert chat_ids, f"No chat agent among {[a.get('name') for a in agents]!r}"
-    return chat_ids[0]
+    assert created.returncode == 0, f"create-chat curl failed: {created.stderr}"
+    body = json.loads(created.stdout)
+    agent_id = str(body.get("agent_id", ""))
+    assert agent_id, f"create-chat returned no agent id: {created.stdout[:500]}"
+
+    # The endpoint answers as soon as the background `mngr create` starts, so the agent is
+    # a proto for a few seconds; messaging it before mngr registers it would fail.
+    poll = (
+        f"for i in $(seq 1 {_CHAT_CREATE_ATTEMPTS}); do "
+        "cd /home/user/workspace && mngr list --format json --on-error continue "
+        f"| grep -q {shlex.quote(agent_id)} && exit 0; sleep 5; done; exit 1"
+    )
+    listed = _exec_in_container(container_name, poll, timeout=_CHAT_CREATE_ATTEMPTS * 5 + 60)
+    assert listed.returncode == 0, f"chat agent {agent_id} never appeared in mngr list"
+    return agent_id
 
 
 def _chat_and_await_echo(container_name: str, chat_agent_id: str, token: str) -> None:
@@ -231,6 +249,9 @@ def _chat_and_await_echo(container_name: str, chat_agent_id: str, token: str) ->
     replied = _exec_in_container(container_name, poll, timeout=_CHAT_REPLY_ATTEMPTS * 5 + 120)
     assert replied.returncode == 0, f"The chat agent never echoed the token {token}"
 
+
+# How long to wait for a freshly created chat to be registered by mngr.
+_CHAT_CREATE_ATTEMPTS = 24
 
 _KEEPALIVE_PING_INTERVAL_SECONDS = 2.0
 
@@ -358,8 +379,9 @@ def test_litellm_spend_tracking_via_local_workspace(
         submit_body = _submit_credentials_via_workspace_endpoint(container_name, credential_blob)
         assert submit_body.get("logged_in") is True, f"credential submit did not authenticate: {submit_body!r}"
         assert submit_body.get("auth_mode") == "imbue", f"expected imbue mode after blob submit: {submit_body!r}"
+        assert submit_body.get("account_id"), f"credential submit minted no account: {submit_body!r}"
 
-        chat_agent_id = _find_chat_agent_id(container_name)
+        chat_agent_id = _create_chat_on_account(container_name, str(submit_body["account_id"]))
         # The keepalive must span the whole chat-to-assertion window: the
         # proxy's last chat call otherwise strands its spend in the throttled
         # container's memory (see _litellm_proxy_keepalive), and the echo

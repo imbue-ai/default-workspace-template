@@ -100,7 +100,17 @@ def submit_credentials() -> Response:
         return _error_response(str(e), status_code=400)
     except (AccountError, FlowError) as e:
         return _error_response(str(e), status_code=500)
-    return _json_response({"account_id": account.id, "display": account.display, "logged_in": True})
+    # `auth_mode` rides along because mngr's deployment test asserts on it: it is how the
+    # Imbue path proves the blob it sent was understood as a proxied setup and not as a
+    # plain key. Derived from what was pasted, not from a probe.
+    return _json_response(
+        {
+            "account_id": account.id,
+            "display": account.display,
+            "logged_in": True,
+            "auth_mode": auth.derive_auth_mode(auth.parse_credential_lines(pasted)).value,
+        }
+    )
 
 
 
