@@ -179,14 +179,25 @@ class AuthFlowService:
     _work_dir: Path
     _lock: threading.Lock
     _session: _Session | None
+    _spawner: Callable[..., Any]
 
     @classmethod
-    def create(cls, home: Path | None = None, work_dir: Path | None = None) -> "AuthFlowService":
+    def create(
+        cls,
+        home: Path | None = None,
+        work_dir: Path | None = None,
+        spawner: Callable[..., Any] | None = None,
+    ) -> "AuthFlowService":
+        """`spawner` stands in for `spawn_pty`, so a test can drive a scripted terminal.
+
+        Injected rather than patched, matching ClaudeAuthService's `pexpect_spawner`.
+        """
         service = cls()
         service._home = home
         service._work_dir = work_dir or Path("/home/user/workspace")
         service._lock = threading.Lock()
         service._session = None
+        service._spawner = spawner or spawn_pty
         return service
 
     # -- lifecycle ------------------------------------------------------------------------
@@ -232,7 +243,7 @@ class AuthFlowService:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
         env = {**os.environ, **account_env(session.lane.harness, account_path)}
         binary = _binary_for(session.lane)
-        session.process = spawn_pty(binary, list(method.argv), method.scrape_timeout_s, env=env)
+        session.process = self._spawner(binary, list(method.argv), method.scrape_timeout_s, env=env)
 
         # A keystroke script is blind without this: a reordered menu would make the same keys
         # choose a different login method, and nothing downstream would notice.
@@ -260,14 +271,19 @@ class AuthFlowService:
                 session.process, session.output, method.key_gap_s, method.key_gap_s * 2
             )
 
-        index = session.process.expect(
-            [re.compile(method.scrape.trigger), pexpect.EOF, pexpect.TIMEOUT],
-            timeout=method.scrape_timeout_s,
-        )
-        if index != 0:
-            self._fail_locked(session, "Timed out waiting for the sign-in details.")
-            raise FlowError(session.detail or "no value")
-        session.output += (session.process.before or "") + (session.process.after or "")
+        # Only wait on the stream if the trigger is not already in hand. Pacing the
+        # keystrokes READS the PTY, so on a CLI that answers immediately the value can
+        # already be in `session.output` -- and `expect` cannot match bytes something
+        # else has consumed, so waiting on it would time out with the answer in hand.
+        if re.search(method.scrape.trigger, session.output) is None:
+            index = session.process.expect(
+                [re.compile(method.scrape.trigger), pexpect.EOF, pexpect.TIMEOUT],
+                timeout=method.scrape_timeout_s,
+            )
+            if index != 0:
+                self._fail_locked(session, "Timed out waiting for the sign-in details.")
+                raise FlowError(session.detail or "no value")
+            session.output += (session.process.before or "") + (session.process.after or "")
         # A URL is drained until it can be extracted -- the CLI animates forever afterwards,
         # so there is no quiet gap to wait for. A minted token is drained to process exit,
         # because the CLI prints it and leaves.

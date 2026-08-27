@@ -18,6 +18,7 @@ from imbue.system_interface.harnesses.auth_flows import FlowShape
 from imbue.system_interface.harnesses.auth_flows import FlowState
 from imbue.system_interface.harnesses.auth_flows import flow_shape
 from imbue.system_interface.harnesses.lanes import get_method
+from imbue.system_interface.testing import FakePexpectProcess
 
 
 @pytest.fixture
@@ -25,6 +26,9 @@ def service(tmp_path: Path) -> AuthFlowService:
     work_dir = tmp_path / "workspace"
     work_dir.mkdir()
     return AuthFlowService.create(home=tmp_path, work_dir=work_dir)
+
+
+_AGY_URL = "https://accounts.google.com/o/oauth2/auth?client_id=fake&state=fake"
 
 
 def test_the_shape_comes_from_the_method_not_the_harness() -> None:
@@ -162,3 +166,24 @@ def test_re_authenticating_reuses_the_folder_so_bound_chats_recover(
 def test_re_authenticating_an_unknown_account_is_refused(service: AuthFlowService) -> None:
     with pytest.raises(FlowError):
         service.start("opencode-go", "api_key", account_id="nope")
+
+
+def test_a_value_the_key_pacing_already_read_is_not_waited_for_again(tmp_path: Path) -> None:
+    """Pacing the keystrokes reads the PTY, so the value can arrive before we ask for it.
+
+    `expect` cannot match bytes another read has already consumed. Before this was
+    handled, agy -- whose menu answers the moment Enter lands -- had its URL pulled in
+    by the key-gap drain and then timed out waiting for it, with the answer in hand.
+    The second scripted `expect` returns the TIMEOUT index, so reaching it fails.
+    """
+    process = FakePexpectProcess(
+        [(0, "Select login method:"), (2, "")],
+        drain_chunks=[f"Visit {_AGY_URL}\r\n"],
+    )
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process
+    )
+
+    started = service.start("google", "oauth")
+
+    assert started.url == _AGY_URL
