@@ -399,7 +399,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           class: `${css.INPUT} flex-1`,
           type: "text",
           value: codeInput,
-          placeholder: "CODE#STATE",
+          // No placeholder. It read as an instruction about the code's SHAPE, and the shape
+          // differs per lane -- Google's is nothing like `CODE#STATE`. The step label already
+          // says what to paste, so an example that is wrong half the time is worse than none.
           spellcheck: false,
           autocomplete: "off",
           onfocus: () => {

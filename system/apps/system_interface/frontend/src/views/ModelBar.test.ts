@@ -223,7 +223,9 @@ describe("the combo card", () => {
     expect(rows).toHaveLength(1);
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(started).toEqual([]);
-    expect(screenText()).toContain("Start a new chat to use this provider");
+    // The hint itself is a hover-intent bubble on <body> (hoverTooltip.ts), so it is not in
+    // the tree at render time -- what this pins is that pressing a locked row does NOTHING.
+    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
   });
 
   it("arms the sign-out trash before it fires, and disarms it when the card closes", () => {
@@ -267,7 +269,8 @@ describe("the combo card", () => {
     render();
     click(".model-selector-trigger");
     expect(document.querySelector('[data-card-row="model"]')?.querySelector("svg")).toBeNull();
-    expect(screenText()).toContain("run /model or /effort in the agent terminal");
+    click('[data-card-row="model"]');
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
   });
 
   it("survives a dynamic harness with no static options", () => {

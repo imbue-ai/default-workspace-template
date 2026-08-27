@@ -17,9 +17,13 @@
 
 export const MODAL =
   "overflow-hidden rounded-xl bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06),0_16px_40px_rgba(0,0,0,0.18)]";
-export const PANEL = "flex w-[460px] flex-1 flex-col";
+/* Half again as big as the mockup on every side. This is the first thing a new workspace
+   shows and it carries the decision the whole product hangs on -- the mockup's 460 was sized
+   for a screenshot, not for someone actually choosing. Padding scales with it (px-4 -> px-6,
+   pt-3 -> pt-5) so the extra room becomes air rather than longer lines. */
+export const PANEL = "flex w-[690px] flex-1 flex-col";
 
-export const HEADER = "flex items-center gap-1.5 px-4 pb-3 pt-3";
+export const HEADER = "flex items-center gap-1.5 px-6 pb-4 pt-5";
 export const TITLE = "text-[1.0625rem] font-semibold tracking-[-0.005em] text-primary";
 export const BACK_BUTTON =
   "-ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary " +
@@ -34,8 +38,8 @@ export const CLOSE_BUTTON =
  *  same height as a MINIMUM. The mockup does this by measuring the chooser once and keeping
  *  it as a floor: the flow always opens there, so anything shorter afterwards reads as the
  *  card shrinking under you. A short form pads to the floor instead. */
-export const BODY_SCROLLING = "h-[332px] overflow-y-auto overscroll-contain px-4 pb-3 pt-1";
-export const BODY_FLEXING = "min-h-[332px] flex-1 overflow-y-auto px-4 pb-3 pt-1";
+export const BODY_SCROLLING = "h-[498px] overflow-y-auto overscroll-contain px-6 pb-5 pt-1";
+export const BODY_FLEXING = "min-h-[498px] flex-1 overflow-y-auto px-6 pb-5 pt-1";
 export const ROW_STACK = "flex flex-col gap-2";
 
 export const CHOOSER_ROW =
@@ -85,7 +89,7 @@ export const SECONDARY_BTN =
   "transition-colors hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer";
 
 /** The mockup's success footer: one right-aligned action under the body. */
-export const FOOTER = "px-4 pb-3 pt-3";
+export const FOOTER = "px-6 pb-5 pt-4";
 export const FOOTER_ROW = "flex justify-end";
 
 /** Secondary prose under a field or step -- the mockup's `mt-1.5 text-[0.75rem]`. */

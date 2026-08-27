@@ -754,6 +754,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       // above the input, read straight off the backend-derived activity state.
       const isAgentWorking = isWorkingActivityState(getAgentById(agentId)?.activity_state ?? null);
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
+      // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
+      const hasQueuedMessages = (getAgentById(agentId)?.queued_messages ?? []).length > 0;
+      const stopButtonLabel = hasQueuedMessages
+        ? "Interrupt agent and bring queued messages to draft area"
+        : "Interrupt agent";
 
       return m("div", { class: "message-input mx-auto w-full" }, [
         interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
@@ -827,8 +832,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     "button",
                     {
                       class: "message-input-stop-button",
-                      "data-tooltip": "Interrupt and bring queued messages to the composer",
-                      "aria-label": "Interrupt and bring queued messages to the composer",
+                      // The label states what THIS press will do. The button always interrupts;
+                      // it only hands messages back when there are some parked in the harness,
+                      // so promising that unconditionally described a case that usually is not
+                      // the one in front of the user.
+                      "data-tooltip": stopButtonLabel,
+                      "aria-label": stopButtonLabel,
                       onclick: handleStopToComposer,
                     },
                     m.trust(stopIcon(14)),

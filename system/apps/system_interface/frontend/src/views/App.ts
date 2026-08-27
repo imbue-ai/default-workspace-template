@@ -30,18 +30,51 @@ import { FastModeModal } from "./FastModeModal";
 import { Sidebar } from "./Sidebar";
 import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import type { AppEntry } from "../models/AgentManager";
-import { closeProviderChooser, isProviderChooserOpen, loadAccounts } from "../models/Providers";
+import {
+  closeProviderChooser,
+  getAccounts,
+  isProviderChooserOpen,
+  loadAccounts,
+  openProviderChooser,
+} from "../models/Providers";
 import { getFastModePromptAgentId } from "../models/FastModePrompt";
+
+/** Marks that the workspace has already greeted this user. Local storage rather than a server
+ *  flag on purpose: it is a fact about a person having seen a screen, and it has to survive a
+ *  reload and a reboot without a round trip that could race the boot render. */
+const GREETED_KEY = "minds.provider-chooser.greeted";
+
+/** Open the provider chooser the FIRST time a workspace is opened with nothing signed in.
+ *
+ * A workspace with no provider cannot start a chat, so the new tab's every affordance is a dead
+ * end until one is added -- this is the one moment where popping a modal is telling the user
+ * something rather than interrupting them. It fires once, ever: not on reload, not on reboot,
+ * and not the next time the account list happens to be empty (someone who removed their last
+ * provider has already met this screen and knows where it lives).
+ */
+function greetFirstRun(): void {
+  if (getAccounts().length > 0) return;
+  try {
+    if (window.localStorage.getItem(GREETED_KEY) !== null) return;
+    window.localStorage.setItem(GREETED_KEY, "1");
+  } catch {
+    // Storage disabled or full. Greeting every boot would be worse than never greeting, so
+    // this errs toward silence.
+    return;
+  }
+  openProviderChooser();
+  m.redraw();
+}
 
 export function App(): m.Component {
   return {
     oninit() {
       // The new-tab picker and the rail's Chat shortcut both read the account list,
       // and both can be the first thing a user clicks, so load it once at boot
-      // rather than on the chooser's own oninit. Nothing pops a modal off the back
-      // of it: signing in is something the user asks for, not something the app
-      // decides for them on page load.
-      void loadAccounts().catch(() => undefined);
+      // rather than on the chooser's own oninit.
+      void loadAccounts()
+        .then(greetFirstRun)
+        .catch(() => undefined);
     },
     view() {
       return m(

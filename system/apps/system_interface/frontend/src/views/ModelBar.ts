@@ -27,6 +27,7 @@ import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "./DockviewWorkspace";
 import { placeFlyout } from "./flyout-position";
 import { Portal } from "./portal";
+import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 import * as css from "./modelCardStyles";
 
@@ -63,6 +64,10 @@ const MODEL_SEARCH_CAP = 100;
 /** Gap kept between the card (and its flyout) and every viewport edge. */
 const CARD_MARGIN = 8;
 
+/** Marks the trigger, the card and the flyout as one popover stack, so an outside-click test
+ *  is a `closest` call rather than three element references that can go stale. */
+const POPOVER_ATTR = "data-model-popover";
+
 /** The slider's filled portion, deepening with effort. From the mockup verbatim. */
 function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
@@ -93,9 +98,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // card closes, so someone who clicked the bin to see what it did does not come back later
   // to a primed one.
   let confirmingRemoval: string | null = null;
-  let triggerElement: HTMLElement | null = null;
-  let cardElement: HTMLElement | null = null;
-  let flyoutElement: HTMLElement | null = null;
   // The index the pointer is currently dragging the effort slider to. Held locally because
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
@@ -146,30 +148,26 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     confirmingRemoval = null;
   }
 
+  /** A click outside the card, its flyout and its trigger closes the whole stack -- and only
+   *  a click does; a pointer that merely drifts off leaves everything up.
+   *
+   *  The test is `closest`, not a cached element reference. References captured in `oncreate`
+   *  go stale or arrive late, and when they do this handler decides an inside click was an
+   *  outside one and tears the popover down on mousedown -- before the click that was supposed
+   *  to act ever reaches its button. That is what made the trash and "+ Add a provider" look
+   *  like they did nothing. The DOM already knows the answer; ask it. */
   function handleOutsideMousedown(event: MouseEvent): void {
-    const target = event.target as Node;
-    const insideCard = cardElement !== null && cardElement.contains(target);
-    const insideFlyout = flyoutElement !== null && flyoutElement.contains(target);
-    const insideTrigger = triggerElement !== null && triggerElement.contains(target);
-    if (!insideCard && !insideFlyout && !insideTrigger) {
-      closeCard();
-      m.redraw();
-      return;
-    }
-    // Clicking anywhere that is not the armed trash disarms it. Someone who pressed the bin to
-    // find out what it did gets to back out by looking away, not only by pressing Escape.
-    if (!insideFlyout && confirmingRemoval !== null) {
-      confirmingRemoval = null;
-      m.redraw();
-    }
+    if (cardAnchor === null) return;
+    const target = event.target as Element | null;
+    if (target?.closest?.(`[${POPOVER_ATTR}]`) != null) return;
+    closeCard();
+    m.redraw();
   }
 
-  /** Wraps a row so a tooltip chip can float above it. */
-  function withTooltip(row: m.Children, text: string | null, wide = false): m.Vnode {
-    return m("div", { class: css.ROW_WRAP }, [
-      row,
-      text === null ? null : m("span", { class: wide ? css.TOOLTIP_ABOVE_ROW_WRAP : css.TOOLTIP_ABOVE_ROW }, text),
-    ]);
+  /** A row's tooltip attrs, or nothing when it has none to give. Spread, not wrapped: the
+   *  bubble lives on <body>, so the row needs no container of its own. */
+  function tooltipAttrs(text: string | null): m.Attributes {
+    return text === null ? {} : hoverTooltipAttrs(text);
   }
 
   /** One card row that opens a flyout, or -- when `openable` is false -- one that just states
@@ -191,6 +189,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         // The mockup's own row hook, kept so the two can be diffed and so a test can address
         // a row by what it is rather than by its classes.
         "data-card-row": opts.which,
+        ...tooltipAttrs(opts.tooltip),
         // CLICK, not hover. The mockup opens these on `onMouseEnter`, which is free in a
         // prototype and expensive here: opening the model flyout fetches this agent's
         // offerable models, which for pi shells out to `pi --list-models` (up to 15s) and
@@ -220,7 +219,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         ]),
       ],
     );
-    return withTooltip(row, opts.tooltip, true);
+    return row;
   }
 
   /** The effort slider, or null when there is nothing to slide.
@@ -253,7 +252,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       shown.findIndex((effort) => effort.level === opts.current),
     );
     const pct = (index / (shown.length - 1)) * 100;
-    const row = m("div", { class: css.ROW_STATIC }, [
+    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(opts.current ?? shown[index].level)),
@@ -293,7 +292,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         ]),
       ]),
     ]);
-    return withTooltip(row, opts.tooltip, true);
   }
 
   /** Fast mode: a switch, ported from the mockup's `Switch.tsx`.
@@ -302,7 +300,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
    * read off its fill -- a switch says on or off by its shape.
    */
   function fastRow(opts: { on: boolean; interactive: boolean; tooltip: string | null; onToggle: () => void }): m.Vnode {
-    const row = m("div", { class: css.ROW_STATIC }, [
+    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Fast Mode"),
       m(
         "span",
@@ -328,7 +326,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         ),
       ),
     ]);
-    return withTooltip(row, opts.tooltip, true);
   }
 
   /** The card's viewport left, clamped so it cannot hang off either edge. */
@@ -377,13 +374,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       "div",
       {
         class: css.FLYOUT,
+        [POPOVER_ATTR]: "flyout",
         style: flyoutPlacement(),
-        oncreate: (flyoutVnode: m.VnodeDOM) => {
-          flyoutElement = flyoutVnode.dom as HTMLElement;
-        },
-        onremove: () => {
-          flyoutElement = null;
-        },
       },
       children,
     );
@@ -423,6 +415,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                     type: "button",
                     class: isCurrent ? css.FLYOUT_ROW_SELECTED : css.FLYOUT_ROW_LOCKED,
                     "aria-disabled": isCurrent ? undefined : "true",
+                    ...tooltipAttrs(isCurrent ? null : LOCKED_PROVIDER_TOOLTIP),
                     onclick: () => {
                       // Locked, and locked means locked: a chat's account is fixed at create
                       // time. Opening a new chat on it is the reachable version of the wish,
@@ -437,7 +430,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                     isCurrent ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 }))) : null,
                   ],
                 ),
-                isCurrent ? null : m("span", { class: css.TOOLTIP_ABOVE_ROW_WRAP }, LOCKED_PROVIDER_TOOLTIP),
                 removalControl(row, arming),
               ]);
             }),
@@ -599,14 +591,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           // A stable hook for the composer's own styles and for tests; the tailwind classes
           // beside it are the mockup's and may be re-ported at any time.
           class: `model-selector-trigger ${css.TRIGGER}`,
+          [POPOVER_ATTR]: "trigger",
           title: "Model, effort and speed",
           "aria-expanded": cardAnchor !== null ? "true" : "false",
-          oncreate: (triggerVnode: m.VnodeDOM) => {
-            triggerElement = triggerVnode.dom as HTMLElement;
-          },
-          onremove: () => {
-            triggerElement = null;
-          },
           onclick: (event: MouseEvent) => {
             event.stopPropagation();
             if (cardAnchor !== null) {
@@ -623,11 +610,18 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           },
         },
         [
+          // Joined by dots between EVERY part, including before the bolt: the three axes are
+          // one reading, and a bolt tacked on without a separator read as a button.
           m("span", matched?.label ?? account?.provider ?? "Model"),
           shownEfforts.length > 1 && currentEffort !== null
-            ? [m("span", "·"), m("span", capitalizeEffort(currentEffort))]
+            ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
             : null,
-          currentFast ? m("span", m.trust(icon("zap", { size: 12, filled: true }))) : null,
+          currentFast
+            ? [
+                m("span", { class: css.TRIGGER_DOT }, "·"),
+                m("span", { class: "flex items-center" }, m.trust(icon("zap", { size: 12, filled: true }))),
+              ]
+            : null,
         ],
       );
 
@@ -646,13 +640,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         "div",
         {
           class: css.CARD,
+          [POPOVER_ATTR]: "card",
           style: cardPlacement(cardAnchor),
-          oncreate: (cardVnode: m.VnodeDOM) => {
-            cardElement = cardVnode.dom as HTMLElement;
-          },
-          onremove: () => {
-            cardElement = null;
-          },
         },
         m("div", { class: css.CARD_INNER }, [
           menuRow({
