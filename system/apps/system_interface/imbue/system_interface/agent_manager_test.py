@@ -531,7 +531,9 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
             work_dir=str(git_work_dir),
         )
 
-    created = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
+    codex_account_id, _ = mint_account_dir()
+    commit_account(codex_account_id, "openai", "OpenAI")
+    created = agent_manager.create_chat_agent("test-codex", account_id=codex_account_id)
     agent_manager.stop()
 
     assert isinstance(created.agent_id, str)

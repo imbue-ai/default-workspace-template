@@ -131,7 +131,6 @@ _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
 # width (pexpect's default PTY is 80 columns) and pexpect can match mid
 # render-frame, so the buffer may hold just a prefix. The actual URL is
 # recovered by `_extract_oauth_url` after draining the stream.
-_OAUTH_URL_REGEX = re.compile(r"https://\S*oauth/authorize\S*")
 # Strict charset for re-assembling a width-wrapped URL from visible text:
 # unlike `\S`, it excludes stray control bytes left between render fragments.
 _OAUTH_URL_CHARSET = r"[A-Za-z0-9%&=?_.~/:+#-]"
@@ -140,38 +139,25 @@ _OAUTH_URL_CONTINUATION_REGEX = re.compile(rf"^{_OAUTH_URL_CHARSET}+$")
 # The long-lived token `claude setup-token` prints on completion. Like the
 # URL regex, only a trigger -- extraction re-assembles the possibly
 # width-wrapped token from the drained stream.
-_SETUP_TOKEN_REGEX = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]+")
-_SETUP_TOKEN_STRICT_REGEX = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]*")
-_SETUP_TOKEN_CONTINUATION_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
 # Printed by the CLI when Anthropic rejects a pasted code (wrong, expired, or
 # from an earlier attempt's state) or its own polling hits an error; the CLI
 # then parks on a "Press Enter to retry." prompt, so without failing fast the
 # session would just time out with a misleading message.
-_OAUTH_ERROR_REGEX = re.compile(r"OAuth error")
 # Printed plainly (outside the Ink renderer) by `claude auth login` right
 # before it exits 0 / 1 respectively, so no screen replay is needed to
 # detect completion of the credentials-based browser sign-ins.
-_LOGIN_SUCCESS_REGEX = re.compile(r"Login successful")
-_LOGIN_FAILED_LINE_REGEX = re.compile(r"Login failed: ?([^\r\n]*)")
 # The CLI's Ink input treats a rapid burst of characters as a paste; Enter
 # must arrive as its own later keystroke or it lands in the field as
 # content. The burst is over once the input echo goes quiet for
 # _CODE_ECHO_QUIET_SECONDS (deadline-capped so a silent PTY cannot stall
 # the submit).
 _CODE_ECHO_QUIET_SECONDS: Final = 0.3
-_CODE_ECHO_DEADLINE_SECONDS: Final = 3.0
 # Real setup tokens are ~110 characters. A much shorter extraction is a
 # wrapped fragment, not the token -- keep waiting rather than storing it.
-_MIN_SETUP_TOKEN_LENGTH: Final = 60
-_OAUTH_URL_WAIT_SECONDS: Final = 30.0
-_SETUP_TOKEN_POLL_SECONDS: Final = 0.2
-_SETUP_TOKEN_CODE_WAIT_SECONDS: Final = 30.0
-_MNGR_COMMAND_TIMEOUT_SECONDS: Final = 60.0
 # A fused `mngr start --restart` call stops, starts, readiness-waits, and
 # (for previously-RUNNING agents) messages a whole batch of agents. It runs
 # on the background restart thread, so the generous ceiling costs nothing
 # in the request path.
-_MNGR_RESTART_TIMEOUT_SECONDS: Final = 600.0
 _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 
 # Agent types whose window-0 process is a real claude binary and therefore
@@ -185,8 +171,6 @@ _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 # absent: its window 0 sleeps forever and restarting it would tear down
 # supervisord and every background service.
 CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "chat", "worker"))
-_AGENT_STATE_RUNNING: Final[str] = "RUNNING"
-_AGENT_STATE_WAITING: Final[str] = "WAITING"
 
 # Sent (via `mngr message`) to agents that were RUNNING when the auth-change
 # restart tore them down, so unattended work resumes instead of silently
@@ -252,12 +236,6 @@ class AuthFlowKind(str, Enum):
     OAUTH_LOGIN = "oauth_login"
 
 
-class RestartReason(str, Enum):
-    """Why the background agent restart is running (drives the checklist copy)."""
-
-    CREDENTIALS_SAVED = "credentials_saved"
-    SUBSCRIPTION_SWITCH = "subscription_switch"
-    CONSOLE_SWITCH = "console_switch"
 
 
 class AuthStatus(FrozenModel):
@@ -290,33 +268,10 @@ class AuthStatus(FrozenModel):
             "for the desktop app's key-mint page link"
         ),
     )
-    restart_phase: str | None = Field(
-        default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"
-    )
-    restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
-    restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
-    restart_reason: str | None = Field(
-        default=None,
-        description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
-    )
 
 
-class RestartPhase(str, Enum):
-    """Lifecycle of the background credential apply that follows an auth change."""
-
-    RESTARTING = "restarting"
-    FINISHING = "finishing"
-    DONE = "done"
-    FAILED = "failed"
 
 
-class RestartProgress(FrozenModel):
-    """Snapshot of the background agent restart's progress."""
-
-    phase: RestartPhase = Field(description="Current phase of the restart")
-    detail: str | None = Field(default=None, description="Human-readable detail for the phase")
-    error: str | None = Field(default=None, description="Error message when the phase is FAILED")
-    reason: RestartReason = Field(description="Why the restart is running (drives the checklist copy)")
 
 
 class AuthFlowStartResult(FrozenModel):
@@ -642,71 +597,14 @@ def _extract_oauth_url(raw_output: str) -> str | None:
     return extract_wrapped_value(raw_output, _OAUTH_URL_STRICT_REGEX, _OAUTH_URL_CONTINUATION_REGEX)
 
 
-@pure
-def _extract_setup_token(raw_output: str) -> str | None:
-    """Pull the minted `sk-ant-oat01-...` token out of the PTY output.
-
-    The token is longer than an 80-column row, so it may be width-wrapped
-    just like the OAuth URL (but has no hyperlink copy). A too-short
-    extraction is a wrapped fragment, not the token -- return None so the
-    caller keeps draining instead of storing a truncated token.
-    """
-    token = extract_wrapped_value(raw_output, _SETUP_TOKEN_STRICT_REGEX, _SETUP_TOKEN_CONTINUATION_REGEX)
-    if token is None or len(token) < _MIN_SETUP_TOKEN_LENGTH:
-        return None
-    return token
 
 
-def _build_list_command() -> list[str]:
-    """Build the ``mngr list`` argv used to enumerate agents.
-
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess (see ``claude_auth_test.py``).
-
-    ``--on-error continue`` makes this blanket listing tolerate an
-    unauthenticated/unreachable provider: ``mngr list`` still emits the
-    healthy providers' agents and exits ``EXIT_CODE_PROVIDER_INACCESSIBLE``,
-    which the caller treats as success.
-    """
-    return ["mngr", "list", "--format", "json", "--on-error", "continue"]
 
 
-def _log_inaccessible_providers(payload: dict[str, Any]) -> None:
-    """Debug-log each provider `mngr list` skipped due to an auth/access error.
-
-    The structured `errors` array is present when `mngr list` exits
-    EXIT_CODE_PROVIDER_INACCESSIBLE. Skipped providers are expected (e.g. a
-    provider enabled in config but never authenticated), so this is debug
-    only -- the enumeration still succeeds on the healthy providers.
-    """
-    errors = payload.get("errors", [])
-    if not isinstance(errors, list):
-        return
-    for error in errors:
-        if not isinstance(error, dict):
-            continue
-        provider_name = error.get("provider_name", "?")
-        message = error.get("message", "")
-        logger.debug("Skipped inaccessible provider {} while listing agents: {}", provider_name, message)
 
 
-def _build_restart_with_message_command(names: Sequence[str], message: str) -> list[str]:
-    """Build the fused restart argv for previously-RUNNING agents. Pure (see above).
-
-    ``--restart`` stops each agent first; ``--resume-message`` delivers the
-    auth-aware continue message through mngr's readiness-aware resume
-    machinery after each agent starts.
-    """
-    return ["mngr", "start", "--restart", "--resume-message", message, *names]
 
 
-def _build_restart_no_resume_command(names: Sequence[str]) -> list[str]:
-    """Build the fused restart argv for previously-WAITING agents. Pure (see above).
-
-    ``--no-resume`` suppresses any message: idle agents come back idle and
-    pick up the fresh credentials on their next user message.
-    """
-    return ["mngr", "start", "--restart", "--no-resume", *names]
 
 
 class ClaudeAuthService(MutableModel):
@@ -746,7 +644,6 @@ class ClaudeAuthService(MutableModel):
     # credential change is rejected while a restart is still running.
     _restart_state_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _restart_thread: threading.Thread | None = PrivateAttr(default=None)
-    _restart_progress: RestartProgress | None = PrivateAttr(default=None)
 
     def get_auth_status(self, extra_env: Mapping[str, str] | None = None) -> AuthStatus:
         """Invoke `claude auth status --json` and parse the result.
@@ -793,7 +690,6 @@ class ClaudeAuthService(MutableModel):
         return self._with_derived_mode(_parse_status_payload(payload), combined_extra)
 
     def _with_derived_mode(self, status: AuthStatus, managed_env: Mapping[str, str]) -> AuthStatus:
-        progress = self.current_restart_progress()
         # Managed env keys outrank everything claude reads elsewhere, so
         # they define the mode when present. With an empty managed env the
         # mode folds in the credentials-based browser sign-ins: both report
@@ -806,553 +702,27 @@ class ClaudeAuthService(MutableModel):
             to_update(status.field_ref().auth_mode, derived_mode),
             to_update(status.field_ref().masked_key_suffix, masked_credential_suffix(managed_env)),
             to_update(status.field_ref().workspace_id, read_workspace_id()),
-            to_update(status.field_ref().restart_phase, progress.phase.value if progress is not None else None),
-            to_update(status.field_ref().restart_detail, progress.detail if progress is not None else None),
-            to_update(status.field_ref().restart_error, progress.error if progress is not None else None),
-            to_update(status.field_ref().restart_reason, progress.reason.value if progress is not None else None),
         )
 
-    def snapshot_claude_binary_agents(self) -> list[AgentSnapshot]:
-        """Return name + state of every claude-binary agent in the local mind.
 
-        Uses `mngr list --format json` and filters to the claude-binary
-        types (``claude``, ``chat``, and ``worker``). This excludes the `main`-type
-        system-services agent, which has no interactive claude process to
-        restart -- and whose restart would tear down every background
-        service in the mind.
-        """
-        result = self.command_runner(_build_list_command(), _MNGR_COMMAND_TIMEOUT_SECONDS)
-        # Exit EXIT_CODE_PROVIDER_INACCESSIBLE means some enabled provider was
-        # unauthenticated/unreachable, but the healthy providers' agents were
-        # still listed (we pass --on-error continue). This is a blanket listing,
-        # so that is an acceptable partial success: enumerate what we got. Any
-        # other nonzero exit is a real failure.
-        if result.returncode not in (0, EXIT_CODE_PROVIDER_INACCESSIBLE):
-            raise ClaudeAuthError(f"mngr list failed (exit {result.returncode}): {result.stderr.strip()}")
-        stdout = result.stdout if isinstance(result.stdout, str) else ""
-        try:
-            payload = json.loads(stdout)
-        except json.JSONDecodeError as e:
-            raise ClaudeAuthError(f"mngr list returned non-JSON output: {stdout!r}") from e
-        if not isinstance(payload, dict):
-            raise ClaudeAuthError(f"mngr list returned non-object JSON: {payload!r}")
-        if result.returncode == EXIT_CODE_PROVIDER_INACCESSIBLE:
-            _log_inaccessible_providers(payload)
-        agents = payload.get("agents", [])
-        if not isinstance(agents, list):
-            raise ClaudeAuthError(f"mngr list 'agents' field is not a list: {agents!r}")
-        snapshots: list[AgentSnapshot] = []
-        for agent in agents:
-            if not isinstance(agent, dict):
-                continue
-            if agent.get("type") not in CLAUDE_BINARY_AGENT_TYPES:
-                continue
-            name = agent.get("name")
-            if not (isinstance(name, str) and name):
-                continue
-            state = agent.get("state")
-            snapshots.append(AgentSnapshot(name=name, state=state if isinstance(state, str) else ""))
-        return snapshots
 
-    def restart_all_claude_agents(self, never_welcomed_agent_name: str | None = None) -> list[str]:
-        """Restart every live claude-binary agent via fused `mngr start --restart` calls.
 
-        Snapshots agent states first, then issues one batched call per
-        behavior group: previously-RUNNING agents restart with
-        `--resume-message` so the auth-aware continue message is delivered
-        by mngr's readiness-aware resume machinery, and previously-WAITING
-        agents restart with `--no-resume` so they come back idle. STOPPED
-        agents are left stopped. (The API-key challenge the restarted
-        claudes would otherwise hit is pre-empted by the approval the apply
-        records; see ``record_api_key_approval``.)
 
-        ``never_welcomed_agent_name`` names the initial chat agent when it
-        has never rendered the welcome: it restarts idle even if it
-        snapshots as RUNNING. Its only turn is typically the failed
-        pre-auth ``/welcome``, whose API-error ending fires no Stop hook
-        and strands the ``active`` marker, so the snapshot says RUNNING
-        while the agent sits at an idle prompt -- and a "please continue"
-        resume message would send a fresh agent hunting for nonexistent
-        work. The post-restart welcome resend is its real resumption.
 
-        Returns the list of agent names that were restarted.
-        """
-        snapshots = self.snapshot_claude_binary_agents()
-        running = [s.name for s in snapshots if s.state == _AGENT_STATE_RUNNING]
-        waiting = [s.name for s in snapshots if s.state == _AGENT_STATE_WAITING]
-        if never_welcomed_agent_name is not None and never_welcomed_agent_name in running:
-            logger.info(
-                "Agent {} has never rendered the welcome; restarting it idle instead of resuming",
-                never_welcomed_agent_name,
-            )
-            running.remove(never_welcomed_agent_name)
-            waiting.append(never_welcomed_agent_name)
-        if running:
-            self._set_restart_progress(RestartPhase.RESTARTING, f"Restarting {len(running)} active agent(s)", None)
-            logger.info("Restarting previously-RUNNING agents {} via mngr start --restart", running)
-            self._run_restart_command(_build_restart_with_message_command(running, RESTART_CONTINUE_MESSAGE))
-        if waiting:
-            self._set_restart_progress(RestartPhase.RESTARTING, f"Restarting {len(waiting)} idle agent(s)", None)
-            logger.info("Restarting previously-WAITING agents {} via mngr start --restart", waiting)
-            self._run_restart_command(_build_restart_no_resume_command(waiting))
-        return running + waiting
 
-    def _run_restart_command(self, command: list[str]) -> None:
-        result = self.command_runner(command, _MNGR_RESTART_TIMEOUT_SECONDS)
-        if result.returncode != 0:
-            stderr = result.stderr.strip() if isinstance(result.stderr, str) else ""
-            raise ClaudeAuthError(f"{' '.join(command[:3])} failed (exit {result.returncode}): {stderr}")
 
-    def _set_restart_progress(self, phase: RestartPhase, detail: str | None, error: str | None) -> None:
-        with self._restart_state_lock:
-            reason = (
-                self._restart_progress.reason
-                if self._restart_progress is not None
-                else RestartReason.CREDENTIALS_SAVED
-            )
-            self._restart_progress = RestartProgress(phase=phase, detail=detail, error=error, reason=reason)
 
-    def current_restart_progress(self) -> RestartProgress | None:
-        with self._restart_state_lock:
-            return self._restart_progress
 
-    def _clear_terminal_restart_progress(self) -> None:
-        """Drop restart progress left over from a previous, finished apply.
 
-        The subscription fast path performs no restart, so a stale terminal
-        phase (DONE or FAILED) from an earlier credential change must not
-        leak into the status it returns -- the frontend routes a "failed"
-        phase to the error screen, which would misreport the successful
-        sign-in. An apply that is genuinely still running keeps its
-        progress (its thread is alive), so the status stays truthful.
-        """
-        with self._restart_state_lock:
-            if self._restart_thread is None or not self._restart_thread.is_alive():
-                self._restart_progress = None
 
-    def start_background_apply(
-        self,
-        managed_env: Mapping[str, str],
-        on_complete: Callable[[], object] | None,
-        reason: RestartReason,
-    ) -> None:
-        """Write new managed credentials and restart agents on a background thread.
 
-        The submit endpoints call this and return immediately; the frontend
-        follows the apply through the `restart_*` fields on the status
-        endpoint. There is deliberately no pre-restart credential probe: a
-        bad credential surfaces on the agent's first request, where the
-        transcript auth-error detection reopens the modal. `on_complete`
-        runs after a successful restart (the welcome-resend check, which
-        needs the chat agent back up).
-        """
-        with self._restart_state_lock:
-            if self._restart_thread is not None and self._restart_thread.is_alive():
-                raise ClaudeAuthError(
-                    "An agent restart from a previous credential change is still in progress; "
-                    "wait a moment and try again."
-                )
-            self._restart_progress = RestartProgress(
-                phase=RestartPhase.RESTARTING, detail="Preparing to restart agents", error=None, reason=reason
-            )
-            thread = threading.Thread(
-                target=self._run_apply_in_background,
-                args=(dict(managed_env), on_complete),
-                name="claude-auth-apply",
-                daemon=True,
-            )
-            self._restart_thread = thread
-            thread.start()
 
-    def _run_apply_in_background(self, managed_env: dict[str, str], on_complete: Callable[[], object] | None) -> None:
-        # Thread entry point: this is the top-level handler for the apply
-        # thread, so any escaping exception is caught, logged, and surfaced
-        # to the frontend through the FAILED progress phase instead of
-        # dying silently.
-        try:
-            write_managed_auth_env(managed_env)
-            # Must precede the restart: a restarted interactive claude blocks
-            # on the custom-API-key challenge for any unapproved key.
-            record_api_key_approval(managed_env)
-            never_welcomed = (
-                self.resolve_never_welcomed_agent_name() if self.resolve_never_welcomed_agent_name else None
-            )
-            self.restart_all_claude_agents(never_welcomed_agent_name=never_welcomed)
-            self._set_restart_progress(RestartPhase.FINISHING, "Resuming your agent", None)
-            if on_complete is not None:
-                on_complete()
-            self._set_restart_progress(RestartPhase.DONE, None, None)
-        except Exception as e:
-            # Deliberately NOT logger.opt(exception=...): loguru's diagnose
-            # mode renders frame locals into the log, and this thread's
-            # frames hold the raw credential.
-            logger.error("Background credential apply failed: {}: {}", type(e).__name__, e)
-            self._set_restart_progress(RestartPhase.FAILED, None, str(e))
 
-    def submit_credentials(self, pasted_text: str, on_restart_complete: Callable[[], object] | None) -> AuthStatus:
-        """Parse pasted credentials, write the settings env block, start the restart.
 
-        The single chokepoint for the API-key field, the Imbue blob
-        textarea, and the subtle direct-token paste: all three arrive as
-        env-var-style lines and land in the fully-controlled settings env
-        block. All claude-binary agents must be restarted: settings env is
-        read at process start, so already-running claudes won't pick up the
-        new credentials until their tmux sessions are torn down and
-        respawned. The restart runs on a background thread; the returned
-        status carries its initial `restart_*` progress fields.
-        """
-        managed_env = parse_credential_lines(pasted_text)
-        self.start_background_apply(managed_env, on_restart_complete, RestartReason.CREDENTIALS_SAVED)
-        return self.get_auth_status(extra_env=managed_env)
 
-    def _spawn_auth_flow_and_parse_url(self, args: list[str]) -> tuple[Any, str, str]:
-        process = self.pexpect_spawner(
-            "claude",
-            args,
-            _OAUTH_URL_WAIT_SECONDS,
-        )
-        match_index = process.expect([_OAUTH_URL_REGEX, pexpect.EOF, pexpect.TIMEOUT])
-        if match_index != 0:
-            safe_terminate(process)
-            safe_close(process)
-            if match_index == 1:
-                raise ClaudeAuthError(f"claude {' '.join(args)} exited before printing the OAuth URL")
-            raise ClaudeAuthError(f"Timed out waiting for the OAuth URL from claude {' '.join(args)}")
-        # The expect trigger can fire mid-render-frame -- e.g. inside the OSC 8
-        # hyperlink's opening sequence or on the first width-wrapped row of the
-        # visible label -- so the consumed buffer may hold only a prefix of the
-        # URL. Drain until a *terminated* hyperlink target is extractable (the
-        # normal case, satisfied within the same frame); if the CLI emitted no
-        # hyperlink, the deadline expires and the visible label is de-wrapped
-        # from everything drained.
-        initial_consumed = (process.before or "") + (process.after or "")
-        consumed = drain_pty_stream(
-            process,
-            initial_consumed,
-            lambda buffer: _extract_oauth_url_from_hyperlink(buffer) is not None,
-        )
-        oauth_url = _extract_oauth_url(consumed)
-        if oauth_url is None:
-            safe_terminate(process)
-            safe_close(process)
-            raise ClaudeAuthError(
-                "OAuth URL matched in the stream but could not be extracted after stripping terminal escape sequences"
-            )
-        return process, oauth_url, consumed
 
-    def start_setup_token(self) -> AuthFlowStartResult:
-        """Spawn `claude setup-token` and return the parsed OAuth URL.
 
-        Replaces any prior in-flight session: only one PTY auth flow can
-        be live at a time per instance, which matches the single-mind /
-        single-user deployment model. The subprocess then polls Anthropic
-        on its own; the frontend drives `poll_setup_token` until the token
-        appears (or pastes a code via `submit_setup_token_code` if the CLI
-        demands one).
-        """
-        with self._setup_token_lock:
-            self._drop_current_session_locked()
-            process, oauth_url, consumed = self._spawn_auth_flow_and_parse_url(["setup-token"])
-            record = _AuthFlowSessionRecord(
-                session_id=uuid.uuid4().hex, kind=AuthFlowKind.SETUP_TOKEN, provider=None, oauth_url=oauth_url
-            )
-            self._current_setup_token_record = record
-            self._current_setup_token_process = process
-            self._current_setup_token_output = consumed
-        return AuthFlowStartResult(session_id=record.session_id, oauth_url=record.oauth_url)
 
-    def start_oauth_login(self, provider: OAuthProvider) -> AuthFlowStartResult:
-        """Spawn `claude auth login --<provider>` and return the parsed OAuth URL.
 
-        The credentials-based browser sign-ins: `--claudeai` writes a
-        subscription credential that running claudes re-read on their next
-        API call (no restart when the managed env is empty); `--console`
-        stores its key inside `.claude.json`, which claudes cache at
-        process start, so it always takes the restart path.
-        """
-        with self._setup_token_lock:
-            self._drop_current_session_locked()
-            process, oauth_url, consumed = self._spawn_auth_flow_and_parse_url(
-                ["auth", "login", f"--{provider.value}"]
-            )
-            record = _AuthFlowSessionRecord(
-                session_id=uuid.uuid4().hex, kind=AuthFlowKind.OAUTH_LOGIN, provider=provider, oauth_url=oauth_url
-            )
-            self._current_setup_token_record = record
-            self._current_setup_token_process = process
-            self._current_setup_token_output = consumed
-        return AuthFlowStartResult(session_id=record.session_id, oauth_url=record.oauth_url)
 
-    def _drop_current_session_locked(self) -> None:
-        if self._current_setup_token_process is not None:
-            safe_terminate(self._current_setup_token_process)
-            safe_close(self._current_setup_token_process)
-        self._current_setup_token_record = None
-        self._current_setup_token_process = None
-        self._current_setup_token_output = ""
 
-    def _pump_setup_token_output_locked(self, timeout_seconds: float) -> str | None:
-        """Read newly available subprocess output; return the token if it appeared.
-
-        Uses a short expect against the token pattern so each poll returns
-        promptly. On EOF the accumulated buffer is scanned once more (the
-        token and process exit can arrive together); an EOF without a token
-        anywhere in the output means the subprocess failed.
-        """
-        process = self._current_setup_token_process
-        try:
-            match_index = process.expect(
-                [_SETUP_TOKEN_REGEX, _OAUTH_ERROR_REGEX, pexpect.EOF, pexpect.TIMEOUT], timeout=timeout_seconds
-            )
-        except pexpect.ExceptionPexpect as e:
-            raise ClaudeAuthError(f"claude setup-token subprocess failed while waiting for the token: {e}") from e
-        self._current_setup_token_output += (process.before or "") + (
-            process.after if isinstance(process.after, str) else ""
-        )
-        if match_index == 1:
-            raise ClaudeAuthError(
-                "Sign-in was not accepted (OAuth error). The pasted code may be wrong, expired, "
-                "or from an earlier sign-in attempt. Please start over."
-            )
-        if match_index == 0:
-            # The trigger fires on the first (possibly width-wrapped) token
-            # fragment, but ANY mid-render screen is racy: while the token's
-            # first row is drawn, the row under it can still hold the
-            # previous frame's content, which is indistinguishable from a
-            # terminated one-row value. `claude setup-token` exits right
-            # after printing the token, so drain all the way to EOF (the
-            # deadline is only a hang backstop) and extract from the final,
-            # stable screen.
-            self._current_setup_token_output = drain_pty_stream(
-                process,
-                self._current_setup_token_output,
-                lambda buffer: False,
-            )
-        token = _extract_setup_token(self._current_setup_token_output)
-        if token is not None:
-            # Length is safe metadata and the key diagnostic for wrap bugs
-            # (a real token is ~108 characters; a screen-width multiple
-            # means a truncated extraction).
-            logger.info("Extracted setup token (length={})", len(token))
-            return token
-        if match_index == 2:
-            raise ClaudeAuthError("claude setup-token exited without printing a token")
-        return None
-
-    def _complete_setup_token_locked(self, token: str, on_restart_complete: Callable[[], object] | None) -> AuthStatus:
-        """Hand the minted token to the background apply, drop the session."""
-        self._drop_current_session_locked()
-        managed_env = {CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: token}
-        self.start_background_apply(managed_env, on_restart_complete, RestartReason.CREDENTIALS_SAVED)
-        return self.get_auth_status(extra_env=managed_env)
-
-    def poll_setup_token(
-        self, session_id: str, on_restart_complete: Callable[[], object] | None
-    ) -> AuthFlowPollResult:
-        """Check whether the in-flight setup-token subprocess minted the token yet.
-
-        The browser approval completes the flow CLI-side without any code
-        paste (the CLI polls Anthropic), so the frontend just calls this
-        periodically. On completion the token is written to the settings
-        env block and the background agent restart starts; the returned
-        status carries its initial `restart_*` progress fields.
-        """
-        with self._setup_token_lock:
-            record = self._current_setup_token_record
-            if record is None or record.session_id != session_id or record.kind is not AuthFlowKind.SETUP_TOKEN:
-                raise ClaudeAuthError("No active setup-token session matches the provided session_id")
-            try:
-                token = self._pump_setup_token_output_locked(_SETUP_TOKEN_POLL_SECONDS)
-            except ClaudeAuthError:
-                self._drop_current_session_locked()
-                raise
-            if token is None:
-                return AuthFlowPollResult(is_complete=False)
-            status = self._complete_setup_token_locked(token, on_restart_complete)
-        return AuthFlowPollResult(is_complete=True, status=status)
-
-    def submit_setup_token_code(
-        self, session_id: str, code: str, on_restart_complete: Callable[[], object] | None
-    ) -> AuthStatus:
-        """Send the user's pasted `CODE#STATE` to the live setup-token subprocess.
-
-        The fallback path for flows where the CLI actually prompts for a
-        code paste instead of completing via its own polling.
-        """
-        with self._setup_token_lock:
-            record = self._current_setup_token_record
-            process = self._current_setup_token_process
-            if (
-                record is None
-                or process is None
-                or record.session_id != session_id
-                or record.kind is not AuthFlowKind.SETUP_TOKEN
-            ):
-                raise ClaudeAuthError("No active setup-token session matches the provided session_id")
-            self._send_code_locked(process, code)
-            try:
-                token = self._pump_setup_token_output_locked(_SETUP_TOKEN_CODE_WAIT_SECONDS)
-            except ClaudeAuthError:
-                self._drop_current_session_locked()
-                raise
-            if token is None:
-                self._drop_current_session_locked()
-                raise ClaudeAuthError("Timed out waiting for claude setup-token to print the token after code submit")
-            status = self._complete_setup_token_locked(token, on_restart_complete)
-        return status
-
-    def _send_code_locked(self, process: Any, code: str) -> None:
-        """Type a `CODE#STATE` paste into the live PTY, then a separate Enter.
-
-        Two separate writes: the CLI's paste heuristic swallows a newline
-        arriving in the same burst as the code (it becomes field content,
-        not a submit). Completion of the burst is observable -- the input
-        field echoes the paste as render output -- so Enter is sent once
-        the echo stream goes quiet (with a deadline backstop) rather than
-        after a fixed sleep.
-        """
-        try:
-            process.send(code)
-            self._current_setup_token_output = drain_pty_stream_until_quiet(
-                process,
-                self._current_setup_token_output,
-                _CODE_ECHO_QUIET_SECONDS,
-                _CODE_ECHO_DEADLINE_SECONDS,
-            )
-            process.send("\r")
-        except pexpect.ExceptionPexpect as e:
-            self._drop_current_session_locked()
-            raise ClaudeAuthError(f"auth subprocess failed sending code: {e}") from e
-
-    def _pump_oauth_login_output_locked(self, timeout_seconds: float) -> bool:
-        """Read `claude auth login` output; return True once it reports success.
-
-        The CLI prints a plain `Login successful.` and exits 0 (or `Login
-        failed: ...` and exits 1), so completion detection needs no screen
-        replay. A transient `OAuth error` (rejected/stale code) fails fast
-        with the same copy as the setup-token flow.
-        """
-        process = self._current_setup_token_process
-        try:
-            match_index = process.expect(
-                [_LOGIN_SUCCESS_REGEX, _LOGIN_FAILED_LINE_REGEX, _OAUTH_ERROR_REGEX, pexpect.EOF, pexpect.TIMEOUT],
-                timeout=timeout_seconds,
-            )
-        except pexpect.ExceptionPexpect as e:
-            raise ClaudeAuthError(f"claude auth login subprocess failed while waiting for completion: {e}") from e
-        self._current_setup_token_output += (process.before or "") + (
-            process.after if isinstance(process.after, str) else ""
-        )
-        if match_index == 2:
-            raise ClaudeAuthError(
-                "Sign-in was not accepted (OAuth error). The pasted code may be wrong, expired, "
-                "or from an earlier sign-in attempt. Please start over."
-            )
-        if match_index == 0:
-            # Drain the goodbye output so the process reaps cleanly.
-            self._current_setup_token_output = drain_pty_stream(
-                process, self._current_setup_token_output, lambda buffer: False
-            )
-            return True
-        if match_index in (1, 3):
-            # Failure line matched, or EOF: the buffer decides (success and
-            # exit can arrive in one read, so EOF does not imply failure).
-            self._current_setup_token_output = drain_pty_stream(
-                process, self._current_setup_token_output, lambda buffer: False
-            )
-            if _LOGIN_SUCCESS_REGEX.search(self._current_setup_token_output):
-                return True
-            failed_match = _LOGIN_FAILED_LINE_REGEX.search(self._current_setup_token_output)
-            failure_detail = failed_match.group(1).strip() if failed_match is not None else ""
-            raise ClaudeAuthError(
-                f"Sign-in did not complete: {failure_detail or 'claude auth login exited without logging in'}"
-            )
-        return False
-
-    def _complete_oauth_login_locked(
-        self, provider: OAuthProvider, on_restart_complete: Callable[[], object] | None
-    ) -> AuthStatus:
-        """Apply a finished browser sign-in: fast path or switch-restart.
-
-        The credential is already stored by the CLI itself. With an empty
-        managed env and the subscription provider, nothing else is needed:
-        running claudes re-read the credential on their next API call, so
-        the welcome-resend hook runs inline and no restart happens. When
-        managed keys are active they would keep outranking the fresh
-        credential, so they are cleared and the agents restarted; Console
-        always restarts (its key lives in `.claude.json`, cached at claude
-        process start).
-        """
-        self._drop_current_session_locked()
-        managed_env = read_managed_auth_env()
-        if provider is OAuthProvider.CLAUDEAI and not managed_env:
-            self._clear_terminal_restart_progress()
-            status = self.get_auth_status()
-            if on_restart_complete is not None:
-                on_restart_complete()
-            return status
-        reason = (
-            RestartReason.CONSOLE_SWITCH if provider is OAuthProvider.CONSOLE else RestartReason.SUBSCRIPTION_SWITCH
-        )
-        self.start_background_apply({}, on_restart_complete, reason)
-        return self.get_auth_status()
-
-    def poll_oauth_login(
-        self, session_id: str, on_restart_complete: Callable[[], object] | None
-    ) -> AuthFlowPollResult:
-        """Check whether the in-flight `claude auth login` finished on its own.
-
-        Like setup-token, the CLI polls Anthropic itself after the browser
-        approval, so the frontend just calls this periodically; the pasted
-        code is the always-available path.
-        """
-        with self._setup_token_lock:
-            record = self._current_setup_token_record
-            if record is None or record.session_id != session_id or record.kind is not AuthFlowKind.OAUTH_LOGIN:
-                raise ClaudeAuthError("No active browser sign-in session matches the provided session_id")
-            provider = record.provider
-            if provider is None:
-                raise ClaudeAuthError("Browser sign-in session is missing its provider")
-            try:
-                is_complete = self._pump_oauth_login_output_locked(_SETUP_TOKEN_POLL_SECONDS)
-            except ClaudeAuthError:
-                self._drop_current_session_locked()
-                raise
-            if not is_complete:
-                return AuthFlowPollResult(is_complete=False)
-            status = self._complete_oauth_login_locked(provider, on_restart_complete)
-        return AuthFlowPollResult(is_complete=True, status=status)
-
-    def submit_oauth_login_code(
-        self, session_id: str, code: str, on_restart_complete: Callable[[], object] | None
-    ) -> AuthStatus:
-        """Send the user's pasted `CODE#STATE` to the live `claude auth login`."""
-        with self._setup_token_lock:
-            record = self._current_setup_token_record
-            process = self._current_setup_token_process
-            if (
-                record is None
-                or process is None
-                or record.session_id != session_id
-                or record.kind is not AuthFlowKind.OAUTH_LOGIN
-            ):
-                raise ClaudeAuthError("No active browser sign-in session matches the provided session_id")
-            provider = record.provider
-            if provider is None:
-                raise ClaudeAuthError("Browser sign-in session is missing its provider")
-            self._send_code_locked(process, code)
-            try:
-                is_complete = self._pump_oauth_login_output_locked(_SETUP_TOKEN_CODE_WAIT_SECONDS)
-            except ClaudeAuthError:
-                self._drop_current_session_locked()
-                raise
-            if not is_complete:
-                self._drop_current_session_locked()
-                raise ClaudeAuthError("Timed out waiting for claude auth login to complete after code submit")
-            status = self._complete_oauth_login_locked(provider, on_restart_complete)
-        return status
-
-    def abort_auth_flow(self) -> None:
-        """Drop any in-flight PTY auth session (e.g. user closed the modal)."""
-        with self._setup_token_lock:
-            self._drop_current_session_locked()
