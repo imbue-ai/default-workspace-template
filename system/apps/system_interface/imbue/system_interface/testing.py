@@ -233,7 +233,7 @@ def build_test_state(
     # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
     return SystemInterfaceState(
-        auth_flows=AuthFlowService(),
+        auth_flows=AuthFlowService.create(),
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),

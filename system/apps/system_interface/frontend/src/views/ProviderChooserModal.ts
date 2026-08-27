@@ -25,6 +25,7 @@ import {
   areLanesLoaded,
   clearFlow,
   getAccounts,
+  deleteAccount,
   getFlow,
   getLanes,
   loadAccounts,
@@ -46,6 +47,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let keyProvider: string | null = null;
   let error: string | null = null;
   let busy = false;
+  // The account the trash button is armed on. Two clicks rather than a second modal:
+  // deleting strands every chat bound to that account, so it must not be a single slip.
+  let confirmingDelete: string | null = null;
 
   function reset(): void {
     lane = null;
@@ -54,6 +58,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     keyInput = "";
     keyProvider = null;
     error = null;
+    confirmingDelete = null;
     clearFlow();
   }
 
@@ -93,6 +98,41 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     abortFlow();
     reset();
     m.redraw();
+  }
+
+  function renderAccounts(): m.Children {
+    const signedIn = getAccounts();
+    if (signedIn.length === 0) return null;
+    return m("div.claude-login-alts", [
+      m("p.claude-login-alt-desc", "Signed in"),
+      m(
+        "div.claude-login-alts-list",
+        signedIn.map((account) =>
+          m("div.claude-login-alt", { key: account.id }, [
+            m("span.claude-login-alt-text", m("span.claude-login-alt-name", account.label)),
+            m(
+              "button.claude-login-close",
+              {
+                type: "button",
+                "aria-label": confirmingDelete === account.id ? "Confirm removal" : `Remove ${account.label}`,
+                onclick: () => {
+                  if (confirmingDelete !== account.id) {
+                    confirmingDelete = account.id;
+                    return;
+                  }
+                  confirmingDelete = null;
+                  void send(() => deleteAccount(account.id));
+                },
+              },
+              confirmingDelete === account.id ? "Remove?" : m.trust(icon("close", { size: 16 })),
+            ),
+          ]),
+        ),
+      ),
+      confirmingDelete !== null
+        ? m("p.claude-login-alt-desc", "Chats already running on it will not be able to take another turn.")
+        : null,
+    ]);
   }
 
   function renderChooser(): m.Children {
@@ -296,10 +336,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           ]),
           m("div.claude-login-body", [
             error !== null || detail !== null ? m("div.claude-login-error", error ?? detail) : null,
-            lane === null ? renderChooser() : [renderSignIn(lane), renderAlternates(lane)],
-            lane === null && getAccounts().length > 0
-              ? m("p.claude-login-alt-desc", `${getAccounts().length} provider(s) already signed in.`)
-              : null,
+            lane === null ? [renderChooser(), renderAccounts()] : [renderSignIn(lane), renderAlternates(lane)],
           ]),
         ]),
       );

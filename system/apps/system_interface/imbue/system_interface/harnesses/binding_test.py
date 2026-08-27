@@ -59,8 +59,9 @@ def test_the_account_side_of_each_link_mirrors_the_agent_side(tmp_path: Path) ->
     """Source and destination must be the same shape or the symlink points at nothing."""
     for harness in (HarnessType.CODEX, HarnessType.ANTIGRAVITY, HarnessType.PI_CODING):
         source = account_credential_path(harness, tmp_path)
-        assert source is not None
-        assert source.name == agent_credential_path(harness, tmp_path / "state").name
+        agent_side = agent_credential_path(harness, tmp_path / "state")
+        assert source is not None and agent_side is not None
+        assert source.name == agent_side.name
 
 
 def test_claude_binds_through_the_env_file(tmp_path: Path) -> None:

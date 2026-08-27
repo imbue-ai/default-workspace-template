@@ -155,3 +155,8 @@ before returning, so anything done afterwards lands too late. The chat carries a
 
 With no accounts the behaviour is unchanged, which is what lets this land before the
 new-tab picker exists to name one.
+
+# Show and remove signed-in accounts from the chooser
+
+The chooser lists what is already signed in, with a two-click remove: deleting an account
+strands every chat bound to it, so the second click is the confirmation.

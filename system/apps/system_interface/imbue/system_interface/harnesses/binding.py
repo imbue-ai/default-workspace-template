@@ -131,6 +131,10 @@ def seed_account(harness: HarnessType, account_dir: Path, work_dir: Path) -> Non
         config = account_dir / "config.toml"
         if not config.exists():
             config.write_text(_CODEX_CONFIG_TOML)
+    else:
+        # agy and pi need nothing seeded: neither has an onboarding dialog to dismiss, and
+        # both write their whole credential file themselves on a successful sign-in.
+        pass
 
 
 def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) -> list[str]:
