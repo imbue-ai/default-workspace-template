@@ -23,6 +23,7 @@ from imbue.system_interface.harnesses.auth_flows import FlowError
 from imbue.system_interface.harnesses.auth_flows import flow_shape
 from imbue.system_interface.harnesses.lanes import LANES
 from imbue.system_interface.harnesses.lanes import LaneNotFoundError
+from imbue.system_interface.harnesses.lanes import PasteMethod
 from imbue.system_interface.harnesses.lanes import account_label
 from imbue.system_interface.harnesses.lanes import get_lane
 from imbue.system_interface.models import ErrorResponse
@@ -59,6 +60,7 @@ def list_lanes() -> Response:
                     "id": method.id,
                     "label": method.label,
                     "description": method.description,
+                    "signup_url": method.signup_url if isinstance(method, PasteMethod) else "",
                     "shape": flow_shape(method).value,
                     "is_primary": index == 0,
                 }

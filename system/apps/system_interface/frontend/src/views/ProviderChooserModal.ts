@@ -248,7 +248,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         m("span", { class: css.CHOOSER_ROW_MARK }, m.trust(providerMark(candidate.id, 30))),
         m("span", { class: css.CHOOSER_ROW_TEXT }, [
           m("span", { class: css.CHOOSER_ROW_NAME }, candidate.provider_name),
-          m("span", { class: css.CHOOSER_ROW_BODY }, candidate.subtitle),
+          // A lane with nothing non-obvious to say has no subtitle, and gets no empty line
+          // where one would be -- the row simply sits shorter than its neighbours.
+          candidate.subtitle === "" ? null : m("span", { class: css.CHOOSER_ROW_BODY }, candidate.subtitle),
         ]),
         m("span", { class: css.CHEVRON }, m.trust(icon("chevron-right", { size: 18 }))),
       ],
@@ -325,9 +327,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   // --- sign-in bodies --------------------------------------------------------------------
 
   /** ProviderSignInModal's stepsBlock, step 1, plus the old modal's copy-link fallback. */
-  function openLinkStep(url: string, label: string): m.Vnode {
+  function openLinkStep(url: string, label: string, title = "Open the sign-in page"): m.Vnode {
     return stepBlock(1, false, [
-      stepLabel("1", "Open the sign-in page"),
+      stepLabel("1", title),
       m(
         "a",
         {
@@ -513,15 +515,32 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       ),
     ]);
 
+    const savedAs =
+      selected !== null && selected.env_var !== ""
+        ? m("p", { class: css.HINT }, `Saved as ${selected.env_var} for this mind.`)
+        : null;
+
     if (!withPicker) {
+      // A provider you have to subscribe to before a key exists gets that as an explicit first
+      // step, rather than a sentence hoping you already did it.
+      const signupUrl = method?.signup_url ?? "";
+      if (signupUrl === "") {
+        return m("div", [
+          m("div", { class: css.SECTION_LABEL }, "Use an API key"),
+          m("p", { class: css.LEAD }, method?.description ?? `Paste a ${current.provider_name} API key.`),
+          stepLabel(null, "Your API key"),
+          keyField,
+          savedAs,
+        ]);
+      }
       return m("div", [
-        m("div", { class: css.SECTION_LABEL }, "Use an API key"),
         m("p", { class: css.LEAD }, method?.description ?? `Paste a ${current.provider_name} API key.`),
-        stepLabel(null, "Your API key"),
-        keyField,
-        selected !== null && selected.env_var !== ""
-          ? m("p", { class: css.HINT }, `Saved as ${selected.env_var} for this mind.`)
-          : null,
+        openLinkStep(
+          signupUrl,
+          signupUrl.replace(/^https?:\/\//, ""),
+          `Sign up for ${current.provider_name}, if you haven't`,
+        ),
+        stepBlock(2, true, [stepLabel("2", "Paste your API key"), keyField, savedAs]),
       ]);
     }
     return m("div", [

@@ -522,3 +522,15 @@ spends seconds spawning a CLI and deserves it; a paste lane mints a folder in mi
 so all it produced was a flicker between the click and a form that was always going to be
 there. The form renders immediately and the mint lands behind it -- measured in the browser
 at 7ms from click to form, with no spinner drawn.
+
+# Sign up for Opencode Go from inside the sign-in screen
+
+Its row said what the plan costs, which is not what the row is for -- the row says what the
+account gets you, and the price belongs where you are deciding to buy it.
+
+A paste lane can now carry a `signup_url`. When it does, the screen becomes two numbered steps
+-- sign up, then paste -- instead of one field that assumes you already have a key. Step 1
+reuses the same link block the browser lanes use, so the copy-link fallback comes with it.
+
+Only Opencode Go sets it. OpenRouter and the generic API-key lane are providers you either
+already have an account with or are picking deliberately, so they stay a single field.

@@ -26,6 +26,8 @@ export interface LaneMethod {
   id: string;
   label: string;
   description: string;
+  /** Empty unless the provider has to be signed up for before a key exists. */
+  signup_url: string;
   shape: FlowShape;
   is_primary: boolean;
 }
