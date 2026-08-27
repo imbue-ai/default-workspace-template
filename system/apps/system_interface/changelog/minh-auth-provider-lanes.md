@@ -179,3 +179,14 @@ otherwise be hiding.
 Launching bumps that account's most-recently-used marker, so the picker offers it again
 next time. `first` is gone from the frontend: that create template belongs to the
 workspace's own first run, not to a tile anyone clicks.
+
+# Do not wait for a value the keystroke pacing already read
+
+Pacing the keystrokes reads the PTY, so on a CLI that answers the moment Enter lands the
+scraped value can arrive before we ask for it -- and `expect` cannot match bytes another
+read has already consumed. agy hit this every time: its URL was pulled in by the key-gap
+drain, and the flow then timed out waiting for it with the answer in hand. The trigger is
+now checked against what we already hold before the stream is waited on.
+
+`AuthFlowService.create` takes an optional `spawner`, matching ClaudeAuthService's
+`pexpect_spawner`, so the case has a test instead of only a manual run.
