@@ -1223,6 +1223,34 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     assert "finish_report_path: " in frontmatter_template
 
 
+def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
+    """Every ``update_self.py`` invocation from Step 3 on must use the staged copy.
+
+    From Step 3 the lead follows the staged target-version prose, but a relative
+    ``.agents/skills/update-self/scripts/update_self.py`` resolves to the
+    *workspace's own* copy, which is whatever release the workspace is still
+    on. For the ``run-status`` writes (delegate, hold, resume, verdict) that
+    copy may predate the subcommand entirely, so a local-path invocation fails
+    exactly on the first update into the release that ships it -- the runs
+    those records exist for. Only Step 1's ``run-status start`` runs before
+    anything is staged and stays local.
+    """
+    skill_md = (_MODULE_PATH.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+    below_step_3 = skill_md[skill_md.index("## 3. Dispatch the worker") :]
+    joined = below_step_3.replace("\\\n", " ")
+    invocations = [
+        line
+        for line in joined.splitlines()
+        if line.startswith("python3 ") and "update_self.py" in line
+    ]
+    # The commands this guard exists for; without them it is vacuous.
+    assert any("run-status delegate" in line for line in invocations)
+    assert any("run-status hold" in line for line in invocations)
+    staged = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
+    strays = [line for line in invocations if staged not in line]
+    assert strays == []
+
+
 # ==== The atomic apply =========================================================
 #
 # The orchestration tests inject a recording ``Runner`` (so no real
