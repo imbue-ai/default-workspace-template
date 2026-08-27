@@ -80,6 +80,69 @@
   --color-info: #166fc7;
 }
 
+/*
+ * Elevation, copied from the mockup. `overlay` is the soft shadow for anything floating above
+ * the page -- menus, modals, tooltips -- which is most of the combo card. Without it those
+ * surfaces render as white boxes on white with only a hairline border, and nothing reports it.
+ */
+@theme {
+  --shadow-raised: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-overlay: 0 0px 2px 0px rgb(0 0 0 / 0.08), 0 3px 8px 2px var(--tw-shadow-color, rgb(0 0 0 / 0.08));
+}
+
+/*
+ * The mockup's type ramp, copied verbatim. Each bundles size + weight + line-height into one
+ * utility; COLOR is orthogonal, composed with text-primary / -secondary / -tertiary.
+ *
+ * Registered for the same reason as the color tokens above: the mockup's markup says
+ * `type-helper`, and an unknown utility in Tailwind v4 emits NOTHING -- so a ported row would
+ * silently take the inherited font size and read as nearly-right rather than wrong.
+ */
+@utility type-heading-lg {
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+  font-weight: 700;
+}
+@utility type-heading {
+  font-size: var(--text-lg);
+  line-height: 1.333;
+  font-weight: 600;
+}
+@utility type-label {
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  font-weight: 600;
+}
+@utility type-body {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  font-weight: 400;
+}
+@utility type-helper {
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  font-weight: 400;
+}
+@utility type-section {
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+@utility type-subsection {
+  font-size: 10px;
+  line-height: 1.3;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+@utility type-badge {
+  font-size: 10px;
+  line-height: 12px;
+  font-weight: 700;
+}
+
 body {
   font-family: var(--font-family-base);
   font-size: 15px;

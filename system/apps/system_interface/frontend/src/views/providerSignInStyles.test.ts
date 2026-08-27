@@ -89,4 +89,19 @@ describe("the ported sign-in styles", () => {
       expect(defined, `--color-${token} is missing`).toContain(token);
     }
   });
+
+  it("defines the mockup's @utility ramp and shadows", () => {
+    // Colour was only half of it. The mockup also bundles size/weight/line-height into
+    // `type-*` utilities and its elevation into `shadow-*`, and the combo card uses both --
+    // `type-helper` eleven times in ModelBar.tsx alone. Same silent failure mode: Tailwind v4
+    // emits nothing for an unknown utility, so a ported row just takes the inherited size and
+    // reads as nearly-right rather than wrong.
+    for (const utility of ["type-heading", "type-label", "type-body", "type-helper", "type-section", "type-badge"]) {
+      // The trailing brace matters: without it `type-helper` matches `type-helper-renamed`.
+      expect(STYLE_SHEET, `@utility ${utility} is missing`).toContain(`@utility ${utility} {`);
+    }
+    for (const shadow of ["--shadow-raised", "--shadow-overlay"]) {
+      expect(STYLE_SHEET, `${shadow} is missing`).toContain(shadow);
+    }
+  });
 });

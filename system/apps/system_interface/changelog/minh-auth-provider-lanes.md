@@ -822,3 +822,18 @@ establishes that codex's daemon re-reads its auth file either. One rule for all 
 than a per-harness table built on untested assumptions: a restart after a deliberate sign-in is
 cheap, and guessing wrong the other way leaves a chat dead with nothing on screen to say why.
 A FAILED re-auth restarts nothing -- the account still holds the credential it had.
+
+# Finish the mockup's token layer: type and elevation, not just colour
+
+Registering the mockup's colour names covered a third of the problem. Its markup also uses
+`@utility type-*` -- one utility bundling size, weight and line-height -- and `shadow-overlay`
+for anything floating above the page. Neither existed here: `grep -c` returned 0 while the
+combo card's source uses `type-helper` eleven times and `shadow-overlay` three.
+
+Both fail exactly the way the colours did. Tailwind v4 emits nothing at all for an unknown
+utility, so a ported row silently takes the inherited font size and a floating panel renders as
+a white box on white with a hairline border. No build error, no lint error, no type error.
+
+Both are copied verbatim, and the style guard now checks utilities and shadows alongside
+colours -- verified by renaming one and watching it fail, which the first version of the
+assertion did not catch because it matched on a prefix.
