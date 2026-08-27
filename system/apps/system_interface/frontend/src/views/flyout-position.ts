@@ -2,9 +2,9 @@
  * Pure geometry for a side flyout -- a submenu that opens BESIDE its parent panel,
  * top-aligned with the row that triggered it.
  *
- * Sibling of `dropdown-position.ts`, which owns the horizontal-only case (a popup under
- * its trigger). A flyout needs both axes and a height cap, and it opens against a panel
- * rather than a label, so the rules are different enough to keep apart.
+ * Replaced `dropdown-position.ts`, which handled the horizontal-only case (a popup under its
+ * trigger) for the model bar this card supersedes. A flyout needs both axes, a height cap and
+ * a side to flip to, and nothing else wanted the old one.
  *
  * Kept free of the DOM so it is unit-testable; the caller measures the live rects and
  * feeds them in.
