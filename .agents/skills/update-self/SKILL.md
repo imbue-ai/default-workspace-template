@@ -408,17 +408,34 @@ BODY_EOF
 } > data/.tasks/update-self/task.md
 ```
 
+First clear the previous pass's worker, which Step 6 leaves *stopped* rather
+than destroyed (so its transcript stays reachable for bug reports). Look it up;
+a worker of that name whose state is `STOPPED` or `DONE` is destroyed (its
+`mngr/update-self` branch survives in the shared object store); one in any
+other state is still running, which is a genuine conflict -- resolve it per
+the lease check in Step 1 rather than forcing past it:
+
+```bash
+mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
+```
+
+```bash
+mngr destroy update-self --force
+```
+
+This is done with plain `mngr` commands rather than a launcher flag on
+purpose: this document runs from the *target* version's copy of the skill
+(Step 2a) but launches with the workspace's *own* `launch-task/create_worker.py`,
+which may be older, so everything here asks of the launcher only what every
+supported version of it provides (`scripts/launcher_contract_test.py` pins
+that set).
+
 Launch with the plain `worker` template (this flow uses its own worker guidance,
-not the generic `harden-worker`), then background-poll (`run_in_background:
-true`), re-arming per `lead-proxy.md`. `--destroy-existing` clears the previous
-pass's worker, which Step 6 leaves *stopped* rather than destroyed (so its
-transcript stays reachable for bug reports); a previous worker that is still
-running is a genuine conflict and the launch refuses it -- resolve that per the
-lease check in Step 1 rather than forcing past it:
+not the generic `harden-worker`):
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name update-self --template worker --destroy-existing \
+    --name update-self --template worker \
     --runtime-dir data/.tasks/update-self/ --task-file data/.tasks/update-self/task.md
 ```
 
