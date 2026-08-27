@@ -16,12 +16,10 @@ from versioning.trailers import parse_git_log_output
 
 _GIT_TIMEOUT_SECONDS: Final[float] = 30.0
 
-# A binary file's churn has no line count ("-" in numstat); count it as a fixed weight.
 _BINARY_FILE_LINE_WEIGHT: Final[int] = 40
 
 _SHA_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{40}$")
 
-# These control characters cannot appear in commit messages.
 _LOG_FIELD_SEPARATOR: Final[str] = "\x1f"
 _LOG_RECORD_SEPARATOR: Final[str] = "\x1e"
 LOG_FORMAT: Final[str] = (
@@ -142,7 +140,6 @@ class SubprocessGitRepo(GitRepoInterface):
         return self._run_git(["rev-parse", "HEAD"]).strip()
 
     def restore_path_to_commit(self, sha: str, relative_path: str) -> None:
-        # rm-then-checkout so files added after the sha disappear; changes are left staged.
         logger.debug("Restoring {} to {}", relative_path, sha)
         self._run_git(["rm", "-r", "-q", "-f", "--ignore-unmatch", "--", relative_path])
         self._run_git(["checkout", sha, "--", relative_path])

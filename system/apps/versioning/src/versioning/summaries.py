@@ -77,7 +77,6 @@ def read_cached_summary(cache_dir: Path, sha: str) -> VersionSummary | None:
 def generate_and_cache_summary(
     cache_dir: Path,
     sha: str,
-    # The Versioning-Request trailer, used verbatim as the title when present.
     request_title: str | None,
     commit_message: str,
     diff_excerpt: str,

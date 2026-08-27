@@ -38,13 +38,11 @@ def test_replace_program_block_leaves_every_other_program_untouched() -> None:
     assert replaced is not None
     assert "--icon-file" not in replaced
     assert "command=uv run curio\n" in replaced
-    # The neighbours keep their own definitions, byte for byte.
     assert "[supervisord]\nnodaemon=true\n" in replaced
     assert "[program:files]\ncommand=uv run files\n" in replaced
 
 
 def test_replace_program_block_keeps_the_next_section_on_its_own_line() -> None:
-    # A block taken from the end of another file has no trailing newline of its own.
     replaced = replace_program_block(_CONFIG, "curio", "[program:curio]\ncommand=uv run curio")
 
     assert replaced is not None

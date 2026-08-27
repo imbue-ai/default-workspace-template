@@ -1,10 +1,3 @@
-"""Helpers for calling headless ``claude -p`` (the keyless AI path).
-
-Adapted from the use-ai-integration skill's reference snippet
-(``.agents/skills/use-ai-integration/scripts/claude_p.py``), trimmed to the
-two entry points this service uses: ``claude_p_completion`` and ``claude_p_task``.
-"""
-
 from __future__ import annotations
 
 import json
@@ -50,9 +43,8 @@ class ClaudeResult(FrozenModel):
 
 
 def _child_env() -> dict[str, str]:
-    """Build the child environment: a copy of os.environ minus the session var."""
-    # An inherited MAIN_CLAUDE_SESSION_ID makes the child look like mngr's managed
-    # main session and trips its stop/readiness hooks, so it must be unset.
+    # An inherited MAIN_CLAUDE_SESSION_ID makes the child look like mngr's managed main
+    # session and trips its stop/readiness hooks.
     env = dict(os.environ)
     env.pop(_MAIN_CLAUDE_SESSION_ID, None)
     return env
@@ -67,12 +59,6 @@ def _build_argv(
     tools: str | None,
     permission_mode: str | None,
 ) -> list[str]:
-    """Assemble the ``claude -p`` argv. Pure, so flag emission is unit-testable.
-
-    ``tools`` is checked against ``None`` (not falsiness): the empty string is the
-    meaningful "disable every tool" value, distinct from "leave the flag off and
-    inherit the default tool set".
-    """
     argv = ["claude", "-p", prompt, "--output-format", "json"]
     if model:
         argv += ["--model", model]
@@ -88,12 +74,7 @@ def _build_argv(
 
 
 class _UsageModel(BaseModel):
-    """The ``usage`` block of a ``claude -p`` result, with token counts validated.
-
-    Extra keys are ignored (the block carries fields we do not surface), and each
-    count defaults to 0 so an absent field is fine; a present value that cannot be
-    read as an integer fails validation rather than silently reading as 0.
-    """
+    """The ``usage`` block of a ``claude -p`` result, with token counts validated."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -106,14 +87,8 @@ class _UsageModel(BaseModel):
 class _ResultModel(BaseModel):
     """A ``claude -p --output-format json`` result message, typed and validated.
 
-    The fields are optional with defaults because the payload shape differs by arm:
-    the **success arm** (``subtype == "success"``) carries ``result`` and
-    ``total_cost_usd``, while the **error arm** (``is_error`` true, e.g.
-    ``error_max_turns`` / ``error_during_execution``) carries ``errors`` and no
-    ``result``. ``_parse_result`` decides the arm and rejects the error arm or a
-    success arm missing its text. pydantic enforces each field's *type*, so a
-    wrong-typed ``result`` or ``total_cost_usd`` (or a non-object payload) raises
-    instead of slipping through.
+    Every field is optional because the success arm and the error arm carry
+    different ones; ``_parse_result`` decides which arm the payload is on.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -127,15 +102,7 @@ class _ResultModel(BaseModel):
 
 
 def _parse_result(data: object) -> ClaudeResult:
-    """Validate raw ``claude -p`` JSON into a ``ClaudeResult``, or raise.
-
-    ``data`` is the verbatim decoded JSON (any shape). It is validated into the
-    typed ``_ResultModel`` first -- a non-object payload or a wrong-typed field
-    raises ``ClaudeCLIError`` -- so the rest of this function reads typed
-    attributes rather than poking at an untyped object. The error arm and a
-    success arm with no ``result`` text both raise, so a maxed-out or failed run
-    surfaces instead of looking like an empty-text success.
-    """
+    """Validate raw ``claude -p`` JSON into a ``ClaudeResult``, or raise."""
     try:
         payload = _ResultModel.model_validate(data)
     except ValidationError as exc:
@@ -203,9 +170,6 @@ def claude_p_completion(
         tools="",
         permission_mode=None,
     )
-    # Isolated cwd: claude -p auto-discovers CLAUDE.md / .claude hooks from the
-    # working directory, so a throwaway dir keeps that project context out of the
-    # answer. Credentials come from the env, not the cwd, so auth is unaffected.
     with tempfile.TemporaryDirectory(prefix="claude_p_completion_") as cwd:
         return _run_blocking(argv, env=env, cwd=cwd)
 
@@ -216,18 +180,11 @@ def claude_p_task(
     system: str | None = None,
     append_system: str | None = None,
     model: str = _DEFAULT_MODEL,
-    # bypassPermissions is load-bearing: a headless run has no human to approve
-    # tool use, so otherwise Read/Write/Bash are auto-denied.
+    # A headless run has no human to approve tool use, so anything else auto-denies it.
     permission_mode: str | None = "bypassPermissions",
-    # None inherits the full default tool set; a comma-separated list restricts it.
     tools: str | None = None,
 ) -> ClaudeResult:
-    """One agentic task: tools enabled, run in the current (repo) working dir.
-
-    ``append_system`` layers task instructions on Claude Code's default agent
-    prompt; pass ``system`` to replace it outright (rare -- you usually want the
-    default agent here).
-    """
+    """One agentic task: tools enabled, run in the current (repo) working dir."""
     env = _child_env()
     argv = _build_argv(
         prompt,

@@ -27,9 +27,6 @@ def _commit(sha: str, subject: str, minutes: int, message_body: str = "") -> Com
 
 
 def test_two_commits_by_same_author_minutes_apart_are_two_nodes() -> None:
-    # Regression guard: science_explorer's real history is two commits by the same
-    # author eleven minutes apart, and they are two separate user requests. Any
-    # grouping heuristic that merges them makes the timeline lie.
     commits = [
         _commit("a" * 40, "science-explorer: a visual science encyclopedia", 0),
         _commit("b" * 40, "science-explorer: put the world behind an interface", 11),
@@ -68,7 +65,6 @@ def test_restore_trailer_redirects_parent_and_sets_aside_skipped_versions() -> N
     assert restore_node.restored_from_sha == "a" * 40
     assert restore_node.kind == VersionKind.RESTORE
     assert restore_node.is_current
-    # The skipped version is off the current lineage: set aside, not lost.
     assert nodes[1].is_set_aside
     assert not nodes[0].is_set_aside
 
@@ -87,8 +83,6 @@ def test_restore_trailer_pointing_outside_history_falls_back_to_previous_parent(
 
 
 def test_lineage_walk_terminates_on_a_malformed_restore_trailer_cycle() -> None:
-    # Regression guard: a hand-written restore trailer pointing at the commit's own
-    # sha forms a parent cycle; the lineage walk must terminate, not hang the service.
     self_restore_message = "Versioning-Restored-From: " + "b" * 40
     commits = [
         _commit("a" * 40, "news: first build", 0),
@@ -151,8 +145,6 @@ def test_discover_apps_includes_the_system_shell_titled_system(tmp_path: Path) -
 
 
 def test_discover_apps_carries_the_registered_program_and_icon(tmp_path: Path) -> None:
-    # The sidebar draws each app with its registered icon, so discovery must carry it
-    # across from the registry; an app the registry does not mention has neither.
     for app_dir in ("news_reader", "quiet_app"):
         (tmp_path / "system/apps" / app_dir).mkdir(parents=True)
     apps_toml = tmp_path / "apps.toml"

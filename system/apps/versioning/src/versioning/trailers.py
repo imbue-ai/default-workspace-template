@@ -1,5 +1,3 @@
-"""The Versioning-* commit trailer block: names, parsing, and serialization."""
-
 import re
 from datetime import datetime
 from typing import Final

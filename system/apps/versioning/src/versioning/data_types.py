@@ -70,13 +70,11 @@ class AppRef(FrozenModel):
     package_dir: str
     title: str
     program: str | None = None
-    # Authored by a skill, so untrusted: every surface that draws it must sanitize it.
     icon: str | None = None
 
 
 class CommitRecord(FrozenModel):
     sha: str
-    # The author name identifies the chat session that made the commit.
     author: str
     authored_at: datetime
     subject: str
@@ -96,7 +94,6 @@ class VersionNode(FrozenModel):
     restored_from_sha: str | None = None
     ported_from_sha: str | None = None
     is_current: bool = False
-    # Whether a later restore moved history off this version's arm.
     is_set_aside: bool = False
     change_stats: ChangeStats | None = None
 
@@ -122,7 +119,6 @@ class RestorePreview(FrozenModel):
     changed_file_count: int
     set_aside_node_count: int
     diff_stat: str
-    # Whether how the app gets started would change too, on top of the files.
     is_startup_config_changed: bool = False
 
 

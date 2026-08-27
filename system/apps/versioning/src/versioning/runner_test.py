@@ -23,7 +23,6 @@ def client(
     monkeypatch.setenv("VERSIONING_APPS_TOML", str(tmp_path / "missing-apps.toml"))
     runner = importlib.reload(versioning.runner)
     yield runner.app.test_client()
-    # Re-derive module globals from the real environment for any later import.
     monkeypatch.undo()
     importlib.reload(versioning.runner)
 
@@ -61,7 +60,6 @@ def test_history_payload_carries_labels_and_restorability(client) -> None:
     assert node["is_current"] is True
     assert node["when_label"]
     assert node["short_when_label"]
-    # The scratch commit records no kind, so it falls back to the generic noun.
     assert node["phrase"] == "A tiny change"
     assert json.loads(client.get("/api/app/nope/history").data)["error"]
 

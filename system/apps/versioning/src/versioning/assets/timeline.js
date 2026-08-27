@@ -1,8 +1,3 @@
-/* Versioning timeline, built from small Mithril components: a sidebar listing every
-   app, beside one column of that app's versions grouped by day and threaded onto a
-   connector line, newest first. Clicking a version expands it in place into a card
-   carrying its description, the single restore action, and a chat scoped to that
-   version. */
 "use strict";
 
 var APP_NAME = window.APP_NAME;
@@ -22,7 +17,6 @@ var S = {
 };
 
 function feedNodes() {
-  // Newest at the very top, down to the first version.
   return S.history ? S.history.nodes.slice().reverse() : [];
 }
 
@@ -31,7 +25,6 @@ function nodeBySha(sha) {
 }
 
 function selectNode(sha) {
-  // Only one version is open at a time; re-opening one keeps its chat thread.
   S.selectedSha = sha;
   S.restore = { reviewing: false, preview: null, status: null, isError: false, busy: false };
   S.tech.open = false;
@@ -49,8 +42,6 @@ function loadHistory() {
     document.title = "History - " + data.app.title;
     var current = data.nodes.find(function (n) { return n.is_current; });
     if (current) selectNode(current.sha);
-    // Summaries are requested per rendered row (VersionRow oncreate), so a long
-    // history does not fire a generation call for every hidden version at once.
   });
 }
 
@@ -94,7 +85,6 @@ function icon(name, size) {
       m("path", { d: "M3 3v5h5" }),
       m("path", { d: "M12 7v5l4 2" }),
     ],
-    // Stand-in for an app that registered no icon of its own.
     app: [m("rect", { x: 3, y: 3, width: 18, height: 18, rx: 4 })],
   };
   return m("svg.icon", {
@@ -107,10 +97,6 @@ function icon(name, size) {
 
 /* ── Sidebar: every app, with the one being browsed marked ── */
 
-/* An app's registered icon is markup a skill authored, so it is untrusted and is
-   never inlined as it stands. Only a single <svg> element survives, with nothing
-   that can run, navigate, or fetch; anything else falls back to the built-in
-   glyph. This mirrors the workspace UI's own gate (appIcon.ts). */
 function sanitizedAppIcon(markup) {
   if (typeof markup !== "string" || !/^\s*<svg[\s>]/i.test(markup) || !window.DOMPurify) return null;
   var clean = DOMPurify.sanitize(markup, {
@@ -171,7 +157,6 @@ var Header = {
 
 function baseTitle(node) { return node.summary ? node.summary.title : node.raw_title; }
 
-/* Versions cluster under "Today" / "Yesterday" / "August 20". */
 function dayKey(iso) {
   var d = new Date(iso);
   return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
@@ -188,16 +173,12 @@ function dayLabel(iso) {
   return d.toLocaleDateString("en-US", opts);
 }
 
-/* A restore's name is the whole description of it, so it is phrased as a
-   completed fact -- 'Restored from "X"'. Three earlier engines wrote it three
-   other ways, and all of them are re-read into that one form so the timeline
-   never mixes them. */
-var GENERIC_RESTORE = /^Restored .+ to an earlier version$/;   // oldest: names no target
-var WENT_BACK_TO = /^Went back to (".*"|an earlier version)$/; // previous wording
-var RESTORED_FROM = /^Restored from /;                         // current wording
+var OLDEST_RESTORE_NAME = /^Restored .+ to an earlier version$/;
+var PREVIOUS_RESTORE_NAME = /^Went back to (".*"|an earlier version)$/;
+var CURRENT_RESTORE_NAME = /^Restored from /;
 
 function isRestoreName(title) {
-  return GENERIC_RESTORE.test(title) || WENT_BACK_TO.test(title) || RESTORED_FROM.test(title);
+  return OLDEST_RESTORE_NAME.test(title) || PREVIOUS_RESTORE_NAME.test(title) || CURRENT_RESTORE_NAME.test(title);
 }
 
 function restoredFromTitle(targetTitle) {
@@ -207,21 +188,18 @@ function restoredFromTitle(targetTitle) {
 function rowTitle(node) {
   var title = baseTitle(node);
   if (!node.restored_from_sha) return title;
-  // Name the version actually pointed at rather than the text the engine froze
-  // into the commit: that text is truncated, and when the target was itself a
-  // restore it nests one restore's name inside another's.
   var target = nodeBySha(node.restored_from_sha);
   if (target) {
     var targetTitle = baseTitle(target);
     return restoredFromTitle(isRestoreName(targetTitle) ? null : targetTitle);
   }
-  var wentBack = WENT_BACK_TO.exec(title);
+  var wentBack = PREVIOUS_RESTORE_NAME.exec(title);
   if (wentBack) {
     var quoted = wentBack[1];
     var inner = quoted === "an earlier version" ? null : quoted.slice(1, -1);
     return restoredFromTitle(inner !== null && !isRestoreName(inner) ? inner : null);
   }
-  return GENERIC_RESTORE.test(title) ? restoredFromTitle(null) : title;
+  return OLDEST_RESTORE_NAME.test(title) ? restoredFromTitle(null) : title;
 }
 
 /* ── Collapsed row ── */
@@ -252,9 +230,6 @@ var VersionRow = {
 
 /* ── Expanded card ── */
 
-/* Two versions carry no "go back" button: the one the app is already on, and
-   every version of an app the engine will not rewind (it cannot safely restart
-   itself, or the workspace shell, from underneath a running restore). */
 function noRestoreReason(node) {
   if (node.is_current) return "This is the version the app is on right now.";
   return S.history.app.title + " can be browsed here, but going back has to be done from a chat.";
@@ -283,7 +258,6 @@ var VersionCard = {
               onclick: startRestoreReview,
               disabled: r.reviewing || r.busy,
             }, [icon("undo", 15), "Go back to this version"])
-              // A card with no button used to look broken; say why instead.
               : m(".no-restore-note", noRestoreReason(node)),
             m("button.tech-toggle", {
               "aria-expanded": String(S.tech.open),
@@ -314,8 +288,6 @@ var TimelineFeed = {
     var shown = nodes.slice(0, S.visibleCount);
     var remaining = nodes.length - shown.length;
 
-    // One block per calendar day: a labelled rule, then the day's nodes on a
-    // connector line of their own.
     var blocks = [];
     shown.forEach(function (n) {
       var key = dayKey(n.authored_at);
@@ -389,8 +361,6 @@ var RestoreConfirm = {
   },
 };
 
-/* An app can differ from a version by how it starts up even when every file matches,
-   so the files alone do not decide whether there is anything to go back to. */
 function isPreviewUnchanged(preview) {
   return preview.changed_file_count === 0 && !preview.is_startup_config_changed;
 }
@@ -432,7 +402,6 @@ function applyRestore(sha) {
 
 /* ── Chat, scoped to the open version ── */
 
-/* Assistant answers may arrive as markdown; render it, sanitized. */
 function renderAnswer(text) {
   if (window.marked && window.DOMPurify) {
     return m.trust(DOMPurify.sanitize(marked.parse(text)));
@@ -561,7 +530,6 @@ var App = {
   },
 };
 
-// Keyboard: up/down walk the feed (newest first).
 document.addEventListener("keydown", function (e) {
   if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
   if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;

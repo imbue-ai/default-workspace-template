@@ -22,8 +22,6 @@ from versioning.trailers import serialize_trailer_block
 _SUPERVISORCTL_TIMEOUT_SECONDS: Final[float] = 60.0
 _UV_SYNC_TIMEOUT_SECONDS: Final[float] = 300.0
 
-# Browse-only: restoring versioning would restart the service running the restore,
-# and the workspace shell's safe rollback path is the update-system-interface machinery.
 SELF_APP_NAME: Final[str] = "versioning"
 UNRESTORABLE_APP_NAMES: Final[frozenset[str]] = frozenset({SELF_APP_NAME, "system-interface"})
 
@@ -45,15 +43,8 @@ def _plan_startup_config_restore(
     git_repo: GitRepoInterface,
     app: AppRef,
     target_sha: str,
-# the whole supervisord config rewritten with the app's old startup entry back in place,
-# or None when the entry is already right or cannot be restored safely
 ) -> str | None:
-    """How an app was started is part of its version, so it has to travel back with the folder.
-
-    Restoring only the folder is how an app gets stranded: a version whose entry pointed at a
-    file that a later version deleted comes back with a startup command referring to something
-    that no longer exists, and the app crash-loops on a tab that never finishes loading.
-    """
+    """How an app was started is part of its version, so it has to travel back with the folder."""
     if app.program is None:
         return None
     config_path = git_repo.repo_root / SUPERVISORD_CONFIG_PATH
@@ -64,8 +55,6 @@ def _plan_startup_config_restore(
         return None
     target_block = extract_program_block(target_config_text, app.program)
     if target_block is None:
-        # The app was not supervised back then. Keeping today's entry leaves the restored
-        # code running, which beats unregistering the app and taking its tab away.
         logger.debug("Version {} of {} has no startup entry; keeping the current one", target_sha[:10], app.name)
         return None
     current_config_text = config_path.read_text()
@@ -87,7 +76,6 @@ def build_restore_preview(
     target_idx = next((idx for idx, node in enumerate(history.nodes) if node.sha == target_sha), None)
     if target_idx is None:
         raise RestoreError(f"No version '{target_sha}' for {history.app.name}")
-    # Positional, not time-based: commits in the same second tie on timestamps.
     later_nodes = [node for node in history.nodes[target_idx + 1 :] if not node.is_set_aside]
     return RestorePreview(
         target_sha=target_sha,
@@ -131,9 +119,7 @@ def restart_service(program: str) -> None:
 def reload_service_definition(program: str) -> None:
     """Bring a service back onto a startup entry that just changed under it.
 
-    A plain restart re-runs the *old* definition supervisord still holds in memory, so a
-    restored startup entry only takes effect once the config is re-read. The update is
-    scoped to this one program: another app mid-edit in the same file stays untouched.
+    A plain restart re-runs the old definition supervisord still holds in memory.
     """
     _run_supervisorctl(["reread"], "Could not re-read the service configuration")
     _run_supervisorctl(["update", program], f"Could not apply the restored startup settings for {program}")
@@ -154,7 +140,6 @@ def _sync_dependencies(repo_root: Path) -> None:
 
 
 def _refresh_open_tab(repo_root: Path, app_name: str) -> None:
-    # Best-effort: reloading the app's open tab is cosmetic, so a failure only logs.
     completed = subprocess.run(
         ["python3", "system/scripts/layout.py", "refresh", app_name],
         cwd=repo_root,
@@ -177,7 +162,6 @@ def perform_restore(
     if app.name in UNRESTORABLE_APP_NAMES:
         raise RestoreError(f"{app.title} can be browsed here but not restored")
     with operation_lock(lock_file):
-        # Save any in-progress edits first so nothing is silently lost.
         dirty_paths = git_repo.read_dirty_paths_under(app.package_dir)
         if len(dirty_paths) > 0:
             logger.debug("Saving {} in-progress files before restore", len(dirty_paths))
@@ -205,8 +189,6 @@ def perform_restore(
         )
         git_repo.restore_path_to_commit(target_sha, app.package_dir)
 
-        # Put the app's startup entry back alongside its folder, in the same commit: a version
-        # the app cannot actually start from is not one anybody can return to.
         restored_config_text = _plan_startup_config_restore(git_repo, app, target_sha)
         is_startup_config_restored = restored_config_text is not None
         if restored_config_text is not None:
@@ -229,7 +211,6 @@ def perform_restore(
             f"versioning: restore {app.name} to {target_sha[:10]}\n\n{restore_trailers}",
         )
 
-    # Revive the app outside the lock: the commit is durable at this point.
     is_dependency_sync_run = pyproject_before != pyproject_target
     if is_dependency_sync_run:
         _sync_dependencies(git_repo.repo_root)

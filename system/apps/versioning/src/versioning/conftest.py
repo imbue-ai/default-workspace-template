@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-# Every scratch repo commits under a fixed identity so tests are deterministic.
 _GIT_ENV_ARGS = [
     "-c",
     "user.name=Chat-Test",

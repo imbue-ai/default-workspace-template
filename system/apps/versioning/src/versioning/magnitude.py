@@ -1,5 +1,3 @@
-"""Deterministic sizing of a version's change, and the phrase that describes it."""
-
 from enum import auto
 from typing import Final
 
@@ -9,8 +7,6 @@ from imbue.imbue_common.pure import pure
 from versioning.data_types import ChangeStats
 from versioning.data_types import VersionKind
 
-# Each file counts this many lines on top of its line churn, so a change spread
-# across many files reads bigger than the same churn in one file.
 FILE_WEIGHT_LINES: Final[int] = 25
 
 
@@ -22,7 +18,6 @@ class MagnitudeTier(UpperCaseStrEnum):
     SWEEPING = auto()
 
 
-# Ascending upper bounds on the magnitude scalar; the last tier is unbounded.
 _TIER_CEILINGS: Final[tuple[tuple[float, MagnitudeTier], ...]] = (
     (60.0, MagnitudeTier.TINY),
     (250.0, MagnitudeTier.SMALL),
@@ -38,8 +33,6 @@ _ADJECTIVE_BY_TIER: Final[dict[MagnitudeTier, str]] = {
     MagnitudeTier.SWEEPING: "sweeping",
 }
 
-# Deliberately not the enum's own spelling: a bare kind word next to a size
-# reads like a control rather than a description.
 _NOUN_BY_KIND: Final[dict[VersionKind, str]] = {
     VersionKind.CHANGE: "update",
     VersionKind.FIX: "fix",

@@ -5,11 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>History</title>
 <style>
-/* The palette, type, and control shapes are the workspace interface's own
-   (system/apps/system_interface/frontend/src/style.css): system font, off-white
-   sidebar against a white reading surface, green accent, 6px corners. Keeping
-   them in step means the history of an app looks like it belongs to the same
-   product as the app. */
 :root {
   --bg: #fafaf8;
   --bg-sidebar: #f3f2ef;
@@ -49,9 +44,6 @@ button, input, textarea { font-family: var(--font); }
 .icon { flex: none; }
 
 /* ── Shell: app list on the left, the chosen app's history on the right ── */
-/* The app list and the history it belongs to are centred together as one block,
-   so the pair sits in the middle of whatever pane the app is given rather than
-   the list hugging the left edge with a gap beside it. */
 .shell { display: flex; justify-content: center; height: 100%; }
 .main {
   flex: 0 1 auto; width: 100%; max-width: 824px; min-width: 0;
@@ -60,10 +52,6 @@ button, input, textarea { font-family: var(--font); }
 .page { padding: 24px 32px 64px; }
 
 /* ── Sidebar ── */
-/* Always open, so the shape of the place is on screen at all times: apps here,
-   that app's versions next to it. Styled like the workspace's own Permissions
-   and Settings panels -- no fill of its own and no dividing rule, so it reads as
-   the left column of one surface. Only the app being browsed is filled in. */
 .sidebar {
   width: var(--sidebar-width); flex: none;
   display: flex; flex-direction: column;
@@ -108,8 +96,6 @@ button, input, textarea { font-family: var(--font); }
 .top-count { font-size: 12.5px; color: var(--faint); flex: none; }
 
 /* ── Day groups ── */
-/* A label with a rule running out to the edge, then the day's nodes threaded
-   onto a vertical connector. */
 .day-label-row { display: flex; align-items: center; gap: 10px; margin: 22px 0 4px; }
 .day-block:first-child .day-label-row { margin-top: 0; }
 .day-label {
@@ -134,7 +120,6 @@ button, input, textarea { font-family: var(--font); }
 }
 .row:hover { background: var(--bg-sidebar); }
 .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* The node cell is a fixed 12px column so every node centres on the connector. */
 .node-cell { flex: none; width: 12px; display: grid; place-items: center; }
 .node {
   width: 11px; height: 11px; border-radius: 50%;
@@ -165,8 +150,6 @@ button, input, textarea { font-family: var(--font); }
 .loading, .empty { padding: 24px 14px; color: var(--muted); font-size: 14px; }
 
 /* ── Expanded version card ── */
-/* Takes the place of its row in the flow, so details open under the node the
-   reader clicked. */
 .card {
   position: relative;
   margin: 8px 0;
@@ -206,8 +189,6 @@ button, input, textarea { font-family: var(--font); }
 .btn-restore:disabled { opacity: 0.55; cursor: default; }
 .btn-restore:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .no-restore-note { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
-/* The technical record stays reachable, but quietly: the restore button is the
-   card's only real action. */
 .tech-toggle {
   padding: 0; border: none; background: none;
   display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
@@ -276,7 +257,6 @@ button, input, textarea { font-family: var(--font); }
   0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-3px); }
 }
-/* Rendered markdown inside an answer bubble */
 .chat-a p, .chat-a ul, .chat-a ol { margin: 0 0 8px; }
 .chat-a > :last-child { margin-bottom: 0; }
 .chat-a ul, .chat-a ol { padding-left: 20px; }
@@ -291,7 +271,6 @@ button, input, textarea { font-family: var(--font); }
 .chat-a a { color: var(--accent); }
 .chat-a blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid var(--border); color: var(--muted); }
 .chat-note { align-self: flex-start; font-size: 11.5px; color: var(--muted); padding-left: 4px; }
-/* Openers for a version with nothing asked about it yet. */
 .chat-starters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .chip {
   padding: 6px 12px; border: 1px solid var(--border); border-radius: 99px;
@@ -327,7 +306,6 @@ button, input, textarea { font-family: var(--font); }
   :root { --sidebar-width: 168px; }
   .card-chat { padding-left: 20px; }
   .chat-q, .chat-a { max-width: 85%; }
-  /* Too narrow for the restore button and the record link side by side. */
   .card-actions { flex-direction: column; align-items: flex-start; gap: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {

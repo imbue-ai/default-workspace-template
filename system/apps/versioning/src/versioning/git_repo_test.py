@@ -27,8 +27,6 @@ def test_read_commits_touching_path_returns_only_app_commits_oldest_first(
 def test_read_commits_touching_path_skips_merged_branch_commits(
     scratch_repo: Path, commit_app_file: Callable[[str, str, str, str], str]
 ) -> None:
-    # A merge commit touching the app must not leak the merged branch's commits
-    # into the timeline: history follows first parents only.
     commit_app_file("news", "runner.py", "v1", "news: first build")
     run_git(scratch_repo, ["checkout", "-q", "-b", "side"])
     side_sha = commit_app_file("news", "extra.py", "side work", "news: side branch change")
@@ -119,7 +117,6 @@ def test_read_file_changes_of_commit_classifies_added_edited_removed(
 ) -> None:
     commit_app_file("news", "keep.py", "v1", "news: first build")
     commit_app_file("news", "gone.py", "bye", "news: add a file")
-    # One commit that edits keep.py, removes gone.py, and adds new.py.
     (scratch_repo / "system/apps/news/keep.py").write_text("v2")
     (scratch_repo / "system/apps/news/gone.py").unlink()
     (scratch_repo / "system/apps/news/new.py").write_text("hello")

@@ -1,8 +1,3 @@
-"""Per-version conversational helper: answer questions about a saved version, or
-apply a requested change to today's app. The agent edits files but never commits;
-this engine commits any resulting change as a new PORT version.
-"""
-
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -27,16 +22,12 @@ from versioning.trailers import serialize_trailer_block
 
 ASSIST_MODEL: Final[str] = "claude-sonnet-5"
 
-# Read-only tool surface for browse-only apps (versioning itself, the system).
 _READ_ONLY_TOOLS: Final[str] = "Read,Grep,Glob,Bash"
 
 _MAX_MESSAGE_CHARS: Final[int] = 1000
 _MAX_PRIOR_EXCHANGES: Final[int] = 6
 _MAX_TITLE_CHARS: Final[int] = 80
 
-# A callable that runs the agentic task and returns its final text; injected so
-# the engine is testable without a live model. Second argument: whether the
-# task may change files.
 AssistTaskRunner = Callable[[str, bool], str]
 
 
@@ -131,10 +122,7 @@ def perform_assist(
     lock_file: Path,
     task_runner: AssistTaskRunner,
 ) -> AssistOutcome:
-    """Run one exchange with the helper; commit its change (if any) as a new version.
-
-    Raises AssistError when the helper cannot run or the app is mid-edit.
-    """
+    """Run one exchange with the helper; commit its change (if any) as a new version."""
     with operation_lock(lock_file):
         dirty_before = git_repo.read_dirty_paths_under(app.package_dir)
         if len(dirty_before) > 0:
@@ -144,7 +132,6 @@ def perform_assist(
         try:
             response_text = task_runner(prompt, is_change_allowed)
         except AssistError:
-            # Drop any partial edits so a failed exchange never leaks into the app.
             if len(git_repo.read_dirty_paths_under(app.package_dir)) > 0:
                 git_repo.restore_path_to_commit("HEAD", app.package_dir)
             raise

@@ -124,12 +124,9 @@ def build_version_nodes(commits: list[CommitRecord]) -> list[VersionNode]:
             )
         )
 
-    # Walk back from the newest node to find the current lineage; everything off
-    # it was set aside by some restore.
     node_by_sha = {node.sha: node for node in bare_nodes}
     lineage_shas: set[str] = set()
     cursor: VersionNode | None = bare_nodes[-1]
-    # The sha check guards against a hand-written restore trailer forming a parent cycle.
     while cursor is not None and cursor.sha not in lineage_shas:
         lineage_shas.add(cursor.sha)
         cursor = node_by_sha.get(cursor.parent_sha) if cursor.parent_sha is not None else None

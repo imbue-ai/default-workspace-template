@@ -1,8 +1,3 @@
-"""Flask service for browsing an app's history as a timeline and restoring versions.
-
-See history.py for the tree derivation and restore.py for the restore engine.
-"""
-
 import json
 import os
 import threading
@@ -43,18 +38,10 @@ from versioning.restore import restart_service
 from versioning.summaries import generate_and_cache_summary
 from versioning.summaries import read_cached_summary
 
-# Persistent state for this app lives under DATA_DIR. It defaults to
-# ``data/.apps/versioning/`` but is overridable via the ``VERSIONING_DATA_DIR`` env var
-# so a throwaway instance can run against a *copy* of the data while editing --
-# see the update-app skill.
 DATA_DIR = Path(os.environ.get("VERSIONING_DATA_DIR", "data/.apps/versioning"))
 
-# Listen port. Defaults to this app's assigned port but is overridable via
-# the ``VERSIONING_PORT`` env var so an editing agent can boot a throwaway
-# instance on a spare port next to the live one (see the update-app skill).
 PORT = int(os.environ.get("VERSIONING_PORT", "8082"))
 
-# The shared repo this whole workspace lives in; services run from its root.
 REPO_ROOT = Path(os.environ.get("VERSIONING_REPO_ROOT", ".")).resolve()
 
 APPS_TOML_PATH = Path(os.environ.get("VERSIONING_APPS_TOML", "data/.state/apps.toml"))
@@ -84,7 +71,6 @@ def _error_response(error: Exception, status: int) -> Response:
 
 @app.route("/")
 def index() -> Response:
-    # The standalone entry: show the first app's timeline, or let ?app= pick one.
     requested = request.args.get("app")
     apps = discover_apps(REPO_ROOT, APPS_TOML_PATH)
     if len(apps) == 0:
@@ -261,7 +247,6 @@ def _run_assist_job(
     if outcome.new_version_sha is None:
         _write_assist_job(job_id, "done", outcome.answer)
         return
-    # The helper changed the app: revive it so the change is live immediately.
     answer = outcome.answer
     try:
         if app_ref.program is not None:
@@ -277,7 +262,6 @@ def start_assist(app_name: str) -> Response:
     sha = body.get("sha")
     message = body.get("message")
     raw_prior = body.get("prior", [])
-    # A non-dict prior item would crash the worker thread and strand the job as "running".
     prior_exchanges = [item for item in raw_prior if isinstance(item, dict)] if isinstance(raw_prior, list) else []
     if not isinstance(sha, str) or not isinstance(message, str) or not message.strip():
         return _json_response({"error": "Expected JSON body with sha and message"}, status=400)

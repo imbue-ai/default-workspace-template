@@ -18,16 +18,13 @@ def test_version_phrase_folds_size_and_kind_into_one_noun_phrase() -> None:
     assert version_phrase(VersionKind.FIX, small) == "A small fix"
     assert version_phrase(VersionKind.CHANGE, sweeping) == "A sweeping update"
     assert version_phrase(VersionKind.HARDEN, small) == "A small background tidy-up"
-    # Commits from before the trailer convention record no kind at all.
     assert version_phrase(None, small) == "A small change"
 
 
 def test_version_phrase_is_absent_where_the_versions_own_name_already_says_it() -> None:
     small = ChangeStats(files_changed=1, lines_changed=100)
 
-    # A restore is named "Restored from ...", so a phrase under it would repeat it.
     assert version_phrase(VersionKind.RESTORE, small) is None
-    # An unmeasurable diff has no size to report.
     assert version_phrase(VersionKind.FIX, None) is None
     assert version_phrase(VersionKind.BUILD, small) == "The first build"
     assert version_phrase(VersionKind.PORT, small) == "Brought back from an earlier version"
