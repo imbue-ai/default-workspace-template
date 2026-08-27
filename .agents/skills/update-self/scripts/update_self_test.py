@@ -1206,12 +1206,19 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     those records exist for. Only Step 1's ``run-status start`` runs before
     anything is staged and stays local.
     """
-    skill_md = (_MODULE_PATH.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+    skill_dir = _MODULE_PATH.parent.parent
+    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     below_step_3 = skill_md[skill_md.index("## 3. Dispatch the worker") :]
-    joined = below_step_3.replace("\\\n", " ")
+    # The references are all read after the handoff, so every invocation in
+    # them is held to the same rule.
+    prose = [below_step_3] + [
+        path.read_text(encoding="utf-8")
+        for path in sorted((skill_dir / "references").glob("*.md"))
+    ]
     invocations = [
         line
-        for line in joined.splitlines()
+        for text in prose
+        for line in text.replace("\\\n", " ").splitlines()
         if line.startswith("python3 ") and "update_self.py" in line
     ]
     # The commands this guard exists for; without them it is vacuous.
