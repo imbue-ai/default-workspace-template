@@ -20,6 +20,12 @@ ENV CODEX_VERSION=${CODEX_VERSION}
 # with the defaults there. Bump deliberately, not by accident.
 ARG NODE_VERSION=22.23.2
 ENV NODE_VERSION=${NODE_VERSION}
+# Playwright's own CLI: the agent's entire browser-driving interface. The fleet
+# (agentic-browser-fleet) owns browsers; this drives them, over the gated CDP endpoint
+# the fleet prints. NOTE it is "@playwright/cli" -- the bare "playwright-cli" package on
+# npm is a deprecated stub.
+ARG PLAYWRIGHT_CLI_VERSION=0.1.18
+ENV PLAYWRIGHT_CLI_VERSION=${PLAYWRIGHT_CLI_VERSION}
 ARG PI_VERSION=0.83.0
 ENV PI_VERSION=${PI_VERSION}
 ARG OPENCODE_VERSION=1.18.19

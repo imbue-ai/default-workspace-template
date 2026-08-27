@@ -63,10 +63,6 @@ dev = [
 
 [tool.uv]
 package = false
-# browser-use pins openai==2.16.0 but litellm needs openai>=2.20.0. We drive
-# browser-use with ChatAnthropic (not the OpenAI path), so its openai pin is
-# unused at runtime; override it so the single workspace lock resolves. See system/apps/browser.
-override-dependencies = ["openai>=2.20.0"]
 
 [tool.uv.workspace]
 # The globs cover every package in the three-way system/ split -- built-in
