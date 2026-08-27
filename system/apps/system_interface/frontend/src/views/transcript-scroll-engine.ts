@@ -351,13 +351,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   }
 
   function dispatchPosition(event: ScrollPositionEvent): void {
+    // The reducer returns the same reference only when nothing changed (a
+    // re-anchor is always a fresh object), so identity is the full no-op test.
     const next = reduceScrollPosition(positionState, event);
     if (next !== positionState) {
       trace?.record("transition", { from: positionState.kind, to: next.kind, event: event.kind });
-      positionState = next;
-      schedulePersist();
-    } else if (event.kind === "USER_SCROLLED" && next.kind === "USER_CONTROLLED") {
-      // Same kind but a fresh anchor object: still a state update worth persisting.
       positionState = next;
       schedulePersist();
     }
