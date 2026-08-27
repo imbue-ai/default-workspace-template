@@ -138,6 +138,18 @@ _FLEET_ARGS = (
     # Maps the (0,0,w,h) capture region 1:1 to window pixels so the human's input
     # coordinates stay correct. Load-bearing for the streaming path.
     "--window-position=0,0",
+    # Declare English explicitly rather than inheriting whatever locale the base image
+    # happens to have. `--lang` sets Chrome's UI locale; `--accept-lang` sets the
+    # Accept-Language header outright, so it does not matter whether LANG/LC_ALL are set
+    # in the container at all.
+    #
+    # This fixes any site that honours Accept-Language. It does NOT fix Google, which
+    # falls back to IP geolocation for its consent interstitial -- and our egress is an
+    # OVH range that is physically in Oregon but carries French registration metadata
+    # (RIPE lists 51.81.0.0/16 as non-RIPE-managed with country EU, and the org is OVH
+    # SAS, Roubaix). For Google the lever is `hl=en` in the URL; see _HOME_URL.
+    "--lang=en-US",
+    "--accept-lang=en-US,en",
 )
 
 
