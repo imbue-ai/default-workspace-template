@@ -45,8 +45,10 @@ from imbue.system_interface.harnesses.binding import account_env
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.binding import seed_account
 from imbue.system_interface.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
+from imbue.system_interface.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.system_interface.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.system_interface.harnesses.claude.auth import parse_credential_lines
+from imbue.system_interface.harnesses.claude.auth import record_api_key_approval
 from imbue.system_interface.harnesses.lanes import DrainUntil
 from imbue.system_interface.harnesses.lanes import EofPolicy
 from imbue.system_interface.harnesses.lanes import Lane
@@ -437,8 +439,31 @@ class AuthFlowService:
         if not (said_success or exited_meaning_success or not alive or probe_is_the_only_verdict):
             return FlowStatus(state=FlowState.PENDING)
 
-        # The CLI is done talking. Its own probe, not the screen, decides.
+        # The CLI is done talking.
         path = accounts.account_dir(session.account_id, self._home)
+
+        # `claude setup-token` prints a token and persists nothing -- the credential store
+        # write happens only on the other arm of its OAuth completion. So for a method that
+        # declares a result, the value has to be scraped off the screen and written into the
+        # account before anything asks whether the account works; otherwise the probe reads
+        # an empty folder and the flow fails with a valid 1-year token on screen.
+        if method.result_scrape is not None and method.result_sink is not None:
+            result = _extract(session.output, method.result_scrape, method.frame_marker)
+            if result is None:
+                # Nothing printed yet. If the CLI has also exited, nothing is coming.
+                if alive:
+                    return FlowStatus(state=FlowState.PENDING)
+                self._fail_locked(session, "The sign-in finished without printing a token.")
+                return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+            with _restored_on_failure(_credential_paths(method.result_sink, path)) as restore:
+                _write_paste(method.result_sink, path, result, None, session.lane)
+                if self._probe(session.lane.harness, path) is SignedIn.NO:
+                    restore()
+                    self._fail_locked(session, "The token that was minted was not accepted.")
+                    return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+            return self._commit_locked(session, session.lane.provider_name)
+
+        # Its own probe, not the screen, decides.
         verdict = self._probe(session.lane.harness, path)
         if verdict is SignedIn.YES:
             return self._commit_locked(session, session.lane.provider_name)
@@ -513,6 +538,10 @@ def _binary_for(lane: Lane) -> str:
     return {"pi-coding": "pi", "antigravity": "agy"}.get(lane.harness.value, lane.harness.value)
 
 
+# The prefix claude stamps on a `setup-token` result. Mirrors `_CLAUDE_TOKEN_SCRAPE`.
+_OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat01-"
+
+
 def claude_env_from_paste(pasted: str) -> dict[str, str]:
     """The managed settings-env block a claude paste means.
 
@@ -523,6 +552,11 @@ def claude_env_from_paste(pasted: str) -> dict[str, str]:
     """
     if "=" in pasted:
         return dict(parse_credential_lines(pasted))
+    # A long-lived subscription token and an API key are different managed keys, and claude
+    # reads them from different variables. The `setup_token` method scrapes one of these off
+    # the screen, and users paste them into the key field too.
+    if pasted.startswith(_OAUTH_TOKEN_PREFIX):
+        return {CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: pasted}
     return {ANTHROPIC_API_KEY_ENV_VAR: pasted}
 
 
@@ -537,6 +571,11 @@ def write_claude_env(account_path: Path, managed_env: Mapping[str, str]) -> None
     kept = {k: v for k, v in dict(existing.get("env", {})).items() if k not in MANAGED_AUTH_ENV_KEYS}
     existing["env"] = {**kept, **managed_env}
     settings.write_text(json.dumps(existing, indent=2) + "\n")
+    # Interactive claude challenges any ANTHROPIC_API_KEY it has not been told about -- a TUI
+    # dialog that blocks the agent before it ever signals ready, so `mngr create` destroys it
+    # on the readiness timeout. mngr approves keys it can see at creation time; a key that
+    # arrives through a sign-in is ours to approve, in this account's own .claude.json.
+    record_api_key_approval(managed_env, account_path / ".claude.json")
     settings.chmod(0o600)
 
 

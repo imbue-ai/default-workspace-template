@@ -232,10 +232,11 @@ def test_a_cli_that_never_announces_success_is_decided_by_its_probe(tmp_path: Pa
     # The CLI is alive and silent, exactly as agy is after a successful sign-in.
     status = service.submit_code(started.flow_id, "4/0Aexample")
 
-    # It reached the probe rather than parking on PENDING. The probe itself answers NO here
-    # (nothing signed in under a tmp account dir), which is a verdict, not a hang.
-    assert status.state in (FlowState.OK, FlowState.PENDING)
-    assert service._session is not None and service._session.code_submitted
+    # It reached the probe rather than parking on PENDING. Accepting PENDING here would have
+    # accepted the very bug this test is named after: the fixture's probe says YES, so
+    # reaching it means OK and not reaching it means PENDING -- both used to pass.
+    assert status.state is FlowState.OK
+    assert service._session is None, "a committed flow is torn down"
 
 
 def test_the_probe_is_not_run_before_the_code_is_handed_over(tmp_path: Path) -> None:
@@ -349,3 +350,103 @@ def test_an_account_id_that_is_a_path_is_refused(service: AuthFlowService) -> No
     for hostile in ("../..", "/home/user/workspace", "../../.claude"):
         with pytest.raises((FlowError, AccountError)):
             service.start("opencode-go", "api_key", account_id=hostile)
+
+
+# ----- a method whose credential is printed, not persisted by the CLI ---------------------
+
+_OAT = "sk-ant-oat01-" + "A" * 80
+
+
+def test_a_minted_token_is_written_into_the_account(tmp_path: Path) -> None:
+    """`claude setup-token` prints a 1-year token and persists NOTHING -- its credential-store
+    write is on the other arm of the OAuth completion. The token has to come off the screen
+    and into the account, or the probe reads an empty folder and the flow fails with a valid
+    token sitting in the pane."""
+    process = FakePexpectProcess(
+        [(0, "Visit https://claude.ai/oauth/authorize?code=1")],
+        drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n", f"{_OAT}\r\n"],
+    )
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.YES,
+    )
+    started = service.start("anthropic", "setup_token")
+    process.exit()
+
+    status = service.poll(started.flow_id)
+
+    assert status.state is FlowState.OK
+    (account,) = read_index(tmp_path).accounts
+    settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
+    assert settings["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": _OAT}
+
+
+def test_a_token_flow_that_prints_nothing_fails_rather_than_committing(tmp_path: Path) -> None:
+    """Committing here would offer an account whose folder holds no credential at all."""
+    process = FakePexpectProcess(
+        [(0, "Visit https://claude.ai/oauth/authorize?code=1")],
+        drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n"],
+    )
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.YES,
+    )
+    started = service.start("anthropic", "setup_token")
+    process.exit()
+
+    assert service.poll(started.flow_id).state is FlowState.FAILED
+    assert read_index(tmp_path).accounts == ()
+
+
+def test_a_token_flow_still_running_keeps_waiting(tmp_path: Path) -> None:
+    """The token appears well after the URL does; a poll in between is not a failure."""
+    process = FakePexpectProcess(
+        [(0, "Visit https://claude.ai/oauth/authorize?code=1")],
+        drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n"],
+    )
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.YES,
+    )
+    started = service.start("anthropic", "setup_token")
+
+    assert service.poll(started.flow_id).state is FlowState.PENDING
+
+
+def test_a_bare_oauth_token_pasted_into_the_key_field_is_not_read_as_an_api_key(
+    tmp_path: Path,
+) -> None:
+    """They are different managed keys and claude reads them from different variables, so
+    filing a token under ANTHROPIC_API_KEY leaves the account signed out."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
+    started = service.start("anthropic", "api_key")
+
+    service.submit_key(started.flow_id, _OAT)
+
+    (account,) = read_index(tmp_path).accounts
+    settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
+    assert settings["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": _OAT}
+
+
+def test_a_pasted_api_key_is_approved_so_claude_does_not_challenge_it(tmp_path: Path) -> None:
+    """Interactive claude blocks on a "do you want to use this API key?" dialog for any key
+    it has not been told about -- and blocks before signalling ready, so `mngr create`
+    destroys the agent on its readiness timeout."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
+    started = service.start("anthropic", "api_key")
+
+    service.submit_key(started.flow_id, "sk-ant-api03-" + "B" * 40)
+
+    (account,) = read_index(tmp_path).accounts
+    config = json.loads((tmp_path / ".minds" / "accounts" / account.id / ".claude.json").read_text())
+    assert config["customApiKeyResponses"]["approved"], "the key was not pre-approved"

@@ -560,3 +560,28 @@ history with it -- the chats did not just stop working, they rendered empty. Dis
 account now removes its credentials and leaves `projects/` alone, and the boot reconcile leaves
 a folder holding only that behind rather than sweeping it as debris. Signing in again is
 recoverable; a deleted transcript is not.
+
+# Finish the long-lived token sign-in, and stop the promote gate rubber-stamping
+
+`Get a long-lived token` minted a real 1-year token and wrote it nowhere: the method declared
+where the token should be scraped from and written to, and nothing read either field. It now
+takes the token off the screen and into the account before asking whether the account works --
+`claude setup-token` persists nothing itself, so without that the probe reads an empty folder
+and the sign-in fails with a valid token sitting in the pane.
+
+A bare `sk-ant-oat01-` value pasted into the API-key field is filed as a token rather than as an
+API key. They are different managed keys and claude reads them from different variables, so the
+old behaviour left the account signed out.
+
+A pasted API key is now pre-approved in the account's own `.claude.json`. Interactive claude
+challenges any key it has not been told about, and it does so before signalling ready -- so the
+agent was destroyed on its readiness timeout rather than starting.
+
+Both promote probes could only answer yes:
+
+- pi's matched text pi prints when asked to take a turn, not when asked to list models. Signed
+  out, `pi --list-models` says "No models available" and exits zero, so every key was accepted.
+- claude's ran with the server's own environment, and `claude auth status --json` reports
+  logged-in on an ambient `ANTHROPIC_API_KEY` alone. On a workspace upgraded from the
+  shared-login era, an empty account folder committed as signed in, became the default, and
+  launched every later chat with no credential.
