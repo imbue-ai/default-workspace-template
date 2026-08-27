@@ -496,7 +496,7 @@ python3 .agents/skills/update-self/scripts/update_self.py run-status hold CUSTOM
 (`CONFLICT` for the breaking-conflict case above.) The detail line is shown
 in the app's modal, so write it for the user, not for the worker. When they
 answer, clear it -- `run-status hold` is what put the machine on "waiting for
-you", and nothing else takes it off:
+you", and nothing short of the pass's verdict takes it off:
 
 ```bash
 python3 .agents/skills/update-self/scripts/update_self.py run-status resume
