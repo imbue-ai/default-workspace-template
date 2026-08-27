@@ -497,16 +497,41 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     if (Math.abs(remainingPx) <= 1) {
       writeScrollTop(element, smoothTargetPx, smoothReason);
       smoothTargetPx = null;
+      realignAnchorToGlide();
       m.redraw();
       return;
     }
     const stepPx = Math.sign(remainingPx) * Math.max(SMOOTH_MIN_STEP_PX, Math.abs(remainingPx) * SMOOTH_STEP_FRACTION);
     const nextPx = Math.abs(stepPx) >= Math.abs(remainingPx) ? smoothTargetPx : element.scrollTop + stepPx;
     writeScrollTop(element, nextPx, smoothReason);
+    realignAnchorToGlide();
     // Keep the mounted window tracking the gliding viewport (echo-consumed
     // scroll events do not redraw on their own).
     m.redraw();
     smoothRafId = requestAnimationFrame(smoothStep);
+  }
+
+  /**
+   * Keep a USER_CONTROLLED anchor in lockstep with an engine glide. The glide's
+   * writes are echo-tracked, so their scroll events never re-anchor through the
+   * state machine; without this the anchor stays where the glide STARTED, and
+   * the next content change (a measurement landing, a spacer update) would
+   * anchor-hold the viewport back there -- a backward teleport undoing the end
+   * of a scrollbar drag -- and persistence would store that stale position.
+   */
+  function realignAnchorToGlide(): void {
+    if (positionState.kind !== "USER_CONTROLLED" || pendingRestore !== null) {
+      return;
+    }
+    const anchor = anchorForUser();
+    if (
+      anchor !== null &&
+      (anchor.rowKey !== positionState.anchor.rowKey || anchor.offsetPx !== positionState.anchor.offsetPx)
+    ) {
+      trace?.record("glide-realign", { anchor });
+      positionState = { kind: "USER_CONTROLLED", anchor };
+      schedulePersist();
+    }
   }
 
   function smoothWriteScrollTop(element: HTMLElement, targetPx: number, reason: string): void {
