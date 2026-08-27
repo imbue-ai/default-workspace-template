@@ -108,17 +108,6 @@ class BackupCapabilities(FrozenModel):
         default=120.0,
         description="Hard cap on how long to wait for the outer helper's result.json",
     )
-    max_local_snapshots: int = Field(
-        default=1,
-        ge=1,
-        description=(
-            "outer_trigger only: how many on-host btrfs snapshots to retain. "
-            "Each tick creates a new timestamped snapshot and deletes the "
-            "oldest beyond this count. One is enough: restic reads only the "
-            "newest, and every retained snapshot pins its CoW delta on the "
-            "slice's data disk. Ignored by btrfs_local and direct."
-        ),
-    )
 
 
 def detect_backup_capabilities(
