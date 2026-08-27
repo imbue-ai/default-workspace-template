@@ -5110,6 +5110,54 @@ def test_run_status_hold_and_resume_round_trip(tmp_path, monkeypatch) -> None:
     assert resumed.chat_agent_name == "update-lead"
 
 
+def test_run_status_delegate_names_the_worker_until_the_verdict(
+    tmp_path, monkeypatch
+) -> None:
+    # The lead's chat sits idle while the worker runs, which the app would
+    # otherwise read as "waiting for the user"; the record names the worker
+    # so the app can look at it instead, and the verdict takes the name off.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    assert (
+        update_self.main(
+            ["run-status", "delegate", "update-self", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+    delegated = update_self.read_run_status(tmp_path)
+    assert delegated is not None
+    assert delegated.worker_agent_name == "update-self"
+    assert delegated.chat_agent_name == "update-lead"
+    assert delegated.verdict is None
+
+    assert (
+        update_self.main(
+            ["run-status", "verdict", "UPDATED", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+    ended = update_self.read_run_status(tmp_path)
+    assert ended is not None
+    assert ended.worker_agent_name is None
+
+
+def test_run_status_start_clears_the_previous_runs_worker(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    assert (
+        update_self.main(
+            ["run-status", "delegate", "update-self", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.worker_agent_name is None
+
+
 def test_run_status_verdict_clears_a_hold(tmp_path, monkeypatch) -> None:
     # Declining at the hold ends the pass with REFUSED; the record must not
     # keep saying the run is waiting for an answer it already got.
