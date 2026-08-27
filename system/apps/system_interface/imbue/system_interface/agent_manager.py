@@ -6,6 +6,7 @@ import shlex
 import threading
 import tomllib
 from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -48,7 +49,12 @@ from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
+from imbue.system_interface.accounts import AccountError
+from imbue.system_interface.accounts import account_dir
 from imbue.system_interface.agent_discovery import get_host_dir
+from imbue.system_interface.harnesses.binding import BindingError
+from imbue.system_interface.harnesses.binding import create_args as binding_create_args
+from imbue.system_interface.harnesses.binding import resolve_binding
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
@@ -175,6 +181,7 @@ def _build_chat_create_command(
     harness: HarnessType,
     extra_role_templates: tuple[str, ...] = (),
     project_id: str = "",
+    account_args: Sequence[str] = (),
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent on a given harness.
 
@@ -220,6 +227,11 @@ def _build_chat_create_command(
     project_label = _chat_project_label(primary_labels, project_id)
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
+    # The account this chat runs on, if any. These come from ``binding.create_args`` and have
+    # to ride the create rather than follow it: ``mngr create`` provisions, starts, waits for
+    # readiness and delivers the first message before returning, so a repoint afterwards
+    # lands after the first turn has already run on the wrong credential.
+    cmd.extend(account_args)
     return cmd
 
 
@@ -1086,6 +1098,7 @@ class AgentManager:
         extra_role_templates: tuple[str, ...] = (),
         project_id: str = "",
         extra_taken_names: tuple[str, ...] = (),
+        account_id: str = "",
     ) -> CreatedChatAgent:
         """Create a chat agent in the primary agent's work dir on the given harness.
 
@@ -1109,13 +1122,25 @@ class AgentManager:
         with an existing agent or an in-flight create (by canonical form -- the same
         collision mngr itself would reject).
 
+        ``account_id`` binds the chat to one signed-in account; empty picks the most recently
+        used account on this harness, and falls back to the shared login when there are none.
+
         An alt harness authenticates through its own CLI; if that CLI is signed out, refuse
         the create up front (raising ``AgentCreationError``) rather than launch a chat that
         can never take a turn. Claude is not gated -- its auth is the shared workspace login.
+        A bound chat skips the gate entirely: the gate probes the SHARED login, which is a
+        different credential from the account, and an account is only ever committed after
+        its own probe said it was signed in.
         """
-        unauthenticated_reason = self._auth_gate(get_harness_spec(harness).auth_check)
-        if unauthenticated_reason is not None:
-            raise AgentCreationError(unauthenticated_reason)
+        try:
+            account = resolve_binding(harness, account_id)
+        except (AccountError, BindingError) as e:
+            raise AgentCreationError(str(e)) from e
+
+        if account is None:
+            unauthenticated_reason = self._auth_gate(get_harness_spec(harness).auth_check)
+            if unauthenticated_reason is not None:
+                raise AgentCreationError(unauthenticated_reason)
 
         explicit_name = requested_name.strip()
         if explicit_name and not canonical_agent_name(explicit_name):
@@ -1150,6 +1175,17 @@ class AgentManager:
             self._proto_agents[agent_id] = proto_info
             self._log_queues[agent_id] = log_queue
 
+        account_args: list[str] = []
+        if account is not None:
+            account_args = [
+                *binding_create_args(harness, account_dir(account.id), self._get_agent_state_dir(agent_id)),
+                # The binding is invisible from the outside once mngr has baked the command,
+                # so record it as a label: it is how the UI shows which account a chat runs
+                # on, and how a re-auth knows which chats it just revived.
+                "--label",
+                f"account={account.id}",
+            ]
+
         cmd = _build_chat_create_command(
             self._mngr_binary,
             display_name,
@@ -1158,6 +1194,7 @@ class AgentManager:
             harness,
             extra_role_templates,
             project_id,
+            account_args,
         )
 
         self._broadcaster.broadcast_proto_agent_created(
@@ -1174,6 +1211,8 @@ class AgentManager:
         project_label = _chat_project_label(primary_labels, project_id)
         if project_label:
             labels["project"] = project_label
+        if account is not None:
+            labels["account"] = account.id
         canonical_name = canonical_agent_name(display_name)
         self._launch_creation_thread(agent_id, canonical_name, cmd, Path(work_dir), log_queue, labels, harness)
 
