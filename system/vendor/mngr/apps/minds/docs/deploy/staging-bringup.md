@@ -362,13 +362,15 @@ what runs on it.
   # wait for cloud-init: ssh debian@<ip> cloud-init status --wait
   just register-share-relay https://<connector> <region> <ip>:7000 <ip> share-relay-staging-<region>-<ordinal>
   # note the relay_id the registration prints
-  just deploy-share-relay <ip> <relay_id> <region> <SHARE_CONTENT_DOMAIN> \
-      "https://<connector>/frps/auth/<FRPS_AUTH_SECRET>"
+  FRPS_AUTH_SECRET=<secret> just deploy-share-relay <ip> <relay_id> <region> <SHARE_CONTENT_DOMAIN> \
+      "https://<connector>/frps/auth"
   ```
   (`FRPS_AUTH_SECRET` and `SHARE_CONTENT_DOMAIN` come from the tier's
-  `sharing` Vault entry pushed in step 4; the connector must already be
-  deployed -- step 6 -- because the relay's plugin-auth URL points at it and
-  registration writes its `relays` table.)
+  `sharing` Vault entry pushed in step 4 -- the secret travels via the
+  environment and is rendered into the plugin `addr`'s userinfo, never the
+  URL; the connector must already be deployed -- step 6 -- because the
+  relay's plugin-auth URL points at it and registration writes its `relays`
+  table.)
 - [ ] Seed the region DNS record sets once per region (the connector's
   per-minute health sweep maintains them from then on):
   ```bash

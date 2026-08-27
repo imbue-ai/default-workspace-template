@@ -9,7 +9,7 @@ An agent that chats beautifully and ships nothing outscores one that ships a wor
 This spec enumerates the space of outcome verification (checking the delivered artifact itself), maps each option onto what harbor, rewardkit, and the Minds workspace already provide, and specifies the design: a per-case `expectations` block in the eval config, a trial-time evidence-collection phase in the driver, and a grade-time `outcome` scoring dimension (programmatic checks plus an LLM judge over the evidence).
 
 Audience: whoever implements this in `apps/minds_evals`, and reviewers deciding the open questions at the end.
-Related: [improvements.md](improvements.md) (backlog this interacts with, especially items 3, 4, and 9).
+Related: the `minds-eval` GitHub issues (scoring fidelity in #706, dev-loop items and the harness-axis note in #708).
 
 ## The topology constraint everything follows from
 
@@ -62,7 +62,7 @@ Run the test suite the agent wrote for its app (if it wrote one) inside the work
 - **Where it runs:** evidence collection.
   The expectations block may declare `test_commands` (explicit commands run in the workspace project dir via the existing `run_in_workspace` bridge, each with a timeout).
   The driver records each command, exit code, and a bounded output tail into the evidence manifest.
-  No auto-discovery of test suites in v1: guessing how to invoke arbitrary generated projects is exactly the kind of flaky heuristic the gates already suffer from (improvements item 4.5).
+  No auto-discovery of test suites in v1: guessing how to invoke arbitrary generated projects is exactly the kind of flaky heuristic the gates already suffer from (the stub-reply gate, #706).
 - **Needs:** `test_commands` in the schema, one collection step in the driver.
 
 ### Level 3: liveness probes (is the thing actually being served)
@@ -168,7 +168,7 @@ Two modes, for when the deferral ends:
   Rejected because the costs pile up: the snapshot deliberately excludes `node_modules`/`.venv`/`dist`/`build`, so every grade would reinstall dependencies (network in the verifier, minutes, and a whole class of new infra flakes that would masquerade as grading failures); the verifier image would have to become the multi-GB dwt system image instead of a slim rewardkit container; and regrade would stop being cheap and pure, which is the property the evidence/judgment split exists to protect.
   Revisit only if a code-quality (as opposed to delivery) eval is ever wanted.
 
-Fresh-env verification depends on `dwt_branch` being pinned to a SHA at generation time (improvements item 6.2); that work is being handled separately before this spec is implemented, so this spec treats the pin as given.
+Fresh-env verification depends on `dwt_branch` being pinned to a SHA at generation time; that pin has since landed, so this spec treats it as given.
 
 ## What the stack already provides (and where its edges are)
 
@@ -356,7 +356,7 @@ Failure semantics, extending finalize.py's existing rule:
 - Structural gates are untouched: outcome verification never rescues a trial whose conversation gates failed.
 
 Oracle: `solve.sh` fabricates a green bundle -- a manifest with every declared check `passed`, a plausible `apps.toml`, canned flow logs, no screenshots (the judge prompt states screenshots may be absent) -- so `-a oracle` exercises generation, the new artifacts, both new criteria files, and the composition.
-Note the existing caveat (improvements item 4.3) that oracle reward floors are judge-dependent and case-dependent; adding a dimension does not fix that, and the oracle threshold claim stays informal.
+Note the existing caveat (#706) that oracle reward floors are judge-dependent and case-dependent; adding a dimension does not fix that, and the oracle threshold claim stays informal.
 
 ## Validity and gaming concerns
 
@@ -376,7 +376,7 @@ Note the existing caveat (improvements item 4.3) that oracle reward floors are j
    This alone catches ships-nothing and never-started failures and gives the judge real evidence.
 2. **UI flows**: the host-side flow agent, flow evidence, `ui_flows_completed`, screenshots feeding the judge (Level 5 comes along for free). Shipped first over the workspace browser fleet (PR #523, live-proven), then re-executed over the forwarded origin (see the executor spec and phase 2b below).
 2b. **Executor swap to the forwarded origin** (PR stacked on #523, branch `maciek/minds-evals-forwarded-origin-flows`): box-side Playwright + `mngr forward`, deleting the fleet command layer and the eval's dependency on dwt #462's allowlist; details in [flow_executor_forwarded_origin.md](flow_executor_forwarded_origin.md).
-3. **Expectations for the existing dataset**: write `outcome` prose and flows for `todo-app` and `landing-page`; leave `greeting` bare; measure judge/flow stability across `-k` repeats before trusting the numbers (the same statistical discipline improvements item 2.5 demands).
+3. **Expectations for the existing dataset**: write `outcome` prose and flows for `todo-app` and `landing-page`; leave `greeting` bare; measure judge/flow stability across `-k` repeats before trusting the numbers (the same statistical discipline #623 demands of a scheduled run).
 4. **Fresh-environment boots** (`fresh_env: true`, Minds-mode) -- deferred at review, not scheduled: the quiescence wait, repo harvest, second-workspace create, and the `env`-tagged second capture pass. The Phase 1 bundle capture keeps this applicable retroactively to trials run in the meantime. Requires the dwt SHA pin to have landed (being handled separately).
 5. Later, as needed: `expect_body_regex` refinements, `image_similarity` against reference shots for pixel-stable cases, scripted-mode fresh boot if a code-quality (as opposed to delivery) eval is ever wanted.
 
@@ -392,4 +392,4 @@ Note the existing caveat (improvements item 4.3) that oracle reward floors are j
    If so, a `repo_clean` check joins the implied `minds-app` set and the bundle alone fully describes the deliverable; if not, uncommitted content lives only in the snapshot tarball and retroactive fresh-boots miss it.
    Parked deliberately; revisit once trials show how often the repo is clean at conversation end.
 
-Resolved since the first draft: `dwt_branch` SHA-pinning (improvements item 6.2) is being handled separately before this work starts, so the browser-fleet and fresh-env dependencies on a stable dwt are treated as given rather than open.
+Resolved since the first draft: `dwt_branch` SHA-pinning is being handled separately before this work starts, so the browser-fleet and fresh-env dependencies on a stable dwt are treated as given rather than open.

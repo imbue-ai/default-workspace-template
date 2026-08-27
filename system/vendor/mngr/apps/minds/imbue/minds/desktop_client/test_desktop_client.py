@@ -40,6 +40,7 @@ from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
+from imbue.minds.desktop_client.backup_env_store import write_canonical_env
 from imbue.minds.desktop_client.conftest import DEFAULT_SERVICE_NAME
 from imbue.minds.desktop_client.conftest import make_agents_json
 from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
@@ -51,29 +52,37 @@ from imbue.minds.desktop_client.cookie_manager import _COOKIE_MAX_AGE_SECONDS
 from imbue.minds.desktop_client.cookie_manager import _COOKIE_SALT
 from imbue.minds.desktop_client.cookie_manager import _SESSION_PAYLOAD
 from imbue.minds.desktop_client.cookie_manager import create_session_cookie
+from imbue.minds.desktop_client.data_types import BackupAccessState
+from imbue.minds.desktop_client.data_types import RemoteWorkspaceKind
 from imbue.minds.desktop_client.dek_store import bundle_mirror_path
+from imbue.minds.desktop_client.dek_store import ensure_dek
 from imbue.minds.desktop_client.dek_store import is_account_unlocked
 from imbue.minds.desktop_client.dek_store import set_master_password_for_account
 from imbue.minds.desktop_client.dek_store import verify_master_password_for_account
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
+from imbue.minds.desktop_client.latchkey.response_events import RequestStatus
+from imbue.minds.desktop_client.latchkey.response_events import create_request_response_event
 from imbue.minds.desktop_client.minds_config import MindsConfig
-from imbue.minds.desktop_client.request_events import RequestInbox
-from imbue.minds.desktop_client.request_events import RequestStatus
-from imbue.minds.desktop_client.request_events import create_latchkey_predefined_permission_request_event
-from imbue.minds.desktop_client.request_events import create_request_response_event
+from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.testing import StaticPendingRequests
 from imbue.minds.desktop_client.testing import blocking_release_wait_body
 from imbue.minds.desktop_client.testing import build_resolver_with_system_services
+from imbue.minds.desktop_client.testing import create_predefined_permission_request
 from imbue.minds.desktop_client.testing import drain_ui_channel_frames
 from imbue.minds.desktop_client.testing import exec_json_envelope
 from imbue.minds.desktop_client.testing import install_stub_mngr_on_path
 from imbue.minds.desktop_client.testing import record_provider_discovery_error
 from imbue.minds.desktop_client.testing import tamper_session_cookie_signed_content
 from imbue.minds.desktop_client.testing import write_stub_mngr
+from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_ACTIVE
 from imbue.minds.desktop_client.workspace_record_store import ReplicaRecord
+from imbue.minds.desktop_client.workspace_record_store import WorkspaceSecretsPayload
+from imbue.minds.desktop_client.workspace_record_store import encode_encrypted_secrets
+from imbue.minds.mngr_settings.provider_blocks import imbue_cloud_provider_name_for_account
 from imbue.minds.primitives import CookieSigningKey
 from imbue.minds.primitives import OneTimeCode
 from imbue.minds.primitives import ServiceName
@@ -741,6 +750,170 @@ def test_remote_tiles_wait_for_the_initial_discovery_snapshot(tmp_path: Path) ->
     assert [tile.agent_id for tile in tiles] == ["agent-elsewhere"]
 
 
+def _upsert_remote_record(
+    session_store: MultiAccountSessionStore,
+    *,
+    user_id: str,
+    email: str,
+    agent_id: AgentId,
+    provider_kind: str,
+    device_label: str,
+    encrypted_secrets: str | None,
+) -> ReplicaRecord:
+    """Store an ACTIVE record for a workspace this device does not host (so it renders as a remote tile)."""
+    record_store = session_store.record_store
+    assert record_store is not None
+    record = ReplicaRecord(
+        host_id=str(HostId.generate()),
+        agent_id=str(agent_id),
+        display_name="elsewhere",
+        provider_kind=provider_kind,
+        hosting_device_id=None,
+        device_label=device_label,
+        state=RECORD_STATE_ACTIVE,
+        encrypted_secrets=encrypted_secrets,
+    )
+    record_store.upsert_local_record(user_id, email, record)
+    return record
+
+
+def _encrypt_payload(dek: bytes, payload: WorkspaceSecretsPayload) -> str:
+    """The base64 AEAD blob a record carries for ``payload``, as ``decrypt_record_secrets`` expects it."""
+    return encode_encrypted_secrets(dek, payload.model_dump_json().encode("utf-8"))
+
+
+def test_cloud_record_outside_discovery_is_badged_with_its_provider_not_the_creating_device(
+    tmp_path: Path,
+) -> None:
+    """A cloud workspace lives with its provider: the badge must never read as the creating device's hostname.
+
+    The record's ``device_label`` is stamped from whichever device created the
+    workspace, so a stopped cloud workspace that falls out of discovery used to
+    render as "on <that hostname>" -- nonsense for a workspace in the cloud.
+    """
+    cli = make_fake_imbue_cloud_cli()
+    cli.add_account(user_id="user-1", email="a@b.com")
+    session_store = make_session_store_for_test(tmp_path, cli=cli)
+    cloud_agent_id = AgentId.generate()
+    _upsert_remote_record(
+        session_store,
+        user_id="user-1",
+        email="a@b.com",
+        agent_id=cloud_agent_id,
+        provider_kind=imbue_cloud_provider_name_for_account("a@b.com"),
+        device_label="mac",
+        encrypted_secrets=None,
+    )
+    other_device_agent_id = AgentId.generate()
+    _upsert_remote_record(
+        session_store,
+        user_id="user-1",
+        email="a@b.com",
+        agent_id=other_device_agent_id,
+        provider_kind="docker",
+        device_label="mac",
+        encrypted_secrets=None,
+    )
+    resolver = make_resolver_with_data(agents_json=make_agents_json(AgentId.generate()))
+
+    tile_by_agent_id = {tile.agent_id: tile for tile in _collect_remote_workspace_tiles(resolver, session_store)}
+
+    cloud_tile = tile_by_agent_id[str(cloud_agent_id)]
+    assert cloud_tile.kind is RemoteWorkspaceKind.CLOUD
+    assert cloud_tile.location == "Imbue Cloud"
+    other_device_tile = tile_by_agent_id[str(other_device_agent_id)]
+    assert other_device_tile.kind is RemoteWorkspaceKind.OTHER_DEVICE
+    assert other_device_tile.location == "mac"
+
+
+def test_remote_tile_backup_access_follows_where_the_credentials_are(tmp_path: Path) -> None:
+    """The tile says whether this device can read the backups now, and if not, why.
+
+    This device's own canonical env always wins (the case of a workspace this
+    device provisioned that fell out of discovery); a synced blob it cannot
+    decrypt is locked behind the master password; no blob at all means the
+    credentials never reached this device. Once the account is unlocked here,
+    a synced blob carrying a restic env makes the backups available, while a
+    blob with only SSH material (backups never configured) does not.
+    """
+    cli = make_fake_imbue_cloud_cli()
+    cli.add_account(user_id="user-1", email="a@b.com")
+    session_store = make_session_store_for_test(tmp_path, cli=cli)
+    record_store = session_store.record_store
+    assert record_store is not None
+    provider_kind = imbue_cloud_provider_name_for_account("a@b.com")
+
+    local_env_agent_id = AgentId.generate()
+    _upsert_remote_record(
+        session_store,
+        user_id="user-1",
+        email="a@b.com",
+        agent_id=local_env_agent_id,
+        provider_kind=provider_kind,
+        device_label="mac",
+        encrypted_secrets=None,
+    )
+    write_canonical_env(record_store.paths, local_env_agent_id, "RESTIC_REPOSITORY=s3:local\nRESTIC_PASSWORD=pw\n")
+    locked_agent_id = AgentId.generate()
+    _upsert_remote_record(
+        session_store,
+        user_id="user-1",
+        email="a@b.com",
+        agent_id=locked_agent_id,
+        provider_kind=provider_kind,
+        device_label="mac",
+        encrypted_secrets="c29tZS1ibG9i",
+    )
+    secretless_agent_id = AgentId.generate()
+    _upsert_remote_record(
+        session_store,
+        user_id="user-1",
+        email="a@b.com",
+        agent_id=secretless_agent_id,
+        provider_kind=provider_kind,
+        device_label="mac",
+        encrypted_secrets=None,
+    )
+    unlocked_user_id = "user-2"
+    unlocked_email = "c@d.com"
+    cli.add_account(user_id=unlocked_user_id, email=unlocked_email)
+    unlocked_provider_kind = imbue_cloud_provider_name_for_account(unlocked_email)
+    dek = ensure_dek(record_store.paths, unlocked_user_id)
+    synced_agent_id = AgentId.generate()
+    _upsert_remote_record(
+        session_store,
+        user_id=unlocked_user_id,
+        email=unlocked_email,
+        agent_id=synced_agent_id,
+        provider_kind=unlocked_provider_kind,
+        device_label="mac",
+        encrypted_secrets=_encrypt_payload(
+            dek, WorkspaceSecretsPayload(restic_env="RESTIC_REPOSITORY=s3:synced\nRESTIC_PASSWORD=pw\n")
+        ),
+    )
+    ssh_only_agent_id = AgentId.generate()
+    _upsert_remote_record(
+        session_store,
+        user_id=unlocked_user_id,
+        email=unlocked_email,
+        agent_id=ssh_only_agent_id,
+        provider_kind=unlocked_provider_kind,
+        device_label="mac",
+        encrypted_secrets=_encrypt_payload(dek, WorkspaceSecretsPayload(ssh_private_key="synced-key")),
+    )
+    resolver = make_resolver_with_data(agents_json=make_agents_json(AgentId.generate()))
+
+    access_by_agent_id = {
+        tile.agent_id: tile.backup_access for tile in _collect_remote_workspace_tiles(resolver, session_store)
+    }
+
+    assert access_by_agent_id[str(local_env_agent_id)] is BackupAccessState.AVAILABLE
+    assert access_by_agent_id[str(locked_agent_id)] is BackupAccessState.LOCKED
+    assert access_by_agent_id[str(secretless_agent_id)] is BackupAccessState.UNAVAILABLE
+    assert access_by_agent_id[str(synced_agent_id)] is BackupAccessState.AVAILABLE
+    assert access_by_agent_id[str(ssh_only_agent_id)] is BackupAccessState.UNAVAILABLE
+
+
 class _AllAgentsKnownStaticResolver(StaticBackendResolver):
     """Reports every queried agent as a known, host-resolvable agent.
 
@@ -759,19 +932,17 @@ def test_build_requests_payload_empty_inbox() -> None:
     resolver = _AllAgentsKnownStaticResolver(url_by_agent_and_service={})
     expected = {"count": 0, "request_ids": []}
     assert _build_requests_payload(None, resolver) == expected
-    assert _build_requests_payload(RequestInbox(), resolver) == expected
+    assert _build_requests_payload(StaticPendingRequests(), resolver) == expected
 
 
 def test_build_requests_payload_carries_pending_ids() -> None:
-    """A pending request surfaces its event_id alongside the count."""
+    """A pending request surfaces its request_id alongside the count."""
     agent_id = str(AgentId())
-    event = create_latchkey_predefined_permission_request_event(
-        agent_id=agent_id, scope="slack-api", rationale="post updates"
-    )
+    event = create_predefined_permission_request(agent_id=agent_id, scope="slack-api", rationale="post updates")
     resolver = _AllAgentsKnownStaticResolver(url_by_agent_and_service={})
-    payload = _build_requests_payload(RequestInbox().add_request(event), resolver)
+    payload = _build_requests_payload(StaticPendingRequests(pending=(event,)), resolver)
     assert payload["count"] == 1
-    assert payload["request_ids"] == [str(event.event_id)]
+    assert payload["request_ids"] == [event.request_id]
 
 
 def test_build_requests_payload_distinguishes_equal_count_different_contents() -> None:
@@ -781,31 +952,28 @@ def test_build_requests_payload_distinguishes_equal_count_different_contents() -
     would miss this transition (count stays 1), so the payload must differ.
     """
     agent_id = str(AgentId())
-    request_a = create_latchkey_predefined_permission_request_event(
-        agent_id=agent_id, scope="slack-api", rationale="a"
-    )
-    request_b = create_latchkey_predefined_permission_request_event(
-        agent_id=agent_id, scope="github-api", rationale="b"
-    )
+    request_a = create_predefined_permission_request(agent_id=agent_id, scope="slack-api", rationale="a")
+    request_b = create_predefined_permission_request(agent_id=agent_id, scope="github-api", rationale="b")
 
-    inbox_with_a = RequestInbox().add_request(request_a)
+    inbox_with_a = StaticPendingRequests(pending=(request_a,))
     # Resolve A and add B: the pending set becomes {B}, same size as {A}.
-    inbox_with_b = inbox_with_a.add_response(
-        create_request_response_event(
-            request_event_id=str(request_a.event_id),
-            status=RequestStatus.GRANTED,
-            agent_id=agent_id,
-            request_type=request_a.request_type,
-            scope="slack-api",
-        )
-    ).add_request(request_b)
+    inbox_with_b = StaticPendingRequests(
+        pending=(request_b, request_a),
+        answered=(
+            create_request_response_event(
+                request_event_id=request_a.request_id,
+                status=RequestStatus.GRANTED,
+                agent_id=agent_id,
+            ),
+        ),
+    )
 
     resolver = _AllAgentsKnownStaticResolver(url_by_agent_and_service={})
     payload_a = _build_requests_payload(inbox_with_a, resolver)
     payload_b = _build_requests_payload(inbox_with_b, resolver)
     assert payload_a["count"] == payload_b["count"] == 1
     assert payload_a != payload_b
-    assert payload_b["request_ids"] == [str(request_b.event_id)]
+    assert payload_b["request_ids"] == [request_b.request_id]
 
 
 # -- Tests for new account management and request routes --
@@ -839,7 +1007,7 @@ def _create_test_client_with_stores(
     auth_store = FileAuthStore(data_directory=auth_dir)
     session_store = make_session_store_for_test(tmp_path, cli=cli)
     minds_config = MindsConfig(data_dir=tmp_path)
-    request_inbox = RequestInbox()
+    request_inbox = StaticPendingRequests()
 
     backend_resolver = StaticBackendResolver(url_by_agent_and_service={})
     app = create_desktop_client(
@@ -848,7 +1016,7 @@ def _create_test_client_with_stores(
         http_client=None,
         session_store=session_store,
         minds_config=minds_config,
-        request_inbox=request_inbox,
+        pending_requests=request_inbox,
         paths=InstallationPaths(data_dir=tmp_path),
         mngr_caller=mngr_caller,
         imbue_cloud_cli=imbue_cloud_cli,
@@ -1839,6 +2007,32 @@ def test_remove_workspace_record_deletes_the_row(tmp_path: Path) -> None:
     assert workspace_id not in cli.sync_records_by_email["a@b.com"]
     assert session_store.record_store is not None
     assert session_store.record_store.list_records("user-1") == []
+
+
+def test_remove_workspace_record_of_a_leased_cloud_workspace_is_refused_with_a_hint(tmp_path: Path) -> None:
+    """The connector's tombstone-first refusal surfaces as a 409 that points at destroy, not a sync error."""
+    cli = make_fake_imbue_cloud_cli()
+    cli.add_account(user_id="user-1", email="a@b.com")
+    client, auth_store = _create_test_client_with_stores(tmp_path, cli=cli)
+    _authenticate_client(client, auth_store)
+    session_store = get_state(client.application).session_store
+    assert session_store is not None
+    workspace_id = str(AgentId.generate())
+    session_store.associate_created_workspace(
+        user_id="user-1",
+        agent_id=workspace_id,
+        host_id="host-still-leased",
+        display_name="live",
+        color=None,
+        is_cloud_row=True,
+    )
+    cli.lease_holding_workspace_ids.add(workspace_id)
+
+    response = client.post("/_chrome/workspaces/remove-record", json={"workspace_id": workspace_id})
+
+    assert response.status_code == 409
+    assert "destroy the workspace" in response.get_json()["error"]
+    assert workspace_id in cli.sync_records_by_email["a@b.com"]
 
 
 def test_remove_workspace_record_unknown_host_is_404(tmp_path: Path) -> None:

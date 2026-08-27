@@ -303,6 +303,17 @@ class UnknownEntitlementColumnError(ConnectorError, ValueError):
         super().__init__(f"Unknown entitlement columns: {unknown_columns}")
 
 
+class WorkspaceRecordLeaseActiveError(ConnectorError, RuntimeError):
+    """A workspace record may not be hard-deleted while its workspace still holds a pool lease."""
+
+    def __init__(self, record_key: str) -> None:
+        self.record_key = record_key
+        super().__init__(
+            f"workspace record {record_key} still holds a cloud lease; destroy the workspace instead of "
+            "removing its record"
+        )
+
+
 class PoolHostCleanupError(ConnectorError, RuntimeError):
     """Raised when a pool-host release/teardown cannot destroy the slice's lima VM.
 
