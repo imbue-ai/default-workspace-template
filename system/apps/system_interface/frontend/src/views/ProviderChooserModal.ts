@@ -50,6 +50,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   // The account the trash button is armed on. Two clicks rather than a second modal:
   // deleting strands every chat bound to that account, so it must not be a single slip.
   let confirmingDelete: string | null = null;
+  // The account a re-authentication is writing into, if this is one. Keeping the folder is
+  // the whole point: every chat bound to it by label comes back rather than being orphaned.
+  let reauthAccountId: string | null = null;
 
   function reset(): void {
     lane = null;
@@ -59,11 +62,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     keyProvider = null;
     error = null;
     confirmingDelete = null;
+    reauthAccountId = null;
     clearFlow();
   }
 
-  async function begin(chosen: Lane, chosenMethod: LaneMethod): Promise<void> {
+  async function begin(chosen: Lane, chosenMethod: LaneMethod, intoAccountId?: string): Promise<void> {
     lane = chosen;
+    reauthAccountId = intoAccountId ?? null;
     error = null;
     // A key flow needs a provider chosen before it can be written; default to the lane's
     // first so the common single-provider case needs no extra click.
@@ -71,7 +76,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     busy = true;
     m.redraw();
     try {
-      await startFlow(chosen.id, chosenMethod.id);
+      await startFlow(chosen.id, chosenMethod.id, intoAccountId);
     } catch (e) {
       error = errorText(e);
     } finally {
@@ -109,7 +114,21 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         "div.claude-login-alts-list",
         signedIn.map((account) =>
           m("div.claude-login-alt", { key: account.id }, [
-            m("span.claude-login-alt-text", m("span.claude-login-alt-name", account.label)),
+            m(
+              "button.claude-login-alt-text",
+              {
+                type: "button",
+                // Re-authenticating writes the SAME folder, so the account keeps its id and
+                // every chat bound to it recovers. Minting a new one instead would leave
+                // them all pointed at a credential that has expired.
+                onclick: () => {
+                  const owner = getLanes().find((candidate) => candidate.id === account.lane);
+                  if (owner !== undefined) void begin(owner, owner.methods[0], account.id);
+                },
+                title: "Sign in again, keeping this account",
+              },
+              m("span.claude-login-alt-name", account.label),
+            ),
             m(
               "button.claude-login-close",
               {
@@ -192,7 +211,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   function renderSignIn(current: Lane): m.Children {
     const flow = getFlow();
     if (flow !== null && flow.status.state === "ok") {
-      return m("div.claude-login-applying", `Signed in to ${current.provider_name}.`);
+      return m(
+        "div.claude-login-applying",
+        reauthAccountId === null
+          ? `Signed in to ${current.provider_name}.`
+          : `Signed in again. Every chat on this provider can take a turn once more.`,
+      );
     }
     if (busy && flow === null) return m("div.claude-login-applying", "Starting sign-in...");
     if (flow === null) return null;

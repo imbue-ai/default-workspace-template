@@ -57,6 +57,7 @@ from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.harnesses.binding import BindingError
 from imbue.system_interface.harnesses.binding import create_args as binding_create_args
+from imbue.system_interface.harnesses.binding import harness_for
 from imbue.system_interface.harnesses.binding import resolve_binding
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
@@ -1094,7 +1095,6 @@ class AgentManager:
     def create_chat_agent(
         self,
         requested_name: str,
-        harness: HarnessType = HarnessType.CLAUDE,
         extra_role_templates: tuple[str, ...] = (),
         project_id: str = "",
         extra_taken_names: tuple[str, ...] = (),
@@ -1112,9 +1112,10 @@ class AgentManager:
         (the caller passes the member-title store's chosen names, so a terminal
         someone renamed to "Chat 2" blocks that slot too).
 
-        ``harness`` is also the name of the harness create template it stacks; the
-        `chat` role template supplies everything else, so a new harness needs no new
-        method here. ``project_id`` is the project the chat was created inside, which
+        The harness comes from the account, not from the caller: it is the name of the
+        create template stacked on top, and the `chat` role template supplies everything
+        else, so a new harness needs no new method here. ``project_id`` is the project the
+        chat was created inside, which
         becomes the agent's ``project`` label -- the project it starts out filed in
         (see ``_chat_project_label``); empty keeps the primary agent's inherited label.
 
@@ -1123,7 +1124,8 @@ class AgentManager:
         collision mngr itself would reject).
 
         ``account_id`` binds the chat to one signed-in account; empty picks the most recently
-        used account on this harness, and falls back to the shared login when there are none.
+        used one, and falls back to the workspace's shared login when there are none -- which
+        is the claude harness, exactly as before accounts existed.
 
         An alt harness authenticates through its own CLI; if that CLI is signed out, refuse
         the create up front (raising ``AgentCreationError``) rather than launch a chat that
@@ -1133,9 +1135,11 @@ class AgentManager:
         its own probe said it was signed in.
         """
         try:
-            account = resolve_binding(harness, account_id)
+            account = resolve_binding(account_id)
         except (AccountError, BindingError) as e:
             raise AgentCreationError(str(e)) from e
+        harness = harness_for(account) if account is not None else HarnessType.CLAUDE
+        assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
 
         if account is None:
             unauthenticated_reason = self._auth_gate(get_harness_spec(harness).auth_check)

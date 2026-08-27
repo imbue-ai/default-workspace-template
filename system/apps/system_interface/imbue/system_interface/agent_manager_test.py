@@ -44,6 +44,8 @@ from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_chat_display_label_command
 from imbue.system_interface.agent_manager import _build_chat_rename_command
@@ -1535,11 +1537,23 @@ def test_create_chat_agent_counts_in_flight_creates_as_taken(
 
 def test_create_chat_agent_numbers_each_harness_under_its_own_word(
     agent_manager: AgentManager,
+    tmp_path: Path,
 ) -> None:
-    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently."""
+    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently.
+
+    The harness comes from the bound account, so the codex one is named by signing in
+    rather than by asking for it -- which is the point: a caller cannot name a harness
+    that disagrees with the credential the chat will actually run on.
+    """
     agent_manager._auth_gate = lambda check: None
+    # The plain chat is created first, while there is nothing signed in, so it lands on
+    # the workspace login as claude. Signing in afterwards is what makes the second one
+    # codex -- and note it would also make an unbound THIRD chat codex, since the most
+    # recently used account is the default.
     chat = agent_manager.create_chat_agent("")
-    codex = agent_manager.create_chat_agent("", HarnessType.CODEX)
+    codex_account_id, _ = mint_account_dir()
+    commit_account(codex_account_id, "openai", "OpenAI")
+    codex = agent_manager.create_chat_agent("", account_id=codex_account_id)
     agent_manager.stop()
 
     assert chat.display_name == "Chat 1"

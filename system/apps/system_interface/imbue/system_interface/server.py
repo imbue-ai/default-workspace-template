@@ -2572,7 +2572,6 @@ def _create_chat_agent() -> Response:
         create_request = CreateChatRequest.model_validate(request_fields)
         created = agent_manager.create_chat_agent(
             create_request.name,
-            create_request.harness,
             extra_role_templates=("first",) if create_request.first else (),
             project_id=project_id,
             extra_taken_names=titled_names,

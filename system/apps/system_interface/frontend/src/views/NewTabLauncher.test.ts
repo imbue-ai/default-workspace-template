@@ -340,12 +340,7 @@ describe("NewTabLauncher", () => {
   it("offers the four Open new tiles, with the file viewer inert until an app backs it", () => {
     const tiles = tilesOf(render());
     // Each tile renders its glyph markup and then its label.
-    expect(tiles.map((tile) => texts(tile.children)[1])).toEqual([
-      "New chat",
-      "File viewer",
-      "Browser",
-      "Terminal",
-    ]);
+    expect(tiles.map((tile) => texts(tile.children)[1])).toEqual(["New chat", "File viewer", "Browser", "Terminal"]);
     expect(tiles[1].attrs?.["aria-disabled"]).toBe("true");
     expect(tiles[1].attrs?.onclick).toBeUndefined();
     expect(tiles[0].attrs?.onclick).toBeTypeOf("function");
@@ -384,15 +379,15 @@ describe("NewTabLauncher", () => {
     expect(started).toEqual(["terminal"]);
   });
 
-  it("hands the selected provider's harness straight through", () => {
+  it("hands the selected provider's account straight through", () => {
     providerState.accounts = [{ id: "a", harness: "pi-coding", label: "Opencode Go (Pi)" }];
     try {
       const started: string[] = [];
       const tiles = tilesOf(
-        render({ onOpenNew: (target) => started.push(target.kind === "chat" ? target.harness : target.kind) }),
+        render({ onOpenNew: (target) => started.push(target.kind === "chat" ? target.accountId : target.kind) }),
       );
       (tiles[0].attrs?.onclick as () => void)();
-      expect(started).toEqual(["pi-coding"]);
+      expect(started).toEqual(["a"]);
     } finally {
       providerState.accounts = [];
     }
@@ -517,20 +512,19 @@ describe("NewTabLauncher", () => {
 describe("openNewTiles", () => {
   const chatTarget = () => openNewTiles().find((tile) => tile.label === "New chat")?.target;
 
-  it("carries the selected account and its harness", () => {
-    // The harness reaches `mngr create --type` verbatim, and mngr's agent type for
-    // pi is "pi-coding" ("pi" is only an alias the create endpoint's enum rejects),
-    // so what the account reports is what has to arrive here unchanged.
+  it("carries the selected account, and no harness", () => {
+    // The server derives the harness from the account, so a target that named one could
+    // only ever contradict the credential the chat will actually run on.
     providerState.accounts = [{ id: "abc", harness: "pi-coding", label: "Opencode Go (Pi)" }];
     try {
-      expect(chatTarget()).toEqual({ kind: "chat", harness: "pi-coding", accountId: "abc" });
+      expect(chatTarget()).toEqual({ kind: "chat", accountId: "abc" });
     } finally {
       providerState.accounts = [];
     }
   });
 
-  it("carries no account when nothing is signed in, which is what opens the chooser", () => {
-    expect(chatTarget()).toEqual({ kind: "chat", harness: "claude", accountId: "" });
+  it("carries no account when nothing is signed in, which means the workspace login", () => {
+    expect(chatTarget()).toEqual({ kind: "chat", accountId: "" });
   });
 
   it("gives the non-chat tiles no harness to send", () => {

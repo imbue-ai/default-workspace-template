@@ -157,31 +157,33 @@ def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) 
     return ["--extra-provision-command", link]
 
 
-def resolve_binding(harness: HarnessType, account_id: str = "", home: Path | None = None) -> Account | None:
-    """The account a new agent on `harness` should run under, or None for the shared login.
+def resolve_binding(account_id: str = "", home: Path | None = None) -> Account | None:
+    """The account a new agent should run under, or None for the workspace's shared login.
 
-    An explicit id is honoured (and must be on this harness -- binding a codex account to an
-    agy agent would produce a chat that silently cannot take a turn). Otherwise the most
-    recently used account on this harness wins, so signing in and then starting a chat "just
-    works" without the caller having to name what it just created.
+    An explicit id wins; otherwise the most recently used account, which is bumped on every
+    launch -- so signing in and then starting a chat "just works" without the caller having
+    to name what it just created.
 
-    None is not an error: a workspace with no accounts yet keeps today's behaviour exactly,
-    which is what lets this land before any UI sends an account id.
+    The account decides the harness (see `harness_for`), not the other way round: asking the
+    caller for both invites a chat that names codex while running on an agy credential, and
+    there is no way to notice that until its first turn fails.
+
+    None is not an error: a workspace with no accounts keeps today's behaviour exactly.
     """
-    index = accounts.read_index(home)
     if account_id:
         account = accounts.resolve_account(account_id, home)
-        if _harness_of(account) is not harness:
-            raise BindingError(f"account {account_id} is not a {harness} account")
+        if harness_for(account) is None:
+            raise BindingError(f"account {account_id} is on a lane this build does not have")
         return account
 
-    on_harness = [a for a in index.accounts if _harness_of(a) is harness]
-    if not on_harness:
+    index = accounts.read_index(home)
+    usable = [a for a in index.accounts if harness_for(a) is not None]
+    if not usable:
         return None
-    return next((a for a in on_harness if a.id == index.mru), on_harness[-1])
+    return next((a for a in usable if a.id == index.mru), usable[-1])
 
 
-def _harness_of(account: Account) -> HarnessType | None:
+def harness_for(account: Account) -> HarnessType | None:
     """The harness an account's lane runs on, or None if this build no longer has that lane."""
     try:
         return get_lane(account.lane).harness

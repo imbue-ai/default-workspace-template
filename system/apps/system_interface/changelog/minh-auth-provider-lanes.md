@@ -222,3 +222,19 @@ Both shapes go through the same strict parse that rejects unmanaged keys and mix
 
 Abandoned sign-in folders are swept at boot: a minted folder with no index row is
 unreachable by definition, so nothing else would ever look at it.
+
+# The account decides the harness, and an expired one can be signed in again
+
+`CreateChatRequest` no longer takes a harness. It was possible to ask for a codex chat and
+an agy account in the same call, and nothing would notice until the first turn failed; the
+harness now comes from the account's lane, so the two cannot disagree. With no account the
+answer is claude, which is the workspace login -- unchanged from before accounts existed.
+
+Clicking a signed-in account in the chooser re-authenticates it in place. Same folder, same
+id, so every chat bound to it by label can take a turn again instead of being orphaned by
+an expiry.
+
+Tests get their own accounts root (`MINDS_ACCOUNTS_ROOT`, set by the isolation fixture).
+Without it a test run wrote into the developer's own `~/.minds` -- a chat create resolves an
+account several calls down -- and the leaked account then bound every later create in the
+session. That is not hypothetical; it happened while writing this.
