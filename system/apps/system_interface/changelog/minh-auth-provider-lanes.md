@@ -733,3 +733,11 @@ request-level test written against these routes.
 account's sign-in rather than on the lane list -- which is what a dead-account notice and a
 per-provider card both need, and what the account row's own "Sign in again" button now uses so
 there is one path rather than two.
+
+# Every chooser row says what the account gets you
+
+Anthropic and OpenAI had no subtitle, on the reasoning that a familiar provider name says
+enough. It does not: someone deciding between these rows wants to know whether the plan they
+already pay for is usable here, and OpenAI in particular has a free tier with limited coding
+usage that is worth naming. Opencode Go's line carries its price, and OpenRouter's says "any
+model", which is what it actually offers.
