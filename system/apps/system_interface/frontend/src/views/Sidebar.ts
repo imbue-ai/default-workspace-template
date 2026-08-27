@@ -2126,12 +2126,14 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 // The dock itself stays flush at the bottom; this insets only
                 // the rail.
                 //
-                // `top-[2px]` is the dock's own pane inset (--si-pane-inset):
-                // the tab strip starts that far below the shared canvas
-                // padding, so without it the header's 34px row sat 2px higher
-                // than the equally tall tabs beside it. With it, the two rows
-                // ride level and both end at the pane card's top edge.
-                "machine-sidebar absolute top-[2px] bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border " +
+                // `top-[1px]` lands the header row's visible top edge (1px of
+                // card border above the 34px header) exactly on the tab chips'
+                // visible top edge: the dock's tab strip starts --si-pane-inset
+                // (2px) below the shared canvas padding, and the chip the user
+                // sees is the 35px .dv-tab, not the 34px label box inside it.
+                // Flush at top-0 the header rode 1px above the chips; at
+                // top-[2px] (aligned to the label box) it rode 1px below.
+                "machine-sidebar absolute top-[1px] bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border " +
                 `${RAIL_PADDING_CLASS} transition-[width] duration-150 ease-out ` +
                 (expanded ? EXPANDED_CLASS : COLLAPSED_CLASS),
             },
