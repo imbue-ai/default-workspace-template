@@ -738,7 +738,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     const jumpIndexAtDispatch = pendingJumpIndex;
     dataSource
       .executeFill(action)
-      .catch(() => {})
+      .catch((error: unknown) => {
+        // Expected network failures are caught (and logged) inside the fetch
+        // helpers; anything landing here is unexpected and must not vanish.
+        console.warn("Transcript fill action failed", action, error);
+      })
       .then(() => {
         fillInFlight = false;
         if (action.kind === "fetch-at-offset" && jumpIndexAtDispatch !== null) {
