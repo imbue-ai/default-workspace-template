@@ -303,3 +303,16 @@ de-wrap. Measured across three agy builds: at 80 columns 1.1.16 yields 78 charac
 1.1.22 fails extraction outright; wide, all of them yield the full 704. `min_length` on the
 scrape is the backstop -- a short extraction is a fragment, so keep draining rather than
 hand it over.
+
+# Restore the sign-in screens to the shape the old modal had
+
+The chooser was rebuilt against the mockup's grammar rather than reduced to the minimum that
+worked. Back to being what it was: brand marks in a reserved icon column so every label
+lines up, a fixed-height scroll region that remembers its offset across a drill-in and back,
+the numbered-step layout with the finished step desaturating, and the "Didn't open? Copy the
+link" fallback -- which reveals the raw URL when the clipboard write is rejected, so a
+browser handoff that does not fire never dead-ends anyone.
+
+OpenAI's flow inverts the direction (it shows a code you carry to the browser rather than
+taking one back), so its second step shows the code with a Copy button instead of a field.
+That is the only place the two browser shapes differ; everything around them is shared.

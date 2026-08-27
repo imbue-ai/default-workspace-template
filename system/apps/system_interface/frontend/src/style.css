@@ -3922,3 +3922,92 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .terminal-banner-btn:hover {
   background: var(--color-bg-hover, #eef2f7);
 }
+
+/* --- Provider chooser: brand marks, account rows, and the two-shape step body ------- */
+
+/* The reserved icon column. Fixed width whether or not the lane has a mark, because
+   that is what holds every row's label on the same left edge. */
+.claude-login-alt-mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  color: var(--color-text-primary);
+}
+
+/* A row and its trailing remove button share one frame, so the remove target is not
+   nested inside the row's own button (which would be invalid and unclickable). */
+.claude-login-account-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.claude-login-account-row .claude-login-alt {
+  flex: 1;
+  min-width: 0;
+}
+
+.claude-login-account-remove {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 0 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--color-text-faint);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition:
+    color 100ms ease,
+    background 100ms ease,
+    border-color 100ms ease;
+}
+
+.claude-login-account-remove:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* Armed: the second click removes, so it reads as destructive rather than neutral. */
+.claude-login-account-remove:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.claude-login-section-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+  margin-bottom: 8px;
+}
+
+/* The inverted shape's code sits beside its copy button rather than under it: the code
+   is the thing to act on, and the action should not be a hunt. */
+.claude-login-code-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.claude-login-code-row .claude-login-code {
+  flex: 1;
+  margin: 0;
+}
+
+/* A finished step desaturates so the eye lands on the live one. Not hidden -- you may
+   still need to re-open the link. */
+.claude-login-step--done {
+  filter: grayscale(1);
+  opacity: 0.6;
+  transition:
+    filter 300ms ease,
+    opacity 300ms ease;
+}
