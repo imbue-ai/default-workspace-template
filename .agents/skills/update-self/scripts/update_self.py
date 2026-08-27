@@ -1136,6 +1136,13 @@ MNGR_EXECUTABLE = "mngr"
 TOOL_NAME = "system-interface"
 # uv records how a tool was installed here, inside the tool's own directory.
 _RECEIPT = "uv-receipt.toml"
+# The plugin set each tool is built with, as build_workspace.sh reads it. The
+# receipt only knows the plugins a tool was installed with *last time*, so a
+# release that ships a new plugin needs this to reach an existing workspace:
+# the merged tree's manifest is unioned into the reinstall, keyed by the name
+# the manifest uses for each tool.
+PLUGIN_MANIFEST_PATH = "system/config/mngr_plugins.toml"
+_MANIFEST_TOOL_NAMES = {MNGR_TOOL_NAME: "mngr", TOOL_NAME: "system-interface"}
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
 # and this ``static/`` bundle are gitignored, so they never appear in a diff --
 # they are protected by the pre-apply snapshots instead.
@@ -2823,6 +2830,37 @@ def _tool_extras(
     return extras
 
 
+def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
+    """The ``--with-editable`` args ``PLUGIN_MANIFEST_PATH`` assigns to ``tool_name``.
+
+    Empty for a tree that predates the manifest (a rollback re-refreshes the
+    restored tree, and the receipt alone was that tree's whole answer).
+    """
+    manifest_path = repo_root / PLUGIN_MANIFEST_PATH
+    if not manifest_path.is_file():
+        return []
+    manifest = tomllib.loads(manifest_path.read_text())
+    tool = _MANIFEST_TOOL_NAMES.get(tool_name, tool_name)
+    extras: list[str] = []
+    for entry in manifest.get("plugins", []):
+        if tool in entry.get("tools", []):
+            extras.extend(["--with-editable", str(repo_root / str(entry["path"]))])
+    return extras
+
+
+def _merge_extras(*extra_lists: list[str]) -> list[str]:
+    """Concatenate ``--with``/``--with-editable`` pairs, dropping repeats of a target."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for extras in extra_lists:
+        for flag, target in zip(extras[::2], extras[1::2]):
+            if target in seen:
+                continue
+            seen.add(target)
+            merged.extend([flag, target])
+    return merged
+
+
 def _warn_extras_lost(tool_name: str, why: str) -> None:
     sys.stderr.write(
         f"refresh: cannot read what '{tool_name}' was installed with ({why}); "
@@ -2846,7 +2884,8 @@ def _reinstall_tool(
     timeout: float | None = None,
 ) -> None:
     """Re-resolve the installed ``executable``'s tool from its in-tree source,
-    keeping the extras it was installed with.
+    keeping the extras it was installed with and adding the merged tree's own
+    plugin manifest.
 
     ``expend`` gates the expendable tag: a forward install may be shed (the
     rollback restores the tool-environment snapshot), a recovery install must
@@ -2859,7 +2898,10 @@ def _reinstall_tool(
         "install",
         "-e",
         source_dir,
-        *_tool_extras(tool_name, repo_root, runner, env),
+        *_merge_extras(
+            _tool_extras(tool_name, repo_root, runner, env),
+            _manifest_extras(tool_name, repo_root),
+        ),
         "--reinstall",
     ]
     _run_checked(

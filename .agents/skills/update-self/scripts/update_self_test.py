@@ -3702,6 +3702,76 @@ def test_the_refresh_preserves_a_tools_registered_plugins(
     ]
 
 
+def test_the_refresh_registers_the_merged_trees_new_plugins(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # The receipt names only the plugins a tool was installed with last time.
+    # A release that ships a new plugin (opencode, say) merges a settings.toml
+    # its agent type needs, and a reinstall from the receipt alone leaves an
+    # mngr that rejects its own config at the restart -- so the merged tree's
+    # manifest is unioned in, for both tools, without repeating what the
+    # receipt already has.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        update_self.MNGR_TOOL_NAME,
+        f"""
+        [tool]
+        requirements = [
+            {{ name = "imbue-mngr", editable = "{apply_repo}/system/vendor/mngr/libs/mngr" }},
+            {{ name = "imbue-mngr-claude", editable = "{apply_repo}/system/vendor/mngr/libs/mngr_claude" }},
+        ]
+        """,
+    )
+    manifest = apply_repo / update_self.PLUGIN_MANIFEST_PATH
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        """
+        [[plugins]]
+        path = "system/vendor/mngr/libs/mngr_claude"
+        tools = ["mngr", "system-interface"]
+
+        [[plugins]]
+        path = "system/vendor/mngr/libs/mngr_opencode"
+        tools = ["mngr", "system-interface"]
+
+        [[plugins]]
+        path = "system/vendor/mngr/libs/mngr_wait"
+        tools = ["mngr"]
+        """
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert _install_argv(runner, update_self.MNGR_DIR) == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        update_self.MNGR_DIR,
+        "--with-editable",
+        f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
+        "--with-editable",
+        f"{apply_repo}/system/vendor/mngr/libs/mngr_opencode",
+        "--with-editable",
+        f"{apply_repo}/system/vendor/mngr/libs/mngr_wait",
+        "--reinstall",
+    ]
+    assert _install_argv(runner, update_self.APP_DIR) == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        update_self.APP_DIR,
+        "--with-editable",
+        f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
+        "--with-editable",
+        f"{apply_repo}/system/vendor/mngr/libs/mngr_opencode",
+        "--reinstall",
+    ]
+
+
 def test_the_refresh_repins_the_base_to_the_in_tree_source(
     apply_repo: Path, tmp_path: Path
 ) -> None:
