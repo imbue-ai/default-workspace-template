@@ -819,6 +819,26 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
         "system/services/gamma/changelog/my-branch.md",
     ]
 
+    # The worker guide has the tool run from the staged skill's scripts
+    # directory. A git pathspec is cwd-relative, so from a subdirectory the
+    # changelog glob matched nothing and the digest was silently empty.
+    subdir = tmp_path / "system" / "apps" / "browser"
+    assert (
+        update_self.main(
+            [
+                "changelog-entries",
+                "--base",
+                "base",
+                "--target",
+                "target",
+                "--repo-root",
+                str(subdir),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["added"] == added
+
 
 def test_classify_merge_refuses_a_local_that_already_contains_the_target(
     tmp_path, capsys
@@ -2532,6 +2552,12 @@ def test_the_provisioner_runs_under_the_image_builds_environment(
     # env, with everything else ambient preserved.
     monkeypatch.setenv("HOME", "/home/user")
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    # An image built when the Dockerfile exported its pins as ENV carries the
+    # image's version in every process; setup_system.sh's `:=` defaults yield
+    # to it, so the merged tree's bump would reinstall the old version and pass
+    # the script's own pin check. The pins are the tree's, never the caller's.
+    monkeypatch.setenv("CLAUDE_CODE_VERSION", "2.1.207")
+    monkeypatch.setenv("NODE_VERSION", "22.0.0")
     runner = _apply_runner(_PROVISIONER_DIFF + _BACKEND_DIFF, apply_repo)
     spawner = _FakeSpawner(output="boom", exited=True)
 
@@ -2552,10 +2578,32 @@ def test_the_provisioner_runs_under_the_image_builds_environment(
         assert env["HOME"] == "/root"
         assert env["PATH"].startswith("/root/.local/bin:")
         assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
+        assert "CLAUDE_CODE_VERSION" not in env
+        assert "NODE_VERSION" not in env
     # Only the recovery re-run is forced past the provision guard: the rolled-
     # back tree is the one the guard's marker was written for, so an unforced
     # re-run would skip and leave the global tools at the merged versions.
     assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == [None, "1"]
+
+
+def test_every_script_setup_system_reads_is_a_provisioner_input() -> None:
+    # The live re-run is keyed on the files the provisioner reads. An installer
+    # setup_system.sh chains but this set omits means a pin bump in that
+    # installer alone lands without the binary being reinstalled.
+    setup_system = (
+        _WORKSPACE_ROOT / "system" / "scripts" / "setup_system.sh"
+    ).read_text()
+    # Every sibling script setup_system.sh runs or sources by path
+    # (`bash "$dir/x.sh"`, `. "$(dirname "$0")/x.sh"`), as opposed to one it
+    # only mentions in a comment.
+    chained = {
+        f"system/scripts/{name}"
+        for name in re.findall(
+            r'^\s*(?:bash|\.)\s+"[^"]*/([\w.-]+\.sh)"', setup_system, re.MULTILINE
+        )
+    }
+    assert chained != set()
+    assert chained <= update_self._PROVISIONER_SCRIPTS
 
 
 def test_a_hung_forward_step_rolls_back_naming_the_step(
