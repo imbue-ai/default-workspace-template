@@ -41,6 +41,7 @@ vi.mock("../models/Providers", () => ({
   getAccounts: () => providerState.accounts,
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
   openProviderChooser: () => undefined,
+  deleteAccount: () => Promise.resolve(),
 }));
 
 const started: string[] = [];
@@ -210,17 +211,63 @@ describe("the combo card", () => {
     expect(picks).toHaveLength(1);
   });
 
-  it("greys every provider that is not this chat's, and opens a new chat on it", () => {
+  it("locks every provider that is not this chat's, and says how to reach it", () => {
     // A chat binds to its account when it is CREATED and nothing rebinds it, so there is no
-    // state in which switching would work -- clicking one starts a chat on it instead.
+    // state in which switching would work. The row states that rather than doing something
+    // else by surprise -- the tooltip is the whole affordance.
     providerState.accounts = [ACCOUNT, { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" }];
     render();
     click(".model-selector-trigger");
-    click('[class*="cursor-pointer"]');
+    click('[data-card-row="providers"]');
     const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Google"));
     expect(rows).toHaveLength(1);
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(started).toEqual(["acct-2"]);
+    expect(started).toEqual([]);
+    expect(screenText()).toContain("Start a new chat to use this provider");
+  });
+
+  it("arms the sign-out trash before it fires, and disarms it when the card closes", () => {
+    // The bin only appears on hover and signing out cannot be undone, so a single click would
+    // too often be someone finding out what it was.
+    render();
+    click(".model-selector-trigger");
+    click('[data-card-row="providers"]');
+    expect(screenText()).not.toContain("Remove?");
+    click('[aria-label="Sign out of Anthropic"]');
+    expect(screenText()).toContain("Remove?");
+
+    // Closing and reopening must not leave it primed.
+    click(".model-selector-trigger");
+    click(".model-selector-trigger");
+    click('[data-card-row="providers"]');
+    expect(screenText()).not.toContain("Remove?");
+  });
+
+  it("states model, effort and fast on the trigger, from the card's own values", () => {
+    // The chip is a SUMMARY of the card. Reading them off different sources is how they came
+    // to disagree, so this pins them to one.
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "high", in_picker: true },
+    ];
+    const model = { ...OPUS, efforts, supports_fast: true };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: "high", fast: true }, matched: model, pending: null };
+    render();
+    const trigger = document.querySelector(".model-selector-trigger") as HTMLElement;
+    expect(trigger.textContent).toContain("Opus");
+    expect(trigger.textContent).toContain("High");
+    expect(trigger.querySelector("svg")).not.toBeNull();
+  });
+
+  it("gives a read-only harness no model list to open", () => {
+    // agy's `/model` is an interactive TUI with no scriptable form. A chevron on that row
+    // would be a promise the card cannot keep.
+    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-card-row="model"]')?.querySelector("svg")).toBeNull();
+    expect(screenText()).toContain("run /model or /effort in the agent terminal");
   });
 
   it("survives a dynamic harness with no static options", () => {

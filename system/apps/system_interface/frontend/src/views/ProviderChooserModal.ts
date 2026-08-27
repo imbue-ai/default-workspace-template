@@ -336,6 +336,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               {
                 type: "button",
                 class: css.ROW_ACTION,
+                "data-confirm-delete": account.id,
                 "aria-label": confirmingDelete === account.id ? "Confirm removal" : `Remove ${account.label}`,
                 onclick: () => {
                   if (confirmingDelete !== account.id) {
@@ -781,7 +782,22 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           current !== null && mode === "apiKey" ? keyProviderMenu(current) : null,
           m(
             "div",
-            { class: css.MODAL, role: "dialog", "aria-modal": "true", "aria-label": "Pick your AI provider" },
+            {
+              class: css.MODAL,
+              role: "dialog",
+              "aria-modal": "true",
+              "aria-label": "Pick your AI provider",
+              // Pressing anywhere that is NOT the armed Remove? disarms it. Someone who
+              // pressed the bin to find out what it did gets to back out by looking away.
+              // Keyed on the button's own id rather than a plain "did we hit a button",
+              // because mousedown lands before the click that confirms.
+              onmousedown: (event: MouseEvent) => {
+                if (confirmingDelete === null) return;
+                const armed = (event.target as HTMLElement).closest?.("[data-confirm-delete]");
+                if (armed?.getAttribute("data-confirm-delete") === confirmingDelete) return;
+                confirmingDelete = null;
+              },
+            },
             m("div", { class: css.PANEL }, [
               m("div", { class: css.HEADER }, [
                 current !== null

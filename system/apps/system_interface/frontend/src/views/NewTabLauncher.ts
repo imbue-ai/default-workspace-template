@@ -36,7 +36,15 @@ import { getApps } from "../models/AgentManager";
 import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
-import { getAccounts, getSelectedAccount, openProviderChooser, selectAccount } from "../models/Providers";
+import {
+  deleteAccount,
+  getAccounts,
+  getSelectedAccount,
+  openProviderChooser,
+  selectAccount,
+} from "../models/Providers";
+import { Portal } from "./portal";
+import * as css from "./modelCardStyles";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 
@@ -382,52 +390,187 @@ export interface NewTabLauncherAttrs {
  *  setting that happened to be nearby, and nothing said the button obeyed it.
  *
  *  Cross-PROVIDER switching mid-chat is not supported yet, which is exactly why the choice
- *  belongs here, before the chat exists. */
-function providerSelect(onOpenNew: (target: LaunchTarget) => void): m.Vnode {
-  const account = getSelectedAccount();
-  const accounts = getAccounts();
-  return m(
-    "select",
-    {
-      class:
-        "text-text-secondary hover:bg-bg-hover hover:text-text-primary min-w-0 max-w-[190px] cursor-pointer " +
-        "appearance-none truncate bg-transparent py-0 pr-6 pl-3 text-[13px] focus:outline-none",
-      // The caret is drawn rather than left to the platform: a native one on a transparent
-      // select renders differently per OS and would not sit on the button's baseline.
-      style:
-        "background-image: url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' " +
-        "viewBox='0 0 24 24' fill='none' stroke='%238c8c8c' stroke-width='2' stroke-linecap='round' " +
-        "stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\"); " +
-        "background-repeat: no-repeat; background-position: right 6px center; background-size: 14px;",
-      "aria-label": "Provider for the new chat",
-      value: account?.id ?? NO_PROVIDER_VALUE,
-      onchange: (event: Event) => {
-        const chosen = (event.target as HTMLSelectElement).value;
-        if (chosen === ADD_PROVIDER_VALUE) {
-          // Adding a provider from the new-tab screen opens a chat on it: this picker exists
-          // to choose what the next chat runs on, so signing in IS choosing.
-          openProviderChooser({
-            onSignedIn: (accountId) => onOpenNew({ kind: "chat", accountId }),
-          });
-          return;
-        }
-        if (chosen !== NO_PROVIDER_VALUE) selectAccount(chosen);
-      },
+ *  belongs here, before the chat exists.
+ *
+ *  A menu, not a native `<select>`: the OS dropdown cannot carry the per-row sign-out the
+ *  chat card's provider list has, renders differently on every platform, and looked nothing
+ *  like the rest of the app. It shares that card's row classes so the two ARE the same list.
+ */
+function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => void }> {
+  let open = false;
+  let anchor: DOMRect | null = null;
+  let triggerElement: HTMLElement | null = null;
+  let menuElement: HTMLElement | null = null;
+  // Which account's trash has been armed into "Remove?"; see the model card's copy of this.
+  let confirmingRemoval: string | null = null;
+
+  function close(): void {
+    open = false;
+    anchor = null;
+    confirmingRemoval = null;
+  }
+
+  function handleOutsideMousedown(event: MouseEvent): void {
+    if (!open) return;
+    const target = event.target as Node;
+    if (menuElement?.contains(target) === true || triggerElement?.contains(target) === true) return;
+    close();
+    m.redraw();
+  }
+
+  /** Below the trigger when there is room, above it when there is not. */
+  function placement(rect: DOMRect): string {
+    const margin = 8;
+    const left = Math.min(
+      Math.max(rect.left, margin),
+      Math.max(margin, window.innerWidth - margin - PICKER_WIDTH),
+    );
+    const below = window.innerHeight - rect.bottom - margin;
+    const vertical =
+      below >= PICKER_MIN_HEIGHT
+        ? `top: ${rect.bottom + 4}px; max-height: ${below - 4}px;`
+        : `bottom: ${window.innerHeight - rect.top + 4}px; max-height: ${Math.max(0, rect.top - margin - 4)}px;`;
+    return `left: ${left}px; ${vertical} width: ${PICKER_WIDTH}px;`;
+  }
+
+  return {
+    oninit() {
+      document.addEventListener("mousedown", handleOutsideMousedown);
     },
-    // Built as one list rather than with a conditional hole: mithril refuses a fragment
-    // that mixes keyed vnodes with a null, and every option here is keyed.
-    [
-      ...(accounts.length === 0
-        ? [{ id: NO_PROVIDER_VALUE, label: "No provider yet" }]
-        : accounts.map((candidate) => ({ id: candidate.id, label: candidate.label }))),
-      { id: ADD_PROVIDER_VALUE, label: "+ Add provider" },
-    ].map((option) => m("option", { key: option.id, value: option.id }, option.label)),
-  );
+    onremove() {
+      document.removeEventListener("mousedown", handleOutsideMousedown);
+    },
+    view(vnode) {
+      const selected = getSelectedAccount();
+      const accounts = getAccounts();
+      const trigger = m(
+        "button",
+        {
+          type: "button",
+          class:
+            "text-text-secondary hover:bg-bg-hover hover:text-text-primary flex min-w-0 max-w-[190px] " +
+            "cursor-pointer items-center gap-1 truncate bg-transparent py-0 pr-2 pl-3 text-[13px] focus:outline-none",
+          "aria-label": "Provider for the new chat",
+          "aria-expanded": open ? "true" : "false",
+          oncreate: (triggerVnode: m.VnodeDOM) => {
+            triggerElement = triggerVnode.dom as HTMLElement;
+          },
+          onremove: () => {
+            triggerElement = null;
+          },
+          onclick: (event: MouseEvent) => {
+            // The picker sits inside the New-chat tile, whose own click starts a chat.
+            event.stopPropagation();
+            if (open) {
+              close();
+              return;
+            }
+            open = true;
+            anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
+            confirmingRemoval = null;
+          },
+        },
+        [
+          m("span", { class: "min-w-0 truncate" }, selected?.label ?? "No provider yet"),
+          m("span", { class: "shrink-0 text-text-faint" }, m.trust(icon("chevron-down", { size: 14 }))),
+        ],
+      );
+
+      if (!open || anchor === null) return trigger;
+
+      const menu = m(
+        "div",
+        {
+          class: css.FLYOUT,
+          style: placement(anchor),
+          oncreate: (menuVnode: m.VnodeDOM) => {
+            menuElement = menuVnode.dom as HTMLElement;
+          },
+          onremove: () => {
+            menuElement = null;
+          },
+        },
+        [
+          m(
+            "div",
+            { class: css.FLYOUT_SCROLL },
+            accounts.length === 0
+              ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
+              : accounts.map((candidate) => {
+                  const isSelected = candidate.id === selected?.id;
+                  const arming = confirmingRemoval === candidate.id;
+                  return m("div", { key: candidate.id, class: css.ROW_WRAP }, [
+                    m(
+                      "button",
+                      {
+                        type: "button",
+                        class: isSelected ? css.FLYOUT_ROW_SELECTED : css.FLYOUT_ROW,
+                        onclick: (event: MouseEvent) => {
+                          event.stopPropagation();
+                          selectAccount(candidate.id);
+                          close();
+                        },
+                      },
+                      [
+                        m("span", { class: css.FLYOUT_ROW_NAME }, candidate.provider),
+                        m("span", { class: css.FLYOUT_ROW_SUB }, `(${candidate.harness_label})`),
+                        isSelected
+                          ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+                          : null,
+                      ],
+                    ),
+                    m(
+                      "button",
+                      {
+                        type: "button",
+                        class: arming ? css.ROW_TRASH_ARMED : css.ROW_TRASH,
+                        "aria-label": arming
+                          ? `Confirm removing ${candidate.provider}`
+                          : `Sign out of ${candidate.provider}`,
+                        onclick: (event: MouseEvent) => {
+                          event.stopPropagation();
+                          if (!arming) {
+                            confirmingRemoval = candidate.id;
+                            return;
+                          }
+                          confirmingRemoval = null;
+                          void deleteAccount(candidate.id);
+                        },
+                      },
+                      arming ? "Remove?" : m.trust(icon("trash", { size: 13 })),
+                    ),
+                  ]);
+                }),
+          ),
+          m(
+            "button",
+            {
+              type: "button",
+              class: css.FLYOUT_ADD,
+              onclick: (event: MouseEvent) => {
+                event.stopPropagation();
+                close();
+                // Adding a provider from the new-tab screen opens a chat on it: this picker
+                // exists to choose what the next chat runs on, so signing in IS choosing.
+                openProviderChooser({
+                  onSignedIn: (accountId) => vnode.attrs.onOpenNew({ kind: "chat", accountId }),
+                });
+              },
+            },
+            "+ Add a provider",
+          ),
+        ],
+      );
+
+      // Portalled: the launcher sits inside a dockview panel that clips its overflow.
+      return [trigger, m(Portal, { children: menu })];
+    },
+  };
 }
 
-/** The picker's sentinel options. Neither is an account id, so neither can collide. */
-const ADD_PROVIDER_VALUE = "__add__";
-const NO_PROVIDER_VALUE = "__none__";
+/** The picker's own width, and the shortest it is worth opening downward. */
+const PICKER_WIDTH = 260;
+const PICKER_MIN_HEIGHT = 120;
 
 export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   // Per table, the kinds the user unchecked. Hidden rather than shown so a kind
@@ -687,7 +830,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                     ],
                   ),
                   isChatTile ? m("span", { class: "bg-border w-px self-stretch" }) : null,
-                  isChatTile ? providerSelect(attrs.onOpenNew) : null,
+                  isChatTile ? m(ProviderPicker, { onOpenNew: attrs.onOpenNew }) : null,
                 ],
               );
             }),

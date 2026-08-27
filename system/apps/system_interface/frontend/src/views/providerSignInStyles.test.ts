@@ -1,5 +1,5 @@
 /**
- * Every color utility in the ported sign-in styles has to resolve to a real token.
+ * Every color utility in the ported style modules has to resolve to a real token.
  *
  * Tailwind v4 emits NOTHING for an unknown color utility -- no build error, no lint error,
  * no type error. `hover:bg-fill-hover` against an undefined `--color-fill-hover` simply has
@@ -11,7 +11,14 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import * as css from "./providerSignInStyles";
+import * as cardCss from "./modelCardStyles";
+import * as signInCss from "./providerSignInStyles";
+
+/** Both files are verbatim ports from the same mockup, so both invite the same failure. */
+const PORTED_MODULES: Record<string, Record<string, unknown>> = {
+  providerSignInStyles: signInCss,
+  modelCardStyles: cardCss,
+};
 
 const STYLE_SHEET = readFileSync(join(__dirname, "..", "style.css"), "utf8");
 
@@ -20,10 +27,10 @@ function definedColorTokens(): Set<string> {
   return new Set([...STYLE_SHEET.matchAll(/--color-([a-z0-9-]+)\s*:/g)].map((m) => m[1]));
 }
 
-/** Every color utility used across the exported class strings, minus arbitrary values. */
-function usedColorTokens(): Set<string> {
+/** Every color utility used across one module's exported class strings, minus arbitrary values. */
+function usedColorTokens(module: Record<string, unknown>): Set<string> {
   const used = new Set<string>();
-  for (const value of Object.values(css)) {
+  for (const value of Object.values(module)) {
     if (typeof value !== "string") continue;
     for (const cls of value.split(/\s+/)) {
       // Strip variants ("hover:", "focus:") and any leading "-".
@@ -51,6 +58,15 @@ function usedColorTokens(): Set<string> {
           "wrap",
           "balance",
           "pretty",
+          // Border SIDES, which share the `border-` prefix but name an edge, not a colour.
+          "t",
+          "b",
+          "l",
+          "r",
+          "x",
+          "y",
+          // `outline-offset-*` likewise: a distance under the `outline-` prefix.
+          "offset-2",
         ].includes(token)
       )
         continue;
@@ -60,16 +76,18 @@ function usedColorTokens(): Set<string> {
   return used;
 }
 
-describe("the ported sign-in styles", () => {
-  it("uses only color tokens this app defines", () => {
-    const defined = definedColorTokens();
-    const missing = [...usedColorTokens()].filter(
-      // Tailwind ships its own palette (white, black, red-600, ...); only names that look
-      // like OUR tokens need to be in our stylesheet.
-      (token) => !defined.has(token) && !/^(white|black|transparent|current|[a-z]+-\d{2,3})$/.test(token),
-    );
-    expect(missing).toEqual([]);
-  });
+describe("the ported styles", () => {
+  for (const [name, module] of Object.entries(PORTED_MODULES)) {
+    it(`uses only color tokens this app defines (${name})`, () => {
+      const defined = definedColorTokens();
+      const missing = [...usedColorTokens(module)].filter(
+        // Tailwind ships its own palette (white, black, red-600, ...); only names that look
+        // like OUR tokens need to be in our stylesheet.
+        (token) => !defined.has(token) && !/^(white|black|transparent|current|[a-z]+-\d{2,3})$/.test(token),
+      );
+      expect(missing).toEqual([]);
+    });
+  }
 
   it("defines the mockup's token names, so its class strings port unchanged", () => {
     const defined = definedColorTokens();
@@ -85,6 +103,11 @@ describe("the ported sign-in styles", () => {
       "fill-active",
       "surface-primary",
       "surface-overlay",
+      // The card's tooltip chip is the only surface that needs the inverse pair; this app is
+      // light-only, so they are a fixed dark chip rather than a light/dark mirror.
+      "surface-inverse",
+      "inverse-primary",
+      "important",
     ]) {
       expect(defined, `--color-${token} is missing`).toContain(token);
     }

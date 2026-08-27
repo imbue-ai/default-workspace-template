@@ -8,6 +8,7 @@ vi.mock("../models/Providers", () => ({
   getAccounts: () => providerState.accounts,
   getSelectedAccount: () => providerState.accounts[0] ?? null,
   selectAccount: () => undefined,
+  deleteAccount: () => Promise.resolve(),
   openProviderChooser: () => undefined,
 }));
 
