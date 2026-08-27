@@ -1495,10 +1495,13 @@ def test_launch_args_declare_english_explicitly() -> None:
     assert "--accept-lang=en-US,en" in args
 
 
-def test_the_default_home_page_forces_google_into_english() -> None:
-    # Google picks its UI language from IP GEOLOCATION, not Accept-Language, and this
-    # workspace's egress is an OVH range that geolocates to France. Without `hl=en` the
-    # first thing a user sees on every new browser is a French consent page. Only the
-    # landing page is fixable this way -- `hl` means nothing outside Google.
-    assert "hl=en" in bsession._HOME_URL
-    assert bsession._HOME_URL.startswith("https://www.google.com/?")  # a `?` query, not `&`
+def test_a_new_browser_lands_on_a_blank_page() -> None:
+    # It used to land on google.com, so the first thing anyone saw on a new browser was
+    # Google's consent interstitial -- in French, because Google decides both the language
+    # and the "this looks like the EU" question from IP geolocation, and our egress is an
+    # OVH range registered in Roubaix. `?hl=en` would only have translated that wall; the
+    # interstitial appears because of WHERE Google thinks we are, which a language
+    # parameter does not change. A blank page has nothing to geolocate.
+    assert bsession._HOME_URL == "about:blank"
+    # ...and it must not be persisted as a restorable tab, or every restart would reopen it.
+    assert bsession._is_restorable_url(bsession._HOME_URL) is False
