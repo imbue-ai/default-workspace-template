@@ -14,11 +14,24 @@ from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracke
 from imbue.system_interface.harnesses.registry import build_tracker
 from imbue.system_interface.harnesses.registry import get_harness_spec
 
-# All three parsers emit the same common event schema (tool calls nested in
+# Every parser here emits the same common event schema (tool calls nested in
 # ``assistant_message``, results keyed by ``tool_call_id`` -- see ``harnesses/events.py``), so
-# every harness runs the shared tests. The fixtures open with a ``turn_started`` marker so
+# these harnesses run the shared tests. The fixtures open with a ``turn_started`` marker so
 # codex's turn latch engages; claude/pi read the tail and ignore the marker.
-_TRACKER_HARNESSES = tuple(HarnessType)
+#
+# NOT ``tuple(HarnessType)``: every assertion below reads a state INFERRED FROM A TRANSCRIPT,
+# which the launch-only harnesses (see ``_PLACEHOLDER_HARNESSES``) do not have. Their dot comes
+# from mngr's ``active`` marker alone, so they can never report TOOL_RUNNING and cannot have a
+# stale tail. Covering them here would mean weakening these assertions for the harnesses that
+# CAN meet them; they get their own test instead. Move a harness up to this tuple when it lands
+# a real transcript watcher.
+_TRACKER_HARNESSES = (HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.PI_CODING, HarnessType.ANTIGRAVITY)
+
+# The harnesses on the shared placeholder watcher/tracker -- launchable, with no transcript
+# behind them. Emptying this tuple is what retires ``harnesses/placeholder.py``. antigravity
+# graduated out of it once its real watcher landed; it still uses the placeholder RESOLVER,
+# which is why its catalog is asserted empty below rather than here.
+_PLACEHOLDER_HARNESSES = (HarnessType.OPENCODE,)
 
 
 def _turn_started_marker() -> dict[str, Any]:
@@ -181,3 +194,53 @@ def test_active_marker_declarations_match_what_mngr_writes() -> None:
     assert build_tracker(HarnessType.CLAUDE).active_marker_filename == "active"
     assert build_tracker(HarnessType.PI_CODING).active_marker_filename == "active"
     assert build_tracker(HarnessType.CODEX).active_marker_filename is None
+
+
+@pytest.mark.parametrize("harness", _PLACEHOLDER_HARNESSES)
+def test_placeholder_harness_dot_follows_the_active_marker(harness: HarnessType) -> None:
+    """A launch-only harness derives its dot from mngr's ``active`` marker and nothing else.
+
+    Both plugins behind these harnesses maintain that marker already, so the dot is live even
+    with no transcript. The states it can reach are exactly two: THINKING while a turn is in
+    flight, IDLE otherwise -- never TOOL_RUNNING, which needs an unmatched tool call from a
+    transcript. Pinned here so swapping in a real tracker is a deliberate, visible change.
+    """
+    tracker = build_tracker(harness)
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=True, process_started_at=None) == ActivityState.THINKING
+    # The base class's dead-lifecycle gate still applies, exactly as it does for every harness.
+    assert tracker.derive(lifecycle_state="STOPPED", is_active_marker_present=True, process_started_at=None) == ActivityState.IDLE
+
+
+@pytest.mark.parametrize("harness", _PLACEHOLDER_HARNESSES)
+def test_placeholder_harness_reports_an_empty_transcript(harness: HarnessType) -> None:
+    """The placeholder watcher/catalog answer empty rather than raising, so a launch-only
+    harness renders a blank chat instead of erroring, and its model bar shows nothing."""
+    spec = get_harness_spec(harness)
+    assert spec.catalog_factory().options == ()
+    assert spec.special_kinds == frozenset()
+    # No auth gate: a fail-closed probe that has not been verified would refuse every create.
+    assert spec.auth_check is None
+@pytest.mark.parametrize(
+    ("harness", "expected"),
+    [
+        (HarnessType.CLAUDE, "claude_process_started"),
+        (HarnessType.CODEX, "codex_process_started"),
+        (HarnessType.PI_CODING, "pi_process_started"),
+    ],
+)
+def test_process_started_marker_is_declared_on_the_spec(harness: HarnessType, expected: str) -> None:
+    """The OOM prioritizer resolves this filename knowing only an agent id, so it must come
+    from harness IDENTITY -- available the moment the agent is known -- and not from a live
+    tracker instance, which ``_ensure_activity_tracking`` only registers for agents with a
+    local state dir. Pinned to the literal mngr touches, since a drift here silently costs
+    the prioritizer its aging rather than raising."""
+    assert get_harness_spec(harness).process_started_marker_filename == expected
+
+
+def test_spec_process_started_marker_matches_its_tracker() -> None:
+    """The spec field and the tracker ClassVar name the same file for every harness: the
+    tracker still uses it to bound transcript staleness, so the two must not drift."""
+    for harness in HarnessType:
+        spec = get_harness_spec(harness)
+        assert spec.process_started_marker_filename == spec.tracker_class.marker_filename

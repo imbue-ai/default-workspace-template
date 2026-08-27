@@ -526,6 +526,9 @@ describe("openNewTiles", () => {
       expect(harnessOf("Chat")).toBe("claude");
       expect(harnessOf("Codex chat")).toBe("codex");
       expect(harnessOf("Pi chat")).toBe("pi-coding");
+      // Same trap as pi: the tile's word is "Agy", but mngr's agent type is
+      // "antigravity" ("agy" is only an alias the create endpoint's enum rejects).
+      expect(harnessOf("Agy chat")).toBe("antigravity");
     } finally {
       otherHarnessesEnabled = false;
     }
