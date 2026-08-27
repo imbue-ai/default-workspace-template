@@ -222,6 +222,9 @@ def adopt_default_claude_home(account_path: Path, home: Path | None = None) -> N
         shutil.rmtree(root, ignore_errors=True)
     elif root.exists():
         root.unlink()
+    else:
+        # Nothing there at all -- a workspace that has never run claude. Just link it.
+        pass
     root.parent.mkdir(parents=True, exist_ok=True)
     root.symlink_to(account_path, target_is_directory=True)
     logger.info("Pointed {} at account {}", root, account_path.name)

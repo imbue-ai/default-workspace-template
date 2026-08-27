@@ -31,10 +31,6 @@ from imbue.system_interface.harnesses.antigravity.session import AntigravityHarn
 from imbue.system_interface.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
 from imbue.system_interface.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
-from imbue.system_interface.harnesses.auth_check import ANTIGRAVITY_AUTH_CHECK
-from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
-from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
-from imbue.system_interface.harnesses.auth_check import PI_AUTH_CHECK
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
@@ -300,9 +296,6 @@ class HarnessSpec(FrozenModel):
     # that taps through its live connection (codex) registers none and overrides
     # ``shoulder_tap`` on its session directly.
     shoulder_tap_class: type[AtomicShoulderTap] | None = None
-    # How to tell whether this harness's CLI is signed in before creating an agent on it.
-    # ``None`` = no auth gate (claude's auth lives in the shared ``~/.claude``).
-    auth_check: HarnessAuthCheck | None = None
     # The popups this harness declares for the chat UI, shipped on the wire with the
     # catalog. An empty tuple is the honest statement that a harness has none (pi's
     # composer sends everything as-is and it never launches fast).
@@ -372,7 +365,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # ``turn/interrupt`` + a per-id settle / the combined early resend), so the registered
         # interrupter default is inert and no shoulder_tap_class is needed.
         session_class=CodexHarnessSession,
-        auth_check=CODEX_AUTH_CHECK,
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
             HarnessPopup(
@@ -399,7 +391,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # it overrides the base restart-drain rather than SIGKILL-relaunching.
         interrupt_to_composer_class=PiInterruptToComposer,
         shoulder_tap_class=PiAtomicShoulderTap,
-        auth_check=PI_AUTH_CHECK,
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=("/login",), action=PopupAction.OPEN_AUTH),
             HarnessPopup(
@@ -415,12 +406,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     # would fall it back to claude and point claude's watcher at another harness's state dir.
     # So it names the shared placeholders (see ``harnesses/placeholder.py``) until its own
     # implementation lands. antigravity has since landed all four and no longer uses them.
-    #
-    # ``auth_check`` is deliberately None for both. ``find_unauthenticated_harness_reason`` is
-    # FAIL-CLOSED: an auth probe whose command or output pattern is wrong refuses every create
-    # on that harness. Neither CLI's sign-in probe has been verified here, so a guessed one
-    # would block the very thing this registration exists to enable. Each harness adds its own
-    # (to ``auth_check.py``, with its popups) alongside its real implementation.
     HarnessType.OPENCODE: HarnessSpec(
         name=HarnessType.OPENCODE,
         watcher_class=PlaceholderSessionWatcher,
@@ -472,7 +457,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         shoulder_tap_class=AntigravityAtomicShoulderTap,
         cancel_chord="C-c",
         popups=(_MODEL_BAR_POPUP,),
-        auth_check=ANTIGRAVITY_AUTH_CHECK,
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
         auth_instructions="Open the agent's terminal and run `agy` (no arguments) to sign in.",

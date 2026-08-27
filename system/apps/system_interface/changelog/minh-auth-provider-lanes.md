@@ -277,3 +277,14 @@ The submit-credentials response keeps `auth_mode` and gains `account_id`. mngr's
 `test_litellm_via_workspace` asserts on the first and now creates its chat on the second,
 because the boot chat it used to reuse binds at create time and never sees a credential
 that arrives later. That mirror is imbue-ai/mngr-internal#688.
+
+# Delete the signed-out preflight
+
+Creating a chat no longer probes a harness's CLI first. An account is committed only after
+that harness's own probe agreed it was signed in, and a chat runs on the account it binds
+to, so "is this harness authenticated" is answered by the account existing. The old gate
+probed the SHARED login -- a different credential from the account -- so it would have
+refused creates that were about to work fine.
+
+`harnesses/auth_check.py` goes with it. Its probe table duplicated `signed_in.py`'s, which
+is the one that decides whether an account is real.

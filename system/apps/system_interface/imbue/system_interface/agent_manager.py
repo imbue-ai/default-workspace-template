@@ -61,8 +61,6 @@ from imbue.system_interface.harnesses.binding import harness_for
 from imbue.system_interface.harnesses.binding import resolve_binding
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
-from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
-from imbue.system_interface.harnesses.auth_check import find_unauthenticated_harness_reason
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -544,7 +542,6 @@ class AgentManager:
     # around it -- per-harness behavior is the session implementation's.
     _session_by_agent: dict[str, AgentHarnessSession]
     # The alt-harness sign-in preflight (injectable so tests skip the real CLI).
-    _auth_gate: Callable[[HarnessAuthCheck | None], str | None]
     # The last computed model choice per agent, and the filesystem watcher that
     # re-derives it when the agent's model_state.json changes. The live read is
     # harness-neutral (the shared reader + the harness's registered state-file path), so
@@ -577,7 +574,6 @@ class AgentManager:
         broadcaster: WebSocketBroadcaster,
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
-        auth_gate: Callable[[HarnessAuthCheck | None], str | None] = find_unauthenticated_harness_reason,
         liveness_prober: Callable[[str, str], bool] = probe_app_liveness,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
@@ -620,7 +616,6 @@ class AgentManager:
         manager._queued_messages_by_agent = {}
         manager._queue_idle_handler_by_agent = {}
         manager._session_by_agent = {}
-        manager._auth_gate = auth_gate
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
         manager._auto_opened_assist_ids = set()
@@ -1127,12 +1122,11 @@ class AgentManager:
         used one, and falls back to the workspace's shared login when there are none -- which
         is the claude harness, exactly as before accounts existed.
 
-        An alt harness authenticates through its own CLI; if that CLI is signed out, refuse
-        the create up front (raising ``AgentCreationError``) rather than launch a chat that
-        can never take a turn. Claude is not gated -- its auth is the shared workspace login.
-        A bound chat skips the gate entirely: the gate probes the SHARED login, which is a
-        different credential from the account, and an account is only ever committed after
-        its own probe said it was signed in.
+        There is no signed-out preflight any more. An account is committed only after the
+        harness's own probe agreed it was signed in, and a chat runs on the account it binds
+        to -- so "is this harness authenticated" is answered by the account existing. The old
+        gate probed the SHARED login, which is a different credential from the account and
+        would have refused creates that were about to work fine.
         """
         try:
             account = resolve_binding(account_id)
@@ -1140,11 +1134,6 @@ class AgentManager:
             raise AgentCreationError(str(e)) from e
         harness = harness_for(account) if account is not None else HarnessType.CLAUDE
         assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
-
-        if account is None:
-            unauthenticated_reason = self._auth_gate(get_harness_spec(harness).auth_check)
-            if unauthenticated_reason is not None:
-                raise AgentCreationError(unauthenticated_reason)
 
         explicit_name = requested_name.strip()
         if explicit_name and not canonical_agent_name(explicit_name):

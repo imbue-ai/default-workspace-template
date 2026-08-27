@@ -517,9 +517,6 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Both menu entries make a chat, so creation_type is the role -- never the harness."""
-    # Stub the sign-in preflight to always report signed in, so the create does not depend
-    # on a real (possibly signed-out) codex CLI in the test env.
-    agent_manager._auth_gate = lambda check: None
     q = broadcaster.register()
 
     with agent_manager._lock:
@@ -1547,7 +1544,6 @@ def test_create_chat_agent_numbers_each_harness_under_its_own_word(
     rather than by asking for it -- which is the point: a caller cannot name a harness
     that disagrees with the credential the chat will actually run on.
     """
-    agent_manager._auth_gate = lambda check: None
     # The plain chat is created first, while there is nothing signed in, so it lands on
     # the workspace login as claude. Signing in afterwards is what makes the second one
     # codex -- and note it would also make an unbound THIRD chat codex, since the most
