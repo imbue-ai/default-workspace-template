@@ -131,7 +131,7 @@ import {
   setMemberTitle,
 } from "../models/MemberTitles";
 import { createBrowser } from "../models/Browsers";
-import { getAccounts, getSelectedAccount, openProviderChooser } from "../models/Providers";
+import { getSelectedAccount } from "../models/Providers";
 import { appServiceDisplayName, browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
 import {
   applyMemberLastUsedChange,
@@ -3355,13 +3355,10 @@ function openTabOfTypeInGroup(
   // dir -- on the harness of the account the provider picker selected. No dialog:
   // the name is auto-minted like every other create.
   if (target.kind === "chat") {
-    // Nothing signed in yet, so there is nothing to launch on. Send the user to
-    // the chooser rather than creating a chat that cannot take a turn.
-    if (target.accountId === "" && getAccounts().length === 0) {
-      releaseLauncherCreate(launcherPanelId);
-      openProviderChooser();
-      return null;
-    }
+    // An empty account id is not an error yet: the workspace still has a shared
+    // login and a boot chat, so a chat with no account behaves exactly as it did
+    // before accounts existed. Once the first-run redesign removes both, this is
+    // where "nothing signed in" starts sending the user to the chooser instead.
     return openNewChat(targetGroup, launcherPanelId, target.harness, target.accountId).finally(() => {
       releaseLauncherCreate(launcherPanelId);
       m.redraw();

@@ -170,8 +170,11 @@ whole meta-tag injection they were the only users of, plus `flip_feature_flags.s
 The new-tab screen now offers one **New chat** tile and a **Provider** picker under it.
 The picker lists the accounts you have signed in and an "+ Add provider" row; the chat
 starts on whichever is selected, and the rail's Chat shortcut reads the same selection so
-the two cannot disagree. With nothing signed in the picker says so and the tile opens the
-chooser rather than starting a chat that could not take a turn.
+the two cannot disagree. With nothing signed in the picker names the workspace's own
+login, and a chat started there behaves exactly as it did before accounts existed --
+"no accounts, no change". Sending an empty picker to the chooser instead is part of the
+first-run redesign, which is the same change that removes the shared login it would
+otherwise be hiding.
 
 Launching bumps that account's most-recently-used marker, so the picker offers it again
 next time. `first` is gone from the frontend: that create template belongs to the
