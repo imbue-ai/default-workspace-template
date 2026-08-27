@@ -1,6 +1,6 @@
 """One live app-server connection per codex agent -- the ledger's persistent home.
 
-The message-lifecycle contract (see ``docs/design/harness-message-lifecycle-contract.md``)
+The message-lifecycle contract (see ``system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract.md``)
 makes the backend the sole authority for a codex agent's five message states, and
 :class:`~imbue.system_interface.harnesses.codex.ledger.CodexMessageLedger` is that authority.
 The ledger is a pure reducer over the stock ``codex app-server`` notification stream, so it needs
@@ -98,7 +98,7 @@ class CodexLiveConnection:
     # The account's models from ``model/list``, fetched once on connect and cached for the whole
     # daemon generation. This is the per-agent model set the chip-match reads (via AgentManager) --
     # no daemon call in the hot recompute path. The picker re-fetches fresh per open (D2); this
-    # cache only backs the chip-match. Empty when the fetch failed (the chip still renders logo-only
+    # cache only backs the chip-match. Empty when the fetch failed (the chip renders nothing
     # or falls back to whatever the live state file already holds).
     _codex_models: tuple[CodexModel, ...]
 

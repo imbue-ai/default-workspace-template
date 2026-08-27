@@ -50,6 +50,11 @@ dev = [
     # root .venv so `uv run mngr` parses its agent_types fields instead of
     # rejecting them as "Unknown fields".
     "imbue-mngr-pi-coding",
+    # imbue-mngr-opencode / imbue-mngr-antigravity: same rationale as the three
+    # above -- registering the opencode / antigravity agent types so mngr can parse
+    # their `[agent_types.*]` config blocks.
+    "imbue-mngr-opencode",
+    "imbue-mngr-antigravity",
     # Shared validator that checks mngr CLI argvs against the live mngr command
     # tree; used by the per-feature contract tests (bootstrap's manager_test,
     # launch-task's create_worker_test).
@@ -91,6 +96,8 @@ imbue-mngr = { path = "system/vendor/mngr/libs/mngr", editable = true }
 imbue-mngr-claude = { path = "system/vendor/mngr/libs/mngr_claude", editable = true }
 imbue-mngr-codex = { path = "system/vendor/mngr/libs/mngr_codex", editable = true }
 imbue-mngr-pi-coding = { path = "system/vendor/mngr/libs/mngr_pi_coding", editable = true }
+imbue-mngr-opencode = { path = "system/vendor/mngr/libs/mngr_opencode", editable = true }
+imbue-mngr-antigravity = { path = "system/vendor/mngr/libs/mngr_antigravity", editable = true }
 resource-guards = { path = "system/vendor/mngr/libs/resource_guards", editable = true }
 concurrency-group = { path = "system/vendor/mngr/libs/concurrency_group", editable = true }
 

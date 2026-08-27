@@ -38,6 +38,7 @@ fi
 : "${CLAUDE_CODE_VERSION:=2.1.227}"
 : "${CODEX_VERSION:=0.147.0}"
 : "${PI_VERSION:=0.83.0}"
+: "${OPENCODE_VERSION:=1.18.19}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
@@ -255,10 +256,38 @@ npm install -g "@openai/codex@${CODEX_VERSION}"
 command -v codex >/dev/null
 codex --version
 
+# OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
+# VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the
+# binary into /usr/local/bin like the other downloaded tools.
+curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash
+ln -sf "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode
+opencode --version >/dev/null
+
 # Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
 # in sync with agent_types.pi-coding.version in .mngr/settings.toml.
 npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
 command -v pi >/dev/null
+
+# Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
+# installer: the upstream one queries a "latest" manifest, and that manifest is the
+# ONLY source of a release's opaque build id, so a version can be pinned only by
+# capturing its URL + sha512 while it is current. agy_install-1.1.16.sh holds those.
+# Reachable two ways depending on how we were invoked (mirrors the secret-scanner
+# dual-name resolution below): in a Dockerfile build it is baked beside this script as
+# default-workspace-template-install-agy; run straight from the repo (Lima/Modal) it is
+# its sibling agy_install-1.1.16.sh. Installed into /usr/local/bin explicitly rather
+# than the installer's $HOME/.local/bin default, so agy sits with every other
+# downloaded tool and does not depend on HOME surviving into the runtime image.
+agy_installer_dir="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$agy_installer_dir/agy_install-1.1.16.sh" ]; then
+    bash "$agy_installer_dir/agy_install-1.1.16.sh" /usr/local/bin
+else
+    bash "$agy_installer_dir/default-workspace-template-install-agy" /usr/local/bin
+fi
+# NOT guarded by `command -v agy &&`: errexit ignores a failure on the left of an AND-OR
+# list, so a missing binary sailed past and the build verification could not fail. Bare,
+# a missing agy is a 127 and `set -e` fires.
+agy --version >/dev/null
 
 # Bake the pi extension packages (subagents, web access) into the image at a
 # NON-home path: the runtime volume shadows the build-time HOME, so ~/.pi cannot

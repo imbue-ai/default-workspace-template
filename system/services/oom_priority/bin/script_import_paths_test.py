@@ -3,7 +3,7 @@
 Those inserted paths are invisible to the venv-backed pytest runs (the same
 packages are installed in the workspace venv), so a stale path only explodes
 at runtime under a bare ``python3`` -- which is exactly how every claude
-launch runs ``claude_oom_launch.py``. Assert that every inserted path in
+launch runs ``agent_oom_launch.py``. Assert that every inserted path in
 every plain-python3 script -- the oom_priority entry points here in ``bin/``
 and the remaining hook scripts in ``system/scripts/`` -- resolves to a real
 directory, so a package move cannot silently break agent startup again.
