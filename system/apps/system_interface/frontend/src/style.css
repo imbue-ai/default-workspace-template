@@ -1968,153 +1968,24 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* ─────────────────────────────────────────────────────────────────────
    PROGRESS VIEW (per-turn task timeline rendered from tk tickets)
+
+   The timeline's structure lives as utilities in views/ProgressBlock.ts and
+   views/icons.ts. What stays here is what utilities cannot carry: the
+   narration classes (they style markdown-rendered children, and the live
+   one's shimmer is a keyframe + background-clip machine) and the expanded
+   panel's markdown/tool-block child rules.
    ─────────────────────────────────────────────────────────────────── */
-
-.progress-block {
-  margin: 18px 0 28px;
-  --pv-fg: var(--c-text-primary);
-  --pv-fg-soft: var(--c-text-secondary);
-  --pv-fg-muted: var(--c-text-secondary);
-  --pv-fg-faint: var(--c-text-faint);
-  --pv-line: var(--c-border);
-  --pv-line-faint: var(--c-border-faint);
-  --pv-active: var(--c-accent);
-  --pv-done: var(--c-text-secondary);
-  --pv-pending: var(--c-text-faint);
-  /* The "glint" that sweeps across active-step narration. Kept independent of
-     the text scale so the shimmer stays visible against the muted caption. */
-  --pv-shimmer: var(--c-text-faint);
-  font-size: var(--font-size-body);
-  line-height: 1.5;
-  color: var(--pv-fg);
-}
-
-/* Status icons */
-.pv-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.pv-icon--done {
-  color: var(--pv-done);
-}
-.pv-icon--active {
-  color: var(--pv-active);
-  width: 16px;
-  height: 16px;
-}
-.pv-icon--in-flight {
-  color: var(--pv-active);
-  width: 16px;
-  height: 16px;
-}
-.pv-icon--pending {
-  color: var(--pv-pending);
-}
-
-/* The progress-view active-step spinner now uses the shared .spinner primitive
-   (.spinner--sm.spinner--current: a 12px currentColor ring, coloured by
-   --pv-active via the surrounding .pv-icon--active). */
-
-/* Chevron */
-.pv-chev {
-  display: inline-block;
-  margin-left: --spacing(1.5);
-  font-size: 18px; /* design-system-exception: icon glyph (chevron), not text */
-  color: var(--pv-fg-muted);
-  transition: transform 0.15s ease;
-  font-weight: 400;
-}
-.pv-chev--open {
-  transform: rotate(90deg);
-  color: var(--pv-fg);
-}
-
-/* Title button reset (timeline variant) */
-.pv-tl-title {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  font-size: var(--font-size-body);
-  font-weight: 500;
-  color: var(--pv-fg);
-  line-height: 1.4;
-  display: inline-flex;
-  align-items: center;
-}
-.pv-tl-title:disabled {
-  cursor: default;
-}
-
-/* Timeline thread + nodes */
-.pv.pv--timeline {
-  position: relative;
-  padding-left: 0;
-}
-.pv-timeline-thread {
-  position: absolute;
-  left: 7.5px;
-  top: 8px;
-  bottom: 0;
-  width: 1px;
-  background: var(--pv-line);
-}
-.pv-tl-node {
-  position: relative;
-  display: flex;
-  gap: 14px;
-  padding: 0 0 18px 0;
-  align-items: flex-start;
-}
-.pv-tl-node--last {
-  padding-bottom: 0;
-}
-.pv-tl-bullet {
-  position: relative;
-  z-index: var(--z-content);
-  background: var(--c-bg-chat);
-  padding: 1px 0;
-  flex-shrink: 0;
-  width: 16px;
-}
-.pv-tl-body {
-  flex: 1;
-  min-width: 0;
-}
-.pv-tl-node--done .pv-tl-title {
-  color: var(--pv-fg-soft);
-  font-weight: 400;
-}
-.pv-tl-node--pending .pv-tl-title {
-  color: var(--pv-fg-muted);
-  font-weight: 400;
-}
-.pv-tl-node--active .pv-tl-title {
-  color: var(--pv-active);
-  font-weight: 600;
-}
-
-.pv-tl-summary {
-  margin-top: 3px;
-  padding-left: --spacing(0.5);
-  font-size: var(--font-size-body);
-  color: var(--pv-fg-muted);
-  line-height: 1.5;
-}
 
 .pv-tl-narration {
   margin-top: 3px;
   padding-left: --spacing(0.5);
   font-size: var(--font-size-body);
   font-style: italic;
-  color: var(--pv-fg-muted);
+  color: var(--c-text-secondary);
   line-height: 1.5;
-  background: linear-gradient(90deg, var(--pv-fg-muted) 0%, var(--pv-shimmer) 40%, var(--pv-fg-muted) 80%);
+  /* The "glint" that sweeps across active-step narration: the faint tone as
+     the moving highlight over the muted caption color. */
+  background: linear-gradient(90deg, var(--c-text-secondary) 0%, var(--c-text-faint) 40%, var(--c-text-secondary) 80%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -2131,15 +2002,15 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* Static (settled) narration: an unclosed step that went idle still shows
-   its mid-work narration, but without the live shimmer -- muted italic, a
-   neutral left rule instead of the active-accent rule. The markdown child
-   styling below is shared with .pv-tl-narration via the grouped selectors. */
+   its mid-work narration, but without the live shimmer -- muted italic. The
+   markdown child styling below is shared with .pv-tl-narration via the
+   grouped selectors. */
 .pv-tl-narration--static {
   margin-top: 3px;
   padding-left: --spacing(0.5);
   font-size: var(--font-size-body);
   font-style: italic;
-  color: var(--pv-fg-muted);
+  color: var(--c-text-secondary);
   line-height: 1.5;
 }
 .pv-tl-narration p,
@@ -2154,16 +2025,15 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-narration--static code {
   font-size: 0.9em;
   padding: 0.1em 0.35em;
-  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
+  background: var(--c-border-faint);
   border-radius: var(--radius-sm);
   font-style: normal;
-  -webkit-text-fill-color: var(--pv-fg-muted);
+  -webkit-text-fill-color: var(--c-text-secondary);
   -webkit-background-clip: padding-box;
   background-clip: padding-box;
 }
 /* The live (shimmering) narration keeps its pre-unification borderless code
-   chip; only the settled/static narration adopts the bordered chip. Both still
-   draw their fill/text from the shared --pv-* tokens above. */
+   chip; only the settled/static narration adopts the bordered chip. */
 .pv-tl-narration code {
   border: none;
 }
@@ -2171,12 +2041,12 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-narration--static pre {
   margin: 0.4em 0;
   padding: 0.5em 0.7em;
-  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
+  background: var(--c-border-faint);
   border-radius: var(--radius-sm);
   overflow-x: auto;
   font-size: 0.9em;
   font-style: normal;
-  -webkit-text-fill-color: var(--pv-fg-muted);
+  -webkit-text-fill-color: var(--c-text-secondary);
   -webkit-background-clip: padding-box;
   background-clip: padding-box;
 }
@@ -2187,7 +2057,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 .pv-tl-narration a,
 .pv-tl-narration--static a {
-  color: var(--pv-fg-muted);
+  color: var(--c-text-secondary);
   text-decoration: underline;
 }
 .pv-tl-narration ul,
@@ -2202,96 +2072,19 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-bottom: 0.15em;
 }
 
-/* Steps are creator-private progress markers -- they read like sub-items, so
-   we keep the title weight lighter and the typography slightly de-emphasized. */
-.pv-tl-node--step .pv-tl-title {
-  font-weight: 500;
-  font-size: var(--font-size-body);
-  color: var(--pv-fg-soft);
-}
-
-.pv-tl-expanded {
-  margin-top: --spacing(1.5);
-}
-
 /* Expanded panel: matches the rest of the chat -- interleaved markdown +
-   tool-call-blocks. We just contain it with a subtle indent + left rule
-   so it's visually distinct from the surrounding progress structure. */
-.pv-expanded {
-  margin-top: 10px;
-  padding: 4px 0 4px 14px;
-  border-left: 2px solid var(--pv-line-faint);
-  font-size: var(--font-size-body);
-}
+   tool-call-blocks (the container's indent + left rule are utilities in
+   ProgressBlock.ts; these are its rendered-content children). */
 .pv-expanded p {
   margin: 0 0 0.6em;
   line-height: 1.5;
-  color: var(--pv-fg);
+  color: var(--c-text-primary);
 }
 .pv-expanded p:last-child {
   margin-bottom: 0;
 }
 .pv-expanded .tool-call-block {
   margin: 0.5em 0;
-}
-
-/* Final (trailing) assistant reply under the progress timeline */
-.pv-final {
-  margin-top: --spacing(4);
-  padding: 0;
-  font-size: var(--font-size-body);
-  line-height: 1.5;
-  color: var(--pv-fg);
-}
-
-/* Leading prose: emitted before the first step, rendered ABOVE the timeline
-   as plain chat-style prose. */
-.pv-lead {
-  margin-bottom: --spacing(4);
-  padding: 0;
-  font-size: var(--font-size-body);
-  line-height: 1.5;
-  color: var(--pv-fg);
-}
-
-/* Stop-hook chip woven into the timeline at the point the hook fired. Like
-   the ungrouped block it sits above the timeline thread (opaque background +
-   z-index) so the thread doesn't draw through the chip. The chip itself keeps
-   its own collapsible styling; this wrapper only handles positioning and
-   masking the thread. The background is the pure-white transcript color
-   (--c-bg-chat), not the shell's off-white --c-bg, so the mask blends
-   into the transcript instead of showing as a band. */
-.pv-stophook {
-  position: relative;
-  z-index: 2; /* design-system-exception: lifts this block above the timeline thread; the z scale has no "content + 1" layer for 2 */
-  margin: 6px 0 14px 0;
-  background: var(--c-bg-chat);
-}
-
-/* Ungrouped work/prose: real work the agent did with no step open (e.g.
-   before declaring the first step, or in a gap between steps). Rendered
-   inline as plain chat-style messages, sitting above the timeline thread
-   (opaque background + z-index) so the thread doesn't draw through it. */
-.pv-ungrouped {
-  position: relative;
-  z-index: 2; /* design-system-exception: lifts this block above the timeline thread; the z scale has no "content + 1" layer for 2 */
-  /* Top space as padding, not margin, so the white background extends up and
-     masks a bit of the timeline line above the ungrouped run. */
-  margin: 0 0 14px 0;
-  padding-top: --spacing(1.5);
-  background: var(--c-bg-chat);
-}
-
-/* Agent permission request, lifted out of any open step so it is always
-   directly visible and breaks the timeline flow. Lifted above the timeline
-   thread with z-index so the thread doesn't draw through it; the permission-request
-   card carries its own opaque surface, so it masks the thread on its own and this
-   wrapper needs no background of its own (a background here would paint the shell's
-   off-white --c-bg over the pure-white --c-bg-chat transcript). */
-.pv-permission {
-  position: relative;
-  z-index: 2; /* design-system-exception: lifts the permission card above the timeline thread; the z scale has no "content + 1" layer for 2 */
-  margin: 6px 0 14px 0;
 }
 
 /* ─────────────────────────────────────────────────────────────────────
