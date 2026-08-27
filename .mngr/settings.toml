@@ -210,7 +210,7 @@ command = "sleep infinity"
 # daemon, so both are banded (the daemon is where turns run, so it is the one that
 # matters for memory).
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py codex"
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 model = "gpt-5.6-sol"
 model_reasoning_effort = "medium"
@@ -280,9 +280,9 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # model bar reads the live values via the pi lifecycle extension.
 #
 # auto_allow_permissions MUST be true -- pi has no approval gate and its config
-# validator rejects false. auto_dismiss_dialogs adds pi's `--approve` (trust
+# validator rejects false. auto_dismiss_dialogs_at_startup adds pi's `--approve` (trust
 # project-local files for the run) so an unattended agent is not blocked on the
-# first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs.
+# first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs_at_startup.
 [agent_types.pi-coding]
 # Launch through the OOM band wrapper -- see the codex block above. The wrapper execs
 # `pi` in place, and mngr's own prelude/`-e <extension>` splice after this base.
@@ -297,7 +297,7 @@ auto_allow_permissions = true
 # -- and never has to write to -- the shared tree. The boot warm-up in seed_home_skeleton.sh
 # fills the cache once so even the FIRST agent after a boot is fast.
 share_home_npm_dir = true
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words.""", """# The /welcome command
@@ -372,7 +372,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # / notifications off keep the surface quiet.
 [agent_types.antigravity]
 auto_allow_permissions = true
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
 check_installation = false
 update_policy = "NEVER"
 # Launch through the OOM band wrapper, like every other harness. agy takes it as a plain
