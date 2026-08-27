@@ -381,7 +381,7 @@ var RestoreConfirm = {
       m(".buttons", [
         m("button.cancel", { onclick: function () { r.reviewing = false; } }, "Cancel"),
         m("button.go", {
-          disabled: r.busy || !r.preview || r.preview.error || r.preview.changed_file_count === 0,
+          disabled: r.busy || !r.preview || r.preview.error || isPreviewUnchanged(r.preview),
           onclick: function () { applyRestore(S.selectedSha); },
         }, "Go back to this version"),
       ]),
@@ -389,16 +389,28 @@ var RestoreConfirm = {
   },
 };
 
+/* An app can differ from a version by how it starts up even when every file matches,
+   so the files alone do not decide whether there is anything to go back to. */
+function isPreviewUnchanged(preview) {
+  return preview.changed_file_count === 0 && !preview.is_startup_config_changed;
+}
+
 function restorePreviewText(preview) {
   if (!preview) return "Checking what would change…";
   if (preview.error) return preview.error;
-  if (preview.changed_file_count === 0) return "The app is already identical to that version.";
+  if (isPreviewUnchanged(preview)) return "The app is already identical to that version.";
   var laterNote = preview.set_aside_node_count > 0
     ? " " + preview.set_aside_node_count + " later version" + (preview.set_aside_node_count === 1 ? "" : "s") +
       " will be kept safe on the timeline, so you can always return to them."
     : "";
+  if (preview.changed_file_count === 0) {
+    return "Going back returns the way the app starts up to how it was." + laterNote;
+  }
+  var startupNote = preview.is_startup_config_changed
+    ? " The way it starts up goes back too, so it runs as it did then."
+    : "";
   return "Going back returns " + preview.changed_file_count + " part" +
-         (preview.changed_file_count === 1 ? "" : "s") + " of the app to how they were." + laterNote;
+         (preview.changed_file_count === 1 ? "" : "s") + " of the app to how they were." + startupNote + laterNote;
 }
 
 function applyRestore(sha) {

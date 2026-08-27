@@ -1,5 +1,6 @@
 import re
 import subprocess
+from collections.abc import Sequence
 from typing import Final
 
 from imbue.imbue_common.pure import pure
@@ -135,9 +136,9 @@ class SubprocessGitRepo(GitRepoInterface):
         output = self._run_git(["status", "--porcelain", "--", relative_path])
         return [line[3:].strip() for line in output.splitlines() if line.strip()]
 
-    def commit_paths(self, relative_path: str, message: str) -> str:
-        self._run_git(["add", "-A", "--", relative_path])
-        self._run_git(["commit", "-m", message, "--", relative_path])
+    def commit_paths(self, relative_paths: Sequence[str], message: str) -> str:
+        self._run_git(["add", "-A", "--"] + list(relative_paths))
+        self._run_git(["commit", "-m", message, "--"] + list(relative_paths))
         return self._run_git(["rev-parse", "HEAD"]).strip()
 
     def restore_path_to_commit(self, sha: str, relative_path: str) -> None:

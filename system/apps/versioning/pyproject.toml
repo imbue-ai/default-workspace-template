@@ -69,7 +69,7 @@ layers = [
     "versioning.history",
     "versioning.git_repo",
     "versioning.trailers",
-    "versioning.interfaces | versioning.locking | versioning.claude_p | versioning.magnitude",
+    "versioning.interfaces | versioning.locking | versioning.claude_p | versioning.magnitude | versioning.supervisor_config",
     "versioning.data_types",
 ]
 

@@ -168,7 +168,7 @@ def perform_assist(
             )
         )
         new_sha = git_repo.commit_paths(
-            app.package_dir,
+            [app.package_dir],
             f"versioning: change {app.name} from a conversation about {version_sha[:10]}\n\n{assist_trailers}",
         )
         logger.debug("Assist changed {} files of {}", len(changed_paths), app.name)

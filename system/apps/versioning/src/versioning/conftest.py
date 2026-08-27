@@ -1,5 +1,6 @@
 import subprocess
 from collections.abc import Callable
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
@@ -37,6 +38,22 @@ def scratch_repo(tmp_path: Path) -> Path:
     run_git(repo_root, ["add", "-A"])
     run_git(repo_root, ["commit", "-q", "-m", "initial"])
     return repo_root
+
+
+@pytest.fixture
+def commit_repo_files(scratch_repo: Path) -> Callable[[Mapping[str, str], str], str]:
+    """Write several repo-relative files and commit them together; returns the sha."""
+
+    def _commit(content_by_relative_path: Mapping[str, str], message: str) -> str:
+        for relative_path, content in content_by_relative_path.items():
+            target = scratch_repo / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        run_git(scratch_repo, ["add", "-A"])
+        run_git(scratch_repo, ["commit", "-q", "-m", message])
+        return run_git(scratch_repo, ["rev-parse", "HEAD"]).strip()
+
+    return _commit
 
 
 @pytest.fixture

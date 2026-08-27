@@ -1,5 +1,6 @@
 from abc import ABC
 from abc import abstractmethod
+from collections.abc import Sequence
 from pathlib import Path
 
 from imbue.imbue_common.mutable_model import MutableModel
@@ -44,8 +45,8 @@ class GitRepoInterface(MutableModel, ABC):
         """Return repo-relative paths under the given path with uncommitted changes."""
 
     @abstractmethod
-    def commit_paths(self, relative_path: str, message: str) -> str:
-        """Stage everything under the path and commit it, returning the new commit sha."""
+    def commit_paths(self, relative_paths: Sequence[str], message: str) -> str:
+        """Stage everything under the paths and commit it, returning the new commit sha."""
 
     @abstractmethod
     def restore_path_to_commit(self, sha: str, relative_path: str) -> None:

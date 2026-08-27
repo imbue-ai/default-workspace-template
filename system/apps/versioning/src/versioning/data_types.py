@@ -122,9 +122,12 @@ class RestorePreview(FrozenModel):
     changed_file_count: int
     set_aside_node_count: int
     diff_stat: str
+    # Whether how the app gets started would change too, on top of the files.
+    is_startup_config_changed: bool = False
 
 
 class RestoreResult(FrozenModel):
     restore_commit_sha: str
     is_service_restarted: bool
     is_dependency_sync_run: bool
+    is_startup_config_restored: bool = False

@@ -56,7 +56,7 @@ def test_restore_path_to_commit_removes_files_added_after_the_target(
     assert not (scratch_repo / "system/apps/news/added_later.py").exists()
 
 
-def test_commit_paths_records_only_the_given_path(
+def test_commit_paths_records_only_the_given_paths(
     scratch_repo: Path, commit_app_file: Callable[[str, str, str, str], str]
 ) -> None:
     commit_app_file("news", "runner.py", "v1", "news: first build")
@@ -64,12 +64,27 @@ def test_commit_paths_records_only_the_given_path(
     (scratch_repo / "outside.txt").write_text("keep me uncommitted")
     repo = SubprocessGitRepo(repo_root=scratch_repo)
 
-    new_sha = repo.commit_paths("system/apps/news", "news: edit")
+    new_sha = repo.commit_paths(["system/apps/news"], "news: edit")
 
     assert repo.read_dirty_paths_under("system/apps/news") == []
     status = run_git(scratch_repo, ["status", "--porcelain"])
     assert "outside.txt" in status
     assert new_sha == run_git(scratch_repo, ["rev-parse", "HEAD"]).strip()
+
+
+def test_commit_paths_records_several_paths_as_one_commit(
+    scratch_repo: Path, commit_app_file: Callable[[str, str, str, str], str]
+) -> None:
+    commit_app_file("news", "runner.py", "v1", "news: first build")
+    (scratch_repo / "system/supervisord.conf").write_text("[program:news]\ncommand=run\n")
+    (scratch_repo / "system/apps/news/runner.py").write_text("v2")
+    repo = SubprocessGitRepo(repo_root=scratch_repo)
+
+    repo.commit_paths(["system/apps/news", "system/supervisord.conf"], "news: edit with its startup entry")
+
+    committed_files = run_git(scratch_repo, ["show", "--name-only", "--format=", "HEAD"])
+    assert "system/apps/news/runner.py" in committed_files
+    assert "system/supervisord.conf" in committed_files
 
 
 def test_read_diff_of_commits_covers_the_full_span(
