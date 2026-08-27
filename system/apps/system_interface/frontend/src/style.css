@@ -4,7 +4,7 @@
  * The shipped default interface is built from the tokens below plus a set of
  * shared component classes (buttons, modals, badges, toggles, spinners, inputs).
  * When you extend or maintain the default look, prefer them over new one-offs:
- *   - Colour:  var(--color-*)           rather than a raw #hex / rgb() / rgba()
+ *   - Colour:  var(--c-*)           rather than a raw #hex / rgb() / rgba()
  *   - Radius:  var(--radius-md) etc.    rather than a raw 6px
  *   - Type / spacing / shadow / z-index: reuse a token or an existing value.
  *   - Components: extend a shared class/primitive rather than copying one.
@@ -24,53 +24,63 @@
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
-@theme {
-  --color-bg: #fafaf8;
-  --color-bg-sidebar: #f3f2ef;
-  --color-bg-hover: #edecea;
-  --color-bg-active: #e8e6e1;
-  --color-bg-user-bubble: #ededed;
-  --color-bg-composer: #ffffff;
-  --color-bg-chat: #ffffff;
-  --color-bg-code: #f0f0f0;
-  --color-text-primary: #202020;
-  --color-text-secondary: #666666;
-  --color-text-faint: #8c8c8c;
-  --color-border: #e4e3df;
-  --color-border-faint: #efeeeb;
-  --color-border-code: #e0e0e0;
-  --color-accent: #2f6b4f;
-  --color-accent-hover: #24573f;
-  --color-accent-light: #e9f2ee;
-  --color-surface: #ffffff;
-  --color-surface-secondary: #f3f2ef;
-  --color-stop-button: #64748b;
-  --color-stop-button-hover: #475569;
+/* ── Colour tokens — two layers (mirrors apps/minds) ────────────────────────
+ * 1. VALUE LAYER (--c-*, on :root below): the raw colour for each token. The
+ *    ONLY place a value lives, so a future theme swap (or dark mode) edits one
+ *    table. Hand-written CSS in this file references these directly.
+ * 2. UTILITY LAYER (@theme inline, below): registers each --c-* under a clean
+ *    semantic name, generating the colour utilities the views use
+ *    (text-primary, bg-fill-hover, border-default, ...). `inline` makes the
+ *    generated utility resolve THROUGH var(--c-*) at runtime, so re-declaring
+ *    a --c-* value on a subtree reskins it live.
+ * The palette itself is the system interface's own (warm neutrals + green
+ * accent) — only the architecture mirrors minds, not the values. */
+:root {
+  --c-bg: #fafaf8;
+  --c-bg-sidebar: #f3f2ef;
+  --c-bg-hover: #edecea;
+  --c-bg-active: #e8e6e1;
+  --c-bg-user-bubble: #ededed;
+  --c-bg-composer: #ffffff;
+  --c-bg-chat: #ffffff;
+  --c-bg-code: #f0f0f0;
+  --c-text-primary: #202020;
+  --c-text-secondary: #666666;
+  --c-text-faint: #8c8c8c;
+  --c-border: #e4e3df;
+  --c-border-faint: #efeeeb;
+  --c-border-code: #e0e0e0;
+  --c-accent: #2f6b4f;
+  --c-accent-hover: #24573f;
+  --c-accent-light: #e9f2ee;
+  --c-surface: #ffffff;
+  --c-surface-secondary: #f3f2ef;
+  --c-stop-button: #64748b;
+  --c-stop-button-hover: #475569;
   /* Semantic status colours (promoted from scattered raw hexes). */
-  --color-danger: #d83a2c;
-  --color-danger-hover: #b62d22;
-  --color-danger-bg: #fdecea;
-  --color-danger-border: #f4c7c3;
-  --color-warning: #b45309;
-  --color-warning-bg: #fde68a;
-  --color-success: #22a06b;
+  --c-danger: #d83a2c;
+  --c-danger-hover: #b62d22;
+  --c-danger-bg: #fdecea;
+  --c-danger-border: #f4c7c3;
+  --c-warning: #b45309;
+  --c-warning-bg: #fde68a;
+  --c-success: #22a06b;
   /* Foreground on accent/coloured surfaces (e.g. white button text). */
-  --color-text-on-accent: #ffffff;
+  --c-text-on-accent: #ffffff;
   /* Inverse surface — dark ("black") bg with on-accent text; inverse buttons + tooltips. */
-  --color-inverse-surface: #202020;
-  --color-inverse-surface-hover: #383838;
-  --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-family-heading: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-family-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
-     `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
-     references the same scale via the `--spacing(N)` function (e.g.
-     `padding: --spacing(3)` compiles to `calc(var(--spacing) * 3)`) -- so markup
-     and CSS share one source with no per-step token to define or keep in sync.
-     Steps in use: 0.5/1/1.5/2/3/4/5/6/8 = 2/4/6/8/12/16/20/24/32px. Off-grid
-     strays (3/5/7/9px etc.) stay raw as design-system-exceptions. */
-  --spacing: 0.25rem;
-  --width-message-column: 740px;
+  --c-inverse-surface: #202020;
+  --c-inverse-surface-hover: #383838;
+  /* Typography scale — role-based; backs the type-* utilities below. Unit: px.
+     (Not --text-*: overriding Tailwind's --text-sm/lg would silently resize its
+     text-sm/text-lg utilities, which the views use at their stock values.) */
+  --font-size-heading-lg: 24px;
+  --font-size-heading: 18px;
+  --font-size-body: 14px;
+  --font-size-helper: 12px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
   /* Motion scale — one unit (ms). Durations back the common UI transitions.
      Off-scale durations (100/150/300/320ms, and the long looping animation
      timings) are left raw. */
@@ -86,6 +96,69 @@
   --z-dropdown: 1000;
   --z-overlay: 10000;
   --z-tooltip: 10001;
+  --width-message-column: 740px;
+  --logo-url: none;
+}
+
+/* The colour-utility layer: clean semantic names over the --c-* values, in
+ * minds' taxonomy — text (primary/secondary/faint/on-accent), borders
+ * (default/subtle), surfaces, fills (hover/active state tints), accent, and
+ * status. Utilities generate on demand: text-primary, bg-page, bg-fill-hover,
+ * border-default, bg-danger-surface, ... */
+@theme inline {
+  /* text: text-primary / -secondary / -faint / -on-accent */
+  --color-primary: var(--c-text-primary);
+  --color-secondary: var(--c-text-secondary);
+  --color-faint: var(--c-text-faint);
+  --color-on-accent: var(--c-text-on-accent);
+  /* borders: border-default / border-subtle */
+  --color-default: var(--c-border);
+  --color-subtle: var(--c-border-faint);
+  /* surfaces: bg-page / -sidebar / -chat / -composer / -code / -user-bubble /
+     -surface / -surface-secondary / -inverse / -inverse-hover */
+  --color-page: var(--c-bg);
+  --color-sidebar: var(--c-bg-sidebar);
+  --color-chat: var(--c-bg-chat);
+  --color-composer: var(--c-bg-composer);
+  --color-code: var(--c-bg-code);
+  --color-user-bubble: var(--c-bg-user-bubble);
+  --color-surface: var(--c-surface);
+  --color-surface-secondary: var(--c-surface-secondary);
+  --color-inverse: var(--c-inverse-surface);
+  --color-inverse-hover: var(--c-inverse-surface-hover);
+  /* fills: bg-fill-hover / bg-fill-active (control state tints) */
+  --color-fill-hover: var(--c-bg-hover);
+  --color-fill-active: var(--c-bg-active);
+  /* accent / interactive */
+  --color-accent: var(--c-accent);
+  --color-accent-hover: var(--c-accent-hover);
+  --color-accent-light: var(--c-accent-light);
+  --color-stop: var(--c-stop-button);
+  --color-stop-hover: var(--c-stop-button-hover);
+  /* status */
+  --color-danger: var(--c-danger);
+  --color-danger-hover: var(--c-danger-hover);
+  --color-danger-surface: var(--c-danger-bg);
+  --color-danger-border: var(--c-danger-border);
+  --color-warning: var(--c-warning);
+  --color-warning-surface: var(--c-warning-bg);
+  --color-success: var(--c-success);
+}
+
+@theme {
+  /* Font stacks on Tailwind's own namespace: --font-sans re-bases the preflight
+     default (so body text needs no explicit font-family) and backs font-sans;
+     --font-mono re-bases the font-mono utility onto the workspace's mono stack. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
+     `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
+     references the same scale via the `--spacing(N)` function (e.g.
+     `padding: --spacing(3)` compiles to `calc(var(--spacing) * 3)`) -- so markup
+     and CSS share one source with no per-step token to define or keep in sync.
+     Steps in use: 0.5/1/1.5/2/3/4/5/6/8 = 2/4/6/8/12/16/20/24/32px. Off-grid
+     strays (3/5/7/9px etc.) stay raw as design-system-exceptions. */
+  --spacing: 0.25rem;
   /* Radius scale -- aligned with the minds design system (apps/minds): four steps
      sm 4 / md 6 / lg 8 / xl 16 (px) plus the pill. Names mirror minds and equal
      Tailwind's own sm/md/lg defaults, so the rounded-* utilities used in the views
@@ -100,15 +173,6 @@
   --radius-lg: 8px;
   --radius-xl: 16px;
   --radius-pill: 999px;
-  /* Typography scale — role-based; see the .type-* classes below. Unit: px. */
-  --font-size-heading-lg: 24px;
-  --font-size-heading: 18px;
-  --font-size-body: 14px;
-  --font-size-helper: 12px;
-  --weight-regular: 400;
-  --weight-medium: 500;
-  --weight-semibold: 600;
-  --weight-bold: 700;
   /* Elevation -- aligned with the minds design system (apps/minds): two box-shadow
      steps. --shadow-raised is the subtle resting lift on interactive cards;
      --shadow-overlay is the one soft floating shadow shared by everything above the
@@ -118,14 +182,13 @@
      used in the launcher + sidebar views). */
   --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
   --shadow-overlay: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);
-  --logo-url: none;
 }
 
+/* Font family comes from the preflight default (re-based onto --font-sans above). */
 body {
-  font-family: var(--font-family-base);
   font-size: var(--font-size-body);
-  color: var(--color-text-primary);
-  background-color: var(--color-bg);
+  color: var(--c-text-primary);
+  background-color: var(--c-bg);
   margin: 0;
   height: 100vh;
   overflow: hidden;
@@ -185,7 +248,7 @@ body {
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-border);
+    border-color: var(--c-border);
   }
 }
 
@@ -205,7 +268,7 @@ body {
   gap: --spacing(1.5);
   height: 34px;
   padding: 0 14px;
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
   font-weight: var(--weight-medium);
   line-height: 1;
@@ -223,7 +286,7 @@ body {
   padding: 0 --spacing(3);
 }
 .btn:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 2px;
 }
 .btn:disabled,
@@ -235,68 +298,68 @@ body {
   transform: translateY(1px);
 }
 .btn--primary {
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-accent);
+  background: var(--c-accent);
+  color: var(--c-text-on-accent);
+  border-color: var(--c-accent);
 }
 .btn--primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
+  background: var(--c-accent-hover);
+  border-color: var(--c-accent-hover);
 }
 .btn--secondary {
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-  border-color: var(--color-border);
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+  border-color: var(--c-border);
 }
 .btn--secondary:hover:not(:disabled) {
-  background: var(--color-bg-hover);
+  background: var(--c-bg-hover);
 }
 .btn--ghost {
   background: transparent;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 .btn--ghost:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
+  background: var(--c-bg-hover);
+  color: var(--c-text-primary);
 }
 .btn--destructive {
-  background: var(--color-danger);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-danger);
+  background: var(--c-danger);
+  color: var(--c-text-on-accent);
+  border-color: var(--c-danger);
 }
 .btn--destructive:hover:not(:disabled) {
-  background: var(--color-danger-hover);
-  border-color: var(--color-danger-hover);
+  background: var(--c-danger-hover);
+  border-color: var(--c-danger-hover);
 }
 /* Quiet destructive: ghost + destructive (danger text, no fill; danger-bg tint on hover). */
 .btn--ghost.btn--destructive {
   background: transparent;
-  color: var(--color-danger);
+  color: var(--c-danger);
   border-color: transparent;
 }
 .btn--ghost.btn--destructive:hover:not(:disabled) {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
 }
 .btn--inverse {
-  background: var(--color-inverse-surface);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-inverse-surface);
+  background: var(--c-inverse-surface);
+  color: var(--c-text-on-accent);
+  border-color: var(--c-inverse-surface);
 }
 .btn--inverse:hover:not(:disabled) {
-  background: var(--color-inverse-surface-hover);
-  border-color: var(--color-inverse-surface-hover);
+  background: var(--c-inverse-surface-hover);
+  border-color: var(--c-inverse-surface-hover);
 }
 /* Stop/interrupt treatment: the composer's slate fill. Composes on an icon
    button (.btn--icon.btn--stop) or a text button alike. */
 .btn--stop {
-  background: var(--color-stop-button);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-stop-button);
+  background: var(--c-stop-button);
+  color: var(--c-text-on-accent);
+  border-color: var(--c-stop-button);
 }
 .btn--stop:hover:not(:disabled) {
-  background: var(--color-stop-button-hover);
-  border-color: var(--color-stop-button-hover);
+  background: var(--c-stop-button-hover);
+  border-color: var(--c-stop-button-hover);
 }
 /* Icon button: SHAPE + SIZE only (square: width = the btn height, no h-padding).
    The colour comes from the default ghost palette below OR, when a fill variant
@@ -315,22 +378,22 @@ body {
    -- the :where() adds none -- so a per-context override (e.g. the lightbox's
    dark-backdrop palette) still wins by source order, exactly as before. */
 .btn--icon:where(:not(.btn--primary, .btn--secondary, .btn--destructive, .btn--inverse, .btn--stop)) {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 .btn--icon:where(:not(.btn--primary, .btn--secondary, .btn--destructive, .btn--inverse, .btn--stop)):hover:not(
     :disabled
   ) {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
+  background: var(--c-bg-hover);
+  color: var(--c-text-primary);
 }
 /* Circular icon button (composer send/stop/attach, etc.). */
 .btn--round {
   border-radius: 50%;
 }
 .btn--selected {
-  background: var(--color-accent-light);
-  color: var(--color-accent);
-  border-color: var(--color-accent);
+  background: var(--c-accent-light);
+  color: var(--c-accent);
+  border-color: var(--c-accent);
 }
 /* Full-width modifier (e.g. modal CTAs that span the card). */
 .btn--block {
@@ -356,38 +419,38 @@ body {
   white-space: nowrap;
 }
 .badge--mono {
-  font-family: var(--font-family-mono);
+  font-family: var(--font-mono);
 }
 .badge--neutral {
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
-  border-color: var(--color-border);
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  border-color: var(--c-border);
 }
 .badge--accent {
-  background: var(--color-surface);
-  color: var(--color-accent);
-  border-color: var(--color-accent);
+  background: var(--c-surface);
+  color: var(--c-accent);
+  border-color: var(--c-accent);
 }
 .badge--danger {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
-  border-color: var(--color-danger-border);
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+  border-color: var(--c-danger-border);
 }
 .badge--warning {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
+  background: var(--c-warning-bg);
+  color: var(--c-warning);
   border-color: transparent;
 }
 .badge--success {
-  background: color-mix(in srgb, var(--color-success) 14%, transparent);
-  color: var(--color-success);
-  border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
+  background: color-mix(in srgb, var(--c-success) 14%, transparent);
+  color: var(--c-success);
+  border-color: color-mix(in srgb, var(--c-success) 35%, transparent);
 }
 
 /* ── Spinner primitive ───────────────────────────────────────────────────────
  * One CSS ring spinner (+ one @keyframes spin) replacing the near-identical
  * bespoke keyframes. Size via --spinner-size (or .spinner--sm / .spinner--lg);
- * the two-tone track/arc default to --color-border / --color-accent, overridable
+ * the two-tone track/arc default to --c-border / --c-accent, overridable
  * via --spinner-track / --spinner-arc. .spinner--current makes it monochrome
  * (currentColor ring with a transparent gap) for use on coloured contexts.
  * (The login screen's fancier SVG arc keeps its own .claude-login-spinner hook
@@ -401,8 +464,8 @@ body {
   display: block;
   width: var(--spinner-size, 16px);
   height: var(--spinner-size, 16px);
-  border: 2px solid var(--spinner-track, var(--color-border));
-  border-top-color: var(--spinner-arc, var(--color-accent));
+  border: 2px solid var(--spinner-track, var(--c-border));
+  border-top-color: var(--spinner-arc, var(--c-accent));
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   flex-shrink: 0;
@@ -435,7 +498,7 @@ body {
   width: 32px;
   height: 32px;
   padding: 0;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   background: none;
   border: none;
   border-radius: var(--radius-lg);
@@ -446,11 +509,11 @@ body {
   flex-shrink: 0;
 }
 .toggle:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
+  color: var(--c-text-primary);
+  background: var(--c-bg-hover);
 }
 .toggle:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 2px;
 }
 .toggle:disabled,
@@ -460,8 +523,8 @@ body {
 }
 .toggle--on,
 .toggle--on:hover {
-  color: var(--color-accent);
-  background: var(--color-accent-light);
+  color: var(--c-accent);
+  background: var(--c-accent-light);
 }
 /* Read-only: default cursor, no hover brighten. `:not(--on)` so a read-only
    control that is currently on still shows the accent. */
@@ -469,7 +532,7 @@ body {
   cursor: default;
 }
 .toggle--readonly:not(.toggle--on):hover {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   background: none;
 }
 /* Non-interactive inline copy, set in running text so a sentence about "the
@@ -498,29 +561,29 @@ body {
   width: 100%;
   box-sizing: border-box;
   padding: --spacing(2) --spacing(3);
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
-  color: var(--color-text-primary);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  color: var(--c-text-primary);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
   transition:
     border-color var(--dur-base) ease,
     box-shadow var(--dur-base) ease;
 }
 .input::placeholder {
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
 }
 .input--mono {
-  font-family: var(--font-family-mono);
+  font-family: var(--font-mono);
   letter-spacing: 0.01em;
 }
 .input--with-action {
   padding-right: 64px;
 }
 .input:focus-visible {
-  border-color: var(--color-accent);
-  outline: 2px solid var(--color-accent);
+  border-color: var(--c-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 2px;
 }
 .input:disabled {
@@ -544,19 +607,19 @@ body {
 /* ── Title bar ── */
 .app-header {
   padding: 14px 32px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--c-border);
   display: flex;
   align-items: baseline;
   gap: --spacing(3);
   flex-shrink: 0;
-  background: var(--color-bg);
+  background: var(--c-bg);
 }
 
 .app-header-title {
-  font-family: var(--font-family-heading);
+  font-family: var(--font-sans);
   font-size: var(--font-size-heading);
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 /* The subagent header's model/type badge now uses the shared .badge primitive
@@ -565,8 +628,8 @@ body {
 /* ── Messages area ── */
 .app-content {
   /* The chat transcript area is pure white, distinct from the shared off-white
-     --color-bg used by the surrounding shell (footer, tabs, other panels). */
-  background: var(--color-bg-chat);
+     --c-bg used by the surrounding shell (footer, tabs, other panels). */
+  background: var(--c-bg-chat);
   /* Native scroll anchoring stays ON (the browser default) so the viewport holds
      steady when rows above it load or measure to their real height, with no
      per-frame JS scrollTop writes. The virtualization spacers opt out of anchoring
@@ -588,22 +651,22 @@ body {
 
 .message-user-bubble {
   max-width: 80%;
-  background: var(--color-bg-user-bubble);
+  background: var(--c-bg-user-bubble);
   border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
   padding: 12px 18px;
   font-size: var(--font-size-body);
   line-height: 1.5;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   /* Break long unbreakable tokens (e.g. API keys, URLs) so they wrap inside
      the bubble instead of overflowing past its edge. */
   overflow-wrap: break-word;
 }
 
 .message-user-bubble code {
-  font-family: var(--font-family-mono);
+  font-family: var(--font-mono);
   font-size: 0.85em;
-  background-color: var(--color-bg-code);
-  border: 1px solid var(--color-border-code);
+  background-color: var(--c-bg-code);
+  border: 1px solid var(--c-border-code);
   border-radius: 0.25em;
   padding: 0.08em 0.2em;
 }
@@ -643,11 +706,11 @@ body {
 }
 
 .queued-header-label {
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-helper);
   font-weight: 500;
   letter-spacing: 0.02em;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   /* Let the label shrink and ellipsize in a narrow column instead of overlapping
      the button. */
   min-width: 0;
@@ -684,7 +747,7 @@ body {
 }
 
 .queued-header--frozen {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 /* The (i) info affordance next to 'Queued messages'. */
@@ -692,7 +755,7 @@ body {
   flex-shrink: 0;
   font-size: var(--font-size-helper);
   line-height: 1;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   opacity: 0.7;
   cursor: help;
 }
@@ -717,14 +780,14 @@ body {
 }
 
 .outgoing-message .message-user-bubble {
-  border: 1px dashed var(--color-border);
+  border: 1px dashed var(--c-border);
 }
 
 .outgoing-status {
   margin-top: 3px;
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 /* ── Assistant message ── */
@@ -736,7 +799,7 @@ body {
 .app-footer {
   padding: 0 --spacing(8) --spacing(6);
   flex-shrink: 0;
-  background: var(--color-bg-chat);
+  background: var(--c-bg-chat);
   border: none;
 }
 
@@ -787,9 +850,9 @@ body {
   align-items: center;
   height: 30px;
   padding: 0 --spacing(2);
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   white-space: nowrap;
   user-select: none;
 }
@@ -800,8 +863,8 @@ body {
 }
 
 .message-input-box {
-  background: var(--color-bg-composer);
-  border: 1px solid var(--color-border);
+  background: var(--c-bg-composer);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-xl);
   /* design-system-exception: unique upward-cast composer shadow (negative y,
      Notion-charcoal base) that no elevation-scale value expresses. */
@@ -814,7 +877,7 @@ body {
 }
 
 .message-input-box:focus-within {
-  border-color: var(--color-accent);
+  border-color: var(--c-accent);
   /* design-system-exception: unique accent-tinted upward composer glow; no scale value. */
   box-shadow:
     0 -4px 24px rgba(47, 107, 79, 0.08),
@@ -822,17 +885,17 @@ body {
 }
 
 .message-input-textbox {
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
   line-height: 1.5;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   background: transparent;
   border: none;
   padding: 14px 8px 14px 20px;
 }
 
 .message-input-textbox::placeholder {
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
 }
 
 .message-input-toolbar {
@@ -898,13 +961,13 @@ body {
   gap: --spacing(2);
   max-width: 240px;
   padding: --spacing(1.5) --spacing(2) --spacing(1.5) --spacing(1.5);
-  background: var(--color-bg-sidebar);
-  border: 1px solid var(--color-border);
+  background: var(--c-bg-sidebar);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
 }
 
 .composer-attachment--error {
-  border-color: var(--color-danger-border);
+  border-color: var(--c-danger-border);
 }
 
 .composer-attachment-thumb {
@@ -921,7 +984,7 @@ body {
   justify-content: center;
   width: 36px;
   height: 36px;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   flex-shrink: 0;
 }
 
@@ -936,7 +999,7 @@ body {
 
 .composer-attachment-name {
   font-size: var(--font-size-body);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -944,11 +1007,11 @@ body {
 
 .composer-attachment-detail {
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 .composer-attachment-detail--error {
-  color: var(--color-danger);
+  color: var(--c-danger);
 }
 
 .composer-attachment-remove {
@@ -958,7 +1021,7 @@ body {
   width: 18px;
   height: 18px;
   padding: 0;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   background: none;
   border: none;
   border-radius: 50%;
@@ -970,28 +1033,28 @@ body {
 }
 
 .composer-attachment-remove:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-active);
+  color: var(--c-text-primary);
+  background: var(--c-bg-active);
 }
 
 /* ── File attachments: chat drop overlay ── */
 
 .chat-drop-overlay {
   z-index: 50; /* design-system-exception: mid-layer drop overlay; the z scale has no name for 50 (it sits above chat content but below the modal overlay stack) */
-  background: color-mix(in srgb, var(--color-accent-light) 70%, transparent);
-  border: 2px dashed var(--color-accent);
+  background: color-mix(in srgb, var(--c-accent-light) 70%, transparent);
+  border: 2px dashed var(--c-accent);
   border-radius: var(--radius-lg);
   margin: --spacing(2);
 }
 
 .chat-drop-overlay-label {
   padding: 10px 18px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-accent);
+  background: var(--c-surface);
+  border: 1px solid var(--c-accent);
   border-radius: var(--radius-pill);
   font-size: var(--font-size-body);
   font-weight: 500;
-  color: var(--color-accent);
+  color: var(--c-accent);
   box-shadow: var(--shadow-overlay);
 }
 
@@ -1014,7 +1077,7 @@ body {
   max-width: 240px;
   max-height: 240px;
   border-radius: var(--radius-lg);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--c-border);
   display: block;
 }
 
@@ -1030,10 +1093,10 @@ body {
   gap: --spacing(2);
   max-width: 100%;
   padding: --spacing(2) --spacing(3);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   text-decoration: none;
   transition:
     background var(--dur-base),
@@ -1041,14 +1104,14 @@ body {
 }
 
 .message-attachment-file:hover {
-  background: var(--color-bg-hover);
-  border-color: var(--color-border);
+  background: var(--c-bg-hover);
+  border-color: var(--c-border);
 }
 
 .message-attachment-file-icon {
   display: inline-flex;
   align-items: center;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   flex-shrink: 0;
 }
 
@@ -1067,7 +1130,7 @@ body {
 
 .message-attachment-file-size {
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 /* ── Model selector ── */
@@ -1083,7 +1146,7 @@ body {
   height: 30px;
   padding: 0 --spacing(1.5);
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   user-select: none;
 }
 
@@ -1097,9 +1160,9 @@ body {
   align-items: center;
   gap: --spacing(1);
   height: 30px;
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   background: none;
   border: none;
   border-radius: var(--radius-lg);
@@ -1113,14 +1176,14 @@ body {
 }
 
 .model-selector-trigger:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
+  color: var(--c-text-primary);
+  background: var(--c-bg-hover);
 }
 
 .model-selector-chevron {
   display: inline-flex;
   align-items: center;
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
 }
 
 .model-selector-dropdown {
@@ -1136,8 +1199,8 @@ body {
   /* Bound the width so a long provider/model tag can't grow the menu leftward off the
      edge of the screen; options past this width ellipsize (full text on hover). */
   max-width: min(92vw, 460px);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-overlay);
   padding: var(--_dropdown-padding);
@@ -1146,10 +1209,10 @@ body {
 }
 
 .model-selector-dropdown-header {
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-helper);
   font-weight: 500;
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   padding: 4px 10px 6px;
 }
 
@@ -1160,23 +1223,23 @@ body {
   margin: 0 --spacing(0.5) --spacing(1.5);
   padding: 0 --spacing(2);
   height: 30px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
-  background: var(--color-bg-hover);
+  background: var(--c-bg-hover);
   transition:
     border-color var(--dur-base),
     background var(--dur-base);
 }
 
 .model-selector-search:focus-within {
-  border-color: var(--color-accent);
-  background: var(--color-surface);
+  border-color: var(--c-accent);
+  background: var(--c-surface);
 }
 
 .model-selector-search-icon {
   display: inline-flex;
   align-items: center;
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   flex: 0 0 auto;
 }
 
@@ -1186,13 +1249,13 @@ body {
   border: none;
   outline: none;
   background: none;
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 .model-selector-search-input::placeholder {
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
 }
 
 .model-selector-dropdown-list {
@@ -1202,7 +1265,7 @@ body {
   list-style: none;
   margin: 0;
   padding-right: --spacing(1);
-  scrollbar-color: var(--color-border) transparent;
+  scrollbar-color: var(--c-border) transparent;
 }
 
 @supports (-moz-appearance: none) {
@@ -1212,9 +1275,9 @@ body {
 }
 
 .model-selector-option {
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   height: var(--_option-height);
   line-height: var(--_option-height);
   display: block;
@@ -1228,17 +1291,17 @@ body {
 }
 
 .model-selector-option:hover {
-  background: var(--color-bg-hover);
+  background: var(--c-bg-hover);
 }
 
 .model-selector-option--selected {
-  color: var(--color-accent);
+  color: var(--c-accent);
   font-weight: 500;
-  background: var(--color-accent-light);
+  background: var(--c-accent-light);
 }
 
 .model-selector-option--selected:hover {
-  background: var(--color-accent-light);
+  background: var(--c-accent-light);
 }
 
 .model-selector-trigger:disabled {
@@ -1247,7 +1310,7 @@ body {
 }
 
 .model-selector-trigger:disabled:hover {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   background: none;
 }
 
@@ -1259,7 +1322,7 @@ body {
 }
 
 .model-selector-trigger--readonly:hover {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   background: none;
 }
 
@@ -1270,7 +1333,7 @@ body {
 .markdown-content {
   line-height: 1.5;
   font-size: var(--font-size-body);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 .markdown-content p {
@@ -1340,10 +1403,10 @@ body {
 }
 
 .markdown-content code {
-  font-family: var(--font-family-mono);
+  font-family: var(--font-mono);
   font-size: 0.85em;
-  background-color: var(--color-bg-code);
-  border: 1px solid var(--color-border-code);
+  background-color: var(--c-bg-code);
+  border: 1px solid var(--c-border-code);
   border-radius: 0.25em;
   padding: 0.08em 0.2em;
 }
@@ -1352,8 +1415,8 @@ body {
   margin-top: 0.75em;
   margin-bottom: 0.75em;
   padding: 14px 16px;
-  background-color: var(--color-bg-sidebar);
-  border: 1px solid var(--color-border);
+  background-color: var(--c-bg-sidebar);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
   overflow-x: auto;
 }
@@ -1370,8 +1433,8 @@ body {
   margin-top: 0.75em;
   margin-bottom: 0.75em;
   padding-left: 1em;
-  border-left: 3px solid var(--color-border);
-  color: var(--color-text-secondary);
+  border-left: 3px solid var(--c-border);
+  color: var(--c-text-secondary);
 }
 
 /* ── Collapsible tool call blocks ── */
@@ -1392,10 +1455,10 @@ body {
   position: absolute;
   left: 10px;
   top: 14px;
-  font-family: var(--font-family-mono);
+  font-family: var(--font-mono);
   font-size: var(--font-size-body);
   line-height: 1.55;
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   transition: transform 150ms;
   pointer-events: none;
 }
@@ -1419,16 +1482,16 @@ body {
   margin-top: 1.25em;
   margin-bottom: 1.25em;
   border: none;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--c-border);
 }
 
 .markdown-content a {
-  color: var(--color-accent);
+  color: var(--c-accent);
   text-decoration: underline;
 }
 
 .markdown-content a:hover {
-  color: var(--color-accent-hover);
+  color: var(--c-accent-hover);
 }
 
 .markdown-content table {
@@ -1441,14 +1504,14 @@ body {
 
 .markdown-content th,
 .markdown-content td {
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--c-border);
   padding: 0.5em 0.75em;
   text-align: left;
 }
 
 .markdown-content th {
   font-weight: 600;
-  background-color: var(--color-surface-secondary);
+  background-color: var(--c-surface-secondary);
 }
 
 /* ── Streaming indicator ── */
@@ -1485,21 +1548,21 @@ body {
 }
 
 .app-content::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: var(--c-border);
   border-radius: var(--radius-sm);
 }
 
 .app-content::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
+  background: var(--c-text-faint);
 }
 
 /* ── Structured tool call blocks (non-markdown) ── */
 .tool-call-block {
   margin-top: 0.25em;
   margin-bottom: 0.25em;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
-  background: var(--color-bg-sidebar);
+  background: var(--c-bg-sidebar);
   overflow: hidden;
 }
 
@@ -1508,9 +1571,9 @@ body {
   align-items: center;
   gap: --spacing(1.5);
   padding: 3px 10px;
-  font-family: var(--font-family-mono);
+  font-family: var(--font-mono);
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   cursor: pointer;
   user-select: none;
   transition: background 100ms;
@@ -1530,7 +1593,7 @@ body {
 }
 
 .tool-call-header:hover {
-  background: var(--color-bg-hover);
+  background: var(--c-bg-hover);
 }
 
 .tool-call-chevron {
@@ -1545,7 +1608,7 @@ body {
 
 .tool-call-details {
   display: none;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--c-border);
 }
 
 .tool-call-block--expanded .tool-call-details {
@@ -1558,7 +1621,7 @@ body {
 }
 
 .tool-call-input + .tool-call-output {
-  border-top: 1px solid var(--color-border-faint);
+  border-top: 1px solid var(--c-border-faint);
 }
 
 .tool-call-input pre,
@@ -1572,7 +1635,7 @@ body {
 
 .tool-call-input pre code,
 .tool-call-output pre code {
-  font-family: var(--font-family-mono);
+  font-family: var(--font-mono);
   font-size: var(--font-size-helper);
   line-height: 1.5;
   white-space: pre-wrap;
@@ -1582,7 +1645,7 @@ body {
 }
 
 .tool-call-output--error pre code {
-  color: var(--color-danger);
+  color: var(--c-danger);
 }
 
 /* ── Model API error (e.g. "API Error: 529 Overloaded") ── */
@@ -1592,7 +1655,7 @@ body {
   border-radius: var(--radius-md);
   padding: 0.5em 0.75em;
   background: rgba(220, 38, 38, 0.08);
-  color: var(--color-danger);
+  color: var(--c-danger);
 }
 
 .message-api-error-note {
@@ -1605,9 +1668,9 @@ body {
 .subagent-card {
   margin-top: 0.75em;
   margin-bottom: 0.75em;
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--c-accent);
   border-radius: var(--radius-md);
-  background: var(--color-accent-light);
+  background: var(--c-accent-light);
   padding: --spacing(3) --spacing(4);
   display: flex;
   align-items: center;
@@ -1633,26 +1696,26 @@ body {
 }
 
 .subagent-card-status-dot--running {
-  background: var(--color-accent);
+  background: var(--c-accent);
   animation: agent-activity-pulse 1.4s ease-in-out infinite;
 }
 
 /* Settled checkmark shown once the sub-agent finishes, mirroring a done progress step. */
 .subagent-card-status-check {
   flex-shrink: 0;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 /* Once finished, the card drops its green accent for neutral grey -- green reads as active. */
 .subagent-card--done {
-  border-color: var(--color-border);
-  background: var(--color-surface-secondary);
+  border-color: var(--c-border);
+  background: var(--c-surface-secondary);
 }
 
 .subagent-card-description {
   font-size: var(--font-size-body);
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1663,7 +1726,7 @@ body {
 
 .subagent-card-link {
   font-size: var(--font-size-body);
-  color: var(--color-accent);
+  color: var(--c-accent);
   text-decoration: none;
   white-space: nowrap;
   flex-shrink: 0;
@@ -1671,19 +1734,19 @@ body {
 }
 
 .subagent-card-link:hover {
-  color: var(--color-accent-hover);
+  color: var(--c-accent-hover);
   text-decoration: underline;
 }
 
 /* The "View conversation" label before the subagent is linked to its session: there is no
    conversation to open yet, so it renders muted and non-interactive until linkage lands. */
 .subagent-card-link--pending {
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   cursor: default;
 }
 
 .subagent-card-link--pending:hover {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   text-decoration: none;
 }
 
@@ -1693,9 +1756,9 @@ body {
    the review modal (or the verdict receipt once decided), and a toggle
    revealing the raw request/response. */
 .permission-request {
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
-  background: var(--color-bg-composer);
+  background: var(--c-bg-composer);
   padding: 12px 14px;
   max-width: 560px;
 }
@@ -1706,13 +1769,13 @@ body {
   align-items: center;
   gap: --spacing(1.5);
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 .permission-request-status {
   margin-top: 9px;
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 /* Pending body: a rounded subject badge beside the title + rationale column. */
@@ -1727,8 +1790,8 @@ body {
   width: 32px;
   height: 32px;
   border-radius: var(--radius-lg);
-  background: var(--color-bg-hover);
-  color: var(--color-text-secondary);
+  background: var(--c-bg-hover);
+  color: var(--c-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1750,13 +1813,13 @@ body {
 .permission-request-title {
   font-size: var(--font-size-body);
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 .permission-request-reason {
   font-size: var(--font-size-helper);
   line-height: 1.45;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 .permission-request-actions {
@@ -1777,7 +1840,7 @@ body {
 
 .permission-request-raw-toggle {
   font-size: var(--font-size-helper);
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   background: transparent;
   border: none;
   padding: 0;
@@ -1786,7 +1849,7 @@ body {
 }
 
 .permission-request-raw-toggle:hover {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 .permission-request-raw {
@@ -1797,8 +1860,8 @@ body {
   margin: 0;
   font-family: ui-monospace, monospace;
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
-  background: var(--color-bg-sidebar);
+  color: var(--c-text-secondary);
+  background: var(--c-bg-sidebar);
   border-radius: var(--radius-md);
   padding: --spacing(2);
   overflow: auto;
@@ -1835,7 +1898,7 @@ body {
   min-width: 0;
   font-size: var(--font-size-body);
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1859,15 +1922,15 @@ body {
 }
 
 .permission-request-verdict--granted {
-  color: var(--color-accent);
+  color: var(--c-accent);
 }
 
 .permission-request-verdict--denied {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 .permission-request-verdict--error {
-  color: var(--color-warning);
+  color: var(--c-warning);
 }
 
 .permission-request-verdict-icon {
@@ -1902,11 +1965,11 @@ body {
 }
 
 .machine-sidebar:hover ::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: var(--c-border);
 }
 
 .machine-sidebar:hover ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
+  background: var(--c-text-faint);
 }
 
 /* ── Workspace surface: the connected tab card ──
@@ -1938,7 +2001,7 @@ body {
    settled it belongs here, as a `prefers-color-scheme` override. */
 .app-main {
   --si-canvas: rgb(245 245 245);
-  --si-pane-surface: var(--color-surface);
+  --si-pane-surface: var(--c-surface);
   --si-pane-border: rgba(0, 0, 0, 0.09);
   --si-pane-radius: 12px;
   /* A tab's own insets. Named because the drag ghost has to restate them from
@@ -1948,7 +2011,7 @@ body {
   --si-tab-gap: 4px;
   /* The attention flash (see `si-tab-flash`). Amber is deliberately not in the
      palette's working set: it can only mean "look here for a moment". */
-  --si-tab-flash-color: var(--color-warning-bg);
+  --si-tab-flash-color: var(--c-warning-bg);
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
@@ -1985,7 +2048,7 @@ body {
    strip painted its own grey, no matter what this block said. Anything here
    that overrides a `--dv-*` default has to stay inside this doubled selector. */
 .dockview-theme-light.dockview-theme-light {
-  --dv-paneview-header-border-color: var(--color-border);
+  --dv-paneview-header-border-color: var(--c-border);
   /* Everything dockview would paint itself is transparent: the canvas behind
      the dock is the app's, and the only surface is the pane card. */
   --dv-background-color: transparent;
@@ -1995,17 +2058,17 @@ body {
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--si-pane-surface);
   --dv-activegroup-hiddenpanel-tab-background-color: transparent;
   --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
-  --dv-activegroup-visiblepanel-tab-color: var(--color-text-primary);
-  --dv-activegroup-hiddenpanel-tab-color: var(--color-text-secondary);
-  --dv-inactivegroup-visiblepanel-tab-color: var(--color-text-primary);
-  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-text-secondary);
+  --dv-activegroup-visiblepanel-tab-color: var(--c-text-primary);
+  --dv-activegroup-hiddenpanel-tab-color: var(--c-text-secondary);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--c-text-primary);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--c-text-secondary);
   /* Inactive tabs are bare labels: no dividers between them, and no line under
      the strip. The 4px gap is the separator, so that goes too. */
   --dv-tab-divider-color: transparent;
   --dv-separator-border: transparent;
-  --dv-tabs-container-scrollbar-color: var(--color-border);
-  --dv-drag-over-background-color: var(--color-accent-light);
-  --dv-drag-over-border-color: var(--color-accent);
+  --dv-tabs-container-scrollbar-color: var(--c-border);
+  --dv-drag-over-background-color: var(--c-accent-light);
+  --dv-drag-over-border-color: var(--c-accent);
 }
 
 /* The gap between panes. Padding rather than a margin so dockview's own sizing
@@ -2210,22 +2273,22 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   gap: --spacing(1);
   padding: 0 --spacing(1.5);
   border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   font-size: var(--font-size-helper);
   cursor: pointer;
 }
 
 .dockview-theme-light .dv-tabs-overflow-dropdown-default:hover {
-  background-color: var(--color-bg-hover);
-  color: var(--color-text-primary);
+  background-color: var(--c-bg-hover);
+  color: var(--c-text-primary);
 }
 
 .dockview-theme-light .dv-tabs-overflow-container {
   min-width: 160px;
   padding: --spacing(1) 0;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
-  background-color: var(--color-surface);
+  background-color: var(--c-surface);
   box-shadow: var(--shadow-overlay);
 }
 
@@ -2244,7 +2307,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .dockview-theme-light .dv-tabs-overflow-container .dv-tab:hover {
-  background-color: var(--color-bg-hover);
+  background-color: var(--c-bg-hover);
 }
 
 .dockview-theme-light .dv-tabs-overflow-container .dv-tab.dv-active-tab .dv-default-tab-content {
@@ -2258,19 +2321,19 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    Both the icon and the title move to the primary text color together. */
 .dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-custom-tab-icon,
 .dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-default-tab-content {
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 /* dockview outlines a focused tab in the (now transparent) divider color, so
    the keyboard ring is spelled out here instead -- in the accent, which is
    where the accent is allowed. */
 .dockview-theme-light .dv-tab:focus-visible::after {
-  outline: 2px solid var(--color-accent) !important;
+  outline: 2px solid var(--c-accent) !important;
   outline-offset: -2px;
 }
 
 .dockview-theme-light .dv-default-tab {
-  font-family: var(--font-family-base);
+  font-family: var(--font-sans);
   font-size: var(--font-size-body);
   font-weight: 500;
   padding: var(--si-tab-padding);
@@ -2326,7 +2389,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-radius: 1px; /* design-system-exception: one-off; half of this 2px insertion caret's width, so it reads as a rounded line, not a scale radius */
   /* Neutral, like everything else on the dock: the accent is chrome's, and an
      insertion caret here would be the one accent-colored thing in the pane. */
-  background: var(--color-text-primary);
+  background: var(--c-text-primary);
 }
 
 .dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-left::after {
@@ -2367,7 +2430,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   height: 24px;
   border: none;
   background: none;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   font-size: 18px; /* design-system-exception: icon glyph (+ add-tab), not text */
   font-weight: 300;
   cursor: pointer;
@@ -2379,8 +2442,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .dockview-add-tab-button:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
+  background: var(--c-bg-hover);
+  color: var(--c-text-primary);
 }
 
 /* ── Project settings pickers ── */
@@ -2402,11 +2465,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    as ``box-shadow``, so whichever property is spoken for on a given cell, the
    other one still shows the focus. */
 .modal-card button[aria-pressed]:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 2px;
   box-shadow:
-    0 0 0 2px var(--color-surface),
-    0 0 0 4px var(--color-accent);
+    0 0 0 2px var(--c-surface),
+    0 0 0 4px var(--c-accent);
 }
 
 /* ── Custom tab renderer ──
@@ -2435,18 +2498,18 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   background: currentColor;
 }
 
 /* Process up and working (RUNNING) -- green, matching the activity indicator. */
 .dv-tab-process-dot[data-liveness="active"] {
-  color: var(--color-accent);
+  color: var(--c-accent);
 }
 
 /* Process up but idle, waiting on the user (WAITING) -- yellow. */
 .dv-tab-process-dot[data-liveness="waiting"] {
-  color: var(--color-warning);
+  color: var(--c-warning);
 }
 
 /* Within a color, subtly vary the shape so states that share a hue stay
@@ -2503,8 +2566,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   max-width: 480px;
   padding: --spacing(1) --spacing(2);
   border-radius: var(--radius-md);
-  background: var(--color-inverse-surface);
-  color: var(--color-text-on-accent);
+  background: var(--c-inverse-surface);
+  color: var(--c-text-on-accent);
   font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
@@ -2516,8 +2579,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 @media (prefers-color-scheme: dark) {
   .minds-tooltip {
-    background: var(--color-surface);
-    color: var(--color-text-primary);
+    background: var(--c-surface);
+    color: var(--c-text-primary);
   }
 }
 
@@ -2530,11 +2593,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex: 1 1 auto;
   min-width: 0;
   padding: 0 3px;
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--c-accent);
   border-radius: var(--radius-sm);
   outline: none;
-  background: var(--color-bg);
-  color: var(--color-text-primary);
+  background: var(--c-bg);
+  color: var(--c-text-primary);
   font: inherit;
 }
 
@@ -2554,7 +2617,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 0;
   border: none;
   background: none;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   cursor: pointer;
   border-radius: var(--radius-sm);
   transition:
@@ -2570,7 +2633,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .dv-custom-tab-action:hover {
   background: rgba(0, 0, 0, 0.08);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 /* ── Modal primitive ─────────────────────────────────────────────────────────
@@ -2620,8 +2683,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .modal-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
   padding: --spacing(6);
   width: 420px;
@@ -2638,25 +2701,25 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .modal-title {
-  font-family: var(--font-family-heading);
+  font-family: var(--font-sans);
   font-size: var(--font-size-heading);
   font-weight: var(--weight-semibold);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   margin: 0;
 }
 
 /* Dialog body copy reads at full strength by default -- it is the point of the
    dialog. A specific line that is genuinely secondary (a footnote, a hint) opts
-   into --color-text-secondary/-faint at its own call site; the default does not. */
+   into --c-text-secondary/-faint at its own call site; the default does not. */
 .modal-body {
   font-size: var(--font-size-body);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   line-height: 1.5;
 }
 
 .modal-message {
   font-size: var(--font-size-body);
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   line-height: 1.5;
   margin: 0 0 --spacing(4);
 }
@@ -2665,7 +2728,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: block;
   font-size: var(--font-size-body);
   font-weight: 500;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   margin-bottom: --spacing(1);
 }
 
@@ -2692,8 +2755,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   width: 26px;
   height: 26px;
   border-radius: var(--radius-lg);
-  color: var(--color-accent);
-  background: var(--color-accent-light);
+  color: var(--c-accent);
+  background: var(--c-accent-light);
   flex-shrink: 0;
 }
 
@@ -2701,7 +2764,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: inline-flex;
   align-items: center;
   gap: --spacing(1);
-  color: var(--color-accent);
+  color: var(--c-accent);
   text-decoration: underline;
   white-space: nowrap;
 }
@@ -2737,18 +2800,18 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .progress-block {
   margin: 18px 0 28px;
-  --pv-fg: var(--color-text-primary);
-  --pv-fg-soft: var(--color-text-secondary);
-  --pv-fg-muted: var(--color-text-secondary);
-  --pv-fg-faint: var(--color-text-faint);
-  --pv-line: var(--color-border);
-  --pv-line-faint: var(--color-border-faint);
-  --pv-active: var(--color-accent);
-  --pv-done: var(--color-text-secondary);
-  --pv-pending: var(--color-text-faint);
+  --pv-fg: var(--c-text-primary);
+  --pv-fg-soft: var(--c-text-secondary);
+  --pv-fg-muted: var(--c-text-secondary);
+  --pv-fg-faint: var(--c-text-faint);
+  --pv-line: var(--c-border);
+  --pv-line-faint: var(--c-border-faint);
+  --pv-active: var(--c-accent);
+  --pv-done: var(--c-text-secondary);
+  --pv-pending: var(--c-text-faint);
   /* The "glint" that sweeps across active-step narration. Kept independent of
      the text scale so the shimmer stays visible against the muted caption. */
-  --pv-shimmer: var(--color-text-faint);
+  --pv-shimmer: var(--c-text-faint);
   font-size: var(--font-size-body);
   line-height: 1.5;
   color: var(--pv-fg);
@@ -2842,7 +2905,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-bullet {
   position: relative;
   z-index: var(--z-content);
-  background: var(--color-bg-chat);
+  background: var(--c-bg-chat);
   padding: 1px 0;
   flex-shrink: 0;
   width: 16px;
@@ -3024,13 +3087,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    z-index) so the thread doesn't draw through the chip. The chip itself keeps
    its own collapsible styling; this wrapper only handles positioning and
    masking the thread. The background is the pure-white transcript color
-   (--color-bg-chat), not the shell's off-white --color-bg, so the mask blends
+   (--c-bg-chat), not the shell's off-white --c-bg, so the mask blends
    into the transcript instead of showing as a band. */
 .pv-stophook {
   position: relative;
   z-index: 2; /* design-system-exception: lifts this block above the timeline thread; the z scale has no "content + 1" layer for 2 */
   margin: 6px 0 14px 0;
-  background: var(--color-bg-chat);
+  background: var(--c-bg-chat);
 }
 
 /* Ungrouped work/prose: real work the agent did with no step open (e.g.
@@ -3044,7 +3107,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
      masks a bit of the timeline line above the ungrouped run. */
   margin: 0 0 14px 0;
   padding-top: --spacing(1.5);
-  background: var(--color-bg-chat);
+  background: var(--c-bg-chat);
 }
 
 /* Agent permission request, lifted out of any open step so it is always
@@ -3052,7 +3115,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    thread with z-index so the thread doesn't draw through it; the permission-request
    card carries its own opaque surface, so it masks the thread on its own and this
    wrapper needs no background of its own (a background here would paint the shell's
-   off-white --color-bg over the pure-white --color-bg-chat transcript). */
+   off-white --c-bg over the pure-white --c-bg-chat transcript). */
 .pv-permission {
   position: relative;
   z-index: 2; /* design-system-exception: lifts the permission card above the timeline thread; the z scale has no "content + 1" layer for 2 */
@@ -3077,14 +3140,14 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   max-width: var(--width-message-column);
   padding: 0 --spacing(1);
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 .agent-activity-indicator__dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--color-accent);
+  background: var(--c-accent);
   animation: agent-activity-pulse 1.4s ease-in-out infinite;
   flex-shrink: 0;
 }
@@ -3123,7 +3186,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .claude-login-modal {
   position: relative;
-  background: var(--color-surface);
+  background: var(--c-surface);
   border-radius: var(--radius-lg);
   width: 100%;
   max-width: 460px;
@@ -3140,13 +3203,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   align-items: center;
   justify-content: space-between;
   padding: 18px 22px 14px;
-  border-bottom: 1px solid var(--color-border-faint);
+  border-bottom: 1px solid var(--c-border-faint);
 }
 
 .claude-login-title {
   font-size: var(--font-size-heading);
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   margin: 0;
   letter-spacing: -0.005em;
 }
@@ -3159,7 +3222,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin: -4px;
   border-radius: var(--radius-md);
   cursor: pointer;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3169,12 +3232,12 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-close:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
+  background: var(--c-bg-hover);
+  color: var(--c-text-primary);
 }
 
 .claude-login-close:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 1px;
 }
 
@@ -3190,7 +3253,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   justify-content: flex-end;
   gap: --spacing(2);
   padding: 14px 22px 18px;
-  border-top: 1px solid var(--color-border-faint);
+  border-top: 1px solid var(--c-border-faint);
 }
 
 .claude-login-footer--spread {
@@ -3199,7 +3262,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* One-line intro shown above a form's inputs */
 .claude-login-lead {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   margin: 0 0 18px;
   font-size: var(--font-size-body);
   line-height: 1.5;
@@ -3228,14 +3291,14 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-primary-headline {
   font-size: var(--font-size-heading);
   font-weight: 700;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   margin: 0 0 --spacing(1);
   letter-spacing: -0.005em;
 }
 
 .claude-login-primary-sub {
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   line-height: 1.5;
   margin: 0 auto --spacing(4);
   max-width: 320px;
@@ -3244,7 +3307,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 /* "Other ways to sign in" disclosure */
 .claude-login-alts {
   margin-top: 14px;
-  border-top: 1px solid var(--color-border-faint);
+  border-top: 1px solid var(--c-border-faint);
   padding-top: --spacing(3);
 }
 
@@ -3262,15 +3325,15 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font: inherit;
   font-size: var(--font-size-body);
   font-weight: 600;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 .claude-login-alts-toggle:hover {
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 .claude-login-alts-toggle:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 2px;
 }
 
@@ -3298,8 +3361,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   text-align: left;
   width: 100%;
   padding: 12px 14px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-raised);
   cursor: pointer;
@@ -3311,14 +3374,14 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-alt:hover {
-  border-color: var(--color-accent);
+  border-color: var(--c-accent);
   /* design-system-exception: tighter 6px-blur hover lift of the --shadow-raised
      card; between scale tiers, so kept raw. */
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 .claude-login-alt:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 1px;
 }
 
@@ -3332,24 +3395,24 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-alt-name {
   font-size: var(--font-size-body);
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 .claude-login-alt-desc {
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   line-height: 1.4;
 }
 
 .claude-login-alt-go {
   display: flex;
   flex: none;
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   transition: color 100ms ease;
 }
 
 .claude-login-alt:hover .claude-login-alt-go {
-  color: var(--color-accent);
+  color: var(--c-accent);
 }
 
 /* Numbered steps (OAuth flow) */
@@ -3367,7 +3430,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   gap: --spacing(2);
   font-size: var(--font-size-body);
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   margin-bottom: --spacing(2);
 }
 
@@ -3378,8 +3441,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
+  background: var(--c-accent);
+  color: var(--c-text-on-accent);
   font-size: var(--font-size-helper);
   font-weight: 600;
 }
@@ -3387,7 +3450,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 /* "Copy the link" fallback under the Open-sign-in-page button */
 .claude-login-copylink {
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   line-height: 1.5;
   margin: 9px 0 0;
 }
@@ -3396,7 +3459,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font: inherit;
   font-size: var(--font-size-helper);
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--c-accent);
   background: transparent;
   border: none;
   padding: 0;
@@ -3406,11 +3469,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-copylink-action:hover {
-  color: var(--color-accent-hover);
+  color: var(--c-accent-hover);
 }
 
 .claude-login-copylink-action:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 2px;
   border-radius: 2px; /* design-system-exception: one-off; tight focus-ring radius on an inline text link, between scale steps */
 }
@@ -3419,19 +3482,19 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-rawurl {
   margin-top: --spacing(2);
   padding: 8px 10px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
-  font-family: var(--font-family-mono);
+  background: var(--c-surface);
+  font-family: var(--font-mono);
   font-size: var(--font-size-helper);
   line-height: 1.4;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   word-break: break-all;
   user-select: all;
 }
 
 .claude-login-rawurl:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--c-accent);
   outline-offset: 1px;
 }
 
@@ -3460,19 +3523,19 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border: none;
   padding: --spacing(1) --spacing(2);
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
 
 .claude-login-input-action:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
+  color: var(--c-text-primary);
+  background: var(--c-bg-hover);
 }
 
 .claude-login-helper {
   font-size: var(--font-size-helper);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   margin-top: --spacing(1.5);
   line-height: 1.4;
 }
@@ -3484,7 +3547,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 /* Muted "currently signed in via ..." header on the provider-selection screen */
 .claude-login-current-mode {
   font-size: var(--font-size-helper);
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   text-align: center;
   margin: 0 0 10px;
 }
@@ -3502,7 +3565,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   align-items: center;
   gap: --spacing(2);
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   padding: --spacing(1.5) 0;
 }
 
@@ -3537,20 +3600,20 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-checklist-item--done {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
 }
 
 .claude-login-checklist-item--done .claude-login-checklist-icon {
-  color: var(--color-success);
+  color: var(--c-success);
 }
 
 .claude-login-checklist-item--active {
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   font-weight: 500;
 }
 
 .claude-login-checklist-item--pending {
-  color: var(--color-text-tertiary, var(--color-text-secondary));
+  color: var(--c-text-tertiary, var(--c-text-secondary));
 }
 
 .claude-login-checklist-item--pending .claude-login-checklist-icon::before {
@@ -3572,13 +3635,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border: none;
   padding: 0;
   font-size: var(--font-size-helper);
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   cursor: pointer;
   font-family: inherit;
 }
 
 .claude-login-subtle-toggle:hover {
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   text-decoration: underline;
 }
 
@@ -3605,10 +3668,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
-  background: var(--color-danger-bg);
-  border: 1px solid var(--color-danger-border);
+  background: var(--c-danger-bg);
+  border: 1px solid var(--c-danger-border);
   border-radius: var(--radius-lg);
-  color: var(--color-danger);
+  color: var(--c-danger);
   font-size: var(--font-size-body);
   line-height: 1.45;
   margin-bottom: 14px;
@@ -3639,30 +3702,30 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-status-icon--success {
-  background: var(--color-accent-light);
-  color: var(--color-accent);
+  background: var(--c-accent-light);
+  color: var(--c-accent);
 }
 
 .claude-login-status-icon--error {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
 }
 
 .claude-login-status-icon--loading {
   background: transparent;
-  color: var(--color-accent);
+  color: var(--c-accent);
 }
 
 .claude-login-status-title {
   font-size: var(--font-size-heading);
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
   margin: 0 0 --spacing(1);
 }
 
 .claude-login-status-detail {
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   margin: 0;
   line-height: 1.5;
   max-width: 320px;
@@ -3737,7 +3800,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .image-lightbox-iconbtn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.15);
-  color: var(--color-text-on-accent);
+  color: var(--c-text-on-accent);
 }
 
 .image-lightbox-body {
@@ -3769,9 +3832,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 6px 10px;
   font-size: var(--font-size-body);
   line-height: 1.4;
-  color: var(--color-text-secondary);
-  background: var(--color-surface-secondary);
-  border-bottom: 1px solid var(--color-border);
+  color: var(--c-text-secondary);
+  background: var(--c-surface-secondary);
+  border-bottom: 1px solid var(--c-border);
 }
 
 .terminal-banner-text {
@@ -3779,7 +3842,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .terminal-banner-link {
-  color: var(--color-accent);
+  color: var(--c-accent);
   text-decoration: underline;
 }
 

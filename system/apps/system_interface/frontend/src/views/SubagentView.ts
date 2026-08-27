@@ -184,7 +184,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         content = m(
           "div",
           { class: "message-list-loading flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "Loading events..."),
+          m("p", { class: "text-secondary" }, "Loading events..."),
         );
       } else if (loadingError) {
         content = m(
@@ -196,7 +196,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         content = m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "No events yet."),
+          m("p", { class: "text-secondary" }, "No events yet."),
         );
       } else {
         content = renderWindowedList(agentId);
