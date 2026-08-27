@@ -14,6 +14,7 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import reconcile
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
@@ -125,7 +126,15 @@ def main() -> None:
     # folder with no row is an abandoned sign-in nothing can reach; a row with no folder is
     # an account that LOOKS usable and silently is not, which is worse. `reconcile` logs
     # both, so a dropped row is visible rather than a mystery.
-    reconcile()
+    #
+    # Never fatal. supervisord restarts this program a million times, so an unreadable index
+    # -- a truncated write from a hard host kill, a file from a newer build -- would be an
+    # unbounded crash loop with no UI and therefore no way to delete the offending account.
+    # Every other JSON reader in this app degrades with a warning; so does this one.
+    try:
+        reconcile()
+    except AccountError:
+        logger.exception("Could not reconcile the account store; continuing without it")
     application = build_application(config, args)
     with application.app_context():
         state = get_state()

@@ -12,6 +12,7 @@ from imbue.system_interface.accounts import INDEX_VERSION
 from imbue.system_interface.accounts import Account
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import account_dir
+from imbue.system_interface.accounts import accounts_root
 from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import delete_account
 from imbue.system_interface.accounts import discard_account_dir
@@ -225,3 +226,65 @@ def test_an_unreadable_index_raises_rather_than_returning_empty(tmp_path: Path) 
     index_path(tmp_path).write_text("{ not json")
     with pytest.raises(AccountError):
         read_index(tmp_path)
+
+
+def test_discarding_an_account_keeps_its_chat_history(tmp_path: Path) -> None:
+    """claude is bound by pointing CLAUDE_CONFIG_DIR at the account, and it writes its
+    session transcripts inside. Removing the folder wholesale did not just stop the bound
+    chats working -- it made them render empty, permanently."""
+    account_id, path = mint_account_dir(tmp_path)
+    (path / ".credentials.json").write_text("{}")
+    session = path / "projects" / "-home-user-workspace"
+    session.mkdir(parents=True)
+    (session / "abc.jsonl").write_text('{"type":"user"}\n')
+
+    discard_account_dir(account_id, tmp_path)
+
+    assert not (path / ".credentials.json").exists(), "the credential should be gone"
+    assert (session / "abc.jsonl").read_text() == '{"type":"user"}\n'
+
+
+def test_discarding_an_account_with_no_history_leaves_nothing_behind(tmp_path: Path) -> None:
+    account_id, path = mint_account_dir(tmp_path)
+    (path / "auth.json").write_text("{}")
+
+    discard_account_dir(account_id, tmp_path)
+
+    assert not path.exists()
+
+
+def test_the_boot_sweep_leaves_a_kept_history_folder_alone(tmp_path: Path) -> None:
+    """Otherwise the transcripts survive the delete and are swept one boot later."""
+    account_id, path = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    (path / "projects").mkdir()
+    (path / "projects" / "a.jsonl").write_text("{}\n")
+    delete_account(account_id, tmp_path)
+
+    removed, dropped = reconcile(tmp_path)
+
+    assert removed == () and dropped == ()
+    assert (path / "projects" / "a.jsonl").exists()
+
+
+def test_an_index_that_is_not_an_object_is_refused_not_crashed_on(tmp_path: Path) -> None:
+    """`_write_index` has no fsync, so a hard host kill can leave a truncated file -- and
+    boot calls `reconcile`, under a supervisor that restarts a million times."""
+    path = index_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[]")
+
+    with pytest.raises(AccountError):
+        read_index(tmp_path)
+
+
+def test_the_lock_file_is_not_mistaken_for_an_account(tmp_path: Path) -> None:
+    """It lives in the accounts root beside the folders, and the sweep removes everything
+    the index does not name."""
+    account_id, _ = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+
+    removed, dropped = reconcile(tmp_path)
+
+    assert removed == () and dropped == ()
+    assert (accounts_root(tmp_path) / "index.lock").exists()

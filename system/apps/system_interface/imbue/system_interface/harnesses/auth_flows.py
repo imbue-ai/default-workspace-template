@@ -394,10 +394,19 @@ class AuthFlowService:
         managed_env = claude_env_from_paste(pasted)
         lane = get_lane("anthropic")
         with self._lock:
+            # Re-key into the account this endpoint already owns rather than minting another.
+            # It is called every time the user visits the keys page, and a fresh account per
+            # visit leaves a row per re-key -- all but the newest holding a dead credential,
+            # and the newest quietly becoming the default for every new chat.
+            existing = _adopted_account(lane.id, self._home)
+            if existing is not None:
+                path = accounts.account_dir(existing.id, self._home)
+                write_claude_env(path, managed_env)
+                return existing
             account_id, path = accounts.mint_account_dir(self._home)
             seed_account(lane.harness, path, self._work_dir)
             write_claude_env(path, managed_env)
-            return accounts.commit_account(account_id, lane.id, lane.provider_name, self._home)
+            return accounts.commit_account(account_id, lane.id, ADOPTED_DISPLAY, self._home)
 
     def poll(self, flow_id: str) -> FlowStatus:
         with self._lock:
@@ -540,6 +549,29 @@ def _binary_for(lane: Lane) -> str:
 
 # The prefix claude stamps on a `setup-token` result. Mirrors `_CLAUDE_TOKEN_SCRAPE`.
 _OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat01-"
+
+
+# What an adopted account is called. Distinct from the lane's own provider name on purpose:
+# it is how re-keying finds the row it already owns, and it is the only thing that tells the
+# user which of their anthropic accounts came from the keys page rather than a browser sign-in.
+ADOPTED_DISPLAY: Final = "Anthropic (Imbue)"
+
+
+def _adopted_account(lane_id: str, home: Path | None) -> accounts.Account | None:
+    """The account a previous adopt created, if its folder is still there.
+
+    Matched on `ADOPTED_DISPLAY` rather than on the lane, because the lane also holds every
+    account the user signed into through a browser -- and re-keying must not overwrite one
+    of those.
+    """
+    for account in accounts.read_index(home).accounts:
+        if (
+            account.lane == lane_id
+            and account.display == ADOPTED_DISPLAY
+            and accounts.account_dir(account.id, home).is_dir()
+        ):
+            return account
+    return None
 
 
 def claude_env_from_paste(pasted: str) -> dict[str, str]:

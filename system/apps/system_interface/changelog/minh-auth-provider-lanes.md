@@ -585,3 +585,23 @@ Both promote probes could only answer yes:
   logged-in on an ambient `ANTHROPIC_API_KEY` alone. On a workspace upgraded from the
   shared-login era, an empty account folder committed as signed in, became the default, and
   launched every later chat with no credential.
+
+# Make the account store safe to share and safe to boot
+
+The index lock was a thread lock, and the server is not the only process that writes there:
+`migrate_claude_auth.py` runs standalone and commits an account, and boot's reconcile removes
+every folder the index does not name. Two writers interleaving lost an account; one racing the
+sweep had its brand-new folder deleted out from under it. The lock is now an flock held across
+the whole read-modify-write.
+
+Boot no longer treats an unreadable index as fatal. supervisord restarts this program a million
+times, so a truncated write from a hard host kill was an unbounded crash loop with no UI and
+therefore no way to delete the offending account.
+
+# One Imbue account, not one per visit
+
+The keys page posts a credential on every visit and each post minted a new account. Re-keying
+three times left three rows, two of them holding dead credentials and the newest quietly
+becoming the account every new chat launched on. Re-keying now writes into the account it
+already owns. That account is labelled distinctly, so it is matched without ever overwriting an
+account the user signed into through a browser.

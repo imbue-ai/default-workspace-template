@@ -450,3 +450,37 @@ def test_a_pasted_api_key_is_approved_so_claude_does_not_challenge_it(tmp_path: 
     (account,) = read_index(tmp_path).accounts
     config = json.loads((tmp_path / ".minds" / "accounts" / account.id / ".claude.json").read_text())
     assert config["customApiKeyResponses"]["approved"], "the key was not pre-approved"
+
+
+def test_re_keying_through_imbue_reuses_its_own_account(tmp_path: Path) -> None:
+    """The keys page posts on every visit. A fresh account per visit leaves a row per
+    re-key, all but the newest holding a dead credential -- and the newest silently becoming
+    the account every new chat launches on."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
+
+    first = service.adopt_claude_credentials("sk-ant-api03-" + "A" * 40)
+    second = service.adopt_claude_credentials("sk-ant-api03-" + "B" * 40)
+
+    assert second.id == first.id
+    assert len(read_index(tmp_path).accounts) == 1
+    settings = json.loads((tmp_path / ".minds" / "accounts" / first.id / "settings.json").read_text())
+    assert settings["env"]["ANTHROPIC_API_KEY"].endswith("B" * 40)
+
+
+def test_re_keying_does_not_overwrite_a_browser_sign_in(tmp_path: Path) -> None:
+    """Both live on the anthropic lane, so matching on the lane alone would let the keys
+    page silently replace the credential the user signed in with."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
+    started = service.start("anthropic", "api_key")
+    service.submit_key(started.flow_id, "sk-ant-api03-" + "C" * 40)
+    (signed_in,) = read_index(tmp_path).accounts
+
+    adopted = service.adopt_claude_credentials("sk-ant-api03-" + "D" * 40)
+
+    assert adopted.id != signed_in.id
+    settings = json.loads((tmp_path / ".minds" / "accounts" / signed_in.id / "settings.json").read_text())
+    assert settings["env"]["ANTHROPIC_API_KEY"].endswith("C" * 40)
