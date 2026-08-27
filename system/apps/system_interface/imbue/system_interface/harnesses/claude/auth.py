@@ -81,7 +81,6 @@ from typing import Any
 from typing import Final
 
 import pexpect
-import pyte
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -96,6 +95,14 @@ from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.mngr.utils.env_utils import parse_env_file
 from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
 from imbue.mngr_claude.claude_config import get_claude_config_dir
+from imbue.system_interface.harnesses.pty_auth import PtyAuthError
+from imbue.system_interface.harnesses.pty_auth import drain_pty_stream
+from imbue.system_interface.harnesses.pty_auth import drain_pty_stream_until_quiet
+from imbue.system_interface.harnesses.pty_auth import extract_hyperlink_value
+from imbue.system_interface.harnesses.pty_auth import extract_wrapped_value
+from imbue.system_interface.harnesses.pty_auth import safe_close
+from imbue.system_interface.harnesses.pty_auth import safe_terminate
+from imbue.system_interface.harnesses.pty_auth import spawn_pty
 
 logger = _loguru_logger
 
@@ -125,25 +132,11 @@ _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
 # render-frame, so the buffer may hold just a prefix. The actual URL is
 # recovered by `_extract_oauth_url` after draining the stream.
 _OAUTH_URL_REGEX = re.compile(r"https://\S*oauth/authorize\S*")
-# An OSC 8 terminal hyperlink: `ESC ] 8 ; params ; target (BEL | ESC \)`.
-# The params field is not always empty (the CLI emits `id=...`). The target
-# carries the full URL with no width-wrapping, so it survives narrow PTYs
-# that hard-wrap the visible label.
-_OSC8_HYPERLINK_REGEX = re.compile(r"\x1b\]8;[^;\x07\x1b]*;([^\x07\x1b]+)(?:\x07|\x1b\\)")
 # Strict charset for re-assembling a width-wrapped URL from visible text:
 # unlike `\S`, it excludes stray control bytes left between render fragments.
 _OAUTH_URL_CHARSET = r"[A-Za-z0-9%&=?_.~/:+#-]"
 _OAUTH_URL_STRICT_REGEX = re.compile(rf"https://{_OAUTH_URL_CHARSET}*oauth/authorize{_OAUTH_URL_CHARSET}*")
 _OAUTH_URL_CONTINUATION_REGEX = re.compile(rf"^{_OAUTH_URL_CHARSET}+$")
-# End-of-frame marker for Ink's synchronized-update rendering; the replay
-# in _extract_wrapped_value snapshots the screen at each of these.
-_FRAME_END_MARKER: Final = "\x1b[?2026l"
-# The PTY geometry used for `claude setup-token`. Pinned explicitly on the
-# spawn AND used to replay the stream through the terminal emulator during
-# extraction -- the two must match or the reconstructed screen's wrapping
-# would not correspond to what the CLI rendered.
-_PTY_LINES: Final = 24
-_PTY_COLUMNS: Final = 80
 # The long-lived token `claude setup-token` prints on completion. Like the
 # URL regex, only a trigger -- extraction re-assembles the possibly
 # width-wrapped token from the drained stream.
@@ -170,11 +163,6 @@ _CODE_ECHO_DEADLINE_SECONDS: Final = 3.0
 # Real setup tokens are ~110 characters. A much shorter extraction is a
 # wrapped fragment, not the token -- keep waiting rather than storing it.
 _MIN_SETUP_TOKEN_LENGTH: Final = 60
-# After a trigger regex fires, keep draining the PTY until the caller's
-# completion predicate is satisfied or EOF; this hard deadline is only a
-# hang backstop (generous: the token path drains to process exit).
-_STREAM_DRAIN_DEADLINE_SECONDS: Final = 15.0
-_STREAM_DRAIN_READ_SECONDS: Final = 0.25
 _OAUTH_URL_WAIT_SECONDS: Final = 30.0
 _SETUP_TOKEN_POLL_SECONDS: Final = 0.2
 _SETUP_TOKEN_CODE_WAIT_SECONDS: Final = 30.0
@@ -210,7 +198,7 @@ RESTART_CONTINUE_MESSAGE: Final[str] = (
 )
 
 
-class ClaudeAuthError(RuntimeError):
+class ClaudeAuthError(PtyAuthError):
     """Raised when an auth flow operation cannot complete."""
 
 
@@ -229,10 +217,9 @@ def _default_command_runner(command: list[str], timeout: float, env: Mapping[str
 
 
 def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -> Any:
-    # Dimensions pinned to the geometry the extraction replays the stream
-    # at (see _render_final_screen) -- these are pexpect's defaults, made
-    # explicit so the two can never drift apart.
-    return pexpect.spawn(executable, args, timeout=timeout, encoding="utf-8", dimensions=(_PTY_LINES, _PTY_COLUMNS))
+    # Geometry, encoding and the expect-default timeout all live in spawn_pty,
+    # which pins the same dimensions the extraction replays the stream at.
+    return spawn_pty(executable, args, timeout)
 
 
 class AuthMode(str, Enum):
@@ -635,125 +622,10 @@ def record_api_key_approval(managed_env: Mapping[str, str], claude_json_path_ove
     logger.info("Recorded managed API-key approval in {}", claude_json_path)
 
 
-def _safe_terminate(process: Any) -> None:
-    """Terminate a pexpect spawn without letting teardown errors propagate.
-
-    `pexpect.spawn.isalive()` reaps the child's exit status and wraps
-    `ptyprocess` errors in `pexpect.ExceptionPexpect`; `terminate()` can
-    raise `OSError` on an already-reaped descriptor. Both live inside the
-    try so a half-torn-down process never crashes the caller (called from
-    every setup-token teardown path, including the auth-success chokepoint).
-    """
-    try:
-        if not process.isalive():
-            return
-        process.terminate(force=True)
-    except (OSError, pexpect.ExceptionPexpect) as e:
-        logger.warning("setup-token subprocess terminate raised: {}", e)
-
-
-def _safe_close(process: Any) -> None:
-    """Release the pexpect spawn's PTY file descriptor.
-
-    `pexpect.spawn.close()` can raise `OSError` (e.g. on an already-closed
-    descriptor) and `pexpect.ExceptionPexpect` in some teardown paths.
-    Swallow + log both since the only thing we can do at this point is
-    drop the reference anyway.
-    """
-    try:
-        process.close()
-    except (OSError, pexpect.ExceptionPexpect) as e:
-        logger.warning("setup-token subprocess close raised: {}", e)
-
-
-@pure
-def _extract_value_from_screen_rows(
-    rows: list[str],
-    start_regex: re.Pattern[str],
-    continuation_regex: re.Pattern[str],
-) -> tuple[str, bool] | None:
-    """Find `start_regex` on one rendered screen, de-wrapping across rows.
-
-    A value hard-wrapped by the renderer occupies its row through the last
-    column and continues on the next row; a row with trailing blank space
-    is the value's final row. Rows arrive space-padded to the full screen
-    width (pyte's display invariant), which the wrap detection relies on.
-
-    Returns the value plus whether it provably *ended*: a full-width row
-    with only blank space under it is ambiguous (the continuation may not
-    have been drawn yet on this frame), so only non-continuation content
-    under the row proves the value ended at the screen edge.
-    """
-    for idx, row in enumerate(rows):
-        match = start_regex.search(row)
-        if match is None:
-            continue
-        value = row[match.start() :].rstrip()
-        row_idx = idx
-        # A row whose last column is occupied wrapped onto the next row.
-        while rows[row_idx].rstrip() and len(rows[row_idx].rstrip()) == len(rows[row_idx]):
-            candidate = rows[row_idx + 1].strip() if row_idx + 1 < len(rows) else ""
-            if candidate == "":
-                return value, False
-            if continuation_regex.match(candidate) is None:
-                return value, True
-            value += candidate
-            row_idx += 1
-        return value, True
-    return None
-
-
-@pure
-def _extract_wrapped_value(
-    raw_output: str,
-    start_regex: re.Pattern[str],
-    continuation_regex: re.Pattern[str],
-) -> str | None:
-    """Recover a possibly width-wrapped value from a raw PTY stream.
-
-    The CLI's Ink renderer emits diff-based frames full of cursor
-    positioning, so the raw stream's byte order does not correspond to the
-    visual layout -- only a terminal-emulator replay at the exact PTY
-    geometry recovers what was actually on screen. The stream is replayed
-    frame by frame (split on the synchronized-update end marker Ink emits
-    after each frame) and the longest provably-terminated candidate across
-    ALL frames wins: a single mid-frame screen can show a truncated prefix
-    over the previous frame's stale content, and the final screen alone
-    can miss the value entirely if the CLI clears it on exit. A truncated
-    candidate is a strict prefix of the real one, so longest-wins selects
-    the fully drawn frame.
-    """
-    screen = pyte.Screen(_PTY_COLUMNS, _PTY_LINES)
-    stream = pyte.Stream(screen)
-    best_terminated: str | None = None
-    best_any: str | None = None
-    for frame_chunk in raw_output.split(_FRAME_END_MARKER):
-        stream.feed(frame_chunk)
-        extracted = _extract_value_from_screen_rows(list(screen.display), start_regex, continuation_regex)
-        if extracted is None:
-            continue
-        value, is_terminated = extracted
-        if best_any is None or len(value) > len(best_any):
-            best_any = value
-        if is_terminated and (best_terminated is None or len(value) > len(best_terminated)):
-            best_terminated = value
-    return best_terminated if best_terminated is not None else best_any
-
-
 @pure
 def _extract_oauth_url_from_hyperlink(raw_output: str) -> str | None:
-    """Pull the OAuth URL from an OSC 8 hyperlink target in the raw stream.
-
-    The CLI renders the URL as an OSC 8 terminal hyperlink; the (invisible)
-    target carries the full URL with no width-wrapping, unlike the visible
-    label, which Ink hard-wraps at the terminal width. Only *terminated*
-    sequences match, so a half-received target is never returned.
-    """
-    for match in _OSC8_HYPERLINK_REGEX.finditer(raw_output):
-        target_match = _OAUTH_URL_STRICT_REGEX.search(match.group(1))
-        if target_match is not None:
-            return target_match.group(0)
-    return None
+    """Pull the OAuth URL from an OSC 8 hyperlink target in the raw stream."""
+    return extract_hyperlink_value(raw_output, _OAUTH_URL_STRICT_REGEX)
 
 
 @pure
@@ -767,7 +639,7 @@ def _extract_oauth_url(raw_output: str) -> str | None:
     from_hyperlink = _extract_oauth_url_from_hyperlink(raw_output)
     if from_hyperlink is not None:
         return from_hyperlink
-    return _extract_wrapped_value(raw_output, _OAUTH_URL_STRICT_REGEX, _OAUTH_URL_CONTINUATION_REGEX)
+    return extract_wrapped_value(raw_output, _OAUTH_URL_STRICT_REGEX, _OAUTH_URL_CONTINUATION_REGEX)
 
 
 @pure
@@ -779,51 +651,10 @@ def _extract_setup_token(raw_output: str) -> str | None:
     extraction is a wrapped fragment, not the token -- return None so the
     caller keeps draining instead of storing a truncated token.
     """
-    token = _extract_wrapped_value(raw_output, _SETUP_TOKEN_STRICT_REGEX, _SETUP_TOKEN_CONTINUATION_REGEX)
+    token = extract_wrapped_value(raw_output, _SETUP_TOKEN_STRICT_REGEX, _SETUP_TOKEN_CONTINUATION_REGEX)
     if token is None or len(token) < _MIN_SETUP_TOKEN_LENGTH:
         return None
     return token
-
-
-def _drain_pty_stream_until_quiet(process: Any, consumed: str, quiet_seconds: float, deadline_seconds: float) -> str:
-    """Read PTY output until no chunk arrives for `quiet_seconds`.
-
-    Used to detect the end of the CLI's paste-echo burst before sending
-    Enter as its own keystroke. EOF and the overall deadline both end the
-    wait; everything read is appended to `consumed` so the session output
-    stays complete.
-    """
-    deadline = time.monotonic() + deadline_seconds
-    while time.monotonic() < deadline:
-        try:
-            chunk = process.read_nonblocking(size=65536, timeout=quiet_seconds)
-        except pexpect.TIMEOUT:
-            return consumed
-        except pexpect.EOF:
-            return consumed
-        consumed = consumed + (chunk or "")
-    return consumed
-
-
-def _drain_pty_stream(process: Any, consumed: str, is_complete: Callable[[str], bool]) -> str:
-    """Keep reading PTY output until `is_complete(consumed)` or a deadline.
-
-    `process.expect` returns as soon as its trigger pattern matches, which
-    can be mid-escape-sequence or mid-render-frame, so the buffer may hold
-    only a prefix of the value being extracted. The CLI animates its spinner
-    indefinitely, so there is no reliable quiet gap; completion is judged by
-    the caller's predicate, with a hard deadline as backstop.
-    """
-    deadline = time.monotonic() + _STREAM_DRAIN_DEADLINE_SECONDS
-    while not is_complete(consumed) and time.monotonic() < deadline:
-        try:
-            chunk = process.read_nonblocking(size=65536, timeout=_STREAM_DRAIN_READ_SECONDS)
-        except pexpect.TIMEOUT:
-            continue
-        except pexpect.EOF:
-            break
-        consumed = consumed + (chunk or "")
-    return consumed
 
 
 def _build_list_command() -> list[str]:
@@ -1182,8 +1013,8 @@ class ClaudeAuthService(MutableModel):
         )
         match_index = process.expect([_OAUTH_URL_REGEX, pexpect.EOF, pexpect.TIMEOUT])
         if match_index != 0:
-            _safe_terminate(process)
-            _safe_close(process)
+            safe_terminate(process)
+            safe_close(process)
             if match_index == 1:
                 raise ClaudeAuthError(f"claude {' '.join(args)} exited before printing the OAuth URL")
             raise ClaudeAuthError(f"Timed out waiting for the OAuth URL from claude {' '.join(args)}")
@@ -1195,15 +1026,15 @@ class ClaudeAuthService(MutableModel):
         # hyperlink, the deadline expires and the visible label is de-wrapped
         # from everything drained.
         initial_consumed = (process.before or "") + (process.after or "")
-        consumed = _drain_pty_stream(
+        consumed = drain_pty_stream(
             process,
             initial_consumed,
             lambda buffer: _extract_oauth_url_from_hyperlink(buffer) is not None,
         )
         oauth_url = _extract_oauth_url(consumed)
         if oauth_url is None:
-            _safe_terminate(process)
-            _safe_close(process)
+            safe_terminate(process)
+            safe_close(process)
             raise ClaudeAuthError(
                 "OAuth URL matched in the stream but could not be extracted after stripping terminal escape sequences"
             )
@@ -1254,8 +1085,8 @@ class ClaudeAuthService(MutableModel):
 
     def _drop_current_session_locked(self) -> None:
         if self._current_setup_token_process is not None:
-            _safe_terminate(self._current_setup_token_process)
-            _safe_close(self._current_setup_token_process)
+            safe_terminate(self._current_setup_token_process)
+            safe_close(self._current_setup_token_process)
         self._current_setup_token_record = None
         self._current_setup_token_process = None
         self._current_setup_token_output = ""
@@ -1292,7 +1123,7 @@ class ClaudeAuthService(MutableModel):
             # after printing the token, so drain all the way to EOF (the
             # deadline is only a hang backstop) and extract from the final,
             # stable screen.
-            self._current_setup_token_output = _drain_pty_stream(
+            self._current_setup_token_output = drain_pty_stream(
                 process,
                 self._current_setup_token_output,
                 lambda buffer: False,
@@ -1382,7 +1213,7 @@ class ClaudeAuthService(MutableModel):
         """
         try:
             process.send(code)
-            self._current_setup_token_output = _drain_pty_stream_until_quiet(
+            self._current_setup_token_output = drain_pty_stream_until_quiet(
                 process,
                 self._current_setup_token_output,
                 _CODE_ECHO_QUIET_SECONDS,
@@ -1419,14 +1250,14 @@ class ClaudeAuthService(MutableModel):
             )
         if match_index == 0:
             # Drain the goodbye output so the process reaps cleanly.
-            self._current_setup_token_output = _drain_pty_stream(
+            self._current_setup_token_output = drain_pty_stream(
                 process, self._current_setup_token_output, lambda buffer: False
             )
             return True
         if match_index in (1, 3):
             # Failure line matched, or EOF: the buffer decides (success and
             # exit can arrive in one read, so EOF does not imply failure).
-            self._current_setup_token_output = _drain_pty_stream(
+            self._current_setup_token_output = drain_pty_stream(
                 process, self._current_setup_token_output, lambda buffer: False
             )
             if _LOGIN_SUCCESS_REGEX.search(self._current_setup_token_output):
