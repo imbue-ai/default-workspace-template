@@ -34,6 +34,7 @@ from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.buckets import best_effort_revoke_token
 from imbue.remote_service_connector.r2.naming import DESTROYED_WORKSPACE_BACKUP_RETENTION_SECONDS
 from imbue.remote_service_connector.r2.naming import R2_BUCKET_NAME_SEP
+from imbue.remote_service_connector.r2.naming import RESERVED_BUCKET_SHORT_NAME_PREFIXES
 from imbue.remote_service_connector.r2.naming import WORKSPACE_BACKUP_SHORT_NAME_RE
 from imbue.remote_service_connector.r2.naming import bucket_owner_prefix
 from imbue.remote_service_connector.r2.naming import parse_workspace_backup_bucket_name
@@ -101,6 +102,43 @@ def _reap_bucket_bounded(
     return "deleted", objects_deleted
 
 
+def _record_backup_bucket_name(record: dict[str, Any]) -> str | None:
+    """The bucket a destroyed record's backups live in, or None when it has none.
+
+    Prefers the record's explicit ``backup_bucket`` (verified to be a
+    reserved-shape bucket in the record owner's own namespace -- the value is
+    client-supplied, so an unverifiable name gets no bucket work rather than a
+    delete of an arbitrary bucket). Falls back to the legacy name derivation
+    from the host id for records that predate the explicit column.
+    """
+    user_id = str(record["user_id"])
+    owner_prefix = bucket_owner_prefix(derive_user_id_prefix(user_id))
+    explicit = record.get("backup_bucket")
+    if explicit:
+        explicit_name = str(explicit)
+        if explicit_name.startswith(owner_prefix) and parse_workspace_backup_bucket_name(explicit_name) is not None:
+            return explicit_name
+        logger.warning("Ignoring unverifiable backup_bucket %r on a destroyed record", explicit_name)
+        return None
+    host_id = str(record["host_id"])
+    if WORKSPACE_BACKUP_SHORT_NAME_RE.match(host_id):
+        return f"{owner_prefix}{host_id}"
+    return None
+
+
+def _is_bucket_referenced_by_another_record(sync_store: SyncStore, bucket_name: str, workspace_id: str) -> bool:
+    """Whether any record other than ``workspace_id``'s still references the bucket."""
+    parsed = parse_workspace_backup_bucket_name(bucket_name)
+    if parsed is None:
+        # _record_backup_bucket_name only yields parseable names; treat an
+        # unparseable one as referenced (never delete on uncertain evidence).
+        return True
+    user_id_prefix, short_name = parsed
+    return sync_store.any_record_references_backup_bucket(
+        user_id_prefix, bucket_name, short_name, excluding_workspace_id=workspace_id
+    )
+
+
 def run_backup_retention_reap(
     ops: CloudflareOps,
     sync_store: SyncStore,
@@ -120,6 +158,7 @@ def run_backup_retention_reap(
         "records_reaped": 0,
         "orphan_buckets_reaped": 0,
         "buckets_deleted": 0,
+        "buckets_kept_referenced": 0,
         "buckets_partially_emptied": 0,
         "objects_deleted": 0,
     }
@@ -132,19 +171,13 @@ def run_backup_retention_reap(
     for record in sync_store.list_destroyed_records_before(cutoff)[:_REAP_RECORD_BUDGET_PER_PASS]:
         user_id = str(record["user_id"])
         host_id = str(record["host_id"])
-        # Only a host id in the reserved workspace-backup shape names a bucket
-        # the reaper may touch. Host ids are client-supplied strings, so a
-        # non-conforming id could collide with a generic user bucket's name;
-        # such a record is reaped without any bucket work.
-        bucket_name = (
-            f"{bucket_owner_prefix(derive_user_id_prefix(user_id))}{host_id}"
-            if WORKSPACE_BACKUP_SHORT_NAME_RE.match(host_id)
-            else None
-        )
+        workspace_id = str(record["agent_id"])
+        bucket_name = _record_backup_bucket_name(record)
         if dry_run:
             candidates.append(
                 {
                     "kind": "record",
+                    "workspace_id": workspace_id,
                     "host_id": host_id,
                     "bucket_name": bucket_name,
                     "destroyed_at": str(record["destroyed_at"]),
@@ -154,6 +187,22 @@ def run_backup_retention_reap(
             continue
         if object_budget_left <= 0:
             break
+        if bucket_name is not None and _is_bucket_referenced_by_another_record(sync_store, bucket_name, workspace_id):
+            # Grandfathered host-named buckets can be shared (machine reuse),
+            # and a record's explicit backup_bucket is client-supplied: while
+            # any OTHER record of the account still references the bucket, it
+            # may hold live backups, so only the record is reaped. The bucket
+            # falls to the last referencing record's own reap (or the orphan
+            # sweep) once nothing references it.
+            logger.info(
+                "Keeping backup bucket %s of reaped workspace %s: another record still references it",
+                bucket_name,
+                workspace_id,
+            )
+            counters["buckets_kept_referenced"] += 1
+            sync_store.delete_record_by_workspace(user_id, workspace_id)
+            counters["records_reaped"] += 1
+            continue
         if bucket_name is not None:
             outcome, objects_deleted = _reap_bucket_bounded(ops, key_store, bucket_name, object_budget_left)
             object_budget_left -= objects_deleted
@@ -164,18 +213,25 @@ def run_backup_retention_reap(
             if outcome == "deleted":
                 counters["buckets_deleted"] += 1
             orphan_store.delete_stamp(bucket_name)
-        sync_store.delete_record(user_id, host_id)
+        sync_store.delete_record_by_workspace(user_id, workspace_id)
         counters["records_reaped"] += 1
 
     # Phase 2: workspace-backup buckets no record references. First sighting
-    # stamps the orphan clock; reap once the stamp ages past the window.
-    for bucket in ops.list_buckets(name_contains=f"{R2_BUCKET_NAME_SEP}host-"):
+    # stamps the orphan clock; reap once the stamp ages past the window. Both
+    # naming generations are swept: workspace-id-named buckets and the
+    # grandfathered host-id-named ones.
+    orphan_candidates = [
+        bucket
+        for short_prefix in RESERVED_BUCKET_SHORT_NAME_PREFIXES
+        for bucket in ops.list_buckets(name_contains=f"{R2_BUCKET_NAME_SEP}{short_prefix}")
+    ]
+    for bucket in orphan_candidates:
         bucket_name = str(bucket.get("name", ""))
         parsed = parse_workspace_backup_bucket_name(bucket_name)
         if parsed is None:
             continue
-        user_id_prefix, host_id = parsed
-        if sync_store.any_record_references_backup_bucket(user_id_prefix, host_id):
+        user_id_prefix, short_name = parsed
+        if sync_store.any_record_references_backup_bucket(user_id_prefix, bucket_name, short_name):
             if not dry_run:
                 orphan_store.delete_stamp(bucket_name)
             continue
