@@ -2482,16 +2482,16 @@ function addChatPanel(chatAgentId: string, chatAgentName: string, targetGroup?: 
 }
 
 /**
- * Open the workspace's initial (bootstrap-created) chat agent as the first
- * tab. "Initial" = the earliest non-is_primary agent we know about. In a
- * freshly-booted workspace the bootstrap creates exactly one chat agent
- * named after the host, and that's what we want here. The services agent
- * (is_primary=true) is filtered out by getAgents().
+ * Open the workspace's earliest chat as the first tab, if it has one.
  *
- * If no non-is_primary agent exists yet (e.g. the workspace just started
- * and the bootstrap's `mngr create` is still running), returns false so
- * the caller can show a "waiting" state. We re-try when an agents_updated
- * event arrives.
+ * "Earliest" = the first non-is_primary agent we know about; the services agent is filtered
+ * out by getAgents(). A workspace that has been used before opens on the chat it already had,
+ * which is what the user came back for.
+ *
+ * Returns false when there is no chat at all. That is the ordinary state of a fresh
+ * workspace, not a transient one: a chat runs on a provider account and nothing creates one
+ * at boot, so the caller opens the launcher -- where the provider chooser is -- rather than
+ * waiting for something to arrive.
  */
 function openInitialChatTab(): boolean {
   const candidates = getAgents();
