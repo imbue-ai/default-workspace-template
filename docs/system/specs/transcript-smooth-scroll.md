@@ -200,6 +200,7 @@ export interface PersistedScrollState {
 - `fillPlanner.ts` — progressive-fill decisions: given physical extent, anchor/tail location, virtual total, and the 50k cap, return the next fetch (`direction`, `offset`, `limit`) or eviction (which side, how much). Drives tail-first then ~500 → ~2000-event chunks, re-centering on the user.
 - `persistence.ts` — localStorage codec (`transcript-scroll:<agentId>`), versioned, anchor-validation on restore.
 - `trace.ts` — ring buffer + console echo behind `?debug=scroll`; entries for reducer transitions, anchor resolution, compensation writes, spacer applications, fill decisions.
+- `rowEventIndex.ts` — (as-built addition) the bridge between rendered rows and global event indexes: each row's starting event index (a turn collapses many events into one row), and the row containing a given event index. Used by scroll persistence, the fill planner's focus, and jump landing.
 
 ### New view modules (`views/`)
 
