@@ -7,10 +7,11 @@
  * mechanisms. Native ``title`` is suppressed: dockview marks every tab
  * ``draggable`` (tab.js sets ``element.draggable = true``, plus
  * ``-webkit-user-drag: element``), and Chromium hides ``title`` tooltips on
- * draggable elements and their descendants. A CSS ``::after`` bubble (the
- * ``data-tooltip`` pattern used elsewhere) is clipped by the tab strip's
- * overflow -- ``.dv-tabs-container`` is ``overflow: auto`` and ``.dv-groupview``
- * is ``overflow: hidden``. A body-level, fixed-position element driven by our
+ * draggable elements and their descendants. A CSS ``::after`` bubble -- the
+ * ``data-tooltip`` pattern the workspace once used for simple in-flow tooltips,
+ * since retired in favor of this one -- is clipped by the tab strip's overflow
+ * (``.dv-tabs-container`` is ``overflow: auto`` and ``.dv-groupview`` is
+ * ``overflow: hidden``). A body-level, fixed-position element driven by our
  * own listeners avoids both: it is not a native tooltip, and it is not inside
  * the clipping container.
  *
