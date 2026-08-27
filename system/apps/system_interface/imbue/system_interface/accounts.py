@@ -150,14 +150,20 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
     """Write the index row that makes a minted folder into a real account.
 
     This is the commit point of a sign-in. Everything before it is provisional.
+    Idempotent: committing an id that is already indexed returns the existing row.
     """
     path = account_dir(account_id, home)
     if not path.is_dir():
         raise AccountError(f"cannot commit account {account_id}: {path} does not exist")
     with _INDEX_LOCK:
         index = read_index(home)
-        if any(a.id == account_id for a in index.accounts):
-            raise AccountError(f"account {account_id} is already committed")
+        # Re-authenticating writes the same folder a second time. The row already exists and
+        # agents hold its id by label, so keep it as-is rather than renumbering; only the
+        # credential on disk changed. That makes this a no-op commit, not a conflict.
+        existing = next((a for a in index.accounts if a.id == account_id), None)
+        if existing is not None:
+            _write_index(index.model_copy_update(to_update(index.field_ref().mru, account_id)), home)
+            return existing
         account = Account(id=account_id, lane=lane, seq=_next_seq(index, lane), display=display)
         _write_index(
             index.model_copy_update(

@@ -127,11 +127,19 @@ def test_resolve_raises_when_nothing_exists_or_the_id_is_unknown(tmp_path: Path)
         resolve_account("nope", tmp_path)
 
 
-def test_committing_the_same_folder_twice_raises(tmp_path: Path) -> None:
+def test_committing_the_same_folder_twice_keeps_the_original_row(tmp_path: Path) -> None:
+    """Re-authenticating commits the same folder again; the seq must not move."""
+    other = _add(tmp_path, "anthropic", "Anthropic")
     account_id, _ = mint_account_dir(tmp_path)
-    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
-    with pytest.raises(AccountError):
-        commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    first = commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    set_mru(other.id, tmp_path)
+
+    second = commit_account(account_id, "anthropic", "Renamed", tmp_path)
+
+    assert second == first
+    index = read_index(tmp_path)
+    assert [a.id for a in index.accounts] == [other.id, account_id]
+    assert index.mru == account_id
 
 
 def test_committing_a_folder_that_does_not_exist_raises(tmp_path: Path) -> None:
