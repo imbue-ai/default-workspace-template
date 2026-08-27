@@ -402,11 +402,36 @@ def _maybe_create_initial_chat() -> None:
         )
         return
     _initialize_workspace_main_branch()
+    # A chat runs on a provider account, and a fresh workspace has none: auth is not part of
+    # workspace creation any more. Creating one anyway produces a chat that cannot take a turn
+    # no matter what the user later signs into -- the account is chosen when the agent is
+    # CREATED, and nothing rebinds an existing one. The workspace opens on the new-tab screen
+    # instead, where the provider chooser is the way forward.
+    #
+    # The signal is still written, so this runs once and `pool_bake` stops waiting on it.
+    if not _has_provider_account():
+        _touch_signal()
+        logger.info("No provider account yet; skipping the initial chat")
+        return
     labels = _read_main_agent_labels()
     if not _create_initial_chat_agent(labels):
         return
     _touch_signal()
     logger.info("Wrote signal file {}", INITIAL_CHAT_SIGNAL)
+
+
+def _has_provider_account() -> bool:
+    """Whether the workspace has at least one signed-in provider account.
+
+    Reads the account index directly rather than importing the system-interface package:
+    bootstrap runs before that app and must not depend on it. The shape is one JSON object
+    with an `accounts` list -- see `imbue/system_interface/accounts.py`.
+    """
+    index = Path.home() / ".minds" / "accounts" / "index.json"
+    try:
+        return bool(json.loads(index.read_text()).get("accounts"))
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _configure_git_global() -> None:
