@@ -51,8 +51,8 @@ from typing import Sequence
 # as-is and will not build for it: a work_dir without the gitignored bundle is
 # a worker that skipped its build, and the preview refuses it rather than boot
 # the backend's "Frontend not built" placeholder.
-APP_DIR = "system/apps/system_interface"
-STATIC_DIR = f"{APP_DIR}/imbue/system_interface/static"
+SYSTEM_INTERFACE_DIR = "system/apps/system_interface"
+STATIC_DIR = f"{SYSTEM_INTERFACE_DIR}/imbue/system_interface/static"
 FRONTEND_BUILD_INDEX = f"{STATIC_DIR}/index.html"
 TOOL_NAME = "system-interface"
 
@@ -138,7 +138,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
     # should fail fast rather than reaching the shared script.
-    worker_app_dir = Path(work_dir) / APP_DIR
+    worker_app_dir = Path(work_dir) / SYSTEM_INTERFACE_DIR
     if not worker_app_dir.is_dir():
         sys.stderr.write(
             f"preview: {worker_app_dir} is not a directory; is --work-dir correct "

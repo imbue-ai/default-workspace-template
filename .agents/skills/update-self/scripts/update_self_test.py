@@ -3786,12 +3786,12 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
         f"{apply_repo}/system/vendor/mngr/libs/mngr_wait",
         "--reinstall",
     ]
-    assert _install_argv(runner, update_self.APP_DIR) == [
+    assert _install_argv(runner, update_self.SYSTEM_INTERFACE_DIR) == [
         "uv",
         "tool",
         "install",
         "-e",
-        update_self.APP_DIR,
+        update_self.SYSTEM_INTERFACE_DIR,
         "--with-editable",
         f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
         "--with-editable",
@@ -3860,7 +3860,7 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     # Targeting is per executable, not global: the other tool is not on PATH
     # here, so its install is left to uv's own default rather than aimed at the
     # directory that happens to hold mngr.
-    assert "UV_TOOL_DIR" not in envs[update_self.APP_DIR]
+    assert "UV_TOOL_DIR" not in envs[update_self.SYSTEM_INTERFACE_DIR]
 
 
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:

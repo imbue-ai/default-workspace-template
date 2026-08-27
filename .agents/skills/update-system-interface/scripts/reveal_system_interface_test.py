@@ -72,7 +72,7 @@ def _make_work_dir(tmp_path: Path, *, built: bool = True) -> Path:
     done without building it -- the case the preview must refuse.
     """
     work_dir = tmp_path / "worker"
-    (work_dir / reveal_mod.APP_DIR).mkdir(parents=True)
+    (work_dir / reveal_mod.SYSTEM_INTERFACE_DIR).mkdir(parents=True)
     if built:
         static_index = work_dir / reveal_mod.FRONTEND_BUILD_INDEX
         static_index.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +99,7 @@ def test_preview_delegates_to_the_shared_script_with_si_specifics(
     # Boots the worker's already-built app dir -- no re-clone / rebuild here.
     assert not runner.ran("uv", "sync")
     assert not runner.ran("npm", "run", "build")
-    assert _flag(argv, "--cwd") == str(work_dir / reveal_mod.APP_DIR)
+    assert _flag(argv, "--cwd") == str(work_dir / reveal_mod.SYSTEM_INTERFACE_DIR)
     # The launch command (after ``--``) is ``uv run system-interface``.
     assert argv[-3:] == ["uv", "run", reveal_mod.TOOL_NAME]
     # System-interface specifics: bind port/host env, neuter layout persistence by

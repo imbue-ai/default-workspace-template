@@ -37,16 +37,6 @@ Four subcommands cover the lead-side lifecycle:
     ``mngr/<name>`` survives in the shared object store, so the work can still
     be merged or inspected.
 
-``launch --destroy-existing``
-    A flow that keeps its finished worker around *stopped* (``mngr stop
-    <name>``, so its transcript stays reachable for the bug-report collector
-    without the agent consuming memory) would otherwise block its own next
-    pass: ``mngr create`` refuses a duplicate name. With this flag, launch
-    destroys a previous worker of the same name whose agent process is gone
-    -- STOPPED after ``mngr stop``, or DONE after it exited on its own -- as
-    a pre-flight step. Any other state (RUNNING, WAITING, or one mngr cannot
-    classify) is a genuine conflict and is still refused.
-
 The ``launch`` / ``await`` / ``launch-sync`` subcommands take the same
 ``--task-file``: ``launch`` sends it to the worker, and ``await`` /
 ``launch-sync`` read its ``finish_report_path`` to learn what to wait for.
@@ -437,7 +427,6 @@ def launch(
     task_file: Path,
     state_dir: Path | None = None,
     runner: Runner | None = None,
-    destroy_existing: bool = False,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
 
@@ -459,10 +448,6 @@ def launch(
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
     before the task message lands so the worker's first transcript read
     sees fresh events.
-
-    ``destroy_existing`` clears a previous *stopped* worker of the same name
-    before creating (a running one is still refused, exit 2) -- for flows that
-    keep their finished worker stopped rather than destroyed.
     """
     runner = runner or Runner()
 
@@ -531,11 +516,6 @@ def launch(
     if lead_rc is not None:
         return lead_rc
 
-    if destroy_existing:
-        conflict_rc = _destroy_stopped_predecessor(name, runner)
-        if conflict_rc is not None:
-            return conflict_rc
-
     try:
         runner.run(
             [
@@ -560,8 +540,7 @@ def launch(
         print(
             f"create_worker: `mngr create {name}` failed with exit code "
             f"{exc.returncode}; no worker was created. See mngr's output above "
-            "(a duplicate name is refused there when the listing could not be "
-            "read; --destroy-existing clears a STOPPED or DONE predecessor).",
+            "(a duplicate name is refused there).",
             file=sys.stderr,
         )
         return 2
@@ -628,19 +607,13 @@ def _worker_has_pending_shed(worker_name: str) -> bool:
     return has_pending_shed(worker_name)
 
 
-# The lifecycle states mngr reports for an agent with no live process:
-# STOPPED after ``mngr stop``, DONE after the agent exited on its own. Only
-# these are safe for ``--destroy-existing`` to destroy over.
+# The lifecycle state mngr reports after ``mngr stop``.
 _STOPPED_STATE = "STOPPED"
-_DONE_STATE = "DONE"
-_DESTROYABLE_PREDECESSOR_STATES = (_STOPPED_STATE, _DONE_STATE)
 
 
 def _worker_state(worker_name: str, runner: Runner) -> str | None:
     """The mngr lifecycle state of ``worker_name``, or ``None`` when no such
-    agent exists (or the listing could not be read -- the launch then proceeds
-    to ``mngr create``, whose own duplicate-name refusal is the backstop; see
-    ``launch`` for how that refusal is reported)."""
+    agent exists or the listing could not be read."""
     try:
         result = runner.run(
             ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
@@ -662,34 +635,6 @@ def _worker_state(worker_name: str, runner: Runner) -> str | None:
             continue
         state = record.get("state")
         return str(state) if state is not None else None
-    return None
-
-
-def _destroy_stopped_predecessor(name: str, runner: Runner) -> int | None:
-    """Clear a previous worker of the same name whose process is gone; refuse any other.
-
-    Returns exit code ``2`` when a worker of that name is in any state other
-    than STOPPED or DONE (a genuine conflict the caller must resolve),
-    otherwise ``None``.
-    """
-    state = _worker_state(name, runner)
-    if state is None:
-        return None
-    if state not in _DESTROYABLE_PREDECESSOR_STATES:
-        print(
-            f"create_worker: refusing to launch {name}: a worker of that name is "
-            f"still {state}. --destroy-existing only clears a predecessor with "
-            f"no live process (STOPPED or DONE); stop it (mngr stop {name}) or "
-            f"destroy it (mngr destroy {name} --force) first.",
-            file=sys.stderr,
-        )
-        return 2
-    print(
-        f"create_worker: destroying the {state} previous worker {name} "
-        "(--destroy-existing) before launching",
-        file=sys.stderr,
-    )
-    destroy(name, runner)
     return None
 
 
@@ -1006,7 +951,6 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         task_file=args.task_file,
         state_dir=state_dir,
         runner=runner,
-        destroy_existing=args.destroy_existing,
     )
 
 
@@ -1083,14 +1027,6 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         required=True,
         type=Path,
         help="Markdown task file (must already exist; typically inside --runtime-dir).",
-    )
-    launch_parser.add_argument(
-        "--destroy-existing",
-        action="store_true",
-        help="Destroy a previous worker of the same name whose process is gone "
-        "(STOPPED or DONE) before creating, for flows that keep a finished "
-        "worker stopped rather than destroyed. A running or waiting one is "
-        "still refused.",
     )
 
     await_parser = subparsers.add_parser(
