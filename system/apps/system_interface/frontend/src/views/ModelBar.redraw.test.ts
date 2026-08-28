@@ -159,8 +159,12 @@ describe("the card without a hand-cranked redraw", () => {
 
     const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Anthropic"]');
     if (field === null) throw new Error("no rename field on screen");
-    // Seeded with what the row was SHOWING, not with the empty stored name.
-    expect(field.value).toBe("Anthropic");
+    // EMPTY, with the row's current name as the placeholder. Seeding it with what the row was
+    // showing meant seeding from `provider`, which carries the disambiguating number -- so
+    // renaming an unnamed duplicate and pressing Enter filed "Anthropic 2" as a real chosen
+    // name, which then outlives the account it was counting against.
+    expect(field.value).toBe("");
+    expect(field.placeholder).toBe("Anthropic");
     // Every other control stands down while the field is up, so nothing destructive sits
     // under a pointer that came to click into text.
     expect(document.querySelector('[aria-label="Sign out of Anthropic"]')).toBeNull();
