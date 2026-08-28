@@ -41,6 +41,10 @@ vi.mock("../models/Providers", () => ({
   clearFlow: () => undefined,
   isProviderChooserOpen: () => true,
   closeProviderChooser: () => undefined,
+  // The modal reads this in `oninit` to pick up an account a caller pre-selected. A factory
+  // mock replaces the module WHOLESALE, so a name missing here is not a stub returning
+  // undefined -- it is an import error thrown at mount.
+  takeChooserAccountId: () => null,
 }));
 
 import m from "mithril";
