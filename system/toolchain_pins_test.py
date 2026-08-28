@@ -1,11 +1,8 @@
 """Every version ``setup_system.sh`` expands must have a default in the script itself.
 
-The script runs two ways: the Dockerfile ``RUN``s it (docker / vps_docker / ovh
-providers), and the Lima and Modal providers run it directly in a fresh VM as an
-extra provision command. Only the first supplies the Dockerfile's ``ENV``, and
-the script runs under ``set -u`` -- so a version it expands without a ``:=``
-default aborts every non-docker create with "unbound variable" while docker CI
-stays green.
+Only the Dockerfile supplies those pins as ``ENV``; the Lima and Modal providers
+run the script directly, under ``set -u``. An undefaulted version aborts those
+creates with "unbound variable" while docker stays green.
 """
 
 from __future__ import annotations
