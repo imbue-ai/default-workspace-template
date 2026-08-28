@@ -78,7 +78,10 @@ def build_log_view_statements(
         " json_extract_string(payload, '$.method') AS method,"
         " json_extract_string(payload, '$.path') AS path,"
         " TRY_CAST(json_extract_string(payload, '$.status') AS INTEGER) AS status,"
-        " TRY_CAST(json_extract_string(payload, '$.duration_ms') AS DOUBLE) AS duration_ms"
+        " TRY_CAST(json_extract_string(payload, '$.duration_ms') AS DOUBLE) AS duration_ms,"
+        # The client's X-Imbue-Client self-identification (e.g. "minds/0.4.2
+        # imbue-cloud-plugin/0.1.6"); empty for clients older than 0.4.1.
+        " json_extract_string(payload, '$.imbue_client') AS imbue_client"
         " FROM parsed"
         " WHERE json_extract_string(payload, '$.type') = 'http_request'"
         f"{env_predicate}"

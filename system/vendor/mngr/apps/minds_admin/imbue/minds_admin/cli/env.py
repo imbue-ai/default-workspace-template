@@ -74,6 +74,7 @@ from imbue.minds_admin.envs.local_store import read_analytics_override
 from imbue.minds_admin.envs.local_store import write_analytics_override
 from imbue.minds_admin.envs.migrations import apply_pool_hosts_migrations as real_apply_pool_hosts_migrations
 from imbue.minds_admin.envs.migrations import seed_paid_list_defaults as real_seed_paid_list_defaults
+from imbue.minds_admin.envs.migrations import verify_analytics_postgres_major
 from imbue.minds_admin.envs.migrations import write_plan_defaults as real_write_plan_defaults
 from imbue.minds_admin.envs.mngr_agent_cleanup import destroy_all_mngr_agents_in_env
 from imbue.minds_admin.envs.mngr_agent_cleanup import real_destroy_mngr_agents
@@ -97,6 +98,7 @@ from imbue.minds_admin.envs.providers.analytics_stack import AnalyticsStackReque
 from imbue.minds_admin.envs.providers.analytics_stack import create_analytics_stack as real_create_analytics_stack
 from imbue.minds_admin.envs.providers.analytics_stack import delete_analytics_stack as real_delete_analytics_stack
 from imbue.minds_admin.envs.providers.modal_env import delete_modal_env as real_delete_modal_env
+from imbue.minds_admin.envs.providers.neon_db import ANALYTICS_PG_VERSION
 from imbue.minds_admin.envs.providers.neon_db import NeonProjectRecord
 from imbue.minds_admin.envs.providers.neon_db import create_neon_project
 from imbue.minds_admin.envs.providers.neon_db import create_snapshot_branch as real_create_neon_snapshot_branch
@@ -278,6 +280,7 @@ def _deploy_analytics_for_provider(
 
 
 def _apply_analytics_migrations_for_provider(analytics_ops_dsn: SecretStr, cg: ConcurrencyGroup) -> tuple[Path, ...]:
+    verify_analytics_postgres_major(analytics_ops_dsn, expected_major=ANALYTICS_PG_VERSION, parent_cg=cg)
     return real_apply_pool_hosts_migrations(analytics_ops_dsn, migrations_dir=analytics_migrations_dir(), parent_cg=cg)
 
 

@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -12,6 +13,7 @@ from pydantic import SecretStr
 from imbue.analytics.collection import OUTCOME_LAKE_ERROR
 from imbue.analytics.collection import OUTCOME_OK
 from imbue.analytics.collection import OUTCOME_SSH_REFUSED
+from imbue.analytics.collection import OUTCOME_TIMEOUT
 from imbue.analytics.collection import SshCollectionResult
 from imbue.analytics.collection import _build_run_command
 from imbue.analytics.collection import _due_workspaces
@@ -265,6 +267,7 @@ def test_run_collection_poll_collects_due_workspaces_and_skips_recent_ones() -> 
         ops_connection=ops,
         rsc_connection=rsc,
         collect_fn=fake_collect,
+        ssh_phase_slack_seconds=120.0,
     )
 
     assert collected_host_ids == ["host-due"]
@@ -314,6 +317,7 @@ def test_run_collection_poll_records_failed_workspaces_in_the_audit_only() -> No
         ops_connection=ops,
         rsc_connection=rsc,
         collect_fn=refusing_collect,
+        ssh_phase_slack_seconds=120.0,
     )
 
     assert counters["workspaces_failed"] == 1
@@ -366,6 +370,7 @@ def test_run_collection_poll_survives_an_unparsable_stored_cursor() -> None:
         ops_connection=ops,
         rsc_connection=rsc,
         collect_fn=capturing_collect,
+        ssh_phase_slack_seconds=120.0,
     )
 
     assert counters["workspaces_collected"] == 1
@@ -382,6 +387,7 @@ def test_run_collection_poll_wraps_ops_db_failures_in_collection_error() -> None
             ops_connection=FailingOpsConnection(),
             rsc_connection=RoutingFakeConnection({}),
             collect_fn=lambda *args: _ok_ssh_result(),
+            ssh_phase_slack_seconds=120.0,
         )
 
 
@@ -394,9 +400,76 @@ def test_run_collection_poll_skips_cleanly_when_another_run_holds_the_lock() -> 
         ops_connection=ops,
         rsc_connection=RoutingFakeConnection({}),
         collect_fn=lambda *args: _ok_ssh_result(),
+        ssh_phase_slack_seconds=120.0,
     )
 
     assert counters == {"skipped_overlapping": 1}
+
+
+def test_run_collection_poll_returns_despite_a_collect_hop_that_never_finishes() -> None:
+    """A hop whose thread hangs past every timeout must cost the tick a timeout row, not the whole run.
+
+    This is the production failure mode that kept every collection_poll tick
+    from ever completing: shutdown(wait=True) on the SSH pool blocked forever
+    on hung paramiko threads, so the Modal function timed out before the job
+    row was recorded.
+    """
+    lake = build_fixture_analytics_session()
+    ops = _ops_fake()
+    rsc = RoutingFakeConnection(
+        {
+            "account_entitlements": [("aaaa000011112222", "aaaa0000-1111-2222-3333-444455556666")],
+            "FROM pool_hosts": [
+                (
+                    "11111111-2222-3333-4444-555555555555",
+                    "host-hung",
+                    "aaaa000011112222",
+                    "203.0.113.5",
+                    None,
+                    2202,
+                    "user",
+                    None,
+                    None,
+                )
+            ],
+        }
+    )
+    release_hung_thread = threading.Event()
+
+    def hanging_collect(*args: Any) -> SshCollectionResult:
+        release_hung_thread.wait()
+        return _ok_ssh_result()
+
+    settings = CollectionSettings(
+        pool_ssh_private_key=SecretStr("-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n"),
+        interval_seconds=3600,
+        parallelism=2,
+        workspace_timeout_seconds=1,
+        run_budget_bytes=1024 * 1024,
+    )
+    try:
+        counters = run_collection_poll_with_connections(
+            collection_settings=settings,
+            lake_connection=lake,
+            ops_connection=ops,
+            rsc_connection=rsc,
+            collect_fn=hanging_collect,
+            ssh_phase_slack_seconds=0.5,
+        )
+    finally:
+        # Unblock the worker thread so it cannot outlive the test process.
+        release_hung_thread.set()
+
+    assert counters["workspaces_due"] == 1
+    assert counters["workspaces_collected"] == 0
+    assert counters["workspaces_failed"] == 1
+    audit_rows = [
+        parameters
+        for statement, parameters in ops.routing_cursor.executed
+        if "INSERT INTO collection_runs" in statement
+    ]
+    assert len(audit_rows) == 1
+    assert audit_rows[0][5] == OUTCOME_TIMEOUT
 
 
 def test_script_version_is_a_deterministic_content_hash_over_the_injected_files() -> None:

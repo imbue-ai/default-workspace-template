@@ -38,6 +38,7 @@ from imbue.minds.envs.vault_reader import read_vault_kv
 from imbue.minds_admin.cli._activated_env import PRODUCTION_ENV_NAME
 from imbue.minds_admin.cli._activated_env import STAGING_ENV_NAME
 from imbue.minds_admin.cli._activated_env import tier_for_env_name
+from imbue.minds_admin.envs.providers.analytics_analysts import AnalyticsAnalystAdminContext
 from imbue.mngr_imbue_cloud.config import CONNECTOR_URL_ENV_VAR
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_ovh.config import OvhProviderConfig
@@ -76,16 +77,16 @@ DATABASE_URL_HELP: Final[str] = (
 )
 
 
-def _read_activated_minds_host_pool_dsn() -> str | None:
-    """Return the activated dev/ci env's NEON_HOST_POOL_DSN from its secrets.toml, or None.
+def _read_activated_env_secrets_block() -> dict[str, str] | None:
+    """Return the activated dev/ci env's ``[secrets]`` block from its secrets.toml, or None.
 
     Walks the same on-disk layout ``minds-admin env deploy`` writes:
 
-        $HOME/.<MINDS_ROOT_NAME>/secrets.toml -> [secrets].NEON_HOST_POOL_DSN
+        $HOME/.<MINDS_ROOT_NAME>/secrets.toml -> [secrets]
 
     Returns None when ``MINDS_ROOT_NAME`` is unset, when the env root is
     production (``MINDS_ROOT_NAME=minds``, no per-env secrets.toml), when the
-    file doesn't exist, or when the field is missing / empty.
+    file doesn't exist, or when the block is missing / unreadable.
     """
     root_name = os.environ.get(_MINDS_ROOT_NAME_ENV_VAR)
     if not root_name or root_name == _MINDS_PREFIX:
@@ -96,22 +97,24 @@ def _read_activated_minds_host_pool_dsn() -> str | None:
     try:
         raw = tomllib.loads(secrets_path.read_text())
     except OSError as exc:
-        logger.warning("Could not read {} for pool DSN resolution: {}", secrets_path, exc)
+        logger.warning("Could not read {} for secret resolution: {}", secrets_path, exc)
         return None
     except tomllib.TOMLDecodeError as exc:
-        logger.warning(
-            "Could not parse {} for pool DSN resolution ({}); pass --database-url explicitly.",
-            secrets_path,
-            exc,
-        )
+        logger.warning("Could not parse {} for secret resolution ({}).", secrets_path, exc)
         return None
     secrets_block = raw.get("secrets")
     if not isinstance(secrets_block, dict):
         return None
-    dsn = secrets_block.get("NEON_HOST_POOL_DSN")
-    if not isinstance(dsn, str) or not dsn:
+    return {key: str(value) for key, value in secrets_block.items() if isinstance(value, str)}
+
+
+def _read_activated_minds_host_pool_dsn() -> str | None:
+    """Return the activated dev/ci env's NEON_HOST_POOL_DSN from its secrets.toml, or None."""
+    secrets_block = _read_activated_env_secrets_block()
+    if secrets_block is None:
         return None
-    return dsn
+    dsn = secrets_block.get("NEON_HOST_POOL_DSN")
+    return dsn if dsn else None
 
 
 def _read_shared_tier_host_pool_dsn_from_vault(env_name: str) -> str:
@@ -444,3 +447,84 @@ def resolve_boxes_collector_install_config_or_none() -> CollectorInstallConfig |
             _BOXES_INGEST_CREDENTIAL_VAULT_FIELD,
         )
     return config
+
+
+# The tier-source fields analyst management needs from the analytics secret
+# schema (.minds/template/analytics.sh): the two catalog owner DSNs, the two
+# lake buckets, and the Cloudflare account id. Shared tiers carry them in the
+# ``<vault_prefix>/analytics`` Vault entry; dev/ci envs in their local
+# secrets.toml (written by the per-env stack auto-provisioning).
+_REQUIRED_ANALYTICS_ADMIN_FIELDS: Final[tuple[str, ...]] = (
+    "ANALYTICS_METRICS_CATALOG_URL",
+    "ANALYTICS_TRANSCRIPTS_CATALOG_URL",
+    "ANALYTICS_METRICS_R2_BUCKET",
+    "ANALYTICS_TRANSCRIPTS_R2_BUCKET",
+    "ANALYTICS_R2_ACCOUNT_ID",
+)
+
+
+def resolve_analytics_analyst_admin_context() -> AnalyticsAnalystAdminContext:
+    """Resolve the activated tier's backend credentials for analyst management.
+
+    The analytics values come from the tier's ``analytics`` Vault entry
+    (staging / production) or the activated env's local ``secrets.toml``
+    (dev / ci); the Cloudflare API token always comes from the tier's
+    ``cloudflare`` Vault entry (the same account-owned token the connector
+    deploys with).
+    """
+    env_name = active_env_name_or_none()
+    if env_name is None:
+        raise click.ClickException(
+            "No minds env is activated: `minds-admin env activate <env>` first (analyst management "
+            "operates on the activated tier's analytics stack)."
+        )
+    tier = tier_for_env_name(env_name)
+    vault_prefix = str(load_deploy_config(tier).vault_path_prefix).rstrip("/")
+
+    if tier in (PRODUCTION_ENV_NAME, STAGING_ENV_NAME):
+        try:
+            analytics_values: Mapping[str, str] = read_vault_kv(VaultPath(f"{vault_prefix}/analytics"))
+        except VaultReadError as exc:
+            raise click.ClickException(
+                f"Could not read the analytics Vault entry ({vault_prefix}/analytics) for env "
+                f"'{env_name}': {exc}. See apps/analytics/docs/bringup.md for the tier bringup."
+            ) from exc
+    else:
+        secrets_block = _read_activated_env_secrets_block()
+        if secrets_block is None:
+            raise click.ClickException(
+                f"Env '{env_name}' has no local secrets.toml; deploy it with analytics first "
+                "(minds-admin env deploy --with-analytics)."
+            )
+        analytics_values = secrets_block
+
+    missing_fields = [field for field in _REQUIRED_ANALYTICS_ADMIN_FIELDS if not analytics_values.get(field)]
+    if missing_fields:
+        raise click.ClickException(
+            f"The analytics secrets for env '{env_name}' are missing {', '.join(missing_fields)}; "
+            "see .minds/template/analytics.sh for the schema (shared tiers: repopulate the Vault "
+            "entry per apps/analytics/docs/bringup.md; dev envs: re-deploy with --with-analytics)."
+        )
+
+    try:
+        cloudflare_secret = read_vault_kv(VaultPath(f"{vault_prefix}/cloudflare"))
+    except VaultReadError as exc:
+        raise click.ClickException(
+            f"Could not read the Cloudflare Vault entry ({vault_prefix}/cloudflare) for env '{env_name}': {exc}"
+        ) from exc
+    cloudflare_api_token = cloudflare_secret.get("CLOUDFLARE_API_TOKEN", "")
+    if not cloudflare_api_token:
+        raise click.ClickException(
+            f"Vault entry {vault_prefix}/cloudflare is missing 'CLOUDFLARE_API_TOKEN'; the analyst "
+            "R2 tokens are minted with the tier's account-owned Cloudflare token."
+        )
+
+    return AnalyticsAnalystAdminContext(
+        env_name=env_name,
+        metrics_catalog_owner_dsn=SecretStr(analytics_values["ANALYTICS_METRICS_CATALOG_URL"]),
+        transcripts_catalog_owner_dsn=SecretStr(analytics_values["ANALYTICS_TRANSCRIPTS_CATALOG_URL"]),
+        metrics_bucket=analytics_values["ANALYTICS_METRICS_R2_BUCKET"],
+        transcripts_bucket=analytics_values["ANALYTICS_TRANSCRIPTS_R2_BUCKET"],
+        r2_account_id=analytics_values["ANALYTICS_R2_ACCOUNT_ID"],
+        cloudflare_api_token=SecretStr(cloudflare_api_token),
+    )
