@@ -9,8 +9,7 @@ conventions and does not cover the frontend). This file governs the CSS and the
 The architecture deliberately mirrors the minds desktop client
 (`mngr-internal/apps/minds/frontend`): styling lives in the markup as Tailwind
 utilities; `src/style.css` is a token file plus a small set of escape hatches,
-not a stylesheet of component classes. History and the full migration log live
-in [`../docs/design-system.md`](../docs/design-system.md).
+not a stylesheet of component classes.
 
 ---
 

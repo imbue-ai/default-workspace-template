@@ -58,8 +58,7 @@ pixel-identical render.
 
 - **Guidance (not enforced).** `frontend/style_guide.md` documents the
   convention (where styling goes, what stays CSS, the primitives, the Tailwind
-  scanner's contiguous-literal rule); `docs/design-system.md` holds the
-  migration's history and rationale. It is an optional convention for the
+  scanner's contiguous-literal rule). It is an optional convention for the
   default UI -- a user redesigning their interface to their own taste isn't
   constrained by it, and there is deliberately no ratchet gating raw values (an
   earlier draft added one; it was removed to avoid impeding user-driven

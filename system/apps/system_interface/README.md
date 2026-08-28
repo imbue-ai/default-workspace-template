@@ -34,9 +34,7 @@ input/badge recipes) for repeated looks. When you extend or maintain the
 *default* look, prefer them over new one-offs so it stays coherent. This is a
 convention, not an enforced rule — if a user wants their interface restyled to
 their own taste, build that and ignore the tokens freely. See
-[`frontend/style_guide.md`](frontend/style_guide.md) for the guide and
-[`docs/design-system.md`](docs/design-system.md) for the migration's history
-and rationale.
+[`frontend/style_guide.md`](frontend/style_guide.md) for the guide.
 
 ## Updating the running UI (canonical flow)
 
