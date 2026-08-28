@@ -341,17 +341,50 @@ def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
 
     Empty for a tree that predates the manifest (a rollback re-refreshes the
     restored tree, and the receipt alone was that tree's whole answer).
+
+    A manifest that will not parse, or an entry that is not a table naming a
+    ``path``, degrades to a warning rather than raising: this also runs on the
+    rollback path, from ``_recover_running_state``, which catches only
+    ``ApplyFailed`` and ``OSError`` -- so a ``TOMLDecodeError`` here would
+    escape the apply's last line of defense and leave a live marker, an
+    unrestored environment and no emergency record.
     """
     manifest_path = repo_root / PLUGIN_MANIFEST_PATH
     if not manifest_path.is_file():
         return []
-    manifest = tomllib.loads(manifest_path.read_text())
+    try:
+        manifest = tomllib.loads(manifest_path.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        _warn_manifest_unread(manifest_path, f"it could not be read ({exc})")
+        return []
+    entries = manifest.get("plugins", [])
+    if not isinstance(entries, list):
+        _warn_manifest_unread(manifest_path, "its 'plugins' key is not a list of tables")
+        return []
     tool = MANIFEST_TOOL_NAMES.get(tool_name, tool_name)
     extras: list[str] = []
-    for entry in manifest.get("plugins", []):
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("path"):
+            _warn_manifest_unread(manifest_path, "it lists a plugin with no path")
+            continue
         if tool in entry.get("tools", []):
             extras.extend(["--with-editable", str(repo_root / str(entry["path"]))])
     return extras
+
+
+def _warn_manifest_unread(manifest_path: Path, why: str) -> None:
+    """Say that the merged tree's plugin manifest was skipped, and what that costs.
+
+    Deliberately not :func:`_warn_extras_lost`: the receipt is still readable
+    here, so the reinstall keeps every plugin the tool already had. What is lost
+    is narrower -- a plugin this release *adds* -- and saying "base package
+    alone" would send an operator looking for a breakage that has not happened.
+    """
+    sys.stderr.write(
+        f"refresh: skipping the plugin manifest at {manifest_path} ({why}); the tools "
+        "keep the plugins their receipts already name, but any plugin this release "
+        "adds will not be registered.\n"
+    )
 
 
 def _merge_extras(*extra_lists: list[str]) -> list[str]:
