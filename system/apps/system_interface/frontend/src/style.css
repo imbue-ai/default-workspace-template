@@ -352,19 +352,6 @@ body {
   vertical-align: -0.45em;
 }
 
-/* Spacer for the Minds desktop client title bar. When running inside the
-   Electron shell, --minds-titlebar-height is set to the title bar height
-   (38px). Outside the shell the variable is unset and the spacer collapses
-   to zero height. */
-.minds-titlebar-spacer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: var(--minds-titlebar-height, 0px);
-  pointer-events: none;
-}
-
 /* ── Title bar / messages area ── */
 /* The app header and content area (ChatPanel / SubagentView) are styled with
    utilities in their views. On .app-content, native scroll anchoring stays ON
