@@ -22,9 +22,10 @@ import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { prependToComposer } from "./MessageInput";
-import { OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
+import { OUTGOING_BUBBLE_CLASS, OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
 import { describeRequestError } from "../models/request-error";
 import { Button } from "./Button";
+import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
 const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
@@ -72,14 +73,16 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
 function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
   if (queued.is_sending === true) {
     return m("div", { class: OUTGOING_ROW_CLASS, key: `queued-${queued.queued_id}` }, [
-      m("div", { class: "message-user-bubble" }, [
+      m("div", { class: OUTGOING_BUBBLE_CLASS }, [
         m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
       ]),
       m("div", { class: OUTGOING_STATUS_CLASS }, "Sending…"),
     ]);
   }
-  return m("div", { class: "message message-user queued-message", key: `queued-${queued.queued_id}` }, [
-    m("div", { class: "message-user-bubble" }, [
+  // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
+  // is the rhythm between queued bubbles).
+  return m("div", { class: `${USER_MESSAGE_ROW_CLASS} queued-message`, key: `queued-${queued.queued_id}` }, [
+    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85` }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
     ]),
   ]);
