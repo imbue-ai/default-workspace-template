@@ -87,6 +87,7 @@ from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import CreatedChatAgent
 from imbue.system_interface.models import QueuedMessageState
+from imbue.system_interface.harnesses.lanes import AUTO_NAME_WORD_BY_LANE
 from imbue.system_interface.naming import AUTO_NAME_WORD_BY_HARNESS
 from imbue.system_interface.naming import canonical_agent_name
 from imbue.system_interface.naming import first_free_numbered_name
@@ -1233,7 +1234,12 @@ class AgentManager:
                     raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
                 display_name = explicit_name
             else:
-                display_name = first_free_numbered_name(AUTO_NAME_WORD_BY_HARNESS[harness], taken_names)
+                # The lane's word where it has one, else the harness's. Two lanes can share a
+                # harness -- Opencode Go and OpenRouter both run on pi -- and naming those tabs
+                # after the harness made both fleets count as "Pi N", so the strip could not
+                # say which provider a chat was spending.
+                word = AUTO_NAME_WORD_BY_LANE.get(account.lane, AUTO_NAME_WORD_BY_HARNESS[harness])
+                display_name = first_free_numbered_name(word, taken_names)
 
             proto_info = {
                 "agent_id": agent_id,
