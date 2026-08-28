@@ -36,12 +36,7 @@ import { getApps } from "../models/AgentManager";
 import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
-import {
-  getAccounts,
-  getSelectedAccount,
-  openProviderChooser,
-  selectAccount,
-} from "../models/Providers";
+import { getAccounts, getSelectedAccount, openProviderChooser, selectAccount } from "../models/Providers";
 import { Portal } from "./portal";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
@@ -430,10 +425,7 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
   /** Below the trigger when there is room, above it when there is not. */
   function placement(rect: DOMRect): string {
     const margin = 8;
-    const left = Math.min(
-      Math.max(rect.left, margin),
-      Math.max(margin, window.innerWidth - margin - PICKER_WIDTH),
-    );
+    const left = Math.min(Math.max(rect.left, margin), Math.max(margin, window.innerWidth - margin - PICKER_WIDTH));
     const below = window.innerHeight - rect.bottom - margin;
     const vertical =
       below >= PICKER_MIN_HEIGHT

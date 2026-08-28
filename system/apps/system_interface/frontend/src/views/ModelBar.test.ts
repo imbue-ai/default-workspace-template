@@ -151,7 +151,11 @@ describe("the combo card", () => {
       ],
     };
     catalogState.catalog = catalogOf({ switch_mode: "read_only", options: [withEffort] });
-    settingsState.choice = { identity: { model_id: "opus", effort: "low", fast: false }, matched: withEffort, pending: null };
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "low", fast: false },
+      matched: withEffort,
+      pending: null,
+    };
     render();
     click(".model-selector-trigger");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
@@ -166,7 +170,11 @@ describe("the combo card", () => {
     // painted full -- it looks broken and says the opposite of the truth.
     const oneStop = { ...OPUS, efforts: [{ level: "off", in_picker: true }] };
     catalogState.catalog = catalogOf({ options: [oneStop] });
-    settingsState.choice = { identity: { model_id: "opus", effort: "off", fast: false }, matched: oneStop, pending: null };
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "off", fast: false },
+      matched: oneStop,
+      pending: null,
+    };
     document.body.innerHTML = '<div id="root"></div>';
     render();
     click(".model-selector-trigger");
@@ -180,7 +188,11 @@ describe("the combo card", () => {
       ],
     };
     catalogState.catalog = catalogOf({ options: [twoStops] });
-    settingsState.choice = { identity: { model_id: "opus", effort: "low", fast: false }, matched: twoStops, pending: null };
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "low", fast: false },
+      matched: twoStops,
+      pending: null,
+    };
     document.body.innerHTML = '<div id="root"></div>';
     render();
     click(".model-selector-trigger");
@@ -197,7 +209,11 @@ describe("the combo card", () => {
     ];
     const model = { ...OPUS, efforts };
     catalogState.catalog = catalogOf({ options: [model] });
-    settingsState.choice = { identity: { model_id: "opus", effort: "low", fast: false }, matched: model, pending: null };
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "low", fast: false },
+      matched: model,
+      pending: null,
+    };
     render();
     click(".model-selector-trigger");
     const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
@@ -217,7 +233,10 @@ describe("the combo card", () => {
     // A chat binds to its account when it is CREATED and nothing rebinds it, so there is no
     // state in which switching would work. The row states that rather than doing something
     // else by surprise -- the tooltip is the whole affordance.
-    providerState.accounts = [ACCOUNT, { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" }];
+    providerState.accounts = [
+      ACCOUNT,
+      { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
+    ];
     render();
     click(".model-selector-trigger");
     click('[data-card-row="providers"]');
@@ -256,7 +275,11 @@ describe("the combo card", () => {
     ];
     const model = { ...OPUS, efforts, supports_fast: true };
     catalogState.catalog = catalogOf({ options: [model] });
-    settingsState.choice = { identity: { model_id: "opus", effort: "high", fast: true }, matched: model, pending: null };
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "high", fast: true },
+      matched: model,
+      pending: null,
+    };
     render();
     const trigger = document.querySelector(".model-selector-trigger") as HTMLElement;
     expect(trigger.textContent).toContain("Opus");
@@ -279,7 +302,11 @@ describe("the combo card", () => {
     // codex: its options are per-account and come from its own daemon, so the static catalog
     // is empty by design and the flyout must not throw on it.
     catalogState.catalog = catalogOf({ picker_mode: "dynamic", switch_mode: "on_change", options: [] });
-    settingsState.choice = { identity: { model_id: "gpt-5", effort: null, fast: false }, matched: null, pending: null };
+    settingsState.choice = {
+      identity: { model_id: "gpt-5", effort: null, fast: false },
+      matched: null,
+      pending: null,
+    };
     expect(() => {
       render();
       click(".model-selector-trigger");

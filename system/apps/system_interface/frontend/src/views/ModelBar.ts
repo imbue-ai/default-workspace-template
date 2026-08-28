@@ -37,8 +37,7 @@ import * as css from "./modelCardStyles";
 const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
 
 /** Shown on a provider row this chat cannot switch to. */
-const LOCKED_PROVIDER_TOOLTIP =
-  "Start a new chat to use this provider. In-chat provider switching is coming soon!";
+const LOCKED_PROVIDER_TOOLTIP = "Start a new chat to use this provider. In-chat provider switching is coming soon!";
 
 /** The effort to carry when switching to `option`: keep the current one if the new
  *  model declares it, else the model's first shown (or first declared) effort. Null
@@ -134,7 +133,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       m.redraw();
     }
   }
-
 
   function openCard(trigger: HTMLElement): void {
     cardAnchor = trigger.getBoundingClientRect();
@@ -312,7 +310,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
    * A switch rather than a toggling icon, because a switch says on or off by its shape instead
    * of by its fill.
    */
-  function fastRow(opts: { on: boolean; interactive: boolean; tooltip: string | null; onToggle: () => void }): m.Vnode {
+  function fastRow(opts: {
+    on: boolean;
+    interactive: boolean;
+    tooltip: string | null;
+    onToggle: () => void;
+  }): m.Vnode {
     return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Fast Mode"),
       m(
@@ -334,7 +337,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           m(
             "span",
             { class: `${css.SWITCH_KNOB} ${opts.on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` },
-            opts.on ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 }))) : null,
+            opts.on
+              ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 })))
+              : null,
           ),
         ),
       ),
@@ -355,8 +360,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
    *  click target only as wide as their own text. */
   function cardPlacement(anchor: DOMRect): string {
     return (
-      `left: ${cardLeft(anchor)}px; bottom: ${window.innerHeight - anchor.top + 8}px; ` +
-      `width: ${css.CARD_WIDTH}px;`
+      `left: ${cardLeft(anchor)}px; bottom: ${window.innerHeight - anchor.top + 8}px; ` + `width: ${css.CARD_WIDTH}px;`
     );
   }
 
@@ -502,7 +506,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                   },
                   [
                     m("span", { class: css.FLYOUT_ROW_NAME }, option.label),
-                    isCurrent ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 }))) : null,
+                    isCurrent
+                      ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+                      : null,
                   ],
                 );
               }),

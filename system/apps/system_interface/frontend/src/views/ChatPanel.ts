@@ -71,7 +71,6 @@ function getAgentTerminalUrl(agentId: string): string {
   return buildAgentTerminalUrl(agent.name);
 }
 
-
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
 }
@@ -726,20 +725,20 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               // Only while the agent is genuinely still being created -- the same condition the
               // build log uses, so the composer arrives with the transcript rather than after it.
               isStillBeingCreated(agentId)
-            ? null
-            : m("footer", { class: "app-footer" }, [
-                m(EmptySlot, { name: "conversation-before-input" }),
-                isConversationNotFound(agentId)
-                  ? null
-                  : m(ActivityIndicator, {
-                      agentId,
-                      events: getEventsForAgent(agentId),
-                    }),
-                m(MessageInput, { agentId }),
-                // The under-bar is a sibling of the whole flip card, not part of this face: on
-                // a face it would rotate away with the face its own switch turns, and the flip
-                // would be one-way.
-              ]),
+                ? null
+                : m("footer", { class: "app-footer" }, [
+                    m(EmptySlot, { name: "conversation-before-input" }),
+                    isConversationNotFound(agentId)
+                      ? null
+                      : m(ActivityIndicator, {
+                          agentId,
+                          events: getEventsForAgent(agentId),
+                        }),
+                    m(MessageInput, { agentId }),
+                    // The under-bar is a sibling of the whole flip card, not part of this face: on
+                    // a face it would rotate away with the face its own switch turns, and the flip
+                    // would be one-way.
+                  ]),
             ],
           }),
           // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
@@ -747,17 +746,21 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           // either rendering of it, which is the same reason it belongs to neither face.
           isStillBeingCreated(agentId)
             ? null
-            : m("div", { class: "chat-under-bar" }, m("div", { class: "composer-under-bar" }, [
-                m(ModelBar, { agentId }),
-                m("div", { class: "composer-under-bar-actions" }, [
-                  m(TerminalViewToggle, {
-                    on: isFlipped,
-                    onToggle: () => {
-                      isFlipped = !isFlipped;
-                    },
-                  }),
+            : m(
+                "div",
+                { class: "chat-under-bar" },
+                m("div", { class: "composer-under-bar" }, [
+                  m(ModelBar, { agentId }),
+                  m("div", { class: "composer-under-bar-actions" }, [
+                    m(TerminalViewToggle, {
+                      on: isFlipped,
+                      onToggle: () => {
+                        isFlipped = !isFlipped;
+                      },
+                    }),
+                  ]),
                 ]),
-              ])),
+              ),
         ],
       );
     },

@@ -130,7 +130,13 @@ import {
   setMemberTitle,
 } from "../models/MemberTitles";
 import { createBrowser } from "../models/Browsers";
-import { areAccountsLoaded, getAccounts, getSelectedAccount, loadAccounts, openProviderChooser } from "../models/Providers";
+import {
+  areAccountsLoaded,
+  getAccounts,
+  getSelectedAccount,
+  loadAccounts,
+  openProviderChooser,
+} from "../models/Providers";
 import { appServiceDisplayName, browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
 import {
   applyMemberLastUsedChange,
