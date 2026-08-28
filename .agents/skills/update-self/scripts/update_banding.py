@@ -28,6 +28,11 @@ _REQUIRED_BANDS_ATTRIBUTES = (
     "set_oom_score_adj",
 )
 
+# The service whose band the apply takes (see :func:`protect_from_memory_shed`).
+# Required in the same wholesale way the attributes above are: the map is the
+# pre-merge tree's, so a key read out of it is as absent-able as an attribute.
+_APPLY_BAND_SERVICE = "system_interface"
+
 
 def _load_bands(repo_root: Path):
     """Import ``oom_priority.bands`` from ``repo_root``'s tree, or ``None``.
@@ -36,7 +41,8 @@ def _load_bands(repo_root: Path):
     from ``data/.tasks/update-self/skill-at-target/...``, so the package can
     only be found relative to the repo being applied to -- and an older tree
     may not carry it at all, or may carry a version of it predating part of
-    :data:`_REQUIRED_BANDS_ATTRIBUTES`. Either must degrade to "no banding"
+    :data:`_REQUIRED_BANDS_ATTRIBUTES` or :data:`_APPLY_BAND_SERVICE`. Either
+    must degrade to "no banding"
     rather than a crash (the staged copy runs against older pre-merge trees by
     design).
     """
@@ -58,9 +64,11 @@ def _load_bands(repo_root: Path):
     finally:
         sys.path.remove(str(bands_src))
     missing = [name for name in _REQUIRED_BANDS_ATTRIBUTES if not hasattr(bands, name)]
+    if not missing and _APPLY_BAND_SERVICE not in bands.SERVICE_BANDS:
+        missing = [f'SERVICE_BANDS["{_APPLY_BAND_SERVICE}"]']
     if missing:
         sys.stderr.write(
-            f"note: {bands_src} carries an oom_priority package predating "
+            f"note: {bands_src} carries an oom_priority package missing "
             f"{', '.join(missing)}, so this apply runs unbanded and its build steps "
             "are not tagged expendable; a memory shed during it may take the update "
             "rather than a rebuildable child.\n"
@@ -93,7 +101,7 @@ def protect_from_memory_shed(repo_root: Path) -> None:
     _BANDS = _load_bands(repo_root)
     if _BANDS is None:
         return
-    band = _BANDS.SERVICE_BANDS["system_interface"]
+    band = _BANDS.SERVICE_BANDS[_APPLY_BAND_SERVICE]
     if not _BANDS.set_oom_score_adj(os.getpid(), band):
         sys.stderr.write(
             "warning: could not lower this process's memory-shed priority; the apply "

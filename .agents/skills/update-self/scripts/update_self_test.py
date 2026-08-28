@@ -3679,6 +3679,32 @@ def test_the_apply_bands_itself_to_the_pre_merge_trees_system_interface_band(
     assert bands.BANDED_AS == [33]
 
 
+def test_a_bands_module_whose_map_lacks_the_applys_service_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The band is a key read out of the pre-merge tree's map, so it is as
+    # absent-able as an attribute of that tree's module. Unguarded it would be a
+    # KeyError out of __main__, before main() -- taking `recover --if-stale`,
+    # the boot and cron self-healing for a stale apply, with it.
+    monkeypatch.delitem(sys.modules, "oom_priority", raising=False)
+    monkeypatch.delitem(sys.modules, "oom_priority.bands", raising=False)
+    monkeypatch.setattr(update_banding, "_BANDS", None)
+    _write_bands_package(
+        tmp_path,
+        "AGENT_SUBPROCESS = 900\n"
+        "SERVICE_BANDS = {'owner-exec': 5, 'cron': 55}\n"
+        "def set_oom_score_adj(pid, adj):\n"
+        "    return True\n"
+        "def oom_tag_shell_prefix(adj):\n"
+        "    return f'tag {adj}; '\n",
+    )
+
+    update_banding.protect_from_memory_shed(tmp_path)
+
+    assert update_banding._BANDS is None
+    assert update_banding.as_expendable(["npm", "ci"]) == ["npm", "ci"]
+
+
 def test_every_bands_attribute_the_script_reads_is_declared_required() -> None:
     # The load-time refusal only protects what _REQUIRED_BANDS_ATTRIBUTES names.
     # A `_BANDS.<attr>` added later without being listed is the same
