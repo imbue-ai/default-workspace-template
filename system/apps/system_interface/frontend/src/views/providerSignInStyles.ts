@@ -60,7 +60,7 @@ export const BACK_BUTTON =
   "-ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary " +
   "hover:bg-fill-hover hover:text-primary cursor-pointer";
 export const CLOSE_BUTTON =
-  "-mr-1 ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary " +
+  "-mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary " +
   "hover:bg-fill-hover hover:text-primary cursor-pointer";
 
 export const ROW_STACK = "flex flex-col gap-2";
@@ -95,9 +95,17 @@ export const LEAD_LINK = "text-accent underline underline-offset-2 hover:text-ac
  *  The mockup makes it a dropdown, because there it is a CHOICE. Here provider -> harness is
  *  fixed, so it is the same line without the control: a fact the screen states, in the place
  *  the mockup put it. */
-export const RUNS_ON = "ml-auto inline-flex shrink-0 items-center gap-1 text-[0.75rem]";
+/** The right-hand end of the header: the harness line and the close button, as one group.
+ *
+ *  Grouped because both used to carry `ml-auto` and fought over it -- the first pushed the
+ *  label right, the second pushed the button further, and the label ended up stranded in the
+ *  middle of the gap. One `ml-auto` on the pair pins them together at the edge. */
+export const HEADER_END = "ml-auto flex shrink-0 items-center gap-4";
+export const RUNS_ON = "inline-flex shrink-0 items-baseline gap-1.5 text-sm";
 export const RUNS_ON_PREFIX = "text-tertiary";
-export const RUNS_ON_NAME = "font-medium text-secondary";
+/** The harness is the fact worth reading here, so it carries the weight and the full contrast;
+ *  "Runs on" is just the label in front of it. */
+export const RUNS_ON_NAME = "font-semibold text-primary";
 
 /** A step block, and the desaturation the mockup puts on the one you are past. */
 export const STEP = "mb-4 transition-all duration-300";
