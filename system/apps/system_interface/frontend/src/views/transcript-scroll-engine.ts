@@ -167,6 +167,11 @@ export interface TranscriptScrollEngine {
   // Custom scrollbar contract (see TranscriptScrollbar).
   scrollbarEngage(): void;
   scrollbarMoveTo(fraction: number): void;
+  /** Pointer released: the thumb goes back to rendering the LIVE viewport
+   *  position (the frozen mapping stays for future scrubs). While dragging the
+   *  thumb tracks the pointer; after release that would freeze it wherever the
+   *  pointer let go -- showing "at the bottom" while the content is not. */
+  scrollbarRelease(): void;
   getScrollbarRenderState(): ScrollbarRenderState;
 }
 
@@ -1120,7 +1125,19 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       if (isPointerDown || (pendingUserDeltaPx < -0.01 && !isPendingClamp)) {
         trace?.record("follow-yield", { pendingUserDeltaPx, isPointerDown });
       }
-      if (!isPointerDown && !isFollowQuiescent() && (pendingUserDeltaPx >= -0.01 || isPendingClamp)) {
+      // FOLLOW means AT the bottom, always. The quiescence gate exists only
+      // so a relayout caused by the user's own in-transcript interaction (an
+      // expand click) does not fight them mid-gesture; a gap that opens with
+      // no recent native input -- a late image load, a font swap, a delayed
+      // re-measure of freshly mounted tail rows -- is re-pinned even when
+      // everything else is quiescent, otherwise a drag-to-bottom strands the
+      // viewport above the tail with nothing left to close the gap.
+      const isRecentUserInteraction = performance.now() - lastNativeInputAtMs < 500;
+      if (
+        !isPointerDown &&
+        (!isFollowQuiescent() || !isRecentUserInteraction) &&
+        (pendingUserDeltaPx >= -0.01 || isPendingClamp)
+      ) {
         const targetPx = element.scrollHeight - element.clientHeight;
         if (hasPendingUserScroll) {
           pendingEchoTops.push(element.scrollTop);
@@ -1628,6 +1645,13 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           planFill();
         }
       }
+      m.redraw();
+    },
+
+    scrollbarRelease(): void {
+      lastActivityAtMs = performance.now();
+      lastScrollbarFraction = null;
+      frozenThumbSizeFraction = null;
       m.redraw();
     },
 

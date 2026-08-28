@@ -551,6 +551,30 @@ def main():
                 and debug["extent"]["endIndex"] >= debug["totalEvents"],
                 (state["bottomGap"], debug["positionKind"], debug["extent"]),
             )
+            # FOLLOW means AT the bottom: content growing under a pinned
+            # viewport with no user input (a late image load, a delayed
+            # re-measure) must be re-pinned, not left as a gap -- even though
+            # the engine is otherwise quiescent.
+            page.wait_for_timeout(700)  # get past the recent-input grace
+            page.evaluate("""(() => {
+              const el = document.querySelector('.transcript-scroll');
+              const rows = Array.from(el.querySelectorAll('.message-list > [id]'));
+              const last = rows[rows.length - 1];
+              const filler = document.createElement('div');
+              filler.style.height = '400px';
+              last.appendChild(filler);
+            })()""")
+            state = None
+            for _ in range(16):
+                page.wait_for_timeout(250)
+                state = page.evaluate(GET_STATE)
+                if state["bottomGap"] < 2:
+                    break
+            check(
+                "H5 late content growth at the tail re-pins a FOLLOW viewport",
+                state["bottomGap"] < 2,
+                state["bottomGap"],
+            )
             # H drags park the pointer below the track (over the composer);
             # F's wheel events must land on the transcript.
             page.mouse.move(600, 400)
