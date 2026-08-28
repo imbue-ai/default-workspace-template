@@ -57,9 +57,13 @@ function beginRename(state: AccountRowState, row: ProviderAccount): void {
   state.renameDraft = row.name !== "" ? row.name : row.provider;
 }
 
+/** Take the field down. Redraws itself: the paths out that file nothing -- Escape, and a
+ *  commit of a name that says nothing new -- have no response to redraw on afterwards, and
+ *  these menus are portalled, so without this the field simply stays on screen. */
 function endRename(state: AccountRowState): void {
   state.renamingId = null;
   state.renameDraft = "";
+  m.redraw();
 }
 
 /** File what was typed, unless it says nothing new.
