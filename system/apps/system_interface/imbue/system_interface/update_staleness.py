@@ -27,6 +27,7 @@ process holds in memory or resolves its environment from (see
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Self
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -209,7 +210,7 @@ class UpdateStalenessTracker(FrozenModel):
     _moved_tree_verdict: tuple[str, bool] | None = PrivateAttr(default=None)
 
     @classmethod
-    def capture(cls, repo_root: Path = WORKSPACE_ROOT_DIRECTORY) -> "UpdateStalenessTracker":
+    def capture(cls, repo_root: Path = WORKSPACE_ROOT_DIRECTORY) -> Self:
         """Snapshot the current tree HEAD as this process's startup baseline."""
         startup_head = _read_head(repo_root)
         if startup_head is None:
