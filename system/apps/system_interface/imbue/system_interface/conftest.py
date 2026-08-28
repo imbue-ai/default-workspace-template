@@ -245,27 +245,20 @@ def closed_port() -> int:
 
 
 @pytest.fixture
-def fake_supervisor(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeSupervisorServer]:
+def fake_supervisor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeSupervisorServer]:
     """A supervisord-shaped RPC server on a per-test unix socket.
 
     ``MINDS_SUPERVISOR_SOCKET`` is pointed at it, so both the liveness probes
     and the stop/start endpoints reach the fake instead of the developer's (or
     CI's absent) real supervisord.
-
-    The socket lives in its own short mkdtemp dir rather than pytest's
-    ``tmp_path``: an AF_UNIX socket path holds only ~104 chars on macOS, and
-    tmp_path's nested pytest-of-<user>/pytest-<n>/<test-name> path overflows
-    that, failing the bind before the test starts.
     """
-    socket_dir = Path(tempfile.mkdtemp(prefix="si-supervisor-"))
-    server = FakeSupervisorServer(socket_dir / "s.sock")
+    server = FakeSupervisorServer(tmp_path / "supervisor.sock")
     monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(server.socket_path))
     server.start()
     try:
         yield server
     finally:
         server.stop()
-        shutil.rmtree(socket_dir, ignore_errors=True)
 
 
 @pytest.fixture
