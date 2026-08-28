@@ -200,9 +200,7 @@ class _CodexWorld:
         self.client.poll_notifications()
 
     def _push_status(self, status_type: str) -> None:
-        self._push(
-            {"jsonrpc": "2.0", "method": "thread/status/changed", "params": {"status": {"type": status_type}}}
-        )
+        self._push({"jsonrpc": "2.0", "method": "thread/status/changed", "params": {"status": {"type": status_type}}})
         self.client.poll_notifications()
 
     # -- id / text minting ---------------------------------------------------------------
@@ -301,7 +299,9 @@ class _CodexWorld:
         expected_block = self._take_expected_returned_block()
         assert block == expected_block, f"interrupt block {block!r} != expected {expected_block!r}\n{self.note()}"
         if had_turn:
-            assert "turn/interrupt" in self.sent_methods, f"a running turn's stop must issue turn/interrupt\n{self.note()}"
+            assert "turn/interrupt" in self.sent_methods, (
+                f"a running turn's stop must issue turn/interrupt\n{self.note()}"
+            )
 
     def foreign(self) -> None:
         """A foreign ``userMessage`` (clientId null, then an unknown id): neither may touch our chips."""
@@ -457,7 +457,9 @@ def _run_interrupt_during_partial_flush(world: _CodexWorld) -> None:
     world._expected[m_tail] = MessageState.RETURNED
     block = world.ledger.interrupt()
     world._current_turn_id = None
-    assert block == world._take_expected_returned_block(), f"partial-flush return block mismatch: {block!r}\n{world.note()}"
+    assert block == world._take_expected_returned_block(), (
+        f"partial-flush return block mismatch: {block!r}\n{world.note()}"
+    )
     assert world.text_by_cid[m_tail] in block.split("\n"), "the non-committed tail must be in the return block"
     assert world.text_by_cid[m_unobserved] in block.split("\n"), "the unobserved commit returns optimistically"
     assert world.ledger.state_of(m_observed) == MessageState.DELIVERED
