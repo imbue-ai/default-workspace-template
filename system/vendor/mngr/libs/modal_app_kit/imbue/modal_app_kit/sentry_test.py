@@ -167,12 +167,6 @@ def test_init_sentry_activates_and_tags_service_with_a_dsn(
     assert event["server_name"].startswith("test-service-")
 
 
-# Flakes on a >10s pytest-timeout in CI (offload run 32990804756). The body
-# runs ~3.5s locally against this package's --timeout=10, most of it spent in
-# init_sentry's real transport reaching for the deliberately unresolvable
-# bugsink.invalid DSN before the capturing transport is swapped in -- a cost
-# that varies with the resolver CI happens to have.
-@pytest.mark.flaky
 def test_init_sentry_reports_warning_logs_as_events_and_info_logs_as_breadcrumbs_only(
     monkeypatch: pytest.MonkeyPatch, isolated_sentry_client: None
 ) -> None:
@@ -226,3 +220,25 @@ def test_capture_and_reraise_reraises_the_original_exception(isolated_sentry_cli
         assert "cron failure 3178" in str(exc)
     else:
         raise AssertionError("capture_and_reraise swallowed the exception")
+
+
+def test_capture_and_reraise_logs_one_error_record_and_reports_one_event(
+    monkeypatch: pytest.MonkeyPatch, isolated_sentry_client: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    captured_envelopes = _init_sentry_with_capturing_transport(monkeypatch)
+
+    with caplog.at_level(logging.ERROR, logger="imbue.modal_app_kit.sentry"):
+        with pytest.raises(_ExampleError):
+            with capture_and_reraise():
+                raise _ExampleError("cron failure 9042")
+
+    error_records = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(error_records) == 1
+    assert error_records[0].exc_info is not None
+    assert isinstance(error_records[0].exc_info[1], _ExampleError)
+    assert "cron failure 9042" in str(error_records[0].exc_info[1])
+    # The logging integration would report the ERROR record as a second event
+    # were the SDK not deduping it against the explicit capture.
+    events = _captured_events(captured_envelopes)
+    assert len(events) == 1
+    assert "cron failure 9042" in events[0]["exception"]["values"][0]["value"]

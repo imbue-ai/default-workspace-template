@@ -1,6 +1,7 @@
 """R2 storage-cleanup grant + recheck endpoints."""
 
 import logging
+from typing import Final
 
 from fastapi import APIRouter
 from fastapi import Request
@@ -19,11 +20,17 @@ from imbue.remote_service_connector.r2.buckets import measure_live_owner_usage_b
 from imbue.remote_service_connector.r2.stores import R2_CLEANUP_GRANT_EXPIRY_MINUTES
 from imbue.remote_service_connector.r2.stores import R2_CLEANUP_GRANT_FAILED_BUDGET
 from imbue.remote_service_connector.r2.stores import R2_CLEANUP_GRANT_WINDOW_HOURS
-from imbue.remote_service_connector.r2.stores import r2_enforcement_lock
+from imbue.remote_service_connector.r2.stores import r2_enforcement_lease
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# How long the grant/recheck endpoints wait for the owner's enforcement
+# lease. Contention here means the hourly sweep (or a suspension) is
+# mid-enforcement for this account -- seconds of work -- so a bounded wait
+# usually succeeds; past it the caller gets a retryable 503.
+_ENDPOINT_LEASE_WAIT_SECONDS: Final = 30.0
 
 
 @router.post("/account/storage-cleanup-grant")
@@ -46,10 +53,12 @@ def create_storage_cleanup_grant(request: Request) -> dict[str, object]:
         key_store = stores_module.get_key_store()
         grant_store = stores_module.get_grant_store()
         counters = {"keys_downgraded": 0, "keys_restored": 0, "key_update_failures": 0}
-        with r2_enforcement_lock(entitlements.user_id):
+        with r2_enforcement_lease(entitlements.user_id, wait_timeout_seconds=_ENDPOINT_LEASE_WAIT_SECONDS) as lease:
             rows = key_store.list_keys(entitlements.user_id, None)
             active_grant = grant_store.get_active_grant(entitlements.user_id)
-            is_any_key_downgraded = any(row.get("enforced_access") == "read" for row in rows)
+            # A 'pending' marker counts as downgraded: the token's live policy
+            # is untrusted, and the restore pass below settles it.
+            is_any_key_downgraded = any(row.get("enforced_access") is not None for row in rows)
             if active_grant is None and not is_any_key_downgraded:
                 return CleanupGrantResponse(
                     status="not_needed", keys=[key_info_from_row(row) for row in rows]
@@ -69,7 +78,7 @@ def create_storage_cleanup_grant(request: Request) -> dict[str, object]:
                     entitlements.user_id, user.user_id_prefix, baseline_bytes, R2_CLEANUP_GRANT_EXPIRY_MINUTES
                 )
             # Restore every still-downgraded key (is_over_quota=False path).
-            sweep_module.enforce_owner_key_access(ops, key_store, rows, False, counters)
+            sweep_module.enforce_owner_key_access(ops, key_store, rows, False, counters, lease)
             refreshed_rows = key_store.list_keys(entitlements.user_id, None)
         return CleanupGrantResponse(
             status="granted",
@@ -98,14 +107,14 @@ def recheck_storage_enforcement(request: Request) -> dict[str, object]:
         key_store = stores_module.get_key_store()
         grant_store = stores_module.get_grant_store()
         counters = {"keys_downgraded": 0, "keys_restored": 0, "key_update_failures": 0}
-        with r2_enforcement_lock(entitlements.user_id):
+        with r2_enforcement_lease(entitlements.user_id, wait_timeout_seconds=_ENDPOINT_LEASE_WAIT_SECONDS) as lease:
             live_bytes = measure_live_owner_usage_bytes(ops, user.user_id_prefix)
             is_over_quota = live_bytes > entitlements.max_total_bucket_bytes
             unsettled_grants = grant_store.list_unsettled_grants(entitlements.user_id)
             for grant in unsettled_grants:
                 grant_store.settle_grant(int(grant["grant_id"]), live_bytes, live_bytes < int(grant["baseline_bytes"]))
             rows = key_store.list_keys(entitlements.user_id, None)
-            sweep_module.enforce_owner_key_access(ops, key_store, rows, is_over_quota, counters)
+            sweep_module.enforce_owner_key_access(ops, key_store, rows, is_over_quota, counters, lease)
             refreshed_rows = key_store.list_keys(entitlements.user_id, None)
         return StorageRecheckResponse(
             usage_bytes=live_bytes,

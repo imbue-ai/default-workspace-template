@@ -420,6 +420,18 @@ describe("NewTabLauncher", () => {
     expect(tilesOf(render()).some((tile) => tile.attrs?.oncreate !== undefined)).toBe(true);
   });
 
+  it("gives every idle tile a tooltip", () => {
+    // Each tile says what it starts (the rail's copy for the same kinds), and
+    // the unbacked file viewer says why it cannot act instead. The tooltip is
+    // attached through an `oncreate` hook (see hoverTooltipAttrs), so its
+    // presence on every tile is what says each one carries a tooltip.
+    const tiles = tilesOf(render());
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.attrs?.oncreate).toBeDefined();
+    }
+  });
+
   it("splits the machine into the two tables, most recent first", () => {
     const rendered = texts(render());
     expect(rendered).toContain("In this project");

@@ -281,6 +281,33 @@ release published).
     (issues LLM-4/LLM-5) via the tunneled REST API. Production
     reporting is live end to end.
 
+- [ ] **frps plugin secret out of URLs** (issue mngr-internal#616, PR #650; no
+  migration, no new secrets): the connector now accepts the frps plugin
+  callback as `POST /frps/auth/{relay_id}` with the secret in an
+  `Authorization: Basic` header (delivered from the relay's plugin-`addr`
+  URL userinfo), and still accepts the legacy path-secret shape
+  (CLEANUP-marked) so existing relays keep working. Per tier, in order:
+  - Deploy the connector FIRST (it must accept both forms before any relay
+    switches).
+  - Redeploy every relay of the tier with the new CLI form
+    (`FRPS_AUTH_SECRET=<secret> just deploy-share-relay <ip> <relay_id>
+    <region> <domain> "https://<connector>/frps/auth"` -- the URL is now
+    secret-free; the secret comes from the tier's `sharing` Vault entry).
+    3 dev relays (per standing dev env), 4 staging, 4 production.
+  - Verify a share end-to-end after each tier's relay redeploys (tunnel
+    Login/NewProxy/Ping, live-kill on unshare), and confirm the tier's
+    access logs show `/frps/auth/relay-...` paths with no secret segment.
+  - **Rotate `FRPS_AUTH_SECRET`** (the old value sat in Modal-native access
+    lines and 90-day-retention OpenObserve logs, so rotation is part of the
+    fix): set the tier's Vault `sharing/FRPS_AUTH_SECRET` to
+    `<old>,<new>` (comma-separated set), redeploy the connector, redeploy
+    every relay with only `<new>`, then drop `<old>` from Vault and
+    redeploy the connector once more. Zero tunnel downtime in this order.
+  - After ALL tiers (standing dev envs included -- enumerate via
+    `minds-admin relays list` per env) are on the header form with the
+    secret rotated: remove the legacy path-secret route + its tests + the
+    wire-compat entry (grep `CLEANUP` in the connector's `shares.py`).
+
 ## Carried-over post-deploy cleanup (from the 0.3.17 deployment)
 
 - [ ] **Old `dev1` relay.** Destroy the instance (`just list-share-relays` /
