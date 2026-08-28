@@ -50,7 +50,9 @@ import type { MatchRange, MemberKind, ProjectInfo, ShortcutMode } from "../model
 import { AllAppsPicker, appDisplayName, pickableApps } from "./AllAppsPicker";
 import type { UnpinnedShortcutRow } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./appIcon";
+import { Button, buttonClass } from "./Button";
 import { hoverTooltipAttrs } from "./hoverTooltip";
+import type { TooltipPlacement } from "./hoverTooltip";
 import { icon } from "./icons";
 import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
 import type { ObjectMenuActions, ObjectMenuKind } from "./objectMenu";
@@ -204,6 +206,42 @@ const ROW_ICON_SIZE = 16;
 const ACTION_ICON_SIZE = 14;
 
 const ROW_CLASS = "flex h-7 w-full shrink-0 cursor-pointer items-center gap-1 rounded-md text-left";
+
+/** One hover-revealed row action -- every trailing micro-control on a rail or
+ *  menu row (unpin, kebab, rename pencil, remove-from-project) is this single
+ *  recipe: the shared Button at its xs icon size, ghost variant, hidden until
+ *  the row's `group` hover reveals it (or held visible while its own menu is
+ *  open), and always stopping propagation so the row underneath never also
+ *  fires. Positioning and marker classes ride `extra`. */
+function railAction(options: {
+  iconMarkup: string;
+  label: string;
+  tooltip?: string;
+  tooltipPlacement?: TooltipPlacement;
+  /** Hold the control visible regardless of hover (its own menu is open). */
+  isRevealed?: boolean;
+  extra?: string;
+  onclick: (event: MouseEvent) => void;
+}): m.Vnode {
+  const reveal =
+    (options.isRevealed === true ? "opacity-100" : "opacity-0") + " focus-visible:opacity-100 group-hover:opacity-100";
+  return m(
+    Button,
+    {
+      variant: "ghost",
+      icon: true,
+      xs: true,
+      extra: `${reveal} ${options.extra ?? ""}`,
+      "aria-label": options.label,
+      ...(options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip, options.tooltipPlacement)),
+      onclick: (event: MouseEvent) => {
+        event.stopPropagation();
+        options.onclick(event);
+      },
+    },
+    m.trust(options.iconMarkup),
+  );
+}
 
 // Menu chrome, settled in the design (§6): a floating card on the primary
 // surface with a hairline border, 8px radius and the overlay elevation shadow,
@@ -1018,9 +1056,14 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       {
         role: "button",
         tabindex: 0,
-        class:
-          "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-faint opacity-0 " +
-          "hover:bg-fill-hover hover:text-primary focus-visible:opacity-100 group-hover:opacity-100",
+        // The Button recipe via buttonClass -- the escape hatch, since this
+        // control lives inside the header <button> and buttons do not nest --
+        // plus the same reveal-on-row-hover treatment railAction applies.
+        class: buttonClass("ghost", {
+          icon: true,
+          xs: true,
+          extra: "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
+        }),
         "aria-label": "Project settings",
         ...hoverTooltipAttrs("Project settings"),
         onclick: openSettings,
@@ -1163,42 +1206,21 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         ),
         options.onUnpin === null
           ? null
-          : m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "project-rail-shortcut-unpin absolute right-1 flex h-5 w-5 shrink-0 cursor-pointer " +
-                  "items-center justify-center rounded text-faint opacity-0 hover:text-primary " +
-                  "focus-visible:opacity-100 group-hover:opacity-100",
-                "aria-label": `Unpin ${options.baseLabel} from this project`,
-                onclick: (event: MouseEvent) => {
-                  event.stopPropagation();
-                  options.onUnpin?.();
-                },
-              },
-              m.trust(railIcon("pin", ACTION_ICON_SIZE)),
-            ),
+          : railAction({
+              iconMarkup: railIcon("pin", ACTION_ICON_SIZE),
+              label: `Unpin ${options.baseLabel} from this project`,
+              extra: "project-rail-shortcut-unpin absolute right-1",
+              onclick: () => options.onUnpin?.(),
+            }),
         options.onMenu === null
           ? null
-          : m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "project-rail-shortcut-menu absolute flex h-5 w-5 shrink-0 cursor-pointer items-center " +
-                  "justify-center rounded text-faint hover:text-primary focus-visible:opacity-100 " +
-                  "group-hover:opacity-100 " +
-                  (hasUnpin ? "right-6 " : "right-1 ") +
-                  (options.isMenuOpen ? "opacity-100" : "opacity-0"),
-                "aria-label": `Shortcut options for ${options.baseLabel}`,
-                onclick: (event: MouseEvent) => {
-                  event.stopPropagation();
-                  options.onMenu?.(event);
-                },
-              },
-              m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
-            ),
+          : railAction({
+              iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
+              label: `Shortcut options for ${options.baseLabel}`,
+              isRevealed: options.isMenuOpen,
+              extra: "project-rail-shortcut-menu absolute " + (hasUnpin ? "right-6" : "right-1"),
+              onclick: (event) => options.onMenu?.(event),
+            }),
       ],
     );
   }
@@ -1264,53 +1286,31 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           // by construction, with no registry entry to record an unpin
           // against -- so only a project's rows carry the toggle.
           expanded && !isEverythingView(attrs.activeViewId)
-            ? m(
-                "button",
-                {
-                  type: "button",
-                  class:
-                    "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
-                    "text-faint opacity-0 hover:bg-fill-hover hover:text-primary " +
-                    "focus-visible:opacity-100 group-hover:opacity-100",
-                  "aria-label": `Unpin ${label}`,
-                  ...hoverTooltipAttrs(
-                    "Unpins it here only. It keeps running, and stays in every other project showing it.",
-                    "right",
-                  ),
-                  onclick: (event: MouseEvent) => {
-                    // The row underneath opens the app; the pin toggle must not.
-                    event.stopPropagation();
-                    attrs.onSetAppPinned(app, false);
-                  },
-                },
-                m.trust(railIcon("pin", ACTION_ICON_SIZE)),
-              )
+            ? railAction({
+                iconMarkup: railIcon("pin", ACTION_ICON_SIZE),
+                label: `Unpin ${label}`,
+                tooltip: "Unpins it here only. It keeps running, and stays in every other project showing it.",
+                tooltipPlacement: "right",
+                extra: "project-rail-pin",
+                onclick: () => attrs.onSetAppPinned(app, false),
+              })
             : null,
           // The app's own verbs -- Refresh, Share, Quit -- reached the same way
           // a tab-list row's are. Absent when the row is not in this view's
           // members, since there is then no object here to act on.
           expanded && memberRow !== null
-            ? m(
-                "button",
-                {
-                  type: "button",
-                  class:
-                    "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-faint " +
-                    "hover:text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
-                    (isMenuOpenHere ? "opacity-100" : "opacity-0"),
-                  "aria-label": `Actions for ${label}`,
-                  onclick: (event: MouseEvent) => {
-                    // The row underneath opens the app; the kebab must not.
-                    event.stopPropagation();
-                    if (isMenuOpenHere) {
-                      openMenu = null;
-                      return;
-                    }
-                    openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: appRef, shortcutAppName: app.name });
-                  },
+            ? railAction({
+                iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
+                label: `Actions for ${label}`,
+                isRevealed: isMenuOpenHere,
+                onclick: (event) => {
+                  if (isMenuOpenHere) {
+                    openMenu = null;
+                    return;
+                  }
+                  openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: appRef, shortcutAppName: app.name });
                 },
-                m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
-              )
+              })
             : null,
         ],
       ),
@@ -1524,50 +1524,29 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         // home: an object leaves it only by being destroyed.
         isEverythingView(attrs.activeViewId) || hasMenu
           ? null
-          : m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "project-rail-remove flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
-                  "text-faint hover:bg-fill-hover hover:text-primary " +
-                  "focus-visible:opacity-100 group-hover:opacity-100 opacity-0",
-                "aria-label": `Remove ${row.label} from this project`,
-                ...hoverTooltipAttrs(
-                  "Removes it from this project only. It keeps running, and stays in Everything and in any " +
-                    "other project showing it.",
-                  "right",
-                ),
-                onclick: (event: MouseEvent) => {
-                  // The row underneath opens the object; this must not.
-                  event.stopPropagation();
-                  attrs.onRemoveFromView(row);
-                },
-              },
-              m.trust(railIcon("remove-from-view", ACTION_ICON_SIZE)),
-            ),
+          : railAction({
+              iconMarkup: railIcon("remove-from-view", ACTION_ICON_SIZE),
+              label: `Remove ${row.label} from this project`,
+              tooltip:
+                "Removes it from this project only. It keeps running, and stays in Everything and in any " +
+                "other project showing it.",
+              tooltipPlacement: "right",
+              extra: "project-rail-remove",
+              onclick: () => attrs.onRemoveFromView(row),
+            }),
         hasMenu
-          ? m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-faint " +
-                  "hover:text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
-                  (isMenuOpenHere ? "opacity-100" : "opacity-0"),
-                "aria-label": `Actions for ${row.label}`,
-                onclick: (event: MouseEvent) => {
-                  // The row underneath opens the object; the kebab must not.
-                  event.stopPropagation();
-                  if (isMenuOpenHere) {
-                    openMenu = null;
-                    return;
-                  }
-                  openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: row.ref });
-                },
+          ? railAction({
+              iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
+              label: `Actions for ${row.label}`,
+              isRevealed: isMenuOpenHere,
+              onclick: (event) => {
+                if (isMenuOpenHere) {
+                  openMenu = null;
+                  return;
+                }
+                openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: row.ref });
               },
-              m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
-            )
+            })
           : null,
       ],
     );
@@ -1735,23 +1714,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     onOpen: (project: ProjectInfo) => void,
     isStacked: boolean,
   ): m.Vnode {
-    return m(
-      "button",
-      {
-        type: "button",
-        class:
-          "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-faint opacity-0 " +
-          "hover:bg-fill-hover hover:text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
-          (isStacked ? "absolute inset-0" : ""),
-        "aria-label": `Edit ${project.name}`,
-        ...hoverTooltipAttrs(`Edit ${project.name}`),
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
-          onOpen(project);
-        },
-      },
-      m.trust(icon("edit", { size: ACTION_ICON_SIZE, strokeWidth: 1.75 })),
-    );
+    return railAction({
+      iconMarkup: icon("edit", { size: ACTION_ICON_SIZE, strokeWidth: 1.75 }),
+      label: `Edit ${project.name}`,
+      tooltip: `Edit ${project.name}`,
+      extra: isStacked ? "absolute inset-0" : "",
+      onclick: () => onOpen(project),
+    });
   }
 
   /**

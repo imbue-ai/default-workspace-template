@@ -7,9 +7,11 @@ import { TEXT_BODY_SIZE } from "./typography";
  * carries it (Button). Variants: primary | secondary | ghost | destructive |
  * ghost-destructive (quiet destructive: danger text, no fill) | inverse |
  * ghost-inverse (quiet on a dark overlay: light glyph, white-tint hover) |
- * stop (the composer's slate interrupt fill). Options: sm, icon (square),
- * round (circle), selected (accent-tint pressed look -- an icon ghost with
- * `selected` is the on/off toggle recipe), readonly (non-interactive without
+ * stop (the composer's slate interrupt fill). Options: sm, xs (icon-only
+ * 20px, the smallest step -- the hover-revealed micro-controls layered over
+ * rail rows), icon (square), round (circle), selected (accent-tint pressed
+ * look -- an icon ghost with `selected` is the on/off toggle recipe),
+ * readonly (non-interactive without
  * `disabled`: resting look, default cursor, no hover/press, and the element
  * stays enabled so a hover tooltip can explain why -- the component marks it
  * aria-disabled for assistive tech), block (full width), extra (appended
@@ -33,6 +35,9 @@ export type ButtonVariant =
 
 export interface ButtonOptions {
   sm?: boolean;
+  /** The smallest step, icon-only (20px box). Wins over `sm`; requires `icon`
+   *  (there is no xs text button -- the recipe explodes if asked for one). */
+  xs?: boolean;
   icon?: boolean;
   round?: boolean;
   selected?: boolean;
@@ -92,6 +97,7 @@ export const BTN_SELECTED = "bg-accent-light text-accent border-accent";
 export function buttonClass(variant: ButtonVariant = "secondary", options: ButtonOptions = {}): string {
   const {
     sm = false,
+    xs = false,
     icon = false,
     round = false,
     selected = false,
@@ -99,10 +105,15 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
     block = false,
     extra = "",
   } = options;
+  if (xs && !icon) {
+    throw new Error("buttonClass: xs is an icon-only size (pass icon: true)");
+  }
   const size = icon
-    ? sm
-      ? "h-[28px] w-[28px] p-0"
-      : "h-[34px] w-[34px] p-0"
+    ? xs
+      ? "h-5 w-5 p-0"
+      : sm
+        ? "h-[28px] w-[28px] p-0"
+        : "h-[34px] w-[34px] p-0"
     : sm
       ? "h-[28px] px-3"
       : "h-[34px] px-3.5";
@@ -126,12 +137,12 @@ interface ButtonAttrs extends m.Attributes, ButtonOptions {
   variant?: ButtonVariant;
 }
 
-const OWN_KEYS = ["variant", "sm", "icon", "round", "selected", "readonly", "block", "extra"] as const;
+const OWN_KEYS = ["variant", "sm", "xs", "icon", "round", "selected", "readonly", "block", "extra"] as const;
 
 export function Button(): m.Component<ButtonAttrs> {
   return {
     view(vnode) {
-      const { variant = "secondary", sm, icon, round, selected, readonly, block, extra } = vnode.attrs;
+      const { variant = "secondary", sm, xs, icon, round, selected, readonly, block, extra } = vnode.attrs;
       // The passthrough spread comes after `type` (so a caller can still opt
       // into type="submit" if a form ever appears) and after the readonly
       // aria-disabled default (so an explicit caller value wins).
@@ -139,7 +150,7 @@ export function Button(): m.Component<ButtonAttrs> {
         "button",
         {
           type: "button",
-          class: buttonClass(variant, { sm, icon, round, selected, readonly, block, extra }),
+          class: buttonClass(variant, { sm, xs, icon, round, selected, readonly, block, extra }),
           ...(readonly === true ? { "aria-disabled": "true" } : null),
           ...splitAttrs(vnode.attrs, OWN_KEYS),
         },
