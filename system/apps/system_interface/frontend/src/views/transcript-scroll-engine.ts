@@ -160,11 +160,6 @@ export interface TranscriptScrollEngine {
   // Custom scrollbar contract (see TranscriptScrollbar).
   scrollbarEngage(): void;
   scrollbarMoveTo(fraction: number): void;
-  /** Pointer released: the thumb goes back to rendering the LIVE viewport
-   *  position (the frozen mapping stays for future scrubs). While dragging the
-   *  thumb tracks the pointer; after release that would freeze it wherever the
-   *  pointer let go -- showing "at the bottom" while the content is not. */
-  scrollbarRelease(): void;
   getScrollbarRenderState(): ScrollbarRenderState;
 }
 
@@ -1607,13 +1602,6 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           planFill();
         }
       }
-      m.redraw();
-    },
-
-    scrollbarRelease(): void {
-      lastActivityAtMs = performance.now();
-      lastScrollbarFraction = null;
-      frozenThumbSizeFraction = null;
       m.redraw();
     },
 
