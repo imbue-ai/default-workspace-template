@@ -1317,3 +1317,32 @@ numbering count around a literal.
 Save on the API-key screen is disabled until its flow exists. A paste screen renders before the
 mint lands -- deliberately, since there is nothing to wait for -- and submitting in that window
 returned silently, so the button did nothing with no spinner and no error to say why.
+
+# Orphaned sign-in processes are reaped at boot
+
+A supervisord restart, an OOM kill or a container stop mid-sign-in leaves the pexpect child
+reparented to PID 1 and still running. It is not merely garbage: it still holds the account
+folder open and can still WRITE a credential into it -- into a folder the boot sweep is about to
+delete, or over one whose parked backup the sweep is about to restore. Folder sweeping never
+covered it. Reaped before the sweep, for that ordering.
+
+Matched on the command AND the environment, because either alone is wrong: a chat agent is
+scoped to its account by the very same variable, so environment alone would kill the user's own
+agents, and someone running `codex login` by hand has the same argv, so command alone would kill
+that. The command set is derived from the lane table rather than listed, so a new PTY method
+cannot be forgotten.
+
+# Three races closed
+
+`mint_account_dir` takes the index lock, which `_index_lock`'s own docstring already claimed
+protected it. Only the mkdir is inside: the flow that fills the folder runs for minutes and
+holding a cross-process lock across it would wedge everything else.
+
+`startFlow` carries a generation. The server is single-flight and displaces the older flow, so
+two starts resolving out of order left the module pointing at a session the server had already
+forgotten -- every poll 404ing and the modal reporting a replaced sign-in while a live flow
+existed.
+
+"No accounts" and "the account list has not loaded yet" are told apart. Both read as zero, and
+only one means "sign in first" -- so clicking Chat in the moment before the boot fetch landed
+sent someone who has providers to the chooser instead of starting their chat.

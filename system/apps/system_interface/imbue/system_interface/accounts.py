@@ -240,9 +240,15 @@ def mint_account_dir(home: Path | None = None) -> tuple[str, Path]:
     """
     account_id = uuid.uuid4().hex
     path = account_dir(account_id, home)
-    # 0700: the CLIs drop `.credentials.json` / `auth.json` straight in here, and mngr uses
-    # the same mode for the per-agent directories one level over.
-    path.mkdir(parents=True, exist_ok=False, mode=0o700)
+    # Under the index lock, which is what `_index_lock`'s own docstring says protects this: a
+    # mint that lands while `reconcile` is walking the root has its brand-new, not-yet-committed
+    # folder swept as debris. Only the mkdir is inside -- the flow that fills the folder runs
+    # for minutes afterwards and holding a cross-process lock across it would wedge everything
+    # else that touches the index.
+    with _index_lock(home):
+        # 0700: the CLIs drop `.credentials.json` / `auth.json` straight in here, and mngr uses
+        # the same mode for the per-agent directories one level over.
+        path.mkdir(parents=True, exist_ok=False, mode=0o700)
     return account_id, path
 
 

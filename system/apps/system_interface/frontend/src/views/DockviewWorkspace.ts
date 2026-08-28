@@ -130,7 +130,7 @@ import {
   setMemberTitle,
 } from "../models/MemberTitles";
 import { createBrowser } from "../models/Browsers";
-import { getAccounts, getSelectedAccount, openProviderChooser } from "../models/Providers";
+import { areAccountsLoaded, getAccounts, getSelectedAccount, loadAccounts, openProviderChooser } from "../models/Providers";
 import { appServiceDisplayName, browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
 import {
   applyMemberLastUsedChange,
@@ -3317,21 +3317,35 @@ function openTabOfTypeInGroup(
     // rather than starting a chat that cannot take a turn. Auth lives entirely in
     // accounts now -- the shared settings-env writer is gone and `~/.claude` is left
     // alone -- so "no accounts" really does mean no credential.
-    if (target.accountId === "" && getAccounts().length === 0) {
-      releaseLauncherCreate(launcherPanelId);
-      // They asked for a chat and had to sign in on the way, so finish what they asked for
-      // rather than leaving them back on the launcher with a provider and no chat.
-      openProviderChooser({
-        onSignedIn: (accountId) => {
-          void openNewChat(targetGroup, launcherPanelId, accountId).finally(() => m.redraw());
-        },
+    const startOrDivert = (): Promise<void> | null => {
+      if (target.accountId === "" && getAccounts().length === 0) {
+        releaseLauncherCreate(launcherPanelId);
+        // They asked for a chat and had to sign in on the way, so finish what they asked for
+        // rather than leaving them back on the launcher with a provider and no chat.
+        openProviderChooser({
+          onSignedIn: (accountId) => {
+            void openNewChat(targetGroup, launcherPanelId, accountId).finally(() => m.redraw());
+          },
+        });
+        return null;
+      }
+      return openNewChat(targetGroup, launcherPanelId, target.accountId).finally(() => {
+        releaseLauncherCreate(launcherPanelId);
+        m.redraw();
       });
-      return null;
+    };
+    // "No accounts" and "the boot fetch has not landed yet" both read as zero, and only one of
+    // them means "sign in first". Deferring the decision costs a click nothing -- the launcher
+    // already shows its Starting... state -- and diverting on the other one sends someone who
+    // has providers to the chooser instead of starting their chat.
+    if (!areAccountsLoaded()) {
+      return loadAccounts()
+        .catch(() => undefined)
+        .then(() => {
+          void startOrDivert();
+        });
     }
-    return openNewChat(targetGroup, launcherPanelId, target.accountId).finally(() => {
-      releaseLauncherCreate(launcherPanelId);
-      m.redraw();
-    });
+    return startOrDivert();
   }
   if (target.kind === "terminal") {
     return openNewTerminal(targetGroup)
@@ -4236,6 +4250,9 @@ export async function startProjectChat(projectId: string): Promise<void> {
   // A new project's starter chat needs an account like any other, and a workspace with none
   // would otherwise fail the create and surface it as a blocking alert on every project
   // creation. The project itself is already made; the chat waits for a provider.
+  if (!areAccountsLoaded()) {
+    await loadAccounts().catch(() => undefined);
+  }
   if (getAccounts().length === 0) {
     openProviderChooser({
       onSignedIn: () => {

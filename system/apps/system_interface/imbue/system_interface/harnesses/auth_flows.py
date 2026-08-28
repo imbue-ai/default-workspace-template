@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import signal
 import re
 import threading
 import uuid
@@ -55,6 +56,7 @@ from imbue.system_interface.harnesses.lanes import EofPolicy
 from imbue.system_interface.harnesses.lanes import Lane
 from imbue.system_interface.harnesses.lanes import PasteMethod
 from imbue.system_interface.harnesses.lanes import PasteSink
+from imbue.system_interface.harnesses.lanes import LANES
 from imbue.system_interface.harnesses.lanes import PtyMethod
 from imbue.system_interface.harnesses.lanes import Scrape
 from imbue.system_interface.harnesses.lanes import Submit
@@ -735,6 +737,62 @@ class AuthFlowService:
         session.timer = threading.Timer(seconds, self._expire, args=(session, seconds))
         session.timer.daemon = True
         session.timer.start()
+
+
+def _auth_command_signatures() -> set[tuple[str, ...]]:
+    """Every (binary, *argv) this service ever spawns, derived from the lane table.
+
+    Derived rather than listed so a new PTY method cannot be forgotten here.
+    """
+    signatures: set[tuple[str, ...]] = set()
+    for lane in LANES:
+        for method in lane.methods:
+            if isinstance(method, PtyMethod):
+                signatures.add((_binary_for(lane), *method.argv))
+    return signatures
+
+
+def reap_orphaned_auth_processes(home: Path | None = None) -> int:
+    """Kill sign-in CLIs left running by a previous process. Returns how many.
+
+    A supervisord restart, an OOM kill or a container stop mid-sign-in leaves the pexpect child
+    reparented to PID 1 and still running. It is not merely garbage: it still holds the account
+    folder open and can still WRITE a credential into it -- into a folder the boot sweep has
+    just deleted, or over one whose parked backup was just restored. Folder sweeping does not
+    cover it, so this does.
+
+    Matched on the command AND the environment, because either alone is wrong. A chat agent is
+    scoped to an account by exactly the same variable, so environment alone would kill the
+    user's own agents; and a developer running `codex login` by hand in a terminal has the same
+    argv, so command alone would kill that. Only something that is one of OUR spawns, pointed at
+    a folder under OUR accounts root, matches both.
+
+    Never raises. This runs at boot and nothing here is worth refusing to start over.
+    """
+    signatures = _auth_command_signatures()
+    scoping_values = {f"={accounts.accounts_root(home)}"}
+    reaped = 0
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = tuple(entry.joinpath("cmdline").read_bytes().decode().split("\0")[:-1])
+            if not cmdline:
+                continue
+            # argv[0] can be an absolute path; compare on the basename.
+            signature = (Path(cmdline[0]).name, *cmdline[1:])
+            if signature not in signatures:
+                continue
+            environ = entry.joinpath("environ").read_bytes().decode(errors="replace")
+            if not any(value in environ for value in scoping_values):
+                continue
+            os.kill(int(entry.name), signal.SIGKILL)
+            reaped += 1
+            logger.warning("Reaped orphaned sign-in process {} ({})", entry.name, " ".join(cmdline))
+        except (OSError, ValueError, UnicodeDecodeError):
+            # The process exited under us, or is not ours to read. Either way, not our problem.
+            continue
+    return reaped
 
 
 def _binary_for(lane: Lane) -> str:
