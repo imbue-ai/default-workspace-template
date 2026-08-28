@@ -357,7 +357,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         ),
       ),
       confirmingDelete !== null
-        ? m("p", { class: css.HINT }, "Chats already running on it will not be able to take another turn.")
+        ? m(
+            "p",
+            { class: css.HINT },
+            "New chats can't be started on it. A chat already running may keep going until it " +
+              "next restarts, since its harness is already holding the credential.",
+          )
         : null,
     ]);
   }

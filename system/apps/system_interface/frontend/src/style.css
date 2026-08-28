@@ -1052,8 +1052,10 @@ body {
   }
 }
 
-/* The switch that turns it over. Lives in the under-bar, OUTSIDE the card -- inside, it would
-   rotate away with the face it turns and the flip would be one-way. */
+/* The switch that turns the card over. Only the row around it is styled here -- the switch
+   itself is the shared one from `modelCardStyles`, at its own size. Overriding that size with
+   CSS is what broke it: the knob's offset comes from a Tailwind utility, so a `transform` here
+   simply lost to it and left the knob sitting outside the track. */
 .terminal-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -1067,27 +1069,9 @@ body {
   font-size: 0.8125rem;
   transition: color 120ms;
 }
-.terminal-view-toggle:hover {
+.terminal-view-toggle:hover,
+.terminal-view-toggle[aria-checked="true"] {
   color: var(--color-text-primary);
-}
-.terminal-view-toggle[aria-checked="true"] .terminal-view-toggle-label {
-  color: var(--color-text-primary);
-}
-/* The under-bar is a tighter row than the combo card, so the shared switch shrinks here: the
-   track and knob keep their proportions, the whole thing just scales down. */
-.terminal-view-toggle-track {
-  height: 18px;
-  width: 32px;
-}
-.terminal-view-toggle-knob {
-  height: 14px;
-  width: 14px;
-}
-.terminal-view-toggle[aria-checked="true"] .terminal-view-toggle-knob {
-  transform: translateX(16px);
-}
-.terminal-view-toggle[aria-checked="false"] .terminal-view-toggle-knob {
-  transform: translateX(2px);
 }
 
 /* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its

@@ -435,9 +435,13 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                   [
                     m("span", { class: css.FLYOUT_ROW_NAME }, row.provider),
                     m("span", { class: css.FLYOUT_ROW_SUB }, `(${row.harness_label})`),
-                    isCurrent ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 }))) : null,
                   ],
                 ),
+                // Both are siblings of the row button, pinned to its right edge: the tick
+                // outermost and the removal control just left of it, so neither ever moves.
+                isCurrent
+                  ? m("span", { class: css.FLYOUT_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+                  : null,
                 removalControl(row, arming),
               ]);
             }),

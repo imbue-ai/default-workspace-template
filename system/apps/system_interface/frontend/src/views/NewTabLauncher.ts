@@ -508,11 +508,13 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
                       [
                         m("span", { class: css.FLYOUT_ROW_NAME }, candidate.provider),
                         m("span", { class: css.FLYOUT_ROW_SUB }, `(${candidate.harness_label})`),
-                        isSelected
-                          ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
-                          : null,
                       ],
                     ),
+                    // Siblings of the row button, pinned to its right edge: the tick outermost
+                    // and the removal control just left of it, so neither ever moves.
+                    isSelected
+                      ? m("span", { class: css.FLYOUT_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+                      : null,
                     m(
                       "button",
                       {

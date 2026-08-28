@@ -1053,3 +1053,22 @@ back on one shared credential.
 `~/.claude/settings.json` written by a single sign-in modal. Corrected: a chat's credential lives
 in its account folder, one env var per harness names it, and the shared path is now only the
 ambient default a bare `claude` falls back to.
+
+# Corrections
+
+The Terminal View switch is the shared one from the combo card, unmodified. It was being scaled
+down here with CSS that set `transform` on a knob whose offset already comes from a Tailwind
+`translate-x-[22px]` utility; the utility won, and a 22px throw in a 32px track put the knob
+outside it.
+
+On a provider row, the tick is pinned to the right edge and the sign-out control sits to its
+LEFT. The mockup slides the tick aside on hover to let the bin take the edge -- but the tick says
+which provider this chat runs on, and that does not change because the pointer passed over the
+row.
+
+Removing a provider says what it actually does. It takes the credential off disk; it does not
+reach into a process that already read it, so a chat already running can keep answering until it
+next restarts. The old wording promised it "will not be able to take another turn", which is
+false for exactly the case the user is looking at. Killing those agents to make the old sentence
+true would be worse: it destroys a chat they may still be reading, to enforce a rule they can be
+told.
