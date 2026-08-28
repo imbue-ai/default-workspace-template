@@ -310,20 +310,31 @@ class AuthFlowService:
                 accounts.save_reauth_backup(account_id, session.cleared_credentials, self._home)
                 for path in session.cleared_credentials:
                     path.unlink(missing_ok=True)
+            # `finally`, not `except Exception`: the credential is already unlinked by here, so
+            # what matters is that the restore cannot be MISSED, and a catch-all buys nothing a
+            # finally does not. A missing binary raises pexpect.ExceptionPexpect and a CLI that
+            # already exited raises OSError from send(); neither is a FlowError, so without this
+            # the credential stayed deleted with no restore, no teardown and no deadline -- the
+            # account still advertised, its chats failing, the session wedged PENDING with no
+            # timer to expire it.
+            #
+            # The exception propagates either way. A FlowError is the CLI having said no, and is
+            # already reported; anything else is a bug, and a 500 naming it is more use than a
+            # tidy message that hides it.
+            unwound = False
             try:
                 url, code = self._drive_locked(session, method, account_path)
+                unwound = True
             except FlowError:
-                # Already handled: `_drive_locked`'s own failure paths restore and tear down.
+                # Already unwound: `_drive_locked`'s own failure paths restore and tear down.
+                # Marked so the finally does not do it a second time.
+                unwound = True
                 raise
-            except Exception as e:
-                # Anything else -- a missing binary raises pexpect.ExceptionPexpect, a CLI that
-                # already exited raises OSError from send() -- would otherwise leave the
-                # credential unlinked with no restore, no teardown and no deadline: the account
-                # still advertised, its chats failing, the session wedged PENDING forever.
-                self._unwind_credentials_locked(session)
-                self._teardown_locked(session, keep_folder=not minted)
-                self._session = None
-                raise FlowError(f"could not start the {lane.provider_name} sign-in: {e}") from e
+            finally:
+                if not unwound:
+                    self._unwind_credentials_locked(session)
+                    self._teardown_locked(session, keep_folder=not minted)
+                    self._session = None
             self._arm_deadline_locked(session, method.flow_deadline_s)
             return FlowStart(
                 flow_id=session.flow_id,
