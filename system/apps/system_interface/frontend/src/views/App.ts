@@ -48,10 +48,7 @@ export function App(): m.Component {
         "div",
         // h-screen is the full viewport: inside the minds desktop shell this
         // app renders in a sandboxed iframe the shell already places below its
-        // title bar (WorkspaceFrame's .workspace-surface starts at top: 38px),
-        // so there is no title-bar height to subtract here. (A vestigial
-        // --minds-titlebar-height calc + spacer div once did that subtraction,
-        // but nothing ever set the variable inside this iframe.)
+        // title bar, so there is no title-bar height to subtract here.
         { class: "app-layout flex h-screen flex-col" },
         [
           // The whole content area is one grey surface with the rail sitting on
