@@ -224,9 +224,12 @@ def _create_chat_through_ui(page: Page, base_url: str) -> None:
     page.wait_for_selector(".dockview-add-tab-button", timeout=_RECOVERY_TIMEOUT_MS)
     page.locator(".dockview-add-tab-button").first.click()
     page.wait_for_selector(".new-tab-launcher", timeout=_RECOVERY_TIMEOUT_MS)
-    # Anchored: ``has_text`` is a case-insensitive substring match, so a bare
-    # "chat" would also match whatever the provider picker beside the tile says.
-    page.locator(".new-tab-launcher-tile:visible", has_text=re.compile(r"^New chat$")).click()
+    # Anchored, and it has to stay anchored: ``has_text`` is a case-insensitive SUBSTRING match,
+    # so an unanchored "Chat" would also match whatever the provider picker beside the tile says.
+    # Anchoring on the label's exact text is also what makes this break loudly when the label
+    # changes -- it once cost a suite three 30-second action timeouts, which read as the whole
+    # run being slow rather than as a stale selector.
+    page.locator(".new-tab-launcher-tile:visible", has_text=re.compile(r"^Chat$")).click()
 
 
 @pytest.mark.tmux
