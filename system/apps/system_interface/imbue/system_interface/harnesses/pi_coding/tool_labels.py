@@ -9,8 +9,6 @@ and argument shapes (verified live: ``read {path,limit}``, ``bash {command}``, .
 
 from typing import Any
 
-from tk_command_parsing.parser import parse_command
-
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.harnesses.tool_labels import GENERIC_CAPTION
 from imbue.system_interface.harnesses.tool_labels import basename
@@ -19,6 +17,7 @@ from imbue.system_interface.harnesses.tool_labels import mcp_caption
 from imbue.system_interface.harnesses.tool_labels import parse_input_preview
 from imbue.system_interface.harnesses.tool_labels import quoted
 from imbue.system_interface.harnesses.tool_labels import shorten
+from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
 
 # pi's built-in tool names are lowercase; title-case them for the header so it reads
 # like claude's ("Tool: Read"). A tool absent from this table falls back to its raw name.
@@ -69,7 +68,6 @@ _TARGET_PLAIN_KEYS = ("claim", "description")
 # tk lifecycle verbs whose Bash command must survive input truncation, so the chat
 # progress view can read the ``--step`` titles / close summaries out of the command
 # (mirrors the claude/codex parsers' set).
-_TK_LIFECYCLE_VERBS = frozenset({"create", "start", "close"})
 
 # pi's shell tool -- the one whose command can be a tk lifecycle op.
 _BASH_TOOL_NAME = "bash"
@@ -130,12 +128,20 @@ def keeps_full_tool_input(tool_name: str, raw_input: str) -> bool:
     merely mentioned inside another command's quoted argument is not mistaken for a real
     lifecycle call. ``raw_input`` is the untruncated ``{"command": ...}`` JSON.
     """
+    command = shell_command(tool_name, raw_input)
+    return command is not None and is_tk_lifecycle_anywhere(command)
+
+
+@pure
+def shell_command(tool_name: str, raw_input: str) -> str | None:
+    """The shell command this tool call runs, or None if it is not a shell call.
+
+    The ONE question each harness answers for itself. Whether that command is a tk lifecycle
+    invocation is decided centrally (``tool_output.is_pure_tk_lifecycle_command`` for the hide
+    rule, ``is_tk_lifecycle_anywhere`` for the truncation exemption), so the rules live in one
+    place and cannot drift between harnesses.
+    """
     if tool_name != _BASH_TOOL_NAME:
-        return False
+        return None
     command = parse_input_preview(raw_input).get("command")
-    if not isinstance(command, str):
-        return False
-    parsed = parse_command(command)
-    if parsed is None:
-        return False
-    return any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments)
+    return command if isinstance(command, str) else None
