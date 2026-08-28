@@ -411,14 +411,12 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 
 # Applies to mngr commands run from the workspace root INSIDE the container
 # (project config is cwd-based), where `local` is the only enabled provider.
-# The in-container `mngr observe` re-polls full local discovery on this
-# cadence purely as a reconciliation sweep: creates/destroys/renames reach it
-# immediately through the incremental discovery log, and a local agent
-# process dying is caught by observe's PID watchers, so the sweep only
-# catches out-of-band changes (e.g. a tmux session killed by hand). 60s
-# instead of the 30s default halves the sweep's idle cost (file reads plus
-# tmux forks, ~3x as expensive under gVisor) without touching any
-# interactive-latency path.
+# The in-container `mngr observe` discovery poll is purely a reconciliation
+# sweep -- creates/destroys/renames arrive through the incremental discovery
+# log, and local agent process death through observe's PID watchers -- so it
+# only catches out-of-band changes (e.g. a tmux session killed by hand) and
+# can run rarely: each poll costs file reads plus tmux forks, which is what
+# makes it matter at idle (~3x as expensive under gVisor).
 [providers.local]
 discovery_poll_interval_seconds = 60.0
 
