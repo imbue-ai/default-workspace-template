@@ -328,7 +328,9 @@ export function openNewTiles(): readonly LaunchTile[] {
   // always renders blank.
   const account = getSelectedAccount();
   return [
-    { target: { kind: "chat", accountId: account?.id ?? "" }, label: "New chat" },
+    // "Chat", not "New chat": the section above already says OPEN NEW, and the other three are
+    // bare nouns. The shorter label is also what lets this tile take an equal share of the row.
+    { target: { kind: "chat", accountId: account?.id ?? "" }, label: "Chat" },
     { target: { kind: "files" }, label: "File viewer" },
     { target: { kind: "browser" }, label: "Browser" },
     { target: { kind: "terminal" }, label: "Terminal" },
@@ -784,13 +786,12 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                 {
                   key: tile.label,
                   // The chat control carries the frame its own button used to, so the
-                  // provider sits INSIDE it: same height, border, radius and type size as
-                  // the other three, one hairline divider between the two halves. It is
-                  // wider because it holds more, but nothing else about it differs -- the
-                  // row still reads as one set rather than a button with a widget stuck on.
+                  // provider sits INSIDE it: same height, border, radius, type size and WIDTH
+                  // as the other three, with one hairline divider between the two halves. It
+                  // used to take 1.7 shares to fit both, which made the row read as one
+                  // important tile and three afterthoughts.
                   class:
-                    "border-border flex h-9 items-stretch overflow-hidden rounded-lg border " +
-                    (isChatTile ? "min-w-0 flex-[1.7]" : "min-w-0 flex-1") +
+                    "border-border flex h-9 min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border " +
                     (isDisabled ? " text-text-faint" : " text-text-primary"),
                 },
                 [
