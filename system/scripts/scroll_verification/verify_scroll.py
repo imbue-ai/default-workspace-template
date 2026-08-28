@@ -475,6 +475,48 @@ def main():
             expand_checks,
         )
 
+        # --- H: dragging the thumb hard to an edge lands EXACTLY on that edge ---
+        # Runs with the window parked at the top (post-E4), so the tail is
+        # unloaded when the bottom drag begins and vice versa -- the edge-intent
+        # completion has real work to do in both directions.
+        el_box = page.evaluate(
+            "(() => { const e = document.querySelector('.transcript-scrollbar'); if (!e) return null; const r = e.getBoundingClientRect(); return {x: r.x + r.width / 2, top: r.y, height: r.height}; })()"
+        )
+        if el_box:
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.5)
+            page.mouse.down()
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] + 60, steps=8)
+            page.mouse.up()
+            state = debug = None
+            for _ in range(40):
+                page.wait_for_timeout(250)
+                state = page.evaluate(GET_STATE)
+                debug = page.evaluate("window.__scrollDebugState()")
+                if state["bottomGap"] < 45 and debug["positionKind"] == "FOLLOW":
+                    break
+            check(
+                "H1 thumb drag to the very bottom lands at the true tail in FOLLOW",
+                state["bottomGap"] < 45
+                and debug["positionKind"] == "FOLLOW"
+                and debug["extent"]["endIndex"] >= debug["totalEvents"],
+                (state["bottomGap"], debug["positionKind"], debug["extent"]),
+            )
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.5)
+            page.mouse.down()
+            page.mouse.move(el_box["x"], el_box["top"] - 60, steps=8)
+            page.mouse.up()
+            for _ in range(40):
+                page.wait_for_timeout(250)
+                state = page.evaluate(GET_STATE)
+                debug = page.evaluate("window.__scrollDebugState()")
+                if state["scrollTop"] <= 1 and debug["extent"]["firstIndex"] == 0:
+                    break
+            check(
+                "H2 thumb drag to the very top lands at the true beginning",
+                state["scrollTop"] <= 1 and debug["extent"]["firstIndex"] == 0,
+                (state["scrollTop"], debug["extent"]),
+            )
+
         # --- F: persistence across reload ---
         page.mouse.wheel(0, 3000)
         page.wait_for_timeout(200)
