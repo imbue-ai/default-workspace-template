@@ -8,6 +8,7 @@ import signal
 import tomllib
 import threading
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -307,11 +308,11 @@ def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    probed_targets: list[tuple[str, str]] = []
+    probed_targets: list[tuple[str, str, str]] = []
 
-    def fake_prober(program: str, url: str) -> bool:
-        probed_targets.append((program, url))
-        return program == "files"
+    def fake_prober(targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:
+        probed_targets.extend(targets)
+        return {name: program == "files" for name, program, _url in targets}
 
     manager = AgentManager.build(broadcaster, liveness_prober=fake_prober)
     with manager._lock:
@@ -333,8 +334,8 @@ def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
     serialized_by_name = {app["name"]: app for app in apps_updated_events[0]["apps"]}
     assert serialized_by_name["files"]["is_running"] is True
     assert serialized_by_name["web"]["is_running"] is False
-    assert ("files", "http://localhost:8300") in probed_targets
-    assert ("", "http://localhost:8000") in probed_targets
+    assert ("files", "files", "http://localhost:8300") in probed_targets
+    assert ("web", "", "http://localhost:8000") in probed_targets
 
     # A second pass with the same answers changes nothing, so nothing is broadcast.
     manager.refresh_app_liveness()
