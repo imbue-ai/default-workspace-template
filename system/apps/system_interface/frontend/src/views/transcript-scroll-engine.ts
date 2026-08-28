@@ -51,7 +51,13 @@ import {
   type RestoredScrollState,
 } from "../models/transcriptScroll/persistence";
 import { buildRowEventIndexes, rowIndexForEventIndex } from "../models/transcriptScroll/rowEventIndex";
-import { computeLiveMapping, computeThumb, resolveTrackFraction } from "../models/transcriptScroll/scrollbarMap";
+import {
+  computeLiveMapping,
+  computeThumb,
+  mappingPhysicalExtent,
+  resolveTrackFraction,
+  resolveTrackFractionToIndex,
+} from "../models/transcriptScroll/scrollbarMap";
 import {
   computeObservedPxPerEvent,
   computeSpacerUpdate,
@@ -245,6 +251,12 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // apply its completion (clearing the single-flight guard out from under the
   // new agent's fill, or landing the old agent's jump) after the switch.
   let fillEpoch = 0;
+  // A landed fill that changed nothing (a page fully deduped away, a failed
+  // fetch, a stale cursor) must not be refired verbatim: the planner would loop
+  // the identical request forever. Remember the fruitless action and the data
+  // version it ran against; the same plan is skipped until the data moves.
+  let noProgressActionKey: string | null = null;
+  let noProgressRenderVersion = -1;
   /** Scrollbar target (or restore target) in a virtual region awaiting its window. */
   let pendingJumpIndex: number | null = null;
   /** A landed at-offset fetch whose JUMPED_TO_INDEX dispatch awaits fresh geometry. */
@@ -286,6 +298,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
             scrollbarKind: scrollbarState.kind,
             extent: extent(),
             totalEvents: dataSource.getTotalEvents(),
+            capEvents: PHYSICAL_CAP_EVENTS,
             spacerTopPx,
             spacerBottomPx,
             estimatePxPerEvent,
@@ -709,12 +722,19 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     if (spacerIndex !== null) {
       return { kind: "index", index: spacerIndex };
     }
-    const anchorIndex = currentAnchorEventIndex();
+    // The fallback matters: right after a jump's window replace the anchor row
+    // is briefly gone, and a plain lookup would read that as "focus the tail" --
+    // sending the planner off to replace the fresh window with a tail window,
+    // which discards the jump and churns fetch/evict cycles indefinitely.
+    const anchorIndex = currentAnchorEventIndexFallback();
     return anchorIndex !== null ? { kind: "index", index: anchorIndex } : { kind: "tail" };
   }
 
   function planFill(): void {
-    if (fillInFlight || !isVisible()) {
+    // pendingJumpLandIndex: a jump's window has landed but the viewport has not
+    // been re-anchored onto it yet (that happens in computeRenderPlan). Planning
+    // against the stale anchor now would immediately replace the window again.
+    if (fillInFlight || pendingJumpLandIndex !== null || !isVisible()) {
       return;
     }
     const totalEvents = dataSource.getTotalEvents();
@@ -736,10 +756,15 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     if (action.kind === "evict" && isSelectionActiveWithin(selectionStateWithin(scrollEl))) {
       return; // eviction deletes events under a live selection; wait it out
     }
+    const actionKey = JSON.stringify(action);
+    if (actionKey === noProgressActionKey && dataSource.getRenderVersion() === noProgressRenderVersion) {
+      return; // this exact action already landed without changing anything
+    }
     fillInFlight = true;
     trace?.record("fill", { action });
     const jumpIndexAtDispatch = pendingJumpIndex;
     const epochAtDispatch = fillEpoch;
+    const renderVersionAtDispatch = dataSource.getRenderVersion();
     dataSource
       .executeFill(action)
       .catch((error: unknown) => {
@@ -752,6 +777,12 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           return; // setAgent reset everything; this completion is the old agent's
         }
         fillInFlight = false;
+        if (dataSource.getRenderVersion() === renderVersionAtDispatch) {
+          noProgressActionKey = actionKey;
+          noProgressRenderVersion = renderVersionAtDispatch;
+        } else {
+          noProgressActionKey = null;
+        }
         if (action.kind === "fetch-at-offset" && jumpIndexAtDispatch !== null) {
           // The jump's window landed; anchor to the target once geometry rebuilds.
           pendingJumpLandIndex = jumpIndexAtDispatch;
@@ -1179,8 +1210,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       tryFinishRestore();
 
       // A landed jump anchors to its target row now that geometry covers it.
-      if (pendingJumpLandIndex !== null && geometry !== null && geometryRows.length > 0) {
-        const rowIndex = rowIndexForEventIndex(rowEventIndexes, pendingJumpLandIndex);
+      // Cleared even when the landing produced no rows (an empty page): leaving
+      // it set would hold planFill's landing gate closed forever.
+      if (pendingJumpLandIndex !== null && geometry !== null) {
+        const rowIndex = geometryRows.length > 0 ? rowIndexForEventIndex(rowEventIndexes, pendingJumpLandIndex) : -1;
         if (rowIndex >= 0) {
           // Same boundary rule as anchorForUser: never anchor the window's first
           // row while older history remains (it absorbs prepends under a stable
@@ -1277,6 +1310,18 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       // Pads are exact height sums, so mounted rows always sit at their true
       // offsets within the scroll space.
       const rowCount = geometryRows.length;
+      // A retained freeze range can outlive the rows it froze: a jump replaces
+      // the window (or an eviction shrinks it) while a selection is live, and
+      // the old indexes then run past the new rows array. Rendering such a plan
+      // makes rows[i].render() throw on undefined, which kills every subsequent
+      // redraw -- the panel freezes on whatever painted last. Clamp to what
+      // actually exists.
+      if (range.endIndex > rowCount || range.startIndex > rowCount) {
+        range = { startIndex: Math.min(range.startIndex, rowCount), endIndex: Math.min(range.endIndex, rowCount) };
+        if (freezeRange !== null) {
+          freezeRange = range;
+        }
+      }
       const topPadPx =
         spacerTopPx + (range.startIndex < rowCount ? geometry.rowTops[range.startIndex] : geometry.totalHeightPx);
       const windowEndTopPx = range.endIndex < rowCount ? geometry.rowTops[range.endIndex] : geometry.totalHeightPx;
@@ -1339,6 +1384,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       pendingEchoTops.length = 0;
       fillInFlight = false;
       fillEpoch += 1;
+      noProgressActionKey = null;
+      noProgressRenderVersion = -1;
       pendingJumpIndex = null;
       pendingJumpLandIndex = null;
       pendingTailIntent = false;
@@ -1396,7 +1443,25 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       lastActivityAtMs = performance.now();
       lastInputSource = "scrollbar";
       lastScrollbarFraction = Math.min(1, Math.max(0, fraction));
-      const target = resolveTrackFraction(activeMapping(), lastScrollbarFraction);
+      const mapping = activeMapping();
+      let target = resolveTrackFraction(mapping, lastScrollbarFraction);
+      if (target.kind === "physical-fraction") {
+        // The frozen mapping's physical band is trustworthy in PIXEL space only
+        // while it still describes the loaded window. Once fills/evictions land
+        // mid-drag the band's pixels cover different content, and a px-space
+        // resolution would show unrelated old messages. Fall back to index
+        // space: the thumb keeps pointing at the same transcript position, and
+        // an unloaded target goes through the jump path (loading overlay) below.
+        const frozenExtent = mappingPhysicalExtent(mapping);
+        const live = extent();
+        const isMappingCurrent =
+          frozenExtent !== null &&
+          frozenExtent.firstIndex === live.firstIndex &&
+          frozenExtent.endIndex === live.endIndex;
+        if (!isMappingCurrent) {
+          target = { kind: "virtual-index", index: resolveTrackFractionToIndex(mapping, lastScrollbarFraction) };
+        }
+      }
       trace?.record("scrollbar-move", { fraction: lastScrollbarFraction, target });
       if (target.kind === "physical-fraction") {
         // Scale over the region's scrollable span. With a bottom spacer the
@@ -1434,23 +1499,66 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           }
         }
       } else {
-        // A virtual-region target: give immediate feedback by moving into the
-        // spacer (the loading overlay covers it) and let the fill planner land
-        // the window there; the JUMPED_TO_INDEX dispatch anchors on landing.
-        pendingJumpIndex = target.index;
         const { firstIndex, endIndex } = extent();
-        const totalEvents = dataSource.getTotalEvents() ?? endIndex;
-        if (target.index < firstIndex && firstIndex > 0 && spacerTopPx > 0) {
-          writeScrollTop(scrollEl, (target.index / firstIndex) * spacerTopPx, "scrollbar-virtual");
-        } else if (target.index >= endIndex && totalEvents > endIndex && spacerBottomPx > 0) {
-          const intoFraction = (target.index - endIndex) / (totalEvents - endIndex);
-          writeScrollTop(
-            scrollEl,
-            spacerTopPx + physicalHeightPx() + intoFraction * spacerBottomPx,
-            "scrollbar-virtual",
-          );
+        const isTargetLoaded = target.index >= firstIndex && target.index < endIndex;
+        const rowIndex =
+          isTargetLoaded && geometry !== null && geometryRows.length > 0
+            ? rowIndexForEventIndex(rowEventIndexes, target.index)
+            : -1;
+        if (rowIndex >= 0 && geometry !== null) {
+          // The index is already loaded (an index-space resolution through a
+          // stale frozen band): position directly onto its row -- no jump, no
+          // overlay, the content for that spot is on hand.
+          pendingJumpIndex = null;
+          const targetTopPx = spacerTopPx + geometry.rowTops[rowIndex];
+          if (Math.abs(targetTopPx - scrollEl.scrollTop) <= scrollEl.clientHeight * 4) {
+            smoothWriteScrollTop(targetTopPx, "scrollbar-index");
+          } else {
+            cancelSmoothScroll();
+            writeScrollTop(scrollEl, targetTopPx, "scrollbar-index");
+          }
+          const anchor = anchorForUser();
+          if (anchor !== null) {
+            const bottomGapPx = scrollEl.scrollHeight - targetTopPx - scrollEl.clientHeight;
+            const totalEvents = dataSource.getTotalEvents();
+            const atTail =
+              bottomGapPx < BOTTOM_THRESHOLD_PX &&
+              spacerBottomPx <= 0 &&
+              (totalEvents === null || endIndex >= totalEvents);
+            pendingTailIntent = bottomGapPx < BOTTOM_THRESHOLD_PX;
+            dispatchPosition({ kind: "USER_SCROLLED", source: "scrollbar", anchor, atTail });
+          }
+        } else {
+          // A virtual-region target: give immediate feedback by moving into the
+          // spacer (the loading overlay covers it) and let the fill planner land
+          // the window there; the JUMPED_TO_INDEX dispatch anchors on landing.
+          pendingJumpIndex = target.index;
+          const totalEvents = dataSource.getTotalEvents() ?? endIndex;
+          if (target.index < firstIndex && firstIndex > 0 && spacerTopPx > 0) {
+            writeScrollTop(scrollEl, (target.index / firstIndex) * spacerTopPx, "scrollbar-virtual");
+          } else if (target.index >= endIndex && totalEvents > endIndex && spacerBottomPx > 0) {
+            const intoFraction = (target.index - endIndex) / (totalEvents - endIndex);
+            writeScrollTop(
+              scrollEl,
+              spacerTopPx + physicalHeightPx() + intoFraction * spacerBottomPx,
+              "scrollbar-virtual",
+            );
+          }
+          // Leave FOLLOW now, not on landing. An unloaded target near the
+          // window fills in via fetch-before/after (no fetch-at-offset, so no
+          // JUMPED_TO_INDEX dispatch ever fires), and while FOLLOW holds the
+          // pin drags the viewport straight back to the bottom -- the jump
+          // silently never happens. The current-view anchor holds the spacer
+          // position while the fill lands.
+          pendingTailIntent = false;
+          if (positionState.kind === "FOLLOW" && geometry !== null) {
+            const anchor = anchorForUser();
+            if (anchor !== null) {
+              dispatchPosition({ kind: "USER_SCROLLED", source: "scrollbar", anchor, atTail: false });
+            }
+          }
+          planFill();
         }
-        planFill();
       }
       m.redraw();
     },

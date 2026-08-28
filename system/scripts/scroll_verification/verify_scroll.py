@@ -62,6 +62,23 @@ def row_top(page, row_key):
 RESULTS = []
 
 
+def _is_tail_fill_converged(debug):
+    """The initial tail fill has nothing left to do: the whole transcript is
+    physical, or (transcript larger than the physical cap) a cap-sized window
+    ends at the live tail with no fill in flight."""
+    if debug is None or debug["totalEvents"] is None:
+        return False
+    loaded = debug["extent"]["endIndex"] - debug["extent"]["firstIndex"]
+    if debug["extent"]["firstIndex"] == 0 and debug["spacerTopPx"] == 0 and debug["spacerBottomPx"] == 0:
+        return True
+    return (
+        debug["spacerBottomPx"] == 0
+        and debug["extent"]["endIndex"] >= debug["totalEvents"]
+        and loaded >= min(debug["totalEvents"], debug["capEvents"])
+        and not debug["fillInFlight"]
+    )
+
+
 def check(name, ok, detail=""):
     RESULTS.append((name, bool(ok), detail))
     print(
@@ -143,22 +160,12 @@ def main():
                 time.sleep(0.5)
                 continue
 
-            if (
-                debug["extent"]["firstIndex"] == 0
-                and debug["spacerTopPx"] == 0
-                and debug["spacerBottomPx"] == 0
-            ):
+            if _is_tail_fill_converged(debug):
                 break
             time.sleep(1.0)
-        filled = (
-            debug
-            and debug["extent"]["firstIndex"] == 0
-            and debug["spacerTopPx"] == 0
-            and debug["spacerBottomPx"] == 0
-        )
         check(
-            "A1 whole transcript filled into physical (virtual spacers -> 0)",
-            filled,
+            "A1 tail fill converged (whole transcript, or a cap-sized window at the tail)",
+            debug is not None and _is_tail_fill_converged(debug),
             debug,
         )
         max_sustained_gap = page.evaluate("window.__maxSustainedGap")
