@@ -207,7 +207,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     }
     const owner = lane;
     const primary = owner.methods[0];
-    void begin(owner, primary, { fromChooser: true });
+    // Carry the account through. Backing out of an alternate method is still that account's
+    // re-auth: dropping the id here silently turns it into a MINT, so the user finishes the
+    // sign-in, gets a second row for the same provider, and the account they were trying to
+    // revive is still dead along with every chat bound to it.
+    void begin(owner, primary, { fromChooser: true, accountId: reauthAccountId ?? undefined });
   }
 
   function stepBlock(step: 1 | 2, isLast: boolean, children: m.Children): m.Vnode {
