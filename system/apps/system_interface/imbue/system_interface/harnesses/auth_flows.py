@@ -29,9 +29,9 @@ import threading
 import uuid
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from enum import StrEnum
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -43,13 +43,13 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface import accounts
 from imbue.system_interface.harnesses.binding import account_credential_path
 from imbue.system_interface.harnesses.binding import account_env
-from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.binding import seed_account
 from imbue.system_interface.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.system_interface.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.system_interface.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.system_interface.harnesses.claude.auth import parse_credential_lines
 from imbue.system_interface.harnesses.claude.auth import record_api_key_approval
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.lanes import DrainUntil
 from imbue.system_interface.harnesses.lanes import EofPolicy
 from imbue.system_interface.harnesses.lanes import Lane
@@ -267,7 +267,16 @@ class AuthFlowService:
                 # reaching here from a POST body is joined into a path and later removed, and
                 # `Path` joins swallow an absolute segment whole ("<root>" / "/etc" -> "/etc")
                 # while ".." walks straight out of the accounts root.
-                account_id = accounts.resolve_account(account_id, self._home).id
+                existing = accounts.resolve_account(account_id, self._home)
+                # An account's lane is fixed. Without this the requested lane won: a POST
+                # naming an anthropic account with `lane_id="openai"` returned a codex device
+                # flow and wrote codex's config.toml into the claude account's folder. Every
+                # chat bound there then resolved a claude harness against codex credentials.
+                if existing.lane != lane.id:
+                    raise FlowError(
+                        f"that account signs in through {existing.lane}, not {lane.id}"
+                    )
+                account_id = existing.id
                 account_path = accounts.account_dir(account_id, self._home)
             seed_account(lane.harness, account_path, self._work_dir)
 
@@ -292,9 +301,29 @@ class AuthFlowService:
                 session.cleared_credentials = _read_credentials(
                     _harness_credential_paths(lane.harness, account_path)
                 )
+                # Parked on DISK before anything is unlinked, so the only copy is never
+                # process memory alone. A stop, a snapshot or an OOM kill in this window used
+                # to destroy a working credential with no trace: the row still pointed at a
+                # folder that existed, so nothing noticed, and every chat bound there failed
+                # its next turn while the picker showed the account as healthy. `reconcile`
+                # puts it back at boot.
+                accounts.save_reauth_backup(account_id, session.cleared_credentials, self._home)
                 for path in session.cleared_credentials:
                     path.unlink(missing_ok=True)
-            url, code = self._drive_locked(session, method, account_path)
+            try:
+                url, code = self._drive_locked(session, method, account_path)
+            except FlowError:
+                # Already handled: `_drive_locked`'s own failure paths restore and tear down.
+                raise
+            except Exception as e:
+                # Anything else -- a missing binary raises pexpect.ExceptionPexpect, a CLI that
+                # already exited raises OSError from send() -- would otherwise leave the
+                # credential unlinked with no restore, no teardown and no deadline: the account
+                # still advertised, its chats failing, the session wedged PENDING forever.
+                self._unwind_credentials_locked(session)
+                self._teardown_locked(session, keep_folder=not minted)
+                self._session = None
+                raise FlowError(f"could not start the {lane.provider_name} sign-in: {e}") from e
             self._arm_deadline_locked(session, method.flow_deadline_s)
             return FlowStart(
                 flow_id=session.flow_id,
@@ -535,10 +564,25 @@ class AuthFlowService:
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)
         return FlowStatus(state=FlowState.PENDING)
 
+    def _unwind_credentials_locked(self, session: _Session, restore: bool = True) -> None:
+        """Give the account back the credential this flow took away, and unpark the copy.
+
+        One method because these two must never happen apart: leaving a parked copy behind
+        means the next boot restores the OLD credential over whatever the user has by then,
+        and unparking without restoring loses it outright. `restore=False` is the expiry case
+        where a sign-in may genuinely have landed and the old file must NOT go back -- the
+        parked copy still has to go, for the same reason.
+        """
+        if restore:
+            _restore_credentials(session.cleared_credentials)
+        session.cleared_credentials = {}
+        accounts.clear_reauth_backup(session.account_id, self._home)
+
     def _commit_locked(self, session: _Session, display: str) -> FlowStatus:
         # The sign-in wrote a new credential over the cleared one, so there is nothing to
-        # restore -- and restoring would undo what the user just did.
-        session.cleared_credentials = {}
+        # restore -- and restoring would undo what the user just did. The parked copy goes with
+        # it, or the next boot would put the OLD credential back over the new one.
+        self._unwind_credentials_locked(session, restore=False)
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
@@ -557,8 +601,7 @@ class AuthFlowService:
         session.detail = detail
         # A failed re-auth leaves the account exactly as it was: the credential it had is
         # more use than nothing, and the user asked to REPLACE it, not to lose it.
-        _restore_credentials(session.cleared_credentials)
-        session.cleared_credentials = {}
+        self._unwind_credentials_locked(session)
         self._teardown_locked(session, keep_folder=not session.minted)
 
     def _teardown_locked(self, session: _Session, keep_folder: bool) -> None:
@@ -573,13 +616,17 @@ class AuthFlowService:
             accounts.discard_account_dir(session.account_id, self._home)
 
     def _drop_locked(self) -> None:
-        if self._session is not None and self._session.state is FlowState.PENDING:
-            # Abandoned rather than failed -- back button, closed modal, a second sign-in
-            # displacing this one. Same rule: the account keeps what it had.
-            _restore_credentials(self._session.cleared_credentials)
-            self._session.cleared_credentials = {}
-            self._teardown_locked(self._session, keep_folder=not self._session.minted)
-        self._session = None
+        # try/finally, because dropping the session is the part that must not be skipped: this
+        # runs as the first statement of `start()`, so a raise in the restore left the old
+        # session in place and every later sign-in 500ed until the process restarted.
+        try:
+            if self._session is not None and self._session.state is FlowState.PENDING:
+                # Abandoned rather than failed -- back button, closed modal, a second sign-in
+                # displacing this one. Same rule: the account keeps what it had.
+                self._unwind_credentials_locked(self._session)
+                self._teardown_locked(self._session, keep_folder=not self._session.minted)
+        finally:
+            self._session = None
 
     def _expire(self, session: _Session, seconds: float) -> None:
         with self._lock:
@@ -600,9 +647,7 @@ class AuthFlowService:
                 # A re-auth that ran out of time leaves the account as it was. The exception
                 # is UNKNOWN: the check could not run, so a sign-in may genuinely have landed
                 # and putting the old credential back would throw it away.
-                if session.last_verdict is not SignedIn.UNKNOWN:
-                    _restore_credentials(session.cleared_credentials)
-                session.cleared_credentials = {}
+                self._unwind_credentials_locked(session, restore=session.last_verdict is not SignedIn.UNKNOWN)
                 self._teardown_locked(session, keep_folder=keep)
 
     def _require_locked(self, flow_id: str, must_be_pending: bool = False) -> _Session:
@@ -735,6 +780,11 @@ def _restore_credentials(before: Mapping[Path, bytes | None]) -> None:
     not derivable without writing it, and only the previous bytes are worth keeping.
     """
     for path, content in before.items():
+        # The folder can be gone: another client may have deleted the account while this flow
+        # held its credential. There is nothing to restore into, and raising here used to
+        # happen BEFORE `self._session = None`, wedging every later sign-in to any provider.
+        if not path.parent.is_dir():
+            continue
         if content is None:
             path.unlink(missing_ok=True)
         else:

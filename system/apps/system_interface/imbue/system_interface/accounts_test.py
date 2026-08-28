@@ -9,22 +9,25 @@ from pathlib import Path
 import pytest
 
 from imbue.imbue_common.model_update import to_update
-from imbue.system_interface.accounts import INDEX_VERSION
 from imbue.system_interface.accounts import Account
 from imbue.system_interface.accounts import AccountError
+from imbue.system_interface.accounts import INDEX_VERSION
+from imbue.system_interface.accounts import REAUTH_BACKUP_DIRNAME
 from imbue.system_interface.accounts import account_dir
 from imbue.system_interface.accounts import accounts_root
 from imbue.system_interface.accounts import claim_first_chat
+from imbue.system_interface.accounts import clear_reauth_backup
 from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import delete_account
 from imbue.system_interface.accounts import discard_account_dir
 from imbue.system_interface.accounts import index_path
 from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.accounts import read_index
+from imbue.system_interface.accounts import reconcile
 from imbue.system_interface.accounts import rename_account
 from imbue.system_interface.accounts import resolve_account
+from imbue.system_interface.accounts import save_reauth_backup
 from imbue.system_interface.accounts import set_mru
-from imbue.system_interface.accounts import reconcile
 
 
 def _add(home: Path, lane: str, display: str) -> Account:
@@ -358,3 +361,97 @@ def test_a_rename_leaves_every_other_account_untouched(tmp_path: Path) -> None:
 
     names = [account.name for account in read_index(tmp_path).accounts]
     assert names == ["Work", ""]
+
+
+def test_a_non_numeric_index_version_is_an_account_error_not_a_type_error(tmp_path: Path) -> None:
+    """`{"version": null}` used to crash boot in a loop.
+
+    `.get`'s default only covers an ABSENT key, so a present-but-null one reached
+    `None > INDEX_VERSION` and raised TypeError -- which `main.py` does not catch, so
+    supervisord restarted forever. It has to be the error boot already degrades on.
+    """
+    path = index_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for bad in ('{"version": null, "accounts": []}', '{"version": "2", "accounts": []}'):
+        path.write_text(bad)
+        with pytest.raises(AccountError):
+            read_index(tmp_path)
+
+
+def test_committing_an_account_onto_a_different_lane_is_refused(tmp_path: Path) -> None:
+    """`Account.lane` is immutable, and this is where that is enforced.
+
+    Silently keeping the old value let a re-auth on the wrong lane commit: the row still said
+    anthropic while codex's config had been written into its folder.
+    """
+    account_id = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    with pytest.raises(AccountError):
+        commit_account(account_id, "openai", "OpenAI", tmp_path)
+    assert resolve_account(account_id, tmp_path).lane == "anthropic"
+
+
+def test_an_interrupted_reauth_has_its_credential_restored_at_boot(tmp_path: Path) -> None:
+    """The window where the only copy was in process memory is now survivable.
+
+    A re-auth deletes the working credential before driving the CLI. If the process dies in
+    that window the account keeps a folder -- so nothing notices -- and every chat bound there
+    fails its next turn while the picker shows it as healthy.
+    """
+    account_id = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    folder = account_dir(account_id, tmp_path)
+    credential = folder / ".credentials.json"
+    credential.write_bytes(b'{"real": true}')
+
+    # What `start()` does: park, then unlink.
+    save_reauth_backup(account_id, {credential: credential.read_bytes()}, tmp_path)
+    credential.unlink()
+    assert not credential.exists()
+
+    reconcile(tmp_path)
+    assert credential.read_bytes() == b'{"real": true}'
+    # And the park is gone, so a later boot cannot put it back over a newer credential.
+    assert not (folder / REAUTH_BACKUP_DIRNAME).exists()
+
+
+def test_a_reauth_backup_of_a_file_that_did_not_exist_removes_it_again(tmp_path: Path) -> None:
+    """Restoring "it was absent" means deleting, not writing an empty file.
+
+    A first sign-in on a freshly minted folder has no credential to save; if the flow then
+    dies, boot must not leave a zero-byte file that the harness would try to parse.
+    """
+    account_id = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    folder = account_dir(account_id, tmp_path)
+    credential = folder / ".credentials.json"
+
+    save_reauth_backup(account_id, {credential: None}, tmp_path)
+    credential.write_bytes(b"half-written")
+
+    reconcile(tmp_path)
+    assert not credential.exists()
+
+
+def test_clearing_a_reauth_backup_stops_boot_undoing_a_commit(tmp_path: Path) -> None:
+    account_id = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    folder = account_dir(account_id, tmp_path)
+    credential = folder / ".credentials.json"
+    credential.write_bytes(b"old")
+
+    save_reauth_backup(account_id, {credential: b"old"}, tmp_path)
+    credential.write_bytes(b"new")
+    clear_reauth_backup(account_id, tmp_path)
+
+    reconcile(tmp_path)
+    assert credential.read_bytes() == b"new"
+
+
+def test_a_kept_reauth_backup_does_not_make_a_deleted_account_look_like_debris(tmp_path: Path) -> None:
+    """`reconcile` removes folders with no row. A parked backup must not save one from that."""
+    account_id = mint_account_dir(tmp_path)
+    folder = account_dir(account_id, tmp_path)
+    (folder / REAUTH_BACKUP_DIRNAME).mkdir()
+    reconcile(tmp_path)
+    assert not folder.exists()

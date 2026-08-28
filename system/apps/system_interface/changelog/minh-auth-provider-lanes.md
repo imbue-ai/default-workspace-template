@@ -1131,3 +1131,55 @@ called "work" read "work" and "work 2".
 Both provider menus now render their rows through one shared component. They had been two
 copies of the same list, and adding a third control to each by hand is how the copies start
 to drift.
+
+# Re-authentication no longer risks the credential it is replacing
+
+A re-auth deletes the account's working credential before driving the CLI -- it has to, because
+three of the four promote probes are presence checks, so a flow judged against the file already
+there reports success without anything having changed. That left a window in which the only copy
+of a working credential was a dict in process memory, and every unhappy exit from it lost that
+credential while the index went on advertising the account as healthy.
+
+The copy is now parked on disk first, in `<account>/.minds-reauth-backup/`, and `reconcile`
+restores it at boot. So a stop, a snapshot, an OOM kill or a supervisord restart mid-flow is
+survivable rather than silent. It is inside the account folder, so deleting the account takes
+the backup with it, and a file that did not exist before the flow is recorded as absent -- the
+restore deletes rather than leaving a zero-byte file the harness would try to parse.
+
+Restoring the snapshot and unparking the copy now happen in one method, because they must never
+happen apart: a parked copy left behind means the next boot restores the OLD credential over
+whatever the user has by then.
+
+Three specific exits from that window are closed as well:
+
+- A non-`FlowError` out of the drive -- a missing binary raises `pexpect.ExceptionPexpect`, a
+  CLI that already exited raises `OSError` from `send()` -- used to skip the restore, the
+  teardown AND the deadline: credential gone, account still offered, session wedged `PENDING`
+  with no timer to expire it.
+- Restoring into a folder another client had deleted raised from `_drop_locked` BEFORE
+  `self._session = None`, which is the first statement of `start()` -- so every later sign-in to
+  any provider 500ed until the process restarted. The restore skips a missing parent, and the
+  session is dropped in a `finally` either way.
+- `abort`, which is what a closed modal calls on its way out, no longer 500s when the flow it is
+  abandoning is in a bad state. A failure there reaches a UI that has already gone.
+
+# An account's lane is enforced, not just documented
+
+`Account.lane`'s docstring claimed an invariant that nothing checked. `start()` resolved the row
+and discarded its `.lane`, then seeded and spawned using the REQUESTED lane's harness -- so a
+POST naming an anthropic account with `lane_id="openai"` returned a codex device flow and wrote
+codex's `config.toml` into the claude account's folder. Any chat later bound there resolved a
+claude harness against codex credentials. Refused in `start()`, and `commit_account` raises
+rather than silently keeping the old lane.
+
+# A boot crash loop, and a chat that could never finish creating
+
+`read_index` did `payload.get("version", 0)` and then compared. `.get`'s default only covers an
+ABSENT key, so `{"version": null}` yielded None, `None > INDEX_VERSION` raised TypeError, and
+boot catches only `AccountError` -- supervisord restarted forever. A string version did the same.
+
+`set_mru` ran after the proto agent was registered and outside the try that converts
+`AccountError`, so an account deleted in that window escaped as a 500 before the creation thread
+started. Nothing ever popped the proto entry: the chat name was burned forever and every new
+socket replayed a chat stuck at "creating". It is best-effort now -- losing the mru hint is not
+worth failing a create over.
