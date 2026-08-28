@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from imbue.system_interface.harnesses.claude.session_parser import _SYNTHETIC_MODEL
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.tool_output import _MAX_PERMISSION_REQUEST_PROBES
 
@@ -585,9 +586,37 @@ def test_agent_tool_result_prefers_structured_over_trailer() -> None:
     ],
 )
 def test_assistant_message_auth_error_flag(text: str, expected: bool) -> None:
-    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", text)]
+    """The flag is read off Claude Code's own framework notices, which carry `<synthetic>`."""
+    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", text, model=_SYNTHETIC_MODEL)]
     events = parse_lines(lines)
     assert events[0]["is_auth_error"] is expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "When your customer has an **invalid api key** you should help them rotate it.",
+            id="agent-explaining-invalid-api-key",
+        ),
+        pytest.param(
+            'Handle the 401 case: {"type": "authentication_error"} means the key is wrong.',
+            id="agent-quoting-an-error-body",
+        ),
+        pytest.param("Check whether the OAuth token has expired before retrying.", id="agent-prose"),
+    ],
+)
+def test_a_real_reply_that_merely_talks_about_auth_is_not_an_auth_error(text: str) -> None:
+    """An agent helping with a credential says these things in ordinary prose.
+
+    Ungated, its own reply was painted as a failed turn with a "Sign in again" button under it
+    -- the more likely reading of the words, since a coding agent discusses auth far more often
+    than it fails it. The API-error check was already gated this way; this one was not.
+    """
+    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", text)]
+    events = parse_lines(lines)
+    assert events[0]["is_auth_error"] is False
+    assert events[0]["is_api_error"] is False
 
 
 def test_user_message_with_array_content() -> None:

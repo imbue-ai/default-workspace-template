@@ -247,10 +247,9 @@ export function getTerminalUrl(): string {
  *  session. The ttyd dispatch reads ``$1`` ("_") then ``$2`` ("agent")
  *  then ``$3`` (the agent name), so the args are written in that order.
  *
- *  One caller now: the BACK FACE of that agent's chat. The terminal used to be openable as its
- *  own tab too -- by a button and by a ``chat-terminal:<name>`` ref -- and both are gone,
- *  because two live ttyd clients on one tmux window keep resizing it out from under each
- *  other (`window-size latest` means the most recent attach wins). */
+ *  One caller: the BACK FACE of that agent's chat. A terminal is reachable only there, because
+ *  two live ttyd clients on one tmux window keep resizing it out from under each other --
+ *  `window-size latest` means the most recent attach wins. */
 export function buildAgentTerminalUrl(agentName: string): string {
   const baseUrl = getTerminalUrl();
   const separator = baseUrl.includes("?") ? "&" : "?";

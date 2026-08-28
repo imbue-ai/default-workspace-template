@@ -102,10 +102,10 @@ function isProtoAgent(agentId: string): boolean {
  *
  *  The proto list is rebuilt from broadcasts and can still name an agent that has since been
  *  registered -- a `proto_agent_created` for a finished creation, delivered late. Asking
- *  `isProtoAgent` alone is therefore not the same question, and the two used to disagree:
- *  the build log stopped as soon as the agent registered while the footer waited for the
- *  proto entry to clear, so in between you got a chat with an empty transcript and NO
- *  composer -- the blank chat that fills in a moment later. Every branch asks this instead. */
+ *  `isProtoAgent` alone is therefore not the same question, and the two can disagree: the build
+ *  log stops as soon as the agent registers, while the proto entry clears later. A branch
+ *  keying on the proto entry alone shows a chat with an empty transcript and no composer in
+ *  between. Every branch asks THIS instead, so they cannot drift apart. */
 function isStillBeingCreated(agentId: string): boolean {
   return isProtoAgent(agentId) && getAgentById(agentId) === undefined;
 }
@@ -633,9 +633,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // Read per-render rather than latched at load time, so the panel leaves the
     // error state as soon as any reload succeeds -- the tab's Refresh or the
     // stream's background reconnect, neither of which goes through loadAgent.
-    // Reading the phase (not just the error) is what keeps those two from
-    // falling through to "No events yet for this agent." while they are in
-    // flight, which is a lie the panel used to tell for the whole of a retry.
+    // The phase, not just the error: a load that is in flight -- including a retry -- must not
+    // fall through to "No events yet for this agent.", which claims an answer it does not have.
     const load = getConversationLoadState(agentId);
     if (hasNothingToShow && load.phase === "loading") {
       return m(
@@ -925,9 +924,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       events: getEventsForAgent(agentId),
                     }),
                 m(MessageInput, { agentId }),
-                // The under-bar used to live here, inside the footer. It is now a sibling of the
-                // whole flip card: on this face it would rotate away with the face its own
-                // switch turns, and the flip would be one-way.
+                // The under-bar is a sibling of the whole flip card, not part of this face: on
+                // a face it would rotate away with the face its own switch turns, and the flip
+                // would be one-way.
               ]),
             ],
           }),

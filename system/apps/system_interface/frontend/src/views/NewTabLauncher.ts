@@ -309,13 +309,11 @@ function rowIconMarkup(row: LauncherRow): string {
 }
 
 /** One chat tile: the harness it starts, and whether it stacks `first`. */
-/** The tile list. One Chat tile, whose provider comes from the picker below it.
+/** The tile list. One Chat tile, whose provider comes from the picker beside it.
  *
- *  There used to be a tile per harness behind a feature flag, plus a second set
- *  that stacked the `first` create template behind another. Both are gone: the
- *  provider picker carries "which harness" as a real user-facing choice rather
- *  than a dark-launch toggle, and `first` belongs to the workspace's own
- *  first-run, not to a tile.
+ *  One tile rather than one per harness: "which harness" is a real user-facing choice and
+ *  belongs to the provider picker, and the `first` create template belongs to the workspace's
+ *  own first run rather than to a tile.
  *
  *  Exported so the harness a chat starts on can be asserted without a DOM: it
  *  is the value that reaches ``mngr create --type``, and a target naming
@@ -759,15 +757,13 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                 "div",
                 {
                   key: tile.label,
-                  // The chat control carries the frame its own button used to, so the
-                  // provider sits INSIDE it: same height, border, radius and type size as the
-                  // other three, one hairline divider between the two halves.
+                  // The frame belongs to the whole chat control, so the provider picker sits
+                  // INSIDE it: same height, border, radius and type size as the other three,
+                  // with one hairline divider between the two halves.
                   //
-                  // It takes 1.7 shares because it holds TWO things. An equal share was tried
-                  // twice and truncated the label both times -- "New chat" to "Ne...", and then
-                  // even "Chat" to "C...", because the account name beside it is the wider half
-                  // and wins the space. A tile whose own label is one letter is worse than a
-                  // row that is not perfectly even.
+                  // It takes 1.7 shares because it holds TWO things. At an equal share the
+                  // account name -- the wider half -- wins the space and truncates the label to
+                  // a letter or two.
                   class:
                     "border-border flex h-9 items-stretch overflow-hidden rounded-lg border " +
                     (isChatTile ? "min-w-0 flex-[1.7]" : "min-w-0 flex-1") +

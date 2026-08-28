@@ -155,10 +155,10 @@ class _Session:
     lane: Lane
     method: PtyMethod | PasteMethod
     account_id: str
-    # Whether THIS flow created the folder. A re-auth adopts a committed account, and every
-    # failure path used to discard the folder unconditionally -- so aborting, mistyping a code
-    # or letting the deadline pass would delete a live account's credentials and orphan every
-    # chat bound to it. Only a folder we minted is ours to throw away.
+    # Whether THIS flow created the folder. Only a folder we minted is ours to throw away: a
+    # re-auth adopts a committed account, so discarding on failure would delete a live
+    # account's credentials and orphan every chat bound to it -- for nothing worse than a
+    # mistyped code or an abandoned tab.
     minted: bool
     process: Any
     output: str
@@ -792,8 +792,8 @@ def _restore_credentials(before: Mapping[Path, bytes | None]) -> None:
     """
     for path, content in before.items():
         # The folder can be gone: another client may have deleted the account while this flow
-        # held its credential. There is nothing to restore into, and raising here used to
-        # happen BEFORE `self._session = None`, wedging every later sign-in to any provider.
+        # held its credential. There is nothing to restore into, and raising here would happen
+        # BEFORE `self._session = None`, wedging every later sign-in to any provider.
         if not path.parent.is_dir():
             continue
         if content is None:

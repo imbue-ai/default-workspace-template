@@ -304,8 +304,8 @@ def test_the_lock_file_is_not_mistaken_for_an_account(tmp_path: Path) -> None:
 def test_the_first_chat_is_claimed_exactly_once(tmp_path: Path) -> None:
     """It is what stacks the `first` template, and therefore what delivers `/welcome`.
 
-    Bootstrap used to own this by creating a chat at boot. It cannot now: a chat needs a
-    provider account and a fresh workspace has none.
+    Claimed on demand rather than at boot, because a chat needs a provider account and a fresh
+    workspace has none until someone signs in.
     """
     assert claim_first_chat(tmp_path) is True
     assert claim_first_chat(tmp_path) is False
@@ -364,7 +364,7 @@ def test_a_rename_leaves_every_other_account_untouched(tmp_path: Path) -> None:
 
 
 def test_a_non_numeric_index_version_is_an_account_error_not_a_type_error(tmp_path: Path) -> None:
-    """`{"version": null}` used to crash boot in a loop.
+    """`{"version": null}` must not crash boot in a loop.
 
     `.get`'s default only covers an ABSENT key, so a present-but-null one reached
     `None > INDEX_VERSION` and raised TypeError -- which `main.py` does not catch, so

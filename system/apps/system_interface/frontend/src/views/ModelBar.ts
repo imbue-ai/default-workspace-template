@@ -1,9 +1,9 @@
 /**
  * The composer's combo card: which PROVIDER this chat runs on, and which model on it.
  *
- * Ported from the mockup (`imbue-ai/mind-sketches`, `prototypes/minds-harness`). Replaces the
- * old three-slot bar, whose slots said nothing about the provider -- which used to be
- * invisible because there was only ever one.
+ * Ported from the mockup (`imbue-ai/mind-sketches`, `prototypes/minds-harness`). The provider
+ * leads, because with several accounts signed in it is the first thing worth knowing about a
+ * chat.
  *
  * Everything it shows is data: the static per-harness catalog from HarnessCatalog.ts, the
  * agent's live `model_choice` pushed onto the agents store, and its `account` label resolved
@@ -309,8 +309,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   /** Fast mode: a switch, ported from the mockup's `Switch.tsx`.
    *
-   * The bolt that used to sit here doubled as the label AND the control, so its state had to be
-   * read off its fill -- a switch says on or off by its shape.
+   * A switch rather than a toggling icon, because a switch says on or off by its shape instead
+   * of by its fill.
    */
   function fastRow(opts: { on: boolean; interactive: boolean; tooltip: string | null; onToggle: () => void }): m.Vnode {
     return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [

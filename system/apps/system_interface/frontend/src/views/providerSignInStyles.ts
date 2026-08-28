@@ -97,9 +97,9 @@ export const LEAD_LINK = "text-accent underline underline-offset-2 hover:text-ac
  *  the mockup put it. */
 /** The right-hand end of the header: the harness line and the close button, as one group.
  *
- *  Grouped because both used to carry `ml-auto` and fought over it -- the first pushed the
- *  label right, the second pushed the button further, and the label ended up stranded in the
- *  middle of the gap. One `ml-auto` on the pair pins them together at the edge. */
+ *  ONE `ml-auto`, on the pair. Giving each of them their own makes them fight: the first
+ *  pushes the label right, the second pushes the button further still, and the label is left
+ *  stranded in the gap between them. */
 export const HEADER_END = "ml-auto flex shrink-0 items-center gap-4";
 export const RUNS_ON = "inline-flex shrink-0 items-baseline gap-1.5 text-sm";
 export const RUNS_ON_PREFIX = "text-tertiary";

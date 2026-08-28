@@ -234,9 +234,10 @@ def test_a_cli_that_never_announces_success_is_decided_by_its_probe(tmp_path: Pa
     # The CLI is alive and silent, exactly as agy is after a successful sign-in.
     status = service.submit_code(started.flow_id, "4/0Aexample")
 
-    # It reached the probe rather than parking on PENDING. Accepting PENDING here would have
-    # accepted the very bug this test is named after: the fixture's probe says YES, so
-    # reaching it means OK and not reaching it means PENDING -- both used to pass.
+    # It reached the probe rather than parking on PENDING. Asserting OK specifically is what
+    # makes this test mean anything: the fixture's probe says YES, so reaching it gives OK and
+    # not reaching it gives PENDING -- and accepting either would accept the bug it is named
+    # after.
     assert status.state is FlowState.OK
     assert read_index(tmp_path).accounts != (), "reaching the probe is what commits the account"
 
@@ -294,11 +295,11 @@ def test_a_probe_that_cannot_run_does_not_throw_the_key_away(tmp_path: Path) -> 
 def test_an_abandoned_re_auth_leaves_the_live_account_alone(
     service: AuthFlowService, tmp_path: Path
 ) -> None:
-    """Aborting a re-auth used to delete the account it was re-authenticating.
+    """Aborting a re-auth must not delete the account it is re-authenticating.
 
-    Every failure path discarded the folder, and a re-auth adopts a COMMITTED one -- so
-    pressing Back, closing the modal or letting the deadline pass took the credential with
-    it and orphaned every chat bound to that id.
+    A re-auth adopts a COMMITTED folder, so a failure path that discards unconditionally means
+    pressing Back, closing the modal or letting the deadline pass takes the credential with it
+    and orphans every chat bound to that id.
     """
     started = service.start("opencode-go", "api_key")
     service.submit_key(started.flow_id, "live-key", "opencode-go")
