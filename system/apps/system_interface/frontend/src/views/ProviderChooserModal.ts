@@ -580,14 +580,25 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           savedAs,
         ]);
       }
+      // Same screen as any other pasted key -- one field and a button -- with the place to GET
+      // the key named above it. It was a numbered 1-2 sequence, which read as a two-part
+      // procedure when step one is "go to a website if you have not already". The link is the
+      // instruction; the form is the whole task.
       return m("div", [
-        m("p", { class: css.LEAD }, method?.description ?? `Paste a ${current.provider_name} API key.`),
-        openLinkStep(
-          signupUrl,
-          signupUrl.replace(/^https?:\/\//, ""),
-          `Sign up for ${current.provider_name}, if you haven't`,
-        ),
-        stepBlock(2, true, [stepLabel("2", "Paste your API key"), keyField, savedAs]),
+        m("div", { class: css.SECTION_LABEL }, "Use an API key"),
+        m("p", { class: css.LEAD }, [
+          method?.description ?? `Paste a ${current.provider_name} API key.`,
+          " Get one at ",
+          m(
+            "a",
+            { class: css.LEAD_LINK, href: signupUrl, target: "_blank", rel: "noopener noreferrer" },
+            signupUrl.replace(/^https?:\/\//, ""),
+          ),
+          ".",
+        ]),
+        stepLabel(null, "Your API key"),
+        keyField,
+        savedAs,
       ]);
     }
     return m("div", [
@@ -784,14 +795,19 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       // panel; the lane list is the widest thing the flow shows. The body then sizes to its
       // content within that, so a two-line confirmation is a two-line panel rather than the
       // tallest screen's height filled out with white space.
-      const screen: "status" | "menu" | "form" | "chooser" =
-        isSuccess || isPending || error !== null
+      // What the panel is showing, which decides its size.
+      //
+      // A PENDING verdict deliberately keeps the size of the screen it interrupts. Checking a
+      // credential can take well under a second, and resizing down to the small status panel and
+      // straight back up reads as a flinch. A settled verdict -- signed in, or failed -- is a
+      // screen the user will sit on, so that one takes the size it deserves.
+      const settledScreen: "status" | "menu" | "form" | "chooser" =
+        current === null ? "chooser" : mode === "menu" ? "menu" : "form";
+      const screen: "status" | "menu" | "form" | "chooser" = isPending
+        ? settledScreen
+        : isSuccess || error !== null
           ? "status"
-          : current === null
-            ? "chooser"
-            : mode === "menu"
-              ? "menu"
-              : "form";
+          : settledScreen;
       // The entry screen keeps a floor: the flow always returns there, and a panel that shrinks
       // under the pointer on the way back reads as something having gone wrong.
       const size = css.panelSize(screen);
@@ -834,6 +850,16 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                     )
                   : null,
                 m("h2", { class: css.TITLE }, title),
+                // Which harness this connection will run on, stated top-right where the mockup
+                // puts its harness picker. Not a picker here: provider -> harness is fixed in
+                // V1, so there is nothing to choose -- but it is still the fact you want before
+                // you hand over a credential, and the header is where the mockup says it goes.
+                current !== null && !isSuccess && !isPending
+                  ? m("span", { class: css.RUNS_ON }, [
+                      m("span", { class: css.RUNS_ON_PREFIX }, "Runs on"),
+                      m("span", { class: css.RUNS_ON_NAME }, current.harness_label),
+                    ])
+                  : null,
                 m(
                   "button",
                   { type: "button", class: css.CLOSE_BUTTON, onclick: onClose, "aria-label": "Close" },

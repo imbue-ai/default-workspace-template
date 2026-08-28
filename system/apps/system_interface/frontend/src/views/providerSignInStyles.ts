@@ -85,6 +85,19 @@ export const OPTION_ROW_DESC = "mt-0.5 text-[0.75rem] text-secondary";
 
 export const SECTION_LABEL = "mb-3.5 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-secondary";
 export const LEAD = "mb-4 text-sm leading-relaxed text-primary";
+/** A link inside the lead. Where to GET the key, said in the sentence that explains the screen
+ *  rather than promoted to a numbered step -- "go to a website if you have not already" is not
+ *  half of a two-part procedure. */
+export const LEAD_LINK = "text-accent underline underline-offset-2 hover:text-accent-hover";
+
+/** The harness this sign-in will run on, pinned top-right of the header.
+ *
+ *  The mockup makes it a dropdown, because there it is a CHOICE. Here provider -> harness is
+ *  fixed, so it is the same line without the control: a fact the screen states, in the place
+ *  the mockup put it. */
+export const RUNS_ON = "ml-auto inline-flex shrink-0 items-center gap-1 text-[0.75rem]";
+export const RUNS_ON_PREFIX = "text-tertiary";
+export const RUNS_ON_NAME = "font-medium text-secondary";
 
 /** A step block, and the desaturation the mockup puts on the one you are past. */
 export const STEP = "mb-4 transition-all duration-300";

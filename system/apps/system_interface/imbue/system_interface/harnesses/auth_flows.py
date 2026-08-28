@@ -344,10 +344,25 @@ class AuthFlowService:
         # already be in `session.output` -- and `expect` cannot match bytes something
         # else has consumed, so waiting on it would time out with the answer in hand.
         if re.search(method.scrape.trigger, session.output) is None:
+            # The method's own failure lines are waited on ALONGSIDE the trigger. A CLI that is
+            # failing never prints the trigger, so watching only for that means sitting out the
+            # whole `scrape_timeout_s` -- thirty seconds of spinner -- and then reporting a
+            # timeout, when the CLI said what was wrong in the first second and we were not
+            # listening. agy is the case that showed it: a refused sign-in prints
+            # "Got an error: ..." and no URL, ever.
+            failure_patterns = [re.compile(pattern) for pattern, _ in method.failures]
             index = session.process.expect(
-                [re.compile(method.scrape.trigger), pexpect.EOF, pexpect.TIMEOUT],
+                [re.compile(method.scrape.trigger), *failure_patterns, pexpect.EOF, pexpect.TIMEOUT],
                 timeout=method.scrape_timeout_s,
             )
+            if 1 <= index <= len(failure_patterns):
+                # Report the CLI's own words rather than a timeout it did not have.
+                session.output += (session.process.before or "") + (session.process.after or "")
+                _, copy = method.failures[index - 1]
+                match = re.search(failure_patterns[index - 1], session.output)
+                detail = copy.replace("{1}", match.group(1)) if match is not None and match.groups() else copy
+                self._fail_locked(session, detail)
+                raise FlowError(detail)
             if index != 0:
                 self._fail_locked(session, "Timed out waiting for the sign-in details.")
                 raise FlowError(session.detail or "no value")

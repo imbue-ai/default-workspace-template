@@ -1072,3 +1072,26 @@ next restarts. The old wording promised it "will not be able to take another tur
 false for exactly the case the user is looking at. Killing those agents to make the old sentence
 true would be worse: it destroys a chat they may still be reading, to enforce a rule they can be
 told.
+
+# Sign-in screen corrections
+
+Google's row says "Limited free usage", not "Free usage".
+
+Opencode Go's screen is the ordinary pasted-key form -- one field, one button -- with the place
+to get the key named in the sentence above it. It was a numbered 1-2 sequence, which reads as a
+two-part procedure when step one is "go to a website if you have not already". The link is the
+instruction; the form is the whole task.
+
+The header states which harness the connection will run on, top-right, where the mockup puts its
+harness picker. Not a picker: provider -> harness is fixed, so there is nothing to choose. It is
+still the fact you want before handing over a credential.
+
+A PENDING verdict keeps the size of the screen it interrupts. Checking a credential can take well
+under a second, and shrinking to the small status panel and straight back up reads as a flinch. A
+SETTLED verdict -- signed in, or failed -- is a screen the user sits on, so it takes its own size.
+
+A failing sign-in fails as soon as the CLI says why. The wait for the sign-in URL watched only
+for the URL, so a CLI that was failing -- and therefore never printed one -- sat out the whole
+30-second scrape timeout and then reported a timeout it had not had. The method's own failure
+lines are waited on alongside the trigger now, so agy's "Got an error: ..." ends it in the first
+second and reports the CLI's own words.

@@ -44,6 +44,8 @@ export interface Lane {
   provider_name: string;
   subtitle: string;
   harness: string;
+  /** The harness's display name ("Claude Code"), for the header's "Runs on" line. */
+  harness_label: string;
   methods: LaneMethod[];
   key_providers: KeyProvider[];
 }
