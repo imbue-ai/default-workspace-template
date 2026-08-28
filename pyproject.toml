@@ -50,6 +50,11 @@ dev = [
     # root .venv so `uv run mngr` parses its agent_types fields instead of
     # rejecting them as "Unknown fields".
     "imbue-mngr-pi-coding",
+    # imbue-mngr-opencode / imbue-mngr-antigravity: same rationale as the three
+    # above -- registering the opencode / antigravity agent types so mngr can parse
+    # their `[agent_types.*]` config blocks.
+    "imbue-mngr-opencode",
+    "imbue-mngr-antigravity",
     # Shared validator that checks mngr CLI argvs against the live mngr command
     # tree; used by the per-feature contract tests (bootstrap's manager_test,
     # launch-task's create_worker_test).
@@ -58,19 +63,17 @@ dev = [
 
 [tool.uv]
 package = false
-# browser-use pins openai==2.16.0 but litellm needs openai>=2.20.0. We drive
-# browser-use with ChatAnthropic (not the OpenAI path), so its openai pin is
-# unused at runtime; override it so the single workspace lock resolves. See system/apps/browser.
-override-dependencies = ["openai>=2.20.0"]
 
 [tool.uv.workspace]
 # The globs cover every package in the three-way system/ split -- built-in
 # libraries, background services, and apps (built-in and user-built alike) --
 # so a newly scaffolded or adopted app joins the workspace without editing
 # this list. The terminal app is excluded: it is a shell-script wrapper around
-# the vendored mngr_ttyd plugin, not a Python package.
+# the vendored mngr_ttyd plugin, not a Python package. The files app likewise:
+# it is the pinned dufs binary (see system/scripts/install_dufs.sh) plus its
+# registered icon, with no Python of its own.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
-exclude = ["system/apps/terminal"]
+exclude = ["system/apps/terminal", "system/apps/files"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
@@ -89,6 +92,8 @@ imbue-mngr = { path = "system/vendor/mngr/libs/mngr", editable = true }
 imbue-mngr-claude = { path = "system/vendor/mngr/libs/mngr_claude", editable = true }
 imbue-mngr-codex = { path = "system/vendor/mngr/libs/mngr_codex", editable = true }
 imbue-mngr-pi-coding = { path = "system/vendor/mngr/libs/mngr_pi_coding", editable = true }
+imbue-mngr-opencode = { path = "system/vendor/mngr/libs/mngr_opencode", editable = true }
+imbue-mngr-antigravity = { path = "system/vendor/mngr/libs/mngr_antigravity", editable = true }
 resource-guards = { path = "system/vendor/mngr/libs/resource_guards", editable = true }
 concurrency-group = { path = "system/vendor/mngr/libs/concurrency_group", editable = true }
 

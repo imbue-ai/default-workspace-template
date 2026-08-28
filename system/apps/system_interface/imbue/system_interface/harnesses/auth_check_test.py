@@ -6,6 +6,7 @@ nothing. The commands are constructed checks, not the real CLIs; the two verbati
 tests read the real check's wording off the harness spec.
 """
 
+from imbue.system_interface.harnesses.auth_check import ANTIGRAVITY_AUTH_CHECK
 from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
 from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.auth_check import PI_AUTH_CHECK
@@ -24,6 +25,7 @@ def test_specs_carry_the_registered_checks() -> None:
     """The registry is the ONE per-harness table; the checks live on the specs."""
     assert get_harness_spec(HarnessType.CODEX).auth_check is CODEX_AUTH_CHECK
     assert get_harness_spec(HarnessType.PI_CODING).auth_check is PI_AUTH_CHECK
+    assert get_harness_spec(HarnessType.ANTIGRAVITY).auth_check is ANTIGRAVITY_AUTH_CHECK
 
 
 def test_signed_out_harness_yields_a_reason_naming_it() -> None:
@@ -90,3 +92,24 @@ def test_missing_binary_fails_closed() -> None:
         signin_instructions="Sign in.",
     )
     assert find_unauthenticated_harness_reason(check) is not None
+
+
+def test_antigravity_reads_its_signed_out_message_as_signed_out() -> None:
+    """`agy models` prints this verbatim when signed out (verified against agy 1.1.16).
+
+    Pinned as a real subprocess against the REGISTERED pattern, so a reworded probe or a
+    wrong regex fails here rather than silently gating every antigravity create.
+    """
+    message = "Error: Please sign in to view available models. Launch the CLI without arguments to sign in."
+    check = ANTIGRAVITY_AUTH_CHECK.model_copy_update(("command", ("echo", message)))
+    reason = find_unauthenticated_harness_reason(check)
+    assert reason is not None
+    assert "Antigravity" in reason
+
+
+def test_antigravity_ignores_a_nonzero_exit_without_its_message() -> None:
+    """The probe fetches the catalog over the network, so a transient failure exits non-zero
+    too. That must NOT read as signed out -- it would refuse a create for a user who is
+    signed in, and agy does not need `models` to run."""
+    check = ANTIGRAVITY_AUTH_CHECK.model_copy_update(("command", ("false",)))
+    assert find_unauthenticated_harness_reason(check) is None

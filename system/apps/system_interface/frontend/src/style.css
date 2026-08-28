@@ -137,8 +137,10 @@ body {
 
 /* ── Queued messages (the shoulder-tap group) ── */
 /* Messages the harness has parked while the agent is mid-turn, rendered below the
-   last committed turn as a distinct group under a subtle header row. This is a
-   full snapshot from the backend -- there is no optimistic/"sending" state. */
+   last committed turn as a distinct group under a subtle header row. This is a full
+   snapshot from the backend. An entry the backend flags "is_sending" is NOT parked --
+   it is one it is about to type, or is typing -- and renders as the "Sending..."
+   bubble; a snapshot that is entirely is_sending gets no group chrome at all. */
 .queued-group {
   display: flex;
   flex-direction: column;
@@ -254,18 +256,6 @@ body {
 
 .queued-message .message-user-bubble {
   opacity: 0.85;
-}
-
-/* Frozen queued group: while a shoulder-tap restart is in flight, the captured
-   messages are held greyed (ignoring the backend snapshot briefly emptying) so
-   they do not blip out and back, until a backend arrival releases the hold. No
-   countdown is shown. */
-.queued-group--frozen {
-  opacity: 0.55;
-}
-
-.queued-header--frozen {
-  color: var(--color-text-secondary);
 }
 
 /* The (i) info affordance next to 'Queued messages'. */
@@ -1756,6 +1746,14 @@ body {
   --si-pane-surface: #ffffff;
   --si-pane-border: rgba(0, 0, 0, 0.09);
   --si-pane-radius: 12px;
+  /* A tab's own insets. Named because the drag ghost has to restate them from
+     outside the theme root -- see `body > .dv-tab.dv-dragged .dv-default-tab`
+     -- and the two must not drift. */
+  --si-tab-padding: 6px 12px;
+  --si-tab-gap: 4px;
+  /* The attention flash (see `si-tab-flash`). Amber is deliberately not in the
+     palette's working set: it can only mean "look here for a moment". */
+  --si-tab-flash-color: #fde68a;
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
@@ -1918,6 +1916,45 @@ body {
   border-radius: var(--si-pane-radius) var(--si-pane-radius) 0 0;
 }
 
+/* The attention flash: what a tab does when it is opened again while already
+   open. The click has to answer for itself, and the answer cannot be "the tab
+   is now active" -- it usually already was, which is the whole reason nothing
+   appeared to happen.
+
+   A wash of colour rather than the opacity blink this used to be: fading the
+   tab out and back read as the tab going away, which is the opposite of "here
+   it is". Amber because it is the one hue this workspace does not otherwise
+   use -- the accent means active and green, and grey is every resting state --
+   so the flash cannot be mistaken for a state the tab has entered and stayed
+   in. It paints ONLY for the animation's length, so the standing rule that an
+   inactive tab carries no background is untouched.
+
+   Driven by a class rather than the Web Animations API so the keyframes sit
+   with the rest of the tab's appearance, and so `prefers-reduced-motion` can
+   reach it. */
+@keyframes si-tab-flash {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  25%,
+  75% {
+    background-color: var(--si-tab-flash-color);
+  }
+}
+
+.dockview-theme-light .dv-tab.si-tab-flash {
+  animation: si-tab-flash 320ms ease-in-out 2;
+}
+
+/* Reduced motion still needs the acknowledgement, just not the pulsing: one
+   hold and release rather than two round trips. */
+@media (prefers-reduced-motion: reduce) {
+  .dockview-theme-light .dv-tab.si-tab-flash {
+    animation: si-tab-flash 320ms ease-in-out 1;
+  }
+}
+
 /* The drag ghost: dockview-core clones the dragged `.dv-tab` (tab.js,
    `dragHandler.onDragStart`), copies its FULL computed style onto the clone
    as inline styles, and appends the clone as a direct child of `<body>`
@@ -1934,6 +1971,20 @@ body > .dv-tab.dv-dragged {
   border-radius: var(--si-pane-radius) !important;
 }
 
+/* The ghost's INSIDE, for the same reason and with a sharper edge to it: the
+   clone carries the outer `.dv-tab`'s computed style as inline styles, but
+   only that element's -- its descendants keep their classes and lose every
+   rule that was scoped under `.dockview-theme-light`, because the clone hangs
+   off `<body>` and no longer has that ancestor. `padding` and `gap` are not
+   inherited, so the inner `.dv-default-tab` rendered with neither: the icon
+   sat flush against the ghost's left edge with the title against it. Restated
+   here from the same variables the live tab uses, so a dragged tab looks like
+   the tab it came from. */
+body > .dv-tab.dv-dragged .dv-default-tab {
+  padding: var(--si-tab-padding);
+  gap: var(--si-tab-gap);
+}
+
 .dockview-theme-light .dv-tab.dv-active-tab {
   border-color: var(--si-pane-border);
 }
@@ -1941,10 +1992,11 @@ body > .dv-tab.dv-dragged {
 /* Hovering an inactive tab paints NOTHING. A fill at the strip's edges always
    fights the pane's rounded corner below it (two attempts at that shape both
    read as a boxy cutoff), so the hover affordance is everything except a
-   background: the pointer cursor, the title going bold, and the tab's own
-   action buttons appearing -- which the strip already reveals on hover.
-   Spelled out down the whole chain because that is the shape dockview paints
-   tab states with, and a shorter selector would simply lose to it. */
+   background: the pointer cursor, the icon and title recoloring to the
+   primary text color, and the tab's own action buttons appearing -- which the
+   strip already reveals on hover. Spelled out down the whole chain because
+   that is the shape dockview paints tab states with, and a shorter selector
+   would simply lose to it. */
 .dockview-theme-light
   .dv-groupview
   > .dv-tabs-and-actions-container
@@ -2006,11 +2058,14 @@ body > .dv-tab.dv-dragged {
   font-weight: 600;
 }
 
-/* Bolding is confined to the title span. The tab's width is fixed by the
-   equal-width rule, so the heavier face cannot reflow the strip -- at worst a
-   long title fades a character earlier while hovered. */
+/* Recoloring, not bolding: color needs no fixed-width guard the way weight
+   did (a heavier face is physically wider; a different color is not), and it
+   is precisely the kind of affordance that is not a fill -- see the comment
+   above this tab strip's other hover rule for why a fill is off the table.
+   Both the icon and the title move to the primary text color together. */
+.dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-custom-tab-icon,
 .dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-default-tab-content {
-  font-weight: 600;
+  color: var(--color-text-primary);
 }
 
 /* dockview outlines a focused tab in the (now transparent) divider color, so
@@ -2025,7 +2080,7 @@ body > .dv-tab.dv-dragged {
   font-family: var(--font-family-base);
   font-size: 13px;
   font-weight: 500;
-  padding: 6px 12px;
+  padding: var(--si-tab-padding);
   gap: 8px;
 }
 
@@ -2202,6 +2257,7 @@ body > .dv-tab.dv-dragged {
 }
 
 .custom-url-dialog-cancel,
+.custom-url-dialog-danger,
 .custom-url-dialog-open {
   padding: 6px 16px;
   font-family: var(--font-family-base);
@@ -2218,8 +2274,26 @@ body > .dv-tab.dv-dragged {
   color: var(--color-text-primary);
 }
 
-.custom-url-dialog-cancel:hover {
+.custom-url-dialog-cancel:hover:not(:disabled) {
   background: var(--color-bg-hover);
+}
+
+.custom-url-dialog-cancel:disabled,
+.custom-url-dialog-danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Force, on the send-failure notice: it restarts the agent, ending any turn in progress and
+   losing that work, so it must not look like the easy button next to Cancel and Retry. */
+.custom-url-dialog-danger {
+  background: white;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.custom-url-dialog-danger:hover:not(:disabled) {
+  background: #fef2f2;
 }
 
 .custom-url-dialog-open {
@@ -2263,9 +2337,16 @@ body > .dv-tab.dv-dragged {
     0 0 0 4px var(--color-accent);
 }
 
-/* ── Custom tab renderer ── */
-.dv-custom-tab {
-  gap: 4px;
+/* ── Custom tab renderer ──
+   4px normalizes the tab's internal spacing (icon to title, and title to the
+   hover-revealed actions) to the sidebar's own icon-to-label gap (`gap-1` on
+   the rail's row classes in Sidebar.ts). The selector has to repeat both
+   classes: `createCustomTab` sets `className = "dv-default-tab dv-custom-tab"`
+   on the same element, so a bare `.dv-custom-tab` here loses on specificity to
+   `.dockview-theme-light .dv-default-tab`'s own `gap: 8px` above -- which is
+   what left this at 8px despite this rule. */
+.dockview-theme-light .dv-default-tab.dv-custom-tab {
+  gap: var(--si-tab-gap);
 }
 
 /* Per-agent liveness dot on chat tabs, reflecting the agent's mngr lifecycle
@@ -2602,219 +2683,6 @@ body > .dv-tab.dv-dragged {
 .fast-mode-modal-btn-fast:hover {
   background: var(--color-bg-hover);
 }
-
-/* ── Share modal ── */
-.share-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-}
-
-.share-modal {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 24px;
-  width: 480px;
-  max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-.share-modal-title {
-  font-family: var(--font-family-heading);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0 0 16px;
-}
-
-.share-modal-loading {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  margin: 0 0 16px;
-}
-
-.share-modal-error {
-  font-size: 14px;
-  color: #dc2626;
-  margin: 0 0 12px;
-}
-
-.share-modal-label {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  margin: 0 0 12px;
-}
-
-.share-modal-url-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.share-modal-url-input {
-  flex: 1;
-  padding: 8px 12px;
-  font-family: var(--font-family-mono, monospace);
-  font-size: 13px;
-  color: var(--color-text-primary);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  outline: none;
-}
-
-.share-modal-btn {
-  padding: 6px 16px;
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  border-radius: 6px;
-  cursor: pointer;
-  border: none;
-  background: #1e293b;
-  color: white;
-}
-
-.share-modal-btn:hover:not(:disabled) {
-  background: #334155;
-}
-
-.share-modal-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.share-modal-btn-secondary {
-  background: white;
-  color: #1e293b;
-  border: 1px solid #e2e8f0;
-}
-
-.share-modal-btn-secondary:hover:not(:disabled) {
-  background: #f1f5f9;
-}
-
-.share-modal-btn-destructive {
-  background: white;
-  color: #dc2626;
-  border: 1px solid #fecaca;
-}
-
-.share-modal-btn-destructive:hover:not(:disabled) {
-  background: #fef2f2;
-}
-
-.share-modal-section {
-  margin: 16px 0;
-}
-
-.share-modal-empty {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  font-style: italic;
-  margin: 8px 0;
-}
-
-.share-modal-email-list {
-  list-style: none;
-  margin: 8px 0;
-  padding: 0;
-}
-
-.share-modal-email-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
-  font-size: 13px;
-  color: var(--color-text-primary);
-}
-
-.share-modal-email-remove {
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 2px 6px;
-  border-radius: 3px;
-}
-
-.share-modal-email-remove:hover {
-  color: #dc2626;
-  background: rgba(220, 38, 38, 0.1);
-}
-
-.share-modal-add-email {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.share-modal-email-input {
-  flex: 1;
-  padding: 6px 10px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  color: var(--color-text-primary);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  outline: none;
-}
-
-.share-modal-email-input:focus {
-  border-color: var(--color-accent);
-}
-
-.share-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.share-modal-header .share-modal-title {
-  margin: 0;
-}
-
-.share-modal-close-x {
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  font-size: 18px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  line-height: 1;
-}
-
-.share-modal-close-x:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-.share-modal-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 16px;
-}
-
-.share-modal-footer-left {
-  display: flex;
-  gap: 8px;
-}
-
-/* share-modal-btn-create uses the base .share-modal-btn styling (dark button) */
 
 /* === Claude login modal === */
 
@@ -3678,6 +3546,13 @@ body > .dv-tab.dv-dragged {
   color: var(--color-text-secondary);
   line-height: 1.5;
   margin: 8px 0 4px;
+  /* The send-failure notice puts a server's own words in here, and those are not always the one
+     tidy sentence the other users of this class pass. A proxy or an unhandled route answers with
+     a whole HTML page, and an unbroken token (a URL, a traceback line) would otherwise widen the
+     dialog past the viewport or push its OK button off the bottom. Harmless for fixed text. */
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 /* Step checklist shown while the background agent restart runs */

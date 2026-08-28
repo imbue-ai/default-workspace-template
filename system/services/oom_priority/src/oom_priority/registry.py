@@ -2,16 +2,21 @@
 
 earlyoom's after-kill hook is handed only the killed pid, uid, and process name
 (comm) -- and by then the process is gone, so it can't inspect ``/proc`` to learn
-which agent it was. An agent's main process is a ``claude`` process whose comm
-("claude"/"node") does not reveal the agent name. So each agent records its own
-main-process pid here at launch (the launch wrapper, ``system/services/oom_priority/bin/claude_oom_launch.py``,
-calls ``record_agent_pid`` for its own pid just before it execs claude); the kill
-hook looks the killed pid up to decide whether an *agent* was shed (which drives
-revival) versus a mere subprocess.
+which agent it was. An agent's main process is a harness process whose comm
+("claude"/"codex"/"pi"/"node") does not reveal the agent name. So each agent records
+its own main-process pid here at launch (the launch wrapper,
+``system/services/oom_priority/bin/agent_oom_launch.py``, calls ``record_agent_pid``
+for its own pid just before it execs the harness); the kill hook looks the killed pid
+up to decide whether an *agent* was shed (which drives revival) versus a mere
+subprocess.
 
 One file per pid (``<pid>.json``) rather than a shared map, so concurrent agents
 never race on a single file and no locking is needed. Stale entries (whose pid
 has been reused or is simply gone) are pruned best-effort by writers.
+
+One agent can register more than one pid: codex runs both a visible ``--remote`` TUI
+and an ``app-server`` daemon from the same launch command, so both are recorded under
+its id. ``lookup_pid_by_agent_id`` returns the first live match.
 
 Stdlib-only (see ``paths``): imported by the launch wrapper and the kill hook
 under a plain ``python3``.

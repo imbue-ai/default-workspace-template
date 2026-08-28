@@ -26,16 +26,22 @@ const STROKE_PATHS = {
   // they get different glyphs: a minus puts the tab away and leaves the thing
   // running, an "x" ends it everywhere.
   minus: '<path d="M6 12h12"/>',
+  // A third act between those two, and it gets a third glyph: taking an object
+  // out of ONE project. The bare minus is already "put the tab away", and the
+  // object here keeps running and stays in Everything, so neither that nor the
+  // "x" says it. The ring is what marks it as acting on the filing rather than
+  // on the tab.
+  "minus-circle": '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
   file: '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/>',
   // Up-arrow, shared by the composer "send" button and the pending-message
   // "interrupt and send now" action.
   send: '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
-  // Lucide "share" (not "share-2", which is the three-node network glyph):
-  // an up-arrow lifting out of an open box, matching the tab menu's export
-  // sense of the verb.
-  share: '<path d="M12 2v13"/><path d="m16 6-4-4-4 4"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>',
+  // Lucide "user-plus", on the Share rows: sharing grants people access by
+  // email, so the glyph shows a person being added.
+  "user-plus":
+    '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
   // Lucide "power": the classic power-button glyph, on the destructive
   // "Quit {app}" row for a registered app.
   power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
@@ -65,6 +71,9 @@ const STROKE_PATHS = {
   // Pencil, on the tab menu's Rename row and the project switcher's per-row
   // settings control.
   edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
+  // Lucide "folder-plus", on the object menu's "Add to project..." row.
+  "folder-plus":
+    '<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   // Gear, on the switcher's current-project row: the project you are already in
   // does not need to be offered again, so that row leads to its settings.
   settings:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from imbue.system_interface.harnesses.pi_coding.tool_labels import keeps_full_tool_input
+from imbue.system_interface.harnesses.pi_coding.tool_labels import shell_command
 from imbue.system_interface.harnesses.pi_coding.tool_labels import tool_labels
 
 
@@ -85,3 +86,8 @@ def test_does_not_keep_full_for_non_bash_tools() -> None:
 def test_tk_mentioned_inside_a_quoted_argument_is_not_a_lifecycle_call() -> None:
     # shlex-aware recognition: a `tk close` merely echoed is NOT a real lifecycle call.
     assert keeps_full_tool_input("bash", _preview(command='echo "run tk close later"')) is False
+
+
+def test_shell_command_reads_pis_command_key_and_ignores_other_tools() -> None:
+    assert shell_command("bash", '{"command":"ls -la"}') == "ls -la"
+    assert shell_command("read_file", '{"path":"/x"}') is None

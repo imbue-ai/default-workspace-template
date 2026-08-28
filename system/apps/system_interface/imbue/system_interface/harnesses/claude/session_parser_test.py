@@ -388,9 +388,7 @@ def test_ordinary_user_text_resembling_the_sentinel_still_passes() -> None:
     A prompt that merely mentions the phrase mid-sentence (not as the sentinel's leading form)
     is a real user turn and must render.
     """
-    line = _make_user_line(
-        "uuid-1", "2026-01-01T00:00:00Z", "Please explain what [Request interrupted by user] means"
-    )
+    line = _make_user_line("uuid-1", "2026-01-01T00:00:00Z", "Please explain what [Request interrupted by user] means")
     events = parse_lines([line])
     assert len(events) == 1
     assert events[0]["type"] == "user_message"

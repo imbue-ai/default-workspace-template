@@ -1,4 +1,11 @@
 import m from "mithril";
+import { apiUrl } from "../base-path";
+import { getApps } from "../models/AgentManager";
+import type { AppEntry } from "../models/AgentManager";
+import { appStoppedDetail, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
+import { displayNameForMember } from "../models/MemberTitles";
+import { memberRef } from "../models/Projects";
+import { appServiceDisplayName } from "./derived-names";
 
 interface IframePanelAttrs {
   url: string;
@@ -17,6 +24,15 @@ export const IFRAME_PANEL_LIVE_KEY_ATTR = "data-live-key";
 export const IframePanel: m.Component<IframePanelAttrs> = {
   view(vnode) {
     const { url, title, serviceName, liveKey } = vnode.attrs;
+    // A stopped app's pane shows a lightweight placeholder instead of the dead
+    // iframe's raw connection error. Rendered per redraw off the live app list,
+    // so a start (from anywhere) swaps the iframe back in on the next
+    // `apps_updated` push. Only a service-backed pane can be stopped this way;
+    // ad-hoc URL panes and the fleets keep their iframe.
+    const stoppedApp = stoppedAppForServiceName(getApps(), serviceName ?? null);
+    if (stoppedApp !== null) {
+      return m(StoppedAppPlaceholder, { app: stoppedApp });
+    }
     const attrs: Record<string, string> = {
       src: url,
       title,
@@ -36,6 +52,59 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
       attrs[IFRAME_PANEL_LIVE_KEY_ATTR] = liveKey;
     }
     return m("iframe", attrs);
+  },
+};
+
+/**
+ * The minimal stopped-tab state: what the pane is, that it is stopped, and
+ * nothing else -- deliberately no log tail and no diagnostics, since Stop is a
+ * reversible, ordinary state rather than an error. The Start button appears
+ * only where the app is startable through the workspace (a supervised,
+ * non-essential app); the `apps_updated` push after a start swaps the iframe
+ * back in.
+ */
+const StoppedAppPlaceholder: m.Component<{ app: AppEntry }> = {
+  view(vnode) {
+    const app = vnode.attrs.app;
+    const label = displayNameForMember(memberRef("app", app.name), appServiceDisplayName(app.name));
+    return m(
+      "div",
+      {
+        class: "si-stopped-app flex h-full w-full flex-col items-center justify-center gap-3 bg-surface",
+        "data-service-name": app.name,
+      },
+      [
+        m("div", { class: "text-[15px] font-medium text-text-primary" }, label),
+        m("div", { class: "text-[13px] text-text-faint" }, appStoppedDetail(app)),
+        isAppStoppable(app)
+          ? m(
+              "button",
+              {
+                type: "button",
+                class:
+                  "si-stopped-app-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
+                  "border-border px-4 text-[13px] font-medium text-text-primary hover:bg-bg-hover",
+                onclick: () => {
+                  // The `apps_updated` push is the authority on success; a
+                  // failed request leaves the placeholder (and the button, for
+                  // a retry) in place, logged rather than alerted -- this pane
+                  // is deliberately minimal.
+                  void fetch(apiUrl(`/api/apps/${encodeURIComponent(app.name)}/start`), { method: "POST" })
+                    .then(async (response) => {
+                      if (response.ok) return;
+                      const data = (await response.json().catch(() => ({}))) as { detail?: string };
+                      console.warn(`Failed to start ${app.name}: ${data.detail ?? `HTTP ${response.status}`}`);
+                    })
+                    .catch((e: Error) => {
+                      console.warn(`Failed to start ${app.name}: ${e.message}`);
+                    });
+                },
+              },
+              `Start ${label}`,
+            )
+          : null,
+      ],
+    );
   },
 };
 

@@ -1,6 +1,8 @@
 ---
 name: update-self
 description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Minds app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+metadata:
+  author: imbue
 ---
 
 # Pulling updates from the upstream template, safely

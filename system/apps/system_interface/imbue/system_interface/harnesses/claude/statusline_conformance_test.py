@@ -63,10 +63,14 @@ def test_statusline_writes_state_the_shared_reader_matches(tmp_path: Path) -> No
     # The captured payload: model claude-fable-5, effort high, fast off.
     assert identity == ModelIdentity(model_id="claude-fable-5", effort="high", fast=False)
 
-    # Fable is not offered in the picker, so the live read matches no catalog option --
-    # the conformance this test proves is that the writer and reader agree on the file,
-    # not that every model the statusline can report is one we offer.
-    assert match_option(identity, CLAUDE_CATALOG.options) is None
+    # The conformance this test proves is that the writer and reader agree on the file.
+    # It now also lands on a real catalog option: Fable is offered, and this captured
+    # payload is the evidence the statusline reports the SUFFIX-FREE id (claude-fable-5,
+    # not claude-fable-5[1m]) even though the entry switches with fable[1m] -- which is
+    # exactly why harness_reported_model_id is the suffix-free key.
+    matched = match_option(identity, CLAUDE_CATALOG.options)
+    assert matched is not None
+    assert matched.label == "Fable 5"
 
 
 def test_statusline_skips_a_nested_session(tmp_path: Path) -> None:

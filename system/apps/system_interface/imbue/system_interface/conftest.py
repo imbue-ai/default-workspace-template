@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 from collections.abc import Generator
@@ -17,6 +18,7 @@ from playwright.sync_api import sync_playwright
 
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.testing import FORTRESS_CHROMIUM_PATH
+from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -214,6 +216,49 @@ def browser(
 @pytest.fixture
 def broadcaster() -> WebSocketBroadcaster:
     return WebSocketBroadcaster()
+
+
+@pytest.fixture
+def listening_port() -> Iterator[int]:
+    """A loopback port with a live listener behind it, for TCP liveness probes."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        listener.close()
+
+
+@pytest.fixture
+def closed_port() -> int:
+    """A loopback port with nothing behind it.
+
+    Bind-then-close: the port existed a moment ago, so nothing else is likely
+    to have claimed it before the probe runs.
+    """
+    probe_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe_socket.bind(("127.0.0.1", 0))
+    port = probe_socket.getsockname()[1]
+    probe_socket.close()
+    return port
+
+
+@pytest.fixture
+def fake_supervisor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeSupervisorServer]:
+    """A supervisord-shaped RPC server on a per-test unix socket.
+
+    ``MINDS_SUPERVISOR_SOCKET`` is pointed at it, so both the liveness probes
+    and the stop/start endpoints reach the fake instead of the developer's (or
+    CI's absent) real supervisord.
+    """
+    server = FakeSupervisorServer(tmp_path / "supervisor.sock")
+    monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(server.socket_path))
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
 
 
 @pytest.fixture

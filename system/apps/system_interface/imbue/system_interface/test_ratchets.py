@@ -63,7 +63,11 @@ def test_prevent_broad_exception_catch() -> None:
     # auth._run_apply_in_background: same thread-boundary shape --
     # anything escaping must surface as the FAILED restart phase in the
     # sign-in modal instead of dying silently in a daemon thread.
-    rc.check_broad_exception_catch(_DIR, snapshot(4))
+    # Bumped again for antigravity's flush worker in watcher._run_flush_worker:
+    # same thread-boundary shape. The worker is the ONLY thing that ever delivers
+    # a held message, so an escaping exception would strand every queued message
+    # for the life of the process; it logs and keeps looping instead.
+    rc.check_broad_exception_catch(_DIR, snapshot(5))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -287,7 +291,12 @@ def test_prevent_init_methods_in_non_exception_classes() -> None:
     # holds a ``threading.Lock``, mutable presence sets, a recency-timestamp
     # dict mutated under that lock, and injected callables -- runtime state
     # that is not a natural fit for a Pydantic model.
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(6))
+    # +2 for liveness.py's ``_UnixSocketHttpConnection`` and
+    # ``_UnixSocketTransport``: both subclass stdlib classes
+    # (``http.client.HTTPConnection`` / ``xmlrpc.client.Transport``) whose
+    # construction contract is fixed by the stdlib, so a Pydantic model cannot
+    # stand in and the socket path has to arrive through ``__init__``.
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(8))
 
 
 def test_prevent_cast_usage() -> None:

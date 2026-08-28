@@ -38,13 +38,19 @@ export interface HarnessPopup {
   trigger: "composer_command" | "turn_check";
   commands: string[];
   action: "notice" | "open_auth" | "fast_mode_prompt";
+  /** `notice` only: replaces the notice's default body. Absent for most declines,
+   *  which are declined for the same reason (the command takes over the terminal);
+   *  present where the harness has a more specific thing to say. */
+  notice_body?: string | null;
 }
 
 export interface HarnessCatalog {
   // The static catalog options. EMPTY for a "dynamic" picker (codex): its options are per-agent,
   // fetched from /model-options on open, not carried here.
   options: CatalogModelOption[];
-  switch_mode: string; // "eager_then_reconcile" (claude/pi -- optimistic) | "on_change" (codex -- no overlay)
+  // "eager_then_reconcile" (claude/pi -- optimistic) | "on_change" (codex -- no overlay)
+  // | "read_only" (antigravity -- slots render non-interactive, no picker)
+  switch_mode: string;
   picker_mode: string; // "list" | "search" | "dynamic" -- how the model dropdown sources/renders options
   // Whether the "Shoulder tap" button can flush the queue atomically (merge into the live
   // turn without a restart). Every current harness supports it (claude via its cancel chord,

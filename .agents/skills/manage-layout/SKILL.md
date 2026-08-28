@@ -2,6 +2,7 @@
 name: manage-layout
 description: Use when you want to rearrange the workspace dockview tabs (split, move, focus, rename, close, maximize, reload, swap a URL) or inspect the live layout.
 metadata:
+  author: imbue
   crystallized: true
 ---
 

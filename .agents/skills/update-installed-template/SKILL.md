@@ -1,6 +1,8 @@
 ---
 name: update-installed-template
 description: Pull a newer version of a template this mind already adopted from its remote repo and merge it in, reconciling it with this mind's own adaptations. Use when the user wants to update, upgrade, or pull the latest version of an adopted template.
+metadata:
+  author: imbue
 ---
 
 # Update an installed template

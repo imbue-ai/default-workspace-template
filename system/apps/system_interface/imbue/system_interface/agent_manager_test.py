@@ -4,6 +4,8 @@ import json
 import os
 import queue
 import shutil
+import signal
+import tomllib
 import threading
 import time
 from datetime import datetime
@@ -20,6 +22,7 @@ from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.observe import make_agent_removed_event
@@ -47,6 +50,7 @@ from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
+from imbue.system_interface.agent_manager import _rename_failure_detail
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
@@ -257,6 +261,91 @@ def test_read_apps_reads_the_internal_flag(agent_manager: AgentManager, tmp_path
     assert apps[1].internal is False
 
 
+def test_read_apps_reads_the_program_field(agent_manager: AgentManager, tmp_path: Path) -> None:
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\n"
+        'name = "files"\n'
+        'url = "http://localhost:8300"\n'
+        'program = "files"\n'
+        "\n"
+        "[[apps]]\n"
+        'name = "web"\n'
+        'url = "http://localhost:8000"\n'
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].program == "files"
+    # A row with no `program` key -- an unsupervised or pre-field app -- reads back "".
+    assert apps[1].program == ""
+
+
+def test_read_apps_carries_probed_liveness_across_a_reread(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """Re-reading the registry (a registration, an icon change) must not flash
+    a stopped app back to running until the next probe lands."""
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:8000"\n')
+    agent_manager._read_apps(toml_file)
+    with agent_manager._lock:
+        agent_manager._apps = [
+            app.model_copy_update(to_update(app.field_ref().is_running, False)) for app in agent_manager._apps
+        ]
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].is_running is False
+
+
+def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
+    broadcaster: WebSocketBroadcaster,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    probed_targets: list[tuple[str, str]] = []
+
+    def fake_prober(program: str, url: str) -> bool:
+        probed_targets.append((program, url))
+        return program == "files"
+
+    manager = AgentManager.build(broadcaster, liveness_prober=fake_prober)
+    with manager._lock:
+        manager._apps = [
+            AppEntry(name="files", url="http://localhost:8300", program="files"),
+            AppEntry(name="web", url="http://localhost:8000"),
+        ]
+    events: list[dict[str, Any]] = []
+    client_queue = broadcaster.register()
+
+    manager.refresh_app_liveness()
+
+    while not client_queue.empty():
+        message = client_queue.get_nowait()
+        if message is not None:
+            events.append(json.loads(message))
+    apps_updated_events = [event for event in events if event.get("type") == "apps_updated"]
+    assert len(apps_updated_events) == 1
+    serialized_by_name = {app["name"]: app for app in apps_updated_events[0]["apps"]}
+    assert serialized_by_name["files"]["is_running"] is True
+    assert serialized_by_name["web"]["is_running"] is False
+    assert ("files", "http://localhost:8300") in probed_targets
+    assert ("", "http://localhost:8000") in probed_targets
+
+    # A second pass with the same answers changes nothing, so nothing is broadcast.
+    manager.refresh_app_liveness()
+    second_pass_events = []
+    while not client_queue.empty():
+        second_pass_message = client_queue.get_nowait()
+        if second_pass_message is not None:
+            second_pass_events.append(json.loads(second_pass_message))
+    assert [event for event in second_pass_events if event.get("type") == "apps_updated"] == []
+
+
 def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_file = tmp_path / "nonexistent.toml"
     agent_manager._read_apps(toml_file)
@@ -320,6 +409,8 @@ def test_get_apps_serialized(agent_manager: AgentManager) -> None:
             "label": "web-x7k9q2w1",
             "icon": "",
             "internal": False,
+            "program": "",
+            "is_running": True,
         }
     ]
 
@@ -341,6 +432,8 @@ def test_get_apps_serialized_carries_the_icon(agent_manager: AgentManager) -> No
             "label": "web-x7k9q2w1",
             "icon": icon,
             "internal": False,
+            "program": "",
+            "is_running": True,
         }
     ]
 
@@ -361,6 +454,8 @@ def test_get_apps_serialized_carries_internal(agent_manager: AgentManager) -> No
             "label": "",
             "icon": "",
             "internal": True,
+            "program": "",
+            "is_running": True,
         }
     ]
 
@@ -1121,6 +1216,26 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
     assert "user_created=true" in argv
 
 
+def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
+    """Each harness's ``[agent_types.<harness>]`` sends its launch through the OOM band
+    wrapper, naming its own binary.
+
+    A harness with no ``command`` runs unbanded: earlyoom then sheds it by raw kernel
+    score instead of the user/worker tiering, so it can take a user's chat before a
+    worker's build subprocess. That is not loud -- nothing fails, the agent just becomes
+    disproportionately likely to be killed -- so it is pinned here rather than left to be
+    noticed. Driven off ``HarnessType`` so a newly registered harness fails this until it
+    is wired up, which is exactly how codex and pi went unbanded.
+    """
+    settings = tomllib.loads((Path(__file__).parents[5] / ".mngr" / "settings.toml").read_text())
+    agent_types = settings["agent_types"]
+    for harness in HarnessType:
+        command = agent_types[harness.value].get("command", "")
+        assert "oom_priority/bin/agent_oom_launch.py" in command, f"{harness} launches unbanded"
+        # The wrapper consumes argv[1] as the binary to exec, so it must actually be there.
+        assert command.split()[-1], f"{harness} names the wrapper with no binary to exec"
+
+
 def test_chat_create_argv_carries_no_launch_settings() -> None:
     """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
     mode rides only the `first` create template (see .mngr/settings.toml), never
@@ -1216,7 +1331,9 @@ def test_chat_display_label_argv_accepted_by_live_cli() -> None:
 def _tracked_chat(manager: AgentManager, agent_id: str, name: str, display_name: str | None = None) -> None:
     labels = {} if display_name is None else {"display_name": display_name}
     with manager._lock:
-        manager._agents[agent_id] = AgentStateItem(id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None)
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None
+        )
 
 
 def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
@@ -1324,6 +1441,65 @@ def test_rename_chat_agent_rejects_a_name_with_no_usable_characters(
             manager.rename_chat_agent("agent-7", "!!!")
     finally:
         manager.stop()
+
+
+def _finished_rename(returncode: int, stderr: str, is_timed_out: bool = False) -> FinishedProcess:
+    """A rename subprocess's result, as ``run_local_command_modern_version`` shapes it."""
+    return FinishedProcess(
+        returncode=returncode,
+        stdout="",
+        stderr=stderr,
+        command=("mngr", "rename"),
+        is_timed_out=is_timed_out,
+        is_output_already_logged=False,
+    )
+
+
+def test_rename_failure_detail_names_our_own_timeout_rather_than_a_signal_number() -> None:
+    """A timed-out rename is our cap, and has to read like one.
+
+    ``run_local_command_modern_version`` SIGTERMs a run that hits its timeout
+    and reports the kill as a negative return code, so the old wording turned
+    the cap in ``_RENAME_TIMEOUT_SECONDS`` into "rename exited with code -15"
+    -- which tells the user neither what went wrong nor whether the name landed.
+    """
+    detail = _rename_failure_detail(
+        ["mngr", "rename", "agent-1", "Docs"], _finished_rename(-signal.SIGTERM, "", is_timed_out=True)
+    )
+    assert "did not finish within" in detail
+    assert "-15" not in detail
+    # It must not claim the rename did not happen: the subprocess was stopped
+    # partway through work that spans the provider's data and a live tmux session.
+    assert "may or may not have been applied" in detail
+
+
+def test_rename_failure_detail_still_reads_as_a_timeout_when_the_kill_had_to_escalate() -> None:
+    # A SIGTERM the process ignored escalates to SIGKILL, but the cause is
+    # still the timeout -- which is why the wording keys off ``is_timed_out``
+    # rather than off which signal did the stopping.
+    detail = _rename_failure_detail(["mngr", "rename"], _finished_rename(-signal.SIGKILL, "", is_timed_out=True))
+    assert "did not finish within" in detail
+
+
+def test_rename_failure_detail_prefers_what_the_command_actually_said() -> None:
+    detail = _rename_failure_detail(["mngr", "rename"], _finished_rename(1, "  name already taken  "))
+    assert detail == "name already taken"
+
+
+def test_rename_failure_detail_reports_an_ordinary_exit_code_as_one() -> None:
+    detail = _rename_failure_detail(["mngr", "rename"], _finished_rename(2, ""))
+    assert detail == "'rename' exited with code 2"
+
+
+def test_rename_failure_detail_names_a_signal_we_did_not_send() -> None:
+    # No ``is_timed_out``, so this SIGTERM was not our cap (the OOM shedder,
+    # say) and must not be dressed up as one.
+    assert _rename_failure_detail(["mngr", "rename"], _finished_rename(-signal.SIGTERM, "")) == (
+        "'rename' was stopped by signal 15"
+    )
+    assert _rename_failure_detail(["mngr", "rename"], _finished_rename(-signal.SIGKILL, "")) == (
+        "'rename' was stopped by signal 9"
+    )
 
 
 def test_create_chat_agent_mints_the_first_free_numbered_name(
@@ -1579,6 +1755,11 @@ def test_start_observe_spawns_long_lived_subprocess(
     # otherwise running pytest from inside a mngr-managed worktree would inherit
     # a config with ``is_allowed_in_pytest = false`` and the child would abort.
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    # And at an empty host dir: with the developer's real ~/.mngr, the spawned
+    # observe enumerates their live agents and queries tmux about them, which
+    # trips the tmux resource guard on any machine with running agents. The
+    # test only asserts the child stays alive, which an empty world satisfies.
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "mngr-host"))
     manager = AgentManager.build(broadcaster)
     try:
         manager._start_observe()
@@ -1636,8 +1817,9 @@ def test_start_observe_watchdog_stays_quiet_on_clean_shutdown(
         pytest.skip("mngr binary not on PATH")
 
     monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    # See test_start_observe_spawns_long_lived_subprocess for why this is needed.
+    # See test_start_observe_spawns_long_lived_subprocess for why these are needed.
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "mngr-host"))
     manager = AgentManager.build(broadcaster)
     manager._start_observe()
     # ``_start_observe`` only returns after ``run_process_in_background``
@@ -2489,7 +2671,7 @@ def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> Co
 
 
 def test_codex_model_options_is_none_without_a_cache_or_a_sidecar(agent_manager: AgentManager) -> None:
-    # No in-memory set and no sidecar on disk -> empty (the chip goes logo-only).
+    # No in-memory set and no sidecar on disk -> empty (the chip renders nothing).
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
     session = agent_manager._build_session("agent-1", HarnessType.CODEX)
     assert session.switch_options() == ()
@@ -2544,6 +2726,8 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.identity.model_id == "gpt-5.6-terra"
     assert choice.matched is not None
     assert choice.matched.id == "gpt-5.6-terra"
+
+
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 

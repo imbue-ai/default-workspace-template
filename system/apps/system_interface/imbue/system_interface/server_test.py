@@ -1,11 +1,15 @@
 """Tests for the Flask server."""
 
 import fcntl
+import html
 import io
 import json
 import os
 import queue
+import re
+import subprocess
 import time
+import tomllib
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,6 +33,7 @@ from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
@@ -56,14 +61,22 @@ from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
 from imbue.system_interface.projects import add_member
 from imbue.system_interface.projects import create_project
 from imbue.system_interface.projects import write_project_content
+from imbue.system_interface.server import FRONTEND_BUILT_HEADER
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
+from imbue.system_interface.server import _WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
+from imbue.system_interface.server import _build_stop_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
+from imbue.system_interface.server import render_frontend_not_built_page
+from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
@@ -104,6 +117,9 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
         response = test_client.get("/")
         assert response.status_code == 200
         assert "test" in response.text
+        # Both the app and the placeholder are HTTP 200 HTML, so the header is
+        # the only thing that distinguishes them to a health check.
+        assert response.headers[FRONTEND_BUILT_HEADER] == "true"
 
 
 def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
@@ -127,16 +143,344 @@ def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> Non
         assert response.headers["Cache-Control"] == "no-store"
 
 
-def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: Path) -> None:
-    """When static dir has no index.html, show a helpful message."""
+def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) -> None:
+    """The placeholder and the real app are both HTTP 200 HTML.
+
+    Only the header tells them apart, and the reveal flow's frontend probe
+    decides whether to roll back on it -- a placeholder that claimed to be the
+    app would let a reveal sign off on a UI the user cannot see.
+    """
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
         test_client = create_application(build_test_state()).test_client()
         response = test_client.get("/")
-        assert response.status_code == 200
-        assert "npm run build" in response.text
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The page keeps asking whether the bundle is back, which is the only thing
+    # that returns an open tab to the interface once something else restores it
+    # -- nothing on the page can produce one, and nothing notifies it.
+    assert FRONTEND_BUILT_HEADER in response.text
+
+
+def test_not_built_placeholder_polls_rather_than_refreshing_the_whole_page(tmp_path: Path) -> None:
+    """The reader's terminal must survive the wait for a bundle.
+
+    Returning to the interface unattended and hosting a live shell pull against
+    each other: a whole-page refresh on a timer would tear down the terminal
+    session every few seconds, right while it is being typed into. So the
+    scripted page asks for the app-shell marker and reloads only once it says
+    the bundle is back. A page-level ``http-equiv="refresh"`` may therefore
+    appear only inside ``<noscript>``, where there is no terminal to protect.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    scriptless_only = re.sub(r"<noscript>.*?</noscript>", "", response.text, flags=re.DOTALL)
+    assert 'http-equiv="refresh"' not in scriptless_only
+    assert 'http-equiv="refresh"' in response.text
+    # HEAD, because the marker is a header: the poll must not pull the page's
+    # own body down every tick for the lifetime of the outage.
+    assert '"HEAD"' in response.text
+
+
+def test_not_built_placeholder_offers_the_registered_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The way out of a missing interface is a shell, and the page has to name it.
+
+    The terminal's origin label is minted per workspace, so the page cannot
+    carry it -- it is read from the app registry at render time and handed to
+    the script, which derives the origin from the browser's own location. If
+    the label never reaches the page there is no frame to open, and the reader
+    is back to prose about a repair they cannot perform here.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    assert '"terminal-x7k9q2w1"' in response.text
+    assert 'id="terminal"' in response.text
+
+
+def test_not_built_placeholder_renders_without_a_terminal_to_offer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace with no registered terminal still gets a usable page.
+
+    ttyd registers itself alongside the other services rather than before them,
+    so the placeholder can be served in the window where there is nothing to
+    offer -- and this page exists precisely for states where things are missing.
+    It must degrade to the prose rather than fail to render or show an empty
+    frame pointed at nowhere.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text('[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nlabel = "browser-aaaa1111"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The empty label is what the script reads as "no terminal", so the frame
+    # stays hidden instead of loading a made-up origin.
+    assert 'var terminalLabel = "";' in response.text
+    assert "needs to be rebuilt" in response.text
+
+
+def _chat_create_template() -> dict[str, object]:
+    """The workspace's own ``[create_templates.chat]`` block, read from its settings.
+
+    Parsed straight out of the TOML rather than through mngr's config loader: the
+    question is what this repo ships, not what a particular machine resolves, and
+    the loader would fold in user and local layers that a workspace being repaired
+    may not have. ``server.py`` resolves the workspace root the same way.
+    """
+    settings = tomllib.loads((_WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
+    return settings["create_templates"]["chat"]
+
+
+def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
+    """The suggested agent has to come up as a chat, or the suggestion misleads.
+
+    The page tells a reader to create an agent to repair the workspace, and an
+    agent created with the wrong flags is a different thing: a worktree of the
+    tree instead of the tree itself, in the wrong memory band, without the chat
+    role. So every flag the page suggests must be one the app itself passes
+    when it creates a chat, and the command must be one the live CLI accepts.
+    """
+    argv = list(_NOT_BUILT_REPAIR_ARGV)
+    assert_mngr_argv_valid(argv)
+
+    real = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="repair",
+        agent_id="agent-123",
+        primary_labels={},
+        harness=HarnessType.CLAUDE,
+    )
+    assert argv[argv.index("--template") + 1] == real[real.index("--template") + 1]
+    assert "user_created=true" in real
+
+    # ``--no-connect`` is the one flag deliberately inverted: it exists to stop a
+    # headless caller attaching, and a reader typing this wants to land in the
+    # conversation.
+    assert "--no-connect" in real
+    assert "--connect" in argv
+    assert "--no-connect" not in argv
+
+    # ``--type`` is the one the builder must pass and the page must not: the app
+    # is serving a harness the user picked from a menu, while the page has no
+    # such choice to carry and would be pinning every reader to whichever harness
+    # was current when this string was written. Omitted, mngr resolves it from
+    # ``[commands.create] type``, so the repair agent comes up on whatever this
+    # workspace opens chats as.
+    assert "--type" in real
+    assert "--type" not in argv
+
+    # ``--transfer`` is left out for a different reason, and a weaker one: the
+    # ``chat`` template already sets it, so the line does not have to. Unlike the
+    # harness this is not the reader's to choose -- an agent in a worktree would
+    # repair a copy of the workspace instead of the workspace -- so the template
+    # is read rather than assumed. Losing that setting has to fail here and not
+    # in a workspace that has already lost its interface.
+    assert "--transfer" in real
+    assert "--transfer" not in argv
+    assert _chat_create_template()["transfer"] == "none"
+
+    # No agent name, so mngr mints one and nothing collides with an earlier run.
+    # The whole line has to stay flags-only for that: ``mngr create`` reads bare
+    # words as positionals (the name, then the agent type), so one anywhere past
+    # the subcommand -- not just directly after it -- puts the collision back.
+    # ``assert_mngr_argv_valid`` does not catch that: it checks option shape and
+    # throws the positionals away. A value-taking flag added to the line without
+    # being named here reports its value as a positional, which fails in the
+    # direction that gets looked at.
+    assert argv[:2] == ["mngr", "create"]
+    flags_taking_a_value = {"--template", "--transfer", "--label", "--message"}
+    positionals = [
+        token
+        for index, token in enumerate(argv[2:], start=2)
+        if not token.startswith("--") and argv[index - 1] not in flags_taking_a_value
+    ]
+    assert positionals == [], f"the suggested line passes positional arguments: {positionals}"
+
+    # The message is what makes the created agent useful without the reader
+    # having to describe anything, so it has to survive the shell as one word of
+    # plain prose -- an escape dropped from the line above splits it into several
+    # words, or leaves the escapes themselves in what the agent is told.
+    assert argv[argv.index("--message") + 1] == (
+        "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
+    )
+
+    # The shell prefix is not part of the argv the CLI validates, but it is what
+    # makes the connect half work from the workspace's own tmux-backed terminals.
+    assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
+
+
+def test_not_built_repair_message_quotes_the_heading_the_reader_is_looking_at() -> None:
+    """What the message quotes has to be what the page says, or it quotes nothing.
+
+    The message's whole claim on the agent's attention is that it repeats the
+    line the reader is looking at, so the two are one statement written twice.
+    Nothing else notices when they part: reword the heading and the message still
+    parses, still validates against the CLI, and still reads as a quotation --
+    of a sentence that now appears nowhere. The comparison is case-insensitive
+    because the message is in the reader's voice and the heading is a title.
+    """
+    message = _NOT_BUILT_REPAIR_ARGV[_NOT_BUILT_REPAIR_ARGV.index("--message") + 1]
+    quoted = re.search(r'"(.*?)[,.?!]?"', message)
+    assert quoted is not None, f"the message no longer quotes anything: {message}"
+
+    heading = re.search(r"<h1>(.*?)</h1>", render_frontend_not_built_page(None), re.DOTALL)
+    assert heading is not None, "the page no longer carries a heading"
+    assert quoted.group(1).lower().startswith(heading.group(1).strip().lower())
+
+
+def _repair_line_shown_on(page: str) -> str:
+    """The repair line as the page's own markup hands it to the reader.
+
+    Undoing the escaping is what the browser does to fill ``textContent``, which
+    is both what a reader sees in the block and what the copy button puts on the
+    clipboard, so this is the line the page actually offers.
+    """
+    shown = re.search(r'<pre id="repair-command">(.*?)</pre>', page, re.DOTALL)
+    assert shown is not None, "the page no longer carries a repair-command block"
+    return html.unescape(shown.group(1))
+
+
+def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
+    """The suggested line is prose, so the page has to render it as written.
+
+    It carries a ``--message`` a maintainer will reword, and a browser reads an
+    ``&`` in it as the start of an entity reference and a ``<`` as the start of
+    a tag. Either would show a line other than the one the tests validated, and
+    the copy button reads ``textContent``, so it would put that other line on
+    the reader's clipboard.
+    """
+    with patch("imbue.system_interface.server._NOT_BUILT_REPAIR_COMMAND", 'mngr create --message "a & b <c>"'):
+        page = render_frontend_not_built_page(None)
+
+    assert 'mngr create --message "a &amp; b &lt;c&gt;"' in page
+    assert "<c>" not in page
+
+    # And the escaping has to be transparent to the line that ships: undoing it
+    # is what the browser does to fill ``textContent``, so this is the line the
+    # reader reads and copies, and it has to be the one the CLI check and the
+    # shell split validated. The assertions above only show that escaping
+    # happens; this is what says the real command survives it.
+    shown = _repair_line_shown_on(render_frontend_not_built_page(None))
+    assert shown == _NOT_BUILT_REPAIR_COMMAND
+
+
+def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
+    """The argv the CLI validates has to be the argv the reader's shell builds.
+
+    The readable line is the source of truth and the argv is parsed back out of
+    it, which is only sound while the parse agrees with a shell's. ``shlex.split``
+    quotes and splits but expands nothing, so a ``$`` or a backtick worded into
+    the message -- prose, and prose gets reworded -- would reach the argv as
+    itself, leaving the sentence assertion and the live-CLI check above both
+    green while the line a reader copies tells the agent something else.
+
+    So the split is checked against a real shell rather than assumed to match
+    one. ``set --`` keeps the flags from being read as options to ``set`` and
+    keeps the line's first word from being run as a command -- but the words are
+    still expanded on the way in, which is how a ``$`` is caught here. Command
+    substitution is an expansion too, and that one would be *run* rather than
+    reported, so it is refused before a shell ever sees the line.
+    """
+    for substitution in ("`", "$("):
+        assert substitution not in _NOT_BUILT_REPAIR_MNGR_COMMAND, (
+            f"the suggested line contains a command substitution ({substitution}), which the shell below "
+            "would execute rather than report: word it out of the message"
+        )
+
+    printed_words = subprocess.run(
+        ["sh", "-c", f'set -- {_NOT_BUILT_REPAIR_MNGR_COMMAND}\nprintf "%s\\n" "$@"'],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    assert printed_words.stdout.splitlines() == list(_NOT_BUILT_REPAIR_ARGV)
+
+
+def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:
+    """A missing asset must 404, never come back as the SPA shell.
+
+    The catch-all would answer with index.html as text/html, which the browser
+    refuses as a module script -- a blank screen with no hint of the cause.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/assets/index-abc123.js")
+
+    assert response.status_code == 404
+    # The app-shell marker is absent, proving the request did not reach the
+    # catch-all and come back as index.html with a 200.
+    assert FRONTEND_BUILT_HEADER not in response.headers
+
+
+def test_assets_do_not_reveal_whether_files_outside_the_directory_exist(tmp_path: Path) -> None:
+    """A ``..`` path must get the same plain 404 whether or not its target exists.
+
+    Flask's ``<path:>`` converter passes ``..`` segments through unnormalized, so
+    any pre-check that joins the raw filename onto the assets directory stats
+    paths outside it -- and a response that differs between an existing and a
+    missing target is an existence oracle for the whole filesystem.
+    """
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>app</html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state()).test_client()
+        # index.html exists one level above assets/; a file two levels up does not.
+        exists_outside = test_client.get("/assets/../index.html")
+        missing_outside = test_client.get("/assets/../../no-such-file")
+
+    for response in (exists_outside, missing_outside):
+        assert response.status_code == 404
+        assert response.data == b""
+
+
+def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> None:
+    """The route must survive being constructed before the bundle exists.
+
+    Deciding at construction time whether to register it turned a recoverable
+    state into a stuck one: rebuilding no longer helped until a restart.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        # App built while there is no bundle at all, as it is on a cold start
+        # into a wiped tree.
+        test_client = create_application(build_test_state()).test_client()
+        (static_dir / "assets").mkdir()
+        (static_dir / "assets" / "index-abc123.js").write_text("console.log('app');")
+        response = test_client.get("/assets/index-abc123.js")
+
+    assert response.status_code == 200
+    assert "javascript" in response.headers["Content-Type"]
 
 
 def test_list_agents_endpoint(client: FlaskClient) -> None:
@@ -658,9 +1002,16 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     data = response.get_json()
     assert "claude" in data
     claude = data["claude"]
-    assert [option["id"] for option in claude["options"]] == ["opus[1m]", "sonnet", "haiku"]
-    # Each option carries the suffix-free reported id the matcher keys on.
-    assert claude["options"][0]["harness_reported_model_id"] == "claude-opus-5"
+    offered = [option["id"] for option in claude["options"] if option["in_picker"]]
+    assert offered == ["fable[1m]", "opus[1m]", "sonnet[1m]", "haiku"]
+    # The rest are display-only: served so a live read still resolves, never offered.
+    assert any(not option["in_picker"] for option in claude["options"])
+    # Each option carries the suffix-free reported id the matcher keys on. Keyed by id
+    # rather than by position, so reordering the picker does not break this.
+    reported = {option["id"]: option["harness_reported_model_id"] for option in claude["options"]}
+    assert reported["fable[1m]"] == "claude-fable-5"
+    assert reported["opus[1m]"] == "claude-opus-5"
+    assert reported["sonnet[1m]"] == "claude-sonnet-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
     assert claude["powered_by_text"] == ""
 
@@ -724,11 +1075,16 @@ def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.post(
             f"/api/agents/{agent_id}/model",
-            json={"model_id": "sonnet", "effort": "high", "fast": False, "axes": ["model", "effort"]},
+            json={
+                "model_id": "sonnet[1m]",
+                "effort": "high",
+                "fast": False,
+                "axes": ["model", "effort"],
+            },
         )
 
     assert response.status_code == 200
-    assert messenger.sent == [(agent_id, "/model sonnet"), (agent_id, "/effort high")]
+    assert messenger.sent == [(agent_id, "/model sonnet[1m]"), (agent_id, "/effort high")]
 
 
 def test_set_model_rejects_unknown_model(tmp_path: Path) -> None:
@@ -1272,7 +1628,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
             "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent", return_value=True) as mock_send,
+        patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
 
@@ -1870,6 +2226,7 @@ def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> N
     fake_watcher = SimpleNamespace(
         set_queue_snapshot_callback=lambda _callback: None,
         notify_idle=lambda: [],
+        set_flush_hooks=lambda _send, _is_alive: None,
         get_all_events=_record_get_all_events,
         start=lambda: calls.append("start"),
     )
@@ -3083,6 +3440,42 @@ def test_destroy_argv_accepted_by_live_cli() -> None:
     assert_mngr_argv_valid(_build_destroy_command("demo"))
 
 
+def test_stop_argv_accepted_by_live_cli() -> None:
+    """The ``mngr stop`` argv, confronted with the live CLI tree exactly as the
+    destroy argv is."""
+    assert_mngr_argv_valid(_build_stop_command("demo"))
+
+
+def test_stop_unknown_agent_returns_404(client: FlaskClient) -> None:
+    """POST /api/agents/<id>/stop returns 404 for an unknown agent."""
+    response = client.post("/api/agents/nonexistent/stop")
+    assert response.status_code == 404
+
+
+def test_stop_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
+    """POST /api/agents/<id>/stop returns 400 for the services agent.
+
+    Stopping the services agent would take down every supervised service in
+    the workspace, so the endpoint refuses it exactly as destroy does -- and
+    the guard runs before any subprocess, so the agent's tracked state is
+    untouched.
+    """
+    agent_manager: AgentManager = state_of(app).agent_manager
+    services_agent = AgentStateItem(
+        id="services-stop-1",
+        name="system-services",
+        state="RUNNING",
+        labels={"is_primary": "true", "workspace": "my-ws"},
+        work_dir="/home/user/workspace",
+    )
+    agent_manager._agents[services_agent.id] = services_agent
+
+    response = client.post(f"/api/agents/{services_agent.id}/stop")
+    assert response.status_code == 400
+    assert "is_primary" in response.get_json()["detail"]
+    assert services_agent.id in agent_manager._agents
+
+
 # -- Agent file serving (markdown images + download links) --------------------
 #
 # An agent writes a file and references its absolute on-disk path in markdown;
@@ -3415,6 +3808,7 @@ def test_create_project_slugifies_and_registers(
         "glyph": 6,
         "has_content": False,
         "members": [],
+        "shortcut_overrides": {},
     }
     list_response = client.get("/api/projects")
     assert [project["project_id"] for project in list_response.get_json()["projects"]] == [
@@ -3551,248 +3945,126 @@ def test_update_project_settings_keeps_id_content_and_members(
         "glyph": 7,
         "has_content": True,
         "members": ["terminal:terminal-1"],
+        "shortcut_overrides": {},
     }
     assert client.get("/api/projects/alpha").get_json()["layout"] == layout_data
     unknown = client.post("/api/projects/gone/settings", json={"name": "Gone", "color": "#F0603A", "glyph": 0})
     assert unknown.status_code == 404
 
 
-def test_delete_project_reports_the_fallback_and_guards_the_last_one(
+def test_delete_project_reports_the_fallback(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Deleting reports the fallback project; the last remaining one is protected."""
+    """Deleting reports the fallback project clients should switch to."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
 
     delete_scratch = client.post("/api/projects/scratch/delete")
     assert delete_scratch.status_code == 200
-    assert delete_scratch.get_json() == {
-        "fallback_id": "project-1",
-        "stopped": [],
-        "failed": [],
-        "left_running": [],
-    }
-
-    delete_last = client.post("/api/projects/project-1/delete")
-    assert delete_last.status_code == 409
+    assert delete_scratch.get_json() == {"fallback_id": "project-1"}
 
     delete_unknown = client.post("/api/projects/scratch/delete")
     assert delete_unknown.status_code == 404
 
 
-def test_delete_project_stops_its_terminals_and_browsers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Delete tears down the members that have a stop verb and reports the rest.
+def test_deleting_the_last_project_leaves_the_machine_with_zero(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """There is no undeletable project any more: the last one goes too, landing on Everything."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
 
-    A terminal's tmux session is killed and a fleet browser is retired through
-    the browser daemon -- the same teardown their own destroy endpoints use. A
-    chat is an agent and an app is supervised elsewhere, so both are reported as
-    still running rather than being killed off the back of a project delete.
+    response = client.post("/api/projects/project-1/delete")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"fallback_id": "everything"}
+    listed = client.get("/api/projects").get_json()
+    assert listed == {"projects": [], "last_active_id": "everything"}
+    # Everything itself is unaffected: it has no registry entry to have lost,
+    # and reading and writing its content keeps working with zero projects.
+    assert client.get("/api/projects/everything").get_json() == {"layout": None}
+    layout_data = {"dockview": {}, "panelParams": {}}
+    assert client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+    # A read after the delete does not resurrect the starter project.
+    assert client.get("/api/projects").get_json()["projects"] == []
+    # The rail's "New project" path still works from zero.
+    assert (
+        client.post("/api/projects", json={"name": "Fresh Start", "color": "#3B82F6", "glyph": 1}).status_code == 200
+    )
+
+
+def test_delete_project_never_touches_its_members(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deleting a project is a pure view operation: nothing it showed is stopped.
+
+    A terminal's tmux session is never killed and a fleet browser is never
+    contacted through its daemon -- unlike their own per-tab destroy verbs, a
+    project delete has no stop control over any kind of member. Every member
+    stays filed wherever else it already was and in Everything.
     """
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    killed_session = FinishedProcess(
-        returncode=0,
-        stdout="",
-        stderr="",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
-    with serve_app(_build_stub_browser_backend()) as backend:
-        test_client = _client_with_browser_service(backend.http_url)
-        assert (
-            test_client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code
-            == 200
-        )
-        for ref in ("terminal:terminal-4", "service:browser?session=research", "chat:agent-9", "service:web"):
-            assert test_client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
-        with patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session
-        ) as mock_run:
-            response = test_client.post("/api/projects/scratch/delete")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["stopped"] == ["terminal:terminal-4", "service:browser?session=research"]
-    assert body["failed"] == []
-    assert body["left_running"] == ["chat:agent-9", "service:web"]
-    assert body["fallback_id"] == "project-1"
-    assert mock_run.call_args.kwargs["command"] == ["tmux", "kill-session", "-t", "=terminal-4"]
-
-
-def test_delete_project_reports_a_terminal_it_could_not_stop(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A tmux session that survives the kill is reported as failed, not as stopped."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    failed_kill = FinishedProcess(
-        returncode=1,
-        stdout="",
-        stderr="can't kill session",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
-    still_listed = FinishedProcess(
-        returncode=0,
-        stdout="terminal-4\t$1\t/work\n",
-        stderr="",
-        command=("tmux", "list-sessions"),
-        is_output_already_logged=False,
-    )
-    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
-    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:terminal-4"}).status_code == 200
-
-    with patch(
-        "imbue.system_interface.server.run_local_command_modern_version",
-        side_effect=[failed_kill, still_listed],
-    ):
-        response = client.post("/api/projects/scratch/delete")
-
-    assert response.status_code == 200
-    assert response.get_json()["failed"] == ["terminal:terminal-4"]
-    assert response.get_json()["stopped"] == []
-
-
-def test_delete_project_reports_a_browser_it_could_not_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no browser daemon registered, the browser is reported as still running."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     test_client = _client_with_browser_service(None)
     assert (
         test_client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
     )
-    assert (
-        test_client.post("/api/projects/scratch/members", json={"ref": "service:browser?session=research"}).status_code
-        == 200
-    )
-
-    response = test_client.post("/api/projects/scratch/delete")
-
-    assert response.status_code == 200
-    assert response.get_json()["failed"] == ["service:browser?session=research"]
-    assert response.get_json()["stopped"] == []
-
-
-def test_delete_project_never_stops_an_agent_tmux_session(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A ``terminal:`` ref naming an mngr agent session is refused, not killed."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
-    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:mngr-alice"}).status_code == 200
+    members = ("terminal:terminal-4", "service:browser?session=research", "chat:agent-9", "service:web")
+    for ref in members:
+        assert test_client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
+        # Also filed in the surviving project, so membership elsewhere is
+        # verifiably untouched by the delete below.
+        assert test_client.post("/api/projects/project-1/members", json={"ref": ref}).status_code == 200
 
     with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
-        response = client.post("/api/projects/scratch/delete")
+        response = test_client.post("/api/projects/scratch/delete")
 
     assert response.status_code == 200
-    assert response.get_json()["failed"] == ["terminal:mngr-alice"]
+    assert response.get_json() == {"fallback_id": "project-1"}
     mock_run.assert_not_called()
+    remaining = test_client.get("/api/projects").get_json()["projects"]
+    assert len(remaining) == 1
+    assert set(remaining[0]["members"]) == set(members)
 
 
-def test_delete_project_drops_the_names_of_what_it_stopped(
-    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_delete_project_keeps_the_names_and_recency_of_its_members(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A stopped member loses its name, so a reused ref inherits no dead one.
-
-    Deleting a project kills its terminals, and the allocator hands the lowest
-    free ``terminal-<N>`` straight back out -- so a name left behind would land
-    on the next terminal to answer to that ref. Only what actually stopped is
-    cleared: a member the delete left running keeps the name it is known by, and
-    every client is told about the ones that went.
-    """
+    """Nothing is stopped, so no member's name or recency is cleared by a delete."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    killed_session = FinishedProcess(
-        returncode=0,
-        stdout="",
-        stderr="",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
     assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
     for ref in ("terminal:terminal-4", "service:docs"):
         assert client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
     assert client.post("/api/member-titles", json={"ref": "terminal:terminal-4", "title": "Build"}).status_code == 200
     assert client.post("/api/member-titles", json={"ref": "service:docs", "title": "Planning"}).status_code == 200
-    # Registered last, so the queue holds the delete's broadcasts and nothing
-    # the setup above already announced.
-    client_queue = _register_fake_client(app, "client-1", "desktop")
+    assert client.post("/api/member-last-used", json={"ref": "terminal:terminal-4"}).status_code == 200
 
-    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
-        response = client.post("/api/projects/scratch/delete")
+    response = client.post("/api/projects/scratch/delete")
 
     assert response.status_code == 200
-    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
-    # The app was only left project-less, not stopped, so it keeps its name.
-    assert client.get("/api/member-titles").get_json() == {"titles": {"service:docs": "Planning"}}
-    assert _next_broadcast_message(client_queue) == {
-        "type": "member_title_changed",
-        "ref": "terminal:terminal-4",
-        "title": None,
+    assert client.get("/api/member-titles").get_json() == {
+        "titles": {"terminal:terminal-4": "Build", "service:docs": "Planning"}
     }
+    assert "terminal:terminal-4" in client.get("/api/member-last-used").get_json()["last_used"]
 
 
-def test_delete_project_sweeps_stopped_members_out_of_every_view(
+def test_delete_project_broadcasts_only_the_id_and_fallback(
     app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A member the delete stopped also leaves every other view, Everything included.
-
-    The deleted project's own file goes with the delete, but the stopped
-    terminal's panel also sits in Everything's saved arrangement -- and its ref
-    may still be filed in another project. Left anywhere, the panel would
-    restore as a dead tab that silently respawns a fresh tmux session under the
-    reused name. The sweep is announced so clients still showing the tab drop
-    it live instead of autosaving it back.
-    """
+    """The ``project_deleted`` broadcast carries no per-member stop report any more."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    killed_session = FinishedProcess(
-        returncode=0,
-        stdout="",
-        stderr="",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
     assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
-    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:terminal-4"}).status_code == 200
-    # The same terminal is filed in the surviving project too, and docked in
-    # Everything's saved arrangement.
-    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-4"}).status_code == 200
-    layout_data = {
-        "dockview": {
-            "panels": {
-                "terminal-session-terminal-4": {"id": "terminal-session-terminal-4"},
-                "chat-1": {"id": "chat-1"},
-            }
-        },
-        "panelParams": {"terminal-session-terminal-4": {"terminalSessionName": "terminal-4"}},
-    }
-    assert client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
     client_queue = _register_fake_client(app, "client-1", "desktop")
 
-    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
-        response = client.post("/api/projects/scratch/delete")
+    assert client.post("/api/projects/scratch/delete").status_code == 200
 
-    assert response.status_code == 200
-    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
-    remaining_everything = client.get("/api/projects/everything").get_json()["layout"]
-    assert set(remaining_everything["dockview"]["panels"]) == {"chat-1"}
-    assert client.get("/api/projects").get_json()["projects"][0]["members"] == []
     assert _next_broadcast_message(client_queue) == {
-        "type": "project_panel_removed",
-        "panel_id": "terminal-session-terminal-4",
-        "ref": "terminal:terminal-4",
-        "project_ids": ["project-1", "everything"],
+        "type": "project_deleted",
+        "project_id": "scratch",
+        "fallback_id": "project-1",
     }
-    assert _next_broadcast_message(client_queue) == {"type": "project_members_changed", "project_ids": ["project-1"]}
-    assert _next_broadcast_message(client_queue)["type"] == "project_deleted"
 
 
 def test_add_member_files_a_ref_and_lists_it(
@@ -3827,6 +4099,23 @@ def test_add_member_rejects_bad_bodies_and_unknown_projects(
     assert unknown_project.status_code == 404
 
 
+def test_add_member_without_a_primary_agent_degrades_gracefully(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ``MNGR_AGENT_ID`` means nothing persists, so this must not 500.
+
+    Mirrors ``GET /api/projects/members``, the read side of the same resource,
+    which already answers an empty map rather than raising in this dev/test
+    setup with no primary agent configured.
+    """
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    test_client = create_application(build_test_state()).test_client()
+
+    response = test_client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-1"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"project_id": "project-1", "members": []}
+
+
 def test_add_member_files_a_ref_another_project_already_shows(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3843,6 +4132,91 @@ def test_add_member_files_a_ref_another_project_already_shows(
         project["project_id"]: project["members"] for project in client.get("/api/projects").get_json()["projects"]
     }
     assert members_by_id == {"project-1": ["service:web"], "alpha": ["service:web"]}
+
+
+def test_set_project_shortcut_without_a_primary_agent_degrades_gracefully(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ``MNGR_AGENT_ID`` means nothing persists, so this must not 500.
+
+    Mirrors the add-member endpoint's soft no-op for the same dev/test setup;
+    a malformed body still answers 400, so validation is not skipped with it.
+    """
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    test_client = create_application(build_test_state()).test_client()
+
+    response = test_client.post("/api/projects/project-1/shortcuts", json={"shortcut": "chat", "is_pinned": False})
+    assert response.status_code == 200
+    assert response.get_json() == {"project_id": "project-1", "shortcut_overrides": {}}
+
+    bad_body = test_client.post("/api/projects/project-1/shortcuts", json={"shortcut": "chat"})
+    assert bad_body.status_code == 400
+
+
+def test_set_project_shortcut_moves_it_between_the_rail_and_all_apps(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unpinning records the shortcut; pinning it back clears it. Idempotent either way."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    unpin = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": False})
+    assert unpin.status_code == 200
+    assert unpin.get_json() == {"project_id": "project-1", "shortcut_overrides": {"terminal": {"is_pinned": False}}}
+
+    listed = next(p for p in client.get("/api/projects").get_json()["projects"] if p["project_id"] == "project-1")
+    assert listed["shortcut_overrides"] == {"terminal": {"is_pinned": False, "mode": None}}
+
+    again = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": False})
+    assert again.get_json()["shortcut_overrides"] == {"terminal": {"is_pinned": False}}
+
+    repin = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": True})
+    assert repin.get_json() == {"project_id": "project-1", "shortcut_overrides": {}}
+
+
+def test_set_project_shortcut_records_a_mode_flip_and_app_modes(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Modes ride the same endpoint as pinning, sparsely: only deviations from
+    the code-side defaults (chat -> new, everything else -> focus) persist."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    url = "/api/projects/project-1/shortcuts"
+
+    flipped = client.post(url, json={"shortcut": "chat", "mode": "focus"})
+    assert flipped.status_code == 200
+    assert flipped.get_json() == {"project_id": "project-1", "shortcut_overrides": {"chat": {"mode": "focus"}}}
+
+    app_mode = client.post(url, json={"shortcut": "app:docs", "mode": "new"})
+    assert app_mode.status_code == 200
+    assert app_mode.get_json()["shortcut_overrides"] == {"chat": {"mode": "focus"}, "app:docs": {"mode": "new"}}
+
+    # Flipping back to the defaults clears the entries back out.
+    assert client.post(url, json={"shortcut": "chat", "mode": "new"}).status_code == 200
+    back = client.post(url, json={"shortcut": "app:docs", "mode": "focus"})
+    assert back.get_json() == {"project_id": "project-1", "shortcut_overrides": {}}
+
+
+def test_set_project_shortcut_refuses_a_bad_body_or_an_unknown_target(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    url = "/api/projects/project-1/shortcuts"
+
+    assert client.post(url, json={"shortcut": "", "is_pinned": False}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal"}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal", "is_pinned": "no"}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal", "mode": 7}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal", "mode": "sometimes"}).status_code == 400
+    # An app's pin is its membership, so an app: key refuses is_pinned.
+    assert client.post(url, json={"shortcut": "app:docs", "is_pinned": False}).status_code == 400
+    # Not a shortcut: refused rather than stored, since it would hide nothing
+    # while riding every list response.
+    assert client.post(url, json={"shortcut": "made-up", "is_pinned": False}).status_code == 400
+    assert (
+        client.post("/api/projects/gone/shortcuts", json={"shortcut": "terminal", "is_pinned": False}).status_code
+        == 404
+    )
 
 
 def test_remove_member_unfiles_it_without_touching_the_object(
@@ -4399,38 +4773,6 @@ def test_delete_project_panel_drops_the_objects_recency(
     assert set(client.get("/api/member-last-used").get_json()["last_used"]) == {"chat:agent-7"}
 
 
-def test_delete_project_drops_the_recency_of_what_it_stopped(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A stopped member loses its recency along with its name.
-
-    Only what actually stopped is cleared: a member the delete left running was
-    genuinely in front of the user and keeps its place in the launcher.
-    """
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    killed_session = FinishedProcess(
-        returncode=0,
-        stdout="",
-        stderr="",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
-    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
-    for ref in ("terminal:terminal-4", "chat:agent-9"):
-        assert client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
-        assert client.post("/api/member-last-used", json={"ref": ref}).status_code == 200
-
-    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
-        response = client.post("/api/projects/scratch/delete")
-
-    assert response.status_code == 200
-    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
-    # The chat was only left project-less, not stopped, so it keeps its recency.
-    assert set(client.get("/api/member-last-used").get_json()["last_used"]) == {"chat:agent-9"}
-
-
 def test_member_last_used_changes_broadcast_to_every_client(app: Flask) -> None:
     """A touch and a destroy each announce the object's recency, machine-wide.
 
@@ -4580,6 +4922,99 @@ def test_deregister_app_broadcasts_the_projects_it_left(tmp_path: Path, monkeypa
     }
 
 
+def _app_with_supervised_app(name: str, program: str) -> Flask:
+    """A workspace app whose registry holds one supervised app under ``name``."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [AppEntry(name=name, url="http://localhost:8090", program=program)]
+    return create_application(build_test_state(agent_manager=agent_manager))
+
+
+def test_stop_and_start_app_drive_the_supervised_program(
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    """Stop and start reach supervisord and answer the new derived liveness.
+
+    Both are idempotent: stopping a stopped program and starting a running one
+    are the no-op case, not errors -- there is nothing for the caller to
+    recover from.
+    """
+    fake_supervisor.statename_by_program["docs-viewer"] = "RUNNING"
+    test_client = _app_with_supervised_app("docs-viewer", "docs-viewer").test_client()
+
+    stopped = test_client.post("/api/apps/docs-viewer/stop")
+    assert stopped.status_code == 200
+    assert stopped.get_json() == {"name": "docs-viewer", "is_running": False}
+    assert fake_supervisor.statename_by_program["docs-viewer"] == "STOPPED"
+
+    stopped_again = test_client.post("/api/apps/docs-viewer/stop")
+    assert stopped_again.status_code == 200
+    assert stopped_again.get_json() == {"name": "docs-viewer", "is_running": False}
+
+    started = test_client.post("/api/apps/docs-viewer/start")
+    assert started.status_code == 200
+    assert started.get_json() == {"name": "docs-viewer", "is_running": True}
+    assert fake_supervisor.statename_by_program["docs-viewer"] == "RUNNING"
+
+    started_again = test_client.post("/api/apps/docs-viewer/start")
+    assert started_again.status_code == 200
+    assert started_again.get_json() == {"name": "docs-viewer", "is_running": True}
+
+
+def test_stop_app_refuses_the_essential_services_unknown_names_and_programless_rows(
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    """The essential set is refused by name even when a hand-edited registry
+    grants it a program; a row without a program has nothing here to stop."""
+    fake_supervisor.statename_by_program["terminal"] = "RUNNING"
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [
+        AppEntry(name="terminal", url="http://localhost:7681", program="terminal"),
+        AppEntry(name="docs-viewer", url="http://localhost:8090"),
+    ]
+    test_client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    assert test_client.post("/api/apps/terminal/stop").status_code == 400
+    assert test_client.post("/api/apps/system_interface/stop").status_code == 400
+    assert test_client.post("/api/apps/terminal/start").status_code == 400
+    assert test_client.post("/api/apps/unknown-app/stop").status_code == 404
+    assert test_client.post("/api/apps/unknown-app/start").status_code == 404
+    programless = test_client.post("/api/apps/docs-viewer/stop")
+    assert programless.status_code == 400
+    assert "no supervised program" in programless.get_json()["detail"]
+    # Nothing above reached supervisord: the terminal is still running.
+    assert fake_supervisor.statename_by_program["terminal"] == "RUNNING"
+
+
+def test_stop_app_reports_an_unreachable_supervisord(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(tmp_path / "absent.sock"))
+    test_client = _app_with_supervised_app("docs-viewer", "docs-viewer").test_client()
+
+    response = test_client.post("/api/apps/docs-viewer/stop")
+
+    assert response.status_code == 502
+    assert "could not reach supervisord" in response.get_json()["detail"]
+
+
+def test_stop_app_broadcasts_the_refreshed_liveness(
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    """The stop's own request lands the dimmed state on every client -- the
+    liveness refresh runs inside the request rather than waiting for a poll."""
+    fake_supervisor.statename_by_program["docs-viewer"] = "RUNNING"
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [AppEntry(name="docs-viewer", url="http://localhost:8090", program="docs-viewer")]
+    workspace_app = create_application(build_test_state(agent_manager=agent_manager))
+    test_client = workspace_app.test_client()
+    client_queue = _register_fake_client(workspace_app, "client-1", "desktop")
+
+    assert test_client.post("/api/apps/docs-viewer/stop").status_code == 200
+
+    message = _next_broadcast_message(client_queue)
+    assert message["type"] == "apps_updated"
+    assert message["apps"][0]["name"] == "docs-viewer"
+    assert message["apps"][0]["is_running"] is False
+
+
 def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
     """Create, autosave, settings, and delete each reach all connected clients."""
     client_queue = _register_fake_client(app, "client-1", "desktop")
@@ -4594,6 +5029,7 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
         "glyph": 2,
         "has_content": False,
         "members": [],
+        "shortcut_overrides": {},
     }
 
     assert client.post("/api/projects/alpha", json={"layout": {}, "client_id": "client-1"}).status_code == 200
@@ -4616,9 +5052,6 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
         "type": "project_deleted",
         "project_id": "alpha",
         "fallback_id": "project-1",
-        "stopped": [],
-        "failed": [],
-        "left_running": [],
     }
 
 
@@ -4711,3 +5144,241 @@ def test_websocket_snapshot_exposes_each_agent_project_label(app: Flask) -> None
     assert first["type"] == "agents_updated"
     project_by_agent_id = {agent["id"]: agent["project"] for agent in first["agents"]}
     assert project_by_agent_id == {"chat-1": "alpha", "chat-2": None}
+
+
+def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
+    """The placeholder derives a service origin, so it carries a copy of the rule.
+
+    ``frontend/src/origin.ts`` is canonical and two mirrors already exist
+    (``layout_ops.py`` and ``system/scripts/layout.py``, pinned to each other by
+    ``layout_ops_test``). The placeholder cannot import any of them -- it runs in
+    the browser, in the one state where the bundle those live in is missing -- so
+    it holds a fourth copy, and this pins it to the source of truth the way the
+    others are pinned. Without it the rule can be corrected in one place and
+    silently rot in the page that only renders when everything else is broken.
+    """
+    origin_ts = Path(__file__).parents[2] / "frontend" / "src" / "origin.ts"
+    canonical = re.search(r"WORKSPACE_COORDINATE_LABEL = (/.+/i);", origin_ts.read_text())
+    assert canonical is not None, f"the canonical regex is no longer declared in {origin_ts}"
+
+    page = render_frontend_not_built_page("terminal-x7k9q2w1")
+    in_page = re.findall(r"(/\^\(\?:host\|agent\).+?/i)\.test\(", page)
+    assert in_page == [canonical.group(1)], (
+        f"the placeholder's coordinate regex has drifted from {origin_ts}: "
+        f"page has {in_page}, origin.ts has {canonical.group(1)!r}"
+    )
+
+
+def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> None:
+    """The poll reads a header, so HEAD must still carry it -- and nothing else.
+
+    This is the page's only route back to the interface, so a HEAD that stopped
+    reporting the marker would strand every open tab until someone reloaded by
+    hand. It is also the request the page makes every ten seconds per tab for
+    the length of an outage, so it must not re-render the page or re-read the
+    app registry to answer.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        head = test_client.head("/")
+        get = test_client.get("/")
+
+    assert head.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert get.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The GET is the one that renders; the HEAD carries no page to render.
+    assert "needs to be rebuilt" in get.text
+    assert head.text == ""
+
+
+# ---------- App instances and member locations ----------
+
+
+def test_a_fresh_workspace_lists_no_app_instances(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.get("/api/apps/instances").get_json() == {"instances": {}}
+
+
+def test_app_instances_are_derived_from_members_and_layouts(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The instance listing is exactly what the member lists and saved layouts reference."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert (
+        client.post("/api/projects/project-1/members", json={"ref": "service:files?instance=files-2"}).status_code
+        == 200
+    )
+    layout_data = {
+        "dockview": {"panels": {"app-instance-files-1": {"id": "app-instance-files-1"}}},
+        "panelParams": {
+            "app-instance-files-1": {
+                "panelType": "iframe",
+                "serviceName": "files",
+                "serviceInstanceId": "files-1",
+            }
+        },
+    }
+    assert client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+
+    assert client.get("/api/apps/instances").get_json() == {"instances": {"files": ["files-1", "files-2"]}}
+
+
+def test_allocating_an_instance_mints_the_lowest_free_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("files").test_client()
+    assert (
+        test_client.post("/api/projects/project-1/members", json={"ref": "service:files?instance=files-1"}).status_code
+        == 200
+    )
+
+    response = test_client.post("/api/apps/files/instances/allocate")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"name": "files", "instance": "files-2", "ref": "service:files?instance=files-2"}
+
+
+def test_two_rapid_allocations_mint_distinct_instances(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neither mint has been filed yet, so only the reservation set keeps them apart."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("files").test_client()
+
+    first = test_client.post("/api/apps/files/instances/allocate").get_json()["instance"]
+    second = test_client.post("/api/apps/files/instances/allocate").get_json()["instance"]
+
+    assert first != second
+
+
+def test_allocating_an_instance_of_an_unknown_app_is_a_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("files").test_client()
+
+    assert test_client.post("/api/apps/nonexistent/instances/allocate").status_code == 404
+
+
+def test_set_member_location_stores_and_clears_machine_wide(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    stored = client.post(
+        "/api/member-locations", json={"ref": "service:files?instance=files-2", "path": "/notes/2026/"}
+    )
+    assert stored.status_code == 200
+    assert stored.get_json() == {"ref": "service:files?instance=files-2", "path": "/notes/2026/"}
+    assert client.get("/api/member-locations").get_json() == {
+        "locations": {"service:files?instance=files-2": "/notes/2026/"}
+    }
+
+    cleared = client.post("/api/member-locations", json={"ref": "service:files?instance=files-2", "path": ""})
+    assert cleared.status_code == 200
+    assert cleared.get_json() == {"ref": "service:files?instance=files-2", "path": None}
+    assert client.get("/api/member-locations").get_json() == {"locations": {}}
+
+
+def test_set_member_location_rejects_paths_that_could_leave_the_origin(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    for bad_path in ("notes/", "//evil.example/x"):
+        response = client.post(
+            "/api/member-locations", json={"ref": "service:files?instance=files-1", "path": bad_path}
+        )
+        assert response.status_code == 400
+    assert client.get("/api/member-locations").get_json() == {"locations": {}}
+
+
+def test_deleting_an_instance_sweeps_membership_title_recency_and_location(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete clears every trace of the instance: the ref leaves the project, and
+    the machine-wide stores (title, recency, location) all drop their entries,
+    so a later instance reusing the name inherits nothing."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    instance_member_ref = "service:files?instance=files-1"
+    panel_id = "app-instance-files-1"
+    layout_data = {
+        "dockview": {"panels": {panel_id: {"id": panel_id}}},
+        "panelParams": {panel_id: {"panelType": "iframe", "serviceName": "files", "serviceInstanceId": "files-1"}},
+    }
+    assert client.post("/api/projects/project-1/members", json={"ref": instance_member_ref}).status_code == 200
+    assert client.post("/api/projects/project-1", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+    assert client.post("/api/member-titles", json={"ref": instance_member_ref, "title": "Notes"}).status_code == 200
+    assert client.post("/api/member-last-used", json={"ref": instance_member_ref}).status_code == 200
+    assert (
+        client.post("/api/member-locations", json={"ref": instance_member_ref, "path": "/notes/"}).status_code == 200
+    )
+
+    delete_response = client.post(f"/api/projects/panels/{panel_id}/delete", json={"ref": instance_member_ref})
+
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["project_ids"] == ["project-1"]
+    assert client.get("/api/projects").get_json()["projects"][0]["members"] == []
+    assert client.get("/api/apps/instances").get_json() == {"instances": {}}
+    assert client.get("/api/member-titles").get_json() == {"titles": {}}
+    assert client.get("/api/member-last-used").get_json() == {"last_used": {}}
+    assert client.get("/api/member-locations").get_json() == {"locations": {}}
+
+
+def test_a_deleted_instances_reservation_is_released_through_the_delete_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mint, file, delete, mint again: the number comes back."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("files").test_client()
+
+    minted = test_client.post("/api/apps/files/instances/allocate").get_json()
+    assert minted["instance"] == "files-1"
+    assert test_client.post("/api/projects/project-1/members", json={"ref": minted["ref"]}).status_code == 200
+    assert (
+        test_client.post("/api/projects/panels/app-instance-files-1/delete", json={"ref": minted["ref"]}).status_code
+        == 200
+    )
+
+    assert test_client.post("/api/apps/files/instances/allocate").get_json()["instance"] == "files-1"
+
+
+def test_member_location_changes_broadcast_to_every_client(app: Flask) -> None:
+    """A beacon and a destroy each announce the object's location, machine-wide.
+
+    A location belongs to the object, so a client that never opened the
+    project holding it still has to know where its panes would open; hence a
+    plain broadcast, exactly as renames get. A destroyed object's entry is
+    announced as gone (``path`` null), so no client keeps aiming a reused ref
+    at a dead folder.
+    """
+    client = app.test_client()
+    client_queue = _register_fake_client(app, "client-1", "desktop")
+
+    stored = client.post("/api/member-locations", json={"ref": "service:files?instance=files-1", "path": "/a/"})
+    assert stored.status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_location_changed",
+        "ref": "service:files?instance=files-1",
+        "path": "/a/",
+    }
+
+    assert (
+        client.post(
+            "/api/projects/panels/app-instance-files-1/delete", json={"ref": "service:files?instance=files-1"}
+        ).status_code
+        == 200
+    )
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_location_changed",
+        "ref": "service:files?instance=files-1",
+        "path": None,
+    }

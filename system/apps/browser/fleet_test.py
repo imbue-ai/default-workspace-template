@@ -69,11 +69,9 @@ def test_render_event_exit_codes(event: dict, expected: int | None) -> None:
     assert fleet._render_event(event, browser_name="alex-smith") == expected
 
 
-def test_parser_accepts_task_flags() -> None:
-    parser = fleet._build_parser()
-    args = parser.parse_args(["task", "alex-smith", "do it", "--reclaim", "--no-wait", "--max-wait", "30"])
-    assert args.name == "alex-smith" and args.prompt == "do it"
-    assert args.reclaim is True and args.no_wait is True and args.max_wait == 30.0
+def test_parser_accepts_the_ownership_verbs() -> None:
+    # The CLI owns browsers; it does not drive them. Driving is playwright-cli against the
+    # gated CDP URL that `new` / `acquire` print.
     assert fleet._build_parser().parse_args(["ls"]).func is fleet.cmd_ls
     new = fleet._build_parser().parse_args(["new"])
     assert new.func is fleet.cmd_new and new.name is None  # name optional, defaults to None
@@ -112,19 +110,16 @@ def test_render_action_exit_codes(payload: dict, kind: str, expected: int) -> No
     assert fleet._render_action(payload, browser_name="alex-smith", kind=kind) == expected
 
 
-def test_parser_accepts_direct_verbs() -> None:
+def test_parser_rejects_the_removed_drive_verbs() -> None:
     p = fleet._build_parser()
     # The browser arg is a NAME (string), not an int: it must NOT be int-coerced.
-    assert p.parse_args(["state", "alex-smith"]).name == "alex-smith"
-    assert p.parse_args(["open", "alex-smith", "https://x"]).func is fleet.cmd_open
-    click = p.parse_args(["click", "alex-smith", "18"])
-    assert click.func is fleet.cmd_click and click.name == "alex-smith" and click.index == 18
-    typed = p.parse_args(["input", "alex-smith", "3", "hello there"])
-    assert typed.func is fleet.cmd_input and typed.text == "hello there"
-    assert p.parse_args(["screenshot", "riley-jones"]).func is fleet.cmd_screenshot
-    tab = p.parse_args(["tab", "alex-smith", "switch", "1"])
-    assert tab.func is fleet.cmd_tab and tab.action == "switch" and tab.index == 1
     assert p.parse_args(["acquire", "alex-smith", "--reclaim"]).reclaim is True
+    # Driving moved to playwright-cli wholesale; these verbs must be gone rather than
+    # lingering as a second, half-maintained way to do the same thing.
+    for gone in (["state", "alex-smith"], ["click", "alex-smith", "18"], ["scroll", "alex-smith"],
+                 ["task", "alex-smith", "do it"], ["lock", "alex-smith"], ["screenshot", "alex-smith"]):
+        with pytest.raises(SystemExit):
+            p.parse_args(gone)
     assert p.parse_args(["ls", "--include-tabs"]).include_tabs is True
     close = p.parse_args(["close", "morgan-lee"])
     assert close.func is fleet.cmd_close and close.name == "morgan-lee"
@@ -208,6 +203,7 @@ def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(fleet, "_request", fake_request)
     monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: None)
+    monkeypatch.setattr(fleet, "_print_attach", lambda name: None)  # polls the daemon otherwise
     args = fleet._build_parser().parse_args(["new", "my-browser"])
     assert fleet.cmd_new(args) == fleet._EXIT_OK
     assert sent == [{"name": "my-browser"}]
@@ -245,3 +241,31 @@ def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.Mon
     monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: None)
     args = fleet._build_parser().parse_args(["handoff", "alex-smith"])
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
+
+
+def test_attach_url_waits_only_while_the_browser_is_starting(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `new` returns before Chromium is up, so the attach URL has to be polled -- but ONLY
+    # while the daemon says "starting". Anything else will never become an attach URL, and
+    # waiting on it burns the full timeout on a browser that is never coming up.
+    calls: list[int] = []
+    slept: list[float] = []
+    monkeypatch.setattr(fleet.time, "sleep", lambda s: slept.append(s))
+
+    def starting_then_ready(*_a: object, **_k: object) -> tuple[int, dict]:
+        calls.append(1)
+        if len(calls) < 3:
+            return 200, {"ok": False, "status": "starting"}
+        return 200, {"ok": True, "attach_url": "http://127.0.0.1:8083/browser-1/tok"}
+
+    monkeypatch.setattr(fleet, "_request", starting_then_ready)
+    assert fleet._attach_url("browser-1") == "http://127.0.0.1:8083/browser-1/tok"
+    assert len(calls) == 3 and len(slept) == 2  # waited across the launch, then got it
+
+
+def test_attach_url_bails_immediately_on_anything_but_starting(monkeypatch: pytest.MonkeyPatch) -> None:
+    for status, payload in [(404, {"error": "no browser"}), (200, {"ok": False, "status": "crashed"})]:
+        calls: list[int] = []
+        monkeypatch.setattr(fleet.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("must not sleep")))
+        monkeypatch.setattr(fleet, "_request", lambda *a, s=status, p=payload, **k: (calls.append(1), (s, p))[1])
+        assert fleet._attach_url("browser-1") == ""
+        assert len(calls) == 1

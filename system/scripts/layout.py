@@ -18,6 +18,8 @@ Subcommands:
     restore                             Exit a maximized group.
     replace-url <ref-or-service> <url>  Swap an iframe's src (service:<name>[/<path>] or https://...).
     refresh <ref-or-service>            Reload one iframe; ``service:<name>`` reloads all iframes for that service.
+    shortcuts                           List a view's effective rail shortcuts (id, pinned, mode).
+    shortcut set <id> [...]             Set one shortcut's pin (--pin/--unpin) and/or mode (--mode focus|new).
 
 The workspace shows one *view* at a time: a project, or ``Everything`` (the
 unfiltered home). Each connected browser client has one active, and that view
@@ -403,6 +405,34 @@ def _post_layout(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | s
         return -1, str(e.reason)
 
 
+def _request_rest_json(
+    method: str, path: str, body: dict[str, Any] | None = None
+) -> tuple[int, dict[str, Any] | str]:
+    """Call one of the workspace server's REST endpoints and parse the answer.
+
+    The shortcut commands ride the same REST surface the UI uses
+    (``/api/projects`` and ``/api/projects/<id>/shortcuts``) rather than the
+    layout-op broadcast: shortcut state is registry state the server owns, so
+    there is no client-side apply to wait stable on.
+    """
+    url = f"{_workspace_base_url()}{path}"
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        MNGR_AGENT_ID_HEADER: _mngr_agent_id(),
+    }
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=10.0) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            return response.status, _maybe_parse_json(raw)
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        return e.code, _maybe_parse_json(raw)
+    except urllib.error.URLError as e:
+        return -1, str(e.reason)
+
+
 def _maybe_parse_json(text: str) -> dict[str, Any] | str:
     try:
         parsed = json.loads(text)
@@ -526,12 +556,32 @@ def _walk_tree_leaves(node: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _ref_matches(requested: str, panel_ref: Any) -> bool:
+    """Whether a live panel's ref satisfies the ref the caller asked about.
+
+    Exact match, plus one deliberate widening: a bare ``service:<name>`` ref
+    for a plain app is satisfied by any of the app's INSTANCE panels
+    (``service:<name>?instance=<name>-<N>``) -- an app's panes are numbered
+    instances now, so the bare ref means "an instance of it", exactly as the
+    frontend resolves it. The two fleets keep exact matching: a terminal pane
+    never wears a ``service:terminal`` ref, and a bare browser ref is
+    rejected upstream.
+    """
+    if not isinstance(panel_ref, str):
+        return False
+    if panel_ref == requested:
+        return True
+    if not requested.startswith("service:") or "?" in requested:
+        return False
+    return panel_ref.startswith(f"{requested}?instance=")
+
+
 def _find_leaf_for_ref(layout: dict[str, Any], ref: str) -> dict[str, Any] | None:
     """Return the leaf node containing ``ref``'s panel, or None if not present."""
     tree = layout.get("tree")
     for leaf in _walk_tree_leaves(tree):
         for panel in leaf.get("panels", []) or []:
-            if panel.get("ref") == ref:
+            if _ref_matches(ref, panel.get("ref")):
                 return leaf
     return None
 
@@ -539,7 +589,7 @@ def _find_leaf_for_ref(layout: dict[str, Any], ref: str) -> dict[str, Any] | Non
 def _find_panel_summary(layout: dict[str, Any], ref: str) -> dict[str, Any] | None:
     """Return the flat panel summary for ``ref``, or None if not present."""
     for panel in layout.get("panels", []) or []:
-        if panel.get("ref") == ref:
+        if _ref_matches(ref, panel.get("ref")):
             return panel
     return None
 
@@ -625,7 +675,7 @@ def _predicate_focus(ref: str) -> _Predicate:
         if leaf is None:
             return False
         for panel in leaf.get("panels", []) or []:
-            if panel.get("ref") == ref:
+            if _ref_matches(ref, panel.get("ref")):
                 return bool(panel.get("active"))
         return False
 
@@ -1172,6 +1222,27 @@ def _cmd_where(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _allocate_instance_ref(service_name: str) -> str | None:
+    """Mint the app's next free instance via the allocator endpoint.
+
+    Returns the minted ``service:<name>?instance=<name>-<N>`` ref, or None
+    after writing the failure to stderr. REST rather than a broadcast: the
+    allocation is registry-side state the server owns, exactly like the
+    shortcut writes.
+    """
+    status, body = _request_rest_json(
+        "POST", f"/api/apps/{urllib.parse.quote(service_name)}/instances/allocate"
+    )
+    minted_ref = body.get("ref") if isinstance(body, dict) else None
+    if status != 200 or not isinstance(minted_ref, str) or not minted_ref:
+        detail = body.get("detail", body) if isinstance(body, dict) else body
+        sys.stderr.write(
+            f"error: could not mint an instance of {service_name!r} (HTTP {status}): {detail}\n"
+        )
+        return None
+    return minted_ref
+
+
 def _cmd_open(args: argparse.Namespace) -> int:
     ref = _normalize_ref(args.target)
     # Validate before the registration wait so empty-name / malformed refs
@@ -1187,6 +1258,25 @@ def _cmd_open(args: argparse.Namespace) -> int:
                 f"Did you forward_port.py / start the service?\n"
             )
             return EXIT_ERROR
+    # ``--new`` mints a fresh numbered instance of a plain app (``open files
+    # --new`` -> ``files-2``) instead of resolving to one already open. Only a
+    # bare app ref can mint: an instance ref already names its instance, and
+    # the two fleets create through their own paths (``open terminal`` always
+    # creates; browsers through the agentic-browser-fleet commands).
+    if getattr(args, "new", False):
+        if not ref.startswith("service:") or "?" in ref or ref == "service:terminal" or ref == "service:browser":
+            sys.stderr.write(
+                "error: --new mints an app instance, so it takes a bare app name "
+                f"(got {ref!r}; terminals and browsers create through their own paths)\n"
+            )
+            return EXIT_ERROR
+        minted_ref = _allocate_instance_ref(_service_name_from_ref(ref))
+        if minted_ref is None:
+            return EXIT_ERROR
+        ref = minted_ref
+        # The minted ref goes to stdout the way a terminal creation's does, so
+        # the caller can address the new instance without an ``inspect``.
+        _emit_allocated_ref({"ref": ref})
     payload: dict[str, Any] = {
         "ref": ref,
         "new_group": bool(args.new_group),
@@ -1504,6 +1594,193 @@ def _cmd_refresh(args: argparse.Namespace) -> int:
     )
 
 
+# ---------- Shortcuts (per-project rail configuration) ----------
+
+# The rail's built-in shortcut rows, in rail order, and the two modes a
+# shortcut can be in. Mirrors the server's projects.py; the server is the
+# validator of record, so drift here only costs a friendlier error.
+_BUILTIN_SHORTCUT_IDS = ("chat", "files", "browser", "terminal")
+_SHORTCUT_MODES = ("focus", "new")
+_APP_SHORTCUT_PREFIX = "app:"
+_EVERYTHING_VIEW_ID = "everything"
+
+# Services that never appear as app shortcuts: the shell itself, and the
+# services the rail's own built-in rows already stand for. Mirrors the
+# frontend's HIDDEN_APP_NAMES (AllAppsPicker.ts).
+_HIDDEN_APP_SHORTCUT_NAMES = frozenset({"system_interface", "terminal", "browser", "files"})
+
+
+def _default_shortcut_mode(shortcut_id: str) -> str:
+    """Chat defaults to new mode ("New Chat"); everything else to focus."""
+    return "new" if shortcut_id == "chat" else "focus"
+
+
+def _fetch_projects_registry() -> tuple[list[dict[str, Any]], str | None] | None:
+    """The project list plus the last-active view id, or None on failure."""
+    status, body = _request_rest_json("GET", "/api/projects")
+    if status != 200 or not isinstance(body, dict):
+        sys.stderr.write(f"error: could not list projects (HTTP {status}): {body}\n")
+        return None
+    projects = body.get("projects")
+    last_active = body.get("last_active_id")
+    if not isinstance(projects, list):
+        sys.stderr.write("error: malformed /api/projects response\n")
+        return None
+    return projects, last_active if isinstance(last_active, str) else None
+
+
+def _resolve_shortcut_view(view_name: str | None) -> tuple[str, dict[str, Any] | None] | None:
+    """Resolve ``--view`` to ``(view_id, project_entry)``, or None on error.
+
+    ``project_entry`` is None for Everything, which has no registry entry.
+    With no name, the server's last-active view decides -- the closest REST
+    analogue to "the view the connected client is on". Names match a project's
+    display name (case-insensitively) or its id.
+    """
+    registry = _fetch_projects_registry()
+    if registry is None:
+        return None
+    projects, last_active = registry
+    if view_name is None:
+        if last_active is None or last_active == _EVERYTHING_VIEW_ID:
+            return _EVERYTHING_VIEW_ID, None
+        for project in projects:
+            if project.get("project_id") == last_active:
+                return str(project.get("project_id")), project
+        return _EVERYTHING_VIEW_ID, None
+    if view_name.strip().lower() == _EVERYTHING_VIEW_ID:
+        return _EVERYTHING_VIEW_ID, None
+    wanted = view_name.strip().lower()
+    for project in projects:
+        if str(project.get("name", "")).strip().lower() == wanted or project.get("project_id") == view_name:
+            return str(project.get("project_id")), project
+    known = ", ".join(repr(str(p.get("name", p.get("project_id", "?")))) for p in projects)
+    sys.stderr.write(f"error: no project named {view_name!r} (projects: {known or '<none>'}, or 'Everything')\n")
+    return None
+
+
+def _project_app_shortcut_ids(project: dict[str, Any]) -> list[str]:
+    """The ``app:<service>`` shortcut ids a project's membership pins, in member order.
+
+    An app is pinned exactly when the member list holds its ``service:<name>``
+    ref; the browser fleet's ``?session=`` refs and the two fleets' own service
+    names are not apps.
+    """
+    ids: list[str] = []
+    members = project.get("members")
+    for ref in members if isinstance(members, list) else []:
+        if not isinstance(ref, str) or not ref.startswith("service:"):
+            continue
+        name = ref.removeprefix("service:")
+        if not name or "?" in name or name in _HIDDEN_APP_SHORTCUT_NAMES:
+            continue
+        shortcut_id = f"{_APP_SHORTCUT_PREFIX}{name}"
+        if shortcut_id not in ids:
+            ids.append(shortcut_id)
+    return ids
+
+
+def _machine_app_shortcut_ids() -> list[str]:
+    """Every openable app on the machine as ``app:<service>`` ids (for Everything)."""
+    path = _apps_file()
+    if not path.exists():
+        return []
+    with open(path, "rb") as f:
+        doc = tomlkit.load(f)
+    ids: list[str] = []
+    for app in doc.get("apps", []):
+        name = app.get("name") if hasattr(app, "get") else None
+        if not isinstance(name, str) or not name or name in _HIDDEN_APP_SHORTCUT_NAMES:
+            continue
+        if bool(app.get("internal", False)):
+            continue
+        ids.append(f"{_APP_SHORTCUT_PREFIX}{name}")
+    return ids
+
+
+def _effective_shortcut_rows(project: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The effective shortcut list of one view: id, pinned, mode.
+
+    Built-ins first in rail order, then the view's pinned apps. Everything
+    (``project`` None) has no registry entry, so it is always the code-side
+    defaults with every openable app on the machine listed (pinned is not
+    applicable there, and reported true for uniformity).
+    """
+    if project is None:
+        overrides: dict[str, Any] = {}
+        app_ids = _machine_app_shortcut_ids()
+    else:
+        raw_overrides = project.get("shortcut_overrides")
+        overrides = raw_overrides if isinstance(raw_overrides, dict) else {}
+        app_ids = _project_app_shortcut_ids(project)
+    rows: list[dict[str, Any]] = []
+    for shortcut_id in (*_BUILTIN_SHORTCUT_IDS, *app_ids):
+        override = overrides.get(shortcut_id)
+        override = override if isinstance(override, dict) else {}
+        mode = override.get("mode")
+        rows.append(
+            {
+                "id": shortcut_id,
+                "pinned": override.get("is_pinned") is not False,
+                "mode": mode if mode in _SHORTCUT_MODES else _default_shortcut_mode(shortcut_id),
+            }
+        )
+    return rows
+
+
+def _cmd_shortcuts(args: argparse.Namespace) -> int:
+    resolved = _resolve_shortcut_view(args.layout)
+    if resolved is None:
+        return EXIT_ERROR
+    view_id, project = resolved
+    rows = _effective_shortcut_rows(project)
+    _emit_structured({"view": view_id, "shortcuts": rows}, args.json)
+    return EXIT_OK
+
+
+def _validate_shortcut_id(shortcut_id: str) -> int | None:
+    if shortcut_id in _BUILTIN_SHORTCUT_IDS:
+        return None
+    if shortcut_id.startswith(_APP_SHORTCUT_PREFIX) and len(shortcut_id) > len(_APP_SHORTCUT_PREFIX):
+        return None
+    sys.stderr.write(
+        f"error: shortcut {shortcut_id!r} must be one of {', '.join(_BUILTIN_SHORTCUT_IDS)} "
+        f"or 'app:<service-name>'\n"
+    )
+    return EXIT_ERROR
+
+
+def _cmd_shortcut_set(args: argparse.Namespace) -> int:
+    if (err := _validate_shortcut_id(args.shortcut_id)) is not None:
+        return err
+    if args.pin is None and args.mode is None:
+        sys.stderr.write("error: pass --pin/--unpin and/or --mode\n")
+        return EXIT_ERROR
+    resolved = _resolve_shortcut_view(args.layout)
+    if resolved is None:
+        return EXIT_ERROR
+    project_id, project = resolved
+    if project is None:
+        sys.stderr.write(
+            "error: Everything has no project entry to store shortcut state against; "
+            "pass --view <project name>\n"
+        )
+        return EXIT_ERROR
+    body: dict[str, Any] = {"shortcut": args.shortcut_id}
+    if args.pin is not None:
+        body["is_pinned"] = args.pin
+    if args.mode is not None:
+        body["mode"] = args.mode
+    status, response = _request_rest_json("POST", f"/api/projects/{project_id}/shortcuts", body)
+    if status != 200 or not isinstance(response, dict):
+        detail = response.get("detail", response) if isinstance(response, dict) else response
+        sys.stderr.write(f"error: shortcut set failed (HTTP {status}): {detail}\n")
+        return EXIT_ERROR
+    sys.stderr.write(f"set {args.shortcut_id} on view {project_id!r}\n")
+    _emit_structured({"project_id": project_id, "shortcut_overrides": response.get("shortcut_overrides", {})}, False)
+    return EXIT_OK
+
+
 def _add_mutating_view_argument(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--view",
@@ -1634,6 +1911,16 @@ def main(argv: list[str] | None = None) -> int:
             "right-side group (the default reuses adjacent groups when present)."
         ),
     )
+    p_open.add_argument(
+        "--new",
+        action="store_true",
+        help=(
+            "Mint a fresh numbered instance of a plain app and open it "
+            "(``open files --new`` -> ``files-2``), instead of resolving to an "
+            "already-open one. Bare app names only; the minted "
+            "``service:<name>?instance=...`` ref is printed to stdout."
+        ),
+    )
     _add_mutating_view_argument(p_open)
     p_open.set_defaults(func=_cmd_open)
 
@@ -1752,6 +2039,65 @@ def main(argv: list[str] | None = None) -> int:
         help="Panel ref. ``service:<name>`` reloads every iframe for that service.",
     )
     p_refresh.set_defaults(func=_cmd_refresh)
+
+    p_shortcuts = subparsers.add_parser(
+        "shortcuts",
+        help="List a view's effective rail shortcuts: id, pinned, mode",
+    )
+    p_shortcuts.add_argument(
+        "--view",
+        "--layout",
+        dest="layout",
+        metavar="VIEW",
+        default=None,
+        help="View to read: a project's name, or ``Everything``. Defaults to the last-active view.",
+    )
+    p_shortcuts.add_argument("--json", action="store_true", help="Emit JSON instead of YAML")
+    p_shortcuts.set_defaults(func=_cmd_shortcuts)
+
+    p_shortcut = subparsers.add_parser(
+        "shortcut", help="Configure one rail shortcut on a project"
+    )
+    shortcut_subparsers = p_shortcut.add_subparsers(dest="shortcut_command", required=True)
+    p_shortcut_set = shortcut_subparsers.add_parser(
+        "set",
+        help="Set a shortcut's pin and/or mode on a project (the same endpoint the UI uses)",
+    )
+    p_shortcut_set.add_argument(
+        "shortcut_id",
+        metavar="shortcut",
+        help="A built-in shortcut (chat, files, browser, terminal) or ``app:<service-name>``",
+    )
+    pin_group = p_shortcut_set.add_mutually_exclusive_group()
+    pin_group.add_argument(
+        "--pin",
+        dest="pin",
+        action="store_true",
+        default=None,
+        help="Keep the row in the project's rail (built-ins only; an app's pin is its membership)",
+    )
+    pin_group.add_argument(
+        "--unpin",
+        dest="pin",
+        action="store_false",
+        help="Move the row into the project's All apps menu (built-ins only)",
+    )
+    p_shortcut_set.add_argument(
+        "--mode",
+        choices=_SHORTCUT_MODES,
+        default=None,
+        help="What clicking the row does: ``focus`` the most recent member of its kind, or always create (``new``)",
+    )
+    p_shortcut_set.add_argument(
+        "--view",
+        "--layout",
+        dest="layout",
+        metavar="VIEW",
+        default=None,
+        help="Project to configure, by name. Defaults to the last-active view; Everything is refused "
+        "(it has no project entry to store shortcut state against).",
+    )
+    p_shortcut_set.set_defaults(func=_cmd_shortcut_set)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

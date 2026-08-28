@@ -121,9 +121,7 @@ class ModelOptionsResponse(FrozenModel):
 class PoweredByResponse(FrozenModel):
     """Response from GET /api/agents/{id}/powered-by."""
 
-    label: str = Field(
-        description="The agent harness's verbatim credit text, or '' when that harness shows no credit"
-    )
+    label: str = Field(description="The agent harness's verbatim credit text, or '' when that harness shows no credit")
 
 
 class FastModePromptAnsweredResponse(FrozenModel):
@@ -305,6 +303,23 @@ class AppEntry(FrozenModel):
             "rail's All apps popover, its shortcuts)."
         ),
     )
+    program: str = Field(
+        default="",
+        description=(
+            "The supervisord program running this app, registered via "
+            "``forward_port.py --program``. Its presence is the capability "
+            "grant 'this app can be stopped and started through supervisord'; "
+            "empty means unsupervised (or registered before the field existed)."
+        ),
+    )
+    is_running: bool = Field(
+        default=True,
+        description=(
+            "Derived liveness, never stored in the registry: supervisord's "
+            "process state for ``program`` rows, a TCP probe of ``url`` "
+            "otherwise. Rows default to running until the first probe lands."
+        ),
+    )
 
 
 class TerminalSessionInfo(FrozenModel):
@@ -358,6 +373,12 @@ class StartAgentResponse(FrozenModel):
     status: str = Field(description="Result of the start operation")
 
 
+class StopAgentResponse(FrozenModel):
+    """Response from the agent stop endpoint."""
+
+    status: str = Field(description="Result of the stop operation")
+
+
 class ClaudeAuthStatusResponse(FrozenModel):
     """Response from /api/claude-auth/status."""
 
@@ -378,8 +399,12 @@ class ClaudeAuthStatusResponse(FrozenModel):
     masked_key_suffix: str | None = Field(
         default=None, description="Last few characters of the managed key/token, for display"
     )
-    workspace_host_id: str | None = Field(
-        default=None, description="This mind's mngr host id, for the desktop app's key-mint page link"
+    workspace_id: str | None = Field(
+        default=None,
+        description=(
+            "This workspace's id (its services agent id; the machine's host id as a fallback), "
+            "for the desktop app's key-mint page link"
+        ),
     )
     restart_phase: str | None = Field(
         default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"
