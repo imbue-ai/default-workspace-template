@@ -13,44 +13,25 @@ import pytest
 from imbue.system_interface.liveness import SupervisorProgramActionError
 from imbue.system_interface.liveness import fetch_supervisor_program_states
 from imbue.system_interface.liveness import probe_all_app_liveness
-from imbue.system_interface.liveness import probe_app_liveness
-from imbue.system_interface.liveness import probe_supervisor_program
 from imbue.system_interface.liveness import probe_tcp_url
 from imbue.system_interface.liveness import start_supervisor_program
 from imbue.system_interface.liveness import stop_supervisor_program
 from imbue.system_interface.testing import FakeSupervisorServer
 
 
-def test_probe_supervisor_program_reports_a_running_program(fake_supervisor: FakeSupervisorServer) -> None:
-    fake_supervisor.statename_by_program["files"] = "RUNNING"
-    assert probe_supervisor_program("files", fake_supervisor.socket_path) is True
-
-
-def test_probe_supervisor_program_reports_a_starting_program_as_up(
+def test_fetch_supervisor_program_states_reports_a_starting_program_as_up(
     fake_supervisor: FakeSupervisorServer,
 ) -> None:
     fake_supervisor.statename_by_program["files"] = "STARTING"
-    assert probe_supervisor_program("files", fake_supervisor.socket_path) is True
+    assert fetch_supervisor_program_states(fake_supervisor.socket_path) == {"files": True}
 
 
 @pytest.mark.parametrize("statename", ["STOPPED", "STOPPING", "EXITED", "BACKOFF", "FATAL", "UNKNOWN"])
-def test_probe_supervisor_program_reports_a_down_program(
+def test_fetch_supervisor_program_states_reports_a_down_program(
     fake_supervisor: FakeSupervisorServer, statename: str
 ) -> None:
     fake_supervisor.statename_by_program["files"] = statename
-    assert probe_supervisor_program("files", fake_supervisor.socket_path) is False
-
-
-def test_probe_supervisor_program_answers_none_for_an_unknown_program(
-    fake_supervisor: FakeSupervisorServer,
-) -> None:
-    """A program supervisord does not know (hand-edited registry, removed
-    block) is 'cannot say', not 'stopped' -- the caller falls back to TCP."""
-    assert probe_supervisor_program("no-such-program", fake_supervisor.socket_path) is None
-
-
-def test_probe_supervisor_program_answers_none_without_a_socket(tmp_path: Path) -> None:
-    assert probe_supervisor_program("files", tmp_path / "absent.sock") is None
+    assert fetch_supervisor_program_states(fake_supervisor.socket_path) == {"files": False}
 
 
 def test_probe_tcp_url_reports_a_listening_backend(listening_port: int) -> None:
@@ -63,27 +44,6 @@ def test_probe_tcp_url_reports_a_closed_port(closed_port: int) -> None:
 
 def test_probe_tcp_url_reports_an_unparseable_url_as_down() -> None:
     assert probe_tcp_url("not a url") is False
-
-
-def test_probe_app_liveness_prefers_the_supervisor_answer(
-    fake_supervisor: FakeSupervisorServer, listening_port: int
-) -> None:
-    """A supervised row reads supervisord's state even while something still
-    answers on the port (a program mid-STOPPING keeps its socket briefly)."""
-    fake_supervisor.statename_by_program["web"] = "STOPPED"
-    assert probe_app_liveness("web", f"http://127.0.0.1:{listening_port}") is False
-
-
-def test_probe_app_liveness_falls_back_to_tcp_when_supervisord_cannot_say(
-    tmp_path: Path, listening_port: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(tmp_path / "absent.sock"))
-    assert probe_app_liveness("web", f"http://127.0.0.1:{listening_port}") is True
-
-
-def test_probe_app_liveness_probes_tcp_for_an_unsupervised_row(listening_port: int, closed_port: int) -> None:
-    assert probe_app_liveness("", f"http://127.0.0.1:{listening_port}") is True
-    assert probe_app_liveness("", f"http://127.0.0.1:{closed_port}") is False
 
 
 def test_fetch_supervisor_program_states_returns_every_program_in_one_call(
