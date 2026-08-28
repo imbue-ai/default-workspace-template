@@ -299,69 +299,14 @@ body {
    tail-follow and jump pins. Its scrollbar treatment stays below (Scrollbar
    section). */
 
-/* ── User bubble ── */
-.message {
-  margin-bottom: --spacing(5);
-}
-
-.message-user {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.message-user-bubble {
-  max-width: 80%;
-  background: var(--c-bg-user-bubble);
-  border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
-  padding: 12px 18px;
-  font-size: var(--font-size-body);
-  line-height: 1.5;
-  color: var(--c-text-primary);
-  /* Break long unbreakable tokens (e.g. API keys, URLs) so they wrap inside
-     the bubble instead of overflowing past its edge. */
-  overflow-wrap: break-word;
-}
-
-.message-user-bubble code {
-  font-family: var(--font-mono);
-  font-size: 0.85em;
-  background-color: var(--c-bg-code);
-  border: 1px solid var(--c-border-code);
-  border-radius: 0.25em;
-  padding: 0.08em 0.2em;
-}
-
-/* ── Queued messages (the shoulder-tap group) ── */
-/* The group/header layout lives as utilities in views/QueuedMessageView.ts.
-   Only the bubble treatment stays here: a queued bubble reuses the shared
-   user-bubble markup (rendered by the common bubble code), so the not-yet-sent
-   muting is applied contextually off the .queued-message marker. */
-.queued-message {
-  margin-bottom: 0;
-}
-
-.queued-message .message-user-bubble {
-  opacity: 0.85;
-}
-
-/* Optimistic "Sending…" bubble (views/OutgoingMessageView.ts): its row/caption
-   styling lives as utilities there. Here only what must ride the cascade: the
-   zeroed row margin (outranking the unlayered .message rhythm rule above, which
-   a utility cannot) and the dashed bubble border (the bubble markup comes from
-   the shared user-bubble code, so it is styled contextually). */
-.outgoing-message {
-  margin-bottom: 0;
-}
-
-.outgoing-message .message-user-bubble {
-  border: 1px dashed var(--c-border);
-}
-
-/* ── Assistant message ── */
-.message-assistant {
-  margin-bottom: --spacing(5);
-}
+/* ── Chat message rows ── */
+/* The message rows and the user bubble are utilities in their views:
+   user-message-display.ts owns the shared row/bubble recipes
+   (USER_MESSAGE_ROW_CLASS / USER_BUBBLE_CLASS), the queued and outgoing
+   variants compose them (QueuedMessageView.ts / OutgoingMessageView.ts), and
+   the assistant rows live in message-renderers.ts. The .message* names remain
+   in the markup as bare markers for the e2e suite. Code inside a bubble is
+   markdown-rendered content and takes .markdown-content's rules below. */
 
 /* ── Lifted Composer ── */
 /* The footer strip itself (.app-footer) is styled with utilities in ChatPanel. */
@@ -593,12 +538,8 @@ body {
 /* The structured (non-markdown) tool-call block and the collapsed system-chip
    variant live as utilities in views/ToolCallBlock.ts (shared by
    message-renderers.ts and user-message-display.ts); the model-API-error tint
-   is utilities in message-renderers.ts. What stays here is the one rule a
-   utility cannot carry: the collapsed row's tightened rhythm, which must
-   outrank the unlayered .message rule above. */
-.message-system-collapsed {
-  margin-bottom: --spacing(1);
-}
+   is utilities in message-renderers.ts, and the collapsed row's tightened
+   rhythm rides its row class in user-message-display.ts. */
 
 /* The sub-agent link card (renderSubagentCard in views/message-renderers.ts) is
    styled entirely with utilities in its view; its pulsing status dot reuses the

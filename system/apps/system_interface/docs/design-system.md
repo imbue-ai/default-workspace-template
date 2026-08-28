@@ -19,6 +19,30 @@ document is the durable hand-off so any agent can pick the work up cold.
 
 ### Progress log
 
+- **Chat message tree dissolved into its views — DONE.** The `.message*` block
+  (row rhythm, `.message-user` column, the user bubble, the queued/outgoing
+  contextual overrides, `.message-assistant`, `.message-system-collapsed`) is
+  deleted from `style.css`. `user-message-display.ts` owns the shared recipes
+  (`USER_MESSAGE_ROW_CLASS` / `USER_BUBBLE_CLASS`); QueuedMessageView and
+  OutgoingMessageView compose them (`opacity-85` muting, dashed
+  `OUTGOING_BUBBLE_CLASS`), and each row type now carries its own margin
+  (mb-5 / mb-1 / none), which dissolves the must-outrank-the-cascade rhythm
+  overrides entirely. The `.message*` names stay in the markup as bare markers
+  (the Python e2e suite locates rows by them). `.message-user-bubble code` was
+  deleted as redundant: bubble code only comes from markdown-rendered content,
+  which `.markdown-content code` already styles identically.
+
+- **Micro-controls onto Button at a new xs size; one sidebar recipe — DONE.**
+  Button gained `xs` (20px, icon-only, explodes if asked for a text button) and
+  the sidebar's eight hover-revealed micro-controls (unpin, kebabs, rename
+  pencils, remove-from-project) now render through one `railAction()` helper --
+  ghost xs Button, reveal-on-row-hover (or held visible while its menu is
+  open), always stopping propagation to the row underneath. The header pencil
+  keeps its `span role="button"` shape (it nests inside the header `<button>`)
+  via the `buttonClass` escape hatch. Normalizations: all eight get the ghost
+  hover fill (three previously recolored only), the accent focus ring, 6px
+  radius (was 4), and the press translate.
+
 - **Toggle primitive folded into Button (a selectable ghost) — DONE.** The
   `.toggle` CSS block (`--on/--readonly/--inline`) is deleted; an on/off
   icon-toggle is now `m(Button, {variant: "ghost", icon, sm, selected,

@@ -81,11 +81,12 @@ safelist it with `@source inline("...")`.
   (`.markdown-content …`), where classes can't be attached per element.
 - **Pseudo-element/keyframe machines**: `@keyframes`, the `.spinner` — where
   the drawing lives in `::before/::after` or animation state.
-- **Contextual rules over shared markup**: e.g. `.queued-message
-.message-user-bubble { opacity: … }` — the bubble markup comes from shared
-  code, so context classes are the mechanism. The chat message tree
-  (`.message`, `.message-user`, `.message-user-bubble`) stays CSS for this
-  reason (and is queried from JS for row measurement/scroll selection).
+- **Contextual rules over shared markup**: where markup renders in a context
+  that cannot attach classes to it — e.g. the `.modal-card
+  button[aria-pressed]` feedback over the settings pickers' inline-styled
+  cells. Where the shared markup is an exported class constant instead (the
+  user bubble recipes in `user-message-display.ts`), compose the constant
+  rather than writing a contextual rule.
 - **Cascade-critical overrides**: hand-written (unlayered) CSS beats utilities
   (which live in `@layer utilities`). An override of an unlayered rule must
   itself be CSS — a utility cannot win that fight. When migrating a rule to

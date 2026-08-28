@@ -211,7 +211,7 @@ export function renderAssistantMessage(
     "div",
     {
       id: event.event_id,
-      class: "message message-assistant",
+      class: "message message-assistant mb-5",
       key: event.event_id,
     },
     m(StableAssistantMessage, { event, toolResults, agentId }),
@@ -416,7 +416,7 @@ export function renderPermissionItem(
   // and shifting content each time it crosses the window edge.
   return m(
     "div",
-    { id: domId, class: "message message-assistant", key: event.event_id },
+    { id: domId, class: "message message-assistant mb-5", key: event.event_id },
     renderAssistantMessageChildren(event, toolResults, agentId, resolution),
   );
 }

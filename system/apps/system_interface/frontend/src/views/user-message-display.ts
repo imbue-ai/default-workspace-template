@@ -18,6 +18,22 @@ import { classifyUserMessage } from "./message-classification";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
 
+/** The user rail's shared recipes, owned here and composed by the queued and
+ *  outgoing variants (QueuedMessageView / OutgoingMessageView). `message`,
+ *  `message-user` and `message-user-bubble` are bare markers -- the Python e2e
+ *  suite locates chat rows by them -- and the styling is the utilities beside
+ *  them. The row recipe carries no bottom margin: each caller sets its own
+ *  rhythm (a committed row mb-5, queued/outgoing rows none, the collapsed
+ *  chip mb-1). */
+export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-end";
+
+/** wrap-break-word: long unbreakable tokens (API keys, URLs) wrap inside the
+ *  bubble instead of overflowing past its edge. Code inside a bubble is
+ *  markdown-rendered content and takes .markdown-content's own rules. */
+export const USER_BUBBLE_CLASS =
+  "message-user-bubble max-w-[80%] rounded-xl rounded-br-sm bg-user-bubble px-[18px] py-3 " +
+  "text-(length:--font-size-body) leading-normal text-primary wrap-break-word";
+
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
  *  of source; only the label and body differ. Width-capped like the user
@@ -55,7 +71,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      return m("div", { class: "message-user-bubble" }, bubbleChildren);
+      return m("div", { class: USER_BUBBLE_CLASS }, bubbleChildren);
     },
   };
 }
@@ -73,13 +89,10 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
   if (KIND_SPEC[kind].rail !== Rail.User) {
     return null;
   }
-  // The collapsed row's layout is utilities; its tightened row margin stays a
-  // CSS rule (it must outrank the unlayered .message rhythm rule, which a
-  // utility cannot).
   const messageClass =
     kind === UserMessageKind.SystemChip
-      ? "message message-system-collapsed flex flex-col items-end"
-      : "message message-user";
+      ? "message message-system-collapsed mb-1 flex flex-col items-end"
+      : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
   return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [m(StableUserMessage, { event })]);
