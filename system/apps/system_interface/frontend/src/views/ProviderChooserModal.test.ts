@@ -125,21 +125,25 @@ describe("the provider chooser", () => {
         provider: "Anthropic",
         harness_label: "Claude Code",
         seq: 1,
+        name: "",
         label: "Anthropic (Claude Code)",
       },
       {
         id: "a2",
         lane: "anthropic",
         harness: "claude",
-        provider: "Anthropic",
+        // Second of a duplicate pair: the number rides the provider noun, which is the span
+        // the row actually draws -- see `numbered_provider`.
+        provider: "Anthropic 2",
         harness_label: "Claude Code",
         seq: 2,
-        label: "Anthropic (Claude Code) 2",
+        name: "",
+        label: "Anthropic 2 (Claude Code)",
       },
     ];
     const text = render();
     expect(text).toContain("Signed in");
-    expect(text).toContain("Anthropic (Claude Code) 2");
+    expect(text).toContain("Anthropic 2 (Claude Code)");
   });
 
   it("renders a lane whose key picker has several providers", () => {

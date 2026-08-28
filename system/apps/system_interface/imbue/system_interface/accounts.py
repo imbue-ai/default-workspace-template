@@ -105,6 +105,10 @@ class Account(FrozenModel):
     # bring-your-own-key lane, where it is the key provider the user picked, so two keys
     # read "OpenRouter (Pi)" and "Groq (Pi)" rather than "API key (Pi)" and "API key (Pi) 2".
     display: str
+    # What the user renamed this account to, or "" for the provider's own name. Kept separate
+    # from `display` rather than overwriting it: the harness still has to be able to say which
+    # provider a folder actually holds, and a row called "work" no longer could.
+    name: str = ""
 
 
 class AccountIndex(FrozenModel):
@@ -314,6 +318,28 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
         )
     discard_account_dir(account_id, home)
     logger.info("Deleted account {}", account_id)
+
+
+def rename_account(account_id: str, name: str, home: Path | None = None) -> Account:
+    """Give an account a user-chosen name, or "" to go back to the provider's own.
+
+    A rename is display only. Nothing keys off it -- not the folder, not the binding, not the
+    harness -- so it cannot break a chat, and two accounts may share a name.
+    """
+    with _index_lock(home):
+        index = read_index(home)
+        renamed = None
+        rows = []
+        for account in index.accounts:
+            if account.id != account_id:
+                rows.append(account)
+                continue
+            renamed = account.model_copy_update(to_update(account.field_ref().name, name.strip()))
+            rows.append(renamed)
+        if renamed is None:
+            raise AccountError(f"no such account: {account_id}")
+        _write_index(index.model_copy_update(to_update(index.field_ref().accounts, tuple(rows))), home)
+    return renamed
 
 
 def set_mru(account_id: str, home: Path | None = None) -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.accounts import INDEX_VERSION
 from imbue.system_interface.accounts import Account
 from imbue.system_interface.accounts import AccountError
@@ -20,6 +21,7 @@ from imbue.system_interface.accounts import discard_account_dir
 from imbue.system_interface.accounts import index_path
 from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.accounts import read_index
+from imbue.system_interface.accounts import rename_account
 from imbue.system_interface.accounts import resolve_account
 from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.accounts import reconcile
@@ -316,3 +318,43 @@ def test_the_first_chat_marker_survives_deleting_every_account(tmp_path: Path) -
     delete_account(account_id, tmp_path)
 
     assert claim_first_chat(tmp_path) is False
+
+
+def test_a_rename_changes_the_name_and_nothing_else(tmp_path: Path) -> None:
+    """A rename is display only. If it touched the folder, the lane or the seq, it could
+    strand a chat -- so this asserts on the whole row, not just the field that moved."""
+    account_id, _ = mint_account_dir(tmp_path)
+    before = commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+
+    after = rename_account(account_id, "Work", tmp_path)
+
+    assert after == before.model_copy_update(to_update(before.field_ref().name, "Work"))
+    assert account_dir(account_id, tmp_path).is_dir()
+    (stored,) = read_index(tmp_path).accounts
+    assert stored.name == "Work"
+
+
+def test_a_name_is_stripped_and_can_be_cleared(tmp_path: Path) -> None:
+    account_id, _ = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+
+    assert rename_account(account_id, "  Work  ", tmp_path).name == "Work"
+    # "" is the way back to the provider's own name, so it is stored rather than refused.
+    assert rename_account(account_id, "", tmp_path).name == ""
+
+
+def test_renaming_an_account_that_is_not_there_raises(tmp_path: Path) -> None:
+    with pytest.raises(AccountError):
+        rename_account("nope", "Work", tmp_path)
+
+
+def test_a_rename_leaves_every_other_account_untouched(tmp_path: Path) -> None:
+    first, _ = mint_account_dir(tmp_path)
+    commit_account(first, "anthropic", "Anthropic", tmp_path)
+    second, _ = mint_account_dir(tmp_path)
+    commit_account(second, "anthropic", "Anthropic", tmp_path)
+
+    rename_account(first, "Work", tmp_path)
+
+    names = [account.name for account in read_index(tmp_path).accounts]
+    assert names == ["Work", ""]

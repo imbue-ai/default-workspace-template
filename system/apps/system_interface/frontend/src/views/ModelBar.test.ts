@@ -42,6 +42,7 @@ vi.mock("../models/Providers", () => ({
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
   openProviderChooser: () => undefined,
   deleteAccount: () => Promise.resolve(),
+  renameAccount: () => Promise.resolve(),
 }));
 
 const started: string[] = [];
@@ -85,6 +86,7 @@ const ACCOUNT = {
   harness: "claude",
   provider: "Anthropic",
   harness_label: "Claude Code",
+  name: "",
   seq: 1,
   label: "Anthropic (Claude Code)",
 };
