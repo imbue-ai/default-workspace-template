@@ -5,17 +5,19 @@ Application-specific routes (create form, accounts, sharing, request inbox,
 telegram, chrome, etc.) stay in the host application; the plugin only handles:
 
 - the bare-origin login flow (``/login``, ``/authenticate``, ``/`` debug index)
-- the ``/goto/<host-id>/`` cookie-bridge to workspace-domain auth
+- the ``/goto/<agent-id>/`` cookie-bridge to workspace-domain auth
 - the ``/_subdomain_auth`` token-redemption handler on each workspace origin
-- byte-level HTTP forwarding for ``[<service>.]host-<hex>.localhost``
-- WebSocket forwarding for ``[<service>.]host-<hex>.localhost``
+- byte-level HTTP forwarding for ``[<service>.]agent-<hex>.localhost``
+- WebSocket forwarding for ``[<service>.]agent-<hex>.localhost``
 - the host-header middleware that routes the above
 
-Every workspace (host) owns a family of origins: the bare
-``host-<hex>.localhost`` origin serves the configured shell service, and
-each registered service owns ``<name>.host-<hex>.localhost`` (deeper labels
+Every workspace owns a family of origins keyed by its agent id: the bare
+``agent-<hex>.localhost`` origin serves the configured shell service, and
+each registered service owns ``<name>.agent-<hex>.localhost`` (deeper labels
 route to the same service -- they are the service's own sub-origin space).
-One domain-scoped session cookie covers the whole family.
+One domain-scoped session cookie covers the whole family. Legacy
+``host-<hex>`` origins still parse but are only ever redirected (or refused)
+toward the canonical agent-keyed origin.
 """
 
 import asyncio
@@ -60,7 +62,7 @@ from websockets import ClientConnection
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
-from imbue.mngr.primitives import HostId
+from imbue.mngr.primitives import AgentInstanceKey
 from imbue.mngr_forward.auth import AuthStoreInterface
 from imbue.mngr_forward.cookie import create_session_cookie
 from imbue.mngr_forward.cookie import create_subdomain_auth_token
@@ -178,9 +180,10 @@ _TUNNEL_POOL_LIMITS: Final[httpx.Limits] = httpx.Limits(max_connections=200, max
 _SUBDOMAIN_AUTH_PATH: Final[str] = "/_subdomain_auth"
 
 
-# Strict shape for the /goto/{host_id} path segment: the exact (lowercased)
-# ``host-<32hex>`` coordinate FORWARD_SUBDOMAIN_PATTERN routes.
-_GOTO_HOST_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"host-[a-f0-9]{32}")
+# Strict shape for the /goto/{coordinate} path segment: the exact (lowercased)
+# coordinates FORWARD_SUBDOMAIN_PATTERN routes -- the canonical agent id, or
+# a legacy host id from persisted pre-agent-keying URLs.
+_GOTO_COORDINATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:host|agent)-[a-f0-9]{32}")
 
 # One sub-origin label of a service's deeper origin space: the per-label
 # charset FORWARD_SUBDOMAIN_PATTERN routes (looser than ServiceLabel, which
@@ -189,9 +192,9 @@ _SUB_ORIGIN_LABEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9_-]+")
 
 # CLEANUP: drop this pattern together with ``_parse_legacy_service_path`` and the
 # legacy ``/service/<name>/`` redirect in ``_handle_workspace_forward_http`` once no
-# supported workspace predates default-workspace-template's deletion of the
-# ``/service/`` path-prefix proxy (dwt 222b95ef; every pre-minds-v0.3.12-era
-# workspace clears it by running ``update-self``).
+# supported host still serves the legacy ``/service/`` path-prefix proxy (removed
+# from the shell service ahead of minds v0.3.12; older hosts clear it via their
+# self-update).
 #
 # Path shape of that legacy in-workspace service proxy: old system_interface
 # builds render every non-shell service panel as an iframe at
@@ -364,10 +367,10 @@ def _unauthenticated_subdomain_response(
     user on the bare-origin landing instead of self-healing into the
     workspace.
 
-    Service origins (``<name>.host-<hex>.localhost``) carry their label
+    Service origins (``<name>.agent-<hex>.localhost``) carry their label
     chain through the bridge via ``service`` so the final bounce returns to
     the exact origin (and path) that was requested; the cookie the bridge
-    sets is domain-scoped to ``host-<hex>.localhost`` so one hop covers the
+    sets is domain-scoped to ``agent-<hex>.localhost`` so one hop covers the
     shell and every service subtree.
     """
     accept = request.headers.get("accept", "")
@@ -377,7 +380,7 @@ def _unauthenticated_subdomain_response(
     next_url = request.url.path
     if request.url.query:
         next_url = f"{next_url}?{request.url.query}"
-    location = f"{scheme}://localhost:{port}/goto/{host_info.host_id_str}/?next={quote(next_url, safe='')}"
+    location = f"{scheme}://localhost:{port}/goto/{host_info.coordinate}/?next={quote(next_url, safe='')}"
     if host_info.service_labels is not None:
         location = f"{location}&service={host_info.service_labels}"
     return Response(status_code=302, headers={"Location": location})
@@ -562,7 +565,7 @@ def _snapshot_backend_refusals(
 
     Must be called before the request is dialed: the check is a comparison
     against the count as it stands now, so anything refused earlier (a previous
-    request, a workspace that has since come up) is excluded by construction.
+    request, a backend that has since come up) is excluded by construction.
     """
     if ssh_info is None:
         return _never_refused
@@ -584,7 +587,7 @@ def _tunnel_setup_failure_reason(exc: BaseException) -> SystemInterfaceBackendFa
     filesystem, so it says nothing about the agent's host. Everything else -- a
     dial that did not answer, a handshake paramiko rejected, a bare ``OSError``
     out of the dial -- reached the network and stays ``CONNECT_ERROR``, where a
-    consumer may still read it as evidence about the workspace.
+    consumer may still read it as evidence about the backend.
     """
     if isinstance(exc, SSHTunnelError) and exc.phase is SSHTunnelPhase.LOCAL_SETUP:
         return SystemInterfaceBackendFailureReason.TUNNEL_SETUP_FAILED
@@ -856,7 +859,7 @@ async def _forward_workspace_http(
             # exhausted (e.g. by leaked streaming responses), and the backend's
             # health is unknown. POOL_EXHAUSTED says exactly that, so a consumer
             # does not read a proxy of its own that ran out of slots as evidence
-            # against the workspace.
+            # against the backend.
             logger.warning("Exhausted the proxy connection pool for {} at {}: {}", agent_id, backend_url, e)
             _emit_backend_failure(
                 envelope_writer, agent_id, SystemInterfaceBackendFailureReason.POOL_EXHAUSTED, None, e
@@ -979,7 +982,7 @@ async def _forward_workspace_http(
         # The headers arrived and the body did not finish, so the backend was
         # reachable and answered -- a mid-response failure (same shape as
         # SSE_EOF on the streaming path), not a connect-time one. Hence
-        # warning: unlike a connect failure, a workspace that is merely still
+        # warning: unlike a connect failure, a backend that is merely still
         # starting does not produce this.
         logger.warning("Lost the backend connection for {} at {}: {}", agent_id, backend_url, e)
         _emit_backend_failure(envelope_writer, agent_id, SystemInterfaceBackendFailureReason.SSE_EOF, None, e)
@@ -994,7 +997,7 @@ async def _forward_workspace_http(
         # Either the dial timed out, or the backstop expired on a backend that
         # never answered at all. Both are genuine failures (the stall notice
         # already covers merely-slow), so surface CONNECT_ERROR.
-        # Logged at warning while the connect failure above is not: a workspace
+        # Logged at warning while the connect failure above is not: a backend
         # still starting refuses the connection or closes it, so one that
         # accepted it and then stayed silent is a different condition.
         logger.warning("Timed out reaching the backend for {} at {}: {}", agent_id, backend_url, e)
@@ -1172,16 +1175,16 @@ def _handle_subdomain_auth_bridge(
 ) -> Response:
     """Redeem a /goto/ token and set the workspace session cookie.
 
-    The cookie is scoped with ``Domain=host-<hex>.localhost`` (the parsed
+    The cookie is scoped with ``Domain=agent-<hex>.localhost`` (the parsed
     ``workspace_domain`` of whichever origin the bridge ran on), so a single
     bridge hop authenticates the bare shell origin and every service origin
-    (``<name>.host-<hex>.localhost``) at any depth.
+    (``<name>.agent-<hex>.localhost``) at any depth.
     """
     token = request.query_params.get("token", "")
     next_url = _sanitize_next_url(request.query_params.get("next", "/"))
     signing_key = auth_store.get_signing_key()
     if not verify_subdomain_auth_token(
-        token=token, signing_key=signing_key, workspace_host_id=str(host_info.host_id_str)
+        token=token, signing_key=signing_key, origin_coordinate=str(host_info.coordinate)
     ):
         return Response(status_code=403, content="Invalid or expired subdomain auth token")
     cookie_value = create_session_cookie(signing_key=signing_key)
@@ -1195,38 +1198,88 @@ def _handle_subdomain_auth_bridge(
     return response
 
 
-class TunnelWarningRateLimiter(MutableModel):
-    """Interval rate limit for the repeated per-agent tunnel-setup-failed warning.
+# Above this many tracked keys, the limiter forgets the ones whose interval has
+# already lapsed. The unresolved-origin key carries the request's own Host
+# label, which nothing validates against a known service, so without this the
+# key space a long-lived forward accumulates is whatever clients ask for.
+_MAX_TRACKED_WARNING_KEYS: Final[int] = 512
 
-    A refused tunnel is retried about once a second while a workspace view is
-    open, so an unreachable workspace floods the log with (usually identical)
-    warnings. One line per interval per agent (carrying the count of suppressed
-    earlier warnings, whatever their message) keeps the signal without the noise.
+
+class ForwardWarningRateLimiter(MutableModel):
+    """Interval rate limit for a per-key repeated warning.
+
+    Both warnings this guards (tunnel setup failed; origin unresolved) recur
+    about once a second while a proxied view is open -- the tunnel is
+    re-dialed per request, and the 503 loading page polls its dead origin --
+    so an unhealthy agent floods the log with (usually identical)
+    warnings. One line per interval per key (carrying the count of suppressed
+    earlier warnings, whatever their message) keeps the signal without the
+    noise.
     """
 
     interval_seconds: float = Field(
-        frozen=True, default=60.0, description="Minimum seconds between logged warnings per agent"
+        frozen=True, default=60.0, description="Minimum seconds between logged warnings per key"
     )
     now_fn: Callable[[], float] = Field(
         frozen=True, default=time.monotonic, description="Monotonic clock, injectable for tests"
     )
-    last_logged_at_by_agent: dict[str, float] = Field(
-        default_factory=dict, description="Monotonic time of the last logged warning per agent"
+    last_logged_at_by_key: dict[str, float] = Field(
+        default_factory=dict, description="Monotonic time of the last logged warning per key"
     )
-    suppressed_count_by_agent: dict[str, int] = Field(
-        default_factory=dict, description="Warnings suppressed since the last logged one per agent"
+    suppressed_count_by_key: dict[str, int] = Field(
+        default_factory=dict, description="Warnings suppressed since the last logged one per key"
     )
 
-    def suppressed_repeats_if_should_log(self, agent_key: str) -> int | None:
+    def suppressed_repeats_if_should_log(self, key: str) -> int | None:
         """Return the count of warnings suppressed since the last logged one when a warning should log now, or None to suppress."""
         now = self.now_fn()
-        last_logged_at = self.last_logged_at_by_agent.get(agent_key)
+        last_logged_at = self.last_logged_at_by_key.get(key)
         if last_logged_at is None or now - last_logged_at >= self.interval_seconds:
-            suppressed_count = self.suppressed_count_by_agent.pop(agent_key, 0)
-            self.last_logged_at_by_agent[agent_key] = now
+            suppressed_count = self.suppressed_count_by_key.pop(key, 0)
+            self.last_logged_at_by_key[key] = now
+            self._forget_lapsed_keys_over_capacity(now)
             return suppressed_count
-        self.suppressed_count_by_agent[agent_key] = self.suppressed_count_by_agent.get(agent_key, 0) + 1
+        self.suppressed_count_by_key[key] = self.suppressed_count_by_key.get(key, 0) + 1
         return None
+
+    def _forget_lapsed_keys_over_capacity(self, now: float) -> None:
+        """Drop keys whose interval has lapsed, once more than ``_MAX_TRACKED_WARNING_KEYS`` are tracked.
+
+        Only lapsed keys may ever be dropped: evicting one still inside its
+        interval would let the flood this limiter exists to damp silence it.
+        """
+        if len(self.last_logged_at_by_key) <= _MAX_TRACKED_WARNING_KEYS:
+            return
+        for key, last_logged_at in tuple(self.last_logged_at_by_key.items()):
+            if now - last_logged_at >= self.interval_seconds:
+                del self.last_logged_at_by_key[key]
+                self.suppressed_count_by_key.pop(key, None)
+
+
+def _log_unresolved_origin_rate_limited(
+    limiter: ForwardWarningRateLimiter,
+    instance_key: AgentInstanceKey,
+    origin_label: str | None,
+) -> None:
+    """Log (rate-limited per agent+label) that a request's origin had no backend route.
+
+    This is the only trace the permanent loading-page state leaves on
+    the desktop: the 503 response itself is silent, and the UNRESOLVED failure
+    envelope is deliberately not enrolled by the health machinery (an agent
+    restart routes *through* the forward, so it cannot refill the forward's own
+    maps). Without this line, a wedged label map is invisible in every log.
+    """
+    origin_description = "the bare host origin" if origin_label is None else f"origin label {origin_label!r}"
+    suppressed_repeats = limiter.suppressed_repeats_if_should_log(f"{instance_key}|{origin_label}")
+    if suppressed_repeats is not None:
+        repeat_suffix = f" ({suppressed_repeats} earlier occurrences suppressed)" if suppressed_repeats > 0 else ""
+        logger.warning(
+            "Resolved no backend for {} on {}; serving the 503 loading page "
+            "(service not registered, or its origin label is not yet mapped){}",
+            origin_description,
+            instance_key,
+            repeat_suffix,
+        )
 
 
 async def _handle_workspace_forward_http(
@@ -1244,7 +1297,8 @@ async def _handle_workspace_forward_http(
     envelope_writer: EnvelopeWriter,
     use_http2: bool,
     stall_notice_seconds: float,
-    tunnel_warning_limiter: TunnelWarningRateLimiter,
+    tunnel_warning_limiter: ForwardWarningRateLimiter,
+    unresolved_warning_limiter: ForwardWarningRateLimiter,
 ) -> Response:
     if request.url.path == _SUBDOMAIN_AUTH_PATH:
         return _handle_subdomain_auth_bridge(request, host_info, auth_store, use_http2)
@@ -1256,15 +1310,32 @@ async def _handle_workspace_forward_http(
     ):
         return _unauthenticated_subdomain_response(request, listen_port, use_http2, host_info)
 
-    instance_key = resolver.resolve_agent_for_host(str(host_info.host_id_str))
+    instance_key = resolver.resolve_instance_for_coordinate(str(host_info.coordinate))
     if instance_key is None:
-        # No known agent on this host yet (discovery still warming up, or the
-        # host is gone). There is no agent to attribute a failure envelope to,
-        # so just serve the auto-retrying loader.
+        # No known agent for this origin yet (discovery still warming up, or
+        # the agent is gone). There is no agent to attribute a failure
+        # envelope to, so just serve the auto-retrying loader.
         return _service_unavailable_response(request)
     # Envelopes and logs carry the bare agent id (the wire contract); resolver
     # lookups use the host-scoped instance key.
     agent_id = instance_key.agent_id
+
+    # CLEANUP: drop this legacy-origin redirect once no persisted browser
+    # state (bookmarks, Electron window URLs) predates the agent-keyed
+    # origins. A host-coordinate origin is the pre-agent-keying URL shape;
+    # HTML navigations move to the canonical agent origin (so browser state
+    # accumulates in one place), while non-navigations 404 -- a stale open
+    # page heals by reloading onto the canonical origin.
+    if host_info.is_legacy_host_coordinate:
+        if "text/html" in request.headers.get("accept", "") and request.method in ("GET", "HEAD"):
+            scheme = "https" if use_http2 else "http"
+            label_prefix = f"{host_info.service_labels}." if host_info.service_labels is not None else ""
+            next_path = request.url.path
+            if request.url.query:
+                next_path = f"{next_path}?{request.url.query}"
+            location = f"{scheme}://{label_prefix}{agent_id}.localhost:{listen_port}{next_path}"
+            return Response(status_code=301, headers={"Location": location})
+        return Response(status_code=404, content="This origin moved to its agent-keyed URL; reload.")
 
     # CLEANUP: drop this redirect (with ``_parse_legacy_service_path`` and
     # ``ForwardResolver.is_shell_target``) once no supported workspace predates
@@ -1314,6 +1385,7 @@ async def _handle_workspace_forward_http(
     else:
         target = resolver.resolve_by_origin_label(instance_key, host_info.service_name)
     if target is None:
+        _log_unresolved_origin_rate_limited(unresolved_warning_limiter, instance_key, host_info.service_name)
         _emit_backend_failure(envelope_writer, agent_id, SystemInterfaceBackendFailureReason.UNRESOLVED, None)
         return _service_unavailable_response(request)
 
@@ -1384,6 +1456,7 @@ async def _handle_workspace_forward_websocket(
     preauth_cookie_value: str | None,
     allow_host_loopback: bool,
     envelope_writer: EnvelopeWriter,
+    unresolved_warning_limiter: ForwardWarningRateLimiter,
 ) -> None:
     if not _is_authenticated(
         cookies=websocket.cookies,
@@ -1393,9 +1466,16 @@ async def _handle_workspace_forward_websocket(
         await websocket.close(code=4003, reason="Not authenticated")
         return
 
-    instance_key = resolver.resolve_agent_for_host(str(host_info.host_id_str))
-    if instance_key is None:
-        await websocket.close(code=1013, reason="Backend not yet available")
+    instance_key = resolver.resolve_instance_for_coordinate(str(host_info.coordinate))
+    if instance_key is None or host_info.is_legacy_host_coordinate:
+        # No resolvable agent yet -- or a legacy host-keyed origin: sockets
+        # cannot be redirected, so the page that opened this one heals by
+        # reloading onto the canonical agent origin.
+        is_unresolved = instance_key is None
+        await websocket.close(
+            code=1013 if is_unresolved else 4004,
+            reason="Backend not yet available" if is_unresolved else "Origin moved to its agent-keyed URL",
+        )
         return
     agent_id = instance_key.agent_id
 
@@ -1409,6 +1489,7 @@ async def _handle_workspace_forward_websocket(
         # Mirror the HTTP path: an unresolved backend is a backend failure a
         # consumer must hear about. A loaded SPA whose only live channel is a
         # websocket would otherwise leave minds blind to the dead workspace.
+        _log_unresolved_origin_rate_limited(unresolved_warning_limiter, instance_key, host_info.service_name)
         _emit_backend_failure(envelope_writer, agent_id, SystemInterfaceBackendFailureReason.UNRESOLVED, None)
         await websocket.close(code=1013, reason="Backend not yet available")
         return
@@ -1666,12 +1747,13 @@ def _handle_debug_index(
 
 
 def _handle_goto_workspace(
-    host_id: str,
+    coordinate: str,
     request: Request,
     auth_store: AuthStoreInterface,
     preauth_cookie_value: str | None,
     listen_port: int,
     use_http2: bool,
+    resolver: ForwardResolver,
 ) -> Response:
     if not _is_authenticated(
         cookies=request.cookies,
@@ -1679,14 +1761,20 @@ def _handle_goto_workspace(
         preauth_cookie_value=preauth_cookie_value,
     ):
         return Response(status_code=302, headers={"Location": "/"})
-    # ``HostId`` alone is too lax for a value interpolated into the redirect
+    # Typed ids alone are too lax for a value interpolated into the redirect
     # hostname (``int(hex, 16)`` accepts newlines / underscores / ``0x`` and
     # preserves case, which the lowercased subdomain parse then never matches),
-    # so require the exact ``host-<32hex>`` shape the subdomain pattern routes.
-    normalized_host_id = host_id.lower()
-    if _GOTO_HOST_ID_PATTERN.fullmatch(normalized_host_id) is None:
+    # so require the exact 32-hex coordinate shapes the subdomain pattern routes.
+    normalized_coordinate = coordinate.lower()
+    if _GOTO_COORDINATE_PATTERN.fullmatch(normalized_coordinate) is None:
         return Response(status_code=404)
-    parsed_id = HostId(normalized_host_id)
+    # Canonicalize a legacy host coordinate (a persisted pre-agent-keying URL)
+    # to the agent origin when the agent is resolvable; an unresolvable one
+    # falls through unchanged so the origin handler serves its loader.
+    if normalized_coordinate.startswith("host-"):
+        resolved_instance = resolver.resolve_instance_for_coordinate(normalized_coordinate)
+        if resolved_instance is not None:
+            normalized_coordinate = str(resolved_instance.agent_id)
     # An optional ``service`` carries the dotted label chain of the origin
     # that bounced here (e.g. ``svc`` or ``sub.svc``) so the bridge -- and
     # its final redirect -- run on that exact origin. Only the LAST label is a
@@ -1706,12 +1794,12 @@ def _handle_goto_workspace(
             return Response(status_code=404)
         service_host_prefix = ".".join([*sub_origin_labels, str(validated_service)]) + "."
     signing_key = auth_store.get_signing_key()
-    token = create_subdomain_auth_token(signing_key=signing_key, workspace_host_id=str(parsed_id))
+    token = create_subdomain_auth_token(signing_key=signing_key, origin_coordinate=normalized_coordinate)
     next_url = _sanitize_next_url(request.query_params.get("next", "/"))
     encoded_next = quote(next_url, safe="")
     scheme = "https" if use_http2 else "http"
     location = (
-        f"{scheme}://{service_host_prefix}{parsed_id}.localhost:{listen_port}"
+        f"{scheme}://{service_host_prefix}{normalized_coordinate}.localhost:{listen_port}"
         f"{_SUBDOMAIN_AUTH_PATH}?token={token}&next={encoded_next}"
     )
     return Response(status_code=302, headers={"Location": location})
@@ -1799,7 +1887,8 @@ def create_forward_app(
     beyond the default 'self' + workspace-family deny-external posture.
     """
     env = _build_jinja_env()
-    tunnel_warning_limiter = TunnelWarningRateLimiter()
+    tunnel_warning_limiter = ForwardWarningRateLimiter()
+    unresolved_warning_limiter = ForwardWarningRateLimiter()
 
     app = FastAPI(
         title="mngr forward",
@@ -1837,6 +1926,7 @@ def create_forward_app(
             use_http2=use_http2,
             stall_notice_seconds=stall_notice_seconds,
             tunnel_warning_limiter=tunnel_warning_limiter,
+            unresolved_warning_limiter=unresolved_warning_limiter,
         )
         # The proxy owns embedding policy for every workspace origin: APPEND a
         # frame-ancestors CSP header (never modify what the service sent --
@@ -1892,16 +1982,17 @@ def create_forward_app(
             use_http2=use_http2,
         )
 
-    @app.get("/goto/{host_id}/")
-    @app.get("/goto/{host_id}")
-    def _goto(host_id: str, request: Request) -> Response:
+    @app.get("/goto/{coordinate}/")
+    @app.get("/goto/{coordinate}")
+    def _goto(coordinate: str, request: Request) -> Response:
         return _handle_goto_workspace(
-            host_id=host_id,
+            coordinate=coordinate,
             request=request,
             auth_store=auth_store,
             preauth_cookie_value=preauth_cookie_value,
             listen_port=listen_port,
             use_http2=use_http2,
+            resolver=resolver,
         )
 
     @app.websocket("/{path:path}")
@@ -1921,6 +2012,7 @@ def create_forward_app(
             preauth_cookie_value=preauth_cookie_value,
             allow_host_loopback=allow_host_loopback,
             envelope_writer=envelope_writer,
+            unresolved_warning_limiter=unresolved_warning_limiter,
         )
 
     return app

@@ -96,6 +96,7 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ImageReference
+from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
@@ -133,6 +134,8 @@ from imbue.mngr_imbue_cloud.hosts.host import ImbueCloudHost
 from imbue.mngr_imbue_cloud.primitives import FAST_PATH_ADOPTABLE_START_ARGS
 from imbue.mngr_imbue_cloud.primitives import FastMode
 from imbue.mngr_imbue_cloud.primitives import ImbueCloudAccount
+from imbue.mngr_imbue_cloud.primitives import POOL_HOST_SERVICES_AGENT_NAME
+from imbue.mngr_imbue_cloud.primitives import WORKSPACE_PRIMARY_AGENT_LABEL
 from imbue.mngr_imbue_cloud.providers.adoption import ParamikoSliceVmAccess
 from imbue.mngr_imbue_cloud.providers.adoption import SliceAdoptionTarget
 from imbue.mngr_imbue_cloud.providers.adoption import ensure_adopted
@@ -300,7 +303,7 @@ def _rewrite_container_host_name(
 
 
 # How each non-running wire status surfaces as an mngr host state. Every
-# status maps to its literal counterpart: a stopping workspace really is
+# status maps to its literal counterpart: a stopping host really is
 # mid-stop (its upload is in flight and the connector refuses starts until
 # it lands on stopped), so rendering it as an already-startable STOPPED
 # would offer an action the server rejects.
@@ -313,6 +316,32 @@ WORKSPACE_HOST_STATE_BY_STATUS: Final[dict[WorkspaceStatus, HostState]] = {
     # observed but not actionable, and never treated as absent.
     WorkspaceStatus.UNKNOWN: HostState.UNKNOWN,
 }
+
+
+@pure
+def _synthesize_services_agent_for_lifecycle_entry(
+    entry: WorkspaceInfo, host_id: HostId, provider_name: ProviderInstanceName
+) -> DiscoveredAgent:
+    """The services-agent stub for a non-running host this install has never listed.
+
+    The pool row's ``agent_id`` is the host's pre-baked ``system-services`` agent
+    by construction, so the stub can honestly carry that agent's name and its
+    ``is_primary`` label. Without the label, consumers that recognize a host's
+    primary agent by it (e.g. a ``has(agent.labels.is_primary)`` agent filter)
+    would drop a stopped host that was never seen running from this install,
+    even though the lifecycle listing reports it.
+    """
+    return DiscoveredAgent(
+        agent_id=AgentId(entry.agent_id),
+        agent_name=AgentName(POOL_HOST_SERVICES_AGENT_NAME),
+        host_id=host_id,
+        provider_name=provider_name,
+        certified_data={
+            "id": entry.agent_id,
+            "name": POOL_HOST_SERVICES_AGENT_NAME,
+            "labels": {WORKSPACE_PRIMARY_AGENT_LABEL: "true"},
+        },
+    )
 
 
 @pure
@@ -337,24 +366,24 @@ def leased_info_from_workspace(workspace: WorkspaceInfo) -> LeasedHostInfo:
 
 
 def _workspace_start_failed_error(host_id: HostId, transition_error: str | None) -> WorkspaceStartFailedError:
-    return WorkspaceStartFailedError(f"workspace {host_id} failed to start: {transition_error or 'unknown error'}")
+    return WorkspaceStartFailedError(f"host {host_id} failed to start: {transition_error or 'unknown error'}")
 
 
 def _workspace_abandoned_error(host_id: HostId, transition_error: str | None) -> WorkspaceStartFailedError:
     return WorkspaceStartFailedError(
-        f"workspace {host_id} was abandoned ({transition_error or 'no reason recorded'}); "
-        "restore it from its backup into a fresh workspace"
+        f"host {host_id} was abandoned ({transition_error or 'no reason recorded'}); "
+        "restore its data from backup onto a fresh host"
     )
 
 
 def _unrecognized_workspace_status_error(host_id: HostId) -> UnrecognizedWorkspaceStatusError:
     return UnrecognizedWorkspaceStatusError(
-        f"workspace {host_id} is in a state this app version does not recognize; update the app to manage it"
+        f"host {host_id} is in a state this app version does not recognize; update the app to manage it"
     )
 
 
 class _WorkspaceStartPollState(MutableModel):
-    """Mutable bookkeeping for one workspace-start poll, advanced once per probe."""
+    """Mutable bookkeeping for one host-start poll, advanced once per probe."""
 
     is_start_requested: bool = Field(default=False, description="Whether this poll has issued its start request")
     last_observed_status: WorkspaceStatus | None = Field(
@@ -376,10 +405,10 @@ def _advance_workspace_start(
     host_id: HostId,
     state: _WorkspaceStartPollState,
 ) -> WorkspaceInfo | Exception | None:
-    """One start-poll step: the running workspace, a terminal failure, or None (keep polling).
+    """One start-poll step: the running host's wire record, a terminal failure, or None (keep polling).
 
-    Requests the start itself the moment the workspace is startable: a
-    still-``stopping`` workspace is waited out first (the connector refuses
+    Requests the start itself the moment the host is startable: a
+    still-``stopping`` host is waited out first (the connector refuses
     starts mid-stop; the stop lands on ``stopped`` once its upload verifies).
     """
     current = client.get_workspace(token_provider(), host_db_id)
@@ -390,7 +419,7 @@ def _advance_workspace_start(
         case WorkspaceStatus.RUNNING:
             return current
         case WorkspaceStatus.CRASHED:
-            # An operator abandoned the workspace; it can never reach running,
+            # An operator abandoned the host; it can never reach running,
             # so waiting out the poll window would only bury the reason.
             return _workspace_abandoned_error(host_id, current.transition_error)
         case WorkspaceStatus.UNKNOWN:
@@ -994,12 +1023,7 @@ class ImbueCloudProvider(BaseProviderInstance):
                 host_state=WORKSPACE_HOST_STATE_BY_STATUS[workspace.status],
             )
             result[host_ref] = self._load_last_known_agents(host_id) or [
-                DiscoveredAgent(
-                    agent_id=AgentId(workspace.agent_id),
-                    agent_name=AgentName(workspace.agent_id),
-                    host_id=host_id,
-                    provider_name=self.name,
-                )
+                _synthesize_services_agent_for_lifecycle_entry(workspace, host_id, self.name)
             ]
         return result
 
@@ -1767,7 +1791,7 @@ class ImbueCloudProvider(BaseProviderInstance):
             if not lease_result.outer_host_public_key or not lease_result.container_host_public_key:
                 raise MngrError(
                     f"lease of host {host_id} returned no pinned SSH host keys; upgrade the connector and run the "
-                    "one-time operator host-key backfill (`minds-admin pool backfill-host-keys`)"
+                    "one-time operator host-key backfill (`pool backfill-host-keys`)"
                 )
             self._record_host_key(
                 host_id, lease_result.vps_address, lease_result.ssh_port, lease_result.outer_host_public_key
@@ -2462,7 +2486,7 @@ class ImbueCloudProvider(BaseProviderInstance):
                 else ""
             )
             raise WorkspaceStartTimeoutError(
-                f"workspace {host_id} did not reach running within {_WORKSPACE_START_TIMEOUT_SECONDS:.0f}s "
+                f"host {host_id} did not reach running within {_WORKSPACE_START_TIMEOUT_SECONDS:.0f}s "
                 f"(last observed status: {last_status}{error_note})"
             )
         if isinstance(outcome, Exception):

@@ -61,9 +61,6 @@ class UiNotificationPrefs(FrozenModel):
     is_enabled: bool = Field(description="Master notifications toggle (gates every OS nudge the app sends)")
     style: NotificationStyle = Field(description="Delivery style for feed-backed notifications")
     is_os_hint_dismissed: bool = Field(description="Whether the one-time OS-notification hint was dismissed")
-    os_permission_confirmed: bool = Field(
-        description="Whether the desktop app has ever confirmed native OS notification permission is granted"
-    )
     version: str = Field(description="If-Match version for the notification-prefs write")
 
 
@@ -154,7 +151,7 @@ class UiAccountPlanResponse(FrozenModel):
 class UiAiKeysContext(FrozenModel):
     """Context for the workspace AI-key mint page."""
 
-    workspace_host_id: str = Field(description="The workspace host id the key is minted for")
+    workspace_id: str = Field(description="The workspace coordinate the mint page was opened with")
     workspace_display_name: str = Field(description="Display name of the workspace")
     account_email: str = Field(description="The billed account's email")
     error_message: str = Field(description="Non-empty when minting is impossible; explains why")
@@ -219,14 +216,12 @@ def _current_notification_prefs() -> UiNotificationPrefs:
         is_enabled = True
         style: NotificationStyle = DEFAULT_NOTIFICATION_STYLE
         is_os_hint_dismissed = False
-        os_permission_confirmed = False
     else:
-        is_enabled, style, is_os_hint_dismissed, os_permission_confirmed = minds_config.get_notification_prefs()
+        is_enabled, style, is_os_hint_dismissed = minds_config.get_notification_prefs()
     return UiNotificationPrefs(
         is_enabled=is_enabled,
         style=style,
         is_os_hint_dismissed=is_os_hint_dismissed,
-        os_permission_confirmed=os_permission_confirmed,
         version=compute_notification_prefs_version(is_enabled, style, is_os_hint_dismissed),
     )
 
@@ -397,42 +392,6 @@ def _handle_notification_prefs_write() -> Response:
     )
 
 
-class UiNotificationOsPermissionWrite(FrozenModel):
-    """Body of the OS-notification-permission-confirmed write."""
-
-    os_permission_confirmed: bool = Field(
-        description="Whether native OS notification permission was just confirmed granted"
-    )
-
-
-def _handle_notification_os_permission_write() -> Response:
-    """POST /ui/api/settings/notification-os-permission: records the desktop app's own
-    best-effort observation of whether native OS notification permission is granted.
-
-    Electron exposes no permission-status API on macOS, so this is set from a
-    probe notification's 'show' event actually firing (or not) -- the one
-    signal available. Deliberately unguarded by If-Match: this is
-    system-observed state the app derives for itself, not a user-typed
-    preference, so a lost update under a race just means probing once more
-    than strictly necessary, never a torn record.
-    """
-    if not _is_settings_request_authenticated():
-        return _unauthenticated_response()
-    minds_config = get_state().minds_config
-    if minds_config is None:
-        return _error_response("Settings storage is not configured", 503)
-    body = request.get_json(silent=True, force=True)
-    if not isinstance(body, dict):
-        return _error_response("Invalid JSON body", 400)
-    try:
-        write = UiNotificationOsPermissionWrite.model_validate(body)
-    except ValidationError as e:
-        logger.debug("Rejected a malformed notification-os-permission write body: {}", e)
-        return _error_response("Invalid JSON body", 400)
-    minds_config.set_notification_os_permission_confirmed(write.os_permission_confirmed)
-    return Response(status=204)
-
-
 def _handle_accounts_detail() -> Response:
     """GET /ui/api/accounts: the Accounts page's account list."""
     if not _is_settings_request_authenticated():
@@ -508,14 +467,18 @@ def _handle_account_plan(user_id: str) -> Response:
 
 
 def _handle_ai_keys_context() -> Response:
-    """GET /ui/api/ai-keys?workspace=<host_id>: context for the mint page."""
+    """GET /ui/api/ai-keys?workspace=<workspace_id>: context for the mint page.
+
+    A machine's host id is also accepted as the coordinate while in-workspace
+    deep links (written before workspace ids) transition.
+    """
     if not _is_settings_request_authenticated():
         return _unauthenticated_response()
-    workspace_host_id = request.args.get("workspace", "").strip()
-    if not workspace_host_id:
+    workspace_coordinate = request.args.get("workspace", "").strip()
+    if not workspace_coordinate:
         return _json_response(
             UiAiKeysContext(
-                workspace_host_id="",
+                workspace_id="",
                 workspace_display_name="",
                 account_email="",
                 error_message=(
@@ -526,11 +489,11 @@ def _handle_ai_keys_context() -> Response:
         )
     sync_scheduler = get_state().sync_scheduler
     record_store = None if sync_scheduler is None else sync_scheduler.record_store
-    resolved = resolve_workspace_account(workspace_host_id, record_store, get_state().session_store)
+    resolved = resolve_workspace_account(workspace_coordinate, record_store, get_state().session_store)
     if resolved is None:
         return _json_response(
             UiAiKeysContext(
-                workspace_host_id=workspace_host_id,
+                workspace_id=workspace_coordinate,
                 workspace_display_name="",
                 account_email="",
                 error_message=(
@@ -541,7 +504,7 @@ def _handle_ai_keys_context() -> Response:
         )
     return _json_response(
         UiAiKeysContext(
-            workspace_host_id=workspace_host_id,
+            workspace_id=resolved.workspace_id,
             workspace_display_name=resolved.workspace_display_name,
             account_email=resolved.account_email,
             error_message="",
@@ -554,11 +517,6 @@ def register_settings_routes(blueprint: Blueprint) -> None:
     blueprint.add_url_rule("/api/settings", view_func=_handle_settings_overview)
     blueprint.add_url_rule("/api/settings/error-reporting", view_func=_handle_error_reporting_write, methods=["POST"])
     blueprint.add_url_rule("/api/settings/notifications", view_func=_handle_notification_prefs_write, methods=["POST"])
-    blueprint.add_url_rule(
-        "/api/settings/notification-os-permission",
-        view_func=_handle_notification_os_permission_write,
-        methods=["POST"],
-    )
     blueprint.add_url_rule("/api/accounts", view_func=_handle_accounts_detail)
     blueprint.add_url_rule("/api/accounts/<user_id>/plan", view_func=_handle_account_plan)
     blueprint.add_url_rule("/api/ai-keys", view_func=_handle_ai_keys_context)

@@ -19,18 +19,25 @@ resolved an authenticated identity, it can expose it to the log line by
 stashing the user id in ASGI scope state under
 ``AUTHENTICATED_USER_STATE_KEY`` (e.g. via Starlette's ``request.state``);
 the middleware reads it back after the response, so the line carries the
-full user id on authenticated requests and omits the field otherwise.
+full user id on authenticated requests and omits the field otherwise. Two
+more scope-state keys let a route shape its own line:
+``ACCESS_LOG_SUPPRESS_SUCCESS_STATE_KEY`` drops the line for 2xx responses
+only (high-frequency machine traffic counted by metric records instead),
+and ``ACCESS_LOG_PATH_OVERRIDE_STATE_KEY`` replaces the logged path when
+the real one carries a credential in a path segment.
 """
 
 import json
 import logging
-import os
 import time
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
+
+from imbue.modal_app_kit.log_format import StructuredRecordJsonLogFormatter
+from imbue.modal_app_kit.log_format import deployed_minds_env_name
 
 logger = logging.getLogger(__name__)
 
@@ -46,20 +53,19 @@ _UNHANDLED_ERROR_STATUS: Final[int] = 500
 # ``request.state``, which is backed by ``scope["state"]``.
 AUTHENTICATED_USER_STATE_KEY: Final[str] = "authenticated_user_id"
 
-# The deployed env's name, pushed into the app's Modal Secret set by
-# ``minds-admin env deploy`` (dev envs: the env name; shared tiers: the tier
-# name). Stamped into every structured log line so downstream consumers of the
-# shared per-tier log store (the analytics aggregation's log views) can filter
-# one env's lines out of the mix, and used by the connector to scope
-# env-owned maintenance (the slice-box reconcile) on shared infrastructure.
-# Empty when the container predates the stamping or runs outside a minds
-# deploy; log lines omit the field and env-scoped maintenance skips.
-_MINDS_ENV_NAME_ENV_VAR: Final[str] = "MINDS_ENV_NAME"
+# Scope-state key a route sets (to a truthy value) to suppress the request's
+# access-log line -- honored ONLY when the response status is 2xx, so an
+# error outcome always logs in full no matter what the route declared. For
+# high-frequency machine traffic (the connector's frps heartbeats) whose
+# successful requests are counted by periodic metric records instead of
+# per-request lines.
+ACCESS_LOG_SUPPRESS_SUCCESS_STATE_KEY: Final[str] = "access_log_suppress_success"
 
-
-def deployed_minds_env_name() -> str:
-    """The deployed env's name from MINDS_ENV_NAME ('' when not deployed via minds)."""
-    return os.environ.get(_MINDS_ENV_NAME_ENV_VAR, "")
+# Scope-state key a route sets to replace the logged request path with a
+# sanitized form -- for routes whose real path carries a credential in a path
+# segment (the frps plugin-auth shared secret), which must not land in the
+# tier's log store.
+ACCESS_LOG_PATH_OVERRIDE_STATE_KEY: Final[str] = "access_log_path_override"
 
 
 def _first_header_value(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> str:
@@ -91,12 +97,19 @@ def client_ip_from_asgi_scope(scope: Mapping[str, Any]) -> str:
     return "-"
 
 
-def _authenticated_user_from_scope(scope: dict[str, Any]) -> str:
+def _scope_state_string(scope: dict[str, Any], key: str) -> str:
     state = scope.get("state")
     if not isinstance(state, dict):
         return ""
-    user_id = state.get(AUTHENTICATED_USER_STATE_KEY)
-    return user_id if isinstance(user_id, str) else ""
+    value = state.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _is_success_line_suppressed(scope: dict[str, Any], status_code: int | None) -> bool:
+    if status_code is None or not (200 <= status_code < 300):
+        return False
+    state = scope.get("state")
+    return isinstance(state, dict) and bool(state.get(ACCESS_LOG_SUPPRESS_SUCCESS_STATE_KEY))
 
 
 def format_request_log_line(scope: dict[str, Any], status_code: int | None, duration_ms: float) -> str:
@@ -117,17 +130,18 @@ def format_request_log_line(scope: dict[str, Any], status_code: int | None, dura
     # own User-Agent, so the fleet-version picture -- the input for
     # support-window and deprecation decisions -- reads from this field.
     imbue_client = _first_header_value(scope.get("headers") or [], b"x-imbue-client")[:_USER_AGENT_MAX_LENGTH]
+    path_override = _scope_state_string(scope, ACCESS_LOG_PATH_OVERRIDE_STATE_KEY)
     record: dict[str, Any] = {
         "type": "http_request",
         "method": scope.get("method", "-"),
-        "path": str(scope.get("path", "-")),
+        "path": path_override if path_override else str(scope.get("path", "-")),
         "status": status_code if status_code is not None else _UNHANDLED_ERROR_STATUS,
         "duration_ms": round(duration_ms, 1),
         "client_ip": client_ip_from_asgi_scope(scope),
         "user_agent": user_agent,
         "imbue_client": imbue_client,
     }
-    authenticated_user = _authenticated_user_from_scope(scope)
+    authenticated_user = _scope_state_string(scope, AUTHENTICATED_USER_STATE_KEY)
     if authenticated_user:
         record["user"] = authenticated_user
     env_name = deployed_minds_env_name()
@@ -137,21 +151,23 @@ def format_request_log_line(scope: dict[str, Any], status_code: int | None, dura
 
 
 def ensure_info_log_handler(target_logger: logging.Logger) -> None:
-    """Make a logger's INFO lines reach the container's stderr.
+    """Make a logger's INFO lines reach the container's stderr as JSON, regardless of the root logger.
 
-    Python's root logger defaults to WARNING with no configured handler, so
-    without this the structured lines would be silently dropped in a container
-    whose app never calls ``logging.basicConfig``. Attaching a handler to the
-    target logger (with ``propagate=False``) keeps the lines flowing without
-    touching the host app's logging configuration -- and without duplicating
-    lines if the host app later configures the root logger. Idempotent. Also
-    used by app-side structured event lines (e.g. the connector's share-visit
-    records) that must reach the log store at INFO.
+    The structured record lines must flow even in a process that never
+    configured the root logger (unit tests, a container before
+    ``configure_logging`` ran), and must not double up once it has: a
+    dedicated handler on the target logger with ``propagate=False`` gives
+    both. The handler renders with ``StructuredRecordJsonLogFormatter``, which
+    flattens the JSON-object message into the JSON envelope (level, timestamp,
+    logger) -- so every message logged through the target logger MUST be a
+    structured record. Idempotent. Also used by app-side structured event
+    lines (e.g. the connector's share-visit records) that must reach the log
+    store at INFO.
     """
     if target_logger.handlers:
         return
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    handler.setFormatter(StructuredRecordJsonLogFormatter())
     target_logger.addHandler(handler)
     target_logger.setLevel(logging.INFO)
     target_logger.propagate = False
@@ -197,5 +213,6 @@ class RequestLoggingMiddleware:
         try:
             await self.app(scope, receive, _send_recording_status)
         finally:
-            duration_ms = (time.monotonic() - start_monotonic) * 1000.0
-            self.line_sink(format_request_log_line(scope, status_holder["status"], duration_ms))
+            if not _is_success_line_suppressed(scope, status_holder["status"]):
+                duration_ms = (time.monotonic() - start_monotonic) * 1000.0
+                self.line_sink(format_request_log_line(scope, status_holder["status"], duration_ms))

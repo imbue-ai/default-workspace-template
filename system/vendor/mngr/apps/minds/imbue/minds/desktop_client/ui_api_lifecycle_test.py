@@ -11,7 +11,7 @@ from flask.testing import FlaskClient
 from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
@@ -23,6 +23,7 @@ from imbue.minds.desktop_client.conftest import make_session_store_for_test
 from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
+from imbue.minds.desktop_client.system_interface_health import HostRecoveryKind
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.testing import build_resolver_with_provider_backend
 from imbue.minds.desktop_client.testing import build_resolver_with_system_services
@@ -96,7 +97,7 @@ def _build_lifecycle_client(
         backend_resolver=(
             backend_resolver if backend_resolver is not None else StaticBackendResolver(url_by_agent_and_service={})
         ),
-        paths=WorkspacePaths(data_dir=tmp_path),
+        paths=InstallationPaths(data_dir=tmp_path),
         session_store=session_store,
         sync_scheduler=sync_scheduler,
         system_interface_health_tracker=tracker,
@@ -248,14 +249,14 @@ def test_recovery_info_carries_the_live_tracker_state_for_the_card(tmp_path: Pat
     agent_id = AgentId(_DESTROYED_AGENT_ID)
     client, _ = _build_lifecycle_client(tmp_path, tracker=tracker)
 
-    tracker.mark_restarting(agent_id, start_only=False)
+    tracker.mark_recovering(agent_id, HostRecoveryKind.RESTART)
     payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
-    assert payload["health"] == "restarting"
+    assert payload["health"] == "recovering"
 
-    tracker.mark_restart_failed(agent_id, "Start step of host restart failed: exited 1")
+    tracker.mark_recovery_failed(agent_id, "Start step of host recovery failed: exited 1")
     payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
-    assert payload["health"] == "restart_failed"
-    assert payload["health_error"] == "Start step of host restart failed: exited 1"
+    assert payload["health"] == "recovery_failed"
+    assert payload["health_error"] == "Start step of host recovery failed: exited 1"
 
 
 def test_recovery_info_picks_up_a_provider_error_that_lands_after_the_card_opened(tmp_path: Path) -> None:
@@ -283,27 +284,27 @@ def test_recovery_info_picks_up_a_provider_error_that_lands_after_the_card_opene
     assert payload["unreachable_reason"] == "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"
 
 
-def test_recovery_info_reports_the_backend_a_restart_was_already_rejected_at(tmp_path: Path) -> None:
-    """The card's very first read carries the verdict, because the restart already has it.
+def test_recovery_info_reports_the_backend_a_recovery_was_already_rejected_at(tmp_path: Path) -> None:
+    """The card's very first read carries the verdict, because the recovery already has it.
 
-    The card is raised by the restart-failed edge, so this route is called
-    moments after the restart that failed -- and long before the provider's next
+    The card is raised by the recovery-failed edge, so this route is called
+    moments after the recovery that failed -- and long before the provider's next
     poll. Discovery has surfaced nothing here, exactly as it had not when the
-    card opened; the reason comes from the restart mngr rejected at the backend.
+    card opened; the reason comes from the command mngr rejected at the backend.
     """
     agent_id = AgentId(_DESTROYED_AGENT_ID)
     resolver = build_resolver_with_system_services(agent_id, AgentId.generate())
     tracker = SystemInterfaceHealthTracker()
     tracker.record_backend_outage(agent_id, "docker", "Docker Desktop is manually paused.")
-    tracker.mark_restart_failed(
+    tracker.mark_recovery_failed(
         agent_id,
-        "This machine's backend is unreachable, so the restart could not run: Docker Desktop is manually paused.",
+        "This machine's backend is unreachable, so the recovery could not run: Docker Desktop is manually paused.",
     )
     client, _ = _build_lifecycle_client(tmp_path, backend_resolver=resolver, tracker=tracker)
 
     payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
 
-    assert payload["health"] == "restart_failed"
+    assert payload["health"] == "recovery_failed"
     assert payload["is_backend_unreachable"] is True
     assert payload["provider_label"] == "Docker"
     assert payload["unreachable_reason"] == "Docker Desktop is manually paused."
@@ -324,6 +325,31 @@ def test_recovery_info_reports_a_dead_network_for_a_machine_it_can_explain(
     payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
 
     assert payload["device_environment"] == "OFFLINE"
+
+
+@pytest.mark.witnesses(
+    "no-blame-past-an-unmeasured-device",
+    partial="witnesses the recovery card's input only; the card's own withholding is witnessed by the SPA's suite",
+)
+def test_recovery_info_reports_an_unmeasured_device_as_unknown_not_fine(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
+) -> None:
+    """Before a probe lands (and after a wake blanks the reading) the card is told nothing was measured.
+
+    The card withholds its backend verdict on this value: after a wake the
+    provider's poll errored because the laptop was asleep, and NONE here would
+    have the card name the provider on no measurement at all.
+    """
+    agent_id = AgentId(_DESTROYED_AGENT_ID)
+    resolver = build_resolver_with_provider_backend(
+        agent_id, provider_name="imbue_cloud_someone", backend="imbue_cloud"
+    )
+    detector, _ = build_stub_connectivity_detector(root_concurrency_group, is_internet_up=False)
+    client, _ = _build_lifecycle_client(tmp_path, backend_resolver=resolver, connectivity_detector=detector)
+
+    payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
+
+    assert payload["device_environment"] == "UNKNOWN"
 
 
 @pytest.mark.parametrize("backend", ["local", "docker", "lima"])

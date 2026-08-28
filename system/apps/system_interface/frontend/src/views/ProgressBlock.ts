@@ -221,7 +221,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           return m(
             "div",
             { class: "pv-permission relative z-[2] mt-1.5 mb-3.5", key: `perm-${item.event.event_id}` },
-            renderPermissionItem(item.event, toolResults, agentId, item.resolution),
+            renderPermissionItem(item.event, toolResults, agentId, item.resolutionsByRequestId),
           );
         }
         // A stop-hook chip woven into the timeline at the point the hook

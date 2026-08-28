@@ -205,9 +205,10 @@ format-command="uv run ruff format --force-exclude --config pyproject.toml --std
 # execute in, and the standalone project (which has no mngr_forward) cannot
 # resolve them. Do NOT collapse the entries below into a plain
 # "apps/minds_evals/": that excludes resources/ too, and since the standalone
-# project excludes it as well, it leaves those files type-checked nowhere. The
-# cost of naming the package's own modules instead is that a new subpackage
-# importing harbor fails here until it is added -- loudly, which is the point.
+# project excludes it as well, it leaves those files type-checked nowhere
+# (test_meta_ratchets.py probes ty for exactly that). The cost of naming the
+# package's own modules instead is that a new subpackage importing harbor fails
+# here until it is added -- loudly, which is the point.
 exclude = [
     "scripts/style_guide.py",
     "contrib/",
@@ -216,7 +217,8 @@ exclude = [
     "apps/minds_evals/*.py",
     "apps/minds_evals/imbue/minds_evals/*.py",
     # templates/ run in the verifier container, where rewardkit arrives via uvx;
-    # unresolvable in this venv and in the standalone project alike.
+    # unresolvable in this venv. The standalone minds_evals project checks them
+    # instead -- it installs harbor-rewardkit as a dev dependency for exactly that.
     "apps/minds_evals/imbue/minds_evals/templates/",
     # Vendored upstream bugsink settings template; the bugsink package is
     # installed only on the error-tracker VPS (never in the dev venv), so its

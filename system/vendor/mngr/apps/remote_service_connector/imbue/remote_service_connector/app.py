@@ -47,8 +47,9 @@ from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
+from imbue.modal_app_kit.log_format import configure_logging
+from imbue.modal_app_kit.log_format import deployed_minds_env_name
 from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
-from imbue.modal_app_kit.request_logging import deployed_minds_env_name
 from imbue.modal_app_kit.sentry import capture_and_reraise
 from imbue.modal_app_kit.sentry import init_sentry
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
@@ -58,6 +59,7 @@ from imbue.remote_service_connector.auth_proxy import PartitionedCookieMiddlewar
 from imbue.remote_service_connector.auth_proxy import init_supertokens
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.hosts import reconcile_slice_boxes
+from imbue.remote_service_connector.lease_records import run_lease_record_sweep
 from imbue.remote_service_connector.r2.sweep import run_r2_quota_sweep
 from imbue.remote_service_connector.relay_health import get_dns_record_set_ops
 from imbue.remote_service_connector.relay_health import probe_relay_healthz
@@ -68,7 +70,9 @@ from imbue.remote_service_connector.stop_start import run_transition_supervisor
 from imbue.remote_service_connector.stop_start import run_transition_watchdog
 from imbue.remote_service_connector.web import web_app
 
-logger = logging.getLogger(__name__)
+# Named under ``imbue`` because Modal mounts this entrypoint as module ``app``,
+# which sits outside the subtree the shared logging configuration opens to INFO.
+logger = logging.getLogger("imbue.remote_service_connector.app")
 
 
 _DEPLOY_ENV = read_deploy_env()
@@ -174,19 +178,23 @@ def _connector_secrets() -> list[modal.Secret]:
 # single slow request (a lease's SSH provisioning, a cold sync pull) makes
 # every other caller queue behind it or wait out a fresh container's cold
 # boot -- even with a warm pool. The app is safe to run concurrently: routes
-# are sync ``def`` (FastAPI runs them on its threadpool), every route opens
-# its own psycopg2 connection and closes it in ``finally``, the lease
-# selection uses ``FOR UPDATE SKIP LOCKED``, the shared Cloudflare
-# ``httpx.Client`` is thread-safe, and the only module-level mutable state
-# (the paid-status cache) is lock-guarded. ``max_inputs`` is kept modest
-# because each concurrent request holds one direct Neon connection and one
-# threadpool thread for its duration.
+# are sync ``def`` (FastAPI runs them on its threadpool), every route checks
+# a psycopg2 connection out of the lock-guarded per-container pool for
+# exactly the span of one ``with`` block (``db.pooled_db_connection``), the
+# lease selection uses ``FOR UPDATE SKIP LOCKED``, the shared Cloudflare
+# ``httpx.Client`` is thread-safe, and the remaining module-level mutable
+# state (the paid-status and ping-decision caches) is lock-guarded.
+# ``max_inputs`` is kept modest because each concurrent request holds one
+# Neon connection and one threadpool thread for its duration (the pool's
+# idle capacity matches this cap).
 @modal.concurrent(max_inputs=8)
 @modal.asgi_app(custom_domains=_CUSTOM_DOMAINS)
 def fastapi_app() -> FastAPI:
-    # Error reporting to the tier's Bugsink instance; a no-op until the
-    # tier's `sentry` Vault entry carries RSC_SENTRY_DSN. Initialized before
-    # anything that can fail so startup errors are reported too.
+    # JSON log lines (so every line carries its level into the log store),
+    # then error reporting to the tier's Bugsink instance; a no-op until the
+    # tier's `sentry` Vault entry carries RSC_SENTRY_DSN. Both come before
+    # anything that can fail so startup errors are logged and reported too.
+    configure_logging()
     init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     init_supertokens()
     # The SuperTokens middleware serves the accounts surface's browser-session
@@ -226,22 +234,20 @@ def fastapi_app() -> FastAPI:
     timeout=900,
 )
 def cleanup_removing_pool_hosts() -> dict[str, int]:
+    configure_logging()
     init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     with capture_and_reraise():
         return _cleanup_removing_pool_hosts()
 
 
 def _cleanup_removing_pool_hosts() -> dict[str, int]:
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         # Audit this env's slices on every box against the DB (alert-only: it never
         # auto-deletes, to avoid racing an in-flight bake). Scoped to MINDS_ENV_NAME so
         # it is safe on a box shared by multiple dev envs. A reconcile failure (DB,
         # SSH, or a missing POOL_SSH_PRIVATE_KEY while boxes exist) is a real failure:
         # let it propagate and fail the cron run rather than silently swallowing it.
         divergence_count = reconcile_slice_boxes(conn, deployed_minds_env_name())
-    finally:
-        conn.close()
     logger.info("Slice reconcile done: slice_divergences=%d", divergence_count)
     return {"slice_divergences": divergence_count}
 
@@ -263,6 +269,7 @@ def _init_supertokens_once() -> None:
     timeout=900,
 )
 def r2_quota_sweep() -> dict[str, int]:
+    configure_logging()
     init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     with capture_and_reraise():
         return _r2_quota_sweep()
@@ -290,6 +297,7 @@ def _r2_quota_sweep() -> dict[str, int]:
     timeout=900,
 )
 def backup_retention_reap() -> dict[str, int]:
+    configure_logging()
     init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     with capture_and_reraise():
         return _backup_retention_reap()
@@ -307,6 +315,28 @@ def _backup_retention_reap() -> dict[str, int]:
 
 
 @app.function(
+    name="lease_record_sweep",
+    secrets=_connector_secrets(),
+    # Hourly lease-vs-record sweep, offset from the other crons. Each release
+    # is the same synchronous chain the release endpoint runs; the sweep's
+    # per-pass release budget is what keeps a pass inside this timeout.
+    schedule=modal.Cron("20 * * * *"),
+    timeout=900,
+)
+def lease_record_sweep() -> dict[str, object]:
+    configure_logging()
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _lease_record_sweep()
+
+
+def _lease_record_sweep() -> dict[str, object]:
+    result = run_lease_record_sweep()
+    logger.info("Lease-record sweep done: %s", result)
+    return result
+
+
+@app.function(
     name="relay_health_sweep",
     secrets=_connector_secrets(),
     # Every-minute relay liveness sweep: probes each active relay's /healthz
@@ -321,6 +351,7 @@ def _backup_retention_reap() -> dict[str, int]:
     timeout=120,
 )
 def relay_health_sweep() -> dict[str, int]:
+    configure_logging()
     init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     with capture_and_reraise():
         return _relay_health_sweep()
@@ -351,6 +382,7 @@ def _relay_health_sweep() -> dict[str, int]:
     timeout=7200,
 )
 def workspace_transition_supervisor(host_db_id: str, transition_id: str) -> str:
+    configure_logging()
     init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     with capture_and_reraise():
         return _workspace_transition_supervisor(host_db_id, transition_id)
@@ -385,6 +417,7 @@ stop_start_module.spawner.hook = _spawn_transition_supervisor
     timeout=900,
 )
 def workspace_transition_watchdog() -> dict[str, int]:
+    configure_logging()
     init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     with capture_and_reraise():
         return _workspace_transition_watchdog()

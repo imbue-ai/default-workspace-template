@@ -10,7 +10,7 @@ from pydantic import Field
 from pydantic import JsonValue
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
@@ -21,7 +21,7 @@ from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSe
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
 from imbue.minds.desktop_client.latchkey.testing import FakeLatchkeyGatewayClient
 from imbue.minds.desktop_client.latchkey.testing import build_fake_gateway_client
-from imbue.minds.desktop_client.request_events import RequestInbox
+from imbue.minds.desktop_client.testing import StaticPendingRequests
 from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
@@ -179,8 +179,8 @@ def _build_client(
         auth_store=auth_store,
         backend_resolver=resolver,
         http_client=None,
-        paths=WorkspacePaths(data_dir=tmp_path),
-        request_inbox=RequestInbox(),
+        paths=InstallationPaths(data_dir=tmp_path),
+        pending_requests=StaticPendingRequests(),
         request_event_handlers=(handler,),
     )
     client = app.test_client()

@@ -32,7 +32,7 @@ from imbue.remote_service_connector.errors import R2BucketNotFoundError
 from imbue.remote_service_connector.errors import R2ReservedBucketNameError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.naming import DEFAULT_R2_KEY_ALIAS
-from imbue.remote_service_connector.r2.naming import RESERVED_BUCKET_SHORT_NAME_PREFIX
+from imbue.remote_service_connector.r2.naming import RESERVED_BUCKET_SHORT_NAME_PREFIXES
 from imbue.remote_service_connector.r2.naming import WORKSPACE_BACKUP_SHORT_NAME_RE
 from imbue.remote_service_connector.r2.naming import bucket_owner_prefix
 from imbue.remote_service_connector.r2.naming import derive_s3_secret_access_key
@@ -93,7 +93,9 @@ class R2KeyInfo(BaseModel):
         default=None,
         description=(
             "Storage-quota enforcement state: 'read' when the sweep downgraded this key because the "
-            "owner is over their storage quota; None when the live token policy matches ``access``."
+            "owner is over their storage quota; 'pending' while a downgrade/restore is in flight "
+            "(the live token policy is unconfirmed and treated as read-only); None when the live "
+            "token policy matches ``access``."
         ),
     )
 
@@ -176,8 +178,13 @@ def measure_live_owner_usage_bytes(ops: CloudflareOps, user_id_prefix: str) -> i
 
 
 def _is_owner_enforced_over_quota(store: KeyStore, owner_user_id: str) -> bool:
-    """True when any of the owner's keys is currently sweep-downgraded (enforced read-only)."""
-    return any(row.get("enforced_access") == "read" for row in store.list_keys(owner_user_id, None))
+    """True when any of the owner's keys carries a quota-enforcement marker.
+
+    A ``'pending'`` marker (an in-flight transition whose Cloudflare outcome
+    is unconfirmed) counts as enforced: a fresh mint must stay conservative
+    until the next enforcement pass settles the marker.
+    """
+    return any(row.get("enforced_access") is not None for row in store.list_keys(owner_user_id, None))
 
 
 def _check_storage_quota_for_new_bucket(
@@ -273,32 +280,27 @@ def _mint_and_record_key(
         raise HTTPException(status_code=502, detail=f"Failed to provision bucket key: {exc}") from exc
 
 
-def _workspace_record_exists(user_id: str, host_id: str) -> bool:
-    """Whether the user has a workspace record (any state) for ``host_id``."""
-    conn = db.get_pool_db_connection()
-    try:
+def _workspace_record_exists(user_id: str, short_name: str) -> bool:
+    """Whether the user has a workspace record (any state) whose workspace or host id is ``short_name``."""
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT 1 FROM workspace_records WHERE user_id = %s AND host_id = %s",
-                (user_id, host_id),
+                "SELECT 1 FROM workspace_records WHERE user_id = %s AND (host_id = %s OR agent_id = %s)",
+                (user_id, short_name, short_name),
             )
             return cur.fetchone() is not None
-    finally:
-        conn.close()
 
 
-def _workspace_record_is_active(user_id: str, host_id: str) -> bool:
-    """Whether the user has an ACTIVE workspace record for ``host_id``."""
-    conn = db.get_pool_db_connection()
-    try:
+def _workspace_record_is_active(user_id: str, short_name: str) -> bool:
+    """Whether the user has an ACTIVE workspace record whose workspace or host id is ``short_name``."""
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT 1 FROM workspace_records WHERE user_id = %s AND host_id = %s AND state = 'active'",
-                (user_id, host_id),
+                "SELECT 1 FROM workspace_records "
+                "WHERE user_id = %s AND (host_id = %s OR agent_id = %s) AND state = 'active'",
+                (user_id, short_name, short_name),
             )
             return cur.fetchone() is not None
-    finally:
-        conn.close()
 
 
 @router.post("/buckets")
@@ -309,15 +311,15 @@ def create_bucket_endpoint(request: Request, body: CreateBucketRequest) -> dict[
         entitlements = entitlements_module.resolve_entitlements_for_user(owner_user_id, user)
         ops = cloudflare_module.get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, body.name)
-        # The `host-` short-name shape is reserved for workspace-backup buckets:
-        # allowed only when the caller has a workspace record (any state) with
-        # that host id, so generic user buckets can never collide with the
-        # names the backup reapers act on. The check runs on the slugified
-        # short name -- the name the bucket is actually created under -- so
-        # case/punctuation variants (e.g. 'HOST-abc') cannot slip into the
-        # reserved namespace.
+        # The `host-` / `agent-` short-name shapes are reserved for
+        # workspace-backup buckets: allowed only when the caller has a
+        # workspace record (any state) with that host or workspace id, so
+        # generic user buckets can never collide with the names the backup
+        # reapers act on. The check runs on the slugified short name -- the
+        # name the bucket is actually created under -- so case/punctuation
+        # variants (e.g. 'HOST-abc') cannot slip into the reserved namespace.
         short_name = slugify_r2_name(body.name)
-        if short_name.startswith(RESERVED_BUCKET_SHORT_NAME_PREFIX) and not _workspace_record_exists(
+        if short_name.startswith(RESERVED_BUCKET_SHORT_NAME_PREFIXES) and not _workspace_record_exists(
             owner_user_id, short_name
         ):
             raise R2ReservedBucketNameError(short_name)
@@ -433,7 +435,9 @@ def roll_bucket_key_endpoint(request: Request, name: str) -> dict[str, object]:
         newest = rows[-1]
         result = ops.roll_bucket_token_value(str(newest["access_key_id"]))
         secret_access_key = derive_s3_secret_access_key(str(result["value"]))
-        effective_access = str(newest.get("enforced_access") or newest["access"])
+        # Any enforcement marker ('read' or the in-flight 'pending') reports
+        # the conservative read-only scope.
+        effective_access = "read" if newest.get("enforced_access") is not None else str(newest["access"])
         return R2KeyMaterial(
             access_key_id=str(newest["access_key_id"]),
             secret_access_key=secret_access_key,

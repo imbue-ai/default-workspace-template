@@ -49,7 +49,7 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(2))
+    rc.check_broad_exception_catch(_DIR, snapshot(4))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -95,7 +95,7 @@ def test_prevent_setattr() -> None:
 
 
 def test_prevent_asyncio_import() -> None:
-    rc.check_asyncio_import(_DIR, snapshot(4))
+    rc.check_asyncio_import(_DIR, snapshot(6))
 
 
 def test_prevent_pandas_import() -> None:
@@ -122,8 +122,11 @@ def test_prevent_exit_stack() -> None:
     rc.check_exit_stack(_DIR, snapshot(0))
 
 
+# harbor's agent and environment interfaces are async (`BaseAgent.run`, `BaseEnvironment.exec`), so
+# every driver method that touches the box or the workspace has to be too. Reads of the workspace
+# cannot be made synchronous here; keep new async surface to what those interfaces force.
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(160))
+    rc.check_async_await(_DIR, snapshot(260))
 
 
 # --- Hardcoded paths ---

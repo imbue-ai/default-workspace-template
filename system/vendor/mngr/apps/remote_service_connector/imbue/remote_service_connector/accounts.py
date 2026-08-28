@@ -143,23 +143,19 @@ def _normalize_paid_email(value: str) -> str:
 def _list_paid_entries(table: str, value_column: str, paid_only: bool) -> list[tuple[str, bool, str, str]]:
     """Return all rows of a paid-list table as ``(value, is_paid, created_at, updated_at)`` tuples."""
     where_clause = " WHERE is_paid = TRUE" if paid_only else ""
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT {value_column}, is_paid, created_at, updated_at FROM {table}{where_clause} "
                 f"ORDER BY {value_column} ASC"
             )
             rows = cur.fetchall()
-    finally:
-        conn.close()
     return [(row[0], bool(row[1]), str(row[2]), str(row[3])) for row in rows]
 
 
 def _activate_paid_entry(table: str, value_column: str, value: str) -> None:
     """Upsert a paid-list entry to ``is_paid = true`` (reactivating in place, keeping created_at)."""
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -168,23 +164,18 @@ def _activate_paid_entry(table: str, value_column: str, value: str) -> None:
                     f"ON CONFLICT ({value_column}) DO UPDATE SET is_paid = TRUE, updated_at = NOW()",
                     (value,),
                 )
-    finally:
-        conn.close()
     clear_paid_status_cache()
 
 
 def _deactivate_paid_entry(table: str, value_column: str, value: str) -> None:
     """Soft-delete a paid-list entry (``is_paid = false``). A no-op when the row is absent."""
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE {table} SET is_paid = FALSE, updated_at = NOW() WHERE {value_column} = %s",
                     (value,),
                 )
-    finally:
-        conn.close()
     clear_paid_status_cache()
 
 

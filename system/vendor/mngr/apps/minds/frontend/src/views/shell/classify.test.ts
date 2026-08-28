@@ -61,22 +61,17 @@ describe("classifyRoute", () => {
     ).toBe("share");
   });
 
-  it("labels hub pages and back visibility like the legacy chrome", () => {
+  it("labels hub pages like the legacy chrome", () => {
     expect(classifyRoute("/create")).toMatchObject({
       kind: "page",
       pageLabel: "New machine",
-      isBackShown: true,
     });
-    expect(classifyRoute("/creating/agent-ff00")).toMatchObject({
-      kind: "page",
-      isBackShown: false,
-    });
+    expect(classifyRoute("/creating/agent-ff00").kind).toBe("page");
     // Template over a machine is that machine's modal; standalone it is a
     // plain New machine page (until it redirects to the create form).
     expect(classifyRoute("/create/template")).toMatchObject({
       kind: "page",
       pageLabel: "New machine",
-      isBackShown: false,
     });
     expect(
       classifyRoute("/create/template", "workspace=agent-ab12"),
@@ -92,24 +87,12 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/definitely/unknown").kind).toBe("home");
   });
 
-  it("treats app modals as their opener's context, not a back-button page", () => {
+  it("treats app modals as their opener's context, not a standalone page", () => {
     // Minds settings / Accounts / Get help / inbox opened from Home -> home context.
-    expect(classifyRoute("/settings")).toMatchObject({
-      kind: "home",
-      isBackShown: false,
-    });
-    expect(classifyRoute("/accounts")).toMatchObject({
-      kind: "home",
-      isBackShown: false,
-    });
-    expect(classifyRoute("/help")).toMatchObject({
-      kind: "home",
-      isBackShown: false,
-    });
-    expect(classifyRoute("/inbox")).toMatchObject({
-      kind: "home",
-      isBackShown: false,
-    });
+    expect(classifyRoute("/settings").kind).toBe("home");
+    expect(classifyRoute("/accounts").kind).toBe("home");
+    expect(classifyRoute("/help").kind).toBe("home");
+    expect(classifyRoute("/inbox").kind).toBe("home");
     // Get help / the inbox opened over a workspace keep that workspace's context + accent.
     expect(classifyRoute("/help", "workspace=agent-ab12")).toMatchObject({
       kind: "workspace",
@@ -137,10 +120,7 @@ describe("classifyRoute", () => {
     expect(
       accentSourceForRoute("/settings/ai-keys", "workspace=host-99aa"),
     ).toBe("host-99aa");
-    expect(classifyRoute("/settings/ai-keys")).toMatchObject({
-      kind: "home",
-      isBackShown: false,
-    });
+    expect(classifyRoute("/settings/ai-keys").kind).toBe("home");
   });
 
   it("keeps the workspace accent on destroying and recovery routes", () => {
@@ -234,14 +214,14 @@ describe("workspaceSurfaceIdFromPath", () => {
 });
 
 describe("parseWorkspaceIdFromUrl", () => {
-  it("extracts host ids from origin, goto, and forward-bridge URLs", () => {
-    expect(
-      parseWorkspaceIdFromUrl("http://web.host-ab12.localhost:8421/x"),
-    ).toBe("host-ab12");
+  it("extracts workspace ids (agent- and legacy host-keyed) from origin, goto, and forward-bridge URLs", () => {
+    expect(parseWorkspaceIdFromUrl("http://web.host-ab12.localhost:8421/x")).toBe("host-ab12");
+    expect(parseWorkspaceIdFromUrl("http://web.agent-cd34.localhost:8421/x")).toBe("agent-cd34");
     expect(parseWorkspaceIdFromUrl("/goto/host-ab12/")).toBe("host-ab12");
-    expect(
-      parseWorkspaceIdFromUrl("/forward-bridge?next=%2Fgoto%2Fhost-ab12%2F"),
-    ).toBe("host-ab12");
+    expect(parseWorkspaceIdFromUrl("/forward-bridge?next=%2Fgoto%2Fhost-ab12%2F")).toBe("host-ab12");
+    expect(parseWorkspaceIdFromUrl("/forward-bridge?next=%2Fgoto%2Fagent-cd34%2F")).toBe(
+      "agent-cd34",
+    );
     expect(parseWorkspaceIdFromUrl("/goto/agent-cd34/")).toBe("agent-cd34");
     expect(parseWorkspaceIdFromUrl("/workspace/agent-cd34")).toBe("agent-cd34");
     expect(parseWorkspaceIdFromUrl("/workspace/host-ab12")).toBe("host-ab12");

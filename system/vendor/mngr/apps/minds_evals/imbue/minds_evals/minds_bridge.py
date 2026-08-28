@@ -34,6 +34,10 @@ _RESOURCES = resources.files("imbue.minds_evals") / "resources"
 BOX_REVERSE_TUNNEL_FILENAME: Final[str] = "box_reverse_tunnel.py"
 BOX_REVERSE_TUNNEL_PATH: Final[str] = "/tmp/box_reverse_tunnel.py"
 BOX_PROXY_HOOKS_FILENAME: Final[str] = "box_proxy_hooks.py"
+BOX_FLOW_STEP_FILENAME: Final[str] = "box_flow_step.py"
+# The request and result models both sides share. It rides into the box beside the step script
+# and is imported by it as a plain module, so the two files must land in the same directory.
+BOX_FLOW_PROTOCOL_FILENAME: Final[str] = "flow_step_protocol.py"
 BOX_PROXY_DIR: Final[str] = "/tmp/eval_proxy"
 PROXY_CONFIG_FILENAME: Final[str] = "proxy_config.yaml"
 BOX_PROXY_USAGE_LOG_PATH: Final[str] = "/tmp/eval_proxy/usage_proxy.jsonl"
@@ -574,6 +578,23 @@ async def start_reverse_tunnel(
         log=TUNNEL_LOG_FILENAME,
     )
     await check_run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
+
+
+async def upload_flow_step_script(environment: BaseEnvironment, target_path: str) -> None:
+    """Put the UI-flow step script, and the protocol module it imports, in the box.
+
+    Both land in the target's directory, because the script imports the protocol as a plain module
+    beside it. Uploaded per trial rather than baked into the box image for the same reason the
+    reverse-tunnel holder is: the image is layer-cached per mngr SHA and has to stay byte-identical
+    across a dataset, so a change here would otherwise cost a full rebuild.
+    """
+    box_dir = target_path.rsplit("/", 1)[0]
+    for filename, destination in (
+        (BOX_FLOW_STEP_FILENAME, target_path),
+        (BOX_FLOW_PROTOCOL_FILENAME, "{}/{}".format(box_dir, BOX_FLOW_PROTOCOL_FILENAME)),
+    ):
+        with resources.as_file(_RESOURCES / filename) as source_path:
+            await environment.upload_file(source_path, destination)
 
 
 async def read_box_file(environment: BaseEnvironment, env: dict[str, str], path: str) -> str:

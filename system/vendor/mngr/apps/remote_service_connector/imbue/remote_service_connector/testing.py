@@ -1,18 +1,16 @@
 """Test utilities for remote_service_connector."""
 
 import base64
-import contextlib
 import json
 import re
 import secrets
+import threading
 import uuid
-from collections.abc import Iterator
 from collections.abc import MutableMapping
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from types import SimpleNamespace
 from typing import Any
 from typing import Final
 from urllib.parse import quote
@@ -86,11 +84,9 @@ from imbue.remote_service_connector.errors import R2BucketNotFoundError
 # drift from what PostgresShareStore SELECTs (same rationale as
 # _WORKSPACE_RECORD_COLUMNS below).
 from imbue.remote_service_connector.shares import _SHARE_COLUMN_NAMES
-from imbue.remote_service_connector.sync import SyncActiveAgentConflictError
 from imbue.remote_service_connector.sync import SyncRecordFormatTooNewError
 from imbue.remote_service_connector.sync import SyncRevisionConflictError
 from imbue.remote_service_connector.sync import UPDATABLE_RECORD_COLUMNS
-from imbue.remote_service_connector.sync import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
 from imbue.remote_service_connector.sync import _WORKSPACE_RECORD_COLUMNS
 from imbue.remote_service_connector.web import web_app
 
@@ -127,9 +123,13 @@ class FakeCloudflareOps:
         # Failure-injection knobs: the next delete_bucket_token call raises,
         # exercising the sweep revoke-retry paths. While
         # fail_bucket_usage_reads is set, every per-bucket REST usage read
-        # raises (the sweep/gate fail-open paths).
+        # raises (the sweep/gate fail-open paths). The next
+        # update_bucket_token_access call raises while
+        # fail_next_update_token_access is set (the pending-marker retry
+        # paths).
         self.fail_next_delete_bucket_token = False
         self.fail_bucket_usage_reads = False
+        self.fail_next_update_token_access = False
 
     def create_bucket(self, name: str) -> dict[str, Any]:
         if name in self.buckets:
@@ -178,6 +178,9 @@ class FakeCloudflareOps:
         self.account_tokens.pop(token_id, None)
 
     def update_bucket_token_access(self, token_id: str, bucket_name: str, access: str, token_name: str) -> None:
+        if self.fail_next_update_token_access:
+            self.fail_next_update_token_access = False
+            raise CloudflareApiError(status_code=500, errors=[{"message": "simulated token update failure"}])
         token = self.account_tokens.get(token_id)
         if token is None:
             raise CloudflareApiError(status_code=404, errors=[{"message": f"token not found: {token_id}"}])
@@ -1257,14 +1260,6 @@ def _adapted_bytes(value: Any) -> bytes | None:
     return bytes(value.adapted)
 
 
-class _OneActivePerAgentViolation(psycopg2.errors.UniqueViolation):
-    """UniqueViolation whose diagnostics carry the partial-index name, as postgres reports it."""
-
-    @property
-    def diag(self) -> Any:
-        return SimpleNamespace(constraint_name=_ONE_ACTIVE_PER_AGENT_INDEX_NAME)
-
-
 class FakeCursor:
     """In-memory cursor that simulates psycopg2 cursor behavior against FakePoolBackend."""
 
@@ -1283,6 +1278,30 @@ class FakeCursor:
             # The per-user lease serialization lock; the in-memory fake is
             # single-threaded so the lock itself is a no-op.
             self._results = [(True,)]
+
+        elif query_lower.startswith("insert into r2_enforcement_leases"):
+            # PostgresLeaseStore.try_acquire: insert, or take over an expired
+            # claim. Expiry is the backend's explicit test knob (no clock).
+            owner_user_id, claim_id, _duration = params
+            current_claim = self._backend.enforcement_lease_claim_by_owner.get(owner_user_id)
+            if current_claim is None or owner_user_id in self._backend.enforcement_lease_expired_owners:
+                self._backend.enforcement_lease_claim_by_owner[owner_user_id] = claim_id
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
+
+        elif query_lower.startswith("update r2_enforcement_leases"):
+            # PostgresLeaseStore.renew: succeeds only while our claim stands.
+            _duration, owner_user_id, claim_id = params
+            if self._backend.enforcement_lease_claim_by_owner.get(owner_user_id) == claim_id:
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
+
+        elif query_lower.startswith("delete from r2_enforcement_leases"):
+            owner_user_id, claim_id = params
+            if self._backend.enforcement_lease_claim_by_owner.get(owner_user_id) == claim_id:
+                del self._backend.enforcement_lease_claim_by_owner[owner_user_id]
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
 
         elif "select count(*) from pool_hosts" in query_lower:
             user_id_prefix = params[0]
@@ -1555,6 +1574,7 @@ class FakeCursor:
                             row.ssh_user,
                             row.host_id_str,
                             row.container_host_public_key,
+                            row.agent_id,
                         )
                     ]
                     break
@@ -1584,13 +1604,10 @@ class FakeCursor:
             and "leased_to_user" in query_lower
             and "select leased_to_user" in query_lower
         ):
-            # Release endpoint: lookup by id. The connector stringifies
-            # the UUID before passing it as a bind param (psycopg2 can't
-            # adapt Python ``UUID`` directly), so accept either form.
-            # Returns ``(leased_to_user, status, lima_instance_name,
-            # lima_disk_name, bare_metal_server_id)`` so the route can distinguish
-            # already-released / removing / leased and has the slice's lima fields
-            # needed for VM teardown.
+            # The release projection (``hosts._read_pool_row_for_release``
+            # reads it, in this column order). The connector stringifies the
+            # UUID before passing it as a bind param (psycopg2 can't adapt
+            # Python ``UUID`` directly), so accept either form.
             raw_host_id = params[0]
             host_id = UUID(raw_host_id) if isinstance(raw_host_id, str) else raw_host_id
             for row in self._backend.pool_rows:
@@ -1603,6 +1620,7 @@ class FakeCursor:
                             row.lima_disk_name,
                             row.bare_metal_server_id,
                             row.host_id_str,
+                            row.agent_id,
                         )
                     ]
                     break
@@ -1691,7 +1709,7 @@ class FakeCursor:
             self._backend.pool_rows = [r for r in self._backend.pool_rows if r.host_id != host_id]
 
         elif "from workspace_records" in query_lower and "for update" in query_lower:
-            record_row = self._backend.find_sync_record(params[0], params[1])
+            record_row = self._backend.find_sync_record_by_agent(params[0], params[1])
             if record_row is not None:
                 self._results = [self._backend.sync_record_tuple(record_row)]
 
@@ -1702,8 +1720,68 @@ class FakeCursor:
                 if row["user_id"] == params[0]
             ]
 
+        elif query_lower.startswith("insert into workspace_records") and "do nothing" in query_lower:
+            # The lease-time record stub: no-op when the workspace already has
+            # a record (ON CONFLICT (user_id, agent_id) DO NOTHING).
+            self._backend.insert_lease_record_stub(params)
+
         elif query_lower.startswith("insert into workspace_records"):
             self._results = [self._backend.sync_record_tuple(self._backend.insert_sync_record(params))]
+
+        elif query_lower.startswith("update workspace_records set state = 'destroyed'"):
+            # The release-time tombstone, addressed by (agent_id, user-id prefix).
+            agent_id, user_id_prefix = params
+            for row in self._backend.sync_record_rows:
+                if (
+                    row["agent_id"] == agent_id
+                    and derive_user_id_prefix(row["user_id"]) == user_id_prefix
+                    and row["state"] == "active"
+                ):
+                    row["state"] = "destroyed"
+                    row["destroyed_at"] = row.get("destroyed_at") or datetime.now(timezone.utc)
+                    row["revision"] = int(row["revision"]) + 1
+                    row["updated_at"] = _SYNC_ROW_UPDATED_AT
+                    self.rowcount += 1
+
+        elif query_lower.startswith("select 1 from pool_hosts"):
+            # The tombstone-first guard: does the user hold a lease for the
+            # workspace (by agent id) or its current host (by host id)?
+            key, user_id_prefix = params
+            held_statuses = _statuses_in_query(query_lower)
+            for row in self._backend.pool_rows:
+                row_key = row.agent_id if "where agent_id" in query_lower else row.host_id_str
+                if row_key == key and row.leased_to_user == user_id_prefix and row.status in held_statuses:
+                    self._results = [(1,)]
+                    break
+
+        elif "from pool_hosts p left join workspace_records r" in query_lower:
+            # The lease-vs-record sweep's join: every lease-holding row paired
+            # with the owner's record for the same workspace (or NULLs).
+            held_statuses = _statuses_in_query(query_lower)
+            for row in self._backend.pool_rows:
+                if row.status not in held_statuses:
+                    continue
+                record = next(
+                    (
+                        candidate
+                        for candidate in self._backend.sync_record_rows
+                        if candidate["agent_id"] == row.agent_id
+                        and derive_user_id_prefix(candidate["user_id"]) == row.leased_to_user
+                    ),
+                    None,
+                )
+                self._results.append(
+                    (
+                        row.host_id,
+                        row.status,
+                        row.agent_id,
+                        row.host_id_str,
+                        row.leased_to_user,
+                        row.released_at,
+                        record["state"] if record is not None else None,
+                        record.get("destroyed_at") if record is not None else None,
+                    )
+                )
 
         elif query_lower.startswith("update workspace_records set encrypted_secrets = null"):
             self.rowcount = self._backend.scrub_sync_secrets(params[0])
@@ -1713,38 +1791,84 @@ class FakeCursor:
             if updated_row is not None:
                 self._results = [self._backend.sync_record_tuple(updated_row)]
 
+        elif query_lower.startswith("delete from workspace_records") and "revision = 1" in query_lower:
+            # The release-time retirement of a never-written lease stub.
+            agent_id, user_id_prefix = params
+            kept_rows = []
+            for row in self._backend.sync_record_rows:
+                is_untouched_stub = (
+                    row["agent_id"] == agent_id
+                    and derive_user_id_prefix(row["user_id"]) == user_id_prefix
+                    and row["state"] == "active"
+                    and int(row["revision"]) == 1
+                    and row.get("encrypted_secrets") is None
+                    and row.get("backup_bucket") is None
+                )
+                if is_untouched_stub:
+                    self.rowcount += 1
+                else:
+                    kept_rows.append(row)
+            self._backend.sync_record_rows = kept_rows
+
         elif query_lower.startswith("delete from workspace_records"):
-            user_id, record_host_id = params
+            user_id, record_key = params
+            key_column = "agent_id" if "agent_id = %s" in query_lower else "host_id"
             self._backend.sync_record_rows = [
                 row
                 for row in self._backend.sync_record_rows
-                if not (row["user_id"] == user_id and row["host_id"] == record_host_id)
+                if not (row["user_id"] == user_id and row[key_column] == record_key)
             ]
 
         elif query_lower.startswith("select 1 from workspace_records") and "substring" in query_lower:
-            record_host_id, user_id_prefix = params
+            # With the trailing "AND agent_id <> %s" exclusion the query
+            # carries a fifth parameter (the excluded workspace id).
+            if "agent_id <> %s" in query_lower:
+                bucket_name, record_short_a, record_short_b, user_id_prefix, excluded_workspace_id = params
+            else:
+                bucket_name, record_short_a, record_short_b, user_id_prefix = params
+                excluded_workspace_id = None
             for row in self._backend.sync_record_rows:
-                if row["host_id"] == record_host_id and row["user_id"].replace("-", "")[:16] == user_id_prefix:
+                is_referenced = (
+                    row.get("backup_bucket") == bucket_name
+                    or row["host_id"] == record_short_a
+                    or row["agent_id"] == record_short_b
+                )
+                if excluded_workspace_id is not None and row["agent_id"] == excluded_workspace_id:
+                    continue
+                if is_referenced and derive_user_id_prefix(row["user_id"]) == user_id_prefix:
                     self._results = [(1,)]
                     break
 
         elif query_lower.startswith("select 1 from workspace_records") and "state = 'active'" in query_lower:
-            active_row = self._backend.find_sync_record(params[0], params[1])
+            active_row = self._backend.find_sync_record_by_short_name(params[0], params[1])
             if active_row is not None and active_row["state"] == "active":
                 self._results = [(1,)]
 
         elif query_lower.startswith("select 1 from workspace_records"):
-            if self._backend.find_sync_record(params[0], params[1]) is not None:
+            if self._backend.find_sync_record_by_short_name(params[0], params[1]) is not None:
                 self._results = [(1,)]
 
-        elif query_lower.startswith("select user_id, host_id, destroyed_at from workspace_records"):
+        elif query_lower.startswith(
+            "select r.user_id, r.host_id, r.agent_id, r.backup_bucket, r.destroyed_at from workspace_records r"
+        ):
+            # Aged tombstones, minus those whose workspace still holds a lease
+            # (the NOT EXISTS against pool_hosts).
             cutoff = params[0]
+            held_statuses = _statuses_in_query(query_lower) - {"destroyed"}
             reapable = [
-                (row["user_id"], row["host_id"], row["destroyed_at"])
+                (row["user_id"], row["host_id"], row["agent_id"], row.get("backup_bucket"), row["destroyed_at"])
                 for row in self._backend.sync_record_rows
-                if row["state"] == "destroyed" and row.get("destroyed_at") is not None and row["destroyed_at"] < cutoff
+                if row["state"] == "destroyed"
+                and row.get("destroyed_at") is not None
+                and row["destroyed_at"] < cutoff
+                and not any(
+                    pool_row.agent_id == row["agent_id"]
+                    and pool_row.leased_to_user == derive_user_id_prefix(row["user_id"])
+                    and pool_row.status in held_statuses
+                    for pool_row in self._backend.pool_rows
+                )
             ]
-            self._results = sorted(reapable, key=lambda reap_row: reap_row[2])
+            self._results = sorted(reapable, key=lambda reap_row: reap_row[4])
 
         elif query_lower.startswith("insert into orphan_backup_buckets"):
             stamp = self._backend.orphan_stamps.setdefault(params[0], datetime.now(timezone.utc))
@@ -1805,8 +1929,22 @@ class FakeCursor:
             self._results = [(active_count,)]
 
         elif query_lower.startswith("insert into shares"):
-            host_id, user_label, region, workspace_domain, entry_label = params
-            self._backend.upsert_share(host_id, user_label, region, workspace_domain, entry_label=entry_label)
+            host_id, user_label, region, workspace_domain, entry_label, workspace_id, share_label = params
+            self._backend.upsert_share(
+                host_id,
+                user_label,
+                region,
+                workspace_domain,
+                entry_label=entry_label,
+                workspace_id=workspace_id,
+                share_label=share_label,
+            )
+
+        elif "from shares where workspace_id = %s and user_id = %s" in query_lower:
+            for share in self._backend.share_rows:
+                if share.get("workspace_id") == params[0] and share["user_id"] == params[1]:
+                    self._results = [self._backend.share_tuple(share)]
+                    break
 
         elif "from shares where host_id = %s and user_id = %s" in query_lower:
             share = self._backend.find_share(params[0], params[1])
@@ -2027,9 +2165,15 @@ def _make_fake_cursor(backend: "FakePoolBackend") -> FakeCursor:
 
 
 class FakeConnection:
-    """In-memory connection that simulates psycopg2 connection behavior."""
+    """In-memory connection that simulates psycopg2 connection behavior.
+
+    Open/close bookkeeping feeds the backend's ``open_connection_count`` so
+    tests can assert on connection lifetime (e.g. that no DB connection is
+    held across a Cloudflare call).
+    """
 
     _backend: "FakePoolBackend"
+    _is_closed: bool
 
     def cursor(self) -> FakeCursor:
         return _make_fake_cursor(self._backend)
@@ -2038,7 +2182,9 @@ class FakeConnection:
         pass
 
     def close(self) -> None:
-        pass
+        if not self._is_closed:
+            self._is_closed = True
+            self._backend.open_connection_count -= 1
 
     def __enter__(self) -> "FakeConnection":
         return self
@@ -2050,6 +2196,8 @@ class FakeConnection:
 def _make_fake_connection(backend: "FakePoolBackend") -> FakeConnection:
     conn = FakeConnection()
     conn._backend = backend
+    conn._is_closed = False
+    backend.open_connection_count += 1
     return conn
 
 
@@ -2203,6 +2351,14 @@ class FakePoolBackend:
     # (mirroring share_tunnel_logins).
     relay_rows: list[dict[str, Any]]
     share_tunnel_login_rows: list[dict[str, Any]]
+    # R2 enforcement leases (mirroring r2_enforcement_leases): the current
+    # claim per owner, plus the owners whose lease a test has marked expired
+    # (the fake has no clock, so expiry is an explicit test knob).
+    enforcement_lease_claim_by_owner: dict[str, str]
+    enforcement_lease_expired_owners: set[str]
+    # Currently-open fake DB connections (created minus closed), so tests can
+    # assert nothing holds a connection across external (Cloudflare) work.
+    open_connection_count: int
 
     def add_relay(
         self,
@@ -2275,7 +2431,14 @@ class FakePoolBackend:
         seeded["state"] = state
 
     def upsert_share(
-        self, host_id: str, user_label: str, region: str, workspace_domain: str, entry_label: str | None = None
+        self,
+        host_id: str,
+        user_label: str,
+        region: str,
+        workspace_domain: str,
+        entry_label: str | None = None,
+        workspace_id: str | None = None,
+        share_label: str | None = None,
     ) -> None:
         """Mirror the endpoint's INSERT ... ON CONFLICT (host_id, user_id) upsert."""
         existing = self.find_share(host_id, user_label)
@@ -2287,6 +2450,10 @@ class FakePoolBackend:
             # COALESCE semantics: a caller with no label keeps the recorded one.
             if entry_label is not None:
                 existing["entry_label"] = entry_label
+            if workspace_id is not None:
+                existing["workspace_id"] = workspace_id
+            if share_label is not None:
+                existing["share_label"] = share_label
             return
         self.share_rows.append(
             {
@@ -2299,6 +2466,8 @@ class FakePoolBackend:
                 "updated_at": _SHARE_ROW_CREATED_AT,
                 "last_tunnel_login_at": None,
                 "entry_label": entry_label,
+                "workspace_id": workspace_id,
+                "share_label": share_label,
             }
         )
 
@@ -2530,9 +2699,23 @@ class FakePoolBackend:
         return _make_fake_connection(self)
 
     def find_sync_record(self, user_id: str, host_id: str) -> dict[str, Any] | None:
-        """Return the workspace-record row for (user_id, host_id), or None."""
+        """Return the workspace-record row whose host_id column matches, or None."""
         for row in self.sync_record_rows:
             if row["user_id"] == user_id and row["host_id"] == host_id:
+                return row
+        return None
+
+    def find_sync_record_by_agent(self, user_id: str, agent_id: str) -> dict[str, Any] | None:
+        """Return the workspace-record row for (user_id, agent_id) -- the primary key -- or None."""
+        for row in self.sync_record_rows:
+            if row["user_id"] == user_id and row["agent_id"] == agent_id:
+                return row
+        return None
+
+    def find_sync_record_by_short_name(self, user_id: str, short_name: str) -> dict[str, Any] | None:
+        """Return a row whose host_id OR agent_id matches (the bucket reservation checks)."""
+        for row in self.sync_record_rows:
+            if row["user_id"] == user_id and short_name in (row["host_id"], row["agent_id"]):
                 return row
         return None
 
@@ -2543,19 +2726,6 @@ class FakePoolBackend:
         return tuple(
             row.get(name, 1) if name == "record_format" else row.get(name) for name in _WORKSPACE_RECORD_COLUMN_NAMES
         )
-
-    def check_one_active_sync_record_per_agent(self, user_id: str, host_id: str, agent_id: str, state: str) -> None:
-        """Enforce the partial unique index on (user_id, agent_id) WHERE state = 'active'."""
-        if state != "active":
-            return
-        for row in self.sync_record_rows:
-            if (
-                row["user_id"] == user_id
-                and row["host_id"] != host_id
-                and row["agent_id"] == agent_id
-                and row["state"] == "active"
-            ):
-                raise _OneActivePerAgentViolation(f"duplicate active workspace record for agent {agent_id}")
 
     def insert_sync_record(self, params: tuple[Any, ...]) -> dict[str, Any]:
         """Simulate the workspace_records INSERT, including its unique-violation modes."""
@@ -2570,6 +2740,7 @@ class FakePoolBackend:
             device_label,
             state,
             restored_from_host_id,
+            backup_bucket,
             encrypted_secrets,
             revision,
             record_format,
@@ -2583,9 +2754,8 @@ class FakePoolBackend:
             winner.setdefault("updated_at", _SYNC_ROW_CREATED_AT)
             self.sync_record_rows.append(winner)
             raise psycopg2.errors.UniqueViolation("concurrent insert won the primary key")
-        if self.find_sync_record(user_id, host_id) is not None:
-            raise psycopg2.errors.UniqueViolation(f"duplicate primary key ({user_id}, {host_id})")
-        self.check_one_active_sync_record_per_agent(user_id, host_id, agent_id, state)
+        if self.find_sync_record_by_agent(user_id, agent_id) is not None:
+            raise psycopg2.errors.UniqueViolation(f"duplicate primary key ({user_id}, {agent_id})")
         row = {
             "user_id": user_id,
             "host_id": host_id,
@@ -2597,12 +2767,64 @@ class FakePoolBackend:
             "device_label": device_label,
             "state": state,
             "restored_from_host_id": restored_from_host_id,
+            "backup_bucket": backup_bucket,
             "encrypted_secrets": _adapted_bytes(encrypted_secrets),
             "revision": revision,
             "record_format": record_format,
             "created_at": _SYNC_ROW_CREATED_AT,
             "updated_at": _SYNC_ROW_CREATED_AT,
             "destroyed_at": datetime.now(timezone.utc) if state == "destroyed" else None,
+        }
+        self.sync_record_rows.append(row)
+        return row
+
+    def insert_lease_record_stub(self, params: tuple[Any, ...]) -> None:
+        """Simulate the lease-time metadata-only record INSERT ... ON CONFLICT DO NOTHING."""
+        user_id, host_id, agent_id, display_name, provider_kind = params
+        if self.find_sync_record_by_agent(user_id, agent_id) is not None:
+            return
+        self.add_workspace_record(
+            user_id=user_id,
+            host_id=host_id,
+            agent_id=agent_id,
+            display_name=display_name,
+            provider_kind=provider_kind,
+        )
+
+    def add_workspace_record(
+        self,
+        *,
+        user_id: str,
+        host_id: str,
+        agent_id: str,
+        display_name: str = "ws",
+        provider_kind: str = "imbue_cloud_x",
+        state: str = "active",
+        destroyed_at: datetime | None = None,
+        # Revision 1 is the untouched lease stub; a client's first push lands
+        # at 2, which is what makes a release tombstone the record instead of
+        # deleting it.
+        revision: int = 1,
+    ) -> dict[str, Any]:
+        """Seed a metadata-only workspace record (the lease stub's shape) and return the row."""
+        row = {
+            "user_id": user_id,
+            "host_id": host_id,
+            "agent_id": agent_id,
+            "display_name": display_name,
+            "color": None,
+            "provider_kind": provider_kind,
+            "hosting_device_id": None,
+            "device_label": "",
+            "state": state,
+            "restored_from_host_id": None,
+            "backup_bucket": None,
+            "encrypted_secrets": None,
+            "revision": revision,
+            "record_format": 1,
+            "created_at": _SYNC_ROW_CREATED_AT,
+            "updated_at": _SYNC_ROW_CREATED_AT,
+            "destroyed_at": destroyed_at,
         }
         self.sync_record_rows.append(row)
         return row
@@ -2631,15 +2853,12 @@ class FakePoolBackend:
                 column_updates["encrypted_secrets"] = _adapted_bytes(clause_values[0])
             else:
                 column_updates[column] = clause_values[0]
-        user_id, host_id = params[param_idx], params[param_idx + 1]
+        user_id, agent_id = params[param_idx], params[param_idx + 1]
         if self.sync_update_returns_no_row:
             return None
-        row = self.find_sync_record(user_id, host_id)
+        row = self.find_sync_record_by_agent(user_id, agent_id)
         if row is None:
             return None
-        state = column_updates.get("state", row["state"])
-        agent_id = column_updates.get("agent_id", row["agent_id"])
-        self.check_one_active_sync_record_per_agent(user_id, host_id, agent_id, state)
         # Mirror the SQL CASE: stamp on the destroyed transition (keeping an
         # existing stamp), clear on resurrection to active.
         destroyed_at = (
@@ -2661,7 +2880,6 @@ class FakePoolBackend:
 
     def clean_up_slice_on_box(
         self,
-        conn: Any,
         host_db_id: Any,
         bare_metal_server_id: Any,
         lima_instance_name: str | None,
@@ -2830,6 +3048,41 @@ class FakePoolBackend:
         self.pool_rows.append(row)
         return row
 
+    def add_leased_workspace(
+        self,
+        *,
+        suffix: str,
+        leased_to_user: str,
+        record_user_id: str,
+        record_state: str = "active",
+        destroyed_at: datetime | None = None,
+        record_revision: int = 1,
+    ) -> FakePoolRow:
+        """Seed a leased pool row plus its workspace record, both keyed by ``suffix``.
+
+        The row id is ``00000000-0000-0000-0000-0000000000<suffix>`` (two hex
+        chars) and the workspace/host ids are ``agent-<suffix>`` /
+        ``host-<suffix>``. ``record_user_id`` is separate from the lease's
+        ``leased_to_user`` prefix so a test can seed another user's record for
+        the same workspace.
+        """
+        row = self.add_leased_host(
+            host_id=UUID(f"00000000-0000-0000-0000-0000000000{suffix}"),
+            version="v0.1.0",
+            leased_to_user=leased_to_user,
+            agent_id=f"agent-{suffix}",
+            host_id_str=f"host-{suffix}",
+        )
+        self.add_workspace_record(
+            user_id=record_user_id,
+            host_id=f"host-{suffix}",
+            agent_id=f"agent-{suffix}",
+            state=record_state,
+            destroyed_at=destroyed_at,
+            revision=record_revision,
+        )
+        return row
+
 
 def make_fake_pool_backend() -> FakePoolBackend:
     """Construct an empty in-memory pool backend (no pool rows, empty paid lists)."""
@@ -2861,6 +3114,9 @@ def make_fake_pool_backend() -> FakePoolBackend:
     # mutate ``relay_rows`` directly.
     backend.relay_rows = []
     backend.share_tunnel_login_rows = []
+    backend.enforcement_lease_claim_by_owner = {}
+    backend.enforcement_lease_expired_owners = set()
+    backend.open_connection_count = 0
     backend.add_relay(_RELAY_ID_US1, "us1", _RELAY_ENDPOINT_US1, ip_address="198.51.100.1")
     backend.add_relay(_RELAY_ID_US2, "us2", _RELAY_ENDPOINT_US2, ip_address="198.51.100.2")
     backend.box_rows = []
@@ -2905,9 +3161,9 @@ def make_storage_config(retention_seconds: int = 0) -> "connector_storage_module
 class InMemorySyncStore:
     """In-memory SyncStore implementation for testing the workspace-sync endpoints.
 
-    Mirrors PostgresSyncStore's semantics: CAS on revision for updates, at
-    most one ACTIVE record per (user_id, agent_id), scrub, and the per-user
-    key bundle. Records are keyed (user_id, host_id); secrets are raw bytes.
+    Mirrors PostgresSyncStore's semantics: rows keyed by (user_id, agent_id)
+    -- the workspace id -- with host_id as a mutable column, CAS on revision
+    for updates, scrub, and the per-user key bundle. Secrets are raw bytes.
     """
 
     def __init__(self) -> None:
@@ -2934,19 +3190,12 @@ class InMemorySyncStore:
         return sorted(rows, key=lambda record: record["created_at"])
 
     def put_record(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
-        key = (user_id, record["host_id"])
+        key = (user_id, record["agent_id"])
         existing = self.records_by_key.get(key)
         if existing is not None and record.get("record_format", 1) < existing.get("record_format", 1):
             raise SyncRecordFormatTooNewError(self._encode_secrets(existing))
         if existing is not None and record["revision"] != existing["revision"] + 1:
             raise SyncRevisionConflictError(self._encode_secrets(existing))
-        if record["state"] == "active":
-            for (uid, host_id), other in self.records_by_key.items():
-                is_other_row = uid == user_id and host_id != record["host_id"]
-                if is_other_row and other["agent_id"] == record["agent_id"] and other["state"] == "active":
-                    raise SyncActiveAgentConflictError(
-                        f"another ACTIVE record already exists for agent {record['agent_id']}"
-                    )
         # Preserve-on-absent, mirroring PostgresSyncStore: an update writes
         # only the updatable fields the push named; absent fields keep their
         # stored values.
@@ -2970,21 +3219,39 @@ class InMemorySyncStore:
         return self._encode_secrets(stored)
 
     def delete_record(self, user_id: str, host_id: str) -> None:
-        self.records_by_key.pop((user_id, host_id), None)
+        self.records_by_key = {
+            key: record
+            for key, record in self.records_by_key.items()
+            if not (key[0] == user_id and record["host_id"] == host_id)
+        }
+
+    def delete_record_by_workspace(self, user_id: str, workspace_id: str) -> None:
+        self.records_by_key.pop((user_id, workspace_id), None)
 
     def list_destroyed_records_before(self, cutoff: datetime) -> list[dict[str, Any]]:
         rows = [
-            {"user_id": uid, "host_id": host_id, "destroyed_at": record["destroyed_at"]}
-            for (uid, host_id), record in self.records_by_key.items()
+            {
+                "user_id": uid,
+                "host_id": record["host_id"],
+                "agent_id": agent_id,
+                "backup_bucket": record.get("backup_bucket"),
+                "destroyed_at": record["destroyed_at"],
+            }
+            for (uid, agent_id), record in self.records_by_key.items()
             if record["state"] == "destroyed"
             and record.get("destroyed_at") is not None
             and record["destroyed_at"] < cutoff
         ]
         return sorted(rows, key=lambda row: row["destroyed_at"])
 
-    def any_record_references_backup_bucket(self, user_id_prefix: str, host_id: str) -> bool:
+    def any_record_references_backup_bucket(
+        self, user_id_prefix: str, bucket_name: str, short_name: str, excluding_workspace_id: str | None = None
+    ) -> bool:
         return any(
-            hid == host_id and uid.replace("-", "")[:16] == user_id_prefix for (uid, hid) in self.records_by_key
+            (record.get("backup_bucket") == bucket_name or short_name in (record["host_id"], key[1]))
+            and derive_user_id_prefix(key[0]) == user_id_prefix
+            and (excluding_workspace_id is None or key[1] != excluding_workspace_id)
+            for key, record in self.records_by_key.items()
         )
 
     def scrub_secrets(self, user_id: str) -> int:
@@ -3137,11 +3404,41 @@ def make_fake_entitlements_store() -> InMemoryEntitlementsStore:
 # ---------------------------------------------------------------------------
 
 
-@contextlib.contextmanager
-def noop_enforcement_lock(owner_user_id: str) -> Iterator[None]:
-    """Lock stand-in for direct run_r2_quota_sweep calls (no DB in unit tests)."""
-    del owner_user_id
-    yield
+class InMemoryLeaseStore:
+    """In-memory LeaseStore with real acquire/renew/release semantics (no clock).
+
+    Thread-safe so serialization tests can contend from multiple threads.
+    Expiry is modeled as an explicit test action: assigning a different
+    claim to ``claim_by_owner`` simulates a takeover, after which the
+    superseded holder's renewals fail.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.claim_by_owner: dict[str, str] = {}
+
+    def try_acquire(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        del duration_seconds
+        with self._lock:
+            if owner_user_id in self.claim_by_owner:
+                return False
+            self.claim_by_owner[owner_user_id] = claim_id
+            return True
+
+    def renew(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        del duration_seconds
+        with self._lock:
+            return self.claim_by_owner.get(owner_user_id) == claim_id
+
+    def release(self, owner_user_id: str, claim_id: str) -> None:
+        with self._lock:
+            if self.claim_by_owner.get(owner_user_id) == claim_id:
+                del self.claim_by_owner[owner_user_id]
+
+
+def make_fake_lease_store() -> InMemoryLeaseStore:
+    """Construct an empty in-memory LeaseStore for tests."""
+    return InMemoryLeaseStore()
 
 
 class InMemoryGrantStore:
@@ -3328,13 +3625,15 @@ def make_fake_litellm_backend() -> FakeLiteLLMBackend:
 _USER_STUB_TOKEN = "user-stub-jwt"
 
 
-_USER_STUB_USER_ID_PREFIX = "testuser"
-
-
 _USER_STUB_EMAIL = "testuser@example.com"
 
 
 _USER_STUB_USER_ID = "12345678-1234-5678-1234-567812345678"
+
+
+# What `pool_hosts.leased_to_user` stores for the stub user, so fakes joining
+# leases against workspace records line up.
+_USER_STUB_USER_ID_PREFIX = derive_user_id_prefix(_USER_STUB_USER_ID)
 
 
 _ADMIN_KEY_TEST_VALUE = "admin-key-secret-9f3a2b"
@@ -3599,7 +3898,7 @@ def _make_sync_test_client(
 # What a current client's full-record push names: every updatable column plus
 # the row key and CAS revision. Tests that exercise put_record directly pass
 # this so the preserve-on-absent UPDATE behaves like a full-record write.
-ALL_RECORD_FIELDS_SENT: frozenset[str] = frozenset(UPDATABLE_RECORD_COLUMNS) | {"host_id", "revision"}
+ALL_RECORD_FIELDS_SENT: frozenset[str] = frozenset(UPDATABLE_RECORD_COLUMNS) | {"agent_id", "revision"}
 
 
 def _store_record(
@@ -3609,11 +3908,13 @@ def _store_record(
     state: str = "active",
     encrypted_secrets: bytes | None = None,
     revision: int = 1,
+    backup_bucket: str | None = None,
 ) -> dict[str, Any]:
     """A store-layer record dict (raw-bytes secrets), as the endpoints hand to put_record."""
     return {
         "host_id": host_id,
         "agent_id": agent_id,
+        "backup_bucket": backup_bucket,
         "display_name": display_name,
         "color": None,
         "provider_kind": "docker",
@@ -3919,8 +4220,8 @@ def hold_stable_download_link(url: str | None) -> None:
     ``GET /download`` resolves the stable channel manifest over the network, so
     every test runs with an entry held (see the autouse fixture) and none of
     them reach the live feed. Tests that care what the link resolves to hold
-    their own; the resolver's own tests call ``resolve_stable_mac_arm64_url``,
-    which does not read this cache.
+    their own; the parsing tests call ``_arm64_dmg_url_from``, which does not
+    read this cache.
     """
     cache = _stable_download_cache()
     cache.clear()
@@ -3930,6 +4231,19 @@ def hold_stable_download_link(url: str | None) -> None:
 def clear_stable_download_link() -> None:
     """Drop the held link, so the next read reaches the live feed."""
     _stable_download_cache().clear()
+
+
+def read_stable_download_link() -> str | None:
+    """What the last resolution left in the cache; ``None`` is a read that failed.
+
+    Reading the cache rather than calling the resolver is what tells a route
+    that resolved from one that never asked: the call would fill an empty cache
+    itself.
+    """
+    cache = _stable_download_cache()
+    key = hashkey()
+    assert key in cache, "nothing has resolved the stable download link"
+    return cache[key]
 
 
 def _stable_download_cache() -> MutableMapping[Any, Any]:
@@ -3973,6 +4287,9 @@ def _make_share_test_client_with_fakes(
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
     monkeypatch.setenv("SHARE_CONTENT_DOMAIN", _CONTENT_DOMAIN)
     monkeypatch.setenv("FRPS_AUTH_SECRET", _FRPS_SECRET)
+    # Disable the Ping allow-cache so the kill-switch tests observe state
+    # changes on the very next heartbeat.
+    monkeypatch.setenv("MINDS_FRPS_PING_CACHE_TTL_SECONDS", "0")
     for name, fake_impl in session_fakes.items():
         monkeypatch.setattr(auth_mod, name, fake_impl)
     backend = make_fake_pool_backend()

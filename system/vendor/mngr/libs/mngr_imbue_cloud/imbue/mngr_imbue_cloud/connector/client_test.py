@@ -935,10 +935,10 @@ def test_list_sync_records_keeps_the_server_destroyed_at_stamp(monkeypatch: pyte
     assert records[0].destroyed_at == "2026-07-01T00:00:00+00:00"
 
 
-def test_put_sync_record_returns_stored_row(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_put_sync_record_uses_the_workspace_keyed_route(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "PUT"
-        assert request.url.path == "/sync/records/host-1"
+        assert request.url.path == "/sync/records/by-workspace/agent-1"
         body = _json.loads(request.content)
         assert body["revision"] == 1
         return httpx.Response(200, json=_sync_record_json())
@@ -946,6 +946,59 @@ def test_put_sync_record_returns_stored_row(monkeypatch: pytest.MonkeyPatch) -> 
     client = _install_mock_httpx(monkeypatch, handler)
     stored = client.put_sync_record(SecretStr("tok"), SyncWorkspaceRecord.model_validate(_sync_record_json()))
     assert stored.revision == 1
+
+
+def test_put_sync_record_falls_back_to_the_host_route_on_an_older_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path.startswith("/sync/records/by-workspace/"):
+            return httpx.Response(404, json={"detail": "Not Found"})
+        return httpx.Response(200, json=_sync_record_json())
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    stored = client.put_sync_record(SecretStr("tok"), SyncWorkspaceRecord.model_validate(_sync_record_json()))
+    assert stored.revision == 1
+    assert seen_paths == ["/sync/records/by-workspace/agent-1", "/sync/records/host-1"]
+
+
+def test_delete_sync_record_by_workspace_uses_the_workspace_keyed_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        return httpx.Response(200, json={"status": "deleted"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    client.delete_sync_record_by_workspace(SecretStr("tok"), "agent-1")
+    assert calls == [("DELETE", "/sync/records/by-workspace/agent-1")]
+
+
+def test_delete_sync_record_by_workspace_falls_back_via_the_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "DELETE" and request.url.path.startswith("/sync/records/by-workspace/"):
+            return httpx.Response(404, json={"detail": "Not Found"})
+        if request.method == "GET" and request.url.path == "/sync/records":
+            return httpx.Response(200, json={"records": [_sync_record_json()]})
+        return httpx.Response(200, json={"status": "deleted"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    client.delete_sync_record_by_workspace(SecretStr("tok"), "agent-1")
+    assert calls == [
+        ("DELETE", "/sync/records/by-workspace/agent-1"),
+        ("GET", "/sync/records"),
+        ("DELETE", "/sync/records/host-1"),
+    ]
 
 
 def test_put_sync_record_conflict_carries_stored_row(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1220,6 +1273,34 @@ def test_create_share_sends_preferred_region(monkeypatch: pytest.MonkeyPatch) ->
     info = client.create_share(SecretStr("tok"), _SHARE_HOST_ID, preferred_region="us2")
 
     assert info.region == "us2"
+
+
+def test_create_share_sends_workspace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace_id = "agent-" + "c" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shares"
+        # The workspace id must ride the body: dropping it silently downgrades
+        # the share to the legacy host-keyed flow (host-id-led domain that
+        # does not follow the workspace across machines).
+        assert _json.loads(request.content) == {"host_id": _SHARE_HOST_ID, "workspace_id": workspace_id}
+        return httpx.Response(
+            200,
+            json={
+                "host_id": _SHARE_HOST_ID,
+                "workspace_id": workspace_id,
+                "workspace_domain": _SHARE_DOMAIN,
+                "region": "us1",
+                "relay_endpoints": [{"relay_id": "relay-" + "1" * 16, "endpoint": "relay-us1.infra.imbue.com:7000"}],
+                "relay_token": "secret-relay-token",
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    info = client.create_share(SecretStr("tok"), _SHARE_HOST_ID, workspace_id=workspace_id)
+
+    assert info.workspace_domain == _SHARE_DOMAIN
 
 
 def test_list_share_relays_parses(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1667,6 +1748,42 @@ def test_admin_abandon_workspace_posts_reason_with_admin_key(monkeypatch: pytest
     assert seen["path"] == "/admin/workspaces/00000000-0000-0000-0000-000000000042/abandon"
     assert seen["auth"] == "Bearer adminkey"
     assert seen["body"] == {"reason": "box died"}
+
+
+def test_admin_release_workspace_posts_with_admin_key_and_returns_the_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"status": "released"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    status = client.admin_release_workspace(SecretStr("adminkey"), "00000000-0000-0000-0000-000000000043")
+
+    assert status == "released"
+    assert seen["path"] == "/admin/workspaces/00000000-0000-0000-0000-000000000043/release"
+    assert seen["auth"] == "Bearer adminkey"
+
+
+def test_admin_run_lease_record_sweep_passes_dry_run_and_grace_as_query_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["query"] = dict(request.url.params)
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"status": "completed", "result": {"dry_run": True}})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    result = client.admin_run_lease_record_sweep(SecretStr("adminkey"), dry_run=True, grace_seconds=0.0)
+
+    assert result["result"] == {"dry_run": True}
+    assert seen["path"] == "/admin/sweep/lease-records"
+    assert seen["query"] == {"dry_run": "1", "grace_seconds": "0.0"}
+    assert seen["auth"] == "Bearer adminkey"
 
 
 def test_every_request_carries_the_client_identification_headers(monkeypatch: pytest.MonkeyPatch) -> None:

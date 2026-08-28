@@ -14,6 +14,11 @@
  * own in-flight request.
  * (Interrupt-to-composer lives on the composer's Stop button -- see MessageInput.)
  * There is no harness branch anywhere in here.
+ *
+ * A published entry is not necessarily a PARKED one: the backend flags an entry it is
+ * about to type, or is typing, as ``is_sending``, and such an entry renders as the
+ * "Sending…" bubble rather than a queued chip. A snapshot that is entirely ``is_sending``
+ * therefore gets no group chrome at all -- see ``renderQueuedMessages``.
  */
 
 import m from "mithril";
@@ -21,9 +26,9 @@ import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../m
 import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
 import { hoverTooltipAttrs } from "./hoverTooltip";
-import { prependToComposer } from "./MessageInput";
+import { prependToComposer, raiseFailureNotice } from "./MessageInput";
 import { OUTGOING_BUBBLE_CLASS, OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
-import { describeRequestError } from "../models/request-error";
+import { describeRequestError, describeRequestErrorKind } from "../models/request-error";
 import { Button } from "./Button";
 import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
 
@@ -54,7 +59,16 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
   } catch (err) {
     const detail = describeRequestError(err);
     console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);
-    alert(`Failed to send queued messages: ${detail}`);
+    // Hand the failure to the composer's notice rather than putting up a system alert. One shape
+    // of failure gets one shape of answer, whichever button started it -- and Retry here means
+    // "flush the queue again", which is exactly what the user clicked in the first place.
+    raiseFailureNotice(agentId, {
+      title: "Couldn't send the queued messages",
+      detail,
+      kind: describeRequestErrorKind(err),
+      // The finally below has already cleared the in-flight marker by the time this can run.
+      retry: () => shoulderTapQueuedMessages(agentId),
+    });
   } finally {
     inFlightAgentIds.delete(agentId);
     m.redraw();
@@ -100,6 +114,16 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   const queued = getQueuedMessagesForAgent(agentId);
   if (queued.length === 0) {
     return [];
+  }
+  // Nothing is actually parked: every entry the backend published is one it is about to
+  // type or is typing (agy's idle send, codex's shoulder-tap resend). Painting the
+  // "Queued messages" header and the tap button over those tells the user a message is
+  // WAITING when the backend is reporting the opposite -- and the header is the only
+  // reason an idle send ever looked queued, since the bubbles themselves already render
+  // as "Sending…". Bare bubbles, no group wrapper: identical markup to the optimistic
+  // ones they replace, so the handoff is invisible rather than a reflow.
+  if (queued.every((message) => message.is_sending === true)) {
+    return queued.map((message) => renderQueuedBubble(message));
   }
   // The button's enabled state = the backend's availability flag, AND-ed with the local
   // double-fire guard. The frontend computes nothing about availability itself: if the

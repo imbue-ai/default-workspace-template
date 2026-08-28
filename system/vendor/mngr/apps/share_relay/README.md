@@ -7,8 +7,10 @@ A relay is a small OVH Public Cloud instance running [frp](https://github.com/fa
 TLS connection on port 443 and splices the raw byte stream into the matching
 workspace tunnel. It never terminates TLS, so it sees only ciphertext and holds
 no TLS certificates and no per-share credentials: TLS terminates *inside* the
-workspace container. Its only secret is the connector plugin-auth URL embedded
-in `frps.toml` (installed root-only), which authorizes tunnel operations.
+workspace container. Its only secret is the connector plugin-auth secret
+embedded in `frps.toml` (installed root-only) as the plugin `addr`'s URL
+userinfo, which frps delivers to the connector as an `Authorization: Basic`
+header -- keeping it out of the connector's access-logged URL paths.
 It also holds no per-share state -- every tunnel `Login` / `NewProxy` operation
 is authorized by an HTTP callback to the connector, so a workspace's `frpc` can
 only claim the hostnames its relay token is allowed to.
@@ -27,8 +29,9 @@ relay's plugin path ends in its `relay_id`), and the connector's per-minute
 health sweep that keeps the DNS record sets in step with `/healthz`.
 
 The frp behaviors this design rests on (unknown-SNI fast-fail, no inbound
-PROXY protocol, independent same-domain claims on two servers) are pinned by
-a manual harness -- run it on every frp version bump:
+PROXY protocol, independent same-domain claims on two servers, plugin-addr
+userinfo delivered as an Authorization header) are pinned by a manual
+harness -- run it on every frp version bump:
 
 ```bash
 uv run python -m imbue.share_relay.frp_verification
@@ -58,8 +61,11 @@ The operator CLI (`share-relay`) is the source of truth for a relay's on-disk
 config, so the deploy step stays a dumb copy and the config is unit-testable:
 
 ```bash
-# Render a region's config artifacts into a directory.
-share-relay render --relay-id relay-<hex> --region us1 --content-domain imbueminds.com \
+# Render a region's config artifacts into a directory. The plugin-auth URL is
+# secret-free; the plugin secret is read from FRPS_AUTH_SECRET (the tier's
+# sharing Vault entry) and rendered as the plugin addr's URL userinfo.
+FRPS_AUTH_SECRET=<secret> share-relay render --relay-id relay-<hex> --region us1 \
+    --content-domain imbueminds.com \
     --plugin-auth-url https://<connector>/frps/auth --out-dir ./out
 # -> out/frps.toml, out/nftables.conf, out/port80.Caddyfile
 
@@ -74,7 +80,8 @@ the healthcheck script -- over SSH, restarting the services, `dns` upserts the
 region's records, and `list` / `destroy` manage existing instances.
 
 - `frps.toml` -- SNI-passthrough vhost + the connector-auth server plugin
-  (`Login` / `NewProxy` only; visitor connections never call the connector).
+  (`Login` / `NewProxy` / `Ping`; visitor connections never call the
+  connector).
 - `nftables.conf` -- tier-2 abuse guard: per-source-IP new-connection rate and
   concurrent-connection caps on the vhost port. (Per-workspace bandwidth quotas
   are tier 3, deferred, and enforced connector-side.)

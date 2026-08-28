@@ -6,16 +6,14 @@ Invoked by the minds desktop app via a small ``mngr exec`` as
 [--transcript] [--scan-timeout=<seconds>]``. Stdlib only (no venv, no
 third-party imports), targeting the container's system python3 (3.11+).
 
-Prints exactly one line: a JSON object of the shape
-
-    {"contract_version": 1, "zip": "<base64 of a zip>", "omissions": {...}}
-
-``zip`` is absent (not empty) when nothing was collected. The zip holds
-``workspace-logs.log`` (when --logs scanned clean) and one
-``chats/<agent-id>-<harness>.jsonl`` per selected chat, newest chat first
-(when --transcript scanned clean). ``omissions`` explains, per requested
-content type, anything that was withheld; a content type that was not
-requested appears in neither the zip nor omissions.
+Prints exactly one line -- the base64 of a zip -- and nothing at all when no
+content type was requested. The zip holds ``metadata.json`` plus one
+``logs/<program>.log`` member per collected log (when --logs scanned clean)
+and one ``chats/<agent-name>-<harness>.jsonl`` per selected agent
+conversation, newest first (when --transcript scanned clean). Anything
+requested that was withheld is a plain-words line in the archive's own
+``collection-notes.txt`` member, so the archive explains itself; a content
+type that was not requested appears in neither the members nor the notes.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
@@ -25,7 +23,6 @@ archive into a way around the scan, so the scan always happens first.
 """
 
 import base64
-import configparser
 from datetime import datetime
 import glob
 import io
@@ -38,14 +35,11 @@ import sys
 import tempfile
 import time
 import zipfile
-from collections.abc import Mapping, Sequence
-
-CONTRACT_VERSION = 1
+from collections.abc import Sequence
 
 WORKSPACE_DIR = "/home/user/workspace"
-# The workspace's own service definitions, and the single source of truth for
-# which supervisord programs are user-created; minds must not carry a duplicate
-# list of service names.
+# The workspace's own service definitions, read for the supervisorctl status in
+# the report's metadata.
 SUPERVISORD_CONF = WORKSPACE_DIR + "/system/supervisord.conf"
 SHED_LEDGER = WORKSPACE_DIR + "/data/.state/oom_priority/events/shed.jsonl"
 SUPERVISOR_LOG_DIR = "/var/log/supervisor"
@@ -67,8 +61,20 @@ LOADAVG_PATH = "/proc/loadavg"
 
 # How far back a chat counts as recent: every chat transcript written to inside
 # this window is attached, on the view that a bug is rarely about exactly one
-# conversation. Outside it, the single most relevant chat still rides along.
+# conversation.
 TRANSCRIPT_RECENCY_WINDOW_SECONDS = 2 * 60 * 60
+
+# The floor on how many conversations ride along: the newest
+# MIN_TRANSCRIPT_COUNT chats attach even when the recency window holds fewer,
+# because a bug filed from a quiet workspace still needs its recent history --
+# and a stale workspace is exactly where the conversation is hardest to
+# reconstruct from anything else. A workspace with fewer chats sends them all.
+MIN_TRANSCRIPT_COUNT = 5
+
+# How far back a service log still describes the workspace the bug was filed
+# from: a log nothing has written to in over a day is history, not diagnostics,
+# and only pads the archive.
+LOG_RECENCY_WINDOW_SECONDS = 24 * 60 * 60
 
 WORKSPACE_LOGS_KEY = "workspace_logs"
 TRANSCRIPT_KEY = "transcript"
@@ -103,9 +109,12 @@ CHAT_MEMBER_DIR = "chats"
 ZIP_MIN_TIMESTAMP = 315532800
 ZIP_MAX_TIMESTAMP = 4354819199
 
-REASON_SCANNER_UNAVAILABLE = "scanner_unavailable"
-REASON_SECRETS_FOUND = "secrets_found"
-REASON_NO_CHAT_TRANSCRIPT = "no_chat_transcript"
+# Plain-words notes for the ``collection-notes.txt`` member. The archive is
+# the only channel back to the report, so anything withheld says so here.
+NOTES_MEMBER_NAME = "collection-notes.txt"
+NOTE_SCANNER_UNAVAILABLE = "withheld: the secret scanner could not run, so nothing it was to check was released"
+NOTE_SECRETS_FOUND = "withheld: the secret scan reported findings"
+NOTE_NO_CHAT_TRANSCRIPT = "no chat transcripts exist in this workspace"
 
 FINDING_MARKER = "SECRET SCAN FINDING"
 # Every marker scan_secrets.sh prints for "one of my two mandatory scanners did
@@ -163,64 +172,35 @@ def safe_mtime(path: str) -> float:
         return 0.0
 
 
-def load_user_program_names() -> set[str] | None:
-    """Names of the supervisord programs the workspace marks as user-created, or None.
-
-    Every service the workspace starts is wrapped in ``oom_tag_service.py <band>``,
-    and a user-created app is the one passing the literal band ``user`` -- that
-    argument is how the workspace itself distinguishes its own apps, so it is read
-    here rather than guessed at.
-
-    The alternative, asking ``oom_priority.bands`` for each program's band, answers
-    a different question: that table ranks what is expendable under memory
-    pressure, and anything absent from it falls back to the user band. Built-in
-    services that predate the table or skip the wrapper entirely (``cron``) would
-    be read as user apps and their logs silently dropped.
-
-    None means the config could not be read, which the caller reports rather than
-    guessing a classification from.
-    """
-    parser = configparser.ConfigParser(interpolation=None, strict=False)
-    try:
-        if not parser.read(SUPERVISORD_CONF, encoding="utf-8"):
-            return None
-    except (OSError, configparser.Error):
-        return None
-    user_programs = set()
-    for section in parser.sections():
-        if not section.startswith("program:"):
-            continue
-        command = parser.get(section, "command", fallback="")
-        if re.search(r"oom_tag_service\.py\s+user(\s|$)", command):
-            user_programs.add(section[len("program:") :])
-    return user_programs
-
-
 def program_name_for_log(path: str) -> str:
-    """The supervisord program a log file belongs to, from its filename."""
+    """The program a log file belongs to, from its filename.
+
+    The bare ``.log`` case covers files without a stream suffix (supervisord's
+    own log); a program whose stderr file and plain log share a stem is kept
+    apart by the member-name numbering, not here.
+    """
     name = os.path.basename(path)
-    for suffix in ("-stderr.log", "-stdout.log"):
+    for suffix in ("-stderr.log", "-stdout.log", ".log"):
         if name.endswith(suffix):
             return name[: -len(suffix)]
     return name
 
 
-def select_log_files(user_programs: set[str] | None) -> list[str]:
-    """Supervisord log files worth sending, newest first and capped.
+def select_log_files() -> list[str]:
+    """Every supervisord log file worth sending, newest first and capped.
 
-    A user app's logs are workspace content rather than diagnostics, so they never
-    leave the container. ``user_programs`` of None means the classification could
-    not be made at all, and nothing is filtered -- the caller says so in the
-    payload rather than letting the omission pass unremarked.
+    Deliberately unfiltered by owner or stream: any program's log -- app or
+    service, user-created or built-in, stdout or stderr -- can carry the bug,
+    so all of them ride (the user consented via the logs checkbox, and every
+    member still passes the secret scan before it leaves).
+
+    Only logs written to inside ``LOG_RECENCY_WINDOW_SECONDS`` are sent: a
+    program that has been silent for over a day describes some earlier state of
+    the workspace, not the one the bug was filed from.
     """
-    candidates = list(glob.glob(SUPERVISOR_LOG_DIR + "/*-stderr.log"))
-    system_interface_stdout = SUPERVISOR_LOG_DIR + "/system_interface-stdout.log"
-    if os.path.exists(system_interface_stdout):
-        candidates.append(system_interface_stdout)
-    if user_programs is not None:
-        candidates = [
-            p for p in candidates if program_name_for_log(p) not in user_programs
-        ]
+    candidates = list(glob.glob(SUPERVISOR_LOG_DIR + "/*.log"))
+    cutoff = time.time() - LOG_RECENCY_WINDOW_SECONDS
+    candidates = [p for p in candidates if safe_mtime(p) >= cutoff]
     candidates.sort(key=safe_mtime, reverse=True)
     return candidates[:MAX_LOG_FILES]
 
@@ -234,7 +214,6 @@ def build_metadata() -> dict[str, object]:
     string fields rather than being given an invented schema; what matters is
     that they are separately addressable instead of concatenated together.
     """
-    user_programs = load_user_program_names()
     return {
         "workspace": {
             "commit": run_command(
@@ -264,26 +243,21 @@ def build_metadata() -> dict[str, object]:
                 ["supervisorctl", "-c", SUPERVISORD_CONF, "status"],
                 SUPERVISORCTL_TIMEOUT_SECONDS,
             ),
-            # None means the config could not be read, so user-created services
-            # could not be told apart and every log was collected. Recorded
-            # rather than silent: it changes what the log members mean.
-            "are_user_services_identified": user_programs is not None,
             "log_lines_per_file": MAX_LINES_PER_LOG,
         },
     }
 
 
 def collect_log_members() -> list[tuple[str, str, float]]:
-    """One member per service log, as ``(member name, content, mtime)``.
+    """One member per log file, as ``(member name, content, mtime)``.
 
     Separate members rather than one concatenated file: the payload is an
     archive, so there is no reason to make a reader split headed sections apart
-    again. User-created services' logs are excluded -- those are the user's
-    content, not diagnostics -- by the workspace's own service definitions.
+    again.
     """
     members = []
     used_names: set[str] = set()
-    for path in select_log_files(load_user_program_names()):
+    for path in select_log_files():
         stem = safe_member_component(program_name_for_log(path))
         member = "{}/{}.log".format(LOG_MEMBER_DIR, stem)
         index = 2
@@ -348,14 +322,20 @@ def run_mngr(args: Sequence[str], timeout: float) -> str | None:
     return proc.stdout
 
 
-def list_chat_agents(timeout: float) -> list[str]:
-    """Each chat agent's name, by the workspace's own definition.
+def list_agents(timeout: float) -> list[tuple[str, str]]:
+    """Every agent, as ``(name, pinned address)`` -- chat, worker, or the services agent.
 
-    Mirrors system_interface's get_chat_agent_ids: a chat is any agent that is
-    neither a worker another agent spawned (``agent_created=true`` -- caretaker
-    runs, automations) nor the primary services agent (``is_primary=true``).
-    Those two marks are how the workspace tells its background agents apart, so
-    they are read rather than a list of agent types being kept here.
+    Deliberately unfiltered by kind: any agent's conversation can carry the bug,
+    so all of them are asked for a transcript (an agent with none simply
+    contributes no member, which is how the primary services agent usually
+    drops out).
+
+    Scoped to the local provider on purpose: every agent inside a workspace is
+    the inner mngr's own, and asking the cloud providers baked into the
+    settings only makes mngr probe backends that cannot answer from inside a
+    container -- that probing, not the listing, is what used to cost the
+    collection most of its budget. The returned ``name@host.provider`` address
+    pins each later ``mngr event`` the same way, so it skips the fan-out too.
 
     The pipe-delimited template is used rather than ``--format json``: inside a
     workspace container mngr cannot reach the providers that back its hosts, and
@@ -365,29 +345,32 @@ def list_chat_agents(timeout: float) -> list[str]:
     listed = run_mngr(
         [
             "list",
+            "--provider",
+            "local",
             "--format",
-            "{name}|{type}|{labels.is_primary}|{labels.agent_created}",
+            "{name}|{name}@{host.name}.{host.provider_name}",
         ],
         timeout,
     )
     if listed is None:
         return []
-    agents: list[str] = []
+    agents: list[tuple[str, str]] = []
     for line in listed.splitlines():
         parts = line.split("|")
-        if len(parts) != 4:
+        if len(parts) != 2:
             continue
-        name, agent_type, is_primary, agent_created = (p.strip() for p in parts)
-        if not name or not agent_type:
+        name, address = (p.strip() for p in parts)
+        if not name or not address:
             continue
-        if is_primary.lower() == "true" or agent_created.lower() == "true":
-            continue
-        agents.append(name)
+        agents.append((name, address))
     return agents
 
 
-def fetch_transcript(name: str, timeout: float) -> str | None:
+def fetch_transcript(address: str, timeout: float) -> str | None:
     """One agent's conversation as raw JSONL, or None when it has none.
+
+    ``address`` is the pinned ``name@host.provider`` form from ``list_agents``,
+    so resolving it never fans out to the unreachable cloud providers.
 
     The harness is NOT derived from the agent's type: an agent of type ``chat``
     writes its events under ``claude/``, so the two do not map onto each other.
@@ -402,7 +385,7 @@ def fetch_transcript(name: str, timeout: float) -> str | None:
     events = run_mngr(
         [
             "event",
-            name,
+            address,
             "--include",
             'source.endsWith("common_transcript")',
             "--exclude",
@@ -463,18 +446,19 @@ def newest_event_time(events: str) -> float:
 
 
 def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
-    """The chats to attach, as ``(member name, content, last-written epoch)``.
+    """The conversations to attach, as ``(member name, content, last-written epoch)``.
 
-    A bug is rarely about exactly one conversation, so every chat written to
-    inside the recency window rides along, newest first. When the window is
-    empty -- the workspace sat idle -- the report still carries its best single
-    context rather than nothing, since a stale workspace is exactly where the
-    conversation is hardest to reconstruct from anything else.
+    Every agent's transcript is a candidate -- chat, background worker, or
+    otherwise. A bug is rarely about exactly one conversation, so every one
+    written to inside the recency window rides along, newest first -- and never
+    fewer than the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the
+    workspace holds fewer), so a report filed from a quiet workspace still
+    carries its recent history rather than nothing.
     """
     fetched = []
     used_names: set[str] = set()
-    for name in list_chat_agents(timeout):
-        events = fetch_transcript(name, timeout)
+    for name, address in list_agents(timeout):
+        events = fetch_transcript(address, timeout)
         if events is None:
             continue
         member = transcript_member_name(name, transcript_source(events), used_names)
@@ -483,8 +467,10 @@ def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
         return []
     fetched.sort(key=lambda item: item[2], reverse=True)
     cutoff = time.time() - TRANSCRIPT_RECENCY_WINDOW_SECONDS
-    recent = [item for item in fetched if item[2] >= cutoff]
-    return recent if recent else fetched[:1]
+    # Sorted newest first, so the in-window chats are a prefix: one slice keeps
+    # every recent chat and tops up to the floor from the newest of the rest.
+    recent_count = sum(1 for item in fetched if item[2] >= cutoff)
+    return fetched[: max(recent_count, MIN_TRANSCRIPT_COUNT)]
 
 def build_zip(members: Sequence[tuple[str, str, float]]) -> bytes:
     """Deflate the members into one archive, returned as raw zip bytes.
@@ -509,10 +495,7 @@ def build_zip(members: Sequence[tuple[str, str, float]]) -> bytes:
     return buffer.getvalue()
 
 
-def encode_zip(
-    log_members: Sequence[tuple[str, str, float]],
-    chat_members: Sequence[tuple[str, str, float]],
-) -> str | None:
+def encode_zip(members: Sequence[tuple[str, str, float]]) -> str | None:
     """Everything collected, packed and base64-encoded; None when there is nothing.
 
     Deliberately unbounded. The payload returns on the collector's stdout, which
@@ -523,10 +506,9 @@ def encode_zip(
     fails loudly as ``exec_timeout`` rather than quietly shipping a trimmed set
     a reader could not tell from a complete one.
     """
-    members = list(log_members) + list(chat_members)
     if not members:
         return None
-    return base64.b64encode(build_zip(members)).decode("ascii")
+    return base64.b64encode(build_zip(list(members))).decode("ascii")
 
 
 def scan_targets(
@@ -556,28 +538,28 @@ def scan_targets(
             argv, capture_output=True, text=True, timeout=timeout_seconds
         )
     except Exception:
-        return {path: REASON_SCANNER_UNAVAILABLE for path in target_paths}
+        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
     if proc.returncode == 0:
         return {path: None for path in target_paths}
     # scan_secrets.sh reports on stderr, but stdout is folded in so that a
     # failure printed anywhere still counts against the scan.
     output = proc.stdout + "\n" + proc.stderr
     if any(marker in output for marker in SCANNER_MALFUNCTION_MARKERS):
-        return {path: REASON_SCANNER_UNAVAILABLE for path in target_paths}
+        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
     if UNPARSEABLE_REPORT_MARKER in output:
-        return {path: REASON_SECRETS_FOUND for path in target_paths}
+        return {path: NOTE_SECRETS_FOUND for path in target_paths}
     finding_lines = [line for line in output.splitlines() if FINDING_MARKER in line]
     if not finding_lines:
-        return {path: REASON_SCANNER_UNAVAILABLE for path in target_paths}
+        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
     verdicts = {}
     for path in target_paths:
         matched = [line for line in finding_lines if path in line]
-        verdicts[path] = REASON_SECRETS_FOUND if matched else None
+        verdicts[path] = NOTE_SECRETS_FOUND if matched else None
     unattributed = [
         line for line in finding_lines if not any(path in line for path in target_paths)
     ]
     if unattributed:
-        return {path: REASON_SECRETS_FOUND for path in target_paths}
+        return {path: NOTE_SECRETS_FOUND for path in target_paths}
     return verdicts
 
 
@@ -606,7 +588,10 @@ def parse_scan_timeout(flags: Sequence[str]) -> float:
 def main(argv: Sequence[str]) -> None:
     flags = set(argv)
     scan_timeout_seconds = parse_scan_timeout(list(flags))
-    omissions: dict[str, str] = {}
+    # Plain-words lines for the notes member: whenever something requested is
+    # not in the archive, one line here says so. The archive is the only
+    # channel back to the report.
+    notes: list[str] = []
 
     log_members: list[tuple[str, str, float]] = []
     if "--logs" in flags:
@@ -619,7 +604,7 @@ def main(argv: Sequence[str]) -> None:
     if "--transcript" in flags:
         chat_members = collect_transcript_members(scan_timeout_seconds)
         if not chat_members:
-            omissions[TRANSCRIPT_KEY] = REASON_NO_CHAT_TRANSCRIPT
+            notes.append("recent chats: " + NOTE_NO_CHAT_TRANSCRIPT)
 
     # Nothing leaves the container unscanned, so a payload that cannot even be
     # staged for the scanner is dropped exactly as one the scanner could not
@@ -647,7 +632,7 @@ def main(argv: Sequence[str]) -> None:
                 logs_staged.append(staged)
             if logs_staged is None:
                 log_members = []
-                omissions[WORKSPACE_LOGS_KEY] = REASON_SCANNER_UNAVAILABLE
+                notes.append("workspace logs: " + NOTE_SCANNER_UNAVAILABLE)
             else:
                 staged_by_key[WORKSPACE_LOGS_KEY] = logs_staged
         if chat_members:
@@ -664,7 +649,7 @@ def main(argv: Sequence[str]) -> None:
                 transcript_staged.append(staged)
             if transcript_staged is None:
                 chat_members = []
-                omissions[TRANSCRIPT_KEY] = REASON_SCANNER_UNAVAILABLE
+                notes.append("recent chats: " + NOTE_SCANNER_UNAVAILABLE)
             else:
                 staged_by_key[TRANSCRIPT_KEY] = transcript_staged
 
@@ -678,29 +663,30 @@ def main(argv: Sequence[str]) -> None:
                 # partial set of conversations, which a reader could not tell
                 # from the full set.
                 reasons = [
-                    verdicts.get(path, REASON_SCANNER_UNAVAILABLE) for path in paths
+                    verdicts.get(path, NOTE_SCANNER_UNAVAILABLE) for path in paths
                 ]
                 reason = next((r for r in reasons if r is not None), None)
                 if reason is not None:
                     if key == WORKSPACE_LOGS_KEY:
                         log_members = []
+                        notes.append("workspace logs: " + reason)
                     if key == TRANSCRIPT_KEY:
                         chat_members = []
-                    omissions[key] = reason
+                        notes.append("recent chats: " + reason)
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
-    # Base64 because JSON holds no bytes; the host decodes it back and stages
-    # the archive verbatim. "zip" is absent -- never empty -- when nothing was
-    # collected.
-    encoded = encode_zip(log_members, chat_members)
-    payload: dict[str, object] = {
-        "contract_version": CONTRACT_VERSION,
-        "omissions": omissions,
-    }
+    # The notes ride inside the archive itself, so a reader learns what was
+    # withheld from the same file that holds what was not. Collector-authored
+    # text only -- no workspace content -- so it is not itself scanned.
+    members = list(log_members) + list(chat_members)
+    if notes:
+        members.append((NOTES_MEMBER_NAME, "\n".join(notes) + "\n", time.time()))
+    # Base64 because stdout is text; the host decodes the one line and stages
+    # the archive verbatim. Nothing prints when nothing was requested.
+    encoded = encode_zip(members)
     if encoded is not None:
-        payload["zip"] = encoded
-    print(json.dumps(payload))
+        print(encoded)
 
 
 if __name__ == "__main__":

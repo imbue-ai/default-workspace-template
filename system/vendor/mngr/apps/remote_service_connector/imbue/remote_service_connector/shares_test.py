@@ -1,16 +1,23 @@
 """Tests for the self-hosted sharing model + endpoints (shares, relay tokens, frps plugin auth)."""
 
+import base64
+import hashlib
+import json
+import logging
 import re
 from typing import Any
 from uuid import uuid4
 
 import psycopg2
 import pytest
+from fastapi.testclient import TestClient
 
+from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
 from imbue.remote_service_connector.errors import InvalidShareCoordinateError
 from imbue.remote_service_connector.errors import NoActiveRelaysError
 from imbue.remote_service_connector.errors import ShareQuotaExceededError
 from imbue.remote_service_connector.shares import DEFAULT_MAX_SHARED_WORKSPACES_PER_USER
+from imbue.remote_service_connector.shares import FrpsPingMetricsAggregator
 from imbue.remote_service_connector.shares import check_share_quota
 from imbue.remote_service_connector.shares import decide_frps_new_proxy
 from imbue.remote_service_connector.shares import decide_frps_ping
@@ -33,6 +40,7 @@ from imbue.remote_service_connector.testing import _SHARE_STUB_USER_ID
 from imbue.remote_service_connector.testing import _SHARE_STUB_USER_LABEL
 from imbue.remote_service_connector.testing import _make_share_test_client
 from imbue.remote_service_connector.testing import _share_headers
+from imbue.remote_service_connector.web import web_app
 
 # ---------------------------------------------------------------------------
 # Pure model
@@ -184,8 +192,12 @@ def test_resolve_share_region_for_share_is_sticky_on_the_existing_row() -> None:
     # An existing region outranks both the datacenter mapping and a preference.
     assert resolve_share_region_for_share("us2", "US-WEST-OR", None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us2"
     assert resolve_share_region_for_share("us2", None, "us1", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us2"
-    # A recorded region no longer served by any relay falls through.
-    assert resolve_share_region_for_share("eu9", None, None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
+    # A recorded region no longer served by any relay fails loudly: the region
+    # is baked into the stored domain, so silently answering with another
+    # region's relays would leave the persisted share (and the assignment the
+    # in-workspace gateway polls) pointing somewhere the response is not.
+    with pytest.raises(NoActiveRelaysError):
+        resolve_share_region_for_share("eu9", None, None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID)
 
 
 def test_resolve_share_region_for_share_honors_preference_only_without_a_datacenter() -> None:
@@ -345,7 +357,7 @@ def test_share_status_reports_state_endpoint_and_login_stamp(monkeypatch: pytest
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
 
     login_body = {"op": "Login", "content": {"metas": {"relay_token": created["relay_token"]}}}
-    login_resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=login_body)
+    login_resp = client.post(f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=login_body)
     assert login_resp.json()["reject"] is False
 
     resp = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers())
@@ -534,6 +546,19 @@ def test_create_share_rejects_a_malformed_entry_label(monkeypatch: pytest.Monkey
     assert resp.status_code == 422
 
 
+def test_create_share_rejects_a_malformed_workspace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+
+    for bad_workspace_id in ("not-an-agent-id", ""):
+        resp = client.post(
+            "/shares",
+            json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": bad_workspace_id},
+            headers=_share_headers(),
+        )
+
+        assert resp.status_code == 422
+
+
 def test_share_status_404s_for_unknown_host(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
 
@@ -583,6 +608,16 @@ def test_share_status_reports_empty_endpoints_when_the_region_lost_its_relays(
 # ---------------------------------------------------------------------------
 
 
+def _frps_auth_headers(secret: str) -> dict[str, str]:
+    """The Authorization header frps sends when its plugin addr carries the secret as URL userinfo.
+
+    Go's HTTP client renders ``https://<secret>@<connector>`` as
+    ``Basic base64(<secret>:)`` -- the secret in the username position (pinned
+    by the share_relay frp_verification harness).
+    """
+    return {"Authorization": "Basic " + base64.b64encode(f"{secret}:".encode()).decode()}
+
+
 def _login_op(relay_token: str) -> dict[str, object]:
     return {"op": "Login", "content": {"metas": {"relay_token": relay_token}}}
 
@@ -602,16 +637,92 @@ def _new_proxy_op(relay_token: str, custom_domains: list[str]) -> dict[str, obje
 def test_frps_auth_rejects_wrong_plugin_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
 
-    resp = client.post(f"/frps/auth/wrong-secret/{_RELAY_ID_US1}", json=_login_op("whatever"))
+    resp = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers("wrong-secret"), json=_login_op("whatever")
+    )
 
     assert resp.status_code == 401
+
+
+def test_frps_auth_rejects_missing_or_malformed_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+
+    missing = client.post(f"/frps/auth/{_RELAY_ID_US1}", json=_login_op("whatever"))
+    assert missing.status_code == 401
+
+    bearer = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers={"Authorization": f"Bearer {_FRPS_SECRET}"}, json=_login_op("whatever")
+    )
+    assert bearer.status_code == 401
+
+    not_base64 = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers={"Authorization": "Basic !!not-base64!!"}, json=_login_op("whatever")
+    )
+    assert not_base64.status_code == 401
+
+
+def test_frps_auth_rejects_secret_in_basic_password_position(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the username position is accepted: the rendered plugin addr is
+    # `https://<secret>@<connector>`, which Go encodes as base64("<secret>:").
+    # A password-position secret (`https://:<secret>@...`) is a misrendered
+    # config and must fail loudly, not half-work.
+    client, _backend = _make_share_test_client(monkeypatch)
+    password_position = {"Authorization": "Basic " + base64.b64encode(f":{_FRPS_SECRET}".encode()).decode()}
+
+    resp = client.post(f"/frps/auth/{_RELAY_ID_US1}", headers=password_position, json=_login_op("whatever"))
+
+    assert resp.status_code == 401
+
+
+def test_frps_auth_accepts_every_secret_of_the_comma_separated_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    # FRPS_AUTH_SECRET is a comma-separated set so a rotation can briefly
+    # accept {old, new} while the relay fleet redeploys -- no tunnel downtime.
+    client, _backend = _make_share_test_client(monkeypatch)
+    rotated_secret = uuid4().hex
+    monkeypatch.setenv("FRPS_AUTH_SECRET", f"{_FRPS_SECRET}, {rotated_secret}")
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+
+    old_secret_resp = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=_login_op(created["relay_token"])
+    )
+    assert old_secret_resp.status_code == 200
+    assert old_secret_resp.json()["reject"] is False
+
+    new_secret_resp = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(rotated_secret),
+        json=_login_op(created["relay_token"]),
+    )
+    assert new_secret_resp.status_code == 200
+    assert new_secret_resp.json()["reject"] is False
+
+    unlisted = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(uuid4().hex), json=_login_op(created["relay_token"])
+    )
+    assert unlisted.status_code == 401
+
+
+# CLEANUP: remove alongside the legacy path-secret route in shares.py once the
+# whole relay fleet is on the header form and the secret is rotated.
+def test_frps_auth_legacy_path_secret_route_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+
+    allowed = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
+    assert allowed.status_code == 200
+    assert allowed.json()["reject"] is False
+
+    wrong = client.post(f"/frps/auth/wrong-secret/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
+    assert wrong.status_code == 401
 
 
 def test_frps_auth_is_disabled_without_configured_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
     monkeypatch.delenv("FRPS_AUTH_SECRET")
 
-    resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op("whatever"))
+    resp = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=_login_op("whatever")
+    )
 
     assert resp.status_code == 403
 
@@ -620,7 +731,9 @@ def test_frps_auth_login_allows_active_share_and_stamps_liveness(monkeypatch: py
     client, backend = _make_share_test_client(monkeypatch)
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
 
-    resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
+    resp = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=_login_op(created["relay_token"])
+    )
 
     assert resp.status_code == 200
     assert resp.json() == {"reject": False, "reject_reason": "", "unchange": True}
@@ -632,10 +745,14 @@ def test_frps_auth_login_allows_active_share_and_stamps_liveness(monkeypatch: py
 def test_frps_auth_rejects_unknown_and_missing_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
 
-    unknown = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op("not-a-real-token"))
+    unknown = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=_login_op("not-a-real-token")
+    )
     assert unknown.json()["reject"] is True
 
-    missing = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json={"op": "Login", "content": {}})
+    missing = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json={"op": "Login", "content": {}}
+    )
     assert missing.json()["reject"] is True
 
 
@@ -644,7 +761,9 @@ def test_frps_auth_rejects_token_of_inactive_share(monkeypatch: pytest.MonkeyPat
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
     client.delete(f"/shares/{_SHARE_STUB_HOST_ID}", headers=_share_headers())
 
-    resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
+    resp = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=_login_op(created["relay_token"])
+    )
 
     assert resp.json()["reject"] is True
 
@@ -657,13 +776,19 @@ def test_frps_auth_rejects_unknown_and_retired_relay_ids(monkeypatch: pytest.Mon
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
 
     unknown_relay_id = "relay-" + "9" * 16
-    unknown = client.post(f"/frps/auth/{_FRPS_SECRET}/{unknown_relay_id}", json=_login_op(created["relay_token"]))
+    unknown = client.post(
+        f"/frps/auth/{unknown_relay_id}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
+        json=_login_op(created["relay_token"]),
+    )
     assert unknown.json()["reject"] is True
 
     for relay_row in backend.relay_rows:
         if relay_row["relay_id"] == _RELAY_ID_US1:
             relay_row["is_active"] = False
-    retired = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
+    retired = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=_login_op(created["relay_token"])
+    )
     assert retired.json()["reject"] is True
 
 
@@ -675,7 +800,8 @@ def test_frps_auth_new_proxy_records_the_shell_entry_label(monkeypatch: pytest.M
     domain = created["workspace_domain"]
 
     resp = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
         json=_new_proxy_op(
             created["relay_token"],
             [f"terminal-abcd1234.{domain}", f"system_interface-elm7wydc.{domain}", f"auth-x7k9q2w1.{domain}"],
@@ -697,7 +823,8 @@ def test_frps_auth_rejected_new_proxy_records_no_entry_label(monkeypatch: pytest
     foreign = "system_interface-elm7wydc.host-" + "b" * 32 + ".x.us1.example.com"
 
     resp = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
         json=_new_proxy_op(created["relay_token"], [f"system_interface-elm7wydc.{domain}", foreign]),
     )
 
@@ -713,24 +840,31 @@ def test_frps_auth_new_proxy_allows_single_labels_under_own_domain_only(monkeypa
     domain = created["workspace_domain"]
 
     allowed = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
         json=_new_proxy_op(created["relay_token"], [f"terminal-abcd1234.{domain}", f"auth-x7k9q2w1.{domain}"]),
     )
     assert allowed.json()["reject"] is False
 
     # The bare domain and the wildcard must not route under the explicit-claim model.
     bare = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_new_proxy_op(created["relay_token"], [domain])
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
+        json=_new_proxy_op(created["relay_token"], [domain]),
     )
     assert bare.json()["reject"] is True
     wildcard = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_new_proxy_op(created["relay_token"], [f"*.{domain}"])
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
+        json=_new_proxy_op(created["relay_token"], [f"*.{domain}"]),
     )
     assert wildcard.json()["reject"] is True
 
     foreign_domain = f"terminal-abcd1234.{domain.replace(_SHARE_STUB_HOST_ID, _OTHER_HOST_ID)}"
     rejected = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_new_proxy_op(created["relay_token"], [foreign_domain])
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
+        json=_new_proxy_op(created["relay_token"], [foreign_domain]),
     )
     assert rejected.json()["reject"] is True
 
@@ -740,7 +874,8 @@ def test_frps_auth_allows_unsubscribed_ops_unchanged(monkeypatch: pytest.MonkeyP
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
 
     resp = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
         json={"op": "NewWorkConn", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
     )
 
@@ -752,7 +887,8 @@ def test_frps_auth_allows_ping_for_active_share(monkeypatch: pytest.MonkeyPatch)
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
 
     resp = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
         json={"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
     )
 
@@ -764,12 +900,17 @@ def test_frps_auth_rejects_ping_once_share_is_suspended(monkeypatch: pytest.Monk
     client, backend = _make_share_test_client(monkeypatch)
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
     ping_body = {"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}}
-    assert client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=ping_body).json()["reject"] is False
+    assert (
+        client.post(f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=ping_body).json()[
+            "reject"
+        ]
+        is False
+    )
 
     for share in backend.share_rows:
         share["state"] = "suspended"
 
-    rejected = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=ping_body)
+    rejected = client.post(f"/frps/auth/{_RELAY_ID_US1}", headers=_frps_auth_headers(_FRPS_SECRET), json=ping_body)
     assert rejected.json()["reject"] is True
 
 
@@ -780,7 +921,8 @@ def test_frps_auth_rejects_ping_after_unshare(monkeypatch: pytest.MonkeyPatch) -
     client.delete(f"/shares/{_SHARE_STUB_HOST_ID}", headers=_share_headers())
 
     rejected = client.post(
-        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
         json={"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
     )
 
@@ -802,3 +944,370 @@ def test_decide_frps_ping_rejects_missing_token() -> None:
     decision = decide_frps_ping(lambda token_hash: None, None)
 
     assert decision.reject is True
+
+
+class _CountingShareLookup:
+    """Share lookup returning a fixed row while counting invocations."""
+
+    def __init__(self, share: dict[str, Any] | None) -> None:
+        self.share = share
+        self.call_count = 0
+
+    def __call__(self, token_hash: str) -> dict[str, Any] | None:
+        self.call_count += 1
+        return self.share
+
+
+def test_decide_frps_ping_serves_allows_from_cache_within_the_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINDS_FRPS_PING_CACHE_TTL_SECONDS", "30")
+    lookup = _CountingShareLookup({"state": "active"})
+    token = uuid4().hex
+    clock = [1000.0]
+
+    first = decide_frps_ping(lookup, token, monotonic=lambda: clock[0])
+    clock[0] += 29.0
+    second = decide_frps_ping(lookup, token, monotonic=lambda: clock[0])
+
+    assert first.reject is False
+    assert second.reject is False
+    assert lookup.call_count == 1
+
+
+def test_decide_frps_ping_reconsults_the_db_after_the_cached_allow_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The kill-switch bound: a state flip is seen on the first ping after the TTL."""
+    monkeypatch.setenv("MINDS_FRPS_PING_CACHE_TTL_SECONDS", "30")
+    lookup = _CountingShareLookup({"state": "active"})
+    token = uuid4().hex
+    clock = [1000.0]
+
+    decide_frps_ping(lookup, token, monotonic=lambda: clock[0])
+    lookup.share = {"state": "suspended"}
+    clock[0] += 31.0
+    decision = decide_frps_ping(lookup, token, monotonic=lambda: clock[0])
+
+    assert decision.reject is True
+    assert lookup.call_count == 2
+
+
+def test_decide_frps_ping_never_caches_rejects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A re-authorized session must not be re-severed by a stale cached reject."""
+    monkeypatch.setenv("MINDS_FRPS_PING_CACHE_TTL_SECONDS", "30")
+    lookup = _CountingShareLookup(None)
+    token = uuid4().hex
+
+    first = decide_frps_ping(lookup, token)
+    lookup.share = {"state": "active"}
+    second = decide_frps_ping(lookup, token)
+
+    assert first.reject is True
+    assert second.reject is False
+    assert lookup.call_count == 2
+
+
+def test_decide_frps_ping_never_caches_fail_open_allows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINDS_FRPS_PING_CACHE_TTL_SECONDS", "30")
+    call_count = [0]
+
+    def _broken_lookup(token_hash: str) -> dict[str, Any] | None:
+        call_count[0] += 1
+        raise psycopg2.OperationalError("simulated db outage 52917")
+
+    token = uuid4().hex
+    first = decide_frps_ping(_broken_lookup, token)
+    second = decide_frps_ping(_broken_lookup, token)
+
+    assert first.reject is False
+    assert second.reject is False
+    assert call_count[0] == 2
+
+
+def test_decide_frps_ping_hits_the_db_every_time_when_the_cache_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINDS_FRPS_PING_CACHE_TTL_SECONDS", "0")
+    lookup = _CountingShareLookup({"state": "active"})
+    token = uuid4().hex
+
+    decide_frps_ping(lookup, token)
+    decide_frps_ping(lookup, token)
+
+    assert lookup.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Ping metrics aggregation and access-log suppression
+# ---------------------------------------------------------------------------
+
+
+def _make_aggregator(emitted: list[tuple[str, float, dict[str, str]]]) -> FrpsPingMetricsAggregator:
+    return FrpsPingMetricsAggregator(
+        flush_interval_seconds=60.0,
+        emit=lambda name, value, tags: emitted.append((name, value, dict(tags))),
+    )
+
+
+def test_ping_metrics_aggregator_holds_counts_until_the_window_elapses() -> None:
+    emitted: list[tuple[str, float, dict[str, str]]] = []
+    aggregator = _make_aggregator(emitted)
+
+    aggregator.record_authorized_ping("relay-a1", 12.0, now=1000.0)
+    aggregator.record_authorized_ping("relay-a1", 8.0, now=1030.0)
+    assert emitted == []
+
+    aggregator.record_authorized_ping("relay-a1", 10.0, now=1060.0)
+
+    assert emitted == [
+        ("frps_ping_authorized", 3, {"relay": "relay-a1"}),
+        ("frps_ping_authorized_duration_ms_total", 30.0, {"relay": "relay-a1"}),
+    ]
+
+
+def test_ping_metrics_aggregator_emits_one_pair_per_relay() -> None:
+    emitted: list[tuple[str, float, dict[str, str]]] = []
+    aggregator = _make_aggregator(emitted)
+
+    aggregator.record_authorized_ping("relay-b2", 5.0, now=1000.0)
+    aggregator.record_authorized_ping("relay-a1", 7.0, now=1001.0)
+    aggregator.flush(now=1002.0)
+
+    assert emitted == [
+        ("frps_ping_authorized", 1, {"relay": "relay-a1"}),
+        ("frps_ping_authorized_duration_ms_total", 7.0, {"relay": "relay-a1"}),
+        ("frps_ping_authorized", 1, {"relay": "relay-b2"}),
+        ("frps_ping_authorized_duration_ms_total", 5.0, {"relay": "relay-b2"}),
+    ]
+
+
+def test_ping_metrics_aggregator_resets_between_windows() -> None:
+    emitted: list[tuple[str, float, dict[str, str]]] = []
+    aggregator = _make_aggregator(emitted)
+    aggregator.record_authorized_ping("relay-a1", 4.0, now=1000.0)
+    aggregator.flush(now=1001.0)
+
+    aggregator.record_authorized_ping("relay-a1", 6.0, now=1002.0)
+    aggregator.flush(now=1003.0)
+
+    assert emitted[2:] == [
+        ("frps_ping_authorized", 1, {"relay": "relay-a1"}),
+        ("frps_ping_authorized_duration_ms_total", 6.0, {"relay": "relay-a1"}),
+    ]
+
+
+def test_ping_metrics_aggregator_flush_of_an_empty_window_emits_nothing() -> None:
+    emitted: list[tuple[str, float, dict[str, str]]] = []
+    aggregator = _make_aggregator(emitted)
+
+    aggregator.flush(now=1000.0)
+
+    assert emitted == []
+
+
+def _make_log_capturing_share_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, Any, list[str]]:
+    """A share test client wrapped in the access-log middleware, capturing its lines."""
+    inner_client, backend = _make_share_test_client(monkeypatch)
+    del inner_client
+    lines: list[str] = []
+    wrapped = TestClient(RequestLoggingMiddleware(web_app, line_sink=lines.append), raise_server_exceptions=False)
+    return wrapped, backend, lines
+
+
+def test_successful_pings_emit_no_access_log_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend, lines = _make_log_capturing_share_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    lines.clear()
+
+    resp = client.post(
+        f"/frps/auth/{_RELAY_ID_US1}",
+        headers=_frps_auth_headers(_FRPS_SECRET),
+        json={"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
+    )
+
+    assert resp.json()["reject"] is False
+    assert lines == []
+
+
+# CLEANUP: remove this test and the two redaction tests below alongside the
+# legacy path-secret route in shares.py once the whole relay fleet is on the
+# header form and the secret is rotated.
+def test_successful_pings_emit_no_access_log_line_on_the_legacy_path_secret_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _backend, lines = _make_log_capturing_share_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    lines.clear()
+
+    resp = client.post(
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        json={"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
+    )
+
+    assert resp.json()["reject"] is False
+    assert lines == []
+
+
+def test_rejected_pings_log_a_line_with_the_secret_path_segment_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _backend, lines = _make_log_capturing_share_client(monkeypatch)
+    lines.clear()
+
+    resp = client.post(
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        json={"op": "Ping", "content": {"user": {"metas": {"relay_token": "not-a-real-token"}}}},
+    )
+
+    assert resp.json()["reject"] is True
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["path"] == f"/frps/auth/<plugin-secret>/{_RELAY_ID_US1}"
+    assert _FRPS_SECRET not in lines[0]
+
+
+def test_login_lines_are_logged_with_the_secret_path_segment_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _backend, lines = _make_log_capturing_share_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    lines.clear()
+
+    resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
+
+    assert resp.json()["reject"] is False
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["path"] == f"/frps/auth/<plugin-secret>/{_RELAY_ID_US1}"
+    assert _FRPS_SECRET not in lines[0]
+
+
+def test_app_shutdown_flushes_buffered_ping_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lifespan hook is what makes graceful container scaledown lose no counts."""
+    client, _backend, _lines = _make_log_capturing_share_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+
+    # The metrics logger installs a dedicated non-propagating handler at
+    # import; flip propagate so caplog-style capture sees the flush, then
+    # restore (same technique as metrics_test).
+    metrics_logger = logging.getLogger("imbue.modal_app_kit.metrics")
+    captured: list[str] = []
+
+    class _CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    handler = _CapturingHandler()
+    metrics_logger.addHandler(handler)
+    try:
+        with TestClient(web_app):
+            ping = client.post(
+                f"/frps/auth/{_RELAY_ID_US1}",
+                headers=_frps_auth_headers(_FRPS_SECRET),
+                json={"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
+            )
+            assert ping.json()["reject"] is False
+    finally:
+        metrics_logger.removeHandler(handler)
+
+    flushed = [line for line in captured if "frps_ping_authorized" in line]
+    assert len(flushed) >= 1
+    parsed = json.loads(flushed[0])
+    assert parsed["tags"]["relay"] == _RELAY_ID_US1
+
+
+# ---------------------------------------------------------------------------
+# Workspace-keyed shares (minted share labels, hashed user segment)
+# ---------------------------------------------------------------------------
+
+_STUB_WORKSPACE_ID = "agent-" + "c" * 32
+
+
+def test_create_share_with_workspace_id_mints_a_label_led_domain(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+
+    resp = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": _STUB_WORKSPACE_ID},
+        headers=_share_headers(),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    labels = str(body["workspace_domain"]).split(".")
+    # No internal id appears in the (CT-logged) domain: a random 32-hex share
+    # label leads, and the user segment is a one-way hash of the user id.
+    assert re.fullmatch(r"[a-f0-9]{32}", labels[0])
+    assert labels[0] != _SHARE_STUB_HOST_ID
+    assert labels[1] == hashlib.sha256(_SHARE_STUB_USER_ID.encode()).hexdigest()[:32]
+    assert labels[1] != _SHARE_STUB_USER_LABEL
+    assert body["workspace_id"] == _STUB_WORKSPACE_ID
+    share = backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL)
+    assert share is not None
+    assert share["workspace_id"] == _STUB_WORKSPACE_ID
+    assert share["share_label"] == labels[0]
+
+
+def test_reshare_keeps_the_minted_domain_and_rotates_the_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+    body = {"host_id": _SHARE_STUB_HOST_ID, "workspace_id": _STUB_WORKSPACE_ID}
+
+    first = client.post("/shares", json=body, headers=_share_headers()).json()
+    client.delete(f"/shares/{_SHARE_STUB_HOST_ID}", headers=_share_headers())
+    second = client.post("/shares", json=body, headers=_share_headers()).json()
+
+    # The label is minted once at the workspace's first share and persisted:
+    # unshare/re-share resurrects the same URL with a fresh token.
+    assert second["workspace_domain"] == first["workspace_domain"]
+    assert second["relay_token"] != first["relay_token"]
+
+
+def test_create_share_never_reuses_another_workspaces_row_on_a_recycled_machine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+    other_workspace_id = "agent-" + "d" * 32
+    # Workspace A shared while it ran on this machine; the machine has since
+    # been reused by workspace B (the host is a mutable machine attribute).
+    first = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": other_workspace_id},
+        headers=_share_headers(),
+    ).json()
+
+    second = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": _STUB_WORKSPACE_ID},
+        headers=_share_headers(),
+    ).json()
+
+    # B must never inherit A's identity: its share carries its own workspace
+    # id and a freshly minted domain, not A's (whose grants, bookmarks, and
+    # cookies all hang off A's domain).
+    assert second["workspace_id"] == _STUB_WORKSPACE_ID
+    assert second["workspace_domain"] != first["workspace_domain"]
+
+
+def test_create_share_backfills_workspace_id_onto_a_legacy_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+    # A share created by an old client (no workspace id): host-led domain.
+    legacy = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    assert legacy["workspace_domain"].startswith(f"{_SHARE_STUB_HOST_ID}.")
+
+    # A new client re-shares with the workspace id: the legacy domain is kept
+    # (grants/bookmarks/certs hang off it) and the row is backfilled.
+    reshared = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": _STUB_WORKSPACE_ID},
+        headers=_share_headers(),
+    ).json()
+    assert reshared["workspace_domain"] == legacy["workspace_domain"]
+    assert reshared["workspace_id"] == _STUB_WORKSPACE_ID
+    share = backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL)
+    assert share is not None
+    assert share["workspace_id"] == _STUB_WORKSPACE_ID
+    # The re-share then resolves through the workspace id even before any
+    # machine change: a create naming only the workspace's id finds the row.
+    by_workspace = backend.share_rows[-1]
+    assert by_workspace["workspace_id"] == _STUB_WORKSPACE_ID

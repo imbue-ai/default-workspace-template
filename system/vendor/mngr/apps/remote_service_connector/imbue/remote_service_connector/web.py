@@ -8,10 +8,13 @@ suite; everything else lives in the feature routers.
 import logging
 import os
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi import HTTPException
 
+import imbue.remote_service_connector.shares as shares_module
 from imbue.modal_app_kit.deploy import DEPLOY_ID_ENV_VAR
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.accounts import router as accounts_router
@@ -21,6 +24,7 @@ from imbue.remote_service_connector.errors import ReportingProbeError
 from imbue.remote_service_connector.hosts import router as hosts_router
 from imbue.remote_service_connector.http_api import handle_unexpected_exception
 from imbue.remote_service_connector.http_api import is_exception_detail_exposed
+from imbue.remote_service_connector.lease_records import router as lease_records_router
 from imbue.remote_service_connector.llm_keys import router as llm_keys_router
 from imbue.remote_service_connector.r2.buckets import router as r2_buckets_router
 from imbue.remote_service_connector.r2.grants import router as r2_grants_router
@@ -35,7 +39,19 @@ from imbue.remote_service_connector.workspaces import router as workspaces_route
 
 logger = logging.getLogger(__name__)
 
-web_app = FastAPI()
+
+# The ``async`` is mandated by Starlette's lifespan protocol (the same
+# protocol-shim exception as the ASGI middlewares' ``async __call__``).
+@asynccontextmanager
+async def _flush_metrics_on_shutdown(app: FastAPI) -> AsyncIterator[None]:
+    yield
+    # Modal container scaledown is a graceful ASGI shutdown, so the ping
+    # metrics buffered since the last periodic flush are emitted here instead
+    # of dying with the container.
+    shares_module.flush_frps_ping_metrics()
+
+
+web_app = FastAPI(lifespan=_flush_metrics_on_shutdown)
 # Exceptions no layer expected (neither the routes nor raise_as_http's
 # domain mapping) land here: reported to Bugsink at top priority, answered
 # with the generic internal_error body. See http_api.handle_unexpected_exception.
@@ -55,6 +71,7 @@ web_app.include_router(llm_keys_router)
 web_app.include_router(accounts_router)
 web_app.include_router(suspension_admin_router)
 web_app.include_router(retention_router)
+web_app.include_router(lease_records_router)
 
 
 # Public env var name the deployed connector reads at startup to expose

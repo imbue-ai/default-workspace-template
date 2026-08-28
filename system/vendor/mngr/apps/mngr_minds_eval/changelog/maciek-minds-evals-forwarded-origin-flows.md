@@ -1,0 +1,1 @@
+`eval-config-small.json` declares UI flows for the two app-building cases. `todo-app` has an add-complete-delete flow and a persistence flow (add a task, reload the page, the task is still there -- the standing countermeasure against a static mock); `landing-page` has a hero-and-signup flow. The harbor harness executes them against the delivered app after the conversation ends.

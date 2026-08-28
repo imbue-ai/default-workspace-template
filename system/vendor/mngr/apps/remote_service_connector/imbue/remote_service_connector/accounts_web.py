@@ -90,6 +90,10 @@ from supertokens_python.recipe.thirdparty.provider import ProviderInput
 from supertokens_python.recipe.thirdparty.providers.config_utils import find_and_create_provider_instance
 from supertokens_python.syncio import delete_user
 from supertokens_python.types import RecipeUserId
+from tenacity import retry
+from tenacity import retry_if_exception_type
+from tenacity import stop_after_attempt
+from tenacity import wait_fixed
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
@@ -108,6 +112,7 @@ from imbue.remote_service_connector.auth_proxy import build_session_tokens
 from imbue.remote_service_connector.auth_proxy import require_supertokens_configured
 from imbue.remote_service_connector.entitlements import SIGNUP_SELECTABLE_PLAN_NAMES
 from imbue.remote_service_connector.entitlements import create_entitlements_row_from_plan
+from imbue.remote_service_connector.errors import DownloadLinkError
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -172,30 +177,69 @@ _MAC_ARM64_PLATFORM: Final[str] = "mac-arm64"
 # Default per-platform installer links.
 _DEFAULT_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
     # For _MAC_ARM64_PLATFORM, this is the hardcoded fallback, used only when the live manifest is down.
-    _MAC_ARM64_PLATFORM: "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64",
+    _MAC_ARM64_PLATFORM: (
+        "https://download.todesktop.com/26032588hqdzk/Minds%200.4.2%20-%20Build%20260825un55i8ix7-arm64.dmg"
+    ),
     "source": "https://github.com/imbue-ai/mngr",
 }
 
 _STABLE_CHANNEL_MANIFEST_URL: Final[str] = "https://updates.imbueminds.com/stable-mac.yml"
 _STABLE_CHANNEL_CACHE_SECONDS: Final[float] = 60.0
 _STABLE_CHANNEL_FETCH_TIMEOUT_SECONDS: Final[float] = 2.0
+_STABLE_CHANNEL_FETCH_ATTEMPTS: Final[int] = 2
+_STABLE_CHANNEL_RETRY_SECONDS: Final[float] = 0.25
 _ARM64_DMG_SUFFIX: Final[str] = "-arm64.dmg"
+_MANIFEST_FETCH_FAILURES: Final[tuple[type[Exception], ...]] = (
+    # socket level errors
+    OSError,
+    # broken body
+    http.client.HTTPException,
+    UnicodeDecodeError,
+)
+_MANIFEST_PARSE_FAILURES: Final[tuple[type[Exception], ...]] = (
+    yaml.YAMLError,
+    # deeply nested input exhausts the stack instead of failing to parse
+    RecursionError,
+    # a scalar that resolves but will not convert (an out-of-range date, an int
+    # past the digit cap, !!bool on a non-bool) raises out of the constructors
+    # unwrapped
+    ValueError,
+    AttributeError,
+    KeyError,
+)
+
 # Where ToDesktop serves builds, and so the only host this route will redirect to.
 _TODESKTOP_DOWNLOAD_PREFIX: Final[str] = "https://download.todesktop.com/"
 
 
-def _arm64_dmg_urls(manifest: str) -> set[str]:
-    """Every arm64 .dmg an electron-updater channel manifest offers.
+@retry(
+    retry=retry_if_exception_type(_MANIFEST_FETCH_FAILURES),
+    stop=stop_after_attempt(_STABLE_CHANNEL_FETCH_ATTEMPTS),
+    wait=wait_fixed(_STABLE_CHANNEL_RETRY_SECONDS),
+    reraise=True,
+)
+def _fetch_stable_channel_manifest() -> str:
+    """Read the manifest, retrying a failed read.
 
-    Read out of ``files[].url``, which is what names an artifact -- a url under
-    some other key, now or later, is not one. A url that does not point at
-    ToDesktop is not a candidate either, so the route falls back rather than
-    sending anyone wherever the feed happened to say.
+    Capped at ``_STABLE_CHANNEL_FETCH_ATTEMPTS`` because the route is sync: each
+    attempt holds a worker thread the rest of the connector shares.
     """
-    document = yaml.safe_load(manifest)
+    # The feed's CDN answers 403 to `Python-urllib/<version>` by name.
+    request = urllib.request.Request(_STABLE_CHANNEL_MANIFEST_URL, headers={"User-Agent": "minds-connector"})
+    with urllib.request.urlopen(request, timeout=_STABLE_CHANNEL_FETCH_TIMEOUT_SECONDS) as response:
+        return response.read().decode()
+
+
+def _arm64_dmg_url_from(manifest: str) -> str:
+    """Extract exactly one arm64 .dmg url from the channel manifest."""
+    try:
+        document = yaml.safe_load(manifest)
+    except _MANIFEST_PARSE_FAILURES as exc:
+        raise DownloadLinkError("Malformed manifest: the parser could not turn it into a document") from exc
+
     entries = document.get("files") if isinstance(document, dict) else None
     if not isinstance(entries, list):
-        return set()
+        raise DownloadLinkError("Malformed manifest: it names no files list")
     urls = set()
     for entry in entries:
         if not isinstance(entry, dict):
@@ -203,37 +247,9 @@ def _arm64_dmg_urls(manifest: str) -> set[str]:
         url = str(entry.get("url", ""))
         if url.startswith(_TODESKTOP_DOWNLOAD_PREFIX) and url.endswith(_ARM64_DMG_SUFFIX):
             urls.add(url)
-    return urls
 
-
-def _fetch_stable_channel_manifest() -> str:
-    # The feed's CDN answers 403 to `Python-urllib/<version>` by name.
-    request = urllib.request.Request(_STABLE_CHANNEL_MANIFEST_URL, headers={"User-Agent": "minds-connector"})
-    with urllib.request.urlopen(request, timeout=_STABLE_CHANNEL_FETCH_TIMEOUT_SECONDS) as response:
-        return response.read().decode()
-
-
-def resolve_stable_mac_arm64_url(fetch: Callable[[], str] = _fetch_stable_channel_manifest) -> str | None:
-    """The arm64 .dmg the stable channel serves, or None to fall back.
-
-    Uncached; ``stable_mac_arm64_url`` is the entry point the route uses.
-    """
-    try:
-        manifest = fetch()
-    except (OSError, http.client.HTTPException, UnicodeDecodeError) as exc:
-        # OSError to capture socket level errors
-        logger.warning("Could not resolve the stable download: %s", exc)
-        return None
-    try:
-        urls = _arm64_dmg_urls(manifest)
-    except yaml.YAMLError as exc:
-        logger.warning("Could not resolve the stable download: unreadable manifest: %s", exc)
-        return None
     if len(urls) != 1:
-        logger.warning(
-            "Could not resolve the stable download: the manifest names %d distinct arm64 .dmg urls, not 1", len(urls)
-        )
-        return None
+        raise DownloadLinkError(f"Malformed manifest: expected 1 arm64 .dmg url, found {len(urls)}")
     return urls.pop()
 
 
@@ -241,13 +257,19 @@ def resolve_stable_mac_arm64_url(fetch: Callable[[], str] = _fetch_stable_channe
 # downloads at once reads the feed once rather than once per request.
 @cached(cache=TTLCache(maxsize=1, ttl=_STABLE_CHANNEL_CACHE_SECONDS), condition=threading.Condition())
 def stable_mac_arm64_url() -> str | None:
-    """What the route redirects to, re-read at most once per TTL.
+    """The arm64 .dmg the stable channel serves, or None to fall back.
 
     Each container caches independently, so a promotion reaches every one of
-    them within the TTL. A read that fails caches its None too, so an outage
-    costs one download the fetch timeout rather than every one.
+    them within the TTL. A read that fails is cached too, so an outage costs one
+    download the fetch rather than every one.
     """
-    return resolve_stable_mac_arm64_url()
+    try:
+        return _arm64_dmg_url_from(_fetch_stable_channel_manifest())
+    except (*_MANIFEST_FETCH_FAILURES, DownloadLinkError) as exc:
+        # error, not warning: the feed is expected to be readable, and while it
+        # is not, every download serves the fallback.
+        logger.error("Could not resolve the stable download link", exc_info=exc)
+        return None
 
 
 # Friendly aliases resolve server-side so marketing links stay stable if a
@@ -1085,8 +1107,7 @@ class PostgresDeviceAuthCodeStore:
     def insert_code(
         self, code_hash: str, user_id: str, code_challenge: str, redirect_uri: str, expires_at: datetime
     ) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     # Opportunistic cleanup keeps the table tiny without a cron.
@@ -1096,12 +1117,9 @@ class PostgresDeviceAuthCodeStore:
                         "VALUES (%s, %s, %s, %s, %s)",
                         (code_hash, user_id, code_challenge, redirect_uri, expires_at),
                     )
-        finally:
-            conn.close()
 
     def consume_code(self, code_hash: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -1111,8 +1129,6 @@ class PostgresDeviceAuthCodeStore:
                         (code_hash,),
                     )
                     row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {"user_id": row[0], "code_challenge": row[1], "redirect_uri": row[2]}

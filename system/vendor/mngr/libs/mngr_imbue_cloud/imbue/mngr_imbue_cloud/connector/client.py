@@ -80,6 +80,11 @@ from imbue.mngr_imbue_cloud.wire_types import WorkspaceStatus
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 KEY_OP_TIMEOUT_SECONDS = 90.0
+# Operator release: the connector deletes the stop artifacts and tears the
+# slice VM down synchronously before answering.
+ADMIN_RELEASE_TIMEOUT_SECONDS = 300.0
+# One sweep pass releases up to its per-pass budget of leases synchronously.
+ADMIN_SWEEP_TIMEOUT_SECONDS = 900.0
 
 # What a user should do when their connector predates the hosted accounts
 # surface (browser sign-in). Shared by the login command's up-front probe and
@@ -746,6 +751,23 @@ class ImbueCloudConnectorClient(MutableModel):
         body = self._check(response, ImbueCloudConnectorError)
         return WorkspaceStatus(str(body.get("status", "")))
 
+    def admin_release_workspace(self, admin_key: SecretStr, host_db_id: str) -> str:
+        """Operator release of one workspace regardless of owner (admin-key authenticated).
+
+        The owner's exact release chain -- artifacts deleted, slice VM
+        destroyed, record retired, row dropped -- returning ``released`` or
+        ``already_released``. Idempotent, so transport retries are safe.
+        """
+        response = self._send(
+            "POST",
+            self._url(f"/admin/workspaces/{host_db_id}/release"),
+            exc_cls=ImbueCloudConnectorError,
+            headers=self._bearer(admin_key),
+            timeout=ADMIN_RELEASE_TIMEOUT_SECONDS,
+        )
+        body = self._check(response, ImbueCloudConnectorError)
+        return str(body.get("status", ""))
+
     def admin_abandon_workspace(self, admin_key: SecretStr, host_db_id: str, reason: str) -> None:
         """Operator escape hatch: mark a workspace crashed (admin-key authenticated, idempotent)."""
         response = self._send(
@@ -853,6 +875,7 @@ class ImbueCloudConnectorClient(MutableModel):
         host_id: str,
         entry_label: str | None = None,
         preferred_region: str | None = None,
+        workspace_id: str | None = None,
     ) -> ShareInfo:
         """Enable sharing for one workspace; the returned relay token is only ever returned here.
 
@@ -866,6 +889,10 @@ class ImbueCloudConnectorClient(MutableModel):
         keeps an existing share's region.
         """
         body_json: dict[str, str] = {"host_id": host_id}
+        if workspace_id:
+            # Workspace-keyed sharing: the connector mints (and persists) the
+            # share label so the domain follows the workspace, not the machine.
+            body_json["workspace_id"] = workspace_id
         if entry_label:
             body_json["entry_label"] = entry_label
         if preferred_region:
@@ -1280,6 +1307,29 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         return self._check(response, ImbueCloudAccountError)
 
+    def admin_run_lease_record_sweep(
+        self, admin_api_key: SecretStr, dry_run: bool, grace_seconds: float | None
+    ) -> dict[str, Any]:
+        """Run one lease-vs-record sweep pass on demand (operator tool + deployment tests).
+
+        ``dry_run`` reports the verdicts and reap candidates without releasing
+        anything; ``grace_seconds`` overrides the tombstone grace window.
+        """
+        params: dict[str, str] = {}
+        if dry_run:
+            params["dry_run"] = "1"
+        if grace_seconds is not None:
+            params["grace_seconds"] = str(grace_seconds)
+        response = self._send(
+            "POST",
+            self._url("/admin/sweep/lease-records"),
+            exc_cls=ImbueCloudAccountError,
+            headers=self._bearer(admin_api_key),
+            params=params or None,
+            timeout=ADMIN_SWEEP_TIMEOUT_SECONDS,
+        )
+        return self._check(response, ImbueCloudAccountError)
+
     # ------------------------------------------------------------------
     # Workspace sync (records + account key bundle)
     # ------------------------------------------------------------------
@@ -1309,12 +1359,24 @@ class ImbueCloudConnectorClient(MutableModel):
         """
         response = self._send(
             "PUT",
-            self._url(f"/sync/records/{record.host_id}"),
+            self._url(f"/sync/records/by-workspace/{record.agent_id}"),
             exc_cls=ImbueCloudSyncError,
             headers=self._bearer(access_token),
             json=record.model_dump(mode="json"),
             timeout=self.timeout_seconds,
         )
+        if response.status_code == 404:
+            # CLEANUP: drop this fallback once every supported connector serves
+            # the workspace-keyed sync routes (a 404 here can only be a server
+            # from before they existed -- the route itself never 404s).
+            response = self._send(
+                "PUT",
+                self._url(f"/sync/records/{record.host_id}"),
+                exc_cls=ImbueCloudSyncError,
+                headers=self._bearer(access_token),
+                json=record.model_dump(mode="json"),
+                timeout=self.timeout_seconds,
+            )
         if response.status_code == 409:
             detail_message = _detail_from_response(response)
             detail = _detail_dict_from_response(response)
@@ -1332,7 +1394,11 @@ class ImbueCloudConnectorClient(MutableModel):
         return validate_wire(SyncWorkspaceRecord, body)
 
     def delete_sync_record(self, access_token: SecretStr, host_id: str) -> None:
-        """Remove one workspace record outright (disassociation; idempotent)."""
+        """Remove one workspace record by its current host id (disassociation; idempotent).
+
+        Refused with 409 ``lease_active`` while the workspace still holds a
+        pool lease; destroying the workspace is what releases the lease.
+        """
         response = self._send(
             "DELETE",
             self._url(f"/sync/records/{host_id}"),
@@ -1340,6 +1406,33 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
         )
+        self._check(response, ImbueCloudSyncError)
+
+    def delete_sync_record_by_workspace(self, access_token: SecretStr, workspace_id: str) -> None:
+        """Remove one workspace record by its workspace id (disassociation; idempotent).
+
+        Refused with 409 ``lease_active`` while the workspace still holds a
+        pool lease; destroying the workspace is what releases the lease.
+        Against a connector from before the workspace-keyed routes, resolves
+        the workspace's current host id through the record listing and deletes
+        by host instead.
+        """
+        response = self._send(
+            "DELETE",
+            self._url(f"/sync/records/by-workspace/{workspace_id}"),
+            exc_cls=ImbueCloudSyncError,
+            headers=self._bearer(access_token),
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code == 404:
+            # CLEANUP: drop this fallback once every supported connector serves
+            # the workspace-keyed sync routes. The listing round-trip is the
+            # only way to recover the host coordinate the old route needs.
+            for record in self.list_sync_records(access_token):
+                if record.agent_id == workspace_id:
+                    self.delete_sync_record(access_token, record.host_id)
+                    return
+            return
         self._check(response, ImbueCloudSyncError)
 
     def scrub_sync_secrets(self, access_token: SecretStr) -> int:

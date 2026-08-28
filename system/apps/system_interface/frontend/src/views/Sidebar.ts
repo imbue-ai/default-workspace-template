@@ -281,11 +281,12 @@ const SWITCHER_MENU_WIDTH = 256;
 // leading inset (RAIL_PADDING_CLASS) rather than a generic menu row's roomier
 // `px-3`, paired with the rail's own ICON_BOX_CLASS for the icon slot passed
 // alongside it (see switcherMenu). The switcher's card shares the rail card's
-// own left edge (its anchor is the header's bounding rect, which is the rail
-// card's), so matching the per-row inset too is what lands a project's icon
-// and label at the exact x the rail draws its own rows at -- a few px to the
-// left of where the generic menu padding put them, and the reason the
-// dropdown now reads as sitting on top of the rail rather than beside it.
+// own left border (its anchor takes its horizontals from the card itself --
+// see the header's onclick), so matching the per-row inset too is what lands
+// a project's icon and label at the exact x the rail draws its own rows at --
+// a few px to the left of where the generic menu padding put them, and the
+// reason the dropdown now reads as sitting on top of the rail rather than
+// beside it.
 const SWITCHER_ROW_CLASS =
   "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-1 pl-[5px] pr-3 text-left " +
   "hover:bg-fill-hover";
@@ -383,8 +384,9 @@ const SHORTCUT_ROWS: readonly { tabType: QuickAddTabType; label: string }[] = [
 const FILE_VIEWER_TOOLTIP = "A file viewer is coming to this workspace";
 
 // Copy for the rail's working shortcuts, as designed -- "A agent chat"
-// included, not a typo to silently correct.
-const SHORTCUT_TOOLTIPS: Record<QuickAddTabType, string> = {
+// included, not a typo to silently correct. Exported so the New Tab
+// launcher's tiles, which start the same four kinds, say the same thing.
+export const SHORTCUT_TOOLTIPS: Record<QuickAddTabType, string> = {
   chat: "A agent chat to work alongside you",
   files: "Browse and manage the files in your workspace",
   browser: "A browser that agents can control on your behalf",
@@ -461,7 +463,11 @@ export function placeMenu(
     if (left + size.width > viewport.width - MENU_MARGIN && toLeft >= MENU_MARGIN) left = toLeft;
   }
   return {
-    left: Math.max(MENU_MARGIN, Math.min(left, viewport.width - MENU_MARGIN - size.width)),
+    // The left floor never pushes a menu right of its own anchor: the switcher
+    // hangs off the rail card, which itself sits nearer the window edge than
+    // MENU_MARGIN, and clamping it inward would break the flush left edge the
+    // two share.
+    left: Math.max(Math.min(MENU_MARGIN, anchor.left), Math.min(left, viewport.width - MENU_MARGIN - size.width)),
     top: Math.max(MENU_MARGIN, Math.min(top, viewport.height - MENU_MARGIN - size.height)),
   };
 }
@@ -812,10 +818,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * against any open panel.
    */
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
-    // An instance row's menu carries the instance's own verbs, with the
-    // SERVICE's Share and Stop/Start trailing in their own group -- so the
-    // service stays reachable from any of its instances, Everything's rows
-    // included. A bare app row IS the service, and keeps the flat menu.
+    // An instance row's menu carries the instance's own verbs plus the
+    // SERVICE's Share and Stop/Start (via serviceGroup) -- so the service
+    // stays reachable from any of its instances, Everything's rows included.
+    // A bare app row IS the service, and uses the ordinary slots.
     const instanceServiceName =
       row.kind === "app" && instanceNameFromRef(row.ref) !== null ? serviceNameFromRef(row.ref) : null;
     const serviceApp =
@@ -891,7 +897,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     if (row.kind === "app") {
       // An instance row deletes like every other object -- confirm-gated,
       // leaves every project, the app keeps running. The service verbs sit in
-      // the menu's own service group (see railMenuActions).
+      // serviceGroup (see railMenuActions).
       if (instanceNameFromRef(row.ref) !== null) {
         return { label: `Delete ${row.label}`, run: () => attrs.onDeleteFromMachine(row) };
       }
@@ -1097,7 +1103,24 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             openMenu = null;
             return;
           }
-          openMenuAt({ kind: "switcher", anchor: anchorForEvent(event) });
+          // Horizontals from the rail card, verticals from the header: the
+          // header sits inside the card's border, so anchoring the switcher on
+          // its rect alone left the dropdown's border 1px right of the card's.
+          // Taking left/right from the card itself is what makes their borders
+          // flush.
+          const headerRect = anchorForEvent(event);
+          const card = (event.currentTarget as HTMLElement).closest(".machine-sidebar");
+          const cardRect = card === null ? headerRect : card.getBoundingClientRect();
+          openMenuAt({
+            kind: "switcher",
+            anchor: {
+              left: cardRect.left,
+              right: cardRect.right,
+              top: headerRect.top,
+              bottom: headerRect.bottom,
+              width: cardRect.width,
+            },
+          });
         },
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
@@ -2067,10 +2090,19 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 // rounded bottom corners and shadow run off the window edge.
                 // The dock itself stays flush at the bottom; this insets only
                 // the rail.
+                //
+                // `top-[1px]` lands the header row's visible top edge (1px of
+                // card border above the 34px header) exactly on the tab chips'
+                // visible top edge: the dock's tab strip starts --si-pane-inset
+                // (2px) below the shared canvas padding, and the chip the user
+                // sees is the 35px .dv-tab, not the 34px label box inside it.
+                // Flush at top-0 the header rode 1px above the chips; at
+                // top-[2px] (aligned to the label box) it rode 1px below.
+                //
                 // `select-none`: the expanded rail overlays the panels to its
                 // right, so a drag starting on a row must not select the
                 // labels it sweeps across.
-                "machine-sidebar absolute top-0 bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border select-none " +
+                "machine-sidebar absolute top-[1px] bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border select-none " +
                 `${RAIL_PADDING_CLASS} transition-[width] duration-150 ease-out ` +
                 (expanded ? EXPANDED_CLASS : COLLAPSED_CLASS),
             },
