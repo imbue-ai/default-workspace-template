@@ -791,8 +791,12 @@ def reap_orphaned_auth_processes(home: Path | None = None) -> int:
             os.kill(int(entry.name), signal.SIGKILL)
             reaped += 1
             logger.warning("Reaped orphaned sign-in process {} ({})", entry.name, " ".join(cmdline))
-        except (OSError, ValueError, UnicodeDecodeError):
-            # The process exited under us, or is not ours to read. Either way, not our problem.
+        except (OSError, UnicodeDecodeError):
+            # The process exited under us, or is not ours to read, or its cmdline is not text.
+            # None of those is a process we spawned. Deliberately NOT catching ValueError:
+            # `int()` cannot fail after the `isdigit` check above, and ValueError is
+            # JSONDecodeError's parent, so catching it here would silently swallow a class of
+            # corruption this file has no business hiding.
             continue
     return reaped
 
