@@ -16,14 +16,10 @@ ARG CODEX_VERSION=0.147.0
 ENV CODEX_VERSION=${CODEX_VERSION}
 
 # Pin Node.js (installed from a nodejs.org release tarball, not apt -- pi needs
-# Node 22+). Pin the Pi CLI. All passed to setup_system.sh; keep in sync
-# with the defaults there. Bump deliberately, not by accident.
+# Node 22+). Pin the Pi CLI and Playwright's CLI. All passed to setup_system.sh;
+# keep in sync with the defaults there. Bump deliberately, not by accident.
 ARG NODE_VERSION=22.23.2
 ENV NODE_VERSION=${NODE_VERSION}
-# Playwright's own CLI: the agent's entire browser-driving interface. The fleet
-# (agentic-browser-fleet) owns browsers; this drives them, over the gated CDP endpoint
-# the fleet prints. NOTE it is "@playwright/cli" -- the bare "playwright-cli" package on
-# npm is a deprecated stub.
 ARG PLAYWRIGHT_CLI_VERSION=0.1.18
 ENV PLAYWRIGHT_CLI_VERSION=${PLAYWRIGHT_CLI_VERSION}
 ARG PI_VERSION=0.83.0

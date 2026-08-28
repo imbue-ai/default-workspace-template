@@ -38,6 +38,7 @@ fi
 : "${CLAUDE_CODE_VERSION:=2.1.227}"
 : "${CODEX_VERSION:=0.147.0}"
 : "${PI_VERSION:=0.83.0}"
+: "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
 : "${OPENCODE_VERSION:=1.18.19}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
@@ -266,8 +267,14 @@ opencode --version >/dev/null
 # Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
 # in sync with agent_types.pi-coding.version in .mngr/settings.toml.
 npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
-npm install -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}"
 command -v pi >/dev/null
+
+# Playwright's own CLI (pinned; npm-installed): the interface agents drive the
+# agentic-browser-fleet's browsers with, over the gated CDP endpoint the fleet
+# prints. The package is "@playwright/cli"; the bare "playwright-cli" package on
+# npm is a deprecated stub.
+npm install -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}"
+command -v playwright-cli >/dev/null
 
 # Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
 # installer: the upstream one queries a "latest" manifest, and that manifest is the
