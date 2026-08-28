@@ -23,6 +23,7 @@ from imbue.system_interface.harnesses.lanes import Submit
 from imbue.system_interface.harnesses.lanes import account_label
 from imbue.system_interface.harnesses.lanes import get_lane
 from imbue.system_interface.harnesses.lanes import get_method
+from imbue.system_interface.harnesses.lanes import numbered_provider
 
 
 def test_lane_ids_are_unique() -> None:
@@ -135,9 +136,16 @@ def test_key_provider_ids_are_unique_within_a_lane() -> None:
 
 def test_account_label_numbers_from_the_second() -> None:
     assert account_label("Anthropic", HarnessType.CLAUDE, 1) == "Anthropic (Claude Code)"
-    assert account_label("Anthropic", HarnessType.CLAUDE, 2) == "Anthropic (Claude Code) 2"
+    assert account_label("Anthropic", HarnessType.CLAUDE, 2) == "Anthropic 2 (Claude Code)"
     # The key lane's display noun is the provider, not the words "API key".
     assert account_label("OpenRouter", HarnessType.PI_CODING, 1) == "OpenRouter (Pi)"
+
+
+def test_the_number_sits_on_the_provider_noun() -> None:
+    """It has to: the row draws the provider and the harness as two separate spans, so a
+    number trailing the composed string has nowhere to be drawn."""
+    assert numbered_provider("Anthropic", 1) == "Anthropic"
+    assert numbered_provider("Anthropic", 2) == "Anthropic 2"
 
 
 def test_lookups_raise_on_unknown_ids() -> None:

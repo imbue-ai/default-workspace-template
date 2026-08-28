@@ -60,7 +60,11 @@ export interface ProviderAccount {
   provider: string;
   harness_label: string;
   seq: number;
-  /** Already composed server-side ("Anthropic (Claude Code) 2") -- see accounts_endpoints. */
+  /** The name the user gave this account, or "" for the provider's own. `provider` already
+   *  reflects it -- this is here so the rename field can tell "never renamed" from "renamed
+   *  to what it was called anyway". */
+  name: string;
+  /** Already composed server-side ("Anthropic 2 (Claude Code)") -- see accounts_endpoints. */
   label: string;
 }
 
@@ -122,6 +126,14 @@ export async function loadAccounts(): Promise<void> {
   });
   accounts = body.accounts;
   mru = body.mru;
+}
+
+/** Name an account, or pass "" to go back to the provider's own name.
+ *
+ * Display only: nothing keys off the name, so this cannot strand a chat. */
+export async function renameAccount(accountId: string, name: string): Promise<void> {
+  await m.request({ method: "PATCH", url: apiUrl(`/api/accounts/${accountId}`), body: { name } });
+  await loadAccounts();
 }
 
 export async function deleteAccount(accountId: string): Promise<void> {

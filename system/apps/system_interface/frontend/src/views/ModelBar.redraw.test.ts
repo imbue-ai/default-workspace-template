@@ -38,12 +38,17 @@ vi.mock("../models/ModelSettings", () => ({
 const providerState: { accounts: unknown[] } = { accounts: [] };
 const chooserOpens: number[] = [];
 const deleted: string[] = [];
+const renamed: [string, string][] = [];
 vi.mock("../models/Providers", () => ({
   getAccounts: () => providerState.accounts,
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
   openProviderChooser: () => chooserOpens.push(1),
   deleteAccount: (id: string) => {
     deleted.push(id);
+    return Promise.resolve();
+  },
+  renameAccount: (id: string, name: string) => {
+    renamed.push([id, name]);
     return Promise.resolve();
   },
 }));
@@ -68,6 +73,7 @@ const ACCOUNT = {
   harness: "claude",
   provider: "Anthropic",
   harness_label: "Claude Code",
+  name: "",
   seq: 1,
   label: "Anthropic (Claude Code)",
 };
@@ -95,6 +101,7 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
   chooserOpens.length = 0;
   deleted.length = 0;
+  renamed.length = 0;
   agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
   catalogState.catalog = {
     switch_mode: "eager_then_reconcile",
@@ -134,6 +141,52 @@ describe("the card without a hand-cranked redraw", () => {
     // Armed means the SECOND press is the one that acts.
     await press('[aria-label="Confirm removing Anthropic"]');
     expect(deleted).toEqual(["acct-1"]);
+  });
+
+  it("turns a row into a rename field and files what was typed on blur", async () => {
+    await press(".model-selector-trigger");
+    await press('[data-card-row="providers"]');
+    await press('[aria-label="Rename Anthropic"]');
+
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Anthropic"]');
+    if (field === null) throw new Error("no rename field on screen");
+    // Seeded with what the row was SHOWING, not with the empty stored name.
+    expect(field.value).toBe("Anthropic");
+    // Every other control stands down while the field is up, so nothing destructive sits
+    // under a pointer that came to click into text.
+    expect(document.querySelector('[aria-label="Sign out of Anthropic"]')).toBeNull();
+
+    field.value = "Work";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    await settle();
+    expect(renamed).toEqual([["acct-1", "Work"]]);
+  });
+
+  it("discards a rename on Escape, and does not re-file it on the blur that follows", async () => {
+    await press(".model-selector-trigger");
+    await press('[data-card-row="providers"]');
+    await press('[aria-label="Rename Anthropic"]');
+
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Anthropic"]');
+    if (field === null) throw new Error("no rename field on screen");
+    field.value = "Work";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settle();
+    // Removing the field fires a native blur; without the guard that blur commits the very
+    // name Escape just threw away.
+    field.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    await settle();
+    expect(renamed).toEqual([]);
+  });
+
+  it("does not offer a rename on a row that is asking whether to delete itself", async () => {
+    await press(".model-selector-trigger");
+    await press('[data-card-row="providers"]');
+    await press('[aria-label="Sign out of Anthropic"]');
+    expect(document.body.textContent).toContain("Remove?");
+    expect(document.querySelector('[aria-label="Rename Anthropic"]')).toBeNull();
   });
 
   it("keeps Remove? armed while the pointer wanders the rest of the submenu", async () => {

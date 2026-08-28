@@ -1100,3 +1100,34 @@ for the URL, so a CLI that was failing -- and therefore never printed one -- sat
 30-second scrape timeout and then reported a timeout it had not had. The method's own failure
 lines are waited on alongside the trigger now, so agy's "Got an error: ..." ends it in the first
 second and reports the CLI's own words.
+
+# Two accounts on the same provider are told apart again
+
+The number that distinguishes them was there all along -- `account_label` composed
+"Anthropic (Claude Code) 2" and the tests checked it. Nothing drew it. Every surface that
+shows an account renders the provider and the harness as two separate spans at different
+sizes, so a number appended to the whole composed string had no span to live in and was
+dropped on the floor. Two Anthropic accounts read identically in every menu.
+
+The number now sits on the provider noun -- "Anthropic 2 (Claude Code)" -- which is the span
+that actually gets drawn, and the composed label follows the same rule so the two can never
+disagree again.
+
+# Accounts can be renamed
+
+A pencil on hover, third in the row's right-hand lane after the tick and the bin, so none of
+the three ever displaces another. Pressing it turns the row into a field seeded with the name
+it was showing; every other control stands down while it is up, so nothing destructive sits
+under a pointer that came to click into text. Enter or clicking away files it, Escape drops
+it, and emptying the field puts the provider's own name back -- the only way to undo a rename.
+
+Withheld while the bin is armed: "Remove?" is wide enough to reach under the pencil, and a row
+asking whether to delete itself should not also be offering to rename.
+
+The name is display only -- nothing keys off it, so a rename cannot strand a chat -- and
+duplicate names number themselves the same way duplicate providers do, so two accounts both
+called "work" read "work" and "work 2".
+
+Both provider menus now render their rows through one shared component. They had been two
+copies of the same list, and adding a third control to each by hand is how the copies start
+to drift.

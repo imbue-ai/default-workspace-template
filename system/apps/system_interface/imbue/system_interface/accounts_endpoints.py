@@ -11,6 +11,7 @@ starts a flow and the polls that advance it.
 from __future__ import annotations
 
 import json
+from typing import Final
 
 from flask import Flask
 from flask import Response
@@ -27,9 +28,14 @@ from imbue.system_interface.harnesses.lanes import LaneNotFoundError
 from imbue.system_interface.harnesses.lanes import PasteMethod
 from imbue.system_interface.harnesses.lanes import account_label
 from imbue.system_interface.harnesses.lanes import get_lane
+from imbue.system_interface.harnesses.lanes import numbered_provider
 from imbue.system_interface.models import ErrorResponse
 
 logger = _loguru_logger
+
+# Long enough for "Anthropic personal (work laptop)", short enough that no row can be made to
+# push a flyout wider than the card it hangs off.
+_MAX_ACCOUNT_NAME: Final = 40
 
 
 def _json_response(content: object, status_code: int = 200) -> Response:
@@ -108,21 +114,31 @@ def list_accounts() -> Response:
             # can still see and delete their other accounts.
             logger.warning("Account {} names unknown lane {}; skipping", account.id, account.lane)
             continue
-        key = (account.display, lane.harness.value)
+        # A renamed account is numbered under the name the user gave it, not the provider's.
+        # Numbering the hidden name would put a "2" on a row with nothing beside it, and drop
+        # the one that two rows reading "work" actually need.
+        display = account.name if account.name != "" else account.display
+        key = (display, lane.harness.value)
         shown[key] = shown.get(key, 0) + 1
+        # The number rides `provider` rather than `label` alone. Every surface that shows an
+        # account renders the provider and the harness as two spans at different sizes, so a
+        # number that lives only in the composed string is a number nothing displays -- which
+        # is exactly how two "Anthropic (Claude Code)" rows ended up indistinguishable.
+        numbered = numbered_provider(display, shown[key])
         rows.append(
             {
                 "id": account.id,
                 "lane": account.lane,
                 "harness": lane.harness.value,
-                # The composed label ("Groq (Pi) 2") for anything showing one string, and its
+                # The composed label ("Groq 2 (Pi)") for anything showing one string, and its
                 # parts for the combo card, which renders the provider and the harness at
                 # different sizes on one row. Composed here either way, so the numbering rule
                 # lives in one place.
-                "provider": account.display,
+                "provider": numbered,
                 "harness_label": HARNESS_LABEL[lane.harness],
                 "seq": shown[key],
-                "label": account_label(account.display, lane.harness, shown[key]),
+                "name": account.name,
+                "label": account_label(display, lane.harness, shown[key]),
             }
         )
     return _json_response({"accounts": rows, "mru": index.mru})
@@ -186,6 +202,19 @@ def delete_account(account_id: str) -> Response:
     return _json_response({"status": "ok"})
 
 
+def rename_account(account_id: str) -> Response:
+    """Set or clear an account's user-chosen name. Display only -- see `accounts.rename_account`."""
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name", ""))
+    if len(name) > _MAX_ACCOUNT_NAME:
+        return _error_response(f"a name can be at most {_MAX_ACCOUNT_NAME} characters")
+    try:
+        accounts.rename_account(account_id, name)
+    except accounts.AccountError as e:
+        return _error_response(str(e), status_code=404)
+    return _json_response({"status": "ok"})
+
+
 def register_routes(application: Flask) -> None:
     """Wire the chooser's endpoints onto the Flask application.
 
@@ -199,3 +228,4 @@ def register_routes(application: Flask) -> None:
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=submit_flow, methods=["POST"])
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=abort_flow, methods=["DELETE"])
     application.add_url_rule("/api/accounts/<account_id>", view_func=delete_account, methods=["DELETE"])
+    application.add_url_rule("/api/accounts/<account_id>", view_func=rename_account, methods=["PATCH"])

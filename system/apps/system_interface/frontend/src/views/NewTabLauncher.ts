@@ -37,13 +37,13 @@ import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLivenes
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
 import {
-  deleteAccount,
   getAccounts,
   getSelectedAccount,
   openProviderChooser,
   selectAccount,
 } from "../models/Providers";
 import { Portal } from "./portal";
+import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
@@ -402,13 +402,20 @@ export interface NewTabLauncherAttrs {
 function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => void }> {
   let open = false;
   let anchor: DOMRect | null = null;
-  // Which account's trash has been armed into "Remove?"; see the model card's copy of this.
-  let confirmingRemoval: string | null = null;
+  // The rows' own transient state -- an armed "Remove?", an open rename field. See the model
+  // card's copy of this.
+  const rowState = emptyAccountRowState();
+
+  function resetRows(): void {
+    rowState.confirmingRemoval = null;
+    rowState.renamingId = null;
+    rowState.renameDraft = "";
+  }
 
   function close(): void {
     open = false;
     anchor = null;
-    confirmingRemoval = null;
+    resetRows();
   }
 
   /** A click outside the trigger and the menu closes it -- and only a click. See the combo
@@ -466,7 +473,7 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
             }
             open = true;
             anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
-            confirmingRemoval = null;
+            resetRows();
           },
         },
         [
@@ -490,53 +497,18 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
             { class: css.FLYOUT_SCROLL },
             accounts.length === 0
               ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
-              : accounts.map((candidate) => {
-                  const isSelected = candidate.id === selected?.id;
-                  const arming = confirmingRemoval === candidate.id;
-                  return m("div", { key: candidate.id, class: css.ROW_WRAP }, [
-                    m(
-                      "button",
-                      {
-                        type: "button",
-                        class: isSelected ? css.FLYOUT_ROW_SELECTED : css.FLYOUT_ROW,
-                        onclick: (event: MouseEvent) => {
-                          event.stopPropagation();
-                          selectAccount(candidate.id);
-                          close();
-                        },
-                      },
-                      [
-                        m("span", { class: css.FLYOUT_ROW_NAME }, candidate.provider),
-                        m("span", { class: css.FLYOUT_ROW_SUB }, `(${candidate.harness_label})`),
-                      ],
-                    ),
-                    // Siblings of the row button, pinned to its right edge: the tick outermost
-                    // and the removal control just left of it, so neither ever moves.
-                    isSelected
-                      ? m("span", { class: css.FLYOUT_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
-                      : null,
-                    m(
-                      "button",
-                      {
-                        type: "button",
-                        class: arming ? css.ROW_TRASH_ARMED : css.ROW_TRASH,
-                        "aria-label": arming
-                          ? `Confirm removing ${candidate.provider}`
-                          : `Sign out of ${candidate.provider}`,
-                        onclick: (event: MouseEvent) => {
-                          event.stopPropagation();
-                          if (!arming) {
-                            confirmingRemoval = candidate.id;
-                            return;
-                          }
-                          confirmingRemoval = null;
-                          void deleteAccount(candidate.id);
-                        },
-                      },
-                      arming ? "Remove?" : m.trust(icon("trash", { size: 13 })),
-                    ),
-                  ]);
-                }),
+              : accounts.map((candidate) =>
+                  accountRow({
+                    row: candidate,
+                    isCurrent: candidate.id === selected?.id,
+                    rowClass: candidate.id === selected?.id ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
+                    onSelect: () => {
+                      selectAccount(candidate.id);
+                      close();
+                    },
+                    state: rowState,
+                  }),
+                ),
           ),
           m(
             "button",

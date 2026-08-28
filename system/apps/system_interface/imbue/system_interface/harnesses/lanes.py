@@ -515,7 +515,17 @@ def get_method(lane_id: str, method_id: str) -> PtyMethod | PasteMethod:
     raise LaneNotFoundError(f"lane {lane_id} has no method {method_id}")
 
 
+def numbered_provider(provider_display: str, seq: int) -> str:
+    """"Anthropic", and "Anthropic 2" for the second one.
+
+    The number sits on the provider noun rather than after the harness parenthetical because
+    every surface that shows an account renders those as two spans at different sizes. A
+    number trailing the whole composed string has no span to live in, so it was simply never
+    drawn -- which is how two "Anthropic (Claude Code)" rows ended up indistinguishable.
+    """
+    return provider_display if seq <= 1 else f"{provider_display} {seq}"
+
+
 def account_label(provider_display: str, harness: HarnessType, seq: int) -> str:
-    """"Anthropic (Claude Code)", and "Anthropic (Claude Code) 2" for the second one."""
-    suffix = "" if seq <= 1 else f" {seq}"
-    return f"{provider_display} ({HARNESS_LABEL[harness]}){suffix}"
+    """"Anthropic (Claude Code)", and "Anthropic 2 (Claude Code)" for the second one."""
+    return f"{numbered_provider(provider_display, seq)} ({HARNESS_LABEL[harness]})"

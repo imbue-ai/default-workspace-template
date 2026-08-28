@@ -87,7 +87,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
     (row,) = payload["accounts"]
     # `label` is the composed string for anything showing one; `provider` / `harness_label` /
     # `seq` are its parts, which the combo card renders at different sizes on one row.
-    assert set(row) == {"id", "lane", "harness", "provider", "harness_label", "seq", "label"}
+    assert set(row) == {"id", "lane", "harness", "provider", "harness_label", "seq", "name", "label"}
     assert row["provider"] == "Anthropic"
     assert row["harness_label"] == "Claude Code"
     assert row["label"] == "Anthropic (Claude Code)"
@@ -102,7 +102,56 @@ def test_accounts_are_numbered_by_what_the_label_says() -> None:
         commit_account(account_id, lane, "OpenRouter")
     with _client() as client:
         labels = [row["label"] for row in client.get("/api/accounts").get_json()["accounts"]]
-    assert labels == ["OpenRouter (Pi)", "OpenRouter (Pi) 2"]
+    assert labels == ["OpenRouter (Pi)", "OpenRouter 2 (Pi)"]
+
+
+def test_the_number_rides_the_provider_span_the_row_actually_draws() -> None:
+    """Every surface renders an account as two spans -- the provider, then the harness. A
+    number living only in the composed `label` is a number nothing draws, which is how two
+    "Anthropic (Claude Code)" rows ended up indistinguishable on screen."""
+    for _ in range(2):
+        account_id, _unused = mint_account_dir()
+        commit_account(account_id, "anthropic", "Anthropic")
+    with _client() as client:
+        rows = client.get("/api/accounts").get_json()["accounts"]
+    assert [row["provider"] for row in rows] == ["Anthropic", "Anthropic 2"]
+
+
+def test_a_renamed_account_is_shown_and_numbered_under_its_new_name() -> None:
+    first, _unused = mint_account_dir()
+    commit_account(first, "anthropic", "Anthropic")
+    second, _unused2 = mint_account_dir()
+    commit_account(second, "anthropic", "Anthropic")
+    with _client() as client:
+        assert client.patch(f"/api/accounts/{first}", json={"name": "Work"}).status_code == 200
+        rows = client.get("/api/accounts").get_json()["accounts"]
+    # The rename takes the first row out of the "Anthropic" run, so the one left is no longer
+    # a duplicate and loses the number it only had because of the row now called "Work".
+    assert [(row["provider"], row["name"]) for row in rows] == [("Work", "Work"), ("Anthropic", "")]
+
+
+def test_clearing_a_name_puts_the_provider_back() -> None:
+    account_id, _unused = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    with _client() as client:
+        client.patch(f"/api/accounts/{account_id}", json={"name": "Work"})
+        assert client.patch(f"/api/accounts/{account_id}", json={"name": ""}).status_code == 200
+        (row,) = client.get("/api/accounts").get_json()["accounts"]
+    assert row["provider"] == "Anthropic"
+
+
+def test_renaming_an_account_that_is_not_there_is_a_404() -> None:
+    with _client() as client:
+        response = client.patch("/api/accounts/nope", json={"name": "Work"})
+    assert response.status_code == 404
+
+
+def test_a_name_longer_than_a_row_can_show_is_refused() -> None:
+    account_id, _unused = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    with _client() as client:
+        response = client.patch(f"/api/accounts/{account_id}", json={"name": "x" * 200})
+    assert response.status_code == 400
 
 
 # ----- the status codes the client branches on ---------------------------------------------

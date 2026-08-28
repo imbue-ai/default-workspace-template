@@ -111,18 +111,23 @@ export const FLYOUT =
 /** `model-flyout-scroll` gives it a visible slim scrollbar; without one nothing says the
  *  list continues past the edge. */
 export const FLYOUT_SCROLL = "model-flyout-scroll min-h-0 flex-1 overflow-y-auto";
+const FLYOUT_ROW_SHAPE =
+  "flex w-full items-center gap-1.5 rounded-md px-1.5 text-left text-[13px] leading-[29px] transition-colors";
 /** `pr-14` reserves the right edge for the tick and the removal control beside it, so the row's
  *  text never reflows when the bin appears. */
-const FLYOUT_ROW_BASE =
-  "flex w-full items-center gap-1.5 rounded-md px-1.5 pr-14 text-left text-[13px] leading-[29px] " +
-  "transition-colors";
+const FLYOUT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-14`;
+/** An ACCOUNT row reserves one slot more, for the rename pencil. Its own base rather than a
+ *  wider shared one: model rows carry no pencil, and widening what they share would truncate
+ *  every model name by 24px to make room for a control that is never drawn on them. */
+const ACCOUNT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-20`;
 export const FLYOUT_ROW = `${FLYOUT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const FLYOUT_ROW_SELECTED = `${FLYOUT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
+export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
+export const ACCOUNT_ROW_SELECTED = `${ACCOUNT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
 /** A provider on a harness this chat cannot switch to. DIVERGES from the mockup's inert
  *  `text-tertiary cursor-default` only by keeping the hover highlight, so the row still feels
  *  live enough that the user waits for the tooltip that explains it. */
-export const FLYOUT_ROW_LOCKED =
-  `${FLYOUT_ROW_BASE} text-tertiary hover:bg-fill-hover cursor-default`;
+export const ACCOUNT_ROW_LOCKED = `${ACCOUNT_ROW_BASE} text-tertiary hover:bg-fill-hover cursor-default`;
 export const FLYOUT_ROW_NAME = "truncate";
 export const FLYOUT_ROW_SUB = "type-helper text-tertiary";
 /** Pinned to the row's right edge and never moved. A SIBLING of the row button rather than a
@@ -156,6 +161,19 @@ export const ROW_TRASH =
 /** Armed, it is wider than the bin it replaces, so it carries the row's own background: it may
  *  overhang the provider name rather than forcing every row to reserve space for a word that is
  *  almost never shown. */
+/** The rename control: a SIBLING of the row button like the bin, one slot further in at
+ *  `right-14`, so the pencil, the bin and the tick each keep their own lane and none of the
+ *  three ever moves. Hidden while the bin is armed -- "Remove?" is wide enough to sit under
+ *  the pencil, and a row asking whether to delete itself should not also offer to rename. */
+export const ROW_PENCIL =
+  "absolute right-14 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
+  "justify-center rounded text-tertiary transition-colors hover:text-primary group-hover/conn:inline-flex";
+/** The row mid-rename: the field takes the whole row, since every control is hidden while it
+ *  is up. Same metrics as the row it replaces, so nothing shifts on the way in or out. */
+export const ROW_RENAME_INPUT =
+  "w-full rounded-md border border-subtle bg-surface-primary px-1.5 text-[13px] leading-[27px] " +
+  "text-primary outline-none";
+
 export const ROW_TRASH_ARMED =
   "absolute right-8 top-1/2 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center " +
   "justify-center rounded bg-surface-primary px-1 type-helper text-important hover:bg-fill-hover";

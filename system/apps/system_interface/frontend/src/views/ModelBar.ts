@@ -22,13 +22,14 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
-import { accountForAgent, deleteAccount, getAccounts, openProviderChooser } from "../models/Providers";
+import { accountForAgent, getAccounts, openProviderChooser } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "./DockviewWorkspace";
 import { placeFlyout } from "./flyout-position";
 import { Portal } from "./portal";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
+import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
@@ -94,10 +95,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   let cardAnchor: DOMRect | null = null;
   let flyout: "model" | "providers" | null = null;
   let flyoutRowBottom = 0;
-  // Which account's trash has been armed into "Remove?". Cleared whenever the flyout or the
-  // card closes, so someone who clicked the bin to see what it did does not come back later
-  // to a primed one.
-  let confirmingRemoval: string | null = null;
+  // The provider rows' own transient state -- an armed "Remove?", an open rename field.
+  // Cleared whenever the flyout or the card closes, so someone who clicked the bin to see
+  // what it did does not come back later to a primed one.
+  const rowState = emptyAccountRowState();
   // The index the pointer is currently dragging the effort slider to. Held locally because
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
@@ -153,7 +154,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
    *  a redraw. Routing every change through here is what makes "until the submenu closes"
    *  true by construction rather than by remembering to clear it at four call sites. */
   function setFlyout(next: "model" | "providers" | null): void {
-    if (next !== flyout) confirmingRemoval = null;
+    if (next !== flyout) {
+      rowState.confirmingRemoval = null;
+      rowState.renamingId = null;
+      rowState.renameDraft = "";
+    }
     flyout = next;
   }
 
@@ -415,35 +420,23 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
           : rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
-              const arming = confirmingRemoval === row.id;
-              return m("div", { key: row.id, class: css.ROW_WRAP }, [
-                m(
-                  "button",
-                  {
-                    type: "button",
-                    class: isCurrent ? css.FLYOUT_ROW_SELECTED : css.FLYOUT_ROW_LOCKED,
-                    "aria-disabled": isCurrent ? undefined : "true",
-                    ...tooltipAttrs(isCurrent ? null : LOCKED_PROVIDER_TOOLTIP),
-                    onclick: () => {
-                      // Locked, and locked means locked: a chat's account is fixed at create
-                      // time. Opening a new chat on it is the reachable version of the wish,
-                      // but it is a different act, so it is the tooltip's offer -- not
-                      // something a click on a disabled-looking row does by surprise.
-                      if (isCurrent) setFlyout(null);
-                    },
-                  },
-                  [
-                    m("span", { class: css.FLYOUT_ROW_NAME }, row.provider),
-                    m("span", { class: css.FLYOUT_ROW_SUB }, `(${row.harness_label})`),
-                  ],
-                ),
-                // Both are siblings of the row button, pinned to its right edge: the tick
-                // outermost and the removal control just left of it, so neither ever moves.
-                isCurrent
-                  ? m("span", { class: css.FLYOUT_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
-                  : null,
-                removalControl(row, arming),
-              ]);
+              return accountRow({
+                row,
+                isCurrent,
+                rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW_LOCKED,
+                rowAttrs: {
+                  "aria-disabled": isCurrent ? undefined : "true",
+                  ...tooltipAttrs(isCurrent ? null : LOCKED_PROVIDER_TOOLTIP),
+                },
+                onSelect: () => {
+                  // Locked, and locked means locked: a chat's account is fixed at create
+                  // time. Opening a new chat on it is the reachable version of the wish,
+                  // but it is a different act, so it is the tooltip's offer -- not
+                  // something a click on a disabled-looking row does by surprise.
+                  if (isCurrent) setFlyout(null);
+                },
+                state: rowState,
+              });
             }),
       ),
       m(
@@ -459,30 +452,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         "+ Add a provider",
       ),
     ]);
-  }
-
-  /** The per-row sign-out control: a trash can that arms into "Remove?" rather than firing on
-   *  the first press. Signing out is not undoable, and the bin only appears on hover, so a
-   *  single click would too often be someone finding out what it was. */
-  function removalControl(row: ProviderAccount, arming: boolean): m.Vnode {
-    return m(
-      "button",
-      {
-        type: "button",
-        class: arming ? css.ROW_TRASH_ARMED : css.ROW_TRASH,
-        "aria-label": arming ? `Confirm removing ${row.provider}` : `Sign out of ${row.provider}`,
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
-          if (!arming) {
-            confirmingRemoval = row.id;
-            return;
-          }
-          confirmingRemoval = null;
-          void deleteAccount(row.id);
-        },
-      },
-      arming ? "Remove?" : m.trust(icon("trash", { size: 13 })),
-    );
   }
 
   /** The Model row's menu: the models this account can actually use. */
