@@ -516,12 +516,27 @@ def main():
                 state["scrollTop"] <= 1 and debug["extent"]["firstIndex"] == 0,
                 (state["scrollTop"], debug["extent"]),
             )
-            # A release a few px SHY of the track end is still "the very
-            # bottom": the fraction lands in the outer 1% band, not at exactly
-            # 1, and used to resolve to an event tens short of the tail.
+            # A release short of the track end is an honest linear position,
+            # NOT "the bottom": the exact-edge pin fires only when the pointer
+            # genuinely reaches the track end (fraction 1). Released 5% short,
+            # the landing must sit proportionally above the end -- within the
+            # final tenth of the content but clearly not snapped to the bottom.
             page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.5)
             page.mouse.down()
-            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] - 3, steps=8)
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.95, steps=8)
+            page.mouse.up()
+            page.wait_for_timeout(4000)
+            state = page.evaluate(GET_STATE)
+            gap_fraction = state["bottomGap"] / max(1, state["scrollHeight"])
+            check(
+                "H3 release short of the track end lands proportionally, not snapped",
+                0.01 < gap_fraction < 0.12,
+                (state["bottomGap"], round(gap_fraction, 4)),
+            )
+            # And finishing the drag to the end from there still pins exactly.
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.95)
+            page.mouse.down()
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] + 40, steps=4)
             page.mouse.up()
             for _ in range(40):
                 page.wait_for_timeout(250)
@@ -530,27 +545,15 @@ def main():
                 if state["bottomGap"] < 45 and debug["positionKind"] == "FOLLOW":
                     break
             check(
-                "H3 release just short of the track end still lands at the tail",
+                "H4 finishing the drag to the track end pins the exact tail",
                 state["bottomGap"] < 45
                 and debug["positionKind"] == "FOLLOW"
                 and debug["extent"]["endIndex"] >= debug["totalEvents"],
                 (state["bottomGap"], debug["positionKind"], debug["extent"]),
             )
-            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.5)
-            page.mouse.down()
-            page.mouse.move(el_box["x"], el_box["top"] + 3, steps=8)
-            page.mouse.up()
-            for _ in range(40):
-                page.wait_for_timeout(250)
-                state = page.evaluate(GET_STATE)
-                debug = page.evaluate("window.__scrollDebugState()")
-                if state["scrollTop"] <= 1 and debug["extent"]["firstIndex"] == 0:
-                    break
-            check(
-                "H4 release just short of the track top still lands at the beginning",
-                state["scrollTop"] <= 1 and debug["extent"]["firstIndex"] == 0,
-                (state["scrollTop"], debug["extent"]),
-            )
+            # H drags park the pointer below the track (over the composer);
+            # F's wheel events must land on the transcript.
+            page.mouse.move(600, 400)
 
         # --- F: persistence across reload ---
         page.mouse.wheel(0, 3000)

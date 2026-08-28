@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyEdgeMagnet,
   computeLiveMapping,
   computeThumb,
-  EDGE_MAGNET_TRACK_FRACTION,
   mappingPhysicalExtent,
   resolveTrackFraction,
   resolveTrackFractionToIndex,
@@ -181,49 +179,5 @@ describe("resolveTrackFractionToIndex", () => {
   it("clamps to the track ends", () => {
     expect(resolveTrackFractionToIndex(mapping, -1)).toBe(0);
     expect(resolveTrackFractionToIndex(mapping, 2)).toBe(999);
-  });
-});
-
-describe("applyEdgeMagnet", () => {
-  const band = EDGE_MAGNET_TRACK_FRACTION;
-
-  it("pins the exact endpoints and is the identity in the middle", () => {
-    expect(applyEdgeMagnet(0)).toBe(0);
-    expect(applyEdgeMagnet(1)).toBe(1);
-    expect(applyEdgeMagnet(0.5)).toBe(0.5);
-    expect(applyEdgeMagnet(band)).toBeCloseTo(band, 12);
-    expect(applyEdgeMagnet(1 - band)).toBeCloseTo(1 - band, 12);
-  });
-
-  it("is monotone non-decreasing across the whole track (no jumps)", () => {
-    let previous = -1;
-    for (let i = 0; i <= 2000; i++) {
-      const value = applyEdgeMagnet(i / 2000);
-      expect(value).toBeGreaterThanOrEqual(previous);
-      previous = value;
-    }
-  });
-
-  it("converges hard onto the ends: 1% from the end is within one event of it", () => {
-    // 4.6e-6 of the transcript remains at 99% -- under one event for any
-    // transcript below ~200k events, so a slightly-shy release reads as the end.
-    expect(1 - applyEdgeMagnet(0.99)).toBeLessThan(1 / 100_000);
-    expect(applyEdgeMagnet(0.01)).toBeLessThan(1 / 100_000);
-  });
-
-  it("keeps a smooth ramp through the band rather than a cliff", () => {
-    // Positions sampled through the outer band strictly increase toward the
-    // end, each strictly closer than the previous -- a convergence, not a snap.
-    const samples = [0.972, 0.978, 0.984, 0.99, 0.996];
-    const remaining = samples.map((f) => 1 - applyEdgeMagnet(f));
-    for (let i = 1; i < remaining.length; i++) {
-      expect(remaining[i]).toBeLessThan(remaining[i - 1]);
-      expect(remaining[i]).toBeGreaterThanOrEqual(0);
-    }
-  });
-
-  it("clamps out-of-range input", () => {
-    expect(applyEdgeMagnet(-0.5)).toBe(0);
-    expect(applyEdgeMagnet(1.5)).toBe(1);
   });
 });
