@@ -341,7 +341,7 @@ describe("NewTabLauncher", () => {
   it("offers the four Open new tiles, with the file viewer inert until an app backs it", () => {
     const tiles = tilesOf(render());
     // Each tile renders its glyph markup and then its label.
-    expect(tiles.map((tile) => texts(tile.children)[1])).toEqual(["New chat", "File viewer", "Browser", "Terminal"]);
+    expect(tiles.map((tile) => texts(tile.children)[1])).toEqual(["Chat", "File viewer", "Browser", "Terminal"]);
     expect(tiles[1].attrs?.["aria-disabled"]).toBe("true");
     expect(tiles[1].attrs?.onclick).toBeUndefined();
     expect(tiles[0].attrs?.onclick).toBeTypeOf("function");
@@ -367,7 +367,7 @@ describe("NewTabLauncher", () => {
     ];
     try {
       const labels = tilesOf(render()).map((tile) => texts(tile.children)[1]);
-      expect(labels).toEqual(["New chat", "File viewer", "Browser", "Terminal"]);
+      expect(labels).toEqual(["Chat", "File viewer", "Browser", "Terminal"]);
     } finally {
       providerState.accounts = [];
     }
@@ -523,7 +523,7 @@ describe("NewTabLauncher", () => {
 });
 
 describe("openNewTiles", () => {
-  const chatTarget = () => openNewTiles().find((tile) => tile.label === "New chat")?.target;
+  const chatTarget = () => openNewTiles().find((tile) => tile.label === "Chat")?.target;
 
   it("carries the selected account, and no harness", () => {
     // The server derives the harness from the account, so a target that named one could
