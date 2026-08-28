@@ -47,7 +47,6 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   // persistence key: a subagent tab always opens at the live tail.
   const engine = createTranscriptScrollEngine({
     isVisible: () => true,
-    isStreaming: () => isSubagentRunning(events),
     dataSource: {
       getRows: () => cachedRows,
       getWindowEventIds: () => events.map((event) => event.event_id),

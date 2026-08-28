@@ -124,13 +124,6 @@ export interface TranscriptScrollEngineConfig {
   dataSource: TranscriptScrollDataSource;
   /** Defaults to always-visible (SubagentView); ChatPanel feeds dockview's tab visibility. */
   isVisible?: () => boolean;
-  /**
-   * Whether the agent is mid-generation. While FOLLOW, the bottom pin only
-   * pulls the viewport down when this is true (or history is still filling in):
-   * an idle transcript relayout (expanding a block at the tail) must not drag
-   * the user. Defaults to true.
-   */
-  isStreaming?: () => boolean;
 }
 
 export interface TranscriptRenderPlan {
@@ -192,7 +185,6 @@ function isTraceEnabled(): boolean {
 export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfig): TranscriptScrollEngine {
   const dataSource = config.dataSource;
   const isVisible = config.isVisible ?? (() => true);
-  const isStreaming = config.isStreaming ?? (() => true);
 
   // --- state machines -------------------------------------------------------
   let positionState: ScrollPositionState = FOLLOW_STATE;
@@ -207,10 +199,6 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let cachedRenderVersion = -1;
   let heightsEpoch = 0;
   let geometryHeightsEpoch = -1;
-  // Append tracking for the FOLLOW pin: the loaded window's end index at the
-  // last rows refresh, and whether events appended since the last pin.
-  let lastSeenEndIndex = -1;
-  let hasUnfollowedAppend = false;
 
   // --- spacers --------------------------------------------------------------
   let estimatePxPerEvent = DEFAULT_SPACER_PX_PER_EVENT;
@@ -633,28 +621,6 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     return changed;
   }
 
-  /**
-   * Whether the FOLLOW pin has nothing left to chase: the agent is not
-   * generating, no fill or measurement is outstanding, the tail is fully
-   * loaded, and no append has landed since the last pin. While quiescent the
-   * pin must not pull the viewport down -- an idle transcript relayout
-   * (expanding a block at the tail) must not drag the user -- and the render
-   * plan windows around the CURRENT viewport rather than the theoretical
-   * bottom, so the two never disagree about where rows should be mounted.
-   */
-  function isFollowQuiescent(): boolean {
-    const totalEventsNow = dataSource.getTotalEvents();
-    return (
-      !isStreaming() &&
-      !fillInFlight &&
-      !hasUnfollowedAppend &&
-      spacerTopPx <= 0 &&
-      spacerBottomPx <= 0 &&
-      (geometry === null || geometry.unmeasuredCount === 0) &&
-      (totalEventsNow === null || extent().endIndex >= totalEventsNow)
-    );
-  }
-
   // --- geometry -------------------------------------------------------------
 
   function refreshGeometry(): void {
@@ -666,14 +632,6 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
     if (rowsChanged) {
       cachedWindowEventIds = dataSource.getWindowEventIds();
-      // New events past the previous end are an append the FOLLOW pin still
-      // owes a scroll for -- even if the agent already reads idle by the time
-      // the events land (a completed message often arrives as a late append).
-      const endIndexNow = dataSource.getFirstOffset() + cachedWindowEventIds.length;
-      if (lastSeenEndIndex !== -1 && endIndexNow > lastSeenEndIndex) {
-        hasUnfollowedAppend = true;
-      }
-      lastSeenEndIndex = endIndexNow;
       rowEventIndexes = buildRowEventIndexes(
         rows.map((row) => row.anchorEventId),
         cachedWindowEventIds,
@@ -967,13 +925,26 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   }
 
   function onPointerDown(): void {
-    // A drag over the transcript is likely a selection: defer the FOLLOW pin
-    // while the button is held, and treat edge autoscroll as its own source.
     cancelSmoothScroll();
     lastNativeInputAtMs = performance.now();
     lastInputSource = "selection-autoscroll";
     isPointerDown = true;
     markOtherInteraction();
+    // Pressing inside the transcript is an INTERACTION -- a selection, an
+    // expand click, a link -- and interacting and following are disjoint
+    // states: detach to USER_CONTROLLED at the current view so the pin never
+    // fights the user, and cancel any pending edge intent. Scrolling back to
+    // the bottom (wheel, scrollbar, send) is what re-enters FOLLOW.
+    pendingTailIntent = false;
+    pendingTopIntent = false;
+    if (positionState.kind === "FOLLOW" && geometry !== null) {
+      const anchor = anchorForUser();
+      if (anchor !== null) {
+        trace?.record("pointer-detach", {});
+        dispatchPosition({ kind: "USER_SCROLLED", source: "selection-autoscroll", anchor, atTail: false });
+        m.redraw();
+      }
+    }
   }
 
   // --- attach / detach ------------------------------------------------------
@@ -1125,19 +1096,14 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       if (isPointerDown || (pendingUserDeltaPx < -0.01 && !isPendingClamp)) {
         trace?.record("follow-yield", { pendingUserDeltaPx, isPointerDown });
       }
-      // FOLLOW means AT the bottom, always. The quiescence gate exists only
-      // so a relayout caused by the user's own in-transcript interaction (an
-      // expand click) does not fight them mid-gesture; a gap that opens with
-      // no recent native input -- a late image load, a font swap, a delayed
-      // re-measure of freshly mounted tail rows -- is re-pinned even when
-      // everything else is quiescent, otherwise a drag-to-bottom strands the
-      // viewport above the tail with nothing left to close the gap.
-      const isRecentUserInteraction = performance.now() - lastNativeInputAtMs < 500;
-      if (
-        !isPointerDown &&
-        (!isFollowQuiescent() || !isRecentUserInteraction) &&
-        (pendingUserDeltaPx >= -0.01 || isPendingClamp)
-      ) {
+      // FOLLOW means AT the bottom, unconditionally: any gap -- streaming
+      // growth, fills landing, a late image load, a delayed re-measure -- is
+      // pinned shut. There is no "quiescent" exception: an interaction that
+      // should hold the view (an expand click, a selection press) DETACHES to
+      // USER_CONTROLLED at pointerdown instead (see onPointerDown), so by the
+      // time the pin runs, a user engaging with content is no longer in
+      // FOLLOW. Interacting and following are disjoint states, not a timer.
+      if (!isPointerDown && (pendingUserDeltaPx >= -0.01 || isPendingClamp)) {
         const targetPx = element.scrollHeight - element.clientHeight;
         if (hasPendingUserScroll) {
           pendingEchoTops.push(element.scrollTop);
@@ -1159,7 +1125,6 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         } else {
           scrollTopPx = element.scrollTop;
         }
-        hasUnfollowedAppend = false;
       }
     } else if (geometry !== null) {
       let targetPx = scrollTopForAnchor(geometry, positionState.anchor, spacerTopPx);
@@ -1346,15 +1311,14 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         return { topPadPx: spacerTopPx, bottomPadPx: spacerBottomPx, startIndex: 0, endIndex: 0 };
       }
 
-      // Window the rows around where the viewport will be after positioning.
-      // In quiescent FOLLOW the pin does not move the viewport, so the window
-      // must track the CURRENT position -- windowing the theoretical bottom
-      // there mounts rows the viewport is not over, painting blank space.
+      // Window the rows around where the viewport will be after positioning:
+      // the theoretical bottom in FOLLOW (the pin puts the viewport there),
+      // the anchor's position otherwise.
       const viewport = viewportNow();
       let windowScrollTopPx = viewport.scrollTopPx;
-      if (positionState.kind === "FOLLOW" && !isFollowQuiescent()) {
+      if (positionState.kind === "FOLLOW") {
         windowScrollTopPx = Math.max(0, spacerTopPx + physicalHeightPx() + spacerBottomPx - viewport.heightPx);
-      } else if (positionState.kind !== "FOLLOW") {
+      } else {
         const anchoredTopPx = scrollTopForAnchor(geometry, positionState.anchor, spacerTopPx);
         if (anchoredTopPx !== null) {
           windowScrollTopPx = anchoredTopPx;
@@ -1462,8 +1426,6 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       pendingTailIntent = false;
       pendingTopIntent = false;
       cancelSmoothScroll();
-      lastSeenEndIndex = -1;
-      hasUnfollowedAppend = false;
       freezeRange = null;
       lastPositionedKey = "";
       lastScrollbarFraction = null;

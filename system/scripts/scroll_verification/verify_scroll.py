@@ -575,6 +575,34 @@ def main():
                 state["bottomGap"] < 2,
                 state["bottomGap"],
             )
+            # Clicking content at the tail is an INTERACTION: it must detach
+            # FOLLOW immediately, and content growth afterwards must NOT
+            # re-pin the view -- growth chases the bottom only in FOLLOW.
+            before = page.evaluate(GET_STATE)
+            page.mouse.click(600, 400)
+            page.wait_for_timeout(300)
+            debug = page.evaluate("window.__scrollDebugState()")
+            detached = debug["positionKind"] == "USER_CONTROLLED"
+            page.evaluate("""(() => {
+              const el = document.querySelector('.transcript-scroll');
+              const rows = Array.from(el.querySelectorAll('.message-list > [id]'));
+              const filler = document.createElement('div');
+              filler.style.height = '400px';
+              rows[rows.length - 1].appendChild(filler);
+            })()""")
+            page.wait_for_timeout(2000)
+            after = page.evaluate(GET_STATE)
+            held = (
+                before["topRow"] is not None
+                and after["topRow"] is not None
+                and before["topRow"]["id"] == after["topRow"]["id"]
+                and abs(after["topRow"]["top"] - before["topRow"]["top"]) <= 4
+            )
+            check(
+                "H6 a click detaches FOLLOW and later growth does not re-pin",
+                detached and held and after["bottomGap"] > 300,
+                (debug["positionKind"], before["topRow"], after["topRow"], round(after["bottomGap"])),
+            )
             # H drags park the pointer below the track (over the composer);
             # F's wheel events must land on the transcript.
             page.mouse.move(600, 400)
