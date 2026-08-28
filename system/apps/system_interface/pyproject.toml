@@ -13,6 +13,8 @@ dependencies = [
     "imbue-mngr-claude",
     "imbue-mngr-codex",
     "imbue-mngr-pi-coding",
+    "imbue-mngr-opencode",
+    "imbue-mngr-antigravity",
     "oom-priority",
     "pexpect>=4.9",
     "pluggy>=1.5",

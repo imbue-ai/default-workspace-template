@@ -11,7 +11,6 @@ export interface TitlebarContext {
   workspaceAnyId: string | null;
   activeTab: OptionsTab | null;
   pageLabel: string;
-  isBackShown: boolean;
 }
 
 const HOME_CONTEXT: TitlebarContext = {
@@ -19,7 +18,6 @@ const HOME_CONTEXT: TitlebarContext = {
   workspaceAnyId: null,
   activeTab: null,
   pageLabel: "",
-  isBackShown: false,
 };
 
 function workspaceContext(
@@ -31,17 +29,15 @@ function workspaceContext(
     workspaceAnyId: anyId,
     activeTab,
     pageLabel: "",
-    isBackShown: false,
   };
 }
 
-function pageContext(label: string, isBackShown: boolean): TitlebarContext {
+function pageContext(label: string): TitlebarContext {
   return {
     kind: "page",
     workspaceAnyId: null,
     activeTab: null,
     pageLabel: label,
-    isBackShown,
   };
 }
 
@@ -95,6 +91,15 @@ const APP_OVERLAY_PATHS = new Set([
 
 export function isAppOverlayPath(path: string): boolean {
   return APP_OVERLAY_PATHS.has(path);
+}
+
+/** Whether `path` is one of the raised titlebar strip's own routed surfaces:
+ * the docked options panel, the request popup, or Get help. (The bell's feed
+ * is the strip's fourth surface but is local state, not a route.) A strip
+ * switch REPLACES these routes' history entry rather than stacking on it, so
+ * the surface being left is never one Back away under the new one. */
+export function isTitlebarPopupRoutePath(path: string): boolean {
+  return isWorkspaceOverlayPath(path) || path === "/inbox" || path === "/help";
 }
 
 /** The workspace kept mounted behind an app-overlay modal: the ?workspace= that
@@ -156,29 +161,28 @@ export function classifyRoute(path: string, search = ""): TitlebarContext {
     const behind = overlayBehindWorkspaceId(path, search);
     return behind !== null
       ? workspaceContext(behind, null)
-      : pageContext("New machine", false);
+      : pageContext("New machine");
   }
   if (path === "/create" || path.startsWith("/creating/")) {
-    return pageContext("New machine", path === "/create");
+    return pageContext("New machine");
   }
   if (isAppOverlayPath(path)) {
     // Minds settings / Accounts / Get help / the request popup / the AI-keys
     // mint dialog float as a centered modal over the surface they were opened
     // from; the titlebar keeps that surface's context (the workspace behind Get
-    // help / the popup / AI-keys, else Home) rather than a back-button page.
+    // help / the popup / AI-keys, else Home) rather than a standalone page.
     const behind = overlayBehindWorkspaceId(path, search);
     return behind !== null ? workspaceContext(behind, null) : HOME_CONTEXT;
   }
   if (path === "/workspaces/destroyed")
-    return pageContext("Recently destroyed", true);
-  if (path === "/consent") return pageContext("Consent", false);
+    return pageContext("Recently destroyed");
+  if (path === "/consent") return pageContext("Consent");
   if (path === "/welcome") {
     return {
       kind: "welcome",
       workspaceAnyId: null,
       activeTab: null,
       pageLabel: "",
-      isBackShown: false,
     };
   }
   return HOME_CONTEXT;

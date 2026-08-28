@@ -5,6 +5,7 @@ from pathlib import Path
 from inline_snapshot import snapshot
 
 from imbue.analytics.injected.workspace_feeds import append_collections_audit_record
+from imbue.analytics.injected.workspace_feeds import missing_workspace_layout_detail
 from imbue.analytics.injected.workspace_feeds import read_client_activity_feed
 from imbue.analytics.injected.workspace_feeds import read_git_numstat_feed
 from imbue.analytics.injected.workspace_feeds import read_jsonl_tail
@@ -219,10 +220,27 @@ def test_workspace_state_snapshot_reports_presence_booleans_and_names_only(tmp_p
     assert record["agent_count"] == 1
     assert record["agent_type_counts"] == {"claude": 1}
     assert record["template_url"] == "https://github.com/imbue-ai/default-workspace-template.git"
+    # This fixture has an agents dir but no git repo at the workspace root.
+    assert record["is_workspace_repo_present"] is False
+    assert record["is_host_agents_dir_present"] is True
     # Secret material and unguessable labels never enter the record.
     serialized = json.dumps(record)
     assert "super-secret-token" not in serialized
     assert "terminal-x7k9q2w1" not in serialized
+
+
+def test_missing_workspace_layout_detail_fires_only_when_both_markers_are_absent(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    host_dir = tmp_path / ".mngr"
+
+    # Neither marker exists: the hollow-collection case.
+    hollow_detail = missing_workspace_layout_detail(workspace_root, host_dir)
+    assert hollow_detail is not None
+    assert str(workspace_root) in hollow_detail
+
+    # Either marker alone means the layout is (at least partially) present.
+    (host_dir / "agents").mkdir(parents=True)
+    assert missing_workspace_layout_detail(workspace_root, host_dir) is None
 
 
 def test_collections_audit_append_and_readme_seed(tmp_path: Path) -> None:

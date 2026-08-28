@@ -9,7 +9,7 @@ An agent that chats beautifully and ships nothing outscores one that ships a wor
 This spec enumerates the space of outcome verification (checking the delivered artifact itself), maps each option onto what harbor, rewardkit, and the Minds workspace already provide, and specifies the design: a per-case `expectations` block in the eval config, a trial-time evidence-collection phase in the driver, and a grade-time `outcome` scoring dimension (programmatic checks plus an LLM judge over the evidence).
 
 Audience: whoever implements this in `apps/minds_evals`, and reviewers deciding the open questions at the end.
-Related: [improvements.md](improvements.md) (backlog this interacts with, especially items 3, 4, and 9).
+Related: the `minds-eval` GitHub issues (scoring fidelity in #706, dev-loop items and the harness-axis note in #708).
 
 ## The topology constraint everything follows from
 
@@ -62,7 +62,7 @@ Run the test suite the agent wrote for its app (if it wrote one) inside the work
 - **Where it runs:** evidence collection.
   The expectations block may declare `test_commands` (explicit commands run in the workspace project dir via the existing `run_in_workspace` bridge, each with a timeout).
   The driver records each command, exit code, and a bounded output tail into the evidence manifest.
-  No auto-discovery of test suites in v1: guessing how to invoke arbitrary generated projects is exactly the kind of flaky heuristic the gates already suffer from (improvements item 4.5).
+  No auto-discovery of test suites in v1: guessing how to invoke arbitrary generated projects is exactly the kind of flaky heuristic the gates already suffer from (the stub-reply gate, #706).
 - **Needs:** `test_commands` in the schema, one collection step in the driver.
 
 ### Level 3: liveness probes (is the thing actually being served)
@@ -74,7 +74,7 @@ Check that the delivered app is running and answering, the way Minds itself defi
 - **Where it runs:** evidence collection.
   The workspace already has ground truth: apps built by the mind register their ports in `data/.state/apps.toml` (via `system/scripts/forward_port.py`) and run as supervised services.
   The driver captures, via `run_in_workspace`:
-  1. `data/.state/apps.toml` verbatim, and the derived list of **delivered** apps -- the "delivered is narrower than non-builtin" rules in the deliverable section apply here at capture, not just at scoring: boot-registered internal daemons (owner-exec on every workspace, vm-exec on cloud slices) and isolated-instance throwaway rows must not be probed, or every trial's judge-visible evidence carries a guaranteed-failed probe of something nobody shipped.
+  1. `data/.state/apps.toml` verbatim, and the derived list of **delivered** apps -- the "delivered is narrower than not pre-existing" rules in the deliverable section apply here at capture, not just at scoring: boot-registered internal daemons (owner-exec on every workspace, vm-exec on cloud slices) and isolated-instance throwaway rows must not be probed, or every trial's judge-visible evidence carries a guaranteed-failed probe of something nobody shipped.
   2. `supervisorctl status` output.
   3. For each **delivered** app, and for each explicitly declared `http` expectation: an in-workspace `curl` (status code, response-time, headers, body up to 256 KB) recorded under `verification/http/`.
 - **Important framing:** the harness probes the app **as delivered** -- it never starts the app itself.
@@ -97,14 +97,14 @@ Two sub-options were considered for who drives the browser:
   A host-side verification agent -- an LLM loop living in the driver, sibling to the decider -- executes each flow and emits a verdict plus evidence.
 
 Execution vehicle: a **box-side browser driving the app's forwarded origin** -- see [flow_executor_forwarded_origin.md](flow_executor_forwarded_origin.md) for the executor's own spec.
-The verification agent (the host-side LLM loop) is unchanged; what executes its actions is Playwright + Chromium in the box, navigating `https://<label>.host-<hex>.localhost:8421/` -- the exact URL the client's app tab iframes -- served by the `mngr forward` plugin over its per-host SSH tunnel.
+The verification agent (the host-side LLM loop) is unchanged; what executes its actions is Playwright + Chromium in the box, navigating `https://<label>.agent-<hex>.localhost:8431/` -- the app's own label on the workspace's agent-keyed origin -- served by the `mngr forward` plugin over its per-host SSH tunnel.
 Per-step evidence keeps the same shape: a textual DOM digest (Playwright's accessibility snapshot plus URL/title, standing in for the fleet's browser_use digest) recorded verbatim in the flow log, and a screenshot per step.
 
 Two target **surfaces** exist for a flow, both kept open in the schema (`surface` per flow, default `"origin"`):
 
 - `"origin"` (v1): navigate straight to the delivered app's forwarded origin -- the iframe's `src`.
-  Exercises the real product serving path (forward proxy, tunnel, label origin, origin-scoped cookies and auth) without the Minds chrome; simplest automation, one origin, no frame-piercing.
-- `"minds-ui"` (reserved): drive the full Minds client UI at the bare `host-<hex>.localhost` origin, reaching the app *as an embedded iframe* in the workspace chrome.
+  Exercises the real product serving path (forward proxy, tunnel, label origin, the proxy's family-scoped session cookie and auth) without the Minds chrome; simplest automation, one origin, no frame-piercing.
+- `"minds-ui"` (reserved): drive the full Minds client UI at the bare `agent-<hex>.localhost` origin, reaching the app *as an embedded iframe* in the workspace chrome.
   The only surface that can catch works-at-origin-but-broken-when-iframed failures and exercise minds-level login/tab UX; heavier automation (frame-piercing, chrome noise, a failure-attribution layer between chrome and app), deferred until an origin-surface run motivates it.
 
 **History: the v1 executor was the workspace's own browser fleet, and it was replaced deliberately.**
@@ -168,7 +168,7 @@ Two modes, for when the deferral ends:
   Rejected because the costs pile up: the snapshot deliberately excludes `node_modules`/`.venv`/`dist`/`build`, so every grade would reinstall dependencies (network in the verifier, minutes, and a whole class of new infra flakes that would masquerade as grading failures); the verifier image would have to become the multi-GB dwt system image instead of a slim rewardkit container; and regrade would stop being cheap and pure, which is the property the evidence/judgment split exists to protect.
   Revisit only if a code-quality (as opposed to delivery) eval is ever wanted.
 
-Fresh-env verification depends on `dwt_branch` being pinned to a SHA at generation time (improvements item 6.2); that work is being handled separately before this spec is implemented, so this spec treats the pin as given.
+Fresh-env verification depends on `dwt_branch` being pinned to a SHA at generation time; that pin has since landed, so this spec treats it as given.
 
 ## What the stack already provides (and where its edges are)
 
@@ -193,9 +193,15 @@ The accounting the design leans on, so nothing here is rebuilt.
 
 **The Minds workspace** (default-workspace-template):
 
-- `data/.state/apps.toml`: the authoritative registry of served apps and their ports/origins (written by `forward_port.py`); built-ins are the template's own apps (`system_interface`, `terminal`, `browser`, `files`, ...), which register through the same path a delivered app does.
-  A hand-maintained builtin list must track the template, and a live trial showed the cost of drift: `files`, missing from the list and in BACKOFF, was counted as the deliverable, so flows drove the forward proxy's own error page while the real app went unopened.
-  The robust derivation is the pinned template itself: the names under `system/apps/` in the prepared eval-base clone (already in the box) are exactly the builtins for that dwt SHA -- adopt that in place of the list (follow-up on the executor PR).
+- `data/.state/apps.toml`: the authoritative registry of served apps and their ports/origins (written by `forward_port.py`); the template's own apps (`system_interface`, `terminal`, `browser`, `files`, ...) register through the same path a delivered app does, so nothing about a row says which is which.
+  The **pre-existing** set -- what the workspace already served before the agent ran -- is measured from the workspace itself, not from a hand-maintained name list, which must track the template and had already drifted (`files`, missing from the list and in BACKOFF, was counted as the deliverable, so flows drove the forward proxy's own error page while the real app went unopened).
+  It is read from a single probe taken **before turn 1**, once the workspace has booted and been signed in -- the same `workspace_state` probe the evidence phase runs later -- which answers two questions at once, unioned, because neither is complete alone.
+  First, the **app registry as it actually stood**: a measurement rather than an inference, and the only source that sees a template app registering its port from inside the script its supervisord program runs -- `terminal` does exactly that (`system/apps/terminal/run_ttyd.sh`), as do `owner-exec` and the cloud slice's `vm-exec`, so a config-only derivation would score the workspace's own terminal as the case's deliverable.
+  Second, the **workspace's own `system/supervisord.conf`**, which the same probe cats and which at that moment is still the pinned template's file verbatim, parsed with the same `forward_port.py --name` join used for the live workspace's service health. This covers a template app whose service is slow enough that it had not registered its port yet: the file is on disk from the moment the workspace is cloned, whatever its services are doing.
+  Not the directory names under `system/apps/`: a registry name is a caller-supplied `--name` flag rather than a directory, and a multi-port app registers extra origin-label rows that correspond to no directory at all.
+  The union is correct for a dwt fork or branch that ships extra apps, which an eval config may point `dwt_repo`/`dwt_branch` at, and it costs nothing that internal daemons land in the set -- their rows are excluded as `internal` anyway.
+  The registry is the half that must be readable: without it the set is **unknown**, never empty, the delivered set is unresolvable, and every entry that depends on it is recorded `error` with reason `preexisting_unknown` rather than promoting every template app to a deliverable. A config section the probe came back without only means that half contributes nothing.
+  The manifest carries the resolved set as `preexisting_registrations` so a reader can see what was subtracted, and `null` when it is unknown -- the manifest itself keeps that apart from a workspace that served nothing, since a case with no expectations records no entry that would carry the `preexisting_unknown` reason.
 - supervisord: every app's serving process is a `[program:*]` entry; `supervisorctl status` is the process-level health truth.
 - The browser fleet (`agentic-browser-fleet`): real Chromium, direct-control CLI, screenshots -- the UI-automation vehicle, already in every workspace.
 - `system_interface` HTTP API on workspace-local port 8000, already bridged by `minds_bridge.workspace_curl_json`.
@@ -241,7 +247,7 @@ Field semantics:
   This is the piece the eval config has been missing: the task description *for the eval*, alongside the prompts *for the agent*.
 - `deliverable` (object, optional): what the case commissions, as a **kind with implied checks** rather than a hand-authored check list.
   `kind: "minds-app"` implies the standard shape of a Minds app: at least one *delivered* app registered in `apps.toml`, its supervisord service running, an HTTP 200 from each delivered app's root path, and the deliverable committed to the workspace repo (the bundle capture; whether commit *cleanliness* is scored is an open question below).
-  "Delivered" is narrower than "non-builtin", in two ways.
+  "Delivered" is narrower than "not pre-existing", in two ways.
   Rows the registry marks `internal = true` are machinery that forwards a port but has no page of its own to show (`forward_port.py`'s own wording; the owner-exec daemon is one and answers 404 on `/` by design) -- counting one both inflates the delivered count and fails the root-path probe on something nobody shipped, which a live trial demonstrated before the exclusion existed.
   And dwt's isolated-instance flow registers preview/throwaway rows through the same `forward_port.py` path -- detached processes with no `[program:*]` entry and no auto-cleanup -- so an abandoned throwaway would otherwise fail the agent on a row that was never the deliverable.
   Row names are caller-supplied flags, so pattern matching cannot identify them; the exclusion goes by the isolated-instance state records instead (`data/.state/isolated-instances/<name>/instance.json` names exactly the rows that runner registered, and `down` deletes the record along with the rows).
@@ -350,7 +356,7 @@ Failure semantics, extending finalize.py's existing rule:
 - Structural gates are untouched: outcome verification never rescues a trial whose conversation gates failed.
 
 Oracle: `solve.sh` fabricates a green bundle -- a manifest with every declared check `passed`, a plausible `apps.toml`, canned flow logs, no screenshots (the judge prompt states screenshots may be absent) -- so `-a oracle` exercises generation, the new artifacts, both new criteria files, and the composition.
-Note the existing caveat (improvements item 4.3) that oracle reward floors are judge-dependent and case-dependent; adding a dimension does not fix that, and the oracle threshold claim stays informal.
+Note the existing caveat (#706) that oracle reward floors are judge-dependent and case-dependent; adding a dimension does not fix that, and the oracle threshold claim stays informal.
 
 ## Validity and gaming concerns
 
@@ -370,7 +376,7 @@ Note the existing caveat (improvements item 4.3) that oracle reward floors are j
    This alone catches ships-nothing and never-started failures and gives the judge real evidence.
 2. **UI flows**: the host-side flow agent, flow evidence, `ui_flows_completed`, screenshots feeding the judge (Level 5 comes along for free). Shipped first over the workspace browser fleet (PR #523, live-proven), then re-executed over the forwarded origin (see the executor spec and phase 2b below).
 2b. **Executor swap to the forwarded origin** (PR stacked on #523, branch `maciek/minds-evals-forwarded-origin-flows`): box-side Playwright + `mngr forward`, deleting the fleet command layer and the eval's dependency on dwt #462's allowlist; details in [flow_executor_forwarded_origin.md](flow_executor_forwarded_origin.md).
-3. **Expectations for the existing dataset**: write `outcome` prose and flows for `todo-app` and `landing-page`; leave `greeting` bare; measure judge/flow stability across `-k` repeats before trusting the numbers (the same statistical discipline improvements item 2.5 demands).
+3. **Expectations for the existing dataset**: write `outcome` prose and flows for `todo-app` and `landing-page`; leave `greeting` bare; measure judge/flow stability across `-k` repeats before trusting the numbers (the same statistical discipline #623 demands of a scheduled run).
 4. **Fresh-environment boots** (`fresh_env: true`, Minds-mode) -- deferred at review, not scheduled: the quiescence wait, repo harvest, second-workspace create, and the `env`-tagged second capture pass. The Phase 1 bundle capture keeps this applicable retroactively to trials run in the meantime. Requires the dwt SHA pin to have landed (being handled separately).
 5. Later, as needed: `expect_body_regex` refinements, `image_similarity` against reference shots for pixel-stable cases, scripted-mode fresh boot if a code-quality (as opposed to delivery) eval is ever wanted.
 
@@ -386,4 +392,4 @@ Note the existing caveat (improvements item 4.3) that oracle reward floors are j
    If so, a `repo_clean` check joins the implied `minds-app` set and the bundle alone fully describes the deliverable; if not, uncommitted content lives only in the snapshot tarball and retroactive fresh-boots miss it.
    Parked deliberately; revisit once trials show how often the repo is clean at conversation end.
 
-Resolved since the first draft: `dwt_branch` SHA-pinning (improvements item 6.2) is being handled separately before this work starts, so the browser-fleet and fresh-env dependencies on a stable dwt are treated as given rather than open.
+Resolved since the first draft: `dwt_branch` SHA-pinning is being handled separately before this work starts, so the browser-fleet and fresh-env dependencies on a stable dwt are treated as given rather than open.

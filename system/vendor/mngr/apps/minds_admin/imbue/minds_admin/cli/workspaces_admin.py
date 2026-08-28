@@ -5,6 +5,9 @@ CRUD. ``abandon`` marks a workspace ``crashed`` -- the lever for a row whose
 box is permanently dead and whose stop/start transition would otherwise
 retry forever. The user recovers by restoring the workspace's backup into a
 fresh workspace; artifacts and any surviving VM are reclaimed at release.
+``release`` retires a confirmed-abandoned lease through the connector's own
+release chain (artifacts, slice VM, workspace record, row), in any lifecycle
+status -- the operator counterpart of the user's destroy.
 """
 
 import click
@@ -34,6 +37,23 @@ def admin_stop_workspace(host_db_id: str, connector_url: str | None, api_key: st
     """
     client = make_admin_connector_client(connector_url)
     emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id))
+
+
+@workspaces_admin.command(name="release")
+@click.argument("host_db_id")
+@paid_auth_options
+@handle_imbue_cloud_errors
+def admin_release_workspace(host_db_id: str, connector_url: str | None, api_key: str | None) -> None:
+    """Release the workspace HOST_DB_ID regardless of owner: artifacts, slice VM, workspace record, row.
+
+    The user's exact destroy chain run by the operator, for a lease its owner
+    confirmed abandoned (or can no longer reach). Works on any lifecycle status
+    -- including ``stopped`` rows, which ``pool destroy`` cannot claim -- and
+    is idempotent: an already-gone row reports ``already_released``.
+    """
+    client = make_admin_connector_client(connector_url)
+    status = client.admin_release_workspace(resolve_admin_api_key(api_key), host_db_id)
+    emit_json({"host_db_id": host_db_id, "status": status})
 
 
 @workspaces_admin.command(name="abandon")

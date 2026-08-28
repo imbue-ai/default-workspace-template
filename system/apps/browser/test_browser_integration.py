@@ -15,10 +15,11 @@ Three kinds:
 """
 
 import asyncio
+import contextlib
 import json
 import os
-import queue
 import socket
+import urllib.request
 import threading
 import time
 from typing import Any
@@ -27,6 +28,7 @@ import pytest
 import simple_websocket
 from browser import manifest, runner
 from browser import session as bsession
+from browser.cdp_proxy import ProxyServer
 from browser.wsgi import make_threaded_server
 from playwright.async_api import Error as PlaywrightError
 
@@ -42,6 +44,18 @@ _SKIP_REAL_CHROMIUM_IN_GH_CI = pytest.mark.skipif(
 )
 
 
+def _require_running(browser: "bsession.LiveBrowser") -> None:
+    """Skip when the background launch did not actually produce a live Chromium.
+
+    ``create()`` registers the browser and launches in a background task, so a launch
+    failure (no Fortress installed on this host) surfaces as a browser stuck in ``init``
+    rather than as a raised exception. Without this, such a test fails with a confusing
+    downstream assertion instead of skipping.
+    """
+    if not browser._is_running:
+        pytest.skip("Chromium did not come up in this environment (Fortress not installed?)")
+
+
 async def _create_running(manager: "bsession.BrowserSessionManager", name: str | None = None) -> "bsession.LiveBrowser":
     """create() now registers the browser ``init`` and launches Chromium in a background
     task; for the real-Chromium tests that immediately drive the returned session, await
@@ -55,186 +69,6 @@ async def _create_running(manager: "bsession.BrowserSessionManager", name: str |
 
 
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
-@pytest.mark.timeout(120)  # real-Chromium cold-start + nav exceeds the global 10s locally/offload
-def test_live_browser_tabs_track_browser_use(monkeypatch: pytest.MonkeyPatch) -> None:
-    # browser-use is the single source of truth for tabs now (no Playwright observer):
-    # the tab list, opening a tab, and switching a tab all go through browser-use, and
-    # `switch` moves the REAL working tab (state/click follow it). This verifies that
-    # behavioral spec against real Chromium. (Pixel streaming films a display via
-    # pixelflux and so can't be exercised headless -- it's verified on the /stream path
-    # and live, not here.)
-    monkeypatch.setenv("BROWSER_HEADLESS", "1")
-
-    async def go() -> None:
-        manager = bsession.BrowserSessionManager()
-        try:
-            session = await _create_running(manager)
-        except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-            pytest.skip(f"Chromium unavailable in this environment: {e}")
-        try:
-            # Navigate the starting tab, then open a second one via the fleet's tab verb.
-            assert (await session.act_navigate("A", "Alice", "https://example.com"))["ok"]
-            opened = await session.act_tab("A", "Alice", "new", None, "https://example.org")
-            assert opened["ok"]
-            await asyncio.sleep(1.0)
-            # The tab list is browser-use's real tabs, with the newly opened one active.
-            listed = await session.act_tab("A", "Alice", "list", None, None)
-            tabs = listed["tabs"]
-            assert len(tabs) == 2, f"expected two real tabs, got {tabs}"
-            active = [t for t in tabs if t["active"]]
-            assert len(active) == 1 and "example.org" in active[0]["url"]
-            # state runs on that same active tab (single tab brain).
-            state = await session.act_state("A", "Alice")
-            assert "example.org" in state["url"]
-            # Switch back to the first tab -> the REAL working tab moves, state follows.
-            # Use the EXACT CLI verb "switch" (fleet.py's tab action) so this guards the
-            # real agent path, not an alias -- a mismatch here silently no-ops the switch.
-            first_index = next(i for i, t in enumerate(tabs) if "example.com" in t["url"])
-            assert (await session.act_tab("A", "Alice", "switch", first_index, None))["ok"]
-            await asyncio.sleep(0.5)
-            switched = await session.act_state("A", "Alice")
-            assert "example.com" in switched["url"], f"switch did not move the real tab: {switched['url']}"
-        finally:
-            await manager.shutdown()
-
-    asyncio.run(go())
-
-
-class _FakeHistory:
-    def model_thoughts(self) -> list[Any]:
-        return [{"next_goal": "do the thing", "thinking": "reasoning"}]
-
-    def model_actions(self) -> list[Any]:
-        return [{"click": {"index": 1}}]
-
-    def final_result(self) -> str:
-        return "all done"
-
-
-class _FinishingAgent:
-    """browser_use.Agent stand-in whose run() steps once and returns."""
-
-    def __init__(self, **_kwargs: Any) -> None:
-        self.history = _FakeHistory()
-
-    async def run(self, on_step_end: Any = None, max_steps: int | None = None) -> _FakeHistory:
-        if on_step_end is not None:
-            await on_step_end(self)
-        return self.history
-
-    def stop(self) -> None:
-        pass
-
-
-class _BlockingAgent:
-    """browser_use.Agent stand-in whose run() steps once then blocks until stopped/cancelled."""
-
-    def __init__(self, **_kwargs: Any) -> None:
-        self.history = _FakeHistory()
-        self._stopped = False
-
-    async def run(self, on_step_end: Any = None, max_steps: int | None = None) -> _FakeHistory:
-        if on_step_end is not None:
-            await on_step_end(self)
-        for _ in range(10000):
-            if self._stopped:
-                break
-            await asyncio.sleep(0.01)
-        return self.history
-
-    def stop(self) -> None:
-        self._stopped = True
-
-
-def test_run_agent_streams_thinking_and_action_then_done(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(bsession, "Agent", _FinishingAgent)
-    monkeypatch.setattr(bsession, "ChatAnthropic", lambda **_kwargs: object())
-    browser = bsession.LiveBrowser(browser_id="b1")
-    browser._bu_session = object()  # type: ignore[assignment]
-    browser._lifecycle = "running"  # acquire/run_agent only apply once launched
-    events: list[dict[str, Any]] = []
-
-    async def on_event(event: dict[str, Any]) -> None:
-        events.append(event)
-
-    async def go() -> None:
-        # run_agent re-checks ownership under the control lock before driving, so the
-        # browser must be acquired by this agent first (mirrors the task endpoint).
-        await browser.acquire("A", "Alice")
-        await browser.run_agent("A", "do something", on_event)
-        kinds = [e["type"] for e in events]
-        assert "thinking" in kinds and "action" in kinds
-        assert events[-1]["type"] == "done" and events[-1]["result"] == "all done"
-
-    asyncio.run(go())
-
-
-def test_human_take_control_preempts_a_running_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(bsession, "Agent", _BlockingAgent)
-    monkeypatch.setattr(bsession, "ChatAnthropic", lambda **_kwargs: object())
-    browser = bsession.LiveBrowser(browser_id="b1")
-    browser._bu_session = object()  # type: ignore[assignment]
-    browser._lifecycle = "running"  # acquire/run_agent only apply once launched
-    events: list[dict[str, Any]] = []
-
-    async def on_event(event: dict[str, Any]) -> None:
-        events.append(event)
-
-    async def go() -> None:
-        await browser.acquire("A", "Alice")
-        run = asyncio.create_task(browser.run_agent("A", "do something", on_event))
-        for _ in range(200):
-            await asyncio.sleep(0.01)
-            if browser._agent is not None:
-                break
-        assert browser._agent is not None, "agent run never started"
-        await asyncio.wait_for(browser.take_control(), timeout=2.0)
-        try:
-            await run
-        except asyncio.CancelledError:
-            pass
-        assert any(e["type"] == "preempted" for e in events)
-        assert browser._state_tuple() == ("human", None, True)
-
-    asyncio.run(go())
-
-
-def test_run_agent_aborts_if_control_lost_before_it_starts(monkeypatch: pytest.MonkeyPatch) -> None:
-    # RACE 1: the task endpoint acquires in one submitted coroutine, then submits
-    # run_agent SEPARATELY. If a human take_control lands in that gap, run_agent must
-    # NOT drive the human's browser: it re-checks ownership under the control lock and
-    # aborts with `lost_control`, never constructing/registering the agent.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(bsession, "Agent", _BlockingAgent)
-    monkeypatch.setattr(bsession, "ChatAnthropic", lambda **_kwargs: object())
-    browser = bsession.LiveBrowser(browser_id="b1")
-    browser._bu_session = object()  # type: ignore[assignment]
-    browser._lifecycle = "running"  # acquire/run_agent only apply once launched
-    events: list[dict[str, Any]] = []
-
-    async def on_event(event: dict[str, Any]) -> None:
-        events.append(event)
-
-    async def go() -> None:
-        await browser.acquire("A", "Alice")
-        # The human preempts in the gap -- before run_agent is even scheduled.
-        await browser.take_control()
-        assert browser._state_tuple() == ("human", None, True)
-        await browser.run_agent("A", "do something", on_event)
-        # run_agent declined to drive: it emitted lost_control and registered no handle,
-        # so the human still owns a browser no agent ever touched.
-        assert events == [{"type": "lost_control", **browser._control_state()}]
-        assert browser._agent is None and browser._agent_task is None
-        assert browser._state_tuple() == ("human", None, True)
-
-    asyncio.run(go())
-
-
-# --- HTTP layer (Flask test client; run_agent stubbed) -----------------------
-
-
 async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
     """Stand-in for ``_wake_agent``: skip the real ``mngr message`` subprocess in tests."""
 
@@ -242,7 +76,6 @@ async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_nam
 def _install_fake_browser(monkeypatch: pytest.MonkeyPatch, browser_id: str = "alex-smith") -> bsession.LiveBrowser:
     runner.manager._browsers.clear()
     fake = bsession.LiveBrowser(browser_id=browser_id)
-    fake._bu_session = object()  # type: ignore[assignment]
     fake._lifecycle = "running"  # a fake stand-in for an already-launched browser
     runner.manager._browsers[browser_id] = fake
     return fake
@@ -253,127 +86,6 @@ def _stream_events(text: str) -> list[dict[str, Any]]:
     # idle so a dead client surfaces as a broken-pipe write; they aren't trace events.
     events = [json.loads(line) for line in text.splitlines() if line.strip()]
     return [e for e in events if e.get("type") != "ping"]
-
-
-def test_stream_acquire_heartbeats_while_parked_in_the_wait_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A client parked in the acquire FIFO wait-queue used to emit nothing after the first
-    # `waiting` line, so the WSGI server never wrote again and a client that dropped while
-    # waiting was never noticed -- its dead waiter held a slot for the holder's whole lease
-    # (finding [1]). Now _stream_acquire yields a `ping` on each idle poll: the forced write
-    # is what surfaces a dead client (as a broken-pipe GeneratorExit) in bounded time.
-    monkeypatch.setattr(runner, "_NDJSON_POLL_SECONDS", 0.02)
-    gen_queue: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
-    status_out: list[str] = []
-    release = threading.Event()
-
-    async def parked_acquire() -> str:
-        # Model an acquire parked in the wait queue: it does not resolve until the test
-        # releases it (mirroring the holder finally releasing the browser).
-        while not release.is_set():
-            await asyncio.sleep(0.01)
-        return "acquired"
-
-    acquire_task = runner.bridge.submit(parked_acquire())
-    gen = runner._stream_acquire(gen_queue, acquire_task, status_out)
-    pings = 0
-    lines: list[dict[str, Any]] = []
-    # Pull a few lines while the acquire is still parked -- each idle poll must yield a ping.
-    for _ in range(4):
-        line = json.loads(next(gen))
-        lines.append(line)
-        if line.get("type") == "ping":
-            pings += 1
-    assert pings >= 1, "a parked acquire must heartbeat so a dropped waiter is detected"
-    # Let the acquire resolve and drain the generator; the final status is recorded.
-    release.set()
-    for _ in gen:
-        pass
-    assert status_out == ["acquired"]
-
-
-def test_acquire_phase_disconnect_releases_a_just_landed_grant(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Regression for the leak fix [1]'s heartbeat could introduce: if a client drops in the
-    # same ~0.5s poll window a grant lands on the loop, the GeneratorExit cancel hits an
-    # already-done acquire task (the wakeup beat the cancel), so the just-granted lease would
-    # be orphaned -- held until the 90s idle sweep, blocking everyone queued behind it --
-    # unless the acquire-phase disconnect path ALSO releases. Drive hold_browser's stream,
-    # drop the client while parked in the acquire phase, and assert release ran.
-    monkeypatch.setattr(runner, "_NDJSON_POLL_SECONDS", 0.02)
-    _install_fake_browser(monkeypatch)
-    park = threading.Event()
-    released: list[str] = []
-
-    async def parked_acquire(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None, **_kw: Any) -> str:
-        while not park.is_set():  # park like a FIFO waiter; the client drops before it resolves
-            await asyncio.sleep(0.01)
-        return "acquired"
-
-    async def recording_release(self: bsession.LiveBrowser, agent_id: str) -> bool:
-        released.append(agent_id)
-        return True
-
-    monkeypatch.setattr(bsession.LiveBrowser, "acquire", parked_acquire)
-    monkeypatch.setattr(bsession.LiveBrowser, "release", recording_release)
-
-    with runner.application.test_request_context(
-        "/browsers/alex-smith/lock", method="POST", json={},
-        headers={"X-Mngr-Agent-Id": "A", "X-Mngr-Agent-Name": "Alice"},
-    ):
-        resp = runner.hold_browser("alex-smith")
-        stream = resp.response  # the WSGI generator; pull a couple of pings, then drop it
-        for _ in range(3):
-            next(stream)
-        stream.close()  # raises GeneratorExit inside stream() -> the acquire-phase except path
-
-    assert released == ["A"], "a client drop during the acquire phase must release the lease (CAS-safe no-op otherwise)"
-
-
-def test_http_task_streams_trace_and_releases(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = _install_fake_browser(monkeypatch)
-
-    async def fake_run_agent(self: bsession.LiveBrowser, agent_id: str, prompt: str, on_event: Any) -> None:
-        await on_event({"type": "thinking", "text": "planning"})
-        await on_event({"type": "action", "text": "click"})
-        await on_event({"type": "done", "result": "ok"})
-
-    monkeypatch.setattr(bsession.LiveBrowser, "run_agent", fake_run_agent)
-    client = runner.application.test_client()
-    resp = client.post(
-        "/browsers/alex-smith/task",
-        json={"prompt": "do it"},
-        headers={"X-Mngr-Agent-Id": "A", "X-Mngr-Agent-Name": "Alice"},
-    )
-    assert resp.status_code == 200
-    kinds = [e["type"] for e in _stream_events(resp.get_data(as_text=True))]
-    assert kinds[0] == "acquired"
-    assert "thinking" in kinds and "action" in kinds and "done" in kinds
-    # The connection is the lease: once the task finishes, the browser is released.
-    assert fake._state_tuple() == ("human", None, False)
-
-
-def test_http_task_without_agent_id_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_browser(monkeypatch)
-    client = runner.application.test_client()
-    resp = client.post("/browsers/alex-smith/task", json={"prompt": "do it"})
-    assert resp.status_code == 400
-
-
-def test_http_task_on_human_pinned_browser_reports_busy(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = _install_fake_browser(monkeypatch)
-
-    async def pin() -> None:
-        await fake.acquire("X", "X")
-        await fake.take_control()  # human now holds it (pinned)
-
-    asyncio.run(pin())
-    client = runner.application.test_client()
-    resp = client.post(
-        "/browsers/alex-smith/task",
-        json={"prompt": "do it", "wait": False},
-        headers={"X-Mngr-Agent-Id": "A", "X-Mngr-Agent-Name": "Alice"},
-    )
-    kinds = [e["type"] for e in _stream_events(resp.get_data(as_text=True))]
-    assert kinds == ["busy_human"]
 
 
 def test_http_list_browsers_shows_fleet(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -527,90 +239,18 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
 
 
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
-@pytest.mark.timeout(120)
-def test_direct_control_state_click_is_keyless_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Direct control needs NO Anthropic key (the agent does its own reasoning; the
-    # browser commands are deterministic). Drive a real page: navigate -> state ->
-    # click the link -> the page changes -> re-state, all with no key set.
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
-
-    async def go() -> None:
-        manager = bsession.BrowserSessionManager()
-        try:
-            browser = await _create_running(manager)
-        except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-            pytest.skip(f"Chromium unavailable in this environment: {e}")
-        try:
-            nav = await browser.act_navigate("A", "Alice", "https://example.com")
-            assert nav["ok"]
-            # The first command newly takes the browser (the client uses this to
-            # surface the pane once); later commands don't re-trigger it.
-            assert nav["newly_acquired"] is True
-            state = await browser.act_state("A", "Alice")
-            assert state["ok"] and "example" in state["url"].lower()
-            assert state.get("newly_acquired") is False
-            assert browser._selector_map, "state should expose numbered elements"
-            assert "controller" in state and state["controller"] == "agent"
-            index = sorted(browser._selector_map)[0]
-            assert (await browser.act_click("A", "Alice", index))["ok"]
-            # The click navigated, so the cached indices were invalidated; re-state works.
-            assert browser._selector_map == {}
-            assert (await browser.act_state("A", "Alice"))["ok"]
-            # Ownership holds for direct commands too: another agent is refused.
-            other = await browser.act_state("B", "Bob")
-            assert other["ok"] is False and other["status"] == "busy_agent"
-        finally:
-            await manager.shutdown()
-
-    asyncio.run(go())
-
-
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
-@pytest.mark.timeout(120)
-def test_browser_crash_is_detected_and_reported_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Kill the live Chromium out from under the session (simulating an OS/OOM kill,
-    # NOT our own close()), and confirm the daemon detects the crash and reports it
-    # cleanly to the agent instead of leaking a raw CDP exception.
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-    async def go() -> None:
-        manager = bsession.BrowserSessionManager()
-        try:
-            browser = await _create_running(manager)
-        except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-            pytest.skip(f"Chromium unavailable in this environment: {e}")
-        try:
-            assert (await browser.act_state("A", "Alice"))["ok"]  # healthy first
-            # Kill Chromium directly (this is NOT close(), so _closed stays False ->
-            # it looks exactly like an external crash).
-            await browser._bu_session.kill()
-            # The next command must report "crashed" -- via the disconnected event if
-            # it already fired, otherwise via the lazy is_connected() check on failure.
-            result = await browser.act_state("A", "Alice")
-            assert result["ok"] is False and result["status"] == "crashed"
-            assert browser._crashed is True
-            assert (await browser.describe())["crashed"] is True
-        finally:
-            await manager.shutdown()
-
-    asyncio.run(go())
-
-
-# --- persistence: HTTP init gate + close-forgets-profile (fake browser) -------
-
-
-def test_init_gate_blocks_drive_verbs_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
-    # While the fleet is still restoring, the DRIVE verbs (click/task/...) return 503
-    # "initializing", but read-only routes (ls/state/health) AND create stay open --
-    # the locked "init must not block create" decision (a create queues behind the
-    # serialized restore on the manager lock).
+def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
+    # While the fleet is still restoring, taking ownership returns 503 "initializing", but
+    # read-only routes (ls/health) AND create stay open -- the locked "init must not block
+    # create" decision (a create queues behind the serialized restore on the manager lock).
     _install_fake_browser(monkeypatch)
     runner._init_done.clear()  # simulate "still restoring"
     client = runner.application.test_client()
-    # A drive verb on an existing browser is still gated during init.
-    click = client.post("/browsers/alex-smith/click", json={"index": 0}, headers={"X-Mngr-Agent-Id": "A"})
-    assert click.status_code == 503 and click.get_json()["status"] == "initializing"
+    # Acquiring an existing browser is gated during init. This is the FIRST thing an agent
+    # does, so it is where the retryable state has to surface.
+    acq = client.post("/browsers/alex-smith/acquire", json={}, headers={"X-Mngr-Agent-Id": "A"})
+    assert acq.status_code == 503 and acq.get_json()["status"] == "initializing"
     # Read-only routes stay open.
     assert client.get("/browsers").status_code == 200
     assert client.get("/health").get_json()["initializing"] is True
@@ -649,7 +289,6 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
     profile = bsession._profile_dir("riley-jones")
     profile.mkdir(parents=True)
     fake = _install_fake_browser(monkeypatch, browser_id="riley-jones")
-    fake._bu_session = object()  # type: ignore[assignment]
 
     async def fake_close(self: bsession.LiveBrowser) -> None:  # avoid real Chromium teardown
         return None
@@ -664,6 +303,75 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
 
 
 # --- persistence: the core promise, against real Chromium --------------------
+
+
+@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.timeout(120)
+def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The whole handover in one pass against a real browser: Chromium launches without
+    # browser-use, the fleet's own CDP client sees the tab, a capability token is minted,
+    # and the attach URL an agent would hand to `playwright-cli` is well-formed.
+    async def go() -> None:
+        manager = bsession.BrowserSessionManager()
+        proxy = ProxyServer(port=0)
+        await proxy.start()
+        bsession.set_proxy_server(proxy)
+        try:
+            browser = await _create_running(manager)
+        except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+            await proxy.stop()
+            bsession.set_proxy_server(None)
+            pytest.skip(f"Chromium unavailable in this environment: {e}")
+        try:
+            _require_running(browser)
+            # The fleet's own channel works and reports exactly the real pages -- the
+            # same filter playwright-cli's `tab-list` applies, so `ls` cannot disagree.
+            tabs = await browser._tab_list()
+            assert tabs and all(not t["url"].startswith(("chrome://", "chrome-extension://")) for t in tabs)
+            # A token exists and the attach URL is shaped for `playwright-cli attach --cdp=`.
+            assert browser._token
+            assert browser.attach_url.startswith("http://127.0.0.1:")
+            assert browser.attach_url.endswith(f"/{browser.browser_id}/{browser._token}")
+            # Discovery is rewritten: the response must never leak Chromium's real port.
+            assert browser._chrome is not None
+            real_port = str(browser._chrome.port)
+            body = urllib.request.urlopen(f"{browser.attach_url}/json/version/", timeout=5).read().decode()
+            assert real_port not in body, "the proxy leaked the upstream debug port"
+            assert json.loads(body)["webSocketDebuggerUrl"].startswith("ws://127.0.0.1:")
+        finally:
+            await manager.shutdown()
+            await proxy.stop()
+            bsession.set_proxy_server(None)
+
+    asyncio.run(go())
+
+
+@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.timeout(120)
+def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
+    # The lifecycle hole this design had to close: crash detection must NOT depend on an
+    # agent being attached. Kill Chromium with no proxy client at all and the keepalive
+    # poll of the fleet's own CDP client must still notice.
+    async def go() -> None:
+        manager = bsession.BrowserSessionManager()
+        try:
+            browser = await _create_running(manager)
+        except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+            pytest.skip(f"Chromium unavailable in this environment: {e}")
+        try:
+            _require_running(browser)
+            assert await browser._chrome_alive() is True
+            assert browser._chrome is not None
+            await asyncio.to_thread(browser._chrome.kill)  # earlyoom / segfault, nobody attached
+            assert await browser._chrome_alive() is False
+            browser._on_disconnected()
+            assert browser._crashed is True and browser._lifecycle == "crashed"
+            # A crashed browser must free its fleet slot, or `new` fails forever after.
+            assert browser.browser_id not in [b["browser_id"] for b in await manager.list_browsers() if not b["crashed"]]
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(go())
 
 
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
@@ -684,23 +392,29 @@ def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch
                 browser = await _create_running(first)
             except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
                 pytest.skip(f"Chromium unavailable in this environment: {e}")
+            _require_running(browser)
             name = browser.browser_id
-            assert (await browser.act_navigate("A", "Alice", "https://example.com"))["ok"]
-            # Anti-_copy_profile tripwire: the live profile is our persistent dir, NOT a temp copy.
-            assert str(_profile_dir_for(name)) == str(browser._bu_session.browser_profile.user_data_dir)
-            # Set the cookie through browser-use's CDP (the single Chrome connection now).
-            await browser._bu_session._cdp_set_cookies(
-                [{"name": "fleet_test", "value": "persisted", "url": "https://example.com", "expires": future_expiry}]
+            assert browser._cdp is not None and browser._chrome is not None
+            # The profile path is the persistent one, NOT a temp copy. The path itself must
+            # never change (it keeps its historical `browser-use-user-data-dir-` prefix),
+            # because renaming it would strand every logged-in profile on disk.
+            assert str(_profile_dir_for(name)) == str(browser._chrome.profile_dir)
+            assert "browser-use-user-data-dir-" in str(browser._chrome.profile_dir)
+            # Set the cookie through the fleet's own CDP channel.
+            await browser._cdp.send(
+                "Storage.setCookies",
+                {"cookies": [{"name": "fleet_test", "value": "persisted", "url": "https://example.com", "expires": future_expiry}]},
             )
-            live = await browser._bu_session.cookies()
+            live = (await browser._cdp.send("Storage.getCookies")).get("cookies", [])
             assert any(c.get("name") == "fleet_test" for c in live), f"cookie not set in the live session: {live}"
             await first._save_manifest()
-            # Chromium writes the cookie to the on-disk profile DB lazily; the fleet's
-            # teardown kills Chromium with force=True (a hard stop that does NOT flush), so
-            # a cookie set moments before shutdown can be lost. A graceful stop() flushes
-            # the profile deterministically first -- a real daemon that has run for minutes
-            # has long since flushed on Chromium's own timer, so this stands in for that.
-            await browser._bu_session.stop()
+            # Chromium writes the cookie to the on-disk profile DB lazily and teardown is a
+            # hard kill, so close the browser GRACEFULLY first -- that is what flushes it.
+            # (There is no Storage.flushCookies; the CDP method does not exist.) A real
+            # daemon that has run for minutes has long since flushed on its own timer.
+            with contextlib.suppress(Exception):
+                await browser._cdp.send("Browser.close")
+            await asyncio.sleep(1)
         finally:
             await first.shutdown()
 
@@ -711,7 +425,8 @@ def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch
             # the cookie can land a beat after restore returns. Deterministic under load.
             found = False
             for _ in range(20):
-                cookies = await second.get(name)._bu_session.cookies()
+                restored = second.get(name)
+                cookies = (await restored._cdp.send("Storage.getCookies")).get("cookies", []) if restored._cdp else []
                 if any(c.get("name") == "fleet_test" and c.get("value") == "persisted" for c in cookies):
                     found = True
                     break
@@ -811,38 +526,3 @@ def test_cast_ws_streams_control_and_take_control_flips_ownership(monkeypatch: p
             ws.close()
         # Disconnect unregisters the cast queue on the loop (cleanup ran).
         assert _wait_until(lambda: fake._cast_queues == [])
-
-
-@pytest.mark.timeout(30)
-def test_hold_releases_the_lease_when_the_client_socket_dies(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Disconnect-as-lease over a REAL socket: POST /hold, confirm the agent owns the
-    # browser, then hard-close the socket. The heartbeat write fails -> the generator's
-    # finally runs -> the lease is released. This is the contract the in-process test
-    # client cannot exercise (it never fails a real socket write).
-    fake = _install_fake_browser(monkeypatch)
-    with _BootedServer() as server:
-        conn = socket.create_connection(("127.0.0.1", server.port), timeout=5)
-        request = (
-            "POST /browsers/alex-smith/hold HTTP/1.1\r\n"
-            f"Host: 127.0.0.1:{server.port}\r\n"
-            "X-Mngr-Agent-Id: A\r\n"
-            "X-Mngr-Agent-Name: Alice\r\n"
-            "Content-Type: application/json\r\n"
-            "Content-Length: 2\r\n"
-            "\r\n"
-            "{}"
-        )
-        conn.sendall(request.encode())
-        # Read until we see the "held" line, confirming the agent acquired the lease.
-        conn.settimeout(5)
-        assert _wait_until(lambda: fake._state_tuple() == ("agent", "A", False))
-        buffered = b""
-        for _ in range(20):
-            buffered += conn.recv(4096)
-            if b"held" in buffered:
-                break
-        assert b"held" in buffered
-        # Hard-close the client. The next heartbeat write fails, GeneratorExit runs the
-        # finally, and the lease is released back to the human.
-        conn.close()
-        assert _wait_until(lambda: fake._state_tuple() == ("human", None, False), timeout=10.0)
