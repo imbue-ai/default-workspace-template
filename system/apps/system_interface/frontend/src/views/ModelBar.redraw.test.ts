@@ -163,6 +163,37 @@ describe("the card without a hand-cranked redraw", () => {
     expect(renamed).toEqual([["acct-1", "Work"]]);
   });
 
+  it("does not read retyping an already-chosen name as a request to clear it", async () => {
+    // Found live: a renamed row SHOWS its chosen name, so comparing what was typed against
+    // the displayed name read "Work" over "Work" as "reset to the provider" and wiped it.
+    providerState.accounts = [{ ...ACCOUNT, provider: "Work", name: "Work" }];
+    await press(".model-selector-trigger");
+    await press('[data-card-row="providers"]');
+    await press('[aria-label="Rename Work"]');
+
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Work"]');
+    if (field === null) throw new Error("no rename field on screen");
+    expect(field.value).toBe("Work");
+    field.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    await settle();
+    expect(renamed).toEqual([]);
+  });
+
+  it("clears the name when the field is emptied, which is the only way back", async () => {
+    providerState.accounts = [{ ...ACCOUNT, provider: "Work", name: "Work" }];
+    await press(".model-selector-trigger");
+    await press('[data-card-row="providers"]');
+    await press('[aria-label="Rename Work"]');
+
+    const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Work"]');
+    if (field === null) throw new Error("no rename field on screen");
+    field.value = "";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    await settle();
+    expect(renamed).toEqual([["acct-1", ""]]);
+  });
+
   it("discards a rename on Escape, and does not re-file it on the blur that follows", async () => {
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');
