@@ -1591,7 +1591,7 @@ def _create_terminal_from_launcher(page: Page, known_titles: set[str]) -> str:
         page.locator(".dockview-add-tab-button").first.click()
     expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
     page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
-    expect(page.locator(".custom-url-dialog")).to_have_count(0)
+    expect(page.locator(".modal-card")).to_have_count(0)
 
     found: dict[str, str] = {}
 
@@ -2431,7 +2431,7 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         strip_tab.hover()
         expect(strip_tab.locator(".dv-custom-tab-action")).to_have_count(2, timeout=5000)
         strip_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
-        expect(page.locator("[role='menuitem']", has_text="Hide tab")).to_be_visible(timeout=5000)
+        expect(page.locator("[role='menuitem']", has_text="Close tab")).to_be_visible(timeout=5000)
         page.keyboard.press("Escape")
 
 

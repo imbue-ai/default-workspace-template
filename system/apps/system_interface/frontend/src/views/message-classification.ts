@@ -121,3 +121,13 @@ export function resolutionOf(event: Pick<UserMessageEvent, "display" | "resoluti
   const verdict = event.resolution;
   return verdict === "granted" || verdict === "denied" || verdict === "error" ? verdict : null;
 }
+
+/** The id of the request a resolution message resolves, or null when the message
+ *  is not a resolution or carries no id (a notice recorded before request-id
+ *  embedding shipped, which the walk instead correlates by arrival order). */
+export function resolutionRequestIdOf(event: Pick<UserMessageEvent, "display" | "request_id">): string | null {
+  if (event.display !== "permission_resolution") {
+    return null;
+  }
+  return event.request_id ?? null;
+}

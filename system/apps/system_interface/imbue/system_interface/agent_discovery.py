@@ -23,6 +23,7 @@ from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.loader import load_config
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
@@ -205,6 +206,82 @@ def _send_to(matches: Sequence[AgentMatch], message: str, mngr_ctx: MngrContext)
     )
 
 
+class SendFailedError(Exception):
+    """A send was attempted and refused, carrying the reason in the harness's own words.
+
+    Raised on the chat path only, where the reason has somewhere to go: the endpoint turns it
+    into the failure the composer shows. The other callers of ``send_message_to_agent`` check
+    the returned reason instead, so this changes nothing for them.
+
+    ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
+    offer: trying again can clear a blocked input and cannot conjure back a pane that is gone.
+    Unknown when mngr did not classify it, which the chat treats as it always has.
+    """
+
+    def __init__(self, detail: str, kind: str = "unknown") -> None:
+        self.detail = detail
+        self.kind = kind
+        super().__init__(detail)
+
+
+def delivered_or_raise(failure: SendFailure | None) -> bool:
+    """Turn a send's reason into an exception, or report delivery.
+
+    ``SessionDeps.send_to_harness`` is typed as returning a bool and is shared with paths that
+    have no way to show a reason, so the chat path raises rather than widening that contract.
+    The session's send already treats an exception as an expected exit (it resolves its
+    in-flight record in a ``finally`` and lets the request fail with the draft kept).
+    """
+    if failure is not None:
+        raise SendFailedError(failure.reason, failure.kind)
+    return True
+
+
+class SendFailure(FrozenModel):
+    """Why a send did not land: the harness's own words, plus mngr's classification of them."""
+
+    reason: str
+    kind: str
+
+
+def _first_failure(result: MessageResult) -> SendFailure:
+    """Why a send that reached no agent failed, in the harness's own words.
+
+    Each of ``result.failures`` carries the reason alone and mngr's classification of it, so
+    nothing here parses prose or strips framing -- the notice supplies its own title and sits in
+    the failing agent's own tab. A send can fail with no entry at all (nothing matched the id),
+    which is its own answer.
+    """
+    for failure in result.failures:
+        if failure.reason:
+            return SendFailure(reason=failure.reason, kind=str(failure.kind))
+    # A send can also land and THEN be blocked: the text was accepted and a dialog appeared
+    # behind it that mngr could not clear. mngr keeps that apart from a failure -- the message
+    # is not lost -- so it is in blocked_agents, and reading only failures above dropped it into
+    # the catch-all below. That told the user their agent was unreachable when it was sitting
+    # on a dialog, and, because the buttons follow the kind, offered a restart instead of the
+    # Retry that answering the dialog makes work.
+    for agent_name, blocked_message in result.blocked_agents:
+        if blocked_message:
+            return SendFailure(
+                reason=_without_send_prefix(blocked_message, agent_name), kind=str(SendFailureKind.INPUT_BLOCKED)
+            )
+    # Nothing matched the id at all, which is its own answer -- and trying again will not change
+    # it, so it is classified the same as a pane that is gone.
+    return SendFailure(reason="The agent could not be reached.", kind="agent_unreachable")
+
+
+def _without_send_prefix(message: str, agent_name: str) -> str:
+    """Drop mngr's standalone-raise framing from a blocked message before showing it.
+
+    ``blocked_agents`` carries ``str(exception)``, not the bare reason ``failures`` carries, so
+    it still has the "Failed to send message to agent X: " a raised error needs and a notice
+    titled for that agent does not.
+    """
+    prefix = f"Failed to send message to agent {agent_name}: "
+    return message[len(prefix) :] if message.startswith(prefix) else message
+
+
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
     """Press ``key`` into a pre-resolved set of agents' panes (never auto-starting).
 
@@ -233,8 +310,15 @@ class MngrMessenger(FrozenModel):
     send: SendFn = _send_to
     press: PressFn = _press_to
 
-    def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> bool:
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
         """Send to the agent with ``agent_id`` at ``known_locations``, else discovery.
+
+        Returns None when the message was delivered, or the reason it was not. The reason is
+        the harness's own words -- "the agent is in shell mode with an unsubmitted command",
+        say -- and it exists to be shown to the user, who can usually act on it. Reducing it to
+        a bool here would leave the UI with nothing to report but the fact of failure.
 
         ``known_locations`` (the caller's already-resolved location, from the live
         observe cache) is messaged directly -- no discovery. On a miss, or if that send
@@ -245,10 +329,15 @@ class MngrMessenger(FrozenModel):
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
-            if known_locations and self.send(known_locations, message, mngr_ctx).successful_agents:
-                return True
+            if known_locations:
+                result = self.send(known_locations, message, mngr_ctx)
+                if result.successful_agents:
+                    return None
             matches = self.discover(agent_id, mngr_ctx)
-            return bool(self.send(matches, message, mngr_ctx).successful_agents)
+            result = self.send(matches, message, mngr_ctx)
+            if result.successful_agents:
+                return None
+            return _first_failure(result)
         finally:
             cg.__exit__(None, None, None)
 

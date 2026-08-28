@@ -49,7 +49,7 @@ class HarnessAuthCheck(FrozenModel):
     unauthenticated_output_pattern: str | None = None
 
 
-# The two registered checks, wired onto their ``HarnessSpec.auth_check`` in the registry --
+# The registered checks, wired onto their ``HarnessSpec.auth_check`` in the registry --
 # the ONE per-harness table -- rather than a parallel dict here.
 CODEX_AUTH_CHECK = HarnessAuthCheck(
     command=("codex", "login", "status"),
@@ -61,6 +61,20 @@ PI_AUTH_CHECK = HarnessAuthCheck(
     display_name="Pi",
     signin_instructions="Go to New tab (+) → New terminal → run `pi` → type `/login`",
     unauthenticated_output_pattern=r"No models available",
+)
+ANTIGRAVITY_AUTH_CHECK = HarnessAuthCheck(
+    command=("agy", "models"),
+    display_name="Antigravity",
+    # agy has no `/login` command: signing in is what a bare `agy` does on first launch.
+    signin_instructions="Go to New tab (+) → New terminal → run `agy`",
+    # Matched on output rather than left to the exit code, even though `agy models` DOES exit
+    # non-zero when signed out (verified against 1.1.16). The command fetches the catalog over
+    # the network -- it prints "Fetching available models..." first -- so a transient failure
+    # also exits non-zero, and reading that as signed-out would refuse a create for a user who
+    # is signed in perfectly well. agy itself does not need `models` to run. The genuinely
+    # unusable cases (binary missing, command wedged) are fail-closed by ``_is_signed_in``
+    # before the pattern is ever consulted, so nothing is lost by ignoring the exit code here.
+    unauthenticated_output_pattern=r"Please sign in",
 )
 
 

@@ -147,15 +147,15 @@ if [ -n "${MNGR_AGENT_STATE_DIR:-}" ] && [ -f "$TTYD_CLIENT_GZ" ]; then
 fi
 
 # Register the terminal port before starting ttyd (port is known ahead of time)
-uv run python3 "$REPO_ROOT/system/scripts/forward_port.py" --name terminal --url "http://localhost:$TTYD_PORT"
+uv run python3 "$REPO_ROOT/system/scripts/forward_port.py" --name terminal --url "http://localhost:$TTYD_PORT" --no-icon
 
 # Write server events for discovery. The "agent" sub-URL is intentionally not
 # registered as its own application: the chat UI exposes it via an inline link
 # instead of a top-level application tile.
 if [ -n "${MNGR_AGENT_STATE_DIR:-}" ]; then
     mkdir -p "$MNGR_AGENT_STATE_DIR/events/servers"
-    _TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000000000Z")
-    _EID="evt-$(echo -n "terminal:http://localhost:$TTYD_PORT" | sha256sum | cut -c1-32)"
+    _TS=$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")
+    _EID="evt-$(echo -n "$_TS:terminal:http://localhost:$TTYD_PORT" | sha256sum | cut -c1-32)"
     printf '{"timestamp":"%s","type":"server_registered","event_id":"%s","source":"servers","server":"terminal","url":"http://localhost:%s"}\n' \
         "$_TS" "$_EID" "$TTYD_PORT" \
         >> "$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl"

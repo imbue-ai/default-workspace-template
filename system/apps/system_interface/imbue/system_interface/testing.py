@@ -22,14 +22,14 @@ import sys
 import threading
 import time
 import xmlrpc.client
-from xmlrpc.server import SimpleXMLRPCDispatcher
-from xmlrpc.server import SimpleXMLRPCRequestHandler
 from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
+from xmlrpc.server import SimpleXMLRPCDispatcher
+from xmlrpc.server import SimpleXMLRPCRequestHandler
 
 import httpx
 import pexpect
@@ -39,6 +39,7 @@ from flask import Flask
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
@@ -196,11 +197,16 @@ class RecordingMngrMessenger(MngrMessenger):
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
     succeeds: bool = True
+    # What a non-succeeding send reports, in place of a harness's own words and mngr's kind.
+    failure_reason: str = "The agent could not be reached."
+    failure_kind: str = "unknown"
     press_succeeds: bool = True
 
-    def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> bool:
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
         self.sent.append((str(agent_id), message))
-        return self.succeeds
+        return None if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))

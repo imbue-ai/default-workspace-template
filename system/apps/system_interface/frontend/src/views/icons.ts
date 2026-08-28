@@ -38,10 +38,10 @@ const STROKE_PATHS = {
   send: '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
-  // Lucide "share" (not "share-2", which is the three-node network glyph):
-  // an up-arrow lifting out of an open box, matching the tab menu's export
-  // sense of the verb.
-  share: '<path d="M12 2v13"/><path d="m16 6-4-4-4 4"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>',
+  // Lucide "user-plus", on the Share rows: sharing grants people access by
+  // email, so the glyph shows a person being added.
+  "user-plus":
+    '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
   // Lucide "power": the classic power-button glyph, on the destructive
   // "Quit {app}" row for a registered app.
   power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
