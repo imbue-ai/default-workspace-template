@@ -75,6 +75,31 @@ export function computeLiveMapping(
   return { segments, totalEvents };
 }
 
+// Edge magnet: the outermost band of the track on each side. Pointer fractions
+// inside it are remapped by a power curve so the resolved content position
+// CONVERGES on the end instead of jumping there past a threshold: the band
+// boundary maps to itself (continuous with the linear middle), and by 1% from
+// the track end the remaining content distance is ~4.6e-6 of the transcript --
+// less than one event on anything under ~200k events. Dragging through the
+// band therefore flows smoothly into the very end.
+export const EDGE_MAGNET_TRACK_FRACTION = 0.03;
+export const EDGE_MAGNET_POWER = 8;
+
+/** Warp a raw pointer track fraction so the outer bands converge on the ends. */
+export function applyEdgeMagnet(fraction: number): number {
+  const f = Math.min(1, Math.max(0, fraction));
+  const band = EDGE_MAGNET_TRACK_FRACTION;
+  if (f >= 1 - band) {
+    const t = (1 - f) / band;
+    return 1 - band * Math.pow(t, EDGE_MAGNET_POWER);
+  }
+  if (f <= band) {
+    const t = f / band;
+    return band * Math.pow(t, EDGE_MAGNET_POWER);
+  }
+  return f;
+}
+
 /** Resolve a track position (0..1) to a scroll target through a mapping. */
 export function resolveTrackFraction(mapping: ScrollbarMapping, fraction: number): ScrollTarget {
   const clamped = Math.min(1, Math.max(0, fraction));
