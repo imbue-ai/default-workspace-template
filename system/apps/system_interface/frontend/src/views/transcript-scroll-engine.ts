@@ -52,6 +52,7 @@ import {
 } from "../models/transcriptScroll/persistence";
 import { buildRowEventIndexes, rowIndexForEventIndex } from "../models/transcriptScroll/rowEventIndex";
 import {
+  applyEdgeMagnet,
   computeLiveMapping,
   computeThumb,
   mappingPhysicalExtent,
@@ -1484,7 +1485,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       lastInputSource = "scrollbar";
       lastScrollbarFraction = Math.min(1, Math.max(0, fraction));
       const mapping = activeMapping();
-      let target = resolveTrackFraction(mapping, lastScrollbarFraction);
+      // The magnet warps only the RESOLVED position; the thumb keeps tracking
+      // the raw pointer fraction, so nothing visibly jumps on the track.
+      const magnetFraction = applyEdgeMagnet(lastScrollbarFraction);
+      let target = resolveTrackFraction(mapping, magnetFraction);
       if (target.kind === "physical-fraction") {
         // The frozen mapping's physical band is trustworthy in PIXEL space only
         // while it still describes the loaded window. Once fills/evictions land
@@ -1499,14 +1503,13 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           frozenExtent.firstIndex === live.firstIndex &&
           frozenExtent.endIndex === live.endIndex;
         if (!isMappingCurrent) {
-          target = { kind: "virtual-index", index: resolveTrackFractionToIndex(mapping, lastScrollbarFraction) };
+          target = { kind: "virtual-index", index: resolveTrackFractionToIndex(mapping, magnetFraction) };
         }
       }
       // A pointer in the outermost 1% of the track means "the very end/very
-      // beginning", whatever it resolves to. Releasing with the thumb a few px
-      // shy of the track end otherwise resolves to an event tens short of the
-      // tail -- thousands of px above the bottom on a long transcript -- so
-      // "scroll all the way down" only worked on a pixel-perfect release.
+      // beginning", whatever it resolves to -- the exact-landing catch on top
+      // of the magnet's smooth convergence, so a release a few px shy of the
+      // track end still pins precisely (and re-attaches FOLLOW at the bottom).
       const isTrackEndIntent = lastScrollbarFraction >= 0.99;
       const isTrackStartIntent = lastScrollbarFraction <= 0.01;
       trace?.record("scrollbar-move", { fraction: lastScrollbarFraction, target });
