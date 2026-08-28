@@ -1,4 +1,7 @@
 from collections.abc import Callable
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 
 import pytest
 
@@ -27,6 +30,7 @@ def _run_sweep(
     grant_store: InMemoryGrantStore | None = None,
     email_getter: Callable[[str], str | None] = lambda uid: None,
     only_user_id: str | None = None,
+    orphan_first_seen_getter: Callable[[str], datetime | None] = lambda bucket_name: None,
 ) -> dict[str, int]:
     """Call run_r2_quota_sweep with test defaults (fresh grant and lease stores)."""
     return app_mod.run_r2_quota_sweep(
@@ -37,6 +41,7 @@ def _run_sweep(
         email_getter=email_getter,
         lease_store=make_fake_lease_store(),
         only_user_id=only_user_id,
+        orphan_first_seen_getter=orphan_first_seen_getter,
     )
 
 
@@ -165,6 +170,41 @@ def test_sweep_skips_unknown_owner_without_downgrading() -> None:
     assert counters["users_skipped"] == 1
     assert counters["keys_downgraded"] == 0
     assert ops.account_tokens[key_id]["access"] == "readwrite"
+    # A deleted owner's non-workspace-shaped bucket is one the retention
+    # reaper will never touch, so its lingering key rows are a real problem.
+    assert counters["users_skipped_orphan_reap_overdue"] == 1
+    assert counters["users_skipped_orphan_pending_reap"] == 0
+
+
+def test_sweep_counts_unknown_owner_with_unstamped_backup_bucket_as_pending_reap() -> None:
+    """A deleted owner's workspace-backup bucket awaiting its orphan stamp is expected, not a warning."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    key_id = _add_bucket_with_key(ops, store, "user-unknown", "uxprefix--host-abc123")
+    ops.usage_bytes_by_bucket["uxprefix--host-abc123"] = 10**15
+    counters = _run_sweep(ops, store, entitlements_store)
+    assert counters["users_skipped"] == 1
+    assert counters["users_skipped_orphan_pending_reap"] == 1
+    assert counters["users_skipped_orphan_reap_overdue"] == 0
+    assert ops.account_tokens[key_id]["access"] == "readwrite"
+
+
+def test_sweep_counts_unknown_owner_with_recent_orphan_stamp_as_pending_reap() -> None:
+    ops, store, entitlements_store = _sweep_fixtures()
+    _add_bucket_with_key(ops, store, "user-unknown", "uxprefix--host-abc123")
+    recent_stamp = datetime.now(timezone.utc) - timedelta(days=1)
+    counters = _run_sweep(ops, store, entitlements_store, orphan_first_seen_getter=lambda bucket_name: recent_stamp)
+    assert counters["users_skipped_orphan_pending_reap"] == 1
+    assert counters["users_skipped_orphan_reap_overdue"] == 0
+
+
+def test_sweep_warns_when_unknown_owner_orphan_is_well_past_the_reap_window() -> None:
+    """An orphan stamp far past retention-plus-slack means the reaper's cleanup is not coming."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    _add_bucket_with_key(ops, store, "user-unknown", "uxprefix--host-abc123")
+    stale_stamp = datetime.now(timezone.utc) - timedelta(days=45)
+    counters = _run_sweep(ops, store, entitlements_store, orphan_first_seen_getter=lambda bucket_name: stale_stamp)
+    assert counters["users_skipped_orphan_pending_reap"] == 0
+    assert counters["users_skipped_orphan_reap_overdue"] == 1
 
 
 def test_sweep_lazily_creates_row_for_resolvable_owner(monkeypatch: pytest.MonkeyPatch) -> None:
