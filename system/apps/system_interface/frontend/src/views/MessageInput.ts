@@ -182,13 +182,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         attachment.status === "uploading"
           ? null
           : m(
-              "button",
+              Button,
               {
-                type: "button",
-                class:
-                  "composer-attachment-remove inline-flex h-[18px] w-[18px] shrink-0 cursor-pointer items-center " +
-                  "justify-center rounded-full border-none bg-transparent p-0 text-secondary transition-colors " +
-                  "duration-(--dur-base) hover:bg-fill-active hover:text-primary",
+                variant: "ghost",
+                icon: true,
+                xs: true,
+                extra: "composer-attachment-remove shrink-0",
                 "aria-label": "Remove attachment",
                 ...hoverTooltipAttrs("Remove attachment"),
                 onclick: () => removeComposerAttachment(agentId, attachment.localId),
