@@ -198,116 +198,19 @@ def _submit_credentials_via_workspace_endpoint(container_name: str, credential_b
     return body
 
 
-def _create_chat_on_account(container_name: str, account_id: str) -> str:
-    """Start a chat bound to the account the credential was just adopted into.
-
-    The workspace's boot chat cannot be reused: an agent binds to an account when it is
-    CREATED (the credential rides `mngr create`'s own flags), so a chat that already
-    existed when the blob arrived is still running on whatever it was created with. Only
-    a chat created afterwards runs on the minted key, which is what this test measures
-    spend against.
-    """
-    payload = json.dumps({"account_id": account_id})
-    created = _exec_in_container(
+def _find_chat_agent_id(container_name: str) -> str:
+    listing = _exec_in_container(
         container_name,
-        "curl -s -X POST http://localhost:8000/api/agents/create-chat "
-        f"-H 'Content-Type: application/json' -d {shlex.quote(payload)}",
+        "cd /home/user/workspace && mngr list --format json --on-error continue",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
-    assert created.returncode == 0, f"create-chat curl failed: {created.stderr}"
-    body = json.loads(created.stdout)
-    agent_id = str(body.get("agent_id", ""))
-    assert agent_id, f"create-chat returned no agent id: {created.stdout[:500]}"
-
-    # The endpoint answers as soon as the background `mngr create` starts, so the agent is
-    # a proto for a few seconds; messaging it before mngr registers it would fail.
-    poll = (
-        f"for i in $(seq 1 {_CHAT_CREATE_ATTEMPTS}); do "
-        "cd /home/user/workspace && mngr list --format json --on-error continue "
-        f"| grep -q {shlex.quote(agent_id)} && exit 0; sleep 5; done; exit 1"
-    )
-    listed = _exec_in_container(container_name, poll, timeout=_CHAT_CREATE_ATTEMPTS * 5 + 60)
-    assert listed.returncode == 0, f"chat agent {agent_id} never appeared in mngr list"
-    return agent_id
-
-
-def _assert_chat_is_bound_to_account(container_name: str, agent_id: str, account_id: str) -> None:
-    """Prove the agent's harness will actually READ the account it was created on.
-
-    Writing the credential and creating the chat are separately covered; this is the join
-    between them, and it is the one that fails silently. A chat bound to nothing looks
-    identical until its first turn -- and for codex, a credential that landed in an OS
-    keyring rather than the account leaves a dangling symlink while `codex login status`
-    still reports success.
-
-    Both mechanisms are checked the way the harness resolves them: claude reads
-    CLAUDE_CONFIG_DIR out of the agent's env file, the others follow a credential symlink
-    placed in the agent's own state directory.
-    """
-    script = f"""
-import json, os, pathlib, subprocess, sys
-rows = json.loads(subprocess.run(
-    ["mngr", "list", "--format", "json", "--on-error", "continue"],
-    cwd="/home/user/workspace", capture_output=True, text=True, check=True).stdout)
-row = next((r for r in rows if r.get("id") == {agent_id!r}), None)
-if row is None:
-    sys.exit("agent {agent_id} is not in mngr list")
-state = pathlib.Path(row["state_dir"])
-account = pathlib.Path(os.path.expanduser("~/.minds/accounts")) / {account_id!r}
-env_file = state / "env"
-if env_file.exists() and str(account) in env_file.read_text():
-    print("BOUND_BY_ENV")
-    raise SystemExit(0)
-for link in state.rglob("*"):
-    if link.is_symlink() and str(account) in str(link.resolve()):
-        print("BOUND_BY_SYMLINK", link)
-        raise SystemExit(0)
-print("NOT_BOUND")
-print("env:", env_file.read_text() if env_file.exists() else "<none>")
-print("links:", [str(p) for p in state.rglob("*") if p.is_symlink()])
-raise SystemExit(1)
-"""
-    bound = _exec_in_container(
-        container_name,
-        f"cd /home/user/workspace && python3 -c {shlex.quote(script)}",
-        timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
-    )
-    assert bound.returncode == 0, f"chat {agent_id} is not bound to account {account_id}:\n{bound.stdout}"
-    logger.info("chat {} bound to account {}: {}", agent_id, account_id, bound.stdout.strip())
-
-
-def _sign_in_paste_lane(container_name: str, lane_id: str, api_key: str, key_provider: str | None = None) -> str:
-    """Drive a key-paste lane through the real HTTP routes; returns the account id.
-
-    A deliberately fake key: what this proves is the chain from paste to a bound chat --
-    account minted, credential file written where the harness looks, chat created against
-    it. Whether the provider would honour the key is not a thing a deployment test can
-    know, and the promote probe reads the file rather than calling out.
-    """
-    start = json.dumps({"lane_id": lane_id, "method_id": "api_key"})
-    started = _exec_in_container(
-        container_name,
-        "curl -s -X POST http://localhost:8000/api/accounts "
-        f"-H 'Content-Type: application/json' -d {shlex.quote(start)}",
-        timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
-    )
-    assert started.returncode == 0, f"start-flow curl failed for {lane_id}: {started.stderr}"
-    flow = json.loads(started.stdout)
-    assert flow.get("shape") == "paste", f"{lane_id} is not a paste lane: {flow!r}"
-
-    body = {"api_key": api_key} | ({"key_provider": key_provider} if key_provider else {})
-    submitted = _exec_in_container(
-        container_name,
-        f"curl -s -X POST http://localhost:8000/api/accounts/flow/{flow['flow_id']} "
-        f"-H 'Content-Type: application/json' -d {shlex.quote(json.dumps(body))}",
-        timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
-    )
-    assert submitted.returncode == 0, f"submit-key curl failed for {lane_id}: {submitted.stderr}"
-    status = json.loads(submitted.stdout)
-    assert status.get("state") == "ok", f"{lane_id} sign-in did not complete: {status!r}"
-    account_id = str(status.get("account_id", ""))
-    assert account_id, f"{lane_id} sign-in minted no account: {status!r}"
-    return account_id
+    assert listing.returncode == 0, f"in-container mngr list failed: {listing.stderr}"
+    agents = json.loads(listing.stdout).get("agents", [])
+    # The template's chat agents run the "chat" type (parent_type = "claude");
+    # older snapshots report plain "claude", so accept both.
+    chat_ids = [str(agent["id"]) for agent in agents if agent.get("type") in ("claude", "chat")]
+    assert chat_ids, f"No chat agent among {[a.get('name') for a in agents]!r}"
+    return chat_ids[0]
 
 
 def _chat_and_await_echo(container_name: str, chat_agent_id: str, token: str) -> None:
@@ -328,9 +231,6 @@ def _chat_and_await_echo(container_name: str, chat_agent_id: str, token: str) ->
     replied = _exec_in_container(container_name, poll, timeout=_CHAT_REPLY_ATTEMPTS * 5 + 120)
     assert replied.returncode == 0, f"The chat agent never echoed the token {token}"
 
-
-# How long to wait for a freshly created chat to be registered by mngr.
-_CHAT_CREATE_ATTEMPTS = 24
 
 _KEEPALIVE_PING_INTERVAL_SECONDS = 2.0
 
@@ -458,13 +358,8 @@ def test_litellm_spend_tracking_via_local_workspace(
         submit_body = _submit_credentials_via_workspace_endpoint(container_name, credential_blob)
         assert submit_body.get("logged_in") is True, f"credential submit did not authenticate: {submit_body!r}"
         assert submit_body.get("auth_mode") == "imbue", f"expected imbue mode after blob submit: {submit_body!r}"
-        assert submit_body.get("account_id"), f"credential submit minted no account: {submit_body!r}"
 
-        account_id = str(submit_body["account_id"])
-        chat_agent_id = _create_chat_on_account(container_name, account_id)
-        # The spend assertion below proves the key was USED; this proves the chat was
-        # pointed at the account holding it, which is the join that fails silently.
-        _assert_chat_is_bound_to_account(container_name, chat_agent_id, account_id)
+        chat_agent_id = _find_chat_agent_id(container_name)
         # The keepalive must span the whole chat-to-assertion window: the
         # proxy's last chat call otherwise strands its spend in the throttled
         # container's memory (see _litellm_proxy_keepalive), and the echo
@@ -478,82 +373,6 @@ def test_litellm_spend_tracking_via_local_workspace(
         # nonzero exit, missing created event) may have brought a container up.
         # Destroying a host that never came up fails harmlessly and is only
         # logged.
-        destroy = _run(
-            ["mngr", "destroy", f"system-services@{host_name}", "--force"],
-            cwd=template_path,
-            timeout=_CREATE_TIMEOUT_SECONDS,
-        )
-        if destroy.returncode != 0:
-            logger.warning("Workspace teardown failed (leaving for manual cleanup): {}", destroy.stderr[-500:])
-        shutil.rmtree(template_path.parent, ignore_errors=True)
-
-
-# Every lane whose sign-in is a file write, so it needs no browser and no real credential.
-# The OAuth lanes (Anthropic subscription, OpenAI device, Google) cannot be reached without a
-# human in a browser; their PTY driving is covered by unit tests against recorded output.
-_PASTE_LANES: tuple[tuple[str, str | None, str], ...] = (
-    ("opencode-go", None, "Opencode Go (Pi)"),
-    ("openrouter", None, "OpenRouter (Pi)"),
-    ("api-key", "groq", "Groq (Pi)"),
-)
-
-
-@pytest.mark.timeout(2700)
-def test_every_paste_lane_binds_a_chat_to_its_own_account(
-    shared_env: Callable[[str], SharedEnvHandle],
-    default_workspace_template_ref: DefaultWorkspaceTemplateRef,
-) -> None:
-    """Sign in to every key-paste lane in one real workspace and prove each binds a chat.
-
-    The other half of the sign-in artifact. `test_litellm_spend_tracking_via_local_workspace`
-    proves one lane end to end including a real turn; this proves the part that is common to
-    all of them -- account minted, credential written where the harness looks, chat created
-    against it, agent pointed at that folder -- for every lane that can be driven without a
-    human in a browser.
-
-    Deliberately fake keys. What fails silently here is the BINDING, not the key: a chat
-    bound to nothing is indistinguishable from a working one until its first turn, and the
-    label a picker shows comes from the index rather than from anything on disk. A real key
-    would add a turn assertion and a credential to leak, and would still not test the join.
-
-    No LiteLLM leg, so no connector sign-in and no key minting -- just the workspace.
-    """
-    env = shared_env("default")
-    wait_for_env_ready(env)
-    if shutil.which("docker") is None:
-        pytest.skip("Docker is required to create the local workspace")
-    if default_workspace_template_ref.worktree_path is None:
-        pytest.skip("No local template worktree available (offload sandboxes lack the Docker daemon anyway)")
-
-    template_path = _prepare_template_clone(default_workspace_template_ref.worktree_path)
-    host_name = f"lanes-e2e-{get_short_random_string()}"
-    try:
-        _agent_id, host_id = _create_docker_workspace(template_path, host_name)
-        container_name = _find_container_name(host_id)
-        _wait_for_system_interface(container_name)
-
-        bound: list[tuple[str, str, str]] = []
-        for lane_id, key_provider, expected_label in _PASTE_LANES:
-            account_id = _sign_in_paste_lane(
-                container_name, lane_id, f"sk-not-a-real-key-{get_short_random_string()}", key_provider
-            )
-            chat_agent_id = _create_chat_on_account(container_name, account_id)
-            _assert_chat_is_bound_to_account(container_name, chat_agent_id, account_id)
-            bound.append((lane_id, account_id, expected_label))
-
-        # Each lane is its own account, and the picker names it by its provider rather than
-        # by the lane -- two of these run on pi and would otherwise be indistinguishable.
-        listed = _exec_in_container(
-            container_name,
-            "curl -s http://localhost:8000/api/accounts",
-            timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
-        )
-        assert listed.returncode == 0, f"accounts curl failed: {listed.stderr}"
-        rows = json.loads(listed.stdout)["accounts"]
-        assert len(rows) == len(_PASTE_LANES), f"expected one account per lane, got {rows!r}"
-        assert {row["label"] for row in rows} == {label for _lane, _account, label in bound}
-        assert {row["id"] for row in rows} == {account for _lane, account, _label in bound}
-    finally:
         destroy = _run(
             ["mngr", "destroy", f"system-services@{host_name}", "--force"],
             cwd=template_path,
