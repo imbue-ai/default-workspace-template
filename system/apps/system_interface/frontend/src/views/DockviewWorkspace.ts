@@ -246,10 +246,15 @@ export function getTerminalUrl(): string {
 /** Build the iframe URL that attaches a terminal to ``agentName``'s tmux
  *  session. The ttyd dispatch reads ``$1`` ("_") then ``$2`` ("agent")
  *  then ``$3`` (the agent name), so the args are written in that order.
- *  Used by the chat panel's "Open agent terminal" button and the
- *  agent-driven ``chat-terminal:<name>`` ref so both surfaces agree on
- *  the canonical URL (which the server's ``_extract_agent_terminal_name``
- *  parses back out when building refs from persisted layout state). */
+ *
+ *  One caller now: the BACK FACE of that agent's chat. The terminal used to be openable as its
+ *  own tab too -- by a button and by a ``chat-terminal:<name>`` ref -- and both are gone,
+ *  because two live ttyd clients on one tmux window keep resizing it out from under each
+ *  other (`window-size latest` means the most recent attach wins). */
+/** The id shape both agent-terminal creation paths used. Kept only so the restore sweep can
+ *  recognise what they left in saved layouts and drop it. */
+const AGENT_TERMINAL_PANEL_PREFIX = "iframe-agent-";
+
 export function buildAgentTerminalUrl(agentName: string): string {
   const baseUrl = getTerminalUrl();
   const separator = baseUrl.includes("?") ? "&" : "?";
@@ -3070,41 +3075,6 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     return panelId;
   }
 
-  if (ref.startsWith("chat-terminal:")) {
-    // Per-agent terminal singleton: dedup by URL so opening the same ref
-    // twice focuses the existing panel rather than stacking duplicates.
-    // The URL is built by ``buildAgentTerminalUrl`` so the on-disk shape
-    // matches what the server's ``_extract_agent_terminal_name`` projects
-    // back to ``chat-terminal:<name>``.
-    const agentName = ref.substring("chat-terminal:".length);
-    const agent = getAgents().find((a) => a.name === agentName);
-    if (!agent) return null;
-    const url = buildAgentTerminalUrl(agentName);
-    const existingPanelId = findIframePanelIdForUrl(url);
-    if (existingPanelId !== null) {
-      const existing = dockview.panels.find((p) => p.id === existingPanelId);
-      if (existing) dockview.setActivePanel(existing);
-      return existingPanelId;
-    }
-    const title = `${agentName} terminal`;
-    // Owning agentId is the target agent (the terminal *is* that agent's),
-    // not the requester. Matches the panel id format used by the chat
-    // panel's "Open agent terminal" button so the two creation paths
-    // produce identical bookkeeping.
-    const panelId = `iframe-agent-${agent.id}-${Date.now()}`;
-    const params: PanelParams = { panelType: "iframe", agentId: agent.id, url, title };
-    panelParams.set(panelId, params);
-    dockview.addPanel({
-      id: panelId,
-      component: "iframe",
-      title,
-      params,
-      ...placement,
-    });
-    recordMembership(panelId);
-    return panelId;
-  }
-
   if (ref.startsWith("https://")) {
     const existingPanelId = findIframePanelIdForUrl(ref);
     if (existingPanelId !== null) {
@@ -4054,6 +4024,15 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
       }
     }
 
+    // An agent's terminal is the back face of its chat, not a tab. A layout saved while that
+    // was still possible names one, and restoring it would put a bare ttyd iframe beside the
+    // chat that now holds the same session -- two live clients on one tmux window, each
+    // resizing it out from under the other. Both creation paths used one id shape, so one
+    // prefix test covers them.
+    for (const panel of dv.panels.slice()) {
+      if (panel.id.startsWith(AGENT_TERMINAL_PANEL_PREFIX)) dv.removePanel(panel);
+    }
+
     // An object is a singleton with one page, so an arrangement naming the same
     // one twice would give two tabs a page to fight over. The first occurrence
     // keeps it.
@@ -4443,13 +4422,6 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
     const candidate = chatPanelId(agent.id);
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
   }
-  if (ref.startsWith("chat-terminal:")) {
-    // Resolve by URL: ``chat-terminal:<name>`` addresses the singleton
-    // iframe pointed at ``buildAgentTerminalUrl(name)``. ``findIframe
-    // PanelIdForUrl`` returns null when no such panel is currently open.
-    const agentName = ref.substring("chat-terminal:".length);
-    return findIframePanelIdForUrl(buildAgentTerminalUrl(agentName));
-  }
   if (ref.startsWith("subagent:")) {
     const sessionId = ref.substring("subagent:".length);
     for (const [panelId, p] of panelParams) {
@@ -4590,14 +4562,6 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
     handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
     return;
   }
-  if (ref.startsWith("chat-terminal:")) {
-    // Same drop-on-unknown-agent rule as ``chat:`` -- the underlying
-    // panel is the per-agent terminal iframe, addressable by name.
-    const agentName = ref.substring("chat-terminal:".length);
-    if (!getAgents().find((a) => a.name === agentName)) return;
-    handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
-    return;
-  }
   // Other ref kinds (subagent/terminal/url:<hash>) are not creatable from
   // an ``open`` op: their stable refs only exist after creation through
   // the surrounding code paths (e.g. SubagentView, "New URL" dialog).
@@ -4628,17 +4592,13 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
   const referencePanelId = await resolveRefToPanelId(relativeTo, requesterAgentId);
   if (referencePanelId === null) return;
 
-  if (
-    !ref.startsWith("service:") &&
-    !ref.startsWith("chat:") &&
-    !ref.startsWith("chat-terminal:") &&
-    !ref.startsWith("https://")
-  ) {
-    // ``split`` creates new service, chat, chat-terminal, and ad-hoc
-    // external-URL (``https://``) panels. Subagent panels and existing
-    // URL/terminal panels addressed by ``url:<hash>`` / ``terminal:<hash>``
-    // are created through other UI paths and only addressable once they
-    // exist. Fresh anonymous terminals come in as ``service:terminal``.
+  if (!ref.startsWith("service:") && !ref.startsWith("chat:") && !ref.startsWith("https://")) {
+    // ``split`` creates new service, chat, and ad-hoc external-URL (``https://``) panels.
+    // Subagent panels and existing URL/terminal panels addressed by ``url:<hash>`` /
+    // ``terminal:<hash>`` are created through other UI paths and only addressable once they
+    // exist. Fresh anonymous terminals come in as ``service:terminal``. ``chat-terminal:`` is
+    // retired -- an agent's terminal is the back face of its chat, not a panel to split off --
+    // and `layout.py` rejects it by name before it reaches here.
     return;
   }
 

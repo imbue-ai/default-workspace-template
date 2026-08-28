@@ -987,3 +987,44 @@ Signing in from the first-run greeting starts the chat rather than closing onto 
 tab. The greeting only fires when there is no provider at all -- the one state where the new tab
 has nothing it can do -- so landing the user back there, having just signed in, sends them to
 find the one button that was always the only thing to press.
+
+# Phase 6: the chat and its terminal are one card
+
+A chat and its agent's terminal are the same conversation rendered two ways, so they are now the
+front and back of one surface. A Terminal switch in the composer's under-bar turns it over.
+
+The under-bar moved OUT of `ChatPanel`'s footer to sit beside the card rather than on it. Inside,
+the switch would rotate away with the face it turns and the flip would be one-way.
+
+The back face mounts on the first flip and is never removed again. Mithril destroys a vnode that
+becomes null, and destroying that one takes its iframe out of the document -- which ends the ttyd
+session rather than hiding it. So the sticky flag is what is stored and `flipped` only drives the
+transform. Neither face is ever `display: none`: ttyd sizes the agent's tmux window to its client
+viewport (`window-size latest`), so a zero-sized back face hands the agent a zero-column terminal.
+`backface-visibility` hides them at no layout cost, and `inert` keeps the hidden one from taking
+focus or a click. `prefers-reduced-motion` drops the rotation and keeps the swap.
+
+The card lives in its own module with its own tests. Those three rules are the whole risk of the
+feature and every one of them is invisible in review; assembled inline they would be buried in
+six hundred lines of transcript machinery.
+
+# An agent terminal is no longer a tab
+
+Not deprecated -- removed, along with everything that supported it. It was reachable four ways
+and is now reachable one.
+
+- The "Open agent terminal" button is gone, replaced in place by the switch.
+- `chat-terminal:<name>` is REJECTED BY NAME in `layout.py`, and its prefix stays registered
+  precisely so it can be: delisting it would send the ref to the bare-service-name fallback, and
+  the caller would wait five seconds to be told that a service nobody mentioned is unregistered.
+- Both frontend branches that opened and resolved that ref are deleted, as is the `split` op's
+  permission for it.
+- The server stops projecting a terminal panel back to `chat-terminal:<name>` and stops listing
+  an `agent-terminal` entry per agent -- `layout list` would otherwise advertise a ref that
+  `layout.py` now refuses.
+- Layouts saved while it was still possible have their `iframe-agent-*` panels dropped on
+  restore, permanently rather than as a migration.
+
+Side-by-side is given up deliberately. Two live ttyd clients on one tmux window keep resizing it
+out from under each other -- `window-size latest` means the most recent attach wins -- so two
+views of one terminal were never really two views.

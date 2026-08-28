@@ -994,6 +994,90 @@ body {
   padding: 4px 10px 6px;
 }
 
+/* The chat card and its two faces.
+   A chat and its agent's terminal are one conversation rendered two ways, so they are the front
+   and back of one surface rather than two places. The mockup's FlipSurface, ported: perspective
+   on the frame, preserve-3d on the turner, both faces backface-hidden with the back pre-turned
+   so it reads correctly once around. */
+.chat-flip {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  perspective: 2000px;
+}
+.chat-flip-inner {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 600ms cubic-bezier(0.45, 0, 0.25, 1);
+}
+/* Both faces keep their SIZE while hidden. ttyd sizes the agent's tmux window to its client
+   viewport (`window-size latest`), so a display:none back face would hand the agent a
+   zero-column terminal; a zero-sized front face would lose the transcript's scroll offset.
+   backface-visibility is what hides them, and it costs no layout. */
+.chat-flip-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
+     as a hole with two pictures behind it. */
+  background: var(--color-surface);
+  border-radius: inherit;
+  overflow: hidden;
+}
+.chat-flip-back {
+  transform: rotateY(180deg);
+}
+
+/* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
+   turning goes away. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-flip-inner {
+    transition: none;
+  }
+}
+
+/* The switch that turns it over. Lives in the under-bar, OUTSIDE the card -- inside, it would
+   rotate away with the face it turns and the flip would be one-way. */
+.terminal-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+  transition: color 120ms;
+}
+.terminal-view-toggle:hover {
+  color: var(--color-text-primary);
+}
+.terminal-view-toggle[aria-checked="true"] .terminal-view-toggle-label {
+  color: var(--color-text-primary);
+}
+/* The under-bar is a tighter row than the combo card, so the shared switch shrinks here: the
+   track and knob keep their proportions, the whole thing just scales down. */
+.terminal-view-toggle-track {
+  height: 18px;
+  width: 32px;
+}
+.terminal-view-toggle-knob {
+  height: 14px;
+  width: 14px;
+}
+.terminal-view-toggle[aria-checked="true"] .terminal-view-toggle-knob {
+  transform: translateX(16px);
+}
+.terminal-view-toggle[aria-checked="false"] .terminal-view-toggle-knob {
+  transform: translateX(2px);
+}
+
 /* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its
    base and grows upward, so its top edge is not somewhere the eye naturally checks for "more",
    and an overlay scrollbar that only appears mid-scroll says nothing until it is too late. */
