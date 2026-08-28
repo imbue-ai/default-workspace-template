@@ -46,9 +46,14 @@ export function App(): m.Component {
     view() {
       return m(
         "div",
-        { class: "app-layout flex flex-col", style: "height: calc(100vh - var(--minds-titlebar-height, 0px))" },
+        // h-screen is the full viewport: inside the minds desktop shell this
+        // app renders in a sandboxed iframe the shell already places below its
+        // title bar (WorkspaceFrame's .workspace-surface starts at top: 38px),
+        // so there is no title-bar height to subtract here. (A vestigial
+        // --minds-titlebar-height calc + spacer div once did that subtraction,
+        // but nothing ever set the variable inside this iframe.)
+        { class: "app-layout flex h-screen flex-col" },
         [
-          m("div", { class: "minds-titlebar-spacer" }),
           // The whole content area is one grey surface with the rail sitting on
           // it, directly left of the dock. Which view you are in is said by the
           // rail's own header now, so there is no bar above this row.
