@@ -1144,7 +1144,9 @@ The copy is now parked on disk first, in `<account>/.minds-reauth-backup/`, and 
 restores it at boot. So a stop, a snapshot, an OOM kill or a supervisord restart mid-flow is
 survivable rather than silent. It is inside the account folder, so deleting the account takes
 the backup with it, and a file that did not exist before the flow is recorded as absent -- the
-restore deletes rather than leaving a zero-byte file the harness would try to parse.
+restore deletes rather than leaving a zero-byte file the harness would try to parse. A folder
+with no index row is still debris even when it holds a parked backup: the backup is only
+meaningful for an account that exists, and nothing can name a row-less folder to restore it to.
 
 Restoring the snapshot and unparking the copy now happen in one method, because they must never
 happen apart: a parked copy left behind means the next boot restores the OLD credential over

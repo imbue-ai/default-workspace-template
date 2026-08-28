@@ -310,9 +310,9 @@ class AuthFlowService:
                 accounts.save_reauth_backup(account_id, session.cleared_credentials, self._home)
                 for path in session.cleared_credentials:
                     path.unlink(missing_ok=True)
-            # `finally`, not `except Exception`: the credential is already unlinked by here, so
-            # what matters is that the restore cannot be MISSED, and a catch-all buys nothing a
-            # finally does not. A missing binary raises pexpect.ExceptionPexpect and a CLI that
+            # A `finally` rather than a catch-all: the credential is already unlinked by here,
+            # so what matters is that the restore cannot be MISSED, which is what `finally`
+            # guarantees and a catch-all only approximates. A missing binary raises pexpect.ExceptionPexpect and a CLI that
             # already exited raises OSError from send(); neither is a FlowError, so without this
             # the credential stayed deleted with no restore, no teardown and no deadline -- the
             # account still advertised, its chats failing, the session wedged PENDING with no
