@@ -226,10 +226,16 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let observedListEl: Element | null = null;
   let pointerReleaseListener: (() => void) | null = null;
   let isPointerDown = false;
-  // A genuine downward user scroll ended in the bottom band while the fill
-  // still lagged the server total: complete the FOLLOW attach once the tail
-  // is fully loaded (see onScrollEvent). Cleared by any upward wheel.
+  // A genuine downward user scroll (or a scrollbar move targeting the very
+  // bottom) while the fill still lagged the server total: complete the exact
+  // bottom landing + FOLLOW attach once the tail is fully loaded (see
+  // runAfterRender). Cleared by any upward wheel.
   let pendingTailIntent = false;
+  // The mirror for the other edge: the user targeted the very top while older
+  // history was still unloaded. Once event 0 is loaded, pin scrollTop to 0 --
+  // without this, a chunked backfill lands wherever the height estimates put
+  // the anchor, visibly short of the beginning.
+  let pendingTopIntent = false;
 
   // --- input classification -------------------------------------------------
   let lastInputSource: ScrollInputSource = "wheel";
@@ -895,6 +901,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // bottom during streaming strands the user detached at gap 0, where the
     // clamped scrollTop emits no further scroll events to re-evaluate.
     pendingTailIntent = !didScrollUp && bottomGapPx < BOTTOM_THRESHOLD_PX;
+    // Mirror for the top edge: an upward scroll ending at (clamped) scrollTop 0
+    // while older history remains unloaded means "go to the beginning".
+    pendingTopIntent = didScrollUp && topPx < BOTTOM_THRESHOLD_PX;
     trace?.record("scroll", {
       topPx,
       source: lastInputSource,
@@ -921,6 +930,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // The bottom band is only for RE-attaching on the way down.
     if (event.deltaY < 0) {
       pendingTailIntent = false;
+      // An upward wheel already clamped at the top produces no scroll event;
+      // record the top intent here so backfill still lands on the beginning.
+      if (scrollEl !== null && scrollEl.scrollTop < BOTTOM_THRESHOLD_PX) {
+        pendingTopIntent = true;
+      }
       if (positionState.kind === "FOLLOW" && geometry !== null) {
         const anchor = anchorForUser();
         if (anchor !== null) {
@@ -930,6 +944,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         }
       }
     } else if (event.deltaY > 0 && scrollEl !== null) {
+      pendingTopIntent = false;
       // A downward wheel already clamped at the bottom produces no scroll
       // event at all; record the tail intent here so it still re-attaches.
       const gapPx = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
@@ -1180,20 +1195,44 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       }
     }
 
-    // Complete a recorded tail intent (see onScrollEvent): the user's last
-    // scroll ended at the bottom while the fill lagged, so the atTail attach
-    // could not happen then -- and a clamped scrollTop emits no further scroll
-    // events to retry it. Attach once the tail is genuinely loaded and the
-    // viewport still sits in the bottom band.
+    // Complete a recorded edge intent (see onScrollEvent / scrollbarMoveTo):
+    // the user expressed "go to the very bottom/top" while that edge was not
+    // fully loaded, so the exact landing could not happen at gesture time --
+    // and a clamped scrollTop emits no further scroll events to retry. Once
+    // the edge IS loaded, land exactly on it: a jump anchors its target row at
+    // the viewport TOP, so without the snap a tall last row leaves the true
+    // bottom below the fold, and a chunked backfill toward event 0 lands
+    // wherever the height estimates put the anchor rather than at 0.
     if (pendingTailIntent && positionState.kind === "USER_CONTROLLED" && geometry !== null) {
-      const gapPx = element.scrollHeight - element.scrollTop - element.clientHeight;
       const totalNow = dataSource.getTotalEvents();
-      if (gapPx < BOTTOM_THRESHOLD_PX && spacerBottomPx <= 0 && (totalNow === null || extent().endIndex >= totalNow)) {
+      if (spacerBottomPx <= 0 && (totalNow === null || extent().endIndex >= totalNow)) {
+        const targetPx = Math.max(0, element.scrollHeight - element.clientHeight);
+        if (Math.abs(element.scrollTop - targetPx) > 0.5) {
+          cancelSmoothScroll();
+          writeScrollTop(element, targetPx, "tail-intent-pin");
+        }
         const tailAnchor = anchorForUser();
         if (tailAnchor !== null) {
           pendingTailIntent = false;
-          trace?.record("tail-intent-attach", { gapPx });
+          trace?.record("tail-intent-attach", {
+            gapPx: element.scrollHeight - element.scrollTop - element.clientHeight,
+          });
           dispatchPosition({ kind: "USER_SCROLLED", source: lastInputSource, anchor: tailAnchor, atTail: true });
+          m.redraw();
+        }
+      }
+    }
+    if (pendingTopIntent && positionState.kind === "USER_CONTROLLED" && geometry !== null) {
+      if (extent().firstIndex <= 0 && spacerTopPx <= 0) {
+        if (element.scrollTop > 0.5) {
+          cancelSmoothScroll();
+          writeScrollTop(element, 0, "top-intent-pin");
+        }
+        const topAnchor = anchorForUser();
+        if (topAnchor !== null) {
+          pendingTopIntent = false;
+          trace?.record("top-intent-pin", { scrollTopPx: element.scrollTop });
+          dispatchPosition({ kind: "USER_SCROLLED", source: lastInputSource, anchor: topAnchor, atTail: false });
           m.redraw();
         }
       }
@@ -1389,6 +1428,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       pendingJumpIndex = null;
       pendingJumpLandIndex = null;
       pendingTailIntent = false;
+      pendingTopIntent = false;
       cancelSmoothScroll();
       lastSeenEndIndex = -1;
       hasUnfollowedAppend = false;
@@ -1492,9 +1532,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
               bottomGapPx < BOTTOM_THRESHOLD_PX &&
               spacerBottomPx <= 0 &&
               (totalEvents === null || extent().endIndex >= totalEvents);
-            // Same deferred-attach semantics as onScrollEvent: a drag ending
-            // at the bottom while the fill lags attaches once the tail loads.
+            // Same deferred-landing semantics as onScrollEvent: a drag ending
+            // at an edge while the fill lags lands exactly there once loaded.
             pendingTailIntent = bottomGapPx < BOTTOM_THRESHOLD_PX;
+            pendingTopIntent = targetTopPx < BOTTOM_THRESHOLD_PX;
             dispatchPosition({ kind: "USER_SCROLLED", source: "scrollbar", anchor, atTail });
           }
         }
@@ -1526,6 +1567,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
               spacerBottomPx <= 0 &&
               (totalEvents === null || endIndex >= totalEvents);
             pendingTailIntent = bottomGapPx < BOTTOM_THRESHOLD_PX;
+            pendingTopIntent = targetTopPx < BOTTOM_THRESHOLD_PX;
             dispatchPosition({ kind: "USER_SCROLLED", source: "scrollbar", anchor, atTail });
           }
         } else {
@@ -1550,7 +1592,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           // pin drags the viewport straight back to the bottom -- the jump
           // silently never happens. The current-view anchor holds the spacer
           // position while the fill lands.
-          pendingTailIntent = false;
+          // A target at either extreme records edge intent, so the landing
+          // (which anchors the target row at the viewport TOP) gets corrected
+          // to the exact edge by runAfterRender once that edge is loaded.
+          pendingTailIntent = totalEvents > 0 && target.index >= totalEvents - 1;
+          pendingTopIntent = target.index <= 0;
           if (positionState.kind === "FOLLOW" && geometry !== null) {
             const anchor = anchorForUser();
             if (anchor !== null) {
