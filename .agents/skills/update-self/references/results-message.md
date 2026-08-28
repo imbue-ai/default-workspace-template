@@ -60,6 +60,12 @@ since the unattended pass stands up no previews.
 
 ## Language rules
 
+Include only what the user is likely to care about or have an opinion on. A
+deferred item with no consequence they can see (a rebuild-only flag that
+changes nothing until the workspace is someday recreated) is one line at most,
+or nothing; a change to something they built, or a decision they might have
+made differently, always makes the cut.
+
 Detail in the informational sections (3-6); plain language at the decision
 points -- the headline, any caveat that needs the user's action, and the
 closing offer. Those carry no jargon: never "merge", "land" or "fast-forward"

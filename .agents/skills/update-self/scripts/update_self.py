@@ -138,7 +138,6 @@ from update_apply import apply_update, recover
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
     ENV_DRI_AGENT,
-    RUN_HOLD_REASONS,
     RUN_VERDICTS,
     RunStatus,
     read_run_status,
@@ -505,7 +504,6 @@ def _cmd_run_status_start(args: argparse.Namespace) -> int:
     write_run_status(
         RunStatus(
             chat_agent_name=chat_agent_name,
-            is_unattended=args.unattended,
             started_at=now(),
             updated_at=0.0,
         ),
@@ -530,7 +528,7 @@ def _cmd_run_status_verdict(args: argparse.Namespace) -> int:
     status.verdict_at = now()
     # A verdict ends the run, so a hold it was recorded under ends with it,
     # and so does the worker it had delegated to.
-    status.hold_reason = None
+    status.is_holding = False
     status.hold_detail = ""
     status.worker_agent_name = None
     write_run_status(status, repo_root, now)
@@ -557,7 +555,6 @@ def _run_status_for_recorder(
     if status is None:
         status = RunStatus(
             chat_agent_name=recorder,
-            is_unattended=False,
             started_at=now(),
             updated_at=0.0,
         )
@@ -580,10 +577,10 @@ def _cmd_run_status_hold(args: argparse.Namespace) -> int:
     now = time.time
     recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
     status = _run_status_for_recorder(repo_root, recorder, now)
-    status.hold_reason = args.reason
+    status.is_holding = True
     status.hold_detail = args.detail
     write_run_status(status, repo_root, now)
-    print(f"Recorded the {args.reason} hold.")
+    print("Recorded the hold.")
     return 0
 
 
@@ -592,7 +589,7 @@ def _cmd_run_status_resume(args: argparse.Namespace) -> int:
     now = time.time
     recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
     status = _run_status_for_recorder(repo_root, recorder, now)
-    status.hold_reason = None
+    status.is_holding = False
     status.hold_detail = ""
     write_run_status(status, repo_root, now)
     print("Cleared the hold.")
@@ -800,11 +797,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="",
         help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
     )
-    start_parser.add_argument(
-        "--unattended",
-        action="store_true",
-        help="The dispatch message pre-authorized this run to land unattended.",
-    )
     start_parser.set_defaults(func=_cmd_run_status_start)
     verdict_parser = run_status_sub.add_parser(
         "verdict",
@@ -856,14 +848,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     delegate_parser.set_defaults(func=_cmd_run_status_delegate)
     hold_parser = run_status_sub.add_parser(
         "hold",
-        help="Record that the run has stopped to ask the user something, and why.",
+        help="Record that the run has stopped to ask the user something, and what.",
         parents=[common],
-    )
-    hold_parser.add_argument(
-        "reason",
-        choices=RUN_HOLD_REASONS,
-        help="CUSTOMIZATION: something they built cannot be kept; CONFLICT: a "
-        "merge conflict in something they built needs their decision.",
     )
     hold_parser.add_argument(
         "--chat",

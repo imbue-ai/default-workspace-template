@@ -5140,21 +5140,14 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
 
 
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
-    # The whole app-facing contract: `start` records who is running and under
-    # what authorization, `verdict` lands the outcome on the same record, and
-    # the run's start survives the verdict write (the app tells runs apart by
-    # their start).
+    # The whole app-facing contract: `start` records who is running, `verdict`
+    # lands the outcome on the same record, and the run's start survives the
+    # verdict write (the app tells runs apart by their start).
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-abc123")
-    assert (
-        update_self.main(
-            ["run-status", "start", "--unattended", "--repo-root", str(tmp_path)]
-        )
-        == 0
-    )
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
     status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-abc123"
-    assert status.is_unattended
     assert status.verdict is None
     started_at = status.started_at
 
@@ -5181,7 +5174,6 @@ def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
     assert status.detail == "Landed; one rebuild item left."
     assert status.verdict_at is not None
     assert status.started_at == started_at
-    assert status.is_unattended
 
 
 def test_run_status_start_supersedes_the_previous_runs_verdict(
@@ -5225,12 +5217,7 @@ def test_run_status_verdict_is_recorded_under_the_agent_recording_it(
     # pass's name: the app matches a record to a workspace's row by chat name,
     # so it would discard the verdict and read the real run as having died.
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-aborted")
-    assert (
-        update_self.main(
-            ["run-status", "start", "--unattended", "--repo-root", str(tmp_path)]
-        )
-        == 0
-    )
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
 
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-real")
     assert (
@@ -5244,7 +5231,6 @@ def test_run_status_verdict_is_recorded_under_the_agent_recording_it(
     assert status is not None
     assert status.chat_agent_name == "update-real"
     assert status.verdict == "UPDATED"
-    assert not status.is_unattended
     assert "records update-aborted, not update-real" in capsys.readouterr().err
 
 
@@ -5300,7 +5286,6 @@ def test_run_status_hold_and_resume_round_trip(tmp_path, monkeypatch) -> None:
             [
                 "run-status",
                 "hold",
-                "CUSTOMIZATION",
                 "--detail",
                 "Your dashboard widget has no place in the new layout.",
                 "--repo-root",
@@ -5311,14 +5296,14 @@ def test_run_status_hold_and_resume_round_trip(tmp_path, monkeypatch) -> None:
     )
     held = update_apply_contract.read_run_status(tmp_path)
     assert held is not None
-    assert held.hold_reason == "CUSTOMIZATION"
+    assert held.is_holding
     assert held.hold_detail == "Your dashboard widget has no place in the new layout."
     assert held.verdict is None
 
     assert update_self.main(["run-status", "resume", "--repo-root", str(tmp_path)]) == 0
     resumed = update_apply_contract.read_run_status(tmp_path)
     assert resumed is not None
-    assert resumed.hold_reason is None
+    assert not resumed.is_holding
     assert resumed.hold_detail == ""
     assert resumed.chat_agent_name == "update-lead"
 
@@ -5376,12 +5361,7 @@ def test_run_status_verdict_clears_a_hold(tmp_path, monkeypatch) -> None:
     # keep saying the run is waiting for an answer it already got.
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
     assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
-    assert (
-        update_self.main(
-            ["run-status", "hold", "CONFLICT", "--repo-root", str(tmp_path)]
-        )
-        == 0
-    )
+    assert update_self.main(["run-status", "hold", "--repo-root", str(tmp_path)]) == 0
     assert (
         update_self.main(
             ["run-status", "verdict", "REFUSED", "--repo-root", str(tmp_path)]
@@ -5391,15 +5371,7 @@ def test_run_status_verdict_clears_a_hold(tmp_path, monkeypatch) -> None:
     status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.verdict == "REFUSED"
-    assert status.hold_reason is None
-
-
-def test_run_status_rejects_an_unknown_hold_reason(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
-    with pytest.raises(SystemExit):
-        update_self.main(
-            ["run-status", "hold", "QUESTION", "--repo-root", str(tmp_path)]
-        )
+    assert not status.is_holding
 
 
 def test_the_marker_mirrors_the_apply_into_the_run_record(
