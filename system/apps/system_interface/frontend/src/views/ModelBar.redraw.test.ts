@@ -80,7 +80,16 @@ const ACCOUNT = {
 
 /** Let mithril's frame-batched redraw land. */
 async function settle(): Promise<void> {
-  for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  // Waits on real animation FRAMES, not bare macrotasks. Mithril batches its redraw onto
+  // `requestAnimationFrame`, and jsdom schedules that ~16ms out -- so three `setTimeout(0)`
+  // ticks resolve long before the redraw they are supposed to be waiting for, and every
+  // assertion here reads a DOM that has not been updated yet.
+  for (let i = 0; i < 3; i += 1) {
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(undefined));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 /** Press something. No hand-rendering afterwards -- that is the whole point. */
@@ -224,7 +233,9 @@ describe("the card without a hand-cranked redraw", () => {
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');
     await press('[aria-label="Sign out of Anthropic"]');
-    document.querySelector('[data-model-popover="flyout"]')?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    document
+      .querySelector('[data-model-popover="flyout"]')
+      ?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await settle();
     expect(document.body.textContent).toContain("Remove?");
   });
@@ -264,7 +275,9 @@ describe("the card without a hand-cranked redraw", () => {
     await press('[data-card-row="providers"]');
 
     // A pointer merely leaving is not a dismissal.
-    document.querySelector('[data-model-popover="card"]')?.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
+    document
+      .querySelector('[data-model-popover="card"]')
+      ?.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
     await settle();
     expect(document.querySelector('[data-model-popover="card"]')).not.toBeNull();
 

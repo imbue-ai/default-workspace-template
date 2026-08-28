@@ -143,8 +143,7 @@ export const FLYOUT_CHECK = "ml-auto shrink-0 text-accent";
  *  The mockup slides the tick aside on hover to let the bin take the edge. It does not here: the
  *  tick says which provider this chat runs on, and that does not change because the pointer
  *  passed over the row. */
-export const FLYOUT_CHECK_PINNED =
-  "pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-accent";
+export const FLYOUT_CHECK_PINNED = "pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-accent";
 export const FLYOUT_EMPTY = "type-helper text-tertiary px-1.5 py-2";
 export const FLYOUT_ADD =
   "flex w-full items-center gap-1.5 rounded-md px-1.5 text-left text-[13px] leading-[29px] " +
