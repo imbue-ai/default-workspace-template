@@ -125,8 +125,7 @@ export function TranscriptScrollbar(): m.Component<TranscriptScrollbarAttrs> {
           // Releasing does NOT re-sync the thumb: it stays exactly where the
           // pointer left it (frozen with the mapping) until the user interacts
           // by some other means -- wheel, keys, a press in the transcript --
-          // which flips the engine back to the live mapping. A release-time
-          // re-sync made the thumb visibly hop under a still-settling fill.
+          // which flips the engine back to the live mapping.
           onpointerup: (event: PointerEvent) => {
             isDragging = false;
             (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);

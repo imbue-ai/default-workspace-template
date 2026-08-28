@@ -220,9 +220,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // runAfterRender). Cleared by any upward wheel.
   let pendingTailIntent = false;
   // The mirror for the other edge: the user targeted the very top while older
-  // history was still unloaded. Once event 0 is loaded, pin scrollTop to 0 --
-  // without this, a chunked backfill lands wherever the height estimates put
-  // the anchor, visibly short of the beginning.
+  // history was still unloaded. Once event 0 is loaded, pin scrollTop to 0.
   let pendingTopIntent = false;
 
   // --- input classification -------------------------------------------------
@@ -687,9 +685,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       return { kind: "index", index: spacerIndex };
     }
     // The fallback matters: right after a jump's window replace the anchor row
-    // is briefly gone, and a plain lookup would read that as "focus the tail" --
-    // sending the planner off to replace the fresh window with a tail window,
-    // which discards the jump and churns fetch/evict cycles indefinitely.
+    // is briefly gone, and a plain lookup would read that as "focus the tail",
+    // sending the planner off to replace the fresh window with a tail window.
     const anchorIndex = currentAnchorEventIndexFallback();
     return anchorIndex !== null ? { kind: "index", index: anchorIndex } : { kind: "tail" };
   }
@@ -855,9 +852,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // A downward scroll ending in the bottom band expresses "go to the tail"
     // even when the fill still lags the server total (atTail false only for
     // data reasons). Remember the intent; runAfterRender completes the FOLLOW
-    // attach once the tail is fully loaded -- without this, a fling to the
-    // bottom during streaming strands the user detached at gap 0, where the
-    // clamped scrollTop emits no further scroll events to re-evaluate.
+    // attach once the tail is fully loaded, since a clamped scrollTop emits
+    // no further scroll events to re-evaluate.
     pendingTailIntent = !didScrollUp && bottomGapPx < BOTTOM_THRESHOLD_PX;
     // Mirror for the top edge: an upward scroll ending at (clamped) scrollTop 0
     // while older history remains unloaded means "go to the beginning".
@@ -1093,11 +1089,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       }
       // FOLLOW means AT the bottom, unconditionally: any gap -- streaming
       // growth, fills landing, a late image load, a delayed re-measure -- is
-      // pinned shut. There is no "quiescent" exception: an interaction that
-      // should hold the view (an expand click, a selection press) DETACHES to
-      // USER_CONTROLLED at pointerdown instead (see onPointerDown), so by the
-      // time the pin runs, a user engaging with content is no longer in
-      // FOLLOW. Interacting and following are disjoint states, not a timer.
+      // pinned shut. An interaction that should hold the view (an expand
+      // click, a selection press) DETACHES to USER_CONTROLLED at pointerdown
+      // (see onPointerDown), so the pin never runs against a user engaging
+      // with content.
       if (!isPointerDown && (pendingUserDeltaPx >= -0.01 || isPendingClamp)) {
         const targetPx = element.scrollHeight - element.clientHeight;
         if (hasPendingUserScroll) {
@@ -1176,10 +1171,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // the user expressed "go to the very bottom/top" while that edge was not
     // fully loaded, so the exact landing could not happen at gesture time --
     // and a clamped scrollTop emits no further scroll events to retry. Once
-    // the edge IS loaded, land exactly on it: a jump anchors its target row at
-    // the viewport TOP, so without the snap a tall last row leaves the true
-    // bottom below the fold, and a chunked backfill toward event 0 lands
-    // wherever the height estimates put the anchor rather than at 0.
+    // the edge IS loaded, land exactly on it (a jump landing alone anchors
+    // its target row at the viewport TOP, which is not the edge).
     if (pendingTailIntent && positionState.kind === "USER_CONTROLLED" && geometry !== null) {
       const totalNow = dataSource.getTotalEvents();
       if (spacerBottomPx <= 0 && (totalNow === null || extent().endIndex >= totalNow)) {
@@ -1227,11 +1220,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
 
       // A pending scrollbar target lands as soon as its event is inside the
       // loaded window, whichever way the fill got there -- an at-offset
-      // replace or chunked before/after growth. Without this the near-gap
-      // path never re-anchors onto the target: the landing is left to
-      // spacer-estimate noise (a 3x estimate error lands a 95% release at
-      // ~70% of the transcript), and pendingJumpIndex would keep steering
-      // the fill at the stale target forever.
+      // replace or chunked before/after growth (which never dispatches a
+      // JUMPED_TO_INDEX of its own). This is also what retires
+      // pendingJumpIndex, so the fill stops steering at the target.
       if (pendingJumpIndex !== null && pendingRestore === null && geometry !== null) {
         const { firstIndex, endIndex } = extent();
         if (pendingJumpIndex >= firstIndex && pendingJumpIndex < endIndex) {
@@ -1342,9 +1333,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       const rowCount = geometryRows.length;
       // A retained freeze range can outlive the rows it froze: a jump replaces
       // the window (or an eviction shrinks it) while a selection is live, and
-      // the old indexes then run past the new rows array. Rendering such a plan
-      // makes rows[i].render() throw on undefined, which kills every subsequent
-      // redraw -- the panel freezes on whatever painted last. Clamp to what
+      // the old indexes then run past the new rows array. Clamp to what
       // actually exists.
       if (range.endIndex > rowCount || range.startIndex > rowCount) {
         range = { startIndex: Math.min(range.startIndex, rowCount), endIndex: Math.min(range.endIndex, rowCount) };
@@ -1495,7 +1484,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       // 0) means the pointer genuinely reached or passed the point where the
       // thumb bottoms (tops) out -- the one unambiguous "take me to the very
       // end/beginning" signal. Everything short of that is an honest linear
-      // position; no thresholds or warps second-guess the pointer.
+      // position.
       const isTrackEndIntent = lastScrollbarFraction >= 1 - 1e-6;
       const isTrackStartIntent = lastScrollbarFraction <= 1e-6;
       trace?.record("scrollbar-move", { fraction: lastScrollbarFraction, target });
@@ -1582,12 +1571,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
               "scrollbar-virtual",
             );
           }
-          // Leave FOLLOW now, not on landing. An unloaded target near the
+          // Leave FOLLOW now, not on landing: an unloaded target near the
           // window fills in via fetch-before/after (no fetch-at-offset, so no
-          // JUMPED_TO_INDEX dispatch ever fires), and while FOLLOW holds the
-          // pin drags the viewport straight back to the bottom -- the jump
-          // silently never happens. The current-view anchor holds the spacer
-          // position while the fill lands.
+          // JUMPED_TO_INDEX dispatch), and while FOLLOW holds, the pin drags
+          // the viewport straight back to the bottom. The current-view anchor
+          // holds the spacer position while the fill lands.
           // A target at either extreme records edge intent, so the landing
           // (which anchors the target row at the viewport TOP) gets corrected
           // to the exact edge by runAfterRender once that edge is loaded.
