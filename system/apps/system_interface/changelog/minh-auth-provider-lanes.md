@@ -1084,7 +1084,12 @@ instruction; the form is the whole task.
 
 The header states which harness the connection will run on, top-right, where the mockup puts its
 harness picker. Not a picker: provider -> harness is fixed, so there is nothing to choose. It is
-still the fact you want before handing over a credential.
+still the fact you want before handing over a credential, so it is sized to be read -- `text-sm`
+with the harness name at full weight and contrast, "Runs on" the quiet part.
+
+It sits WITH the close button in one right-aligned group. Both carried `ml-auto` at first and
+fought over it: the first pushed the label right, the second pushed the button further, and the
+label ended up stranded in the middle of the gap between them.
 
 A PENDING verdict keeps the size of the screen it interrupts. Checking a credential can take well
 under a second, and shrinking to the small status panel and straight back up reads as a flinch. A

@@ -854,17 +854,19 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 // puts its harness picker. Not a picker here: provider -> harness is fixed in
                 // V1, so there is nothing to choose -- but it is still the fact you want before
                 // you hand over a credential, and the header is where the mockup says it goes.
-                current !== null && !isSuccess && !isPending
-                  ? m("span", { class: css.RUNS_ON }, [
-                      m("span", { class: css.RUNS_ON_PREFIX }, "Runs on"),
-                      m("span", { class: css.RUNS_ON_NAME }, current.harness_label),
-                    ])
-                  : null,
-                m(
-                  "button",
-                  { type: "button", class: css.CLOSE_BUTTON, onclick: onClose, "aria-label": "Close" },
-                  m.trust(icon("close", { size: 16 })),
-                ),
+                m("span", { class: css.HEADER_END }, [
+                  current !== null && !isSuccess && !isPending
+                    ? m("span", { class: css.RUNS_ON }, [
+                        m("span", { class: css.RUNS_ON_PREFIX }, "Runs on"),
+                        m("span", { class: css.RUNS_ON_NAME }, current.harness_label),
+                      ])
+                    : null,
+                  m(
+                    "button",
+                    { type: "button", class: css.CLOSE_BUTTON, onclick: onClose, "aria-label": "Close" },
+                    m.trust(icon("close", { size: 16 })),
+                  ),
+                ]),
               ]),
               m(
                 "div",
