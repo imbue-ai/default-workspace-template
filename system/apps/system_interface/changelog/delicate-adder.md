@@ -64,7 +64,5 @@ pixel-identical render.
   earlier draft added one; it was removed to avoid impeding user-driven
   redesigns).
 
-- **Test infrastructure.** The fake supervisord fixture binds its unix socket
-  in a short `mkdtemp` dir (macOS caps AF_UNIX paths at ~104 chars, which
-  pytest's nested `tmp_path` overflowed). Removed the dev-only visual-diff
-  gallery harness used during the migration.
+- **Test infrastructure.** Removed the dev-only visual-diff gallery harness
+  used during the migration.
