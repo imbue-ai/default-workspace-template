@@ -156,13 +156,17 @@ export function getFlow(): (FlowStart & { status: FlowStatus }) | null {
  * what lets every chat already bound to it recover rather than being orphaned.
  */
 export async function startFlow(laneId: string, methodId: string, accountId?: string): Promise<void> {
-  stopPolling();
   const started = await m.request<FlowStart>({
     method: "POST",
     url: apiUrl("/api/accounts"),
     body: { lane_id: laneId, method_id: methodId, account_id: accountId ?? null },
   });
   flow = { ...started, status: { state: "pending", detail: null, account_id: null } };
+  // Stopped HERE rather than before the await: two overlapping sign-ins both reached the await
+  // with nothing yet to stop, and both then started a poller. The first interval was left with
+  // no reference to it, GETting a flow id the server had already forgotten every two seconds
+  // for the life of the page.
+  stopPolling();
   // A paste flow is waiting on the user, not on a terminal, so there is nothing to poll.
   if (started.shape !== "paste") startPolling();
   m.redraw();

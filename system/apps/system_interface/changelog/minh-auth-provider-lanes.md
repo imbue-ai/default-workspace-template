@@ -1185,3 +1185,20 @@ boot catches only `AccountError` -- supervisord restarted forever. A string vers
 started. Nothing ever popped the proto entry: the chat name was burned forever and every new
 socket replayed a chat stuck at "creating". It is best-effort now -- losing the mru hint is not
 worth failing a create over.
+
+# Three frontend races and a silent failure
+
+A rename or a removal that the server refuses now surfaces and reloads the list. Both were
+`void p.then(...)` with no `.catch`, so a 404 -- a double-click, or the same account open in two
+menus and removed from one -- was an unhandled rejection and the row silently kept a name the
+server did not have.
+
+`startFlow` stopped the previous poller BEFORE its await, so two overlapping sign-ins both
+reached the await with nothing yet to stop and both then started one. The first interval was left
+with no reference to it, GETting a flow id the server had already forgotten every two seconds for
+the life of the page. Stopped after the await instead.
+
+The API-key screen's provider-picker backdrop dismissed on `onclick`, reintroducing exactly the
+bug `backdropDismissAttrs` exists to prevent: a click fires wherever the press ENDED, so
+selecting text inside the menu and releasing past its edge read as "dismiss". This file already
+imported that helper for the modal's own backdrop.

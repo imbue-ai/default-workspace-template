@@ -13,7 +13,7 @@
  */
 
 import m from "mithril";
-import { deleteAccount, renameAccount } from "../models/Providers";
+import { deleteAccount, loadAccounts, renameAccount } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { icon } from "./icons";
 import * as css from "./modelCardStyles";
@@ -77,10 +77,21 @@ function commitRename(state: AccountRowState, row: ProviderAccount, onChanged?: 
   const typed = state.renameDraft.trim();
   endRename(state);
   if (typed === row.name) return;
-  void renameAccount(row.id, typed).then(() => {
-    onChanged?.();
-    m.redraw();
-  });
+  // `.catch` is not optional here: a 404 is ordinary -- a double-click, or the same account
+  // open in two menus and removed from one -- and without it the rejection is unhandled and
+  // the row silently keeps a name the server does not have. Reloading is the correction: it
+  // shows whatever is actually there.
+  void renameAccount(row.id, typed)
+    .then(() => {
+      onChanged?.();
+    })
+    .catch((error: unknown) => {
+      console.warn(`Could not rename account ${row.id}`, error);
+      void loadAccounts();
+    })
+    .finally(() => {
+      m.redraw();
+    });
 }
 
 /** The inline field a row becomes while it is being renamed.
@@ -165,7 +176,16 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
             return;
           }
           state.confirmingRemoval = null;
-          void deleteAccount(row.id).then(() => opts.onChanged?.());
+          void deleteAccount(row.id)
+            .then(() => opts.onChanged?.())
+            .catch((error: unknown) => {
+              // Already gone is the common case, and the list is the honest answer either way.
+              console.warn(`Could not remove account ${row.id}`, error);
+              void loadAccounts();
+            })
+            .finally(() => {
+              m.redraw();
+            });
         },
       },
       arming ? "Remove?" : m.trust(icon("trash", { size: 13 })),
