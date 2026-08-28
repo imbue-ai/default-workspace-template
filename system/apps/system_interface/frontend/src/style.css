@@ -9,7 +9,7 @@
  *     via the type-* roles, shared recipes via views/primitives.ts builders.
  *   - Hand-written CSS here is only for what utilities cannot reach: vendor
  *     DOM (dockview/xterm), markdown-rendered content, keyframes and
- *     pseudo-element machines (spinner/toggle), contextual rules over
+ *     pseudo-element machines (the spinner), contextual rules over
  *     shared markup, and cascade-critical overrides. In those, `@apply` the
  *     semantic utilities where they cover the declarations; reference the
  *     --c-* value tokens where no utility fits, never a raw hex.
@@ -288,70 +288,6 @@ body {
   --spinner-arc: transparent;
 }
 
-/* ── Toggle primitive ────────────────────────────────────────────────────────
- * One on/off icon-toggle button, generalized from the composer's fast-mode
- * toggle. A real <button> whose pressed state is the accent tint. Use:
- *   .toggle [.toggle--on] [.toggle--readonly] [.toggle--inline]
- * States: default / hover / :focus-visible / :disabled + [aria-disabled] /
- * on (--on) / read-only (--readonly, non-interactive but keeps its tooltip, so
- * NOT `disabled`). .toggle--inline is a smaller, non-interactive copy for
- * pointing at the control inside running text. (The disclosure "toggles" on the
- * login and permission cards are text/caret expanders, not on/off switches, so
- * they are deliberately not folded in here.) */
-.toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--c-text-secondary);
-  background: none;
-  border: none;
-  border-radius: var(--radius-lg);
-  cursor: pointer;
-  transition:
-    color var(--dur-base),
-    background var(--dur-base);
-  flex-shrink: 0;
-}
-.toggle:hover {
-  color: var(--c-text-primary);
-  background: var(--c-bg-hover);
-}
-.toggle:focus-visible {
-  outline: 2px solid var(--c-accent);
-  outline-offset: 2px;
-}
-.toggle:disabled,
-.toggle[aria-disabled="true"] {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.toggle--on,
-.toggle--on:hover {
-  color: var(--c-accent);
-  background: var(--c-accent-light);
-}
-/* Read-only: default cursor, no hover brighten. `:not(--on)` so a read-only
-   control that is currently on still shows the accent. */
-.toggle--readonly {
-  cursor: default;
-}
-.toggle--readonly:not(.toggle--on):hover {
-  color: var(--c-text-secondary);
-  background: none;
-}
-/* Non-interactive inline copy, set in running text so a sentence about "the
-   button" can show which one. Reuses the rules above so it cannot drift from
-   the real control. */
-.toggle--inline {
-  width: 26px;
-  height: 26px;
-  cursor: default;
-  vertical-align: -0.45em;
-}
-
 /* ── Title bar / messages area ── */
 /* The app header and content area (ChatPanel / SubagentView) are styled with
    utilities in their views. On .app-content, native scroll anchoring stays ON
@@ -441,7 +377,7 @@ body {
    styled entirely with utilities in their views. Their hover tooltips use the
    shared JS hover tooltip (views/hoverTooltip.ts); the send/stop/attach and
    under-bar buttons are the shared Button primitive; the fast-mode toggle is
-   the shared .toggle primitive. */
+   that same Button as a selectable ghost (selected + readonly options). */
 
 /* ── Markdown content styling ── */
 .markdown-content {
