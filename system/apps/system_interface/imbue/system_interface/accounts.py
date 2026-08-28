@@ -294,7 +294,6 @@ KEPT_ON_DISCARD: Final = ("projects",)
 REAUTH_BACKUP_DIRNAME: Final = ".minds-reauth-backup"
 # Marks a backed-up file that did not exist before the flow, so restoring it means deleting it.
 _ABSENT_SUFFIX: Final = ".absent"
-KEPT_ON_DISCARD_ALL: Final = (*KEPT_ON_DISCARD, REAUTH_BACKUP_DIRNAME)
 
 
 def discard_account_dir(account_id: str, home: Path | None = None) -> None:
@@ -507,7 +506,7 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
             # left behind. Removing it here would undo that one boot later. An EMPTY folder
             # is debris and must still go, which is why this asks for a non-empty subset.
             contents = {c.name for c in child.iterdir()}
-            if contents and contents <= set(KEPT_ON_DISCARD_ALL):
+            if contents and contents <= set(KEPT_ON_DISCARD):
                 continue
             shutil.rmtree(child, ignore_errors=True)
             removed.append(child.name)
