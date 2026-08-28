@@ -95,6 +95,24 @@ def test_probe_all_app_liveness_falls_back_to_tcp_when_supervisord_is_unreachabl
     assert is_running_by_name == {"web": True}
 
 
+def test_probe_all_app_liveness_makes_no_rpc_when_no_row_is_supervised(
+    fake_supervisor: FakeSupervisorServer, listening_port: int, closed_port: int
+) -> None:
+    """The sweep runs on a timer regardless of registry contents, so a registry
+    with only unsupervised rows (or none) must not cost a supervisord round
+    trip per pass -- every row is answered by its TCP probe alone."""
+    is_running_by_name = probe_all_app_liveness(
+        [
+            ("plain", "", f"http://127.0.0.1:{listening_port}"),
+            ("other", "", f"http://127.0.0.1:{closed_port}"),
+        ]
+    )
+
+    assert is_running_by_name == {"plain": True, "other": False}
+    assert probe_all_app_liveness([]) == {}
+    assert fake_supervisor.get_all_process_info_call_count == 0
+
+
 def test_stop_supervisor_program_stops_a_running_program(fake_supervisor: FakeSupervisorServer) -> None:
     fake_supervisor.statename_by_program["docs"] = "RUNNING"
     stop_supervisor_program("docs", fake_supervisor.socket_path)

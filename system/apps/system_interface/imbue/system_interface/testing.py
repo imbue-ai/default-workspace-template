@@ -102,6 +102,9 @@ class FakeSupervisorServer:
     def __init__(self, socket_path: Path) -> None:
         self.socket_path = socket_path
         self.statename_by_program: dict[str, str] = {}
+        # Lets tests assert on the sweep's RPC economy (e.g. that a registry
+        # with no supervised rows makes no supervisord call at all).
+        self.get_all_process_info_call_count = 0
         self._server = _UnixSocketXmlRpcServer(str(socket_path))
         self._server.register_function(self._get_all_process_info, "supervisor.getAllProcessInfo")
         self._server.register_function(self._start_process, "supervisor.startProcess")
@@ -120,9 +123,8 @@ class FakeSupervisorServer:
     # value, so the handlers take ``object`` and stringify -- exactly what the
     # wire delivers.
     def _get_all_process_info(self) -> list[dict[str, str]]:
-        return [
-            {"name": program, "statename": statename} for program, statename in self.statename_by_program.items()
-        ]
+        self.get_all_process_info_call_count += 1
+        return [{"name": program, "statename": statename} for program, statename in self.statename_by_program.items()]
 
     def _start_process(self, name: object, _wait: object) -> bool:
         program = str(name)
