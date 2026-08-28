@@ -1084,33 +1084,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-left: --spacing(1);
 }
 
-.dv-custom-tab-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--c-text-secondary);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition:
-    background var(--dur-fast),
-    color var(--dur-fast);
-  flex-shrink: 0;
-}
-
-.dv-custom-tab-action svg {
-  width: 12px;
-  height: 12px;
-}
-
-.dv-custom-tab-action:hover {
-  background: rgba(0, 0, 0, 0.08);
-  color: var(--c-text-primary);
-}
+/* The tab-action buttons (close, kebab) now wear the shared ghost icon-Button
+ * recipe (buttonClass in views/components/Button.ts) for their box, radius and
+ * hover square; `.dv-custom-tab-action` stays only as a bare marker the E2E
+ * selectors query, and the 12px glyph size is set on the icon markup at the
+ * call site. Only the `.dv-custom-tab-actions` container styling lives here. */
 
 /* Modal enter animations.
  * The modal shell itself (overlay + card + header/title + body copy + actions)

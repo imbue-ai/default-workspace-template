@@ -42,7 +42,8 @@ pixel-identical render.
   JS hover tooltip; the CSS `data-tooltip` bubble is gone). The bespoke
   per-feature buttons, badges, spinners, toggles, and tooltip bubbles across
   the composer, lightbox, queued actions, terminal banner, permission card,
-  sidebar micro-controls, and the modals were migrated onto these.
+  sidebar micro-controls, the dockview tab-bar actions (close/kebab), the
+  new-tab Filter-by-kind control, and the modals were migrated onto these.
 
 - **Shared modal shell.** A `Modal` component (`components/Modal.ts`) owning the
   overlay/card/header/actions chrome and backdrop dismissal

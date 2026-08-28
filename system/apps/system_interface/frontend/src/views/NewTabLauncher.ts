@@ -40,6 +40,7 @@ import { serviceIconMarkup } from "./components/appIcon";
 import { areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
 import { hoverTooltipAttrs } from "./components/hoverTooltip";
 import { icon } from "./components/icons";
+import { buttonClass } from "./components/Button";
 import { SHORTCUT_TOOLTIPS } from "./Sidebar";
 
 /** What one "Open new" tile starts, as data rather than as an encoded name.
@@ -553,10 +554,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           "button",
           {
             type: "button",
+            class: buttonClass("ghost", { icon: true, xs: true }),
             "aria-expanded": openFilterFor === section.key ? "true" : "false",
-            class:
-              "text-faint flex h-6 w-6 cursor-pointer items-center justify-center rounded " +
-              "hover:bg-fill-hover hover:text-primary",
             onclick: () => {
               openFilterFor = openFilterFor === section.key ? null : section.key;
             },

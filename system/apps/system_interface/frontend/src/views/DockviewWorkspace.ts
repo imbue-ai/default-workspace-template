@@ -76,6 +76,7 @@ import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./components/icons";
 import type { IconName } from "./components/icons";
+import { buttonClass } from "./components/Button";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import {
@@ -1423,10 +1424,13 @@ function createTabActionButton(
   onClick: (ev: MouseEvent) => void,
 ): HTMLButtonElement {
   const button = document.createElement("button");
-  button.className = "dv-custom-tab-action";
+  // The shared ghost icon-Button recipe supplies the box, radius and hover
+  // square; `dv-custom-tab-action` stays as a bare marker for the E2E selectors,
+  // and `shrink-0` preserves the old flex-shrink behaviour in the strip.
+  button.className = buttonClass("ghost", { icon: true, xs: true, extra: "dv-custom-tab-action shrink-0" });
   button.setAttribute("aria-label", title);
-  // No explicit size: `.dv-custom-tab-action svg` sizes these to 12px in CSS.
-  button.innerHTML = iconName === "kebab" ? tabIcon("kebab", 14) : icon(iconName);
+  // 12px glyphs, matching the pre-primitive size (previously forced by CSS).
+  button.innerHTML = iconName === "kebab" ? tabIcon("kebab", 12) : icon(iconName, { size: 12 });
   const tooltip = attachHoverTooltip(button);
   tooltip.setText(title);
   disposables.push(tooltip);
