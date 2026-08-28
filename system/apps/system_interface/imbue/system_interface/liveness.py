@@ -162,8 +162,7 @@ def probe_all_app_liveness(probe_targets: Sequence[tuple[str, str, str]]) -> dic
     One batched supervisord RPC answers for all supervised rows, instead of one
     unix-socket round trip per row per sweep. A row falls back to the TCP probe
     when supervisord cannot answer at all, does not know the row's program, or
-    the row is unsupervised (no program) -- the same per-row semantics as
-    :func:`probe_app_liveness`.
+    the row is unsupervised (no program).
     """
     is_running_by_program = fetch_supervisor_program_states(supervisor_socket_path())
     is_running_by_name: dict[str, bool] = {}
@@ -174,36 +173,6 @@ def probe_all_app_liveness(probe_targets: Sequence[tuple[str, str, str]]) -> dic
         else:
             is_running_by_name[name] = probe_tcp_url(url)
     return is_running_by_name
-
-
-def probe_supervisor_program(program: str, socket_path: Path) -> bool | None:
-    """Whether supervisord reports ``program`` as up, or None when it cannot say.
-
-    None covers both an unreachable supervisord (no socket -- a dev setup, a
-    test) and a program name supervisord does not know (a hand-edited registry,
-    or a block removed since registration); the caller falls back to the TCP
-    probe rather than presenting a guess as supervisord's answer.
-    """
-    try:
-        # ``object`` collapses the marshallable union the proxy stub infers, so
-        # the isinstance below is the one narrowing the read relies on.
-        process_info: object = _supervisor_proxy(socket_path).supervisor.getProcessInfo(program)
-    except xmlrpc.client.Fault as e:
-        _loguru_logger.debug("Supervisord has no program {!r}: {}", program, e.faultString)
-        return None
-    except (OSError, xmlrpc.client.ProtocolError, xmlrpc.client.ResponseError) as e:
-        _loguru_logger.debug("Failed to reach supervisord for {!r}: {}", program, e)
-        return None
-    if not isinstance(process_info, dict):
-        return None
-    # Read the one key by iteration: the proxy stub's inferred dict variants
-    # make every keyed access (``get``, ``in``, subscript) an overload mismatch,
-    # while an argument-free ``items()`` walk types cleanly on all of them.
-    statename = ""
-    for key, value in process_info.items():
-        if key == "statename":
-            statename = str(value)
-    return statename in _RUNNING_STATE_NAMES
 
 
 def probe_tcp_url(url: str) -> bool:
@@ -220,17 +189,3 @@ def probe_tcp_url(url: str) -> bool:
             return True
     except OSError:
         return False
-
-
-def probe_app_liveness(program: str, url: str) -> bool:
-    """The ``is_running`` derivation for one registry row.
-
-    Supervisord's process state for a supervised row, with the TCP probe as the
-    fallback whenever supervisord cannot answer (and the whole story for an
-    unsupervised row).
-    """
-    if program:
-        supervised_state = probe_supervisor_program(program, supervisor_socket_path())
-        if supervised_state is not None:
-            return supervised_state
-    return probe_tcp_url(url)
