@@ -788,12 +788,17 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                 {
                   key: tile.label,
                   // The chat control carries the frame its own button used to, so the
-                  // provider sits INSIDE it: same height, border, radius, type size and WIDTH
-                  // as the other three, with one hairline divider between the two halves. It
-                  // used to take 1.7 shares to fit both, which made the row read as one
-                  // important tile and three afterthoughts.
+                  // provider sits INSIDE it: same height, border, radius and type size as the
+                  // other three, one hairline divider between the two halves.
+                  //
+                  // It takes 1.7 shares because it holds TWO things. An equal share was tried
+                  // twice and truncated the label both times -- "New chat" to "Ne...", and then
+                  // even "Chat" to "C...", because the account name beside it is the wider half
+                  // and wins the space. A tile whose own label is one letter is worse than a
+                  // row that is not perfectly even.
                   class:
-                    "border-border flex h-9 min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border " +
+                    "border-border flex h-9 items-stretch overflow-hidden rounded-lg border " +
+                    (isChatTile ? "min-w-0 flex-[1.7]" : "min-w-0 flex-1") +
                     (isDisabled ? " text-text-faint" : " text-text-primary"),
                 },
                 [
