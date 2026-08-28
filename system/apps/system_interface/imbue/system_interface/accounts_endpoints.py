@@ -177,9 +177,13 @@ def submit_flow(flow_id: str) -> Response:
         if "code" in payload:
             status = service.submit_code(flow_id, str(payload["code"]).strip())
         elif "api_key" in payload:
-            status = service.submit_key(
-                flow_id, str(payload["api_key"]).strip(), payload.get("key_provider") or None
-            )
+            # `key_provider` is only ever a string or absent. Passed through raw, a JSON list
+            # or object reaches a set membership test and a dict key, both of which raise on an
+            # unhashable value -- a 500 for a malformed body rather than a 400.
+            raw_provider = payload.get("key_provider")
+            if raw_provider is not None and not isinstance(raw_provider, str):
+                return _error_response("key_provider must be a string")
+            status = service.submit_key(flow_id, str(payload["api_key"]).strip(), raw_provider or None)
         else:
             return _error_response("expected a code or an api_key")
     except FlowError as e:
@@ -200,8 +204,8 @@ def abort_flow(flow_id: str) -> Response:
 
 
 def delete_account(account_id: str) -> Response:
-    """Remove an account. Chats bound to it keep their transcripts and stop being able to
-    take a turn -- the confirmation that says so is the client's job."""
+    """Remove an account. Chats bound to it keep their transcripts; a harness already holding
+    the credential keeps working until it restarts. The confirmation is the client's job."""
     try:
         accounts.delete_account(account_id)
     except accounts.AccountError as e:
@@ -212,7 +216,12 @@ def delete_account(account_id: str) -> Response:
 def rename_account(account_id: str) -> Response:
     """Set or clear an account's user-chosen name. Display only -- see `accounts.rename_account`."""
     payload = request.get_json(silent=True) or {}
-    name = str(payload.get("name", ""))
+    raw_name = payload.get("name", "")
+    # `str(None)` is "None" -- a four-character name the user never typed, under the cap and
+    # therefore silently accepted. A null means "clear it", which is the empty string.
+    if raw_name is not None and not isinstance(raw_name, str):
+        return _error_response("name must be a string")
+    name = raw_name or ""
     if len(name) > _MAX_ACCOUNT_NAME:
         return _error_response(f"a name can be at most {_MAX_ACCOUNT_NAME} characters")
     try:

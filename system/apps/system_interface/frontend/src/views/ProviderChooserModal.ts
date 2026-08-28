@@ -92,6 +92,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   // so `busy` alone leaves a gap where the flow is still pending and nothing marks it. That
   // gap rendered the menu again, which read as being bounced back to the start.
   let awaitingVerdict = false;
+  // Bumped by every `begin`, so a request that has been superseded can tell and stand down.
+  let generation = 0;
 
   function reset(): void {
     mode = "chooser";
@@ -156,14 +158,23 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // and a form that was always going to be there. Render the form and let the mint land
     // behind it; the Save button needs the flow, and it cannot be clicked that fast.
     busy = !isPaste(chosenMethod);
+    // Which attempt this is. Two lanes clicked in quick succession both run this function, and
+    // the second stamps the screen before the first's request resolves -- so without a
+    // generation check the loser's `catch` writes "that didn't work" over the winner's screen,
+    // and its `finally` clears a `busy` the winner is still relying on.
+    generation += 1;
+    const attempt = generation;
     m.redraw();
     try {
       await startFlow(chosen.id, chosenMethod.id, options.accountId);
     } catch (e) {
+      if (attempt !== generation) return;
       error = errorText(e);
     } finally {
-      busy = false;
-      m.redraw();
+      if (attempt === generation) {
+        busy = false;
+        m.redraw();
+      }
     }
   }
 

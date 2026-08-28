@@ -198,6 +198,11 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
   // sign-in displaces the first, and an in-flight poll or submit from the first would
   // otherwise stamp its state -- including "failed" -- onto a flow that is doing fine.
   if (flow === null || flow.flow_id !== flowId) return;
+  // A flow that has already settled stays settled. `ok` and `failed` are terminal, and the
+  // poller is stopped on reaching one -- but a poll already in flight when that happened still
+  // resolves afterwards, and a `pending` from it would put a finished sign-in back on the
+  // spinner with nothing left running to correct it.
+  if (flow.status.state === "ok" || flow.status.state === "failed") return;
   flow = { ...flow, status };
   if (status.state === "ok") {
     stopPolling();
