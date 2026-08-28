@@ -149,8 +149,6 @@ def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None
                 program_name = str(value)
             elif key == "statename":
                 statename = str(value)
-            else:
-                pass
         if program_name:
             is_running_by_program[program_name] = statename in _RUNNING_STATE_NAMES
     return is_running_by_program
