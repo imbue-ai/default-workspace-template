@@ -85,6 +85,9 @@ let lanes: Lane[] = [];
 let accounts: ProviderAccount[] = [];
 let mru: string | null = null;
 let lanesLoaded = false;
+// Whether the account list has been fetched even once. Distinct from "it is empty": both read
+// as zero accounts, and one of them means "ask the user to sign in".
+let accountsLoaded = false;
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -126,6 +129,13 @@ export async function loadAccounts(): Promise<void> {
   });
   accounts = body.accounts;
   mru = body.mru;
+  accountsLoaded = true;
+}
+
+/** Whether `getAccounts()` has an answer yet. Anything that treats "no accounts" as "sign in
+ *  first" has to ask this too, or it diverts the user on a workspace that has providers. */
+export function areAccountsLoaded(): boolean {
+  return accountsLoaded;
 }
 
 /** Name an account, or pass "" to go back to the provider's own name.
@@ -155,12 +165,22 @@ export function getFlow(): (FlowStart & { status: FlowStatus }) | null {
  * Start a sign-in. Pass `accountId` to re-authenticate INTO an existing folder, which is
  * what lets every chat already bound to it recover rather than being orphaned.
  */
+/** Bumped by every `startFlow`, so a response that has been superseded can tell. */
+let startGeneration = 0;
+
 export async function startFlow(laneId: string, methodId: string, accountId?: string): Promise<void> {
+  // Which start this is. The server is single-flight and displaces the older flow, so if two
+  // POSTs resolve out of order the LATER response is the live one -- and without this the
+  // earlier one lands last and leaves `flow` naming a session the server has already forgotten.
+  // Every poll then 404s and the modal says the sign-in was replaced, while a live flow exists.
+  startGeneration += 1;
+  const attempt = startGeneration;
   const started = await m.request<FlowStart>({
     method: "POST",
     url: apiUrl("/api/accounts"),
     body: { lane_id: laneId, method_id: methodId, account_id: accountId ?? null },
   });
+  if (attempt !== startGeneration) return;
   flow = { ...started, status: { state: "pending", detail: null, account_id: null } };
   // Stopped HERE rather than before the await: two overlapping sign-ins both reached the await
   // with nothing yet to stop, and both then started a poller. The first interval was left with

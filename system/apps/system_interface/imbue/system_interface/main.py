@@ -17,6 +17,7 @@ from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import reconcile
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
+from imbue.system_interface.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.server import create_application
@@ -123,6 +124,13 @@ def main() -> None:
     # unbounded crash loop with no UI and therefore no way to delete the offending account.
     # Every other JSON reader in this app degrades with a warning; so does this one.
     try:
+        # Before the sweep, not after: an orphan from a previous process is still holding an
+        # account folder open and can still write a credential into it, so reaping first is
+        # what stops it writing into a folder the sweep is about to delete -- or over one
+        # whose parked backup the sweep is about to restore.
+        reaped = reap_orphaned_auth_processes()
+        if reaped:
+            logger.warning("Reaped {} sign-in process(es) left by a previous run", reaped)
         reconcile()
     except (AccountError, OSError) as e:
         # OSError as well as AccountError: the sweep walks the accounts root, reads and writes
