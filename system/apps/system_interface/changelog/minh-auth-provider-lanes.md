@@ -1022,8 +1022,11 @@ and is now reachable one.
 - The server stops projecting a terminal panel back to `chat-terminal:<name>` and stops listing
   an `agent-terminal` entry per agent -- `layout list` would otherwise advertise a ref that
   `layout.py` now refuses.
-- Layouts saved while it was still possible have their `iframe-agent-*` panels dropped on
-  restore, permanently rather than as a migration.
+- Layouts saved while it was still possible have their terminal panels dropped on restore,
+  permanently rather than as a migration. Identified by the ttyd dispatch args in their URL, not
+  by their `iframe-agent-<id>-<ts>` panel id: that id shape is shared with every iframe an agent
+  opens through `llm-api.openTab`, so an id test would also delete app panes and ad-hoc URLs an
+  agent had put there, on every view switch.
 
 Side-by-side is given up deliberately. Two live ttyd clients on one tmux window keep resizing it
 out from under each other -- `window-size latest` means the most recent attach wins -- so two

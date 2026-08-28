@@ -251,10 +251,6 @@ export function getTerminalUrl(): string {
  *  own tab too -- by a button and by a ``chat-terminal:<name>`` ref -- and both are gone,
  *  because two live ttyd clients on one tmux window keep resizing it out from under each
  *  other (`window-size latest` means the most recent attach wins). */
-/** The id shape both agent-terminal creation paths used. Kept only so the restore sweep can
- *  recognise what they left in saved layouts and drop it. */
-const AGENT_TERMINAL_PANEL_PREFIX = "iframe-agent-";
-
 export function buildAgentTerminalUrl(agentName: string): string {
   const baseUrl = getTerminalUrl();
   const separator = baseUrl.includes("?") ? "&" : "?";
@@ -4027,10 +4023,15 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
     // An agent's terminal is the back face of its chat, not a tab. A layout saved while that
     // was still possible names one, and restoring it would put a bare ttyd iframe beside the
     // chat that now holds the same session -- two live clients on one tmux window, each
-    // resizing it out from under the other. Both creation paths used one id shape, so one
-    // prefix test covers them.
+    // resizing it out from under the other.
+    //
+    // Identified by its URL, NOT by its `iframe-agent-<id>-<ts>` panel id: that id shape is
+    // shared with every iframe an agent opens through `llm-api.openTab`, so an id test also
+    // deletes app panes and ad-hoc URLs an agent put there, on every restore. The ttyd dispatch
+    // args are the shape only an agent terminal has.
     for (const panel of dv.panels.slice()) {
-      if (panel.id.startsWith(AGENT_TERMINAL_PANEL_PREFIX)) dv.removePanel(panel);
+      const url = panelParams.get(panel.id)?.url;
+      if (typeof url === "string" && rebuildAgentTerminalUrl(url) !== null) dv.removePanel(panel);
     }
 
     // An object is a singleton with one page, so an arrangement naming the same
