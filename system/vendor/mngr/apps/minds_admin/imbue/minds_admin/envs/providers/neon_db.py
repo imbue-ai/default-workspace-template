@@ -70,6 +70,13 @@ _PSQL_TIMEOUT_SECONDS: Final[float] = 60.0
 _DEFAULT_REGION_ID: Final[str] = "aws-us-west-2"
 _DEFAULT_PG_VERSION: Final[int] = 17
 
+# Postgres major version every analytics Neon project runs, dev and shared
+# tiers alike. Pinned separately from _DEFAULT_PG_VERSION (the minds-<env>
+# projects) so the analytics stack can move independently; the deploy flow
+# refuses to run analytics migrations against a catalog on a different major
+# (see migrations.verify_analytics_postgres_major).
+ANALYTICS_PG_VERSION: Final[int] = 18
+
 # Names of the databases we provision inside every per-env project.
 # Both names use snake_case so they don't need quoting in psql.
 HOST_POOL_DB_NAME: Final[str] = "host_pool"
@@ -789,7 +796,7 @@ def create_analytics_neon_project(
                     "project": {
                         "name": project_name,
                         "org_id": org_id,
-                        "pg_version": _DEFAULT_PG_VERSION,
+                        "pg_version": ANALYTICS_PG_VERSION,
                         "region_id": _DEFAULT_REGION_ID,
                     },
                 },

@@ -14,7 +14,65 @@ release published).
 
 (nothing yet)
 
-## Must land before the PRODUCTION deploy
+## Pending infrastructure maintenance (not deploy-coupled)
+
+- [ ] **Production box `0b24ee94` (ns1010092.ip-51-81-185.us, 51.81.185.229,
+  hil/US-WEST-OR) NVMe replacement** -- OVH ticket **#724677** (filed
+  2026-08-25, intervention authorized any time). One NVMe has dropped off the
+  bus entirely (second failure after the 2026-08-14 cable re-seat, ticket
+  #720852); `md2`/`md3` both run degraded `[2/1] [_U]` on the surviving drive
+  (serial SDM000039A80). Detected via the connector's hourly box-health check
+  reporting to production Bugsink. Prep already done: the box's 12 available
+  minds-v0.3.17 slices were destroyed 2026-08-25 so no new workspaces land
+  there; only the 2 leased workspaces
+  (host-11642ce9dcf746ac8a1591e467ef4b3a, host-a7b8d32fffda4b91852d9e2596d3e4c3)
+  remain, their owners notified out-of-band.
+  - [ ] **Do NOT bake new slices onto this box** until the array is rebuilt
+    (the DB slot survey now shows 12 free slots there).
+  - [ ] **After OVH's replacement** (they only swap the hardware): replicate
+    the partition table to the new disk, re-add it to `md2`/`md3`, wait for
+    resync to `[2/2] [UU]`, and copy the ESP -- the same procedure as the
+    staging box on 2026-08-19/20 (OVH tickets #721263/#722470, recorded in the
+    v0.4.2-era notes). Verify the 2 leased slice VMs auto-started after the
+    intervention reboot, then resolve the Bugsink box-health issue.
+- [ ] **Modal audit-log stream**: no `modal_audit` data has ever arrived in
+  any tier's OpenObserve (noted at the dev bring-up, confirmed on
+  production 2026-08-25). Asked Modal whether it can be enabled for us --
+  audit-log export requires Modal's **enterprise plan**, which we may get
+  enabled. If it lands, confirm the stream appears and gets the 90-day
+  log retention override; if we stay off enterprise, drop `modal_audit`
+  from `specs/minds-openobserve-telemetry.md` so it stops being a silent
+  expectation.
+- [ ] **Verify the two never-yet-observed log channels in production**:
+  `share_visit_authorized` lines (the append-only share-visit record) and
+  `type=metric` lines have both emitted zero records in production as of
+  2026-08-25 (proven only via the dev/ci reporting probe, which is
+  disabled on production by design). After the next deploy -- or whenever a
+  real share visit / expected-anomaly occurs -- confirm one of each shows
+  up in the tier's OpenObserve `modal_logs` stream. The R2 sweep's new
+  orphan-pending-reap metric (ships with the next connector deploy) will
+  exercise the metric channel hourly on its own.
+- [ ] **Verify the connector-side changes from branch
+  `mngr/production-fixes-0-4-2` (PR #655) on a dev env or staging before the
+  production connector redeploy.** Deploy the connector from that branch
+  (NOT main -- the branch is deliberately based on the deployed production
+  commit) and confirm:
+  - **R2 sweep orphan handling** (`r2/sweep.py`): a deleted-account key
+    owner now produces a `r2_sweep_orphan_owner_pending_reap` metric line
+    in the tier's OpenObserve instead of the hourly
+    "no resolvable verified email" Bugsink warning, and the sweep counters
+    include `users_skipped_orphan_pending_reap` /
+    `users_skipped_orphan_reap_overdue` in the cron's summary log.
+    Easiest drive: `POST /admin/sweep/r2` (admin key) on a tier that has an
+    orphaned key row (production has one: user `e73b6a64`, whose bucket the
+    retention reaper clears ~2026-09-14 -- after that, the case must be
+    manufactured with a test account deleted via `scripts/delete_accounts.py`).
+    On production, success also means the repeating hourly warning stops.
+  - **modal-client Bugsink ignore** (`modal_app_kit/sentry.py`): the tier's
+    Bugsink `rsc` project stops accruing new "Detected N background
+    thread(s) still running after container exit" events after the deploy
+    (before it, they arrived every few minutes on production; compare
+    issue `last_seen` timestamps pre/post).
 
 - [ ] **Updated terms/policy pages**: insert the updated values into the
   code-of-conduct and privacy-policy pages before deploying the connector to
