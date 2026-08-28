@@ -124,7 +124,11 @@ def main() -> None:
     # Every other JSON reader in this app degrades with a warning; so does this one.
     try:
         reconcile()
-    except AccountError as e:
+    except (AccountError, OSError) as e:
+        # OSError as well as AccountError: the sweep walks the accounts root, reads and writes
+        # credential files and rewrites the index, and a full disk or a bad mount raises from
+        # any of them. Every one of those is a reason to start WITHOUT the account store, not
+        # a reason to not start.
         logger.opt(exception=e).error("Could not reconcile the account store; continuing without it")
     application = build_application(config, args)
     with application.app_context():

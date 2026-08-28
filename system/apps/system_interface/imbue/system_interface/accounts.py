@@ -37,6 +37,8 @@ from typing import Final
 
 from loguru import logger as _loguru_logger
 
+from pydantic import ValidationError
+
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 
@@ -157,6 +159,19 @@ def claim_first_chat(home: Path | None = None) -> bool:
         return True
 
 
+def release_first_chat(home: Path | None = None) -> None:
+    """Give the claim back, for a create that claimed it and then failed.
+
+    There is exactly one `/welcome` per workspace and no way to ask for another, so a claim
+    spent on a create that died -- a rejected credential, an OOM, a container restart -- would
+    cost the user their first-run experience permanently. Only the claimant calls this, and
+    only on a failure path, so it cannot race a second create into being first as well.
+    """
+    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
+    with _index_lock(home):
+        marker.unlink(missing_ok=True)
+
+
 def index_path(home: Path | None = None) -> Path:
     return accounts_root(home) / _INDEX_FILENAME
 
@@ -183,7 +198,15 @@ def read_index(home: Path | None = None) -> AccountIndex:
             f"account index at {path} is version {version}, but this build understands "
             f"{INDEX_VERSION}. Refusing to read it rather than silently dropping accounts."
         )
-    return AccountIndex.model_validate(payload)
+    try:
+        return AccountIndex.model_validate(payload)
+    except ValidationError as e:
+        # `FrozenModel` forbids extra keys, so an index written by a build that added a field
+        # without bumping INDEX_VERSION lands here -- the exact case the version field exists
+        # to catch. Raised as AccountError because that is what boot degrades on; a bare
+        # ValidationError escapes the guard and supervisord restarts forever with no UI, and
+        # therefore no way to delete the offending account.
+        raise AccountError(f"account index at {path} is not readable: {e}") from e
 
 
 def _write_index(index: AccountIndex, home: Path | None = None) -> None:

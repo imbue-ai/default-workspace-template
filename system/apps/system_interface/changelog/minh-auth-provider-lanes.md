@@ -1220,3 +1220,34 @@ sign-in back on the spinner with nothing left running to correct it.
 `begin` carries a generation, so a lane click that has been superseded stands down. Two lanes
 clicked in quick succession both ran it, and the loser's `catch` wrote "that didn't work" over
 the winner's screen while its `finally` cleared a `busy` the winner was still relying on.
+
+# Lifecycle fixes found by an independent review
+
+**A malformed index no longer crash-loops boot.** The version guard was only half of it:
+`AccountIndex.model_validate` raises pydantic's `ValidationError`, and `FrozenModel` forbids
+extra keys -- so an index from a build that added a field without bumping `INDEX_VERSION`, the
+exact case the version field exists to catch, went straight past a guard that caught only
+`AccountError`. supervisord then restarts forever, with no UI and therefore no way to delete the
+offending account. Raised as `AccountError` now, and boot also degrades on `OSError`, which the
+sweep can raise from any of its reads, writes and rewrites.
+
+**The one `/welcome` claim is given back when the create fails.** It is one-shot per workspace
+with no way to ask for another, and it was spent before `mngr create` was even attempted -- so a
+first create that died on a bad credential or an OOM cost the user their first-run experience
+permanently. Released on every failure path in the creation thread.
+
+**The re-auth park is dropped the moment the new credential lands.** Parking closed the window
+where a working credential existed only in memory, but left a symmetric one: the park was only
+cleared at commit, and the probe between the write and the commit can take thirty seconds. Dying
+in there had the next boot restore the OLD credential over the one the user had just pasted --
+or over a freshly minted year-long setup token. The park covers "no credential on disk", and
+that is over as soon as one is written; the rejection paths restore from memory and never needed
+it.
+
+# A workspace that already booted is not re-initialised
+
+`_initialize_workspace_main_branch` moved to its own signal, and nothing recognised the old one.
+So an existing workspace updating to this build re-ran work that is destructive to repeat:
+`git add -A`, a commit of whatever the user had in flight, then `git branch -D main` -- which on
+a work_dir sitting on any other branch force-deletes their `main` and renames their branch over
+it. The old signal now counts as done.

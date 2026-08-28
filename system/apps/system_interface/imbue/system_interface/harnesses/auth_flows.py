@@ -464,6 +464,14 @@ class AuthFlowService:
             # quietly break every agent bound to it until each one's next turn.
             with _credentials_restored_on_error(_credential_paths(method.sink, path)) as before:
                 display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
+                # The parked copy exists to cover the window where the account has NO
+                # credential on disk. That window closes the instant the new one lands, and
+                # keeping the park past it is its own bug: dying between here and the commit
+                # below -- the probe can take thirty seconds -- would have the next boot
+                # restore the OLD credential over the one the user just pasted. The rejection
+                # path below restores from `before`/`cleared_credentials` in memory, so it
+                # does not need the park either.
+                accounts.clear_reauth_backup(session.account_id, self._home)
                 # Writing the file is not the same as the harness accepting it. Ask before
                 # committing, so a key the harness cannot use fails here -- where the user is
                 # looking at the field they just typed into -- rather than later, as a chat that
@@ -561,6 +569,11 @@ class AuthFlowService:
                 return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             with _credentials_restored_on_error(_credential_paths(method.result_sink, path)) as before:
                 _write_paste(method.result_sink, path, result, None, session.lane)
+                # Same rule as the paste lanes: the park covers "no credential on disk", and
+                # that is over. Left in place, a crash before the commit below would put the
+                # old credential back over a token the CLI just minted -- and a setup token is
+                # a year long, so the loss is not a small one.
+                accounts.clear_reauth_backup(session.account_id, self._home)
                 session.last_verdict = self._probe(session.lane.harness, path)
                 if session.last_verdict is SignedIn.NO:
                     _restore_credentials(before)

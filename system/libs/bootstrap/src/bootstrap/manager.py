@@ -53,6 +53,13 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # Its own signal, separate from the chat's. `git add -A` + commit is a once-per-workspace
 # operation: running it on a later boot would commit whatever the user had in flight.
 MAIN_BRANCH_SIGNAL = STATE_DIR / "workspace_main_branch_initialized"
+# The signal this one replaced. A workspace that booted under the old build has THIS and not
+# the one above, and the work it gates is destructive to repeat: `git add -A`, a commit of
+# whatever is in flight, then `git branch -D main` -- which on a work_dir sitting on any other
+# branch force-deletes the user's main and renames their branch over it. So the old signal
+# still counts as done. Kept as a bare path rather than a re-exported constant because nothing
+# writes it any more; it exists only to be recognised.
+_LEGACY_MAIN_BRANCH_SIGNAL = STATE_DIR / "initial_chat_created"
 # The view the first chat is filed in: the starter project the workspace seeds.
 # Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
 # imported, to keep this one-shot first-boot program's dependencies minimal (the
@@ -187,7 +194,7 @@ def _initialize_workspace_main_branch() -> None:
     workspace yet and a misbehaving pre-commit hook on the rsynced
     template shouldn't gate boot.
     """
-    if MAIN_BRANCH_SIGNAL.exists():
+    if MAIN_BRANCH_SIGNAL.exists() or _LEGACY_MAIN_BRANCH_SIGNAL.exists():
         logger.debug("Signal file {} present; work_dir is already on main", MAIN_BRANCH_SIGNAL)
         return
     work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
