@@ -156,7 +156,10 @@ def _json_object_body() -> dict[str, Any] | Response:
     """
     try:
         body = json.loads(request.get_data())
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as e:
+        # Logged, not just answered: a 400 tells the caller, and this tells us. Swallowing a
+        # decode error without a trace is the thing the ratchet exists to stop.
+        logger.warning("Request to {} carried invalid JSON: {}", request.path, e)
         return _error_response("Invalid JSON in request body")
     if not isinstance(body, dict):
         return _error_response("Request body must be a JSON object")
