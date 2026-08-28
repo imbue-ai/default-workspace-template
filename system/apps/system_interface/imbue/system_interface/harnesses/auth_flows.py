@@ -450,6 +450,13 @@ class AuthFlowService:
             method = session.method
             if not isinstance(method, PasteMethod):
                 raise FlowError("this sign-in does not take a key")
+            # The id ends up as a KEY in pi's auth.json, so an unhashable one is a 500 and an
+            # unrecognised one silently writes a provider the lane does not have. Checked here
+            # rather than at the endpoint so every caller gets the same rule.
+            if key_provider is not None:
+                known = {k.provider_id for k in session.lane.key_providers}
+                if key_provider not in known:
+                    raise FlowError(f"{session.lane.provider_name} has no key provider {key_provider!r}")
             path = accounts.account_dir(session.account_id, self._home)
             # Write, ask, and put the old credential back if the answer is no. The probe needs
             # the file in place to answer at all, so the write has to happen first -- but on a

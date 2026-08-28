@@ -1202,3 +1202,21 @@ The API-key screen's provider-picker backdrop dismissed on `onclick`, reintroduc
 bug `backdropDismissAttrs` exists to prevent: a click fires wherever the press ENDED, so
 selecting text inside the menu and releasing past its edge read as "dismiss". This file already
 imported that helper for the modal's own backdrop.
+
+# Request-shape validation, and two flow races
+
+`key_provider` is checked against the lane that owns it. It becomes a KEY in pi's `auth.json`,
+so an unhashable JSON value crashed with a 500 rather than a 400, and any unrecognised string
+wrote a provider the lane does not have straight into the credential file. A non-string is
+refused at the endpoint; an unknown id is refused by the flow, so every caller gets the rule.
+
+A null `name` on a rename clears it. `str(None)` is `"None"` -- four characters, under the cap,
+and therefore silently accepted as a name the user never typed.
+
+A settled flow stays settled. `ok` and `failed` are terminal and stop the poller, but a poll
+already in flight when that happened still resolves afterwards, and its `pending` put a finished
+sign-in back on the spinner with nothing left running to correct it.
+
+`begin` carries a generation, so a lane click that has been superseded stands down. Two lanes
+clicked in quick succession both ran it, and the loser's `catch` wrote "that didn't work" over
+the winner's screen while its `finally` cleared a `busy` the winner was still relying on.

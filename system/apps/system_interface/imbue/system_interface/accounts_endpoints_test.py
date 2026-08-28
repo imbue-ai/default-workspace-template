@@ -221,3 +221,49 @@ def test_aborting_a_flow_leaves_no_account_behind(tmp_path: Path) -> None:
 
         assert client.delete(f"/api/accounts/flow/{flow_id}").status_code == 200
         assert client.get("/api/accounts").get_json()["accounts"] == []
+
+
+def test_a_non_string_key_provider_is_refused_not_a_500() -> None:
+    """It becomes a KEY in pi's auth.json, so an unhashable value crashes rather than 400s."""
+    with _client() as client:
+        started = client.post(
+            "/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"}
+        ).get_json()
+        response = client.post(
+            f"/api/accounts/flows/{started['flow_id']}/submit",
+            json={"api_key": "sk-test", "key_provider": ["not", "a", "string"]},
+        )
+    assert response.status_code == 400
+    assert "key_provider" in response.get_json()["detail"]
+
+
+def test_a_key_provider_the_lane_does_not_have_is_refused() -> None:
+    """Unrecognised ids were written straight into auth.json as a provider the lane lacks."""
+    with _client() as client:
+        started = client.post(
+            "/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"}
+        ).get_json()
+        response = client.post(
+            f"/api/accounts/flows/{started['flow_id']}/submit",
+            json={"api_key": "sk-test", "key_provider": "not-a-real-provider"},
+        )
+    assert response.status_code == 400
+
+
+def test_a_null_name_clears_rather_than_naming_the_account_None() -> None:
+    """`str(None)` is "None" -- a four-character name the user never typed, under the cap."""
+    account_id, _unused = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    with _client() as client:
+        client.patch(f"/api/accounts/{account_id}", json={"name": "Work"})
+        assert client.patch(f"/api/accounts/{account_id}", json={"name": None}).status_code == 200
+        (row,) = client.get("/api/accounts").get_json()["accounts"]
+    assert row["provider"] == "Anthropic"
+
+
+def test_a_non_string_name_is_refused() -> None:
+    account_id, _unused = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    with _client() as client:
+        response = client.patch(f"/api/accounts/{account_id}", json={"name": ["Work"]})
+    assert response.status_code == 400
