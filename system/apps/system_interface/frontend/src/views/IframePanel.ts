@@ -5,6 +5,7 @@ import type { AppEntry } from "../models/AgentManager";
 import { appStoppedDetail, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
 import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
+import { Button } from "./Button";
 import { appServiceDisplayName } from "./derived-names";
 
 interface IframePanelAttrs {
@@ -78,12 +79,9 @@ const StoppedAppPlaceholder: m.Component<{ app: AppEntry }> = {
         m("div", { class: "text-[13px] text-faint" }, appStoppedDetail(app)),
         isAppStoppable(app)
           ? m(
-              "button",
+              Button,
               {
-                type: "button",
-                class:
-                  "si-stopped-app-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
-                  "border-default px-4 text-[13px] font-medium text-primary hover:bg-fill-hover",
+                extra: "si-stopped-app-start mt-1",
                 onclick: () => {
                   // The `apps_updated` push is the authority on success; a
                   // failed request leaves the placeholder (and the button, for
