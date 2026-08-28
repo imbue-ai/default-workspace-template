@@ -33,6 +33,7 @@ from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.logging import info_span
+from imbue.imbue_common.pure import pure
 from imbue.minds_admin.envs.providers.neon_db import NeonProviderError
 from imbue.minds_admin.envs.providers.neon_db import direct_dsn_from_pooled
 
@@ -173,6 +174,43 @@ def _record_applied_version(dsn: SecretStr, version: str, *, parent_cg: Concurre
         parent_cg=parent_cg,
         cg_name=f"psql-record-migration-{version}",
     )
+
+
+@pure
+def parse_postgres_major_from_version_num(raw_server_version_num: str) -> int:
+    """The Postgres major version from a ``SHOW server_version_num`` value (e.g. ``180006`` -> 18).
+
+    Raises :class:`MigrationRunnerError` on a value that is not the expected
+    six-or-more digit integer.
+    """
+    stripped = raw_server_version_num.strip()
+    if not stripped.isdigit() or len(stripped) < 6:
+        raise MigrationRunnerError(f"Unexpected server_version_num value: {raw_server_version_num!r}")
+    return int(stripped) // 10000
+
+
+def verify_analytics_postgres_major(dsn: SecretStr, *, expected_major: int, parent_cg: ConcurrencyGroup) -> None:
+    """Refuse to touch an analytics catalog whose Postgres major differs from the pinned version.
+
+    The analytics Neon projects are pinned to one major everywhere
+    (``neon_db.ANALYTICS_PG_VERSION``); shared tiers are console-created by
+    hand, so this is the guard that catches a bringup at the wrong version
+    before migrations (and the app) run against it.
+    """
+    direct_dsn = _direct_migration_dsn(dsn)
+    stdout = _run_psql_command(
+        direct_dsn,
+        sql="SHOW server_version_num",
+        parent_cg=parent_cg,
+        cg_name="psql-verify-analytics-pg-major",
+    )
+    actual_major = parse_postgres_major_from_version_num(stdout)
+    if actual_major != expected_major:
+        raise MigrationRunnerError(
+            f"The analytics database runs Postgres {actual_major}, but the analytics stack is pinned to "
+            f"Postgres {expected_major} (neon_db.ANALYTICS_PG_VERSION). Recreate the tier's analytics Neon "
+            f"project at the pinned major (apps/analytics/docs/bringup.md) or update the pin deliberately."
+        )
 
 
 def list_pending_pool_hosts_migrations(

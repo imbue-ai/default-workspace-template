@@ -8,9 +8,12 @@ model and the reasons behind it.
 """
 
 import os
+from collections.abc import Mapping
 from typing import Final
 
 import modal
+
+from imbue.modal_app_kit.log_format import LOG_LEVEL_ENV_VAR
 
 # Tier name ("production", "staging", "dev", ...) selected by the deploy
 # wrapper. Defaults to production so a bare `modal deploy` outside the wrapper
@@ -74,11 +77,25 @@ def stamped_secret(service: str, tier: str, deploy_id: str) -> modal.Secret:
     return modal.Secret.from_name(stamped_secret_name(service, tier, deploy_id))
 
 
-def deploy_metadata_secret(tier: str, deploy_id: str) -> modal.Secret:
-    """An inline Secret carrying the deploy env + id into the running container.
+def deploy_metadata_entries(tier: str, deploy_id: str, deployer_environ: Mapping[str, str]) -> dict[str, str | None]:
+    """The env entries the deploy metadata secret carries: tier, deploy id, and the log-level knob when set.
 
-    Both values are baked into the function spec at deploy time; this makes
-    them readable at runtime via ``os.environ`` (e.g. by a ``/version``
-    endpoint) without a Vault-backed Secret.
+    Every entry is a str; the ``str | None`` value type is ``modal.Secret.from_dict``'s parameter type.
     """
-    return modal.Secret.from_dict({DEPLOY_ENV_VAR: tier, DEPLOY_ID_ENV_VAR: deploy_id})
+    entries: dict[str, str | None] = {DEPLOY_ENV_VAR: tier, DEPLOY_ID_ENV_VAR: deploy_id}
+    log_level_name = deployer_environ.get(LOG_LEVEL_ENV_VAR, "")
+    if log_level_name:
+        entries[LOG_LEVEL_ENV_VAR] = log_level_name
+    return entries
+
+
+def deploy_metadata_secret(tier: str, deploy_id: str) -> modal.Secret:
+    """An inline Secret carrying the deploy env + id (and the optional log-level knob) into the container.
+
+    The values are baked into the function spec at deploy time; this makes
+    them readable at runtime via ``os.environ`` (e.g. by a ``/version``
+    endpoint, or by ``log_format.configure_logging``) without a Vault-backed
+    Secret. ``MINDS_LOG_LEVEL`` rides along only when the deployer exported
+    it, so an ordinary deploy leaves the runtime default in force.
+    """
+    return modal.Secret.from_dict(deploy_metadata_entries(tier, deploy_id, dict(os.environ)))

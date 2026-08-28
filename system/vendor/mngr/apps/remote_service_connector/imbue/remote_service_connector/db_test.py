@@ -5,24 +5,65 @@ import psycopg2
 from imbue.remote_service_connector.db import PooledConnectionAllocator
 
 
-class _StubConnection:
-    """Minimal stand-in for a psycopg2 connection (closed flag + rollback)."""
+class _StubCursor:
+    """Records the probe statement; raises when the owning connection is marked dead."""
 
-    def __init__(self, is_rollback_failing: bool) -> None:
+    def __init__(self, connection: "_StubConnection") -> None:
+        self._connection = connection
+
+    def execute(self, query: str) -> None:
+        self._connection.executed_queries.append(query)
+        if self._connection.is_probe_failing:
+            raise psycopg2.OperationalError("simulated dead connection 51927")
+
+    def fetchone(self) -> tuple[int]:
+        return (1,)
+
+    def __enter__(self) -> "_StubCursor":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        pass
+
+
+class _StubConnection:
+    """Minimal stand-in for a psycopg2 connection (closed flag, rollback, probe cursor)."""
+
+    def __init__(self, is_rollback_failing: bool, is_probe_failing: bool = False) -> None:
         self.closed = False
         self.rollback_count = 0
         self.is_rollback_failing = is_rollback_failing
+        self.is_probe_failing = is_probe_failing
+        self.executed_queries: list[str] = []
 
     def rollback(self) -> None:
         if self.is_rollback_failing:
             raise psycopg2.OperationalError("simulated dead connection 84213")
         self.rollback_count += 1
 
+    def cursor(self) -> _StubCursor:
+        return _StubCursor(self)
+
     def close(self) -> None:
         self.closed = True
 
 
-def _make_allocator(created: list[_StubConnection], max_idle_connections: int) -> PooledConnectionAllocator:
+class _FakeClock:
+    """A settable monotonic clock for aging idle connections."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _make_allocator(
+    created: list[_StubConnection],
+    max_idle_connections: int,
+    clock: _FakeClock | None = None,
+    idle_probe_threshold_seconds: float = 60.0,
+) -> PooledConnectionAllocator:
     def _factory() -> _StubConnection:
         connection = _StubConnection(is_rollback_failing=False)
         created.append(connection)
@@ -32,6 +73,8 @@ def _make_allocator(created: list[_StubConnection], max_idle_connections: int) -
         connection_factory=_factory,
         max_idle_connections=max_idle_connections,
         is_poolable_connection=lambda connection: isinstance(connection, _StubConnection),
+        idle_probe_threshold_seconds=idle_probe_threshold_seconds,
+        monotonic=clock if clock is not None else _FakeClock(),
     )
 
 
@@ -127,3 +170,47 @@ def test_check_in_of_an_already_closed_connection_is_a_no_op() -> None:
 
     assert fresh is not connection
     assert connection.rollback_count == 0
+
+
+def test_checkout_hands_out_a_recently_used_connection_without_probing() -> None:
+    created: list[_StubConnection] = []
+    clock = _FakeClock()
+    allocator = _make_allocator(created, max_idle_connections=2, clock=clock)
+    connection = allocator.checkout()
+    allocator.check_in(connection)
+    clock.now += 5.0
+
+    reused = allocator.checkout()
+
+    assert reused is connection
+    assert connection.executed_queries == []
+
+
+def test_checkout_probes_a_connection_idle_past_the_threshold() -> None:
+    created: list[_StubConnection] = []
+    clock = _FakeClock()
+    allocator = _make_allocator(created, max_idle_connections=2, clock=clock, idle_probe_threshold_seconds=60.0)
+    connection = allocator.checkout()
+    allocator.check_in(connection)
+    clock.now += 61.0
+
+    reused = allocator.checkout()
+
+    assert reused is connection
+    assert connection.executed_queries == ["SELECT 1"]
+
+
+def test_checkout_discards_a_stale_connection_whose_probe_fails_and_opens_a_fresh_one() -> None:
+    created: list[_StubConnection] = []
+    clock = _FakeClock()
+    allocator = _make_allocator(created, max_idle_connections=2, clock=clock)
+    connection = allocator.checkout()
+    allocator.check_in(connection)
+    connection.is_probe_failing = True
+    clock.now += 3600.0
+
+    fresh = allocator.checkout()
+
+    assert connection.closed
+    assert fresh is not connection
+    assert len(created) == 2

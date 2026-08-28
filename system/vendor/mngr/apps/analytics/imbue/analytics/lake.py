@@ -104,6 +104,15 @@ def attach_postgres_readonly(connection: Any, alias: str, dsn: str) -> None:
         connection.execute(f"ATTACH IF NOT EXISTS {quote_sql_literal(dsn)} AS {alias} (TYPE postgres, READ_ONLY)")
     except duckdb.Error as e:
         raise LakeAttachError(f"Cannot attach Postgres source {alias!r}") from e
+    # Postgres requires table-level SELECT to read the ctid system column, and
+    # the shared tiers' analytics_reader role is deliberately column-scoped on
+    # workspace_records (see apps/analytics/docs/bringup.md section 3), so
+    # ctid-parallelized scans of that table are refused. Plain scans read only
+    # the referenced (granted) columns.
+    try:
+        connection.execute("SET pg_use_ctid_scan = false")
+    except duckdb.Error as e:
+        raise LakeAttachError(f"Cannot disable ctid scans for Postgres source {alias!r}") from e
 
 
 # The raw landing tables for in-workspace collection: typed envelope columns

@@ -3,6 +3,7 @@ import pytest
 from imbue.minds_evals.data_types import DeciderResult
 from imbue.minds_evals.usage import canonical_model_key
 from imbue.minds_evals.usage import parse_proxy_usage_log
+from imbue.minds_evals.usage import resolve_workspace_usage
 from imbue.minds_evals.usage import summarize_decider_usage
 from imbue.minds_evals.usage import summarize_proxy_usage
 from imbue.minds_evals.usage import summarize_workspace_usage
@@ -461,6 +462,28 @@ def test_workspace_usage_metadata_reports_the_speed_tier() -> None:
     assert metadata["fast_message_count"] == 1
     assert metadata["fast_tokens"]["output"] == 100
     assert metadata["per_model"][0]["fast_message_count"] == 1
+
+
+def test_resolve_workspace_usage_reports_the_proxy_when_one_metered_the_trial() -> None:
+    # The proxy is the boundary every call crosses, so its larger total is the real one; the
+    # transcript stays alongside it so the two can be reconciled.
+    events = [_assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100)]
+    records = [_proxy_record(input_tokens=40, output_tokens=400)]
+
+    resolved = resolve_workspace_usage(events, records)
+
+    assert resolved.is_from_proxy is True
+    assert resolved.reported.tokens.output == 400
+    assert resolved.transcript.tokens.output == 100
+
+
+def test_resolve_workspace_usage_falls_back_to_the_transcript_without_a_proxy() -> None:
+    events = [_assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100)]
+
+    resolved = resolve_workspace_usage(events, [])
+
+    assert resolved.is_from_proxy is False
+    assert resolved.reported == resolved.transcript
 
 
 def test_parse_proxy_usage_log_skips_blank_lines() -> None:

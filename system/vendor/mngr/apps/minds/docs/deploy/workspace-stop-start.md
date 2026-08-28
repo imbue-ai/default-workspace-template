@@ -121,6 +121,12 @@ the connector's default hour-long instant-restart window.
   crashed row attempts the VM teardown best-effort: an unreachable box is
   logged and the release still completes, and if the box was actually alive
   the leftover VM surfaces in the box-reconcile sweep.
+- `minds-admin workspaces release <host-db-id>` runs the owner's exact
+  destroy chain (stop artifacts deleted, slice VM destroyed, workspace
+  record retired, row dropped) regardless of owner and in any lifecycle
+  status -- including `stopped` rows, which `pool destroy` cannot claim --
+  for a lease its owner confirmed abandoned. Idempotent: a row already gone
+  reports `already_released`.
 - A stuck transition is visible as a `stopping`/`starting` row (or a
   `stopped` row still holding its box link past the retention window) with
   a stale `transition_heartbeat_at` plus connector logs; the watchdog takes

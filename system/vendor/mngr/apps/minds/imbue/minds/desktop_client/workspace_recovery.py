@@ -1,17 +1,26 @@
-"""Workspace recovery: the passive backend verdict + the restart worker.
+"""Workspace recovery: the passive backend verdict + the recovery worker.
 
-These are the engine behind the recovery flow (the recovery card's state and its
-host restart action). They are extracted here -- away from :mod:`app` -- so the
+minds recovers a machine two ways, and they are not the same action. On the
+STUCK edge it *starts* the machine, unasked: ``mngr start`` alone, which checks
+ground truth at commit time and no-ops against a host that is already running,
+so it can never bounce a live container. Only the user's "Restart machine" click
+*restarts* one -- ``mngr stop --stop-host`` and then that same start -- because
+only a bounce fixes a container that is running but wedged. Which of the two an
+episode is running is :class:`HostRecoveryKind`; "restart" is reserved for the
+one that stops.
+
+These are the engine behind that flow (the recovery card's state and its two
+actions). They are extracted here -- away from :mod:`app` -- so the
 versioned ``/api/v1`` surface (:mod:`api_v1`) can drive them without importing
 :mod:`app` (which would form an import cycle, since ``app`` imports ``api_v1``).
 
 ``read_backend_unreachable_verdict`` answers "can minds reach the provider that
 hosts this machine at all?" from evidence already in hand, so a polling surface
-pays nothing for it. ``run_restart_sequence`` is the background worker body
-(``mngr stop`` + ``mngr start``, then await recovery) that drives both the
-:class:`SystemInterfaceHealthTracker` (so the recovery surfaces re-label) and a
-:class:`WorkspaceOperationRegistryInterface` (so the v1
-``/workspaces/operations/restart/<id>`` resource can report restart status + logs).
+pays nothing for it. ``run_host_recovery_sequence`` is the background worker body
+(the stop step when there is one, then the start, then await recovery) that
+drives both the :class:`SystemInterfaceHealthTracker` (so the recovery surfaces
+re-label) and a :class:`WorkspaceOperationRegistryInterface` (so the v1
+``/workspaces/operations/restart/<id>`` resource can report its status + logs).
 
 The environment signals meet discovery here too. :mod:`environment_signals`
 supplies the raw facts -- has this process been running, can this device reach
@@ -22,9 +31,11 @@ endpoints minds itself dials, which is what the SSH facet measures),
 :class:`ProviderErrorConnectivityTrigger` (a provider discovery cannot reach is
 the earliest evidence a cold start on a dead network produces),
 :func:`is_network_dependent_workspace` / :func:`is_network_dependent_provider`
-(the on-device rule that exempts local, docker and lima from all of it), and
+(the on-device rule that exempts a machine dialled on this device from all of
+it, read from the coordinate discovery reports and only otherwise from the
+provider's backend name), and
 :func:`read_environment_block` (what the recovery surfaces render). They sit
-with the restart paths that consult them: the gate on
+with the recovery paths that consult them: the gate on
 :class:`UnattendedRecoveryDispatcher` is the one place a signal withholds an
 action rather than merely explaining one.
 """
@@ -39,6 +50,7 @@ from datetime import timezone
 from enum import auto
 from pathlib import Path
 from typing import Final
+from typing import assert_never
 
 from loguru import logger
 from pydantic import ConfigDict
@@ -59,19 +71,20 @@ from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
 from imbue.minds.desktop_client.environment_signals import EnvironmentBlock
+from imbue.minds.desktop_client.environment_signals import EnvironmentCondition
 from imbue.minds.desktop_client.environment_signals import SshEndpoint
-from imbue.minds.desktop_client.mngr_command import format_output_tail
-from imbue.minds.desktop_client.mngr_command import mngr_failure_verdict
+from imbue.minds.desktop_client.mngr_command import run_mngr_to_completion
 from imbue.minds.desktop_client.provider_display import friendly_provider_label
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
+from imbue.minds.desktop_client.system_interface_health import HostRecoveryKind
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.workspace_lifecycle import HOST_START_TIMEOUT_SECONDS
 from imbue.minds.desktop_client.workspace_lifecycle import HOST_STOP_TIMEOUT_SECONDS
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKind
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRegistryInterface
+from imbue.minds.desktop_client.workspace_ssh_tunnel import is_loopback_host
 from imbue.minds.errors import MindError
 from imbue.minds.errors import MngrCommandError
-from imbue.minds.errors import MngrCommandTimeoutError
 from imbue.mngr.api.discovery_events import DISCOVERY_STREAM_POLL_INTERVAL_SECONDS
 from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.errors import HOST_SHUTDOWN_NOT_SUPPORTED_MESSAGE
@@ -95,33 +108,26 @@ HOST_ACCESS_REJECTED_REASON: Final[str] = (
 # How long a single workspace probe through the plugin is allowed to hang.
 # Short and snappy so a wedged workspace doesn't gate the recovery UI.
 _WORKSPACE_PROBE_TIMEOUT_SECONDS: Final[float] = 2.0
-# Default hard timeout for an ``mngr`` subprocess run via ``_run_mngr``. A
-# "definitely wedged" ceiling, not an estimate -- generous for quick calls like
-# a container bounce. The restart sequence's host stop/start steps do NOT use
-# it: a host stop can mirror state for minutes (BYO cloud) and a host start can
-# restore a workspace from object storage (imbue_cloud), so those steps pass
-# the shared ``workspace_lifecycle`` budgets explicitly.
-_MNGR_COMMAND_TIMEOUT_SECONDS: Final[float] = 120.0
-# How long we wait for the system interface to answer again after a restart.
+# How long we wait for the system interface to answer again after a recovery.
 # ``mngr start`` cold-boots the container, so this waits for exactly the event
 # the create flow's readiness wait already measures -- a cold-booted workspace's
 # system interface answering 200 through the plugin. Sized from that one
-# calibrated number rather than a second, independent guess: a restart's boot
+# calibrated number rather than a second, independent guess: a recovery's boot
 # does strictly less work than a first boot (the workspace is already
 # provisioned; the worst case, a provider that can only recreate the host from a
 # snapshot, is the first boot again), so the create budget is a sound ceiling
 # and the two cannot drift into contradicting each other about a cold boot.
 #
 # The previous value was an independent 30s, well under the 90-180s a cold boot
-# regularly takes, so an ordinary slow-but-successful restart tripped the
+# regularly takes, so an ordinary slow-but-successful recovery tripped the
 # failure branch below and error-logged. The workspace then came up anyway: the
-# RESTART_FAILED that branch sets is itself a background-probe target (a
-# RESTARTING one is not), so the health probe loop picked the workspace up and
+# RECOVERY_FAILED that branch sets is itself a background-probe target (a
+# RECOVERING one is not), so the health probe loop picked the workspace up and
 # quietly flipped it to HEALTHY once the boot finished -- which is what made the
 # report a false alarm rather than a symptom anyone could act on.
-_HOST_RESTART_STARTUP_WAIT_SECONDS: Final[float] = WORKSPACE_READY_TIMEOUT_SECONDS
-# Poll cadence while waiting for the system interface to come back post-restart.
-_RESTART_PROBE_INTERVAL_SECONDS: Final[float] = 1.0
+_HOST_RECOVERY_STARTUP_WAIT_SECONDS: Final[float] = WORKSPACE_READY_TIMEOUT_SECONDS
+# Poll cadence while waiting for the system interface to come back post-recovery.
+_RECOVERY_PROBE_INTERVAL_SECONDS: Final[float] = 1.0
 # How many consecutive missed snapshots mean the discovery pipeline has stalled,
 # so the state it last reported can no longer be trusted. Multiplied by the
 # cadence of whichever loop produced the snapshot being aged (see
@@ -129,18 +135,24 @@ _RESTART_PROBE_INTERVAL_SECONDS: Final[float] = 1.0
 # inter-snapshot interval to avoid a false "stale" during a single slow poll.
 _DISCOVERY_FRESHNESS_MISSED_SNAPSHOT_COUNT: Final[int] = 3
 # How recent a connectivity reading may be and still answer a gate that is about
-# to withhold a restart. A dropped network wedges every remote workspace on the
+# to withhold a start. A dropped network wedges every remote workspace on the
 # same probe tick, so their gates arrive together; without this each would queue
 # behind the last and re-measure the same network, putting tens of seconds
 # between the first machine's verdict and the last's. Short enough that the
 # reading still describes the network the decision is being made on.
 _GATE_READING_REUSE_SECONDS: Final[float] = 2.0
-# Provider backends whose machines live on this device. Their workspaces are
-# reachable with the network unplugged, so no connectivity reading ever gates or
-# explains anything about them. Not ``mind_liveness``'s set of the same shape:
-# that one is scoped to backends minds can also shut down, which excludes
-# ``local`` -- and a local workspace is the last one a dead network should be
-# allowed to withhold a restart from.
+# Provider backends whose machines *can* live on this device. Their workspaces
+# are then reachable with the network unplugged, so no connectivity reading ever
+# gates or explains anything about them. Only "can": a docker provider is
+# routinely pointed at a daemon on another machine (``host = "ssh://box"`` in
+# its config) and reports this same backend name. So a name outside this set
+# settles the question outright, while one inside it defers to the coordinates
+# minds dials (:func:`is_loopback_host`) -- the machine's own, or its machines'
+# for the provider form -- and answers alone only where no coordinate has been
+# reported. Not ``mind_liveness``'s set of the same shape: that one is scoped
+# to backends minds can also shut down, which excludes ``local`` -- and a local
+# workspace is the last one a dead network should be allowed to withhold a
+# start from.
 _ON_DEVICE_PROVIDER_BACKENDS: Final[frozenset[str]] = frozenset({"local", "docker", "lima"})
 
 
@@ -159,13 +171,17 @@ class WorkspaceSshEndpointSource(MutableModel):
     machines that exist then. Deduped, because the agents on one host share its
     endpoint and probing it three times measures nothing extra.
 
-    Machines on a backend that runs on this device are left out. Discovery
-    reports SSH info for them like any other host -- a docker container is
-    reached at ``127.0.0.1`` on the port its daemon mapped, not through some
-    local channel -- and an endpoint that answers with the wifi off cannot say
-    anything about the network. Handing one over would settle the SSH facet as
-    reachable on every probe, which is the facet reading the whole
-    incompatible-network verdict rests on.
+    Machines dialled on this device are left out. Discovery reports SSH info for
+    them like any other host -- a docker container is reached at ``127.0.0.1``
+    on the port its daemon mapped, not through some local channel -- and an
+    endpoint that answers with the wifi off cannot say anything about the
+    network. Handing one over would settle the SSH facet as reachable on every
+    probe, which is the facet reading the whole incompatible-network verdict
+    rests on. The filter is the endpoint's own address rather than its
+    provider's backend name, so the one workspace that could still slip through
+    -- one whose backend cannot be identified, which every other caller treats
+    conservatively as needing the network -- is judged on where it is actually
+    dialled.
 
     Endpoints on hosts discovery reports as RUNNING come first, because the
     detector samples only the first few and one endpoint answering settles the
@@ -174,7 +190,7 @@ class WorkspaceSshEndpointSource(MutableModel):
     part of a bounded sample on a question it cannot resolve -- and every
     sampled endpoint failing is what sends the facet to the public quorum, where
     a network that blocks port 22 in particular then reads as blocking SSH
-    outright and withholds a restart the machine may genuinely need. Ordering
+    outright and withholds a start the machine may genuinely need. Ordering
     rather than filtering: on a dead network discovery goes stale too, so a
     reading taken when nothing is known to be running must still be able to ask
     about something.
@@ -188,10 +204,8 @@ class WorkspaceSshEndpointSource(MutableModel):
         endpoints_on_running_hosts: list[SshEndpoint] = []
         other_endpoints: list[SshEndpoint] = []
         for agent_id in self.backend_resolver.list_known_agent_ids():
-            if not is_network_dependent_workspace(self.backend_resolver, agent_id):
-                continue
             ssh_info = self.backend_resolver.get_ssh_info(agent_id)
-            if ssh_info is None:
+            if ssh_info is None or is_loopback_host(ssh_info.host):
                 continue
             endpoint = SshEndpoint(host=ssh_info.host, port=ssh_info.port)
             if endpoint in endpoints_on_running_hosts or endpoint in other_endpoints:
@@ -228,8 +242,10 @@ class ProviderErrorConnectivityTrigger(MutableModel):
 
     A remote provider erroring is the earliest evidence available, and it costs
     nothing to act on: the probe answers the question the user is about to ask,
-    and a healthy answer settles it. Local backends are ignored -- a stopped
-    docker daemon errors the same way and says nothing about the network.
+    and a healthy answer settles it. Providers whose machines are dialled on
+    this device are ignored (:func:`is_network_dependent_provider` decides
+    which) -- a stopped docker daemon errors the same way and says nothing about
+    the network.
 
     Registered on the resolver's change callbacks, which fire on every discovery
     event, so the probe is taken on a worker (it blocks for seconds) and once
@@ -335,20 +351,35 @@ class ProviderErrorConnectivityTrigger(MutableModel):
 def is_network_dependent_workspace(backend_resolver: BackendResolverInterface, agent_id: AgentId) -> bool:
     """Whether reaching this workspace requires the device to have a working network.
 
-    Workspaces on a backend that runs on this device (``local``, ``docker``,
-    ``lima``) are reachable over loopback with the wifi off, so a connectivity
-    reading has nothing to say about them: it must never withhold their restart,
-    and must never be offered as the explanation for their failure.
+    Answered from the coordinate minds dials whenever discovery reports one,
+    because that is the fact every caller is really asking about: an endpoint on
+    loopback answers with the wifi off and one anywhere else does not. It is
+    also the only form that gets a docker provider pointed at another machine
+    (``host = "ssh://box"`` in its config) right -- its containers are reached
+    at that box's address, over the network, while the backend name still reads
+    ``docker``. It is the config field rather than ``DOCKER_HOST`` because that
+    field alone is what mngr builds each container's coordinate from; a daemon
+    reached through the environment variable or the docker context is reported
+    at ``127.0.0.1``, which mngr cannot connect to either (see mngr's
+    ``docs/concepts/docker_usage.md``).
+
+    With no coordinate reported, the provider's backend answers instead:
+    ``local``, ``docker`` and ``lima`` run their machines on this device, so a
+    connectivity reading has nothing to say about them -- it must never withhold
+    their start, and must never be offered as the explanation for their
+    failure.
 
     Everything else answers True, including a workspace whose provider or
     backend cannot be identified. That is the conservative direction for this
-    question and only for this question: a wrong True can at most delay an
-    unattended restart until a probe confirms the network is fine (and that
-    probe is what the caller is about to run anyway), whereas a wrong False
-    would restore exactly the doomed-dispatch behaviour this exists to prevent.
-    Nothing here suppresses anything on its own -- a confirmed-bad reading is
-    still required for that.
+    question: a wrong True can at most delay an unattended start until a probe
+    confirms the network is fine (and that probe is what the caller is about to
+    run anyway), whereas a wrong False would restore exactly the doomed-dispatch
+    behaviour this exists to prevent. Nothing here suppresses anything on its
+    own -- a confirmed-bad reading is still required for that.
     """
+    ssh_info = backend_resolver.get_ssh_info(agent_id)
+    if ssh_info is not None:
+        return not is_loopback_host(ssh_info.host)
     if not isinstance(backend_resolver, MngrCliBackendResolver):
         return True
     display_info = backend_resolver.get_agent_display_info(agent_id)
@@ -370,13 +401,50 @@ def is_network_dependent_provider(
 
     Answers True for a provider it cannot identify, for the same reason and with
     the same safety as the per-workspace form: a wrong True costs one probe.
+
+    A backend that can run on this device is not enough to say that it does. A
+    docker provider pointed at a remote daemon reports the same backend name,
+    and discovery carries only the base provider config, so there is no daemon
+    URL here to read; its machines answer for it instead, one of them dialled
+    off this device making the whole provider network-dependent.
+
+    A provider discovery has reported no machine coordinates for keeps the
+    answer its backend name gave, which for an on-device backend is False. That
+    leaves the caller here short in one shape: the provider-error trigger asks
+    about a provider on a cold start over a dead network, where discovery has
+    listed nothing, so a remote-daemon docker provider still reads as on-device
+    and raises no notice. Answering True on no evidence is not free either --
+    this is also the fallback :func:`is_network_dependent_workspace` reaches for
+    a machine with no coordinate of its own, and a dead network must never be
+    allowed to withhold a ``local`` workspace's restart.
     """
     if not isinstance(backend_resolver, MngrCliBackendResolver):
         return True
     for provider in backend_resolver.list_providers():
         if provider.provider_name == provider_name:
-            return str(provider.config.backend) not in _ON_DEVICE_PROVIDER_BACKENDS
+            if str(provider.config.backend) not in _ON_DEVICE_PROVIDER_BACKENDS:
+                return True
+            return _is_any_machine_dialled_off_this_device(backend_resolver, provider_name)
     return True
+
+
+def _is_any_machine_dialled_off_this_device(
+    backend_resolver: MngrCliBackendResolver, provider_name: ProviderInstanceName
+) -> bool:
+    """Whether any machine discovery reports on ``provider_name`` is reached off this device.
+
+    False for a provider discovery has listed no machines for, which is a
+    provider that has said nothing rather than one that has said "on device";
+    the caller's docstring records what that costs.
+    """
+    for agent_id in backend_resolver.list_known_agent_ids():
+        display_info = backend_resolver.get_agent_display_info(agent_id)
+        if display_info is None or display_info.provider_name != str(provider_name):
+            continue
+        ssh_info = backend_resolver.get_ssh_info(agent_id)
+        if ssh_info is not None and not is_loopback_host(ssh_info.host):
+            return True
+    return False
 
 
 def _is_discovery_fresh(last_snapshot_at: datetime | None, poll_interval_seconds: float) -> bool:
@@ -458,7 +526,7 @@ def is_recovery_classification_trustworthy(
     tracker's stuck edge with no verdict at all, so this gate protects the
     verdict's copy, not an action. It is the *outage* onset rather than the
     current probe-failure run's, because that unattended start clears the run
-    within a second of the machine wedging -- and a restart attempt does not make
+    within a second of the machine wedging -- and a recovery attempt does not make
     evidence from before the outage current.
 
     When no onset is recorded (only the force-``mark_stuck`` path, used in tests,
@@ -515,7 +583,7 @@ def _in_band_provider_outage_reason(exc: MngrCommandError, provider_name: str | 
     return parse_provider_unavailable_reason(str(exc), provider_name)
 
 
-def _report_restart_step_failure(
+def _report_recovery_step_failure(
     step_label: str,
     exc: MngrCommandError,
     *,
@@ -525,7 +593,7 @@ def _report_restart_step_failure(
     registry: WorkspaceOperationRegistryInterface,
     connectivity_detector: ConnectivityDetector | None,
 ) -> None:
-    """End the restart on a failed step, naming the backend when that is the real cause.
+    """End the recovery on a failed step, naming the backend when that is the real cause.
 
     Reporting a stop/start that ``mngr`` rejected at the provider as a failed
     step frames a backend outage as a problem with the machine, so the
@@ -536,29 +604,29 @@ def _report_restart_step_failure(
     That reason is also *recorded* on the tracker, because this is the first
     observation of the outage anywhere: the rejection is a live one, while the
     discovery snapshot that carries the same outage is up to a provider poll
-    interval behind it. Recorded before the RESTART_FAILED transition below, so
+    interval behind it. Recorded before the RECOVERY_FAILED transition below, so
     the surfaces that re-derive on that edge already see it.
 
     A step that failed because this *device* is offline (or on a network that
     blocks SSH) reports at warning rather than error. The state it sets is
-    unchanged -- RESTART_FAILED is truthful, and the user can retry it -- but
+    unchanged -- RECOVERY_FAILED is truthful, and the user can retry it -- but
     error level is what reaches error reporting, and there is nothing there to
     report: the command was always going to fail, nobody can act on it, and the
     report's own log upload would be making the same doomed network call. The
     reading is read here rather than passed in, so it is the latest the detector
-    has rather than whatever was known when the restart began -- but it is the
+    has rather than whatever was known when the recovery began -- but it is the
     *cached* reading, not a fresh probe, so a network that dropped since the
     last probe still reads clear and the failure is reported as any other.
     """
     display_info = backend_resolver.get_agent_display_info(workspace_agent_id)
     provider_name = display_info.provider_name if display_info is not None else None
-    message = f"{step_label} step of host restart failed: {exc}"
+    message = f"{step_label} step of host recovery failed: {exc}"
     reason = None
     if provider_name is not None:
         reason = _in_band_provider_outage_reason(exc, provider_name)
         if reason is not None:
             tracker.record_backend_outage(workspace_agent_id, provider_name, reason)
-            message = f"This machine's backend is unreachable, so the restart could not run: {reason}"
+            message = f"This machine's backend is unreachable, so the recovery could not run: {reason}"
     device_block = read_environment_block(connectivity_detector, backend_resolver, workspace_agent_id)
     is_blocked_by_device = device_block is not EnvironmentBlock.NONE
     if is_blocked_by_device:
@@ -575,14 +643,14 @@ def _report_restart_step_failure(
     # an error -- rather than carried in the user-facing message above.
     logger.log(
         "WARNING" if is_blocked_by_device else "ERROR",
-        "{} step of host restart for {} failed ({}): {}{}",
+        "{} step of host recovery for {} failed ({}): {}{}",
         step_label,
         workspace_agent_id,
         verdict,
         exc,
         "" if exc.output_tail is None else f"\nsubprocess output:\n{exc.output_tail}",
     )
-    tracker.mark_restart_failed(workspace_agent_id, message)
+    tracker.mark_recovery_failed(workspace_agent_id, message)
     registry.fail(workspace_agent_id, message)
 
 
@@ -610,12 +678,32 @@ def read_environment_block(
     return connectivity_detector.get_reading().environment_block
 
 
-def _build_restart_agent_address(agent_id: AgentId, workspace_display_info: AgentDisplayInfo | None) -> str:
+def read_environment_condition(
+    connectivity_detector: ConnectivityDetector | None,
+    backend_resolver: BackendResolverInterface,
+    workspace_agent_id: AgentId,
+) -> EnvironmentCondition:
+    """:func:`read_environment_block` for a surface, which also needs to know when nothing was measured.
+
+    The same two halves, and the same cached reading. What differs is the
+    answer for a reading that has not been taken: a surface handed NONE for one
+    treats the device as cleared and blames the provider or the machine, which
+    after a wake is exactly wrong. UNKNOWN lets it decline instead. Still NONE
+    for a machine on this device, about which the reading says nothing either way.
+    """
+    if connectivity_detector is None:
+        return EnvironmentCondition.NONE
+    if not is_network_dependent_workspace(backend_resolver, workspace_agent_id):
+        return EnvironmentCondition.NONE
+    return connectivity_detector.get_reading().environment_condition
+
+
+def _build_recovery_agent_address(agent_id: AgentId, workspace_display_info: AgentDisplayInfo | None) -> str:
     """Render ``agent_id`` as ``AGENT@HOST.PROVIDER`` when discovery can supply both components.
 
     A provider-qualified address is what restricts ``mngr``'s discovery to the
     one provider that can host this agent (see ``find_all_agents``, which queries
-    every configured provider unless every address pins one). Unpinned, a restart
+    every configured provider unless every address pins one). Unpinned, a recovery
     pays for every provider the user has configured, and a provider that is
     merely unreachable -- a stopped Docker daemon, an account this device cannot
     currently reach -- is enough to fail it: when the agent goes unmatched,
@@ -630,7 +718,7 @@ def _build_restart_agent_address(agent_id: AgentId, workspace_display_info: Agen
 
     Falls back to the bare id when discovery supplies no ``host-`` coordinate or
     no provider name. Unpinned is what shipped, so the fallback costs the
-    scoping and nothing else -- a restart must not fail for want of a qualifier.
+    scoping and nothing else -- a recovery must not fail for want of a qualifier.
     """
     if workspace_display_info is None or workspace_display_info.provider_name is None:
         return str(agent_id)
@@ -660,7 +748,7 @@ def _build_mngr_start_argv(mngr_binary: str, agent_address: str) -> list[str]:
 
     ``-v`` instead of ``--quiet`` for the same reason as ``_build_mngr_stop_argv``.
 
-    Structured output because the restart needs one thing the human output does
+    Structured output because the recovery needs one thing the human output does
     not carry: whether a host was actually booted. The two flags act on separate
     streams and do not fight: ``--format json`` writes the one result line to
     stdout and suppresses the human lines entirely, while all of mngr's logging
@@ -677,9 +765,9 @@ def _did_start_boot_a_host(stdout: str) -> bool | None:
 
     None means the output did not answer, which is not the same as answering
     "nothing booted": an ``mngr`` on PATH too old to report the field leaves the
-    question open, and a caller must keep its restart framing rather than
+    question open, and a caller must keep the failed-restart framing rather than
     reading silence as a no-op. Because that silently disables the no-op
-    detection for every restart, it is logged rather than passed over.
+    detection for every recovery, it is logged rather than passed over.
     """
     last_line = next((line for line in reversed(stdout.splitlines()) if line.strip()), "")
     try:
@@ -702,75 +790,12 @@ def _did_start_boot_a_host(stdout: str) -> bool | None:
     return bool(parsed["was_host_started"])
 
 
-def _run_mngr(
-    concurrency_group: ConcurrencyGroup,
-    argv: list[str],
-    env: dict[str, str],
-    timeout_seconds: float = _MNGR_COMMAND_TIMEOUT_SECONDS,
-) -> str:
-    """Run an ``mngr`` subprocess to completion and return its stdout on a clean exit.
+class RecoveryReadinessOutcome(UpperCaseStrEnum):
+    """How the post-recovery wait for the system interface ended."""
 
-    Raises ``MngrCommandError`` for every non-clean outcome (a timeout surfaces as
-    the ``MngrCommandTimeoutError`` subclass, a nonzero exit and a launch failure
-    as a bare ``MngrCommandError``), so callers catch a single domain error.
-    """
-    stdout, returncode, stderr = _run_mngr_capturing(concurrency_group, argv, env, timeout_seconds=timeout_seconds)
-    if returncode != 0:
-        # Only mngr's verdict rides the message (see ``mngr_failure_verdict``);
-        # the timeline it printed getting there rides the tail, exactly as the
-        # timeout path below does.
-        raise MngrCommandError(
-            f"exited {returncode}: {mngr_failure_verdict(stderr)}",
-            output_tail=format_output_tail(stdout, stderr),
-        )
-    return stdout
-
-
-def _run_mngr_capturing(
-    concurrency_group: ConcurrencyGroup,
-    argv: list[str],
-    env: dict[str, str],
-    timeout_seconds: float = _MNGR_COMMAND_TIMEOUT_SECONDS,
-) -> tuple[str, int, str]:
-    """Run an ``mngr`` subprocess, returning ``(stdout, returncode, stderr)`` without raising on nonzero exit.
-
-    A nonzero exit is reported through the returned ``returncode`` rather than
-    raised, so stdout is preserved for the caller to inspect. A failure to launch
-    the process raises ``MngrCommandError``; a timeout raises the more specific
-    ``MngrCommandTimeoutError``.
-    """
-    try:
-        finished = concurrency_group.run_process_to_completion(
-            argv,
-            timeout=timeout_seconds,
-            is_checked_after=False,
-            env=env,
-        )
-    except (OSError, ConcurrencyGroupError) as exc:
-        # The command never ran (a fork/exec failure, or a concurrency-group
-        # setup/strand/shutdown failure). Callers handle failure locally, so we
-        # wrap it as the single MngrCommandError they already catch.
-        raise MngrCommandError(str(exc)) from exc
-    if finished.is_timed_out:
-        # A killed subprocess never printed a verdict, so its captured output is
-        # the only record of which step it died in; carry it on the error
-        # (bounded, out of the message) instead of discarding it.
-        raise MngrCommandTimeoutError(
-            f"timed out after {int(timeout_seconds)}s",
-            output_tail=format_output_tail(finished.stdout, finished.stderr),
-        )
-    # A finished, non-timed-out process always carries a returncode; the Optional
-    # is for the not-yet-finished case, which this branch has ruled out.
-    returncode = finished.returncode if finished.returncode is not None else 1
-    return finished.stdout, returncode, finished.stderr
-
-
-class RestartReadinessOutcome(UpperCaseStrEnum):
-    """How the post-restart wait for the system interface ended."""
-
-    # The interface answered 200: the restart converged.
+    # The interface answered 200: the recovery converged.
     READY = auto()
-    # The whole cold-boot budget elapsed with no answer: the restart did not converge.
+    # The whole cold-boot budget elapsed with no answer: the recovery did not converge.
     TIMED_OUT = auto()
     # The process is shutting down, so the wait was cut short. This says nothing
     # about whether the workspace recovered -- it is not a verdict either way.
@@ -783,15 +808,15 @@ def _await_system_interface_ready(
     preauth_cookie: str,
     wait_seconds: float,
     concurrency_group: ConcurrencyGroup,
-) -> RestartReadinessOutcome:
+) -> RecoveryReadinessOutcome:
     """Poll the system interface through the plugin until it answers 200, the budget elapses, or shutdown.
 
     The wait spans a full cold boot, which is far longer than the group's ~10s
     exit budget, so it sleeps on the group's shutdown event rather than a bare
-    timer: a quit during a restart must not leave this thread parked in an
+    timer: a quit during a recovery must not leave this thread parked in an
     uninterruptible sleep that outlives the join and fails the group's exit.
     Shutdown is reported as its own outcome (never as a timeout), because a
-    truncated wait is not evidence that the restart failed.
+    truncated wait is not evidence that the recovery failed.
     """
     deadline = time.monotonic() + wait_seconds
     with make_workspace_probe_client(
@@ -800,7 +825,7 @@ def _await_system_interface_ready(
     ) as probe_client:
         while time.monotonic() < deadline:
             if concurrency_group.is_shutting_down():
-                return RestartReadinessOutcome.ABANDONED
+                return RecoveryReadinessOutcome.ABANDONED
             status = probe_workspace_through_plugin(
                 mngr_forward_port=mngr_forward_port,
                 preauth_cookie=preauth_cookie,
@@ -809,38 +834,38 @@ def _await_system_interface_ready(
                 client=probe_client,
             )
             if status == 200:
-                return RestartReadinessOutcome.READY
-            if concurrency_group.shutdown_event.wait(timeout=_RESTART_PROBE_INTERVAL_SECONDS):
-                return RestartReadinessOutcome.ABANDONED
-    return RestartReadinessOutcome.TIMED_OUT
+                return RecoveryReadinessOutcome.READY
+            if concurrency_group.shutdown_event.wait(timeout=_RECOVERY_PROBE_INTERVAL_SECONDS):
+                return RecoveryReadinessOutcome.ABANDONED
+    return RecoveryReadinessOutcome.TIMED_OUT
 
 
-class RestartWorkerFailureHandler(MutableModel):
-    """Callable ``on_failure`` hook for the restart worker thread.
+class RecoveryWorkerFailureHandler(MutableModel):
+    """Callable ``on_failure`` hook for the recovery worker thread.
 
-    The recovery page only leaves its "Restarting..." state on a HEALTHY or
-    RESTART_FAILED transition, and the tracker is already RESTARTING when the
+    The recovery page only leaves its in-flight state on a HEALTHY or
+    RECOVERY_FAILED transition, and the tracker is already RECOVERING when the
     worker starts. If the worker thread crashes unexpectedly, the
-    ``ConcurrencyGroup`` invokes this so the tracker still reaches RESTART_FAILED
+    ``ConcurrencyGroup`` invokes this so the tracker still reaches RECOVERY_FAILED
     (and the v1 operation registry reaches FAILED) instead of the page / poller
     hanging. The crash itself is logged by the ``ObservableThread`` machinery, so
     this only records the recovery state.
     """
 
     tracker: SystemInterfaceHealthTracker = Field(frozen=True, description="Health tracker to transition.")
-    workspace_agent_id: AgentId = Field(frozen=True, description="Workspace agent whose restart worker crashed.")
+    workspace_agent_id: AgentId = Field(frozen=True, description="Workspace agent whose recovery worker crashed.")
     registry: WorkspaceOperationRegistryInterface = Field(
         frozen=True, description="In-memory operation registry to mark FAILED."
     )
 
     def __call__(self, exc: BaseException) -> None:
-        message = f"The restart worker failed unexpectedly: {exc}"
-        self.tracker.mark_restart_failed(self.workspace_agent_id, message)
+        message = f"The recovery worker failed unexpectedly: {exc}"
+        self.tracker.mark_recovery_failed(self.workspace_agent_id, message)
         self.registry.fail(self.workspace_agent_id, message)
 
 
-class RestartDispatchOutcome(UpperCaseStrEnum):
-    """What a call to :func:`dispatch_host_restart` did."""
+class RecoveryDispatchOutcome(UpperCaseStrEnum):
+    """What a call to :func:`dispatch_host_recovery` did."""
 
     DISPATCHED = auto()
     ALREADY_RUNNING = auto()
@@ -848,7 +873,7 @@ class RestartDispatchOutcome(UpperCaseStrEnum):
     SPAWN_FAILED = auto()
 
 
-def dispatch_host_restart(
+def dispatch_host_recovery(
     workspace_agent_id: AgentId,
     tracker: SystemInterfaceHealthTracker,
     backend_resolver: BackendResolverInterface,
@@ -858,55 +883,57 @@ def dispatch_host_restart(
     mngr_host_dir: Path,
     mngr_forward_port: int,
     mngr_forward_preauth_cookie: str | None,
-    skip_stop: bool,
+    kind: HostRecoveryKind,
     connectivity_detector: ConnectivityDetector | None = None,
-) -> RestartDispatchOutcome:
-    """Claim the restart for ``workspace_agent_id`` and spawn its worker.
+) -> RecoveryDispatchOutcome:
+    """Claim the recovery for ``workspace_agent_id`` and spawn its worker.
 
     The single dispatch path -- the ``/api/v1`` restart route and the unattended
     STUCK dispatch both come through here -- so there is exactly one place that
-    claims RESTARTING, opens the operation record, and spawns the worker.
+    claims RECOVERING, opens the operation record, and spawns the worker.
+    ``kind`` is the only thing that differs between them, and it decides whether
+    the worker stops the host before starting it.
 
     ``registry.start_if_idle`` is the one claim, and winning it is what makes
-    this caller the restart's owner. Workspace operations are serialized, so the
-    workspace's single operation slot decides: a caller that loses it to another
-    restart gets ``ALREADY_RUNNING`` and must not spawn a second worker racing
-    the first's stop/start commands, and one that loses it to a backup update /
+    this caller the recovery's owner. Workspace operations are serialized, so
+    the workspace's single operation slot decides: a caller that loses it to
+    another recovery gets ``ALREADY_RUNNING`` and must not spawn a second worker
+    racing the first's commands, and one that loses it to a backup update /
     configure / restore gets ``OPERATION_CONFLICT``. A spawn failure leaves the
-    tracker in RESTART_FAILED and the operation FAILED, so nothing polls forever.
+    tracker in RECOVERY_FAILED and the operation FAILED, so nothing polls forever.
 
     One atomic claim rather than a read followed by an unconditional
     ``registry.start``, which would *replace* whatever record won the race --
     stranding that operation's poller and letting its terminal complete/fail
-    land on the restart's record. The unattended dispatch is what makes the race
-    real: it runs on the probe thread rather than a request thread, and a
+    land on the recovery's record. The unattended dispatch is what makes the
+    race real: it runs on the probe thread rather than a request thread, and a
     restore stops the workspace's services for minutes, which is exactly what
     drives the agent STUCK in the first place.
 
-    The tracker is marked only after the slot is won, so RESTARTING is never
-    claimed for a restart that turns out not to be this caller's to run.
+    The tracker is marked only after the slot is won, so RECOVERING is never
+    claimed for a recovery that turns out not to be this caller's to run.
     """
     if not registry.start_if_idle(
-        workspace_agent_id, WorkspaceOperationKind.RESTART, datetime.now(timezone.utc), None
+        workspace_agent_id, WorkspaceOperationKind.RECOVERY, datetime.now(timezone.utc), None
     ):
         # Which operation blocked us decides what the caller is told. Re-read
         # rather than trusting a prior read: only the claim itself is ordered
         # against the other dispatches, and the record may already have moved on.
         blocking_operation = registry.get(workspace_agent_id)
-        if blocking_operation is not None and blocking_operation.kind == WorkspaceOperationKind.RESTART:
-            return RestartDispatchOutcome.ALREADY_RUNNING
-        return RestartDispatchOutcome.OPERATION_CONFLICT
+        if blocking_operation is not None and blocking_operation.kind == WorkspaceOperationKind.RECOVERY:
+            return RecoveryDispatchOutcome.ALREADY_RUNNING
+        return RecoveryDispatchOutcome.OPERATION_CONFLICT
 
-    tracker.mark_restarting(workspace_agent_id, start_only=skip_stop)
+    tracker.mark_recovering(workspace_agent_id, kind)
 
     # is_checked=False + on_failure: a crash of the one-shot worker transitions
-    # the tracker to RESTART_FAILED and the registry to FAILED (so neither the
+    # the tracker to RECOVERY_FAILED and the registry to FAILED (so neither the
     # recovery surface nor the operation poller hangs). The spawn itself can
-    # also raise when the group is shutting down; since RESTARTING is already
+    # also raise when the group is shutting down; since RECOVERING is already
     # claimed, roll both into the failed state.
     try:
         concurrency_group.start_new_thread(
-            target=run_restart_sequence,
+            target=run_host_recovery_sequence,
             kwargs={
                 "workspace_agent_id": workspace_agent_id,
                 "tracker": tracker,
@@ -917,13 +944,13 @@ def dispatch_host_restart(
                 "mngr_forward_port": mngr_forward_port,
                 "mngr_forward_preauth_cookie": mngr_forward_preauth_cookie,
                 "registry": registry,
-                "skip_stop": skip_stop,
+                "kind": kind,
                 "connectivity_detector": connectivity_detector,
             },
-            name=f"workspace-restart-{workspace_agent_id}",
+            name=f"workspace-recovery-{workspace_agent_id}",
             daemon=True,
             is_checked=False,
-            on_failure=RestartWorkerFailureHandler(
+            on_failure=RecoveryWorkerFailureHandler(
                 tracker=tracker, workspace_agent_id=workspace_agent_id, registry=registry
             ),
         )
@@ -935,13 +962,13 @@ def dispatch_host_restart(
     # called on, whose own dispatch catches only OSError/RuntimeError/ValueError.
     except (OSError, RuntimeError, ConcurrencyGroupError, ConcurrencyExceptionGroup) as exc:
         # Error level so the failure reaches Sentry: the recovery surface is
-        # quiet, so a restart that never even spawned must report itself.
-        logger.opt(exception=exc).error("Failed to spawn restart worker for {}: {}", workspace_agent_id, exc)
-        message = f"Could not start the restart worker: {exc}"
-        tracker.mark_restart_failed(workspace_agent_id, message)
+        # quiet, so a recovery that never even spawned must report itself.
+        logger.opt(exception=exc).error("Failed to spawn recovery worker for {}: {}", workspace_agent_id, exc)
+        message = f"Could not start the recovery worker: {exc}"
+        tracker.mark_recovery_failed(workspace_agent_id, message)
         registry.fail(workspace_agent_id, message)
-        return RestartDispatchOutcome.SPAWN_FAILED
-    return RestartDispatchOutcome.DISPATCHED
+        return RecoveryDispatchOutcome.SPAWN_FAILED
+    return RecoveryDispatchOutcome.DISPATCHED
 
 
 class UnattendedRecoveryDispatcher(MutableModel):
@@ -955,17 +982,18 @@ class UnattendedRecoveryDispatcher(MutableModel):
     firehose: it must run once per outage episode, and the edge is the
     once-per-episode event -- the state is re-reported on every failing lap.
 
-    ``start_only`` throughout: a pure ``mngr start`` checks ground truth at
-    commit time and no-ops against a host that is already running, so an
-    unattended dispatch can never bounce a live container out from under
+    ``HostRecoveryKind.START`` throughout: a pure ``mngr start`` checks ground
+    truth at commit time and no-ops against a host that is already running, so
+    an unattended dispatch can never bounce a live container out from under
     someone. Bouncing a running-but-wedged machine stays a decision the user
-    makes, on the recovery card.
+    makes, on the recovery card -- which is the only path that ever dispatches
+    ``HostRecoveryKind.RESTART``.
 
     A machine on the far side of a network this device cannot use is the one
     case where the dispatch is withheld rather than run. Every remote machine
     goes STUCK together when the wifi drops, and every ``mngr start`` aimed at
     them fails at DNS -- turning one local condition into a burst of
-    RESTART_FAILED cards, each with an error report of its own. So a
+    RECOVERY_FAILED cards, each with an error report of its own. So a
     network-dependent workspace's dispatch first asks the device whether it can
     reach anything, and on a confirmed no it remembers the machine as owed (the
     card and band read the same condition off the detector's published state).
@@ -980,11 +1008,11 @@ class UnattendedRecoveryDispatcher(MutableModel):
     """
 
     tracker: SystemInterfaceHealthTracker = Field(frozen=True, description="Tracker whose edges drive this.")
-    backend_resolver: BackendResolverInterface = Field(frozen=True, description="Resolves the host to restart.")
-    registry: WorkspaceOperationRegistryInterface = Field(frozen=True, description="Operation record for the restart.")
-    concurrency_group: ConcurrencyGroup = Field(frozen=True, description="Parent group for the restart worker.")
-    mngr_binary: str = Field(frozen=True, description="mngr executable the restart shells out to.")
-    mngr_host_dir: Path = Field(frozen=True, description="MNGR_HOST_DIR for the restart's mngr calls.")
+    backend_resolver: BackendResolverInterface = Field(frozen=True, description="Resolves the host to start.")
+    registry: WorkspaceOperationRegistryInterface = Field(frozen=True, description="Operation record for the start.")
+    concurrency_group: ConcurrencyGroup = Field(frozen=True, description="Parent group for the recovery worker.")
+    mngr_binary: str = Field(frozen=True, description="mngr executable the start shells out to.")
+    mngr_host_dir: Path = Field(frozen=True, description="MNGR_HOST_DIR for the start's mngr calls.")
     mngr_forward_port: int = Field(frozen=True, description="Forward port used to probe for recovery.")
     mngr_forward_preauth_cookie: str | None = Field(frozen=True, description="Preauth cookie for that probe.")
     connectivity_detector: ConnectivityDetector | None = Field(
@@ -1001,7 +1029,7 @@ class UnattendedRecoveryDispatcher(MutableModel):
 
     # Machines whose unattended start was withheld because this device could not
     # reach anything, held until it can. Per-process and deliberately small: it
-    # is a list of restarts the app owes right now, not a history, and a quit
+    # is a list of starts the app owes right now, not a history, and a quit
     # takes it with it (a machine still down at the next launch is picked up by
     # session restore, which starts it as a matter of course).
     _owed_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -1030,7 +1058,7 @@ class UnattendedRecoveryDispatcher(MutableModel):
                 daemon=True,
                 is_checked=False,
             )
-        # Same two families ``dispatch_host_restart`` names: an exited group
+        # Same two families ``dispatch_host_recovery`` names: an exited group
         # raises ConcurrencyGroupError, one that is shutting down (or already
         # has a failed checked strand) raises ConcurrencyExceptionGroup. An
         # escape here would kill the probe thread this runs on.
@@ -1052,16 +1080,16 @@ class UnattendedRecoveryDispatcher(MutableModel):
         :meth:`on_connectivity_recovered` re-reads before it dispatches an owed
         start. A stop or a destroy marks the machine *before* its own command
         runs, precisely so this dispatch cannot undo it, and a destroy takes no
-        operation slot for the dispatch to lose; a machine a restart has already
+        operation slot for the dispatch to lose; a machine a recovery has already
         claimed is being handled by whatever claimed it.
         """
         try:
             block = detector.probe_now(max_reuse_age_seconds=_GATE_READING_REUSE_SECONDS).environment_block
-        # The group refusing the SSH round is the spawn failure one frame later,
-        # and gets the same answer for the same reason: it only refuses once the
-        # app is going down, so there is nothing left to dispatch onto -- and a
-        # dispatch that then loses its own spawn would report a RESTART_FAILED,
-        # at error level, on the way out.
+        # The group refusing one of the probe's rounds is the spawn failure one
+        # frame later, and gets the same answer for the same reason: it only
+        # refuses once the app is going down, so there is nothing left to
+        # dispatch onto -- and a dispatch that then loses its own spawn would
+        # report a RECOVERY_FAILED, at error level, on the way out.
         except (ConcurrencyGroupError, ConcurrencyExceptionGroup) as exc:
             logger.warning("Dropping the gated start of {}: the group can no longer probe: {}", agent_id, exc)
             return
@@ -1116,24 +1144,35 @@ class UnattendedRecoveryDispatcher(MutableModel):
         Registered as the detector's recovery callback. Only machines that are
         *still* stuck are started: one that answered again in the meantime (the
         outage was the network the whole time, so most of them will have) needs
-        nothing, and one that has moved on to RESTARTING or RESTART_FAILED is
+        nothing, and one that has moved on to RECOVERING or RECOVERY_FAILED is
         already being handled by whatever moved it.
+
+        Machines are claimed one at a time, in the order they sort, rather than
+        the set being emptied up front. Both halves of that matter, because this
+        drain gets one attempt: the detector fires on the bad -> good edge alone
+        and stops watching at it, so a machine dropped here waits behind a
+        waiting-for-network card on a working network with nothing left to come
+        back for it. Fencing each release covers what a release is expected to
+        raise; claiming one at a time covers what it is not, leaving everything
+        this call never reached still owed for the next drain to find.
         """
-        with self._owed_lock:
-            owed_agent_ids = sorted(self._owed_agent_ids)
-            self._owed_agent_ids.clear()
-        for aid_str in owed_agent_ids:
-            # Per machine, because the set was cleared before any of it ran and
-            # the detector has already stopped watching: one release raising
-            # would otherwise leave every machine after it stuck behind a
-            # waiting-for-network card, on a working network, with nothing left
-            # to come back for them. The two families are the ones a restart's
-            # registry and tracker calls raise -- the same pair the detector's
-            # own callback fence names.
+        while (aid_str := self._claim_next_owed_agent_id()) is not None:
+            # The two families are the ones a recovery's registry and tracker
+            # calls raise -- the same pair the detector's own callback fence
+            # names.
             try:
                 self._release_owed_start(AgentId(aid_str))
             except (MindError, MngrError) as exc:
                 logger.opt(exception=exc).warning("The owed start of {} could not be released: {}", aid_str, exc)
+
+    def _claim_next_owed_agent_id(self) -> str | None:
+        """Take the lowest-sorting owed machine out of the set, or None once it is empty."""
+        with self._owed_lock:
+            if not self._owed_agent_ids:
+                return None
+            aid_str = min(self._owed_agent_ids)
+            self._owed_agent_ids.remove(aid_str)
+            return aid_str
 
     def _release_owed_start(self, agent_id: AgentId) -> None:
         """Start one owed machine, if it still needs and may take a start."""
@@ -1146,8 +1185,8 @@ class UnattendedRecoveryDispatcher(MutableModel):
         self._dispatch(agent_id)
 
     def _dispatch(self, agent_id: AgentId) -> None:
-        """Run the start-only restart and report which of the dispatch outcomes it hit."""
-        outcome = dispatch_host_restart(
+        """Run the unattended start and report which of the dispatch outcomes it hit."""
+        outcome = dispatch_host_recovery(
             workspace_agent_id=agent_id,
             tracker=self.tracker,
             backend_resolver=self.backend_resolver,
@@ -1157,13 +1196,13 @@ class UnattendedRecoveryDispatcher(MutableModel):
             mngr_host_dir=self.mngr_host_dir,
             mngr_forward_port=self.mngr_forward_port,
             mngr_forward_preauth_cookie=self.mngr_forward_preauth_cookie,
-            skip_stop=True,
+            kind=HostRecoveryKind.START,
             connectivity_detector=self.connectivity_detector,
         )
         logger.info("Unattended recovery for {}: {}", agent_id, outcome.value)
 
 
-def run_restart_sequence(
+def run_host_recovery_sequence(
     workspace_agent_id: AgentId,
     tracker: SystemInterfaceHealthTracker,
     backend_resolver: BackendResolverInterface,
@@ -1173,115 +1212,118 @@ def run_restart_sequence(
     mngr_forward_port: int,
     mngr_forward_preauth_cookie: str | None,
     registry: WorkspaceOperationRegistryInterface,
-    skip_stop: bool = False,
-    startup_wait_seconds: float = _HOST_RESTART_STARTUP_WAIT_SECONDS,
+    kind: HostRecoveryKind,
+    startup_wait_seconds: float = _HOST_RECOVERY_STARTUP_WAIT_SECONDS,
     connectivity_detector: ConnectivityDetector | None = None,
 ) -> None:
-    """Background worker: stop + start the workspace's host, then await recovery.
+    """Background worker: bring the workspace's host back, then await recovery.
 
-    Drives the health tracker to HEALTHY on recovery or RESTART_FAILED (with a
+    Drives the health tracker to HEALTHY on recovery or RECOVERY_FAILED (with a
     reason) when a step errors or the system interface does not return within
     ``startup_wait_seconds`` (sized for a container cold boot). In lockstep it appends
     progress lines to, and completes / fails, the v1 ``registry`` operation so the
-    ``/workspaces/operations/restart/<id>`` resource can report the same restart. A crash
-    of this worker is turned into RESTART_FAILED by ``RestartWorkerFailureHandler``,
+    ``/workspaces/operations/restart/<id>`` resource can report the same episode. A crash
+    of this worker is turned into RECOVERY_FAILED by ``RecoveryWorkerFailureHandler``,
     wired as the thread's ``on_failure`` callback.
 
-    Every RESTART_FAILED transition also logs at error level: the recovery
-    surface is quiet (Principle 3), so a failed restart must reach error
+    Every RECOVERY_FAILED transition also logs at error level: the recovery
+    surface is quiet (Principle 3), so a failed recovery must reach error
     reporting even though the card renders it for the user. The exception is the
     two endings that route over the network -- a step that errored, and a
     readiness wait that timed out -- while this device is confirmed offline or on
     a network that blocks SSH: those log at warning instead, since the state is
-    still RESTART_FAILED but the failure was doomed by something no error report
-    can act on (see :func:`_report_restart_step_failure`). The endings that
+    still RECOVERY_FAILED but the failure was doomed by something no error report
+    can act on (see :func:`_report_recovery_step_failure`). The endings that
     describe discovery losing a coordinate keep their error level, network or
     no: nothing about the device explains them. That is also why the
-    readiness wait is given a full cold-boot budget: below it, a restart that was
+    readiness wait is given a full cold-boot budget: below it, a recovery that was
     merely slow reports itself as a failure, to the user and to error reporting
     alike. A shutdown that truncates the wait is the one ending that yields no
     verdict at all -- it observed nothing, so it claims nothing.
 
-    ``skip_stop`` is set by the dispatches that fire with no knowledge of the
-    host's state (the API's ``start_only``): the unattended one on the tracker's
-    STUCK edge, and the stopped-machine click-through. The sequence must then
-    never bounce a live container, and ``mngr start`` alone guarantees that --
-    it checks ground truth at commit time, no-ops on a running host, and
-    cold-boots a stopped one. The "Restart machine" click on the recovery card
-    keeps the stop step, since it may target a running-but-wedged container
-    that only a bounce fixes.
+    ``HostRecoveryKind.START`` is what the dispatches that fire with no knowledge
+    of the host's state ask for (the API's ``start_only``): the unattended one on
+    the tracker's STUCK edge, and the stopped-machine click-through. The sequence
+    must then never bounce a live container, and ``mngr start`` alone guarantees
+    that -- it checks ground truth at commit time, no-ops on a running host, and
+    cold-boots a stopped one. Only ``HostRecoveryKind.RESTART``, from the
+    "Restart machine" click on the recovery card, runs the stop step, since it
+    may target a running-but-wedged container that only a bounce fixes.
     """
-    registry.append_log(workspace_agent_id, "Starting host restart.")
+    registry.append_log(workspace_agent_id, "Starting host recovery.")
     services_agent_id = backend_resolver.get_system_services_agent_id(workspace_agent_id)
     if services_agent_id is None:
         message = "Could not locate the system-services agent for this machine."
-        logger.error("Host restart of {} failed: {}", workspace_agent_id, message)
-        tracker.mark_restart_failed(workspace_agent_id, message)
+        logger.error("Host recovery of {} failed: {}", workspace_agent_id, message)
+        tracker.mark_recovery_failed(workspace_agent_id, message)
         registry.fail(workspace_agent_id, message)
         return
 
     # Read before the stop step, so both commands address the same machine. The
-    # post-restart read further down is a separate question (where the machine
+    # post-recovery read further down is a separate question (where the machine
     # ended up) and deliberately takes its own, later snapshot.
-    services_agent_address = _build_restart_agent_address(
+    services_agent_address = _build_recovery_agent_address(
         services_agent_id, backend_resolver.get_agent_display_info(workspace_agent_id)
     )
 
     env = dict(os.environ)
     env["MNGR_HOST_DIR"] = str(mngr_host_dir)
 
-    if skip_stop:
-        logger.info("Start-only restart for {}: skipping the stop step", workspace_agent_id)
-        registry.append_log(workspace_agent_id, "Start-only restart; skipping the stop step.")
-    else:
-        registry.append_log(workspace_agent_id, "Stopping the system-services agent.")
-        try:
-            _run_mngr(
-                concurrency_group,
-                _build_mngr_stop_argv(mngr_binary, services_agent_address),
-                env,
-                timeout_seconds=HOST_STOP_TIMEOUT_SECONDS,
-            )
-        except MngrCommandError as exc:
-            # ``mngr stop --stop-host`` raises HostShutdownNotSupportedError when a provider's
-            # ``supports_shutdown_hosts`` is False (e.g. Modal). minds runs mngr as a subprocess,
-            # so it can only match the error's message text in stderr -- keyed off mngr's exported
-            # HOST_SHUTDOWN_NOT_SUPPORTED_MESSAGE constant (one shared source of truth) rather than
-            # a duplicated literal.
-            if HOST_SHUTDOWN_NOT_SUPPORTED_MESSAGE in str(exc):
-                # Provider can't stop a host in place (e.g. Modal). Expected, not a
-                # failure: the start step below restarts it on its own (reconnect-if-alive,
-                # else recreate-from-snapshot), so skip the stop and proceed.
-                logger.info(
-                    "Stop step of host restart for {} skipped: provider does not support host shutdown; "
-                    "restart proceeds via start alone",
-                    workspace_agent_id,
+    match kind:
+        case HostRecoveryKind.START:
+            logger.info("Start-only recovery for {}: skipping the stop step", workspace_agent_id)
+            registry.append_log(workspace_agent_id, "Start-only recovery; skipping the stop step.")
+        case HostRecoveryKind.RESTART:
+            registry.append_log(workspace_agent_id, "Stopping the system-services agent.")
+            try:
+                run_mngr_to_completion(
+                    concurrency_group,
+                    _build_mngr_stop_argv(mngr_binary, services_agent_address),
+                    env,
+                    timeout_seconds=HOST_STOP_TIMEOUT_SECONDS,
                 )
-                registry.append_log(
-                    workspace_agent_id, "Provider does not support stopping the host; skipping stop step."
-                )
-            else:
-                _report_restart_step_failure(
-                    "Stop",
-                    exc,
-                    workspace_agent_id=workspace_agent_id,
-                    tracker=tracker,
-                    backend_resolver=backend_resolver,
-                    registry=registry,
-                    connectivity_detector=connectivity_detector,
-                )
-                return
+            except MngrCommandError as exc:
+                # ``mngr stop --stop-host`` raises HostShutdownNotSupportedError when a provider's
+                # ``supports_shutdown_hosts`` is False (e.g. Modal). minds runs mngr as a subprocess,
+                # so it can only match the error's message text in stderr -- keyed off mngr's exported
+                # HOST_SHUTDOWN_NOT_SUPPORTED_MESSAGE constant (one shared source of truth) rather than
+                # a duplicated literal.
+                if HOST_SHUTDOWN_NOT_SUPPORTED_MESSAGE in str(exc):
+                    # Provider can't stop a host in place (e.g. Modal). Expected, not a
+                    # failure: the start step below brings it up on its own (reconnect-if-alive,
+                    # else recreate-from-snapshot), so skip the stop and proceed.
+                    logger.info(
+                        "Stop step of host recovery for {} skipped: provider does not support host shutdown; "
+                        "recovery proceeds via start alone",
+                        workspace_agent_id,
+                    )
+                    registry.append_log(
+                        workspace_agent_id, "Provider does not support stopping the host; skipping stop step."
+                    )
+                else:
+                    _report_recovery_step_failure(
+                        "Stop",
+                        exc,
+                        workspace_agent_id=workspace_agent_id,
+                        tracker=tracker,
+                        backend_resolver=backend_resolver,
+                        registry=registry,
+                        connectivity_detector=connectivity_detector,
+                    )
+                    return
+        case _ as unreachable:
+            assert_never(unreachable)
 
     registry.append_log(workspace_agent_id, "Starting the system-services agent.")
     try:
-        start_stdout = _run_mngr(
+        start_stdout = run_mngr_to_completion(
             concurrency_group,
             _build_mngr_start_argv(mngr_binary, services_agent_address),
             env,
             timeout_seconds=HOST_START_TIMEOUT_SECONDS,
         )
     except MngrCommandError as exc:
-        _report_restart_step_failure(
+        _report_recovery_step_failure(
             "Start",
             exc,
             workspace_agent_id=workspace_agent_id,
@@ -1299,28 +1341,28 @@ def run_restart_sequence(
     # restart of it. (It does not mean the start did nothing: an agent whose
     # session had died is relaunched either way. Only the host is in question.)
     if _did_start_boot_a_host(start_stdout) is False:
-        logger.info("Start step of host restart for {} booted nothing; the host was already up", workspace_agent_id)
+        logger.info("Start step of host recovery for {} booted nothing; the host was already up", workspace_agent_id)
         registry.append_log(workspace_agent_id, "The machine was already running; it was not restarted.")
-        tracker.record_restart_started_nothing(workspace_agent_id)
+        tracker.record_recovery_started_nothing(workspace_agent_id)
 
     # Without a plugin route there is no way to probe for recovery, so treat a
     # clean dispatch as success (mirrors the background probe loop being a no-op).
     if mngr_forward_port == 0 or not mngr_forward_preauth_cookie:
         tracker.record_probe_success(workspace_agent_id)
-        registry.append_log(workspace_agent_id, "Restart dispatched.")
+        registry.append_log(workspace_agent_id, "Recovery dispatched.")
         registry.complete(workspace_agent_id)
         return
 
     # Workspace origins are keyed by the workspace id (the services agent's
     # id), so the probe needs no coordinate lookup -- but a workspace that
     # discovery no longer knows at all has no instance the plugin could route
-    # its origin to, so fail the restart fast rather than spin through the
+    # its origin to, so fail the recovery fast rather than spin through the
     # whole cold-boot wait.
     display_info = backend_resolver.get_agent_display_info(workspace_agent_id)
     if display_info is None:
-        message = "The workspace is unknown to discovery after the restart, so its recovery cannot be confirmed."
-        logger.error("Host restart of {} failed: {}", workspace_agent_id, message)
-        tracker.mark_restart_failed(workspace_agent_id, message)
+        message = "The workspace is unknown to discovery after the start, so its recovery cannot be confirmed."
+        logger.error("Host recovery of {} failed: {}", workspace_agent_id, message)
+        tracker.mark_recovery_failed(workspace_agent_id, message)
         registry.fail(workspace_agent_id, message)
         return
 
@@ -1332,37 +1374,37 @@ def run_restart_sequence(
         startup_wait_seconds,
         concurrency_group,
     )
-    if outcome is RestartReadinessOutcome.READY:
+    if outcome is RecoveryReadinessOutcome.READY:
         tracker.record_probe_success(workspace_agent_id)
         registry.append_log(workspace_agent_id, "The system interface is responding again.")
         registry.complete(workspace_agent_id)
-    elif outcome is RestartReadinessOutcome.ABANDONED:
-        # The app is quitting mid-restart. Nothing is left to report to: both the
+    elif outcome is RecoveryReadinessOutcome.ABANDONED:
+        # The app is quitting mid-recovery. Nothing is left to report to: both the
         # tracker and the operation registry are per-process and die with it, and
         # no window is up to render a verdict. Reporting a failure here would be a
         # claim about the workspace we never actually observed, so this stays an
         # info line -- there is no persistent condition for it to hide.
-        logger.info("Host restart of {} was cut short by shutdown before the interface answered", workspace_agent_id)
+        logger.info("Host recovery of {} was cut short by shutdown before the interface answered", workspace_agent_id)
     else:
-        message = f"The system interface did not respond within {int(startup_wait_seconds)}s of the host restart."
+        message = f"The system interface did not respond within {int(startup_wait_seconds)}s of the host recovery."
         # Warning while this device is confirmed offline or on a network that
-        # blocks SSH, for the reason :func:`_report_restart_step_failure` gives
+        # blocks SSH, for the reason :func:`_report_recovery_step_failure` gives
         # for the steps: every poll of the wait was routed over the same network
         # the commands were, so there is nothing here an error report could act
         # on. This is the longer of the two windows the network can die in --
         # the wait is given a full cold-boot budget -- and so the likelier
-        # place a restart already in flight when the wifi dropped ends up.
+        # place a recovery already in flight when the wifi dropped ends up.
         is_blocked_by_device = (
             read_environment_block(connectivity_detector, backend_resolver, workspace_agent_id)
             is not EnvironmentBlock.NONE
         )
         logger.log(
             "WARNING" if is_blocked_by_device else "ERROR",
-            "Host restart of {} failed: {}",
+            "Host recovery of {} failed: {}",
             workspace_agent_id,
             message,
         )
-        tracker.mark_restart_failed(workspace_agent_id, message)
+        tracker.mark_recovery_failed(workspace_agent_id, message)
         registry.fail(workspace_agent_id, message)
 
 
@@ -1419,10 +1461,10 @@ def _recorded_backend_outage_reason(
     """The backend outage a command hit, until discovery has re-polled that backend.
 
     A stop/start ``mngr`` rejected at the provider is recorded on the tracker
-    (see :func:`_report_restart_step_failure`), and this is what reads it back.
+    (see :func:`_report_recovery_step_failure`), and this is what reads it back.
     It is the only account of an outage available before the provider's next
     poll, which is exactly the window in which the recovery surfaces are raised
-    -- minds restarts a machine the moment it wedges, so the rejection lands
+    -- minds starts a machine the moment it wedges, so the rejection lands
     within seconds of the outage while the poll can be half a minute away.
 
     Its authority ends at that poll. Whatever the poll reports supersedes it:
@@ -1499,11 +1541,11 @@ def read_backend_unreachable_verdict(
     ``mngr`` round trip is made for it. Two sources answer, and both are already
     in hand -- a surfaced provider error and an UNAUTHENTICATED host state, both
     freshness-gated because both are properties of one snapshot, plus the backend
-    outage a restart already ran into, which the tracker holds.
+    outage a recovery already ran into, which the tracker holds.
 
     That last one is why this does not trail an outage by a provider poll. The
-    machine minds is asked to recover is one it has just tried to restart, and a
-    restart mngr rejected at the provider names the backend on the spot; only an
+    machine minds is asked to recover is one it has just tried to start, and a
+    command mngr rejected at the provider names the backend on the spot; only an
     outage no command has run into yet waits for discovery.
 
     This answers only "is the backend unreachable?". A None means "not by this
@@ -1566,12 +1608,12 @@ def read_device_cannot_connect_verdict(
     causes raised before the backend is ever dialed qualify; a failure that
     reached the network leaves the workspace implicated and is not this.
 
-    Like the backend-unreachable verdict, this outranks whatever the restart
+    Like the backend-unreachable verdict, this outranks whatever the recovery
     episode concluded, because it explains it: a machine this device cannot
-    reach goes STUCK and gets restarted whether or not anything is wrong with
-    it, and the restart is what produces the RESTART_FAILED the surfaces would
-    otherwise report. It clears the moment a probe succeeds, which drops the
-    tracker's record for the episode along with it.
+    reach goes STUCK and gets a start dispatched at it whether or not anything
+    is wrong with it, and that start is what produces the RECOVERY_FAILED the
+    surfaces would otherwise report. It clears the moment a probe succeeds,
+    which drops the tracker's record for the episode along with it.
 
     Pool exhaustion and a broken tunnel are not separated for the user: both are
     fixed by restarting the app and by nothing else the user can do, so a second

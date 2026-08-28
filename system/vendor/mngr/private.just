@@ -313,6 +313,22 @@ minds-test-electron *args:
 minds-test-electron-flow *args:
   xvfb-run -a uv run --package minds python apps/minds/scripts/electron_full_flow_e2e.py {{args}}
 
+# Run the MIND-205 right-click Copy/Cut/Paste/Select All menu e2e: Playwright
+# `_electron` launches a minimal entry (test/e2e/context-menu-app.js) that wires
+# the shipped registerContextMenuFor from electron/context-menu.js, then drives a
+# real right-click and a Copy->Paste round trip, asserting the menu's items and
+# that text actually moves. Wrapped in `xvfb-run` for headless Linux; macOS users
+# with a real display can run the underlying `pnpm exec playwright test` directly.
+# Needs apps/minds/node_modules (`just minds-install` once); no backend, Docker,
+# or env activation required.
+[group("minds test")]
+minds-test-electron-menu *args:
+    #!/bin/bash
+    set -ueo pipefail
+    . apps/minds/scripts/select_node_version.sh || exit 2
+    cd apps/minds
+    xvfb-run -a pnpm exec playwright test --config=test/e2e/playwright.config.js context-menu.spec.js {{args}}
+
 # Generate a harbor task dataset from a minds eval config (one task per persona
 # case). Datasets default OUTSIDE the repo tree: each generated task embeds a
 # full mngr-internal clone, which must not sit under the repo's apps/ scan (it
