@@ -1672,9 +1672,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     iconMarkup: string | null;
     label: string;
     isDestructive?: boolean;
-    // Tertiary at rest ("New project" is the one user today), text-faint
-    // -- but reads as clickable rather than disabled, so it goes fully
-    // primary on hover rather than staying faint.
+    // Tertiary at rest, text-faint -- but reads as clickable rather than
+    // disabled, so it goes fully primary on hover rather than staying faint.
     isQuiet?: boolean;
     // Rendered faint and inert: the verb exists but cannot act right now
     // ("Focus last X" while the view shows no X). Distinct from isQuiet,

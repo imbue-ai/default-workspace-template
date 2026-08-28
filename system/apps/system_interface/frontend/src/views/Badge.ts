@@ -1,15 +1,13 @@
 import { TEXT_HELPER_SIZE } from "./typography";
 
-/* ── Badge ───────────────────────────────────────────────────────────────────
+/* Badge.
  * One small-label chip, sized off the helper type token. Neutral/accent are
  * outline chips on a surface fill; the status tones carry a light tinted
  * fill. mono for id-like labels (model id, agent type).
  *
- * A class builder, not a component, on purpose: a census found two call
- * sites, both static <span>s with no states or behavior -- a wrapper would be
- * pure ceremony. Revisit if badges multiply the way buttons did. Only the
- * neutral and accent tones are in use today; the status tones are the
- * documented palette for future status chips.
+ * A class builder, not a component, on purpose: badge call sites are static
+ * <span>s with no states or behavior, so a wrapper would be pure ceremony.
+ * Revisit if badges multiply the way buttons did.
  *
  * The leading `badge` class is a bare marker (no styling): a hook for tests
  * and the inspector. The Tailwind scanner reads utility names from the

@@ -3,17 +3,15 @@
  * next to its target, positioned (fixed) under the target after a hover-intent
  * delay.
  *
- * Tab content in dockview can use neither of the app's usual tooltip
- * mechanisms. Native ``title`` is suppressed: dockview marks every tab
- * ``draggable`` (tab.js sets ``element.draggable = true``, plus
+ * Tab content in dockview can use neither of the usual tooltip mechanisms.
+ * Native ``title`` is suppressed: dockview marks every tab ``draggable``
+ * (tab.js sets ``element.draggable = true``, plus
  * ``-webkit-user-drag: element``), and Chromium hides ``title`` tooltips on
- * draggable elements and their descendants. A CSS ``::after`` bubble -- the
- * ``data-tooltip`` pattern the workspace once used for simple in-flow tooltips,
- * since retired in favor of this one -- is clipped by the tab strip's overflow
- * (``.dv-tabs-container`` is ``overflow: auto`` and ``.dv-groupview`` is
- * ``overflow: hidden``). A body-level, fixed-position element driven by our
- * own listeners avoids both: it is not a native tooltip, and it is not inside
- * the clipping container.
+ * draggable elements and their descendants. A CSS ``::after`` bubble is
+ * clipped by the tab strip's overflow (``.dv-tabs-container`` is
+ * ``overflow: auto`` and ``.dv-groupview`` is ``overflow: hidden``). A
+ * body-level, fixed-position element driven by our own listeners avoids both:
+ * it is not a native tooltip, and it is not inside the clipping container.
  *
  * That being the only mechanism that works everywhere in the workspace, it is
  * the one every workspace tooltip uses: 250ms hover-intent delay, keyboard
@@ -22,9 +20,6 @@
  * click / scroll / resize. The centered-below placement is the default
  * everywhere and callers should not opt out of it lightly -- one placement is
  * what keeps every tooltip in the workspace reading as the same tooltip.
- * (The look and timing were originally copied from the minds desktop shell's
- * tooltip; that is provenance, not a contract -- this UI also runs outside the
- * shell, and nothing here tracks the shell's styling.)
  *
  * The one deliberate exception is the project rail: a rail row sits directly
  * above the row it is being compared against (e.g. the shortcut a hover is

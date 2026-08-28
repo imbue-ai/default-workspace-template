@@ -53,9 +53,8 @@ function checkboxByLabel(tree: unknown, label: string): VnodeLike | undefined {
   return checkboxes(tree).find((vnode) => vnode.attrs?.["aria-label"] === label);
 }
 
-// The confirm ("Add") button now lives in the shared Modal's `actions` prop
-// rather than in the dialog's own children, so it is reached through the root
-// Modal vnode's attrs. It carries the shared primary-button primitive class.
+// The confirm ("Add") button rides the shared Modal's `actions` prop, so it
+// is reached through the root Modal vnode's attrs rather than its children.
 function confirmButton(tree: unknown): VnodeLike | undefined {
   const actions = (tree as VnodeLike).attrs?.actions;
   for (const vnode of walk(actions)) {
@@ -118,10 +117,10 @@ describe("ProjectMembershipDialog", () => {
   });
 
   it("delegates backdrop dismissal to the shared modal shell, wired to onCancel", () => {
-    // The dialog no longer owns the backdrop mechanics: it renders the shared
-    // Modal, handing it onCancel as the dismissal handler. The mousedown-not-
-    // click, primary-button-only behaviour lives in modalBackdrop.ts (covered
-    // by modalBackdrop.test.ts), so here we only assert the wiring.
+    // The dialog renders the shared Modal, handing it onCancel as the
+    // dismissal handler. The mousedown-not-click, primary-button-only
+    // behaviour lives in modalBackdrop.ts (covered by modalBackdrop.test.ts),
+    // so here we only assert the wiring.
     const attrs = makeAttrs();
     const tree = makeDialog(attrs).render() as VnodeLike;
     expect(tree.attrs?.onclick).toBeUndefined();

@@ -27,7 +27,7 @@ import { icon } from "./icons";
  *  switched from the agent's own terminal (its native picker), not from this bar. */
 const READ_ONLY_TOOLTIP = "Use agent terminal to switch models";
 
-/* ── Styling ──────────────────────────────────────────────────────────────────
+/* Styling.
  * Utilities in the markup; the model-* class names stay as bare markers
  * (positionDropdown queries .model-selector-label/-dropdown-header, and the
  * e2e tests find the bar by its markers). States are resolved in code, one

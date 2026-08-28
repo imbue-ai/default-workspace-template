@@ -1,6 +1,6 @@
 import { TEXT_BODY_SIZE } from "./typography";
 
-/* ── Input ───────────────────────────────────────────────────────────────────
+/* Input.
  * One text-field style for <input> / <textarea>. Options: mono (id/token-like
  * fields), withAction (reserves room for a trailing inline action button),
  * extra. Text fields are always focus-visible, so the accent ring also shows
@@ -8,9 +8,8 @@ import { TEXT_BODY_SIZE } from "./typography";
  * model-search field, and the inline tab-rename editor.
  *
  * A class builder, not a component, on purpose: the recipe spans two element
- * types (a census found 4 <input> + 1 <textarea> sites), the two differ in
- * their attribute surface, and there is no invariant a wrapper would enforce
- * -- so a component would be an `as:` prop and ceremony for five call sites.
+ * types that differ in their attribute surface, and there is no invariant a
+ * wrapper would enforce -- a component would be an `as:` prop and ceremony.
  * Revisit if text fields multiply the way buttons did.
  *
  * The leading `input` class is a bare marker (no styling): a hook for tests,

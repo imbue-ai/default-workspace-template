@@ -19,7 +19,7 @@ import m from "mithril";
 import { backdropDismissAttrs } from "./modalBackdrop";
 import { TEXT_BODY_SIZE, TEXT_HEADING_SIZE } from "./typography";
 
-/* ── Modal shell recipe ──────────────────────────────────────────────────────
+/* Modal shell recipe.
  * The dimmed overlay + centered card + header/title + body copy + actions row
  * the workspace's dialogs share, emitted by the Modal component below. The
  * copy classes (message, label) are used directly by callers for dialog body
