@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeLiveMapping, computeThumb, resolveTrackFraction } from "./scrollbarMap";
+import {
+  computeLiveMapping,
+  computeThumb,
+  mappingPhysicalExtent,
+  resolveTrackFraction,
+  resolveTrackFractionToIndex,
+} from "./scrollbarMap";
 import type { ScrollbarMapping, Viewport } from "./types";
 
 function viewport(scrollTopPx: number, overrides: Partial<Viewport> = {}): Viewport {
@@ -133,5 +139,45 @@ describe("frozen-mapping scrubbing (SCROLLBAR state)", () => {
     // 75% of the track resolves through the frozen bottom virtual band (700..1000).
     const target = resolveTrackFraction(frozen, 0.75);
     expect(target).toEqual({ kind: "virtual-index", index: 750 });
+  });
+});
+
+describe("mappingPhysicalExtent", () => {
+  it("recovers the physical band's event bounds from its neighbors", () => {
+    const mapping = computeLiveMapping({ totalEvents: 1000 }, { firstIndex: 300, endIndex: 700 }, 15_000);
+    expect(mappingPhysicalExtent(mapping)).toEqual({ firstIndex: 300, endIndex: 700 });
+  });
+
+  it("uses 0 and totalEvents when a side has no virtual band", () => {
+    const fromStart = computeLiveMapping({ totalEvents: 100 }, { firstIndex: 0, endIndex: 40 }, 1000);
+    expect(mappingPhysicalExtent(fromStart)).toEqual({ firstIndex: 0, endIndex: 40 });
+    const allLoaded = computeLiveMapping({ totalEvents: 100 }, { firstIndex: 0, endIndex: 100 }, 1000);
+    expect(mappingPhysicalExtent(allLoaded)).toEqual({ firstIndex: 0, endIndex: 100 });
+  });
+
+  it("is null when nothing is loaded (no physical segment)", () => {
+    const unloaded = computeLiveMapping({ totalEvents: 100 }, { firstIndex: 0, endIndex: 0 }, 0);
+    expect(mappingPhysicalExtent(unloaded)).toBeNull();
+  });
+});
+
+describe("resolveTrackFractionToIndex", () => {
+  const mapping = computeLiveMapping({ totalEvents: 1000 }, { firstIndex: 300, endIndex: 700 }, 15_000);
+
+  it("matches the virtual-band resolution of resolveTrackFraction", () => {
+    expect(resolveTrackFractionToIndex(mapping, 0.15)).toBe(150);
+    expect(resolveTrackFractionToIndex(mapping, 0.75)).toBe(750);
+  });
+
+  it("treats the physical band as linear in index space", () => {
+    // The physical band is 30%..70% covering events 300..700; halfway through
+    // the band is event 500 regardless of row pixel heights.
+    expect(resolveTrackFractionToIndex(mapping, 0.5)).toBe(500);
+    expect(resolveTrackFractionToIndex(mapping, 0.3)).toBe(300);
+  });
+
+  it("clamps to the track ends", () => {
+    expect(resolveTrackFractionToIndex(mapping, -1)).toBe(0);
+    expect(resolveTrackFractionToIndex(mapping, 2)).toBe(999);
   });
 });

@@ -8,7 +8,15 @@
  * state freezes one of these at engage time and keeps resolving through it.
  */
 
-import type { PhysicalExtent, ScrollTarget, ScrollbarMapping, TrackSegment, Viewport, VirtualExtent } from "./types";
+import type {
+  EventIndex,
+  PhysicalExtent,
+  ScrollTarget,
+  ScrollbarMapping,
+  TrackSegment,
+  Viewport,
+  VirtualExtent,
+} from "./types";
 
 export interface ScrollbarThumb {
   readonly startFraction: number;
@@ -88,6 +96,56 @@ export function resolveTrackFraction(mapping: ScrollbarMapping, fraction: number
   const count = segment.endIndex - segment.firstIndex;
   const indexWithin = Math.min(count - 1, Math.floor(relative * count));
   return { kind: "virtual-index", index: segment.firstIndex + Math.max(0, indexWithin) };
+}
+
+/**
+ * The event bounds of the mapping's physical band, implied by its neighboring
+ * virtual segments; null when the mapping has no physical segment. Lets a
+ * consumer of a FROZEN mapping detect that the loaded window has moved since
+ * the freeze (the frozen band's bounds no longer match the live extent).
+ */
+export function mappingPhysicalExtent(mapping: ScrollbarMapping): PhysicalExtent | null {
+  for (let i = 0; i < mapping.segments.length; i++) {
+    const segment = mapping.segments[i];
+    if (segment.kind !== "physical") {
+      continue;
+    }
+    const before = mapping.segments[i - 1];
+    const after = mapping.segments[i + 1];
+    return {
+      firstIndex: before !== undefined && before.kind === "virtual" ? before.endIndex : 0,
+      endIndex: after !== undefined && after.kind === "virtual" ? after.firstIndex : mapping.totalEvents,
+    };
+  }
+  return null;
+}
+
+/**
+ * Resolve a track fraction to a global event index, treating the physical band
+ * as linear in index space (virtual bands already are). Used when a frozen
+ * mapping's physical band no longer matches the loaded window: resolving that
+ * band in pixel space would land on whatever content happens to be loaded now,
+ * showing the wrong messages -- index space keeps the thumb pointing at the
+ * same transcript position regardless of what is currently loaded.
+ */
+export function resolveTrackFractionToIndex(mapping: ScrollbarMapping, fraction: number): EventIndex {
+  const clamped = Math.min(1, Math.max(0, fraction));
+  let segment = mapping.segments[mapping.segments.length - 1];
+  for (const candidate of mapping.segments) {
+    if (clamped < candidate.trackEnd) {
+      segment = candidate;
+      break;
+    }
+  }
+  const width = segment.trackEnd - segment.trackStart;
+  const relative = width > 0 ? (clamped - segment.trackStart) / width : 0;
+  const bounds =
+    segment.kind === "virtual"
+      ? { firstIndex: segment.firstIndex, endIndex: segment.endIndex }
+      : (mappingPhysicalExtent(mapping) ?? { firstIndex: 0, endIndex: mapping.totalEvents });
+  const count = bounds.endIndex - bounds.firstIndex;
+  const indexWithin = Math.min(count - 1, Math.floor(relative * count));
+  return bounds.firstIndex + Math.max(0, indexWithin);
 }
 
 // A scroll-space pixel position mapped to a track fraction. Each segment's
