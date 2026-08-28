@@ -13,7 +13,7 @@ import {
 } from "./conversation-rows";
 import { resolveSelectionRowRange } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
-import { badgeClass } from "./Badge";
+import { badgeClass } from "./components/Badge";
 
 interface SubagentViewAttrs {
   agentId: string;

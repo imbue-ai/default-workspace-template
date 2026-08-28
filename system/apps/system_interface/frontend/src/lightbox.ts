@@ -10,10 +10,10 @@
  * applies to are not part of mithril's vnode tree.
  */
 
-import { attachHoverTooltip } from "./views/hoverTooltip";
-import type { HoverTooltip } from "./views/hoverTooltip";
-import { icon } from "./views/icons";
-import { buttonClass } from "./views/Button";
+import { attachHoverTooltip } from "./views/components/hoverTooltip";
+import type { HoverTooltip } from "./views/components/hoverTooltip";
+import { icon } from "./views/components/icons";
+import { buttonClass } from "./views/components/Button";
 
 function filenameFromUrl(imageUrl: string): string {
   try {

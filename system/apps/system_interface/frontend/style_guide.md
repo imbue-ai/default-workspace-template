@@ -36,7 +36,14 @@ say at the call site.
   needs them (`h-[34px]`), as deliberate exceptions.
 - **Radius/elevation**: `rounded-sm/md/lg/xl` (4/6/8/16) and `shadow-raised` /
   `shadow-overlay`.
-- **Buttons are the `Button` component** in `src/views/Button.ts`:
+**Shared, reusable primitives live in `src/views/components/`** (mirroring the
+minds client's `views/components/`); feature screens and feature-specific
+helpers stay directly in `src/views/`. A primitive is a generic building block
+with no feature knowledge (the Button and Modal components, the input/badge
+recipes, the tooltip mechanism, the icon set); when a look starts being reused
+across features, it belongs here.
+
+- **Buttons are the `Button` component** in `src/views/components/Button.ts`:
   `m(Button, {variant, sm, icon, round, selected, block, extra, ...attrs},
 children)` renders a real `<button type="button">`, applies the shared
   recipe, and passes through every attr it doesn't consume (`onclick`,
@@ -49,14 +56,15 @@ children)` renders a real `<button type="button">`, applies the shared
   (the `secondary` default); a destructive confirm is `"destructive"` (quiet
   form: `"ghost-destructive"`).
 - **Other shared recipes** (a look used by more than one file) live one file
-  per primitive: `inputClass()` in `src/views/Input.ts`, `badgeClass()` in
-  `src/views/Badge.ts`, and the `MODAL_*_CLASS` shell beside the Modal
-  component in `src/views/Modal.ts` (shared type-size fragments:
-  `src/views/typography.ts`). Feature-local sharing is an exported constant
-  next to the owning view. Extend these rather than hand-rolling a lookalike.
-  Input and badge stay class builders deliberately (5 and 2 call sites, no
-  invariants a wrapper would enforce); promote one to a component the way
-  Button was promoted if its usage grows.
+  per primitive under `components/`: `inputClass()` in
+  `src/views/components/Input.ts`, `badgeClass()` in
+  `src/views/components/Badge.ts`, and the `MODAL_*_CLASS` shell beside the
+  Modal component in `src/views/components/Modal.ts` (shared type-size
+  fragments: `src/views/components/typography.ts`). Feature-local sharing is an
+  exported constant next to the owning view. Extend these rather than
+  hand-rolling a lookalike. Input and badge stay class builders deliberately (a
+  handful of call sites, no invariants a wrapper would enforce); promote one to
+  a component the way Button was promoted if its usage grows.
 
 **Keep the semantic class names as bare markers.** Every element keeps a
 readable identity class (`queued-header`, `subagent-card--done`, `btn`,

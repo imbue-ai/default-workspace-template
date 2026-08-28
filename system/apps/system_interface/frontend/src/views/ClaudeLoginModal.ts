@@ -35,13 +35,13 @@
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { backdropDismissAttrs } from "./components/modalBackdrop";
 import { OPEN_AI_KEYS_ACK, OPEN_AI_KEYS_PAGE } from "@minds/embed-contract";
 import { apiUrl } from "../base-path";
 import { clearEmbedderMessageHandler, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
-import { claudeLogoIcon, icon, loginSpinnerIcon, warningIcon } from "./icons";
-import { Button, buttonClass } from "./Button";
-import { inputClass } from "./Input";
+import { claudeLogoIcon, icon, loginSpinnerIcon, warningIcon } from "./components/icons";
+import { Button, buttonClass } from "./components/Button";
+import { inputClass } from "./components/Input";
 
 interface ClaudeAuthStatus {
   logged_in: boolean;

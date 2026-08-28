@@ -8,11 +8,11 @@
  */
 
 import m from "mithril";
-import { MODAL_MESSAGE_CLASS, Modal } from "./Modal";
+import { MODAL_MESSAGE_CLASS, Modal } from "./components/Modal";
 import { getAgentById } from "../models/AgentManager";
 import { getHarnessCatalog } from "../models/HarnessCatalog";
 import { dismissAuthInstructions, getAuthInstructionsAgentId } from "../models/AgentAuth";
-import { Button } from "./Button";
+import { Button } from "./components/Button";
 
 export function AgentAuthInstructionsModal(): m.Component {
   function handleKeydown(event: KeyboardEvent): void {

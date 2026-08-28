@@ -21,7 +21,7 @@ import {
   renderUserMessage,
 } from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
-import { statusDoneIcon, statusPendingIcon, statusRingIcon } from "./icons";
+import { statusDoneIcon, statusPendingIcon, statusRingIcon } from "./components/icons";
 
 interface ProgressBlockAttrs {
   /** Timeline items in transcript order (steps, ungrouped runs, chips). */

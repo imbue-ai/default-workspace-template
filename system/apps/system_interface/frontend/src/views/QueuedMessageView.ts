@@ -25,11 +25,11 @@ import m from "mithril";
 import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
-import { hoverTooltipAttrs } from "./hoverTooltip";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
 import { prependToComposer, raiseFailureNotice } from "./MessageInput";
 import { OUTGOING_BUBBLE_CLASS, OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
 import { describeRequestError, describeRequestErrorKind } from "../models/request-error";
-import { Button } from "./Button";
+import { Button } from "./components/Button";
 import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";

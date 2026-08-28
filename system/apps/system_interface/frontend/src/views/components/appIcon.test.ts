@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The app list is the machine's, delivered over the WebSocket. Standing in for
 // it keeps these tests about the icon rule and away from the socket.
 const registry = vi.hoisted(() => ({ apps: [] as { name: string; url: string; label: string; icon?: string }[] }));
-vi.mock("../models/AgentManager", () => ({ getApps: () => registry.apps }));
+vi.mock("../../models/AgentManager", () => ({ getApps: () => registry.apps }));
 
 import { MAX_ICON_LENGTH, appIconMarkup, sanitizeIconMarkup, serviceIconMarkup } from "./appIcon";
 

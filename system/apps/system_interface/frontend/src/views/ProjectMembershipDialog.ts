@@ -16,11 +16,11 @@
  */
 
 import m from "mithril";
-import { Modal } from "./Modal";
+import { Modal } from "./components/Modal";
 import type { ProjectInfo } from "../models/Projects";
 import { squiggleMarkup } from "./squiggles";
-import { Button } from "./Button";
-import { MODAL_MESSAGE_CLASS } from "./Modal";
+import { Button } from "./components/Button";
+import { MODAL_MESSAGE_CLASS } from "./components/Modal";
 
 const ROW_GLYPH_SIZE = 16;
 

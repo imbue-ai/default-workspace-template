@@ -7,12 +7,12 @@ import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
-import { hoverTooltipAttrs } from "./hoverTooltip";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
-import { renderToolBlock } from "./ToolCallBlock";
-import { badgeClass } from "./Badge";
+import { renderToolBlock } from "./components/ToolCallBlock";
+import { badgeClass } from "./components/Badge";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
  *  `resolutionsByRequestId`, or null while the request awaits a decision (or
