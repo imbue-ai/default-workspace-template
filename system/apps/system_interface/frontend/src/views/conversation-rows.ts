@@ -28,32 +28,43 @@ import {
 import { isHiddenUserMessage } from "./message-classification";
 import { buildSections, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
-import { ESTIMATED_USER_HEIGHT_PX, ESTIMATED_ASSISTANT_HEIGHT_PX } from "./row-measurement";
-import type { WindowSegment } from "../models/virtualWindow";
 
-// Fallback height for a progress block until it has been measured. The user and
-// assistant estimates are shared (see row-measurement).
+// Per-type fallback row heights, used until a row has been measured (live or
+// offscreen). Rough is fine: they only affect spacer sizing for not-yet-measured
+// rows, which the measurement passes correct.
+export const ESTIMATED_USER_HEIGHT_PX = 90;
+export const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
 export const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
+
+// Layout for the centered message column. Shared by the live transcript views
+// and the offscreen measurer, whose rows must lay out identically to measure
+// identically.
+export const MESSAGE_LIST_CLASS = "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6";
 
 export interface RowDescriptor {
   key: string;
   estimate: number;
+  // The transcript event this row starts at, for mapping a row anchor to a
+  // global event index (scroll persistence and fill-planner focus). Null only
+  // for a turn section with no opening user message; consumers fall back to the
+  // previous row's event.
+  anchorEventId: string | null;
   // m.Children (not m.Vnode) because a row can be a component vnode
   // (ProgressBlock), whose typed attrs do not fit the bare Vnode<{}, {}>.
   render: () => m.Children;
 }
 
+/** A run of consecutive rows to render, `[startIndex, endIndex)`, or a spacer
+ *  standing in for everything a run omits (including the virtual end spacers). */
+export type WindowSegment =
+  | { kind: "rows"; startIndex: number; endIndex: number }
+  | { kind: "spacer"; height: number };
+
 /**
- * Render the ordered window segments (from computeTranscriptSlices) into the
- * message list's children: a spacer div for each spacer, and each row's own vnode
- * for each row-run. Shared by ChatPanel and SubagentView so both virtualize
- * identically.
- *
- * Spacers carry `overflow-anchor: none` so native scroll anchoring never picks a
- * spacer (whose height changes as rows page in/measure) as its anchor -- it anchors
- * to a real message row instead. They are keyed by role (top / mid / bottom) so the
- * key stays stable as the middle spacer appears and disappears with a disjoint
- * selection pin.
+ * Render the ordered window segments (from the scroll engine's render plan) into
+ * the message list's children: a spacer div for each spacer, and each row's own
+ * vnode for each row-run. Shared by ChatPanel and SubagentView so both
+ * virtualize identically. Spacer keys are role-stable (top/mid/bottom).
  */
 export function renderTranscriptSegments(rows: RowDescriptor[], segments: WindowSegment[]): m.Children[] {
   const children: m.Children[] = [];
@@ -96,6 +107,7 @@ function buildRows(
       rows.push({
         key: userEvent.event_id,
         estimate: ESTIMATED_USER_HEIGHT_PX,
+        anchorEventId: userEvent.event_id,
         render: () => renderUserMessage(userEvent) as m.Vnode,
       });
     }
@@ -106,6 +118,7 @@ function buildRows(
       rows.push({
         key,
         estimate: ESTIMATED_PROGRESS_HEIGHT_PX,
+        anchorEventId: userEvent?.event_id ?? null,
         render: () =>
           m(ProgressBlock, {
             id: key,
@@ -127,6 +140,7 @@ function buildRows(
           rows.push({
             key: event.event_id,
             estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+            anchorEventId: event.event_id,
             render: () => renderAssistantMessage(event, toolResults, agentId),
           });
         }
@@ -139,6 +153,7 @@ function buildRows(
         rows.push({
           key: permKey,
           estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+          anchorEventId: permissionEvent.event_id,
           // Pass the row key as the DOM id so the measured height is cached under
           // the same key the window math looks up (see renderPermissionItem).
           render: () => renderPermissionItem(permissionEvent, toolResults, agentId, resolutionsByRequestId, permKey),
@@ -149,6 +164,7 @@ function buildRows(
           rows.push({
             key: chipEvent.event_id,
             estimate: ESTIMATED_USER_HEIGHT_PX,
+            anchorEventId: chipEvent.event_id,
             render: () => renderUserMessage(chipEvent) as m.Vnode,
           });
         }
@@ -158,6 +174,7 @@ function buildRows(
       rows.push({
         key: event.event_id,
         estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+        anchorEventId: event.event_id,
         render: () => renderAssistantMessage(event, toolResults, agentId),
       });
     }

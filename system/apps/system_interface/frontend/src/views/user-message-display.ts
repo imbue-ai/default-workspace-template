@@ -15,13 +15,14 @@ import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
 import { classifyUserMessage } from "./message-classification";
+import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
 
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
  *  of source; only the label and body differ. */
-function renderSystemChip(label: string, body: string): m.Vnode {
-  return m("div", { class: "tool-call-block" }, [
+function renderSystemChip(label: string, body: string, expansionKey: string): m.Vnode {
+  return m("div", { class: `tool-call-block${isBlockExpanded(expansionKey) ? " tool-call-block--expanded" : ""}` }, [
     m(
       "div",
       {
@@ -29,7 +30,7 @@ function renderSystemChip(label: string, body: string): m.Vnode {
         onclick(e: Event) {
           const block = (e.currentTarget as HTMLElement).parentElement;
           if (block) {
-            block.classList.toggle("tool-call-block--expanded");
+            setBlockExpanded(expansionKey, block.classList.toggle("tool-call-block--expanded"));
           }
         },
       },
@@ -58,7 +59,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       const cls = classifyUserMessage(event);
 
       if (cls.kind === UserMessageKind.SystemChip) {
-        return renderSystemChip(cls.label ?? "System message", cls.body);
+        return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
       }
 
       const bubbleChildren: m.Children[] = [];

@@ -38,12 +38,13 @@ fi
 : "${CLAUDE_CODE_VERSION:=2.1.227}"
 : "${CODEX_VERSION:=0.147.0}"
 : "${PI_VERSION:=0.83.0}"
+: "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
 : "${OPENCODE_VERSION:=1.18.19}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.4.1}"
+: "${LATCHKEY_VERSION:=3.9.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Shared curl flags for the pinned-binary downloads below. --retry-all-errors
@@ -266,8 +267,10 @@ opencode --version >/dev/null
 # Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
 # in sync with agent_types.pi-coding.version in .mngr/settings.toml.
 npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
-npm install -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}"
 command -v pi >/dev/null
+
+npm install -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}"
+command -v playwright-cli >/dev/null
 
 # Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
 # installer: the upstream one queries a "latest" manifest, and that manifest is the
