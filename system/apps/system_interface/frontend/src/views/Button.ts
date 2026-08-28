@@ -92,7 +92,10 @@ const BTN_VARIANTS: Record<ButtonVariant, string> = {
 // the builder resolves the conflict in code instead of leaning on the cascade.
 // Exported for the one decorative copy of a selected control (the fast-mode
 // modal's inline illustration), so its tint cannot drift from the real thing.
-export const BTN_SELECTED = "bg-accent-light text-accent border-accent";
+// border-transparent, not border-accent: the tint alone says "on" -- an
+// outline reads as a frame around the control (most visibly on the modal's
+// inline illustration), and ghost <-> selected keeps identical geometry.
+export const BTN_SELECTED = "bg-accent-light text-accent border-transparent";
 
 export function buttonClass(variant: ButtonVariant = "secondary", options: ButtonOptions = {}): string {
   const {
