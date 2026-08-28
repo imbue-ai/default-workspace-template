@@ -450,8 +450,8 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
         {
           type: "button",
           class:
-            "text-text-secondary hover:bg-bg-hover hover:text-text-primary flex min-w-0 max-w-[190px] " +
-            "cursor-pointer items-center gap-1 truncate bg-transparent py-0 pr-2 pl-3 text-[13px] focus:outline-none",
+            "text-text-secondary hover:bg-bg-hover hover:text-text-primary flex min-w-0 max-w-[130px] " +
+            "shrink cursor-pointer items-center gap-1 truncate bg-transparent py-0 pr-2 pl-2 text-[13px] focus:outline-none",
           "aria-label": "Provider for the new chat",
           "aria-expanded": open ? "true" : "false",
           [PICKER_ATTR]: "trigger",
@@ -785,12 +785,13 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                   key: tile.label,
                   // The chat control carries the frame its own button used to, so the
                   // provider sits INSIDE it: same height, border, radius and type size as
-                  // the other three, one hairline divider between the two halves. It is
-                  // wider because it holds more, but nothing else about it differs -- the
-                  // row still reads as one set rather than a button with a widget stuck on.
+                  // the other three, one hairline divider between the two halves, and the same
+                  // width. It used to take 1.7 shares to fit the account name, which made the
+                  // row read as one important tile and three afterthoughts -- so the tile keeps
+                  // its share and the account name gives way instead (it truncates, and the
+                  // picker's own menu shows it in full).
                   class:
-                    "border-border flex h-9 items-stretch overflow-hidden rounded-lg border " +
-                    (isChatTile ? "min-w-0 flex-[1.7]" : "min-w-0 flex-1") +
+                    "border-border flex h-9 min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border " +
                     (isDisabled ? " text-text-faint" : " text-text-primary"),
                 },
                 [
