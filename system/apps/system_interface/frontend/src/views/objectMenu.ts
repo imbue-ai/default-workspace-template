@@ -25,7 +25,7 @@
  * callbacks gets wrapped into a row, in what order, with what icon.
  */
 
-import type { IconName } from "./icons";
+import type { IconName } from "./components/icons";
 
 /** The four member kinds that carry the consolidated verb set. Deliberately
  *  narrower than ``MemberKind`` in models/Projects (which also has "url" for

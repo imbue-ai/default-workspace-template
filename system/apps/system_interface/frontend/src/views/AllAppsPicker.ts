@@ -47,9 +47,9 @@ import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
 import type { ShortcutName } from "../models/Projects";
 import { appServiceDisplayName } from "./derived-names";
-import { appIconMarkup } from "./appIcon";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
+import { appIconMarkup } from "./components/appIcon";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { icon } from "./components/icons";
 
 // Show the filter box only once scanning the list by eye stops being faster
 // than typing.

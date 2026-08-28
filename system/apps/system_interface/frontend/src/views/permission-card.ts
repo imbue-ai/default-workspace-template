@@ -20,10 +20,10 @@ import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import { isPermissionRequestCall } from "./message-classification";
-import { icon } from "./icons";
-import type { IconName } from "./icons";
+import { icon } from "./components/icons";
+import type { IconName } from "./components/icons";
 import { serviceMarkUrl } from "./service-marks";
-import { Button } from "./Button";
+import { Button } from "./components/Button";
 
 /** The rich fields a created permission request echoes back on stdout, parsed
  *  from the tool result. `requestId` is always present (it's what the modal

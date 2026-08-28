@@ -50,7 +50,7 @@ import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } f
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
-import { Button } from "./Button";
+import { Button } from "./components/Button";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where

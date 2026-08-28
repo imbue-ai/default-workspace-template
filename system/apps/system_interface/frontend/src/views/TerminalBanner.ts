@@ -16,7 +16,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
-import { Button } from "./Button";
+import { Button } from "./components/Button";
 
 const PERSISTENCE_DOC_URL = "https://github.com/imbue-ai/mngr/blob/main/apps/minds/docs/persistent-terminals.md";
 

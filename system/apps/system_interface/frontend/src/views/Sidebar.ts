@@ -49,11 +49,11 @@ import {
 import type { MatchRange, MemberKind, ProjectInfo, ShortcutMode } from "../models/Projects";
 import { AllAppsPicker, appDisplayName, pickableApps } from "./AllAppsPicker";
 import type { UnpinnedShortcutRow } from "./AllAppsPicker";
-import { appIconMarkup, serviceIconMarkup } from "./appIcon";
-import { Button, buttonClass } from "./Button";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import type { TooltipPlacement } from "./hoverTooltip";
-import { icon } from "./icons";
+import { appIconMarkup, serviceIconMarkup } from "./components/appIcon";
+import { Button, buttonClass } from "./components/Button";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import type { TooltipPlacement } from "./components/hoverTooltip";
+import { icon } from "./components/icons";
 import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
 import type { ObjectMenuActions, ObjectMenuKind } from "./objectMenu";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";

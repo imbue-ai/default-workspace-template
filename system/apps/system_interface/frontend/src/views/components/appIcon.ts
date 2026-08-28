@@ -42,7 +42,7 @@
  */
 
 import DOMPurify from "dompurify";
-import { getApps } from "../models/AgentManager";
+import { getApps } from "../../models/AgentManager";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 

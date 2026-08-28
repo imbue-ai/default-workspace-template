@@ -4,8 +4,8 @@
  */
 
 import m from "mithril";
-import { MODAL_MESSAGE_CLASS, Modal } from "./Modal";
-import { Button } from "./Button";
+import { MODAL_MESSAGE_CLASS, Modal } from "./components/Modal";
+import { Button } from "./components/Button";
 
 interface DestroyConfirmDialogAttrs {
   agentName: string;

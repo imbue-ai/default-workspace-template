@@ -16,7 +16,7 @@ import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
 import { classifyUserMessage } from "./message-classification";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
-import { renderToolBlock } from "./ToolCallBlock";
+import { renderToolBlock } from "./components/ToolCallBlock";
 
 /** The user rail's shared recipes, owned here and composed by the queued and
  *  outgoing variants (QueuedMessageView / OutgoingMessageView). `message`,

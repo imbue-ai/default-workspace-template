@@ -1,5 +1,5 @@
 import m from "mithril";
-import { makeNoticeDialog } from "./NoticeDialog";
+import { makeNoticeDialog } from "./components/NoticeDialog";
 import type { SendFailureKind } from "../models/request-error";
 import {
   clearComposerAttachments,
@@ -20,9 +20,9 @@ import { openAgentAuth } from "../models/AgentAuth";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
 import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon, stopIcon } from "./icons";
-import { Button } from "./Button";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { icon, stopIcon } from "./components/icons";
+import { Button } from "./components/Button";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 

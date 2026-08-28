@@ -36,10 +36,10 @@ import { getApps } from "../models/AgentManager";
 import type { ChatHarness } from "../models/AgentManager";
 import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 import type { MachineInventory, MemberKind } from "../models/Projects";
-import { serviceIconMarkup } from "./appIcon";
+import { serviceIconMarkup } from "./components/appIcon";
 import { areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { icon } from "./components/icons";
 import { SHORTCUT_TOOLTIPS } from "./Sidebar";
 
 /** What one "Open new" tile starts, as data rather than as an encoded name.

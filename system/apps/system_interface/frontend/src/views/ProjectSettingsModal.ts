@@ -25,13 +25,13 @@
  */
 
 import m from "mithril";
-import { Modal } from "./Modal";
+import { Modal } from "./components/Modal";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
-import { Button } from "./Button";
-import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS } from "./Modal";
-import { inputClass } from "./Input";
+import { Button } from "./components/Button";
+import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS } from "./components/Modal";
+import { inputClass } from "./components/Input";
 
 export interface ProjectSettingsModalAttrs {
   project: ProjectInfo;

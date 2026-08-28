@@ -5,7 +5,7 @@ import type { AppEntry } from "../models/AgentManager";
 import { appStoppedDetail, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
 import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
-import { Button } from "./Button";
+import { Button } from "./components/Button";
 import { appServiceDisplayName } from "./derived-names";
 
 interface IframePanelAttrs {

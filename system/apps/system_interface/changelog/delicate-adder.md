@@ -28,24 +28,29 @@ pixel-identical render.
   single knob -- Tailwind's stock 0.25rem `--spacing` base -- shared by the
   `p-N`/`gap-N` utilities and hand-written CSS via the `--spacing(N)` function.
 
-- **Shared primitives as view modules.** A `Button` component
-  (`src/views/Button.ts`: variants primary/secondary/ghost/destructive/
+- **Shared primitives as view modules, under `src/views/components/`.** The
+  generic, reusable building blocks live in their own `views/components/`
+  subfolder (mirroring the minds client), with feature screens and
+  feature-specific helpers staying directly in `views/`. A `Button` component
+  (`components/Button.ts`: variants primary/secondary/ghost/destructive/
   ghost-destructive/inverse/ghost-inverse/stop; sm/xs/icon/round/block options;
   `selected` -- the on/off toggle recipe that replaced the old `.toggle` -- and
   `readonly` for non-interactive-but-explained controls), plus `inputClass`
-  (`Input.ts`), `badgeClass` (`Badge.ts`), a single CSS `.spinner`, one shared
-  collapsible tool block (`ToolCallBlock.ts`), and one tooltip mechanism (the
+  (`components/Input.ts`), `badgeClass` (`components/Badge.ts`), a single CSS
+  `.spinner`, one shared collapsible tool block (`components/ToolCallBlock.ts`),
+  the shared `Modal` shell and `NoticeDialog`, and one tooltip mechanism (the
   JS hover tooltip; the CSS `data-tooltip` bubble is gone). The bespoke
   per-feature buttons, badges, spinners, toggles, and tooltip bubbles across
   the composer, lightbox, queued actions, terminal banner, permission card,
   sidebar micro-controls, and the modals were migrated onto these.
 
-- **Shared modal shell.** A `Modal` component (`src/views/Modal.ts`) owning the
-  overlay/card/header/actions chrome and backdrop dismissal (`modalBackdrop.ts`:
-  primary mousedown on the overlay itself); the destroy-confirm dialog,
-  fast-mode prompt, add-to-project dialog, project settings modal, terminal
-  sign-in notice, and the shared notice dialog (`NoticeDialog.ts` -- the
-  declined-command, auth, and send-failure notices) all render through it.
+- **Shared modal shell.** A `Modal` component (`components/Modal.ts`) owning the
+  overlay/card/header/actions chrome and backdrop dismissal
+  (`components/modalBackdrop.ts`: primary mousedown on the overlay itself); the
+  destroy-confirm dialog, fast-mode prompt, add-to-project dialog, project
+  settings modal, terminal sign-in notice, and the shared notice dialog
+  (`components/NoticeDialog.ts` -- the declined-command, auth, and send-failure
+  notices) all render through it.
   Deliberately left off the shell: the full-bleed image lightbox and the
   multi-step Claude sign-in modal (forcing either on would regress it).
 

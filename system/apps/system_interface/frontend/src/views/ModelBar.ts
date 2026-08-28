@@ -18,10 +18,10 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
-import { Button } from "./Button";
-import { clampDropdownLeft } from "./dropdown-position";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
+import { Button } from "./components/Button";
+import { clampDropdownLeft } from "./components/dropdown-position";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { icon } from "./components/icons";
 
 /** Shown on hover for any read-only model/effort/fast slot: a read-only harness's model is
  *  switched from the agent's own terminal (its native picker), not from this bar. */
