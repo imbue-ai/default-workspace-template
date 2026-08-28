@@ -4,6 +4,7 @@ import pytest
 from imbue.minds_admin.cli._tier_secrets import boxes_collector_install_config_from_secret
 from imbue.minds_admin.cli._tier_secrets import observability_tier_for_env_name
 from imbue.minds_admin.cli._tier_secrets import ovh_config_from_vault_secret
+from imbue.minds_admin.cli._tier_secrets import resolve_analytics_analyst_admin_context
 from imbue.minds_admin.cli._tier_secrets import resolve_ovh_config
 from imbue.observability.primitives import CollectorRole
 from imbue.observability.primitives import ObservabilityTierName
@@ -102,3 +103,12 @@ def test_resolve_ovh_config_without_env_vars_or_activation_gives_an_actionable_e
     message = str(exc_info.value)
     assert "minds-admin env activate" in message
     assert "OVH_APPLICATION_KEY" in message
+
+
+def test_resolve_analytics_analyst_admin_context_without_activation_gives_an_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINDS_ROOT_NAME", raising=False)
+    with pytest.raises(click.ClickException) as exc_info:
+        resolve_analytics_analyst_admin_context()
+    assert "minds-admin env activate" in str(exc_info.value)

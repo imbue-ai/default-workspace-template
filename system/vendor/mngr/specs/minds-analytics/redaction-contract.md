@@ -54,6 +54,14 @@ Applied in order, inside the container, to `user_message.content` and
    the workspace, pinned in the injected script) replaces detected entities
    (email addresses, phone numbers, person names, physical addresses, IP
    addresses, credit cards) with `[REDACTED_<ENTITY_TYPE>]`.
+3. **Random-token scrubbing**: identifier-shaped, random-looking tokens --
+   UUIDs, hex runs of 16+, digit runs of 7+, and high-entropy token shapes
+   (length, character-class alternation, and Shannon-entropy thresholds) --
+   are replaced with `[REDACTED_TOKEN]`. Transcripts are collected for
+   reading the words, so this step is deliberately aggressive. Two carve-outs:
+   workspace-local paths (chunks starting `/home/user` or `~/`) are kept
+   whole, and other path-like strings are scrubbed per `/`-segment so their
+   readable parts survive.
 
 ## What the runner enforces (outside, on untrusted output)
 

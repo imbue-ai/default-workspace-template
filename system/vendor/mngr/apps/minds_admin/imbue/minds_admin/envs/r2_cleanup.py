@@ -286,7 +286,11 @@ def mint_r2_object_token(credentials: CloudflareR2Credentials) -> tuple[str, Sec
 
 
 def revoke_token(credentials: CloudflareR2Credentials, token_id: str) -> None:
-    """Delete a temporary token minted by :func:`mint_r2_object_token`."""
+    """Delete one account-owned Cloudflare API token by id.
+
+    Used for the sweep's temporary :func:`mint_r2_object_token` token and for
+    revoking per-analyst R2 bucket tokens.
+    """
     _cloudflare_delete(credentials, f"/accounts/{credentials.account_id}/tokens/{token_id}")
 
 

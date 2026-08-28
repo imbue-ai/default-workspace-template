@@ -1,0 +1,1 @@
+Excluded `libs/concurrency_group/imbue/concurrency_group/_terminal_freeze_test_script.py` from root coverage. It is a pty/process-group harness that only ever runs as a script inside a subprocess, so coverage can never observe it, and the root omit list has to mirror the subproject's.

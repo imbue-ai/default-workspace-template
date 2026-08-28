@@ -2,10 +2,12 @@ import logging
 from datetime import datetime
 from datetime import timezone
 
+import duckdb
 import pytest
 
 from imbue.analytics.errors import AggregationError
 from imbue.analytics.jobs import JobRunRecord
+from imbue.analytics.jobs import build_transient_source_retry
 from imbue.analytics.jobs import record_run_row_in_ops_db
 from imbue.analytics.jobs import run_recorded_job
 from imbue.analytics.mock_ops_db_test import FakeOpsConnection
@@ -59,6 +61,41 @@ def test_run_recorded_job_warns_when_the_duration_crosses_the_threshold(caplog: 
         )
 
     assert any("approaching its time budget" in message for message in caplog.messages)
+
+
+def test_transient_source_retry_retries_reads_that_race_object_store_compaction(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    attempts: list[int] = []
+
+    @build_transient_source_retry(0.0)
+    def flaky_read() -> str:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise AggregationError("read failed") from duckdb.HTTPException("404 NoSuchKey")
+        return "ok"
+
+    with caplog.at_level(logging.WARNING, logger="imbue.analytics.jobs"):
+        assert flaky_read() == "ok"
+
+    assert len(attempts) == 2
+    # The retried attempt never reaches job_runs, so the warning is its only
+    # trace and must be emitted.
+    assert any("Retrying" in message and "read failed" in message for message in caplog.messages)
+
+
+def test_transient_source_retry_does_not_retry_plain_aggregation_errors() -> None:
+    attempts: list[int] = []
+
+    @build_transient_source_retry(0.0)
+    def broken_statement() -> str:
+        attempts.append(1)
+        raise AggregationError("bad SQL")
+
+    with pytest.raises(AggregationError, match="bad SQL"):
+        broken_statement()
+
+    assert len(attempts) == 1
 
 
 def test_record_run_row_in_ops_db_writes_the_row_and_closes_the_connection() -> None:

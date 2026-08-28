@@ -1,9 +1,12 @@
 -- Acquisition funnel by day: downloads -> signups -> first workspaces.
 --
 -- Downloads come from the marketing site's /download redirect (visitor-id
--- keyed, no account yet); signups from account creation; first_workspaces
--- counts accounts whose first-ever workspace record landed that day.
--- Attribution joins (campaign -> signup) are plain SQL against the
+-- keyed, no account yet; recorded only since 2026-08-21 -- see the README's
+-- "Data start dates"); signups from the SuperTokens backfill coalesced with
+-- account_attribution (the aggregation applies the rule); first_workspaces
+-- counts accounts whose first-ever workspace record landed that day. The
+-- table carries every day in its range, zero-filled, so charts show gaps as
+-- zeros. Attribution joins (campaign -> signup) are plain SQL against the
 -- connector's account_attribution / download_events tables via the same
 -- aggregation source if needed -- this report stays at the daily-count level.
 
@@ -13,11 +16,12 @@ ORDER BY day DESC
 LIMIT 90;
 
 -- Day-7 activation: of each signup cohort, how many showed any non-app_open
--- activity within 7 days.
+-- activity within 7 days. Suspended accounts are excluded from the cohorts.
 WITH signup_days AS (
     SELECT account_id, min(day) AS signup_day
     FROM metrics.gold.activity
     WHERE signal_type = 'signup'
+      AND account_id NOT IN (SELECT account_id FROM metrics.gold.accounts WHERE is_suspended)
     GROUP BY account_id
 )
 SELECT

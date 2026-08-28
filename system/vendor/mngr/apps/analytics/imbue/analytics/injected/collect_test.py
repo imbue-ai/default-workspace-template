@@ -72,6 +72,7 @@ def test_run_collection_emits_a_stream_the_runner_parser_accepts(tmp_path: Path)
     assert {record.event_id for record in parsed.metrics_records} >= {"evt-c1", "evt-s1"}
     assert any(record.feed_source == "workspace_state" for record in parsed.metrics_records)
     assert parsed.run_summary is not None
+    assert "workspace_layout" not in parsed.run_summary.error_by_source
     assert parsed.run_summary.script_version == "abc123"
     assert parsed.run_summary.is_budget_exhausted is False
     assert parsed.run_summary.record_count_by_source["transcripts"] == 1
@@ -111,6 +112,40 @@ def test_run_collection_fails_the_transcript_feed_closed_when_scanning_breaks(tm
     assert any(record.event_id == "evt-c1" for record in parsed.metrics_records)
     summary_line = json.loads(emitted_lines[-1])
     assert "kingfisher exited 3" in summary_line["error_by_source"]["transcripts"]
+
+
+def test_run_collection_reports_a_wholesale_missing_workspace_layout(tmp_path: Path) -> None:
+    """Old workspace generations keep data at other paths: the run must say so.
+
+    The hollow run's summary carries a workspace_layout error entry, which the
+    runner folds into the server-side audit row's detail -- so "connected fine
+    but read an empty world" stops looking identical to a healthy collection.
+    """
+    workspace_root = tmp_path / "workspace"
+    host_dir = tmp_path / ".mngr"
+    emitted_lines: list[str] = []
+
+    run_collection(
+        workspace_root=workspace_root,
+        host_dir=host_dir,
+        run_id="run-1",
+        script_version="abc123",
+        cursor_by_source={},
+        budget_bytes=10_000_000,
+        scan_texts=_no_findings,
+        scrub_pii=_keep_text,
+        emit_line=lambda payload: emitted_lines.append(json.dumps(payload, sort_keys=True)),
+    )
+
+    parsed = parse_collection_output("\n".join(emitted_lines))
+    assert parsed.run_summary is not None
+    layout_error = parsed.run_summary.error_by_source["workspace_layout"]
+    assert "expected workspace layout entirely missing" in layout_error
+    # The snapshot still emits, carrying the queryable layout markers.
+    (state_record,) = [record for record in parsed.metrics_records if record.feed_source == "workspace_state"]
+    state_payload = json.loads(state_record.payload)
+    assert state_payload["is_workspace_repo_present"] is False
+    assert state_payload["is_host_agents_dir_present"] is False
 
 
 def test_run_collection_reports_budget_exhaustion(tmp_path: Path) -> None:

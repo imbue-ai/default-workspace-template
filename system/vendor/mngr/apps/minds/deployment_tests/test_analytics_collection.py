@@ -167,6 +167,7 @@ def test_collection_poll_consents_enumerates_and_audits_a_refused_hop_against_re
             ops_connection=ops_connection,
             rsc_connection=rsc_connection,
             collect_fn=collect_over_ssh,
+            ssh_phase_slack_seconds=30.0,
         )
 
         # The fixture workspace was due and its (real) SSH hop was refused.
@@ -197,6 +198,7 @@ def test_collection_poll_consents_enumerates_and_audits_a_refused_hop_against_re
                 ops_connection=second_ops_connection,
                 rsc_connection=rsc_connection,
                 collect_fn=collect_over_ssh,
+                ssh_phase_slack_seconds=30.0,
             )
         finally:
             second_ops_connection.close()

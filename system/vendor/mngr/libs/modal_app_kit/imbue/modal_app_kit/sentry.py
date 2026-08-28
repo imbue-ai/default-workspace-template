@@ -31,6 +31,7 @@ from typing import Final
 
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.integrations.logging import ignore_logger
 from sentry_sdk.types import Event
 from sentry_sdk.types import Hint
 
@@ -153,6 +154,15 @@ def resolve_sentry_dsn(environ: dict[str, str], dsn_env_var: str) -> str | None:
     return environ.get(dsn_env_var) or None
 
 
+# Loggers whose records must never become Bugsink events or breadcrumbs.
+# Modal's in-container client logs operational warnings about Modal's own
+# runtime (e.g. "Detected N background thread(s) still running after
+# container exit") whose messages embed variable content, so every variant
+# mints a brand-new issue -- noise about infrastructure we neither own nor
+# act on.
+_IGNORED_LOGGER_NAMES: Final[tuple[str, ...]] = ("modal-client",)
+
+
 # ``functools.cache`` makes repeated calls (every request / cron invocation in
 # a warm container) a no-op after the first: one init per (service, dsn) per
 # container, mirroring the connector's ``_init_supertokens_once`` pattern.
@@ -185,6 +195,8 @@ def _init_sentry_once(service_name: str, dsn: str, environment: str, release: st
         max_value_length=10_000,
         before_send=limiter.before_send,
     )
+    for ignored_logger_name in _IGNORED_LOGGER_NAMES:
+        ignore_logger(ignored_logger_name)
     sentry_sdk.set_tag("service", service_name)
 
 

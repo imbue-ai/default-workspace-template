@@ -44,6 +44,7 @@ def test_log_views_parse_http_request_lines_and_ignore_foreign_and_malformed_bod
                     "path": "/account",
                     "status": 200,
                     "duration_ms": 12.5,
+                    "imbue_client": "minds/0.4.2 imbue-cloud-plugin/0.1.6",
                 }
             ),
         ),
@@ -66,12 +67,12 @@ def test_log_views_parse_http_request_lines_and_ignore_foreign_and_malformed_bod
         env_filter="",
     )
     parsed_rows = connection.execute(
-        "SELECT user_id, method, path, status, duration_ms FROM logs.http_requests ORDER BY user_id"
+        "SELECT user_id, method, path, status, duration_ms, imbue_client FROM logs.http_requests ORDER BY user_id"
     ).fetchall()
 
     assert parsed_rows == [
-        ("", "GET", "/version", 200, None),
-        ("st-user-83920", "GET", "/account", 200, 12.5),
+        ("", "GET", "/version", 200, None, None),
+        ("st-user-83920", "GET", "/account", 200, 12.5, "minds/0.4.2 imbue-cloud-plugin/0.1.6"),
     ]
 
 

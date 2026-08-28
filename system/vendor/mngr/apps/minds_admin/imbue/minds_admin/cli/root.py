@@ -13,6 +13,7 @@ from imbue.minds.primitives import OutputFormat
 from imbue.minds.utils.logging import console_level_from_verbose_and_quiet
 from imbue.minds.utils.logging import setup_logging
 from imbue.minds_admin.cli.accounts_admin import account_admin
+from imbue.minds_admin.cli.analytics_admin import analytics_admin
 from imbue.minds_admin.cli.env import env
 from imbue.minds_admin.cli.paid import paid
 from imbue.minds_admin.cli.pool import pool
@@ -56,6 +57,7 @@ cli.add_command(pool)
 cli.add_command(server)
 cli.add_command(paid)
 cli.add_command(account_admin)
+cli.add_command(analytics_admin)
 cli.add_command(workspaces_admin)
 cli.add_command(sweep_admin)
 cli.add_command(relays_admin)

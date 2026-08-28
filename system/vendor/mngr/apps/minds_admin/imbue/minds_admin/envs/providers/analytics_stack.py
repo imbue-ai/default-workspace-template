@@ -63,8 +63,8 @@ _CLOUDFLARE_API_BASE: Final[str] = "https://api.cloudflare.com/client/v4"
 _HTTP_TIMEOUT_SECONDS: Final[float] = 60.0
 _POSTGRES_TIMEOUT_SECONDS: Final[int] = 60
 
-_R2_READ_PERMISSION_GROUP_NAME: Final[str] = "Workers R2 Storage Bucket Item Read"
-_R2_WRITE_PERMISSION_GROUP_NAME: Final[str] = "Workers R2 Storage Bucket Item Write"
+R2_READ_PERMISSION_GROUP_NAME: Final[str] = "Workers R2 Storage Bucket Item Read"
+R2_WRITE_PERMISSION_GROUP_NAME: Final[str] = "Workers R2 Storage Bucket Item Write"
 
 # The read-only role the collection/aggregation loop uses on the env's own
 # connector (host_pool) database. Per-env Neon projects make the name safe.
@@ -229,7 +229,7 @@ def analytics_secret_values_from_record(
 
 @pure
 def build_reader_dsn(admin_dsn: str, *, role: str, password: str) -> str:
-    """The analytics_reader DSN: the admin DSN's direct host + database, reader credentials."""
+    """A reader's DSN: the admin DSN's direct host + database, with ``role``'s credentials."""
     parsed = urllib.parse.urlsplit(direct_dsn_from_pooled(admin_dsn))
     _userinfo, _at_sign, host_and_port = parsed.netloc.rpartition("@")
     quoted_password = urllib.parse.quote(password, safe="")
@@ -273,7 +273,8 @@ def _ensure_bucket(credentials: CloudflareR2Credentials, bucket_name: str) -> No
         logger.info("Adopted pre-existing R2 bucket {!r}", bucket_name)
 
 
-def _permission_group_id(credentials: CloudflareR2Credentials, group_name: str) -> str:
+def permission_group_id(credentials: CloudflareR2Credentials, group_name: str) -> str:
+    """The account's permission-group id for ``group_name`` (e.g. the R2 read/write groups)."""
     body = _cloudflare_request(credentials, "GET", f"/accounts/{credentials.account_id}/tokens/permission_groups")
     for group in body.get("result", []):
         if isinstance(group, dict) and group.get("name") == group_name:
@@ -281,14 +282,21 @@ def _permission_group_id(credentials: CloudflareR2Credentials, group_name: str) 
     raise AnalyticsStackError(f"Cloudflare has no {group_name!r} permission group")
 
 
-def _list_account_token_ids_by_name(credentials: CloudflareR2Credentials, token_name: str) -> list[str]:
-    """Every account token id whose name is exactly ``token_name`` (paginates the full list).
+class CloudflareAccountToken(FrozenModel):
+    """One account-owned Cloudflare API token, as returned by the tokens listing."""
+
+    token_id: str = Field(description="The token's id (doubles as the S3 access key id for R2 tokens)")
+    name: str = Field(description="The token's human-assigned name")
+
+
+def list_cloudflare_account_tokens(credentials: CloudflareR2Credentials) -> list[CloudflareAccountToken]:
+    """Every account token's (id, name), paginating the full list.
 
     The account also holds every user-bucket key the connector mints, so the
-    listing can span many pages; the name match happens client-side because
-    the tokens listing has no server-side name filter.
+    listing can span many pages; any name filtering happens client-side
+    because the tokens listing has no server-side name filter.
     """
-    matching_ids: list[str] = []
+    tokens: list[CloudflareAccountToken] = []
     for page in range(1, _MAX_TOKEN_LIST_PAGES + 1):
         body = _cloudflare_request(
             credentials, "GET", f"/accounts/{credentials.account_id}/tokens?per_page=50&page={page}"
@@ -296,15 +304,22 @@ def _list_account_token_ids_by_name(credentials: CloudflareR2Credentials, token_
         result = body.get("result") or []
         if not isinstance(result, list) or not result:
             break
-        matching_ids.extend(
-            str(entry["id"]) for entry in result if isinstance(entry, dict) and entry.get("name") == token_name
+        tokens.extend(
+            CloudflareAccountToken(token_id=str(entry["id"]), name=str(entry.get("name", "")))
+            for entry in result
+            if isinstance(entry, dict) and entry.get("id")
         )
         if len(result) < 50:
             break
-    return matching_ids
+    return tokens
 
 
-def _replace_bucket_token(
+def list_account_token_ids_by_name(credentials: CloudflareR2Credentials, token_name: str) -> list[str]:
+    """Every account token id whose name is exactly ``token_name``."""
+    return [token.token_id for token in list_cloudflare_account_tokens(credentials) if token.name == token_name]
+
+
+def replace_bucket_token(
     credentials: CloudflareR2Credentials,
     *,
     token_name: str,
@@ -318,7 +333,7 @@ def _replace_bucket_token(
     value. Rotation (delete-then-mint) keeps exactly one live token per name,
     so a re-provision after lost local state never accumulates orphans.
     """
-    for stale_token_id in _list_account_token_ids_by_name(credentials, token_name):
+    for stale_token_id in list_account_token_ids_by_name(credentials, token_name):
         logger.info("Rotating stale Cloudflare account token {!r} ({})", token_name, stale_token_id)
         _cloudflare_request(credentials, "DELETE", f"/accounts/{credentials.account_id}/tokens/{stale_token_id}")
     # The resource key mirrors Cloudflare's R2 bucket resource identifier;
@@ -360,22 +375,7 @@ def _ensure_reader_role(admin_dsn: SecretStr) -> SecretStr:
     connection.autocommit = True
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (_ANALYTICS_READER_ROLE,))
-            is_existing = cursor.fetchone() is not None
-            # Role DDL takes no parameter placeholders; the role name is a
-            # module constant and the password is generated above, so the
-            # interpolation carries no external input.
-            quoted_password = password.replace("'", "''")
-            if is_existing:
-                cursor.execute(f"ALTER ROLE {_ANALYTICS_READER_ROLE} WITH LOGIN PASSWORD '{quoted_password}'")
-            else:
-                cursor.execute(f"CREATE ROLE {_ANALYTICS_READER_ROLE} WITH LOGIN PASSWORD '{quoted_password}'")
-            cursor.execute(f"GRANT CONNECT ON DATABASE {_current_database(cursor)} TO {_ANALYTICS_READER_ROLE}")
-            cursor.execute(f"GRANT USAGE ON SCHEMA public TO {_ANALYTICS_READER_ROLE}")
-            cursor.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {_ANALYTICS_READER_ROLE}")
-            cursor.execute(
-                f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO {_ANALYTICS_READER_ROLE}"
-            )
+            ensure_readonly_role_on_connected_database(cursor, _ANALYTICS_READER_ROLE, password)
     except psycopg2.Error as e:
         raise AnalyticsStackError("Could not create/refresh the analytics_reader role on host_pool") from e
     finally:
@@ -383,12 +383,37 @@ def _ensure_reader_role(admin_dsn: SecretStr) -> SecretStr:
     return SecretStr(build_reader_dsn(direct_admin_dsn, role=_ANALYTICS_READER_ROLE, password=password))
 
 
-def _current_database(cursor: Any) -> str:
+def ensure_readonly_role_on_connected_database(cursor: Any, role_name: str, password: str) -> None:
+    """Create (or re-password) ``role_name`` and grant read-only access on the connected database.
+
+    The shared grant set for every analytics read-only role (the env's
+    ``analytics_reader`` and the per-analyst roles); it mirrors the manual
+    runbook in ``apps/analytics/reports/README.md``. psycopg2 errors propagate
+    for the caller to wrap in its own error type.
+    """
+    cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+    is_existing = cursor.fetchone() is not None
+    # Role DDL takes no parameter placeholders; callers pass internally
+    # derived role names (a module constant or a validated AnalystName) and
+    # generated passwords, so the interpolation carries no external input.
+    quoted_password = password.replace("'", "''")
+    if is_existing:
+        cursor.execute(f"ALTER ROLE {role_name} WITH LOGIN PASSWORD '{quoted_password}'")
+    else:
+        cursor.execute(f"CREATE ROLE {role_name} WITH LOGIN PASSWORD '{quoted_password}'")
+    cursor.execute(f"GRANT CONNECT ON DATABASE {current_database_identifier(cursor)} TO {role_name}")
+    cursor.execute(f"GRANT USAGE ON SCHEMA public TO {role_name}")
+    cursor.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role_name}")
+    cursor.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO {role_name}")
+
+
+def current_database_identifier(cursor: Any) -> str:
+    """The connected database's name as a quoted SQL identifier (for GRANT/REVOKE ... ON DATABASE)."""
     cursor.execute("SELECT current_database()")
     row = cursor.fetchone()
     database_name = str(row[0]) if row else ""
     if not database_name:
-        raise AnalyticsStackError("Could not resolve the host_pool database name for the reader grant")
+        raise AnalyticsStackError("Could not resolve the connected database's name for the role grant")
     # Neon database names are snake_case identifiers; quote defensively anyway.
     return '"' + database_name.replace('"', '""') + '"'
 
@@ -425,18 +450,18 @@ def create_analytics_stack(request: AnalyticsStackRequest) -> AnalyticsStackReco
     with info_span("Provisioning analytics R2 buckets + tokens for env {!r}", str(request.name)):
         _ensure_bucket(cloudflare, metrics_bucket)
         _ensure_bucket(cloudflare, transcripts_bucket)
-        write_group_id = _permission_group_id(cloudflare, _R2_WRITE_PERMISSION_GROUP_NAME)
-        read_group_id = _permission_group_id(cloudflare, _R2_READ_PERMISSION_GROUP_NAME)
-        metrics_key_id, metrics_secret = _replace_bucket_token(
+        write_group_id = permission_group_id(cloudflare, R2_WRITE_PERMISSION_GROUP_NAME)
+        read_group_id = permission_group_id(cloudflare, R2_READ_PERMISSION_GROUP_NAME)
+        metrics_key_id, metrics_secret = replace_bucket_token(
             cloudflare, token_name=metrics_token_name, bucket_name=metrics_bucket, permission_group_id=write_group_id
         )
-        transcripts_key_id, transcripts_secret = _replace_bucket_token(
+        transcripts_key_id, transcripts_secret = replace_bucket_token(
             cloudflare,
             token_name=transcripts_token_name,
             bucket_name=transcripts_bucket,
             permission_group_id=write_group_id,
         )
-        logs_key_id, logs_secret = _replace_bucket_token(
+        logs_key_id, logs_secret = replace_bucket_token(
             cloudflare, token_name=logs_token_name, bucket_name=request.logs_bucket, permission_group_id=read_group_id
         )
 
@@ -513,6 +538,6 @@ def delete_analytics_stack(
             revoke_token(cloudflare, sweep_token_id)
 
     for token_name in analytics_token_names_for(name):
-        for token_id in _list_account_token_ids_by_name(cloudflare, token_name):
+        for token_id in list_account_token_ids_by_name(cloudflare, token_name):
             with info_span("Revoking analytics account token {!r}", token_name):
                 _cloudflare_request(cloudflare, "DELETE", f"/accounts/{cloudflare_account_id}/tokens/{token_id}")

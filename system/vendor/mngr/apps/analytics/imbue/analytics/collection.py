@@ -29,6 +29,7 @@ import io
 import json
 import logging
 import shlex
+import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import Future
@@ -110,6 +111,13 @@ OUTCOME_LAKE_ERROR: Final[str] = "lake_error"
 
 # GNU timeout's exit status when it kills the command.
 _TIMEOUT_EXIT_STATUS: Final[int] = 124
+
+# Slack past the per-workspace timeout for the WHOLE SSH phase: because the
+# workspaces run concurrently, one shared deadline of (workspace timeout +
+# slack) bounds the result loop no matter how many hops hang -- without it, a
+# single hung paramiko thread per stuck workspace costs a full per-future wait
+# each, serially, and one production tick can burn its entire Modal budget.
+_SSH_PHASE_SLACK_SECONDS: Final[float] = 120.0
 
 
 class SshCollectionResult(BaseModel):
@@ -621,6 +629,10 @@ def run_collection_poll_with_connections(
     # The per-workspace SSH phase, with collect_over_ssh's signature.
     # Production passes collect_over_ssh; tests substitute a network-free fake.
     collect_fn: Callable[..., SshCollectionResult],
+    # Extra seconds past the per-workspace timeout the whole SSH phase may
+    # take. Production passes _SSH_PHASE_SLACK_SECONDS; tests shrink it so a
+    # hung-collect test resolves quickly.
+    ssh_phase_slack_seconds: float,
 ) -> dict[str, int]:
     """One poll pass over injected connections (the testable core of the cron).
 
@@ -635,6 +647,7 @@ def run_collection_poll_with_connections(
             ops_connection=ops_connection,
             rsc_connection=rsc_connection,
             collect_fn=collect_fn,
+            ssh_phase_slack_seconds=ssh_phase_slack_seconds,
         )
     except psycopg2.Error as e:
         # The poll's own ops-DB access (lock, cursors, host keys, audit) must
@@ -648,6 +661,7 @@ def _run_locked_collection_poll(
     ops_connection: Any,
     rsc_connection: Any,
     collect_fn: Callable[..., SshCollectionResult],
+    ssh_phase_slack_seconds: float,
 ) -> dict[str, int]:
     if not _try_advisory_lock(ops_connection):
         logger.info("Skipped collection poll: a previous run still holds the advisory lock")
@@ -679,8 +693,15 @@ def _run_locked_collection_poll(
     }
     # SSH runs in a bounded pool; every DB and lake write happens back on this
     # thread (DuckDB connections and psycopg2 connections are not shared
-    # across threads).
-    with ThreadPoolExecutor(max_workers=collection_settings.parallelism) as executor:
+    # across threads). The pool is torn down WITHOUT waiting: a hop whose
+    # paramiko thread hangs past every timeout (a half-dead workspace sshd)
+    # must not block the poll from returning -- on a fleet with even one such
+    # workspace per tick, shutdown(wait=True) would eat the whole Modal
+    # function budget every run, so the tick never records its job_runs row.
+    # Lingering threads die with the container; their workspaces re-collect
+    # next tick (cursors only advance on success) and dedupe downstream.
+    executor = ThreadPoolExecutor(max_workers=collection_settings.parallelism)
+    try:
         future_by_workspace: dict[Any, tuple[CollectableWorkspace, str, datetime]] = {}
         for workspace in due:
             run_id = uuid.uuid4().hex
@@ -698,8 +719,13 @@ def _run_locked_collection_poll(
                 collection_settings.run_budget_bytes,
             )
             future_by_workspace[future] = (workspace, run_id, started_at)
+        # One shared deadline for the whole SSH phase: the workspaces run
+        # concurrently, so every future should resolve within one workspace
+        # timeout (plus slack) of the phase start regardless of fleet size.
+        ssh_phase_deadline = time.monotonic() + collection_settings.workspace_timeout_seconds + ssh_phase_slack_seconds
         for future, (workspace, run_id, started_at) in future_by_workspace.items():
-            ssh_result = _ssh_result_or_timeout(future, collection_settings.workspace_timeout_seconds)
+            remaining_seconds = max(1.0, ssh_phase_deadline - time.monotonic())
+            ssh_result = _ssh_result_or_timeout(future, remaining_seconds)
             outcome = process_collection_result(
                 lake_connection=lake_connection,
                 ops_connection=ops_connection,
@@ -717,15 +743,15 @@ def _run_locked_collection_poll(
             counters["metrics_rows"] += outcome.metrics_rows
             counters["transcript_rows"] += outcome.transcript_rows
             counters["dropped_lines"] += outcome.dropped_lines
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     return counters
 
 
-def _ssh_result_or_timeout(
-    future: "Future[SshCollectionResult]", workspace_timeout_seconds: int
-) -> SshCollectionResult:
-    """Resolve one SSH future with a generous backstop past the remote timeout."""
+def _ssh_result_or_timeout(future: "Future[SshCollectionResult]", timeout_seconds: float) -> SshCollectionResult:
+    """Resolve one SSH future within the SSH phase's remaining time budget."""
     try:
-        return future.result(timeout=float(workspace_timeout_seconds) + 120.0)
+        return future.result(timeout=timeout_seconds)
     except FutureTimeoutError:
         return SshCollectionResult(
             outcome=OUTCOME_TIMEOUT,
@@ -763,6 +789,7 @@ def run_collection_poll(
                 ops_connection=ops_connection,
                 rsc_connection=rsc_connection,
                 collect_fn=collect_over_ssh,
+                ssh_phase_slack_seconds=_SSH_PHASE_SLACK_SECONDS,
             )
         finally:
             rsc_connection.close()

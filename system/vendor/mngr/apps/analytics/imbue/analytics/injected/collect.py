@@ -138,6 +138,14 @@ def run_collection(
     state = _RunState()
     remaining_budget = budget_bytes
 
+    # A wholesale-absent layout (old workspace generations keep their data at
+    # other paths) makes every feed silently empty; record it in the summary
+    # so the runner's audit row shows the run was hollow, not healthy.
+    layout_detail = workspace_feeds.missing_workspace_layout_detail(workspace_root, host_dir)
+    if layout_detail is not None:
+        state.error_by_source[workspace_feeds.WORKSPACE_LAYOUT_ERROR_SOURCE] = layout_detail
+        logger.warning("%s", layout_detail)
+
     # Transcripts: read raw, redact in full, and only then emit. If redaction
     # cannot be guaranteed (scanner missing/broken), nothing is emitted and
     # the cursor stays put.

@@ -440,6 +440,7 @@ class ConcurrencyGroup(MutableModel, AbstractContextManager):
         shutdown_event: ReadOnlyEvent | None = None,
         # Open file descriptors to keep open in (and inherit into) the spawned child, by their fd numbers.
         pass_fds: Sequence[int] = (),
+        is_detached_from_terminal: bool = False,
         # Optional log-safe label for the process. When the command carries secret
         # argument values, pass a masked/friendly ``name`` so they never reach the
         # reader thread's name (recorded in JSONL logs) or any raised error message.
@@ -460,6 +461,9 @@ class ConcurrencyGroup(MutableModel, AbstractContextManager):
         (a permanent stream would otherwise grow the parent's memory without bound). `read_stdout()`/`read_stderr()`
         raise `OutputNotAccumulatedError` in that mode, and any error raised for the process (including by
         `is_checked_by_group`) reports a placeholder in place of its output.
+
+        Pass `is_detached_from_terminal=True` from a service that runs in a background process group on a
+        terminal; see `run_local_command_modern_version` for what the child can otherwise do to its caller.
         """
 
         def process_factory():
@@ -471,6 +475,7 @@ class ConcurrencyGroup(MutableModel, AbstractContextManager):
                 timeout=timeout,
                 shutdown_event=self._maybe_wrap_external_shutdown_event(shutdown_event),
                 pass_fds=pass_fds,
+                is_detached_from_terminal=is_detached_from_terminal,
                 process_class=RunningProcessWithOnLineCallback,
                 process_class_kwargs={"on_line_callback": on_output},
                 name=name,
@@ -488,6 +493,8 @@ class ConcurrencyGroup(MutableModel, AbstractContextManager):
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
         shutdown_event: ReadOnlyEvent | None = None,
+        # Run the child in its own session (see ``run_process_in_background``).
+        is_detached_from_terminal: bool = False,
         # Optional log-safe label for the process (see ``run_process_in_background``).
         name: str | None = None,
     ) -> FinishedProcess:
@@ -505,6 +512,7 @@ class ConcurrencyGroup(MutableModel, AbstractContextManager):
             shutdown_event=shutdown_event,
             on_output=on_output,
             is_checked_by_group=False,
+            is_detached_from_terminal=is_detached_from_terminal,
             name=name,
         )
         process.wait()
