@@ -1,0 +1,1 @@
+Added system/scripts/scroll_verification/: a standalone system-interface fixture server (serving a real session JSONL as an agent transcript) plus a Playwright driver that manually verifies the scroll engine's must-pass scenarios with content-relative measurements.
