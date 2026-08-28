@@ -359,7 +359,9 @@ def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
         return []
     entries = manifest.get("plugins", [])
     if not isinstance(entries, list):
-        _warn_manifest_unread(manifest_path, "its 'plugins' key is not a list of tables")
+        _warn_manifest_unread(
+            manifest_path, "its 'plugins' key is not a list of tables"
+        )
         return []
     tool = MANIFEST_TOOL_NAMES.get(tool_name, tool_name)
     extras: list[str] = []
