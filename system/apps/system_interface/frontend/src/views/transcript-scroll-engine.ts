@@ -52,7 +52,6 @@ import {
 } from "../models/transcriptScroll/persistence";
 import { buildRowEventIndexes, rowIndexForEventIndex } from "../models/transcriptScroll/rowEventIndex";
 import {
-  applyEdgeMagnet,
   computeLiveMapping,
   computeThumb,
   mappingPhysicalExtent,
@@ -1249,6 +1248,21 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       refreshGeometry();
       tryFinishRestore();
 
+      // A pending scrollbar target lands as soon as its event is inside the
+      // loaded window, whichever way the fill got there -- an at-offset
+      // replace or chunked before/after growth. Without this the near-gap
+      // path never re-anchors onto the target: the landing is left to
+      // spacer-estimate noise (a 3x estimate error lands a 95% release at
+      // ~70% of the transcript), and pendingJumpIndex would keep steering
+      // the fill at the stale target forever.
+      if (pendingJumpIndex !== null && pendingRestore === null && geometry !== null) {
+        const { firstIndex, endIndex } = extent();
+        if (pendingJumpIndex >= firstIndex && pendingJumpIndex < endIndex) {
+          pendingJumpLandIndex = pendingJumpIndex;
+          pendingJumpIndex = null;
+        }
+      }
+
       // A landed jump anchors to its target row now that geometry covers it.
       // Cleared even when the landing produced no rows (an empty page): leaving
       // it set would hold planFill's landing gate closed forever.
@@ -1485,10 +1499,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       lastInputSource = "scrollbar";
       lastScrollbarFraction = Math.min(1, Math.max(0, fraction));
       const mapping = activeMapping();
-      // The magnet warps only the RESOLVED position; the thumb keeps tracking
-      // the raw pointer fraction, so nothing visibly jumps on the track.
-      const magnetFraction = applyEdgeMagnet(lastScrollbarFraction);
-      let target = resolveTrackFraction(mapping, magnetFraction);
+      let target = resolveTrackFraction(mapping, lastScrollbarFraction);
       if (target.kind === "physical-fraction") {
         // The frozen mapping's physical band is trustworthy in PIXEL space only
         // while it still describes the loaded window. Once fills/evictions land
@@ -1503,15 +1514,16 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           frozenExtent.firstIndex === live.firstIndex &&
           frozenExtent.endIndex === live.endIndex;
         if (!isMappingCurrent) {
-          target = { kind: "virtual-index", index: resolveTrackFractionToIndex(mapping, magnetFraction) };
+          target = { kind: "virtual-index", index: resolveTrackFractionToIndex(mapping, lastScrollbarFraction) };
         }
       }
-      // A pointer in the outermost 1% of the track means "the very end/very
-      // beginning", whatever it resolves to -- the exact-landing catch on top
-      // of the magnet's smooth convergence, so a release a few px shy of the
-      // track end still pins precisely (and re-attaches FOLLOW at the bottom).
-      const isTrackEndIntent = lastScrollbarFraction >= 0.99;
-      const isTrackStartIntent = lastScrollbarFraction <= 0.01;
+      // The scrollbar clamps the pointer fraction to [0, 1], so exactly 1 (or
+      // 0) means the pointer genuinely reached or passed the point where the
+      // thumb bottoms (tops) out -- the one unambiguous "take me to the very
+      // end/beginning" signal. Everything short of that is an honest linear
+      // position; no thresholds or warps second-guess the pointer.
+      const isTrackEndIntent = lastScrollbarFraction >= 1 - 1e-6;
+      const isTrackStartIntent = lastScrollbarFraction <= 1e-6;
       trace?.record("scrollbar-move", { fraction: lastScrollbarFraction, target });
       if (target.kind === "physical-fraction") {
         // Scale over the region's scrollable span. With a bottom spacer the
