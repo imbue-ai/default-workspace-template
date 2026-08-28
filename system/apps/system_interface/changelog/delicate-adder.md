@@ -1,64 +1,71 @@
-Design-system pass over the system interface frontend: a token layer, shared
-component primitives, and modal consolidation. A styling and structure change
-with no behavioural change. Most values are preserved; a few controls shift size
-slightly where they adopt a shared primitive (the progress spinner ring goes
-1.5px -> 2px, launcher section headings 11px -> 12px, icon buttons onto the
-shared 34px `.btn--icon` size), which is intended -- the goal is a consistent
-system, not a pixel-identical render.
+Design-system pass over the system interface frontend: a semantic token layer,
+styling moved into the markup as Tailwind utilities (architecture parity with
+apps/minds), shared component primitives, and modal consolidation. A styling and
+structure change with no behavioural change. Most values are preserved; a few
+controls shift size slightly where they adopt a shared primitive, and there are
+a few deliberate recolours (one unified warm danger red, neutral progress
+greys, body text 15px -> 14px) -- the goal is a consistent system, not a
+pixel-identical render.
 
-- **Token scaffold in `src/style.css`.** Colours are now semantic
-  `var(--color-*)` tokens from a single `@theme` block (zero raw hex outside
-  `@theme`); every colour is role-named (`bg`, `surface`, `text-*`, `accent*`,
-  `danger`/`warning`/`success`, `inverse-surface`, ...) with no scale-position
-  tokens -- the transitional `--color-neutral-*` slate ramp was removed and its
-  one live use (the terminal banner) moved to `--color-surface-secondary`. The
-  `@theme` block is kept fully live: seven defined-but-unused tokens
-  (`--color-info`, `--ease-standard`, `--elevation-md`, `--spacing-page`,
-  `--width-sidebar`/`-collapsed`, `--duration-sidebar-transition`) were pruned so
-  every token is referenced by the shipped CSS. Corner radii collapse onto a
-  `--radius-*` scale, spacing onto Tailwind's 4px spacing scale, motion
-  timing/easing, drop shadows onto an elevation scale, and the former magic
-  z-index numbers onto named tokens. Spacing is a **single knob** — Tailwind's
-  stock 0.25rem `--spacing` base: the `p-N`/`m-N`/`gap-N`/`w-N` utilities generate
-  from it, and hand-written CSS references the same scale via the `--spacing(N)`
-  function (`padding: --spacing(3)` compiles to `calc(var(--spacing) * 3)`), so
-  markup and CSS share one source with no per-step token to define or keep in
-  sync.
+- **Utilities in the markup; `style.css` reduced to tokens + escape hatches.**
+  Each view now styles its own elements with Tailwind utility classes in its
+  `m(...)` class strings; the ~29 feature-namespaced CSS silos are dissolved.
+  What remains in `src/style.css` (4,125 -> ~1,290 lines) is there by design:
+  the token layer, vendor DOM overrides (dockview/xterm, scrollbars), markdown-
+  rendered content, keyframes and pseudo-element machines (the one `.spinner`),
+  contextual rules over shared markup, and cascade-critical overrides. Semantic
+  class names (`btn--primary`, `modal-card`, `message-user`, ...) stay in the
+  markup as bare, style-free markers for the test suites and JS queries.
 
-- **Shared component primitives.** A unified `.btn` (with `round`/`filled`/`stop`
-  and `ghost-destructive` variants), plus `.badge`, `.input`, `.toggle`, and a
-  `.spinner` that collapses the three duplicate spin keyframes into one. The
-  bespoke per-feature buttons, badges, spinners, and text-tooltip bubbles across
-  the composer, close-×, image lightbox, queued-action, terminal banner,
-  permission request, and the modals were migrated onto these.
+- **Token layer.** Colours live once as a `--c-*` value table on `:root`, with
+  an `@theme inline` layer generating the semantic utilities the views use
+  (`text-primary`, `bg-fill-hover`, `border-default`, `bg-danger-surface`, ...);
+  zero raw hex outside the token table. Type is six role utilities
+  (`type-heading-lg` ... `type-section`) over `--font-size-*`/`--weight-*`
+  tokens. Radius and elevation align with the minds design system
+  (`rounded-sm/md/lg/xl` = 4/6/8/16, `shadow-raised`/`shadow-overlay`); motion
+  is `--dur-*`; z-index magic numbers became named `--z-*` layers. Spacing is a
+  single knob -- Tailwind's stock 0.25rem `--spacing` base -- shared by the
+  `p-N`/`gap-N` utilities and hand-written CSS via the `--spacing(N)` function.
 
-- **Shared modal shell.** A new `Modal` primitive (`src/views/Modal.ts`); the
-  destroy-confirm dialog, fast-mode prompt, add-to-project dialog, project
-  settings modal, terminal sign-in notice, and the shared notice dialog
-  (`NoticeDialog.ts` -- the declined-command, auth, and send-failure notices)
-  all now render through it. Removed the dead custom-url-dialog CSS. (The share
-  modal was migrated too, then deleted on main in favour of a Share deep link;
-  the deletion carries through.)
+- **Shared primitives as view modules.** A `Button` component
+  (`src/views/Button.ts`: variants primary/secondary/ghost/destructive/
+  ghost-destructive/inverse/ghost-inverse/stop; sm/xs/icon/round/block options;
+  `selected` -- the on/off toggle recipe that replaced the old `.toggle` -- and
+  `readonly` for non-interactive-but-explained controls), plus `inputClass`
+  (`Input.ts`), `badgeClass` (`Badge.ts`), a single CSS `.spinner`, one shared
+  collapsible tool block (`ToolCallBlock.ts`), and one tooltip mechanism (the
+  JS hover tooltip; the CSS `data-tooltip` bubble is gone). The bespoke
+  per-feature buttons, badges, spinners, toggles, and tooltip bubbles across
+  the composer, lightbox, queued actions, terminal banner, permission card,
+  sidebar micro-controls, and the modals were migrated onto these.
 
-- **Dialog emphasis.** Buttons: a dialog's confirming action -- a real choice it
-  asks the user to make (Save, Continue, the default in a two-option prompt) --
-  is `.btn--primary`, while a button that only dismisses or acknowledges (a lone
-  OK/Close, a Cancel, a Back) stays quiet (`.btn--secondary`) and a destructive
-  confirm is `.btn--destructive`; the rule is recorded in
-  `frontend/style_guide.md`. Body copy: `.modal-message` / `.modal-body` now read
-  at `--color-text-primary` instead of the muted `--color-text-secondary`, so
-  every dialog's body text reads at full strength; a genuinely secondary line
-  opts into the muted colour at its own call site.
+- **Shared modal shell.** A `Modal` component (`src/views/Modal.ts`) owning the
+  overlay/card/header/actions chrome and backdrop dismissal (`modalBackdrop.ts`:
+  primary mousedown on the overlay itself); the destroy-confirm dialog,
+  fast-mode prompt, add-to-project dialog, project settings modal, terminal
+  sign-in notice, and the shared notice dialog (`NoticeDialog.ts` -- the
+  declined-command, auth, and send-failure notices) all render through it.
+  Deliberately left off the shell: the full-bleed image lightbox and the
+  multi-step Claude sign-in modal (forcing either on would regress it).
 
-- **Removed the dev-only visual-diff gallery harness** (no longer needed after
-  the sweep).
+- **Dialog emphasis.** A dialog's confirming action -- a real choice it asks the
+  user to make -- is the primary Button; a button that only dismisses or
+  acknowledges stays quiet (secondary), and a destructive confirm is
+  destructive (quiet form: ghost-destructive). Body copy reads at the primary
+  text colour; a genuinely secondary line opts into the muted colour at its own
+  call site.
 
-- **Guidance (not enforced).** `frontend/style_guide.md` and
-  `docs/design-system.md` document the tokens and shared primitives as an
-  optional convention for keeping the *default* UI coherent — explicitly not a
-  hard rule, so a user redesigning their interface to their own taste isn't
-  constrained by it. There is deliberately no automated ratchet gating raw
-  values (an earlier draft added one; it was removed to avoid impeding
-  user-driven redesigns). Discoverability: a banner at the top of
-  `src/style.css`, the token set and background in `docs/design-system.md`, and a
-  pointer in the app README.
+- **Guidance (not enforced).** `frontend/style_guide.md` documents the
+  convention (where styling goes, what stays CSS, the primitives, the Tailwind
+  scanner's contiguous-literal rule); `docs/design-system.md` holds the
+  migration's history and rationale. It is an optional convention for the
+  default UI -- a user redesigning their interface to their own taste isn't
+  constrained by it, and there is deliberately no ratchet gating raw values (an
+  earlier draft added one; it was removed to avoid impeding user-driven
+  redesigns).
+
+- **Test infrastructure.** The fake supervisord fixture binds its unix socket
+  in a short `mkdtemp` dir (macOS caps AF_UNIX paths at ~104 chars, which
+  pytest's nested `tmp_path` overflowed). Removed the dev-only visual-diff
+  gallery harness used during the migration.
