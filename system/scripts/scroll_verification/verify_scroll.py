@@ -516,6 +516,41 @@ def main():
                 state["scrollTop"] <= 1 and debug["extent"]["firstIndex"] == 0,
                 (state["scrollTop"], debug["extent"]),
             )
+            # A release a few px SHY of the track end is still "the very
+            # bottom": the fraction lands in the outer 1% band, not at exactly
+            # 1, and used to resolve to an event tens short of the tail.
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.5)
+            page.mouse.down()
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] - 3, steps=8)
+            page.mouse.up()
+            for _ in range(40):
+                page.wait_for_timeout(250)
+                state = page.evaluate(GET_STATE)
+                debug = page.evaluate("window.__scrollDebugState()")
+                if state["bottomGap"] < 45 and debug["positionKind"] == "FOLLOW":
+                    break
+            check(
+                "H3 release just short of the track end still lands at the tail",
+                state["bottomGap"] < 45
+                and debug["positionKind"] == "FOLLOW"
+                and debug["extent"]["endIndex"] >= debug["totalEvents"],
+                (state["bottomGap"], debug["positionKind"], debug["extent"]),
+            )
+            page.mouse.move(el_box["x"], el_box["top"] + el_box["height"] * 0.5)
+            page.mouse.down()
+            page.mouse.move(el_box["x"], el_box["top"] + 3, steps=8)
+            page.mouse.up()
+            for _ in range(40):
+                page.wait_for_timeout(250)
+                state = page.evaluate(GET_STATE)
+                debug = page.evaluate("window.__scrollDebugState()")
+                if state["scrollTop"] <= 1 and debug["extent"]["firstIndex"] == 0:
+                    break
+            check(
+                "H4 release just short of the track top still lands at the beginning",
+                state["scrollTop"] <= 1 and debug["extent"]["firstIndex"] == 0,
+                (state["scrollTop"], debug["extent"]),
+            )
 
         # --- F: persistence across reload ---
         page.mouse.wheel(0, 3000)
