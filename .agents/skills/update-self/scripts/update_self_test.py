@@ -4242,6 +4242,36 @@ def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     assert "could not locate the uv tool environment behind 'system-interface'" in err
 
 
+def test_a_rollback_survives_a_plugin_manifest_it_cannot_read(
+    apply_repo: Path, capsys
+) -> None:
+    # The rollback's own environment rebuild reads the merged tree's plugin
+    # manifest. _recover_running_state catches only ApplyFailed and OSError, so
+    # a TOMLDecodeError raised while parsing it escaped the rollback, the
+    # apply's own handler, and apply_update itself -- leaving a live marker, an
+    # unrestored environment and no emergency record, on the one path that is
+    # supposed to be the last line of defense.
+    (apply_repo / ".venv").mkdir()
+    manifest = apply_repo / update_layout.PLUGIN_MANIFEST_PATH
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("[[plugins]\npath = ")
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert update_apply_contract.read_marker(apply_repo) is None
+    # The reinstalls still happened, from the receipt alone.
+    assert len([c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]]) == 2
+    assert "skipping the plugin manifest" in capsys.readouterr().err
+
+
 def test_the_spawner_captures_both_streams_of_a_real_child(tmp_path: Path) -> None:
     # The capture has to survive a real Popen: stderr is redirected onto
     # stdout's file and the parent closes its handle while the child keeps
