@@ -65,17 +65,15 @@ function endRename(state: AccountRowState): void {
 /** File what was typed, unless it says nothing new.
  *
  * An emptied field is a real instruction, not a slip: clearing the name is the only way back
- * to the provider's own, so it is sent rather than dropped. It is compared against `name`,
- * the stored value -- comparing against the displayed `provider` would read "clear it" as
- * "no change" for every account that never had a name. */
+ * to the provider's own, so it is sent rather than dropped. Compared against `name`, the
+ * STORED value -- comparing against the displayed `provider` would read "clear it" as "no
+ * change" for every account that never had a name, and, worse, would read retyping a chosen
+ * name unchanged as a request to clear it, since `provider` is that chosen name already. */
 function commitRename(state: AccountRowState, row: ProviderAccount, onChanged?: () => void): void {
   const typed = state.renameDraft.trim();
   endRename(state);
-  // A rename to exactly the provider's own name is a reset, not a name -- storing it would
-  // pin the row to a string that stops tracking the provider it came from.
-  const next = typed === row.provider ? "" : typed;
-  if (next === row.name) return;
-  void renameAccount(row.id, next).then(() => {
+  if (typed === row.name) return;
+  void renameAccount(row.id, typed).then(() => {
     onChanged?.();
     m.redraw();
   });
