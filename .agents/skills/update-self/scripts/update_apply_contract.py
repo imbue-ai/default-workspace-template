@@ -318,16 +318,6 @@ RUN_VERDICTS = (
 )
 
 
-# Why a run is holding for the user mid-flight, mirrored by the app's
-# ``UpdateHoldReason``. Like the verdicts, the app drops a reason it does not
-# know, so adding one is a contract change that needs the app taught first.
-RUN_HOLD_CUSTOMIZATION = "CUSTOMIZATION"
-
-RUN_HOLD_CONFLICT = "CONFLICT"
-
-RUN_HOLD_REASONS = (RUN_HOLD_CUSTOMIZATION, RUN_HOLD_CONFLICT)
-
-
 @dataclass
 class RunStatus:
     """One update-self run's record for the Minds app: who is running, and how it ended.
@@ -344,8 +334,8 @@ class RunStatus:
       it waits on that worker, and idle is what the app reads as "waiting for
       the user"; naming the worker lets the app read its liveness instead.
       Cleared by the verdict (and by the next run's ``start``).
-    * ``hold_reason``/``hold_detail`` -- the run has stopped to ask the user
-      something (``run-status hold``), and why; cleared by ``run-status resume``.
+    * ``is_holding``/``hold_detail`` -- the run has stopped to ask the user
+      something (``run-status hold``), and what; cleared by ``run-status resume``.
     * ``apply_phase``/``apply_updated_at`` -- the apply is landing, and its last
       completed phase. Mirrored from the apply marker on its every restamp and
       cleared with it, so the app reads the apply's liveness from this one
@@ -353,11 +343,10 @@ class RunStatus:
     """
 
     chat_agent_name: str
-    is_unattended: bool
     started_at: float
     updated_at: float
     worker_agent_name: str | None = None
-    hold_reason: str | None = None
+    is_holding: bool = False
     hold_detail: str = ""
     apply_phase: str | None = None
     apply_updated_at: float | None = None
@@ -371,11 +360,10 @@ class RunStatus:
         return json.dumps(
             {
                 "chat_agent_name": self.chat_agent_name,
-                "is_unattended": self.is_unattended,
                 "started_at": self.started_at,
                 "updated_at": self.updated_at,
                 "worker_agent_name": self.worker_agent_name,
-                "hold_reason": self.hold_reason,
+                "is_holding": self.is_holding,
                 "hold_detail": self.hold_detail,
                 "apply_phase": self.apply_phase,
                 "apply_updated_at": self.apply_updated_at,
@@ -394,20 +382,18 @@ class RunStatus:
         if not isinstance(raw, dict):
             raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
         worker_agent_name = raw.get("worker_agent_name")
-        hold_reason = raw.get("hold_reason")
         apply_phase = raw.get("apply_phase")
         apply_updated_at = raw.get("apply_updated_at")
         verdict = raw.get("verdict")
         verdict_at = raw.get("verdict_at")
         return cls(
             chat_agent_name=str(raw.get("chat_agent_name", "")),
-            is_unattended=bool(raw.get("is_unattended", False)),
             started_at=float(raw.get("started_at", 0.0)),
             updated_at=float(raw.get("updated_at", 0.0)),
             worker_agent_name=str(worker_agent_name)
             if worker_agent_name is not None
             else None,
-            hold_reason=str(hold_reason) if hold_reason is not None else None,
+            is_holding=bool(raw.get("is_holding", False)),
             hold_detail=str(raw.get("hold_detail", "")),
             apply_phase=str(apply_phase) if apply_phase is not None else None,
             apply_updated_at=float(apply_updated_at)

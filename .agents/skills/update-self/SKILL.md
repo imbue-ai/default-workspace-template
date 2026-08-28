@@ -78,7 +78,6 @@ app can see a run is under way:
 python3 .agents/skills/update-self/scripts/update_self.py run-status start
 ```
 
-Append `--unattended` when your dispatch message says the run is unattended.
 This writes `data/.state/update-apply/run.json`, which the app polls. Besides
 the `hold`/`resume` pair around its one mid-flight question (Step 4), the pass
 owes that file exactly one more write, a `run-status verdict` when it ends;
@@ -305,7 +304,7 @@ report, re-arm the poll.
    what was kept, what the release's version would have changed) -- the
    results message presents each with the alternative still on offer. A
    conflict where *every* resolution breaks something the user built is not
-   a merge question; it is the hold below with reason `CONFLICT`.
+   a merge question; it is the hold below.
 2. **The worker's review-gate escape hatch** (its §4c): a process question
    about whether or at what scope the gates run. Answer it by the §4c rule as
    written; where the rule is silent, the fallback is more coverage, never
@@ -316,13 +315,12 @@ report, re-arm the poll.
    (the widget moved but still works) is not a hold: it applies unattended
    and is named in the results message with an offer to restore.
 
-For the hold, record it first, so the app can say why the machine is waiting
-(`CONFLICT` for the breaking-conflict case; the detail line is shown in the
-app's modal, so write it for the user):
+For the hold, record it first, so the app can say what the machine is waiting
+on (the detail line is shown in the app's modal, so write it for the user):
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    run-status hold CUSTOMIZATION \
+    run-status hold \
     --detail "<one plain line: what they built that the update cannot keep>"
 ```
 
@@ -474,7 +472,12 @@ worker's branch, worktree and report are the retry path: keep them until the
 retry is resolved with the user, but release the leases either way.
 
 Record the success verdict -- `UPDATED`, or `UPDATED_WITH_REBUILD_ITEMS` when
-§5c left something a person must finish:
+§5c left something the user must actually do or decide. A purely-deferred item
+with nothing observable to act on (a rebuild-only flag that changes nothing
+until the workspace is someday recreated) is a results-message caveat under a
+plain `UPDATED`, not a reason for this verdict -- the app renders it as "left
+something for you", and there must really be something. When you do record it,
+the `--detail` line names that something in the user's terms:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
