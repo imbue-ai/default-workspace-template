@@ -28,14 +28,15 @@ npm run dev
 
 ## Design system (optional convention for the default UI)
 
-The frontend has a token layer (`@theme` in `frontend/src/style.css`) and shared
-component classes. When you extend or maintain the *default* look, prefer them
-over new one-offs so it stays coherent. This is a convention, not an enforced
-rule — if a user wants their interface restyled to their own taste, build that
-and ignore the tokens freely. See
-[`frontend/style_guide.md`](frontend/style_guide.md) for the short version and
-[`docs/design-system.md`](docs/design-system.md) for the token set and the
-background on why it exists.
+The frontend styles in the markup: Tailwind utilities over a semantic token
+layer (`frontend/src/style.css`), with shared primitives (Button, Modal, the
+input/badge recipes) for repeated looks. When you extend or maintain the
+*default* look, prefer them over new one-offs so it stays coherent. This is a
+convention, not an enforced rule — if a user wants their interface restyled to
+their own taste, build that and ignore the tokens freely. See
+[`frontend/style_guide.md`](frontend/style_guide.md) for the guide and
+[`docs/design-system.md`](docs/design-system.md) for the migration's history
+and rationale.
 
 ## Updating the running UI (canonical flow)
 

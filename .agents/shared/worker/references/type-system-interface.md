@@ -18,11 +18,11 @@ It is what the user is looking at *right now*, so you always work against an
 
 ## Design system: an optional convention for the default UI
 
-The shipped **default** UI is built from a small design system — a token layer
-(`@theme` at the top of `src/style.css`) plus shared component classes. It keeps
-the default look coherent. Details are in
-`system/apps/system_interface/frontend/style_guide.md` (short) and
-`system/apps/system_interface/docs/design-system.md` (token set + background).
+The shipped **default** UI is built from a small design system, mirroring the
+minds desktop client: styling lives in the markup as Tailwind utilities, and
+`src/style.css` is a token layer (a `--c-*` value table plus an `@theme inline`
+semantic-utility layer) with a small set of escape hatches. Details are in
+`system/apps/system_interface/frontend/style_guide.md`.
 
 It is a convention, **not** a rule, and it defers to the user. If the user asks
 for their interface restyled to their own taste — including something bold and
@@ -30,10 +30,11 @@ unlike the default — build exactly that; don't hold back or steer it back towa
 tokens. Nothing enforces the system (there is no ratchet). When you *are*
 extending the default look, prefer it so it stays consistent:
 
-- **Prefer a token over a literal** (`var(--color-*)` over a raw hex,
-  `var(--radius-base)` over `6px`, an existing type/spacing value over a new one),
-  and **reuse a shared component** (extend `.btn` / the modal / badge / toggle /
-  spinner / input primitive) rather than hand-rolling another per-feature copy.
+- **Style in the markup with the semantic utilities** (`text-primary`,
+  `bg-fill-hover`, `border-default`, the `type-*` roles) rather than raw values
+  or new `.feature-*` CSS, and **reuse a shared primitive** (the `Button` and
+  `Modal` components, `inputClass`/`badgeClass`, the `.spinner`) rather than
+  hand-rolling another per-feature copy.
 - **Regardless of styling, keep interactive elements as real `<button>`/`<a>`**
   (not clickable `<div>`s) — that's accessibility, not taste.
 - Adopting a token or primitive may shift a value slightly (a control taking the
