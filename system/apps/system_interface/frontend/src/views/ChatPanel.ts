@@ -43,7 +43,10 @@ import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
 import { ModelBar } from "./ModelBar";
-import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
+import { AgentTerminalPanel } from "./AgentTerminalPanel";
+import { chatFlipCard } from "./chat-flip";
+import { TerminalViewToggle } from "./TerminalViewToggle";
+import { buildAgentTerminalUrl, getTerminalUrl } from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderQueuedMessages } from "./QueuedMessageView";
@@ -65,11 +68,6 @@ function getAgentTerminalUrl(agentId: string): string {
   return buildAgentTerminalUrl(agent.name);
 }
 
-function openAgentTerminalTab(agentId: string): void {
-  const agent = getAgentById(agentId);
-  const title = agent?.name ? `${agent.name} terminal` : "agent terminal";
-  openIframeTabForAgent(agentId, getAgentTerminalUrl(agentId), title);
-}
 
 // Layout for the centered message column. Shared between the normal transcript
 // render and the empty-state branch that shows an optimistic first message, so
@@ -170,6 +168,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // transcript rows; the overlay is shown while the depth is positive.
   let dragDepth = 0;
   let isFileDragActive = false;
+  // Which face of the card is showing, and whether the back one has ever been built. Per-panel
+  // rather than global: two chats open side by side turn over independently.
+  let isFlipped = false;
+  let hasEverFlipped = false;
 
   function isFileDrag(event: DragEvent): boolean {
     const types = event.dataTransfer?.types;
@@ -827,6 +829,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
       const acceptsFileDrops = !isStillBeingCreated(agentId) && !isConversationNotFound(agentId);
 
+      // The two renderings of one conversation. `hasEverFlipped` is STICKY and separate from
+      // `isFlipped` on purpose: mithril destroys a vnode that becomes null, and destroying the
+      // back face takes its iframe out of the document -- which ends the ttyd session rather
+      // than hiding it. So the back face mounts on the first flip and stays mounted forever;
+      // only the transform changes after that.
+      if (isFlipped) hasEverFlipped = true;
+
       return m(
         "div",
         {
@@ -844,6 +853,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 m("div", { class: "chat-drop-overlay-label" }, "Drop files to attach"),
               )
             : null,
+          chatFlipCard({
+            flipped: isFlipped,
+            everFlipped: hasEverFlipped,
+            back: () =>
+              m(AgentTerminalPanel, {
+                agentId,
+                url: getAgentTerminalUrl(agentId),
+                title: `${getAgentById(agentId)?.name ?? "agent"} terminal`,
+              }),
+            front: [
           m(
             "main",
             {
@@ -906,23 +925,26 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       events: getEventsForAgent(agentId),
                     }),
                 m(MessageInput, { agentId }),
-                // Below the chat input: model bar on the left, the agent-terminal action
-                // right-aligned. There was a "Providers" button here too, as a temporary home
-                // for the chooser while the model bar could not reach it; the card's Provider
-                // row is that entry point now, so the button is gone.
-                m("div", { class: "composer-under-bar" }, [
-                  m(ModelBar, { agentId }),
-                  m("div", { class: "composer-under-bar-actions" }, [
-                    m(
-                      "button",
-                      {
-                        type: "button",
-                        class: "composer-under-bar-action",
-                        onclick: () => openAgentTerminalTab(agentId),
-                      },
-                      "Open agent terminal",
-                    ),
-                  ]),
+                // The under-bar used to live here, inside the footer. It is now a sibling of the
+                // whole flip card: on this face it would rotate away with the face its own
+                // switch turns, and the flip would be one-way.
+              ]),
+            ],
+          }),
+          // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
+          // the flip would be one-way. Everything here describes the conversation rather than
+          // either rendering of it, which is the same reason it belongs to neither face.
+          isStillBeingCreated(agentId)
+            ? null
+            : m("div", { class: "composer-under-bar" }, [
+                m(ModelBar, { agentId }),
+                m("div", { class: "composer-under-bar-actions" }, [
+                  m(TerminalViewToggle, {
+                    on: isFlipped,
+                    onToggle: () => {
+                      isFlipped = !isFlipped;
+                    },
+                  }),
                 ]),
               ]),
         ],
