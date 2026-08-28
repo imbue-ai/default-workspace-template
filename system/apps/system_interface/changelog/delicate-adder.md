@@ -33,9 +33,12 @@ system, not a pixel-identical render.
   permission request, and the modals were migrated onto these.
 
 - **Shared modal shell.** A new `Modal` primitive (`src/views/Modal.ts`); the
-  destroy-confirm dialog, fast-mode prompt, share modal, add-to-project dialog,
-  project settings modal, composer command notices, and terminal sign-in notice
-  all now render through it. Removed the dead custom-url-dialog CSS.
+  destroy-confirm dialog, fast-mode prompt, add-to-project dialog, project
+  settings modal, terminal sign-in notice, and the shared notice dialog
+  (`NoticeDialog.ts` -- the declined-command, auth, and send-failure notices)
+  all now render through it. Removed the dead custom-url-dialog CSS. (The share
+  modal was migrated too, then deleted on main in favour of a Share deep link;
+  the deletion carries through.)
 
 - **Dialog emphasis.** Buttons: a dialog's confirming action -- a real choice it
   asks the user to make (Save, Continue, the default in a two-option prompt) --
