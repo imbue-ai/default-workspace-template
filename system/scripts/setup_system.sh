@@ -271,8 +271,7 @@ command -v pi >/dev/null
 
 # Playwright's own CLI (pinned; npm-installed): the interface agents drive the
 # agentic-browser-fleet's browsers with, over the gated CDP endpoint the fleet
-# prints. The package is "@playwright/cli"; the bare "playwright-cli" package on
-# npm is a deprecated stub.
+# prints.
 npm install -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}"
 command -v playwright-cli >/dev/null
 
