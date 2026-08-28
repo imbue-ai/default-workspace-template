@@ -12,6 +12,7 @@ from typing import Collection, NamedTuple, Sequence
 from update_layout import (
     FRONTEND_DIR,
     MNGR_VENDOR_DIR,
+    PLUGIN_MANIFEST_PATH,
     PROVISIONER_SCRIPT,
     SYSTEM_INTERFACE_DIR,
 )
@@ -271,12 +272,21 @@ def _is_backend_manifest(path: str) -> bool:
     ``pyproject.toml`` moves their dependency closure exactly as the app's own
     does. Both workspace roots count; the vendored root is the one ``uv tool
     install -e system/vendor/mngr/libs/mngr`` resolves through.
+
+    The plugin manifest counts for the same reason without being a Python
+    manifest: it is what :func:`_manifest_extras` unions into each tool's
+    reinstall, so it decides which packages the tool environments carry. Without
+    it a release that only re-assigns an existing plugin to another tool would
+    never trigger the refresh that registers it, and the updated workspace would
+    diverge from a freshly built image -- which is the state the manifest exists
+    to prevent.
     """
     if path in (
         f"{SYSTEM_INTERFACE_DIR}/pyproject.toml",
         "uv.lock",
         "pyproject.toml",
         f"{MNGR_VENDOR_DIR}/pyproject.toml",
+        PLUGIN_MANIFEST_PATH,
     ):
         return True
     parts = path.split("/")

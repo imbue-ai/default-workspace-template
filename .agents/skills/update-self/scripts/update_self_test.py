@@ -1702,6 +1702,11 @@ def test_plan_apply_keys_the_provisioner_run_on_what_it_reads() -> None:
         # workspace root and each of its libraries move the same closure.
         "system/vendor/mngr/pyproject.toml",
         "system/vendor/mngr/libs/mngr/pyproject.toml",
+        # Not a Python manifest, but it is what the refresh unions into each
+        # tool's reinstall, so it decides which packages the tool environments
+        # carry. A release that only re-assigns an existing plugin to another
+        # tool changes nothing else, and without this would never be registered.
+        update_layout.PLUGIN_MANIFEST_PATH,
     ],
 )
 def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
