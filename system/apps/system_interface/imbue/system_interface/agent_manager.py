@@ -710,6 +710,26 @@ class AgentManager:
         with self._lock:
             return self._agents.get(agent_id)
 
+    def restart_agents_on_account_in_background(self, account_id: str) -> None:
+        """Kick off `restart_agents_on_account` on its own thread and return at once.
+
+        The restart is `mngr start --restart` per bound agent, SERIALLY, with a 60s timeout
+        each -- so an account with eight chats is eight minutes. The sign-in that triggers it
+        holds the auth service's single lock for the whole of it, which every poll, submit and
+        abort needs: the modal cannot even be closed, because the DELETE blocks too, and each
+        2s poll parks another Flask worker behind the lock.
+
+        Nothing waits on the answer. The flow is already committed and the user has already
+        been told they are signed in; the restart is what makes their existing chats usable
+        again, and it is no less effective for happening a few seconds later.
+        """
+        self._creation_cg.start_new_thread(
+            target=self.restart_agents_on_account,
+            args=(account_id,),
+            name=f"reauth-restart-{account_id[:8]}",
+            is_checked=False,
+        )
+
     def restart_agents_on_account(self, account_id: str) -> int:
         """Restart every agent bound to `account_id`. Returns how many were restarted.
 

@@ -512,7 +512,7 @@ def test_a_successful_re_auth_restarts_the_chats_bound_to_that_account(tmp_path:
         home=tmp_path,
         work_dir=tmp_path / "work",
         probe=lambda *_a: SignedIn.YES,
-        restart_bound_agents=lambda account_id: (restarted.append(account_id), 2)[1],
+        restart_bound_agents=restarted.append,
     )
     started = service.start("opencode-go", "api_key")
     service.submit_key(started.flow_id, "first-key", "opencode-go")
@@ -534,7 +534,7 @@ def test_a_failed_re_auth_restarts_nothing(tmp_path: Path) -> None:
         home=tmp_path,
         work_dir=tmp_path / "work",
         probe=lambda *_a: verdicts.pop(0),
-        restart_bound_agents=lambda account_id: (restarted.append(account_id), 1)[1],
+        restart_bound_agents=restarted.append,
     )
     started = service.start("opencode-go", "api_key")
     service.submit_key(started.flow_id, "good", "opencode-go")
