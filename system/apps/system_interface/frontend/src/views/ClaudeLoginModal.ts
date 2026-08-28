@@ -105,7 +105,7 @@ export interface ClaudeLoginModalAttrs {
 // relay is listening -- this page is not being viewed inside the desktop app.
 const MINT_PAGE_ACK_TIMEOUT_MS = 300;
 
-/* ── Styling ──────────────────────────────────────────────────────────────────
+/* Styling.
  * Utilities in the markup; the claude-login-* class names stay as bare markers
  * (the vitest suite drives the flow by them). The modal deliberately stays off
  * the shared .modal-* shell: it is a scrollable, sectioned, multi-step flow

@@ -26,7 +26,7 @@ import { Button } from "./Button";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 
-/* ── Styling ──────────────────────────────────────────────────────────────────
+/* Styling.
  * Utilities in the markup; the message-input and composer-attachment class
  * names stay as bare markers (the e2e tests drive the textbox and send button
  * by them). Attachment status looks are resolved in code, one utility per

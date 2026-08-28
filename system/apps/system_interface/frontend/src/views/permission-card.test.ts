@@ -304,8 +304,7 @@ function findByClass(
 }
 
 // The solid "Review & respond" button (distinct from the raw-disclosure toggle,
-// which is also a <button>). It moved onto the shared .btn primitive; btn--primary
-// is unique to it in this render.
+// which is also a <button>): btn--primary is unique to it in this render.
 function findReviewButton(node: unknown): { attrs?: Record<string, unknown>; children?: unknown } | null {
   return findByClass(node, "btn--primary");
 }

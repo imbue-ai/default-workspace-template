@@ -135,10 +135,9 @@ function flatten(node: unknown): AnyVnode[] {
     const component = (vnode.tag as (v: AnyVnode) => { view: (v: AnyVnode) => unknown })(vnode);
     return flatten(component.view(vnode));
   }
-  // Likewise for object component vnodes (an instance with a view method). The notices are their
-  // own component now (NoticeDialog), so their markup does not exist in this tree until it is
-  // asked for -- without this, every assertion about a notice's wording or buttons would silently
-  // see nothing.
+  // Likewise for object component vnodes (an instance with a view method),
+  // e.g. NoticeDialog: their markup does not exist in this tree until the
+  // view is asked for it.
   const tag = vnode.tag as unknown;
   if (tag !== null && typeof tag === "object" && typeof (tag as { view?: unknown }).view === "function") {
     // Children come along too: NoticeDialog renders its body through the Modal

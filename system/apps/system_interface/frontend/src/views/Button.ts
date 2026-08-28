@@ -2,29 +2,15 @@ import m from "mithril";
 import { splitAttrs } from "./attrs";
 import { TEXT_BODY_SIZE } from "./typography";
 
-/* ── Button ──────────────────────────────────────────────────────────────────
+/* Button.
  * One button system: the class recipe (buttonClass) and the component that
- * carries it (Button). Variants: primary | secondary | ghost | destructive |
- * ghost-destructive (quiet destructive: danger text, no fill) | inverse |
- * ghost-inverse (quiet on a dark overlay: light glyph, white-tint hover) |
- * stop (the composer's slate interrupt fill). Options: sm, xs (icon-only
- * 20px, the smallest step -- the hover-revealed micro-controls layered over
- * rail rows), icon (square), round (circle), selected (accent-tint pressed
- * look -- an icon ghost with `selected` is the on/off toggle recipe),
- * readonly (non-interactive without
- * `disabled`: resting look, default cursor, no hover/press, and the element
- * stays enabled so a hover tooltip can explain why -- the component marks it
- * aria-disabled for assistive tech), block (full width), extra (appended
- * utilities/markers). States: hover (guarded so a disabled or aria-disabled
- * button never tints), :focus-visible, :disabled + [aria-disabled], :active
- * press.
+ * carries it (Button).
  *
  * `m(Button, {...})` is the default way to make a button: it renders a real
  * <button type="button"> and passes every attr it doesn't consume (onclick,
  * disabled, title, aria-*, data-*) through to the element. Use buttonClass()
- * directly only where a component can't go: the rare non-button element that
- * must read as a button (the login modal's OAuth link) or DOM built outside
- * mithril (the lightbox).
+ * directly only where a component can't go: a non-button element that must
+ * read as a button, or DOM built outside mithril.
  *
  * The Tailwind scanner reads utility names from the literals in this file
  * (style.css's `@source` covers every .ts file): keep every utility name a
@@ -40,7 +26,12 @@ export interface ButtonOptions {
   xs?: boolean;
   icon?: boolean;
   round?: boolean;
+  /** Accent-tint pressed look; an icon ghost with `selected` is the on/off
+   *  toggle recipe. */
   selected?: boolean;
+  /** Non-interactive without `disabled`: resting look, default cursor, no
+   *  hover/press. The element stays enabled so a hover tooltip can explain
+   *  why; the component marks it aria-disabled for assistive tech. */
   readonly?: boolean;
   block?: boolean;
   extra?: string;

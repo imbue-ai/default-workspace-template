@@ -3,7 +3,7 @@ import { backdropDismissAttrs } from "./modalBackdrop";
 
 // The one backdrop-dismissal helper every modal shares. It keys off a mouse
 // DOWN on the overlay itself -- never a click (which fires wherever the press
-// ended, so selecting text inside a dialog and releasing past its edge used to
+// ended, so selecting text inside a dialog and releasing past its edge would
 // throw the dialog away) and never a secondary button (a right-click reaches
 // for a context menu, not "close").
 describe("backdropDismissAttrs", () => {

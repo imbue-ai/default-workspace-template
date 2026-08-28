@@ -1,12 +1,12 @@
-/* ============================================================================
- * DESIGN SYSTEM (optional) — how the DEFAULT UI stays coherent.
+/* DESIGN SYSTEM (optional) — how the DEFAULT UI stays coherent.
  *
  * Styling lives in the MARKUP as Tailwind utilities (mirrors apps/minds); this
  * file is the token layer plus a small set of escape hatches, not a stylesheet
  * of component classes. When you extend or maintain the default look:
  *   - Style in the view: utility class strings on the m(...) markup, colours
  *     via the semantic utility layer (text-primary, bg-fill-hover, ...), text
- *     via the type-* roles, shared recipes via views/primitives.ts builders.
+ *     via the type-* roles, shared recipes via the component builders in
+ *     views/ (Button, Input, Badge, Modal).
  *   - Hand-written CSS here is only for what utilities cannot reach: vendor
  *     DOM (dockview/xterm), markdown-rendered content, keyframes and
  *     pseudo-element machines (the spinner), contextual rules over
@@ -17,8 +17,7 @@
  * This is a convention for the default UI, not an enforced rule. If the user
  * wants their interface restyled to their own taste, build exactly that and
  * ignore these tokens freely — nothing enforces them. Background:
- * ../style_guide.md and ../docs/design-system.md.
- * ==========================================================================*/
+ * ../style_guide.md and ../docs/design-system.md. */
 @import "tailwindcss" source(none);
 @import "dockview-core/dist/styles/dockview.css";
 
@@ -29,7 +28,7 @@
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
-/* ── Colour tokens — two layers (mirrors apps/minds) ────────────────────────
+/* Colour tokens — two layers (mirrors apps/minds).
  * 1. VALUE LAYER (--c-*, on :root below): the raw colour for each token. The
  *    ONLY place a value lives, so a future theme swap (or dark mode) edits one
  *    table. Hand-written CSS in this file references these directly.
@@ -62,7 +61,7 @@
   --c-surface-secondary: #f3f2ef;
   --c-stop-button: #64748b;
   --c-stop-button-hover: #475569;
-  /* Semantic status colours (promoted from scattered raw hexes). */
+  /* Semantic status colours. */
   --c-danger: #d83a2c;
   --c-danger-hover: #b62d22;
   --c-danger-bg: #fdecea;
@@ -72,7 +71,7 @@
   --c-success: #22a06b;
   /* Foreground on accent/coloured surfaces (e.g. white button text). */
   --c-text-on-accent: #ffffff;
-  /* Inverse surface — dark ("black") bg with on-accent text; inverse buttons + tooltips. */
+  /* Inverse surface — dark ("black") bg with on-accent text. */
   --c-inverse-surface: #202020;
   --c-inverse-surface-hover: #383838;
   /* Typography scale — role-based; backs the type-* utilities below. Unit: px.
@@ -87,16 +86,14 @@
   --weight-regular: 400;
   --weight-semibold: 600;
   --weight-bold: 700;
-  /* Motion scale — one unit (ms). Durations back the common UI transitions.
-     Off-scale durations (100/150/300/320ms, and the long looping animation
-     timings) are left raw. */
+  /* Motion scale — one unit (ms). Durations back the common UI transitions;
+     off-scale durations and the long looping animation timings stay raw. */
   --dur-fast: 80ms;
   --dur-base: 120ms;
   --dur-slow: 200ms;
   /* Z-index scale — names the workspace's stacking layers (see design-system.md).
      Modal backdrops + the image lightbox sit at --z-overlay; the JS hover-tooltip
-     clears them at --z-tooltip. Two mid values (50, 2) have no layer name and stay
-     raw, marked design-system-exception at their sites. */
+     clears them at --z-tooltip. */
   --z-content: 1;
   --z-sticky: 100;
   --z-dropdown: 1000;
@@ -161,29 +158,25 @@
      references the same scale via the `--spacing(N)` function (e.g.
      `padding: --spacing(3)` compiles to `calc(var(--spacing) * 3)`) -- so markup
      and CSS share one source with no per-step token to define or keep in sync.
-     Steps in use: 0.5/1/1.5/2/3/4/5/6/8 = 2/4/6/8/12/16/20/24/32px. Off-grid
-     strays (3/5/7/9px etc.) stay raw as design-system-exceptions. */
+     Off-grid strays stay raw as design-system-exceptions. */
   --spacing: 0.25rem;
-  /* Radius scale -- aligned with the minds design system (apps/minds): four steps
-     sm 4 / md 6 / lg 8 / xl 16 (px). Names mirror minds and equal Tailwind's own
-     sm/md/lg defaults, so the rounded-* utilities used in the views
-     (rounded-md/lg = 6/8px) stay put; only xl (16 vs Tailwind's 12) differs, and no
-     view uses that utility. md is the default control radius; lg carries inputs,
-     cards and modals; xl is reserved for the largest surfaces (the composer and the
-     user bubble); pills and circles are Tailwind's stock rounded-full. The 12px
-     pane/chrome frame keeps its own --si-pane-radius (defined later in this file),
-     matching minds' CONTENT_CORNER_RADIUS window-frame exception. */
+  /* Radius scale -- aligned with the minds design system (apps/minds). Names
+     mirror minds; sm/md/lg equal Tailwind's own defaults, so overriding them
+     leaves the rounded-* utilities in the views at their stock values (only xl
+     differs from Tailwind's). md is the default control radius; lg carries
+     inputs, cards and modals; xl is reserved for the largest surfaces; pills
+     and circles are Tailwind's stock rounded-full. The 12px pane/chrome frame
+     keeps its own --si-pane-radius (defined later in this file), matching
+     minds' CONTENT_CORNER_RADIUS window-frame exception. */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 16px;
   /* Elevation -- aligned with the minds design system (apps/minds): two box-shadow
      steps. --shadow-raised is the subtle resting lift on interactive cards;
-     --shadow-overlay is the one soft floating shadow shared by everything above the
-     page -- menus, pickers, modals, tooltips, the lightbox (Figma minds-elevation-1,
-     two 8%-black drops). The shadow-raised/shadow-overlay utility names these generate
-     are novel, so they don't collide with Tailwind's shadow-{sm,md,lg} (shadow-lg is
-     used in the launcher + sidebar views). */
+     --shadow-overlay is the one soft floating shadow shared by everything above
+     the page -- menus, pickers, modals, tooltips, the lightbox (Figma
+     minds-elevation-1, two 8%-black drops). */
   --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
   --shadow-overlay: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);
 }
@@ -199,7 +192,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── Typography roles ───────────────────────────────────────────────────────
+/* Typography roles.
  * The role-based type system, declared as Tailwind utilities (mirrors
  * apps/minds) so they compose with variants, sort under the prettier plugin,
  * and work inside @apply. Each bundles font-size + weight + line-height; COLOR
@@ -244,8 +237,7 @@ body {
 /* Default border color (mirrors apps/minds). Tailwind v4 defaults un-colored
    borders/dividers to `currentColor`; default them to the standard border token
    instead so a bare `border` / `border-t` utility is legible without each call
-   site naming a color. Explicit `border-*` color utilities still win (they live
-   in the higher utilities layer). */
+   site naming a color. */
 @layer base {
   *,
   ::after,
@@ -256,9 +248,9 @@ body {
   }
 }
 
-/* ── Spinner primitive ───────────────────────────────────────────────────────
- * One CSS ring spinner (+ one @keyframes spin) replacing the near-identical
- * bespoke keyframes. Size via --spinner-size (or .spinner--sm; add a size
+/* Spinner primitive.
+ * One CSS ring spinner (+ one @keyframes spin).
+ * Size via --spinner-size (or .spinner--sm; add a size
  * step when a use exists); the two-tone track/arc default to --c-border /
  * --c-accent, overridable via --spinner-track / --spinner-arc.
  * .spinner--current makes it monochrome (currentColor ring with a transparent
@@ -288,43 +280,14 @@ body {
   --spinner-arc: transparent;
 }
 
-/* ── Title bar / messages area ── */
-/* The app header and content area (ChatPanel / SubagentView) are styled with
-   utilities in their views. On .app-content, native scroll anchoring stays ON
+/* On .app-content (ChatPanel / SubagentView), native scroll anchoring stays ON
    (the browser default) so the viewport holds steady when rows above it load or
    measure to their real height, with no per-frame JS scrollTop writes. The
    virtualization spacers opt out of anchoring individually (see the spacer divs
    in ChatPanel / SubagentView) so the browser anchors to a real message row
    rather than a resizing spacer. The app only writes scrollTop for the discrete
-   tail-follow and jump pins. Its scrollbar treatment stays below (Scrollbar
-   section). */
+   tail-follow and jump pins. */
 
-/* ── Chat message rows ── */
-/* The message rows and the user bubble are utilities in their views:
-   user-message-display.ts owns the shared row/bubble recipes
-   (USER_MESSAGE_ROW_CLASS / USER_BUBBLE_CLASS), the queued and outgoing
-   variants compose them (QueuedMessageView.ts / OutgoingMessageView.ts), and
-   the assistant rows live in message-renderers.ts. The .message* names remain
-   in the markup as bare markers for the e2e suite. Code inside a bubble is
-   markdown-rendered content and takes .markdown-content's rules below. */
-
-/* ── Lifted Composer ── */
-/* The footer strip itself (.app-footer) is styled with utilities in ChatPanel. */
-
-/* The row below the chat input: model bar on the left, agent-terminal + harness-auth actions
-   right-aligned -- the original flex row, undisturbed. The "Powered by" credit is centered over
-   the bar as a non-interactive overlay (see .composer-under-bar-credit) rather than as a flow
-   element, so it never reshapes the row or clips the pickers. Shares the model bar's font; no
-   background of its own; text at the visible secondary color. */
-/* The composer (views/MessageInput.ts: card, textbox, toolbar, attachment
-   chips, drop overlay via ChatPanel.ts), the under-bar row (ChatPanel.ts +
-   PoweredByCredit.ts) and the model bar/selector (views/ModelBar.ts) are
-   styled entirely with utilities in their views. Their hover tooltips use the
-   shared JS hover tooltip (views/hoverTooltip.ts); the send/stop/attach and
-   under-bar buttons are the shared Button primitive; the fast-mode toggle is
-   that same Button as a selectable ghost (selected + readonly options). */
-
-/* ── Markdown content styling ── */
 .markdown-content {
   line-height: 1.5;
   font-size: var(--font-size-body);
@@ -440,7 +403,6 @@ body {
   cursor: zoom-in;
 }
 
-/* ── Collapsible tool call blocks ── */
 .markdown-content .tool-call-block {
   cursor: pointer;
   margin-top: 0.75em;
@@ -517,7 +479,6 @@ body {
   background-color: var(--c-surface-secondary);
 }
 
-/* ── Scrollbar ── */
 .app-content::-webkit-scrollbar {
   width: 6px;
 }
@@ -535,25 +496,9 @@ body {
   background: var(--c-text-faint);
 }
 
-/* The structured (non-markdown) tool-call block and the collapsed system-chip
-   variant live as utilities in views/ToolCallBlock.ts (shared by
-   message-renderers.ts and user-message-display.ts); the model-API-error tint
-   is utilities in message-renderers.ts, and the collapsed row's tightened
-   rhythm rides its row class in user-message-display.ts. */
-
-/* The sub-agent link card (renderSubagentCard in views/message-renderers.ts) is
-   styled entirely with utilities in its view; its pulsing status dot reuses the
-   agent-activity-pulse keyframes below. */
-
-/* The permission-request card (views/permission-card.ts) is styled entirely
-   with utilities in its view. */
-
-/* ── Machine rail ── */
-/* The narrow icon strip down the left edge lives as utilities in
-   views/Sidebar.ts; only its scrollbar treatment is here. The rail overlays
-   the panels to its right while expanded, and the app list's scrollbar must
-   not eat into the 37px the icons need, so it is transparent until the rail
-   is hovered. */
+/* The machine rail's scrollbar. The rail overlays the panels to its right
+   while expanded, and the app list's scrollbar must not eat into the 37px the
+   icons need, so it is transparent until the rail is hovered. */
 .machine-sidebar ::-webkit-scrollbar {
   width: 6px;
 }
@@ -575,7 +520,7 @@ body {
   background: var(--c-text-faint);
 }
 
-/* ── Workspace surface: the connected tab card ──
+/* Workspace surface: the connected tab card.
    The whole content area is one flat grey canvas, and every pane is a white
    card floating on it whose active tab is physically part of the card. The
    pieces that make that read as one shape:
@@ -624,7 +569,6 @@ body {
   --si-pane-inset: 2px;
 }
 
-/* ── Dockview workspace ── */
 .dockview-workspace {
   position: relative;
 }
@@ -635,15 +579,13 @@ body {
   left: 0;
 }
 
-/* ── Dockview theme overrides ──
-
+/* Dockview theme overrides.
    The class is doubled to win on specificity. dockview-core does not rely on
    the stylesheet we import at the top of this file: it *injects its own style
    element at runtime*, which therefore lands after our linked stylesheet and
-   beats a plain `.dockview-theme-light` rule on document order alone. That is
-   what used to leave the dock painted white over our grey canvas, and the tab
-   strip painted its own grey, no matter what this block said. Anything here
-   that overrides a `--dv-*` default has to stay inside this doubled selector. */
+   beats a plain `.dockview-theme-light` rule on document order alone. Anything
+   here that overrides a `--dv-*` default has to stay inside this doubled
+   selector. */
 .dockview-theme-light.dockview-theme-light {
   --dv-paneview-header-border-color: var(--c-border);
   /* Everything dockview would paint itself is transparent: the canvas behind
@@ -697,11 +639,7 @@ body {
 
    The overlay sits outside the group's subtree and carries nothing that says
    which pane it belongs to, so this clip cannot be the conditional one the card
-   above gets: it rounds all four corners. Where a card is square at the
-   top-left, a panel painted anything other than white therefore leaves the
-   card's own white showing in that corner -- directly under the white active
-   tab that squared it. The card's outline, which is what reads as the shape, is
-   still exactly right. */
+   above gets: it rounds all four corners. */
 .dockview-theme-light .dv-render-overlay {
   border: 1px solid transparent;
   border-radius: var(--si-pane-radius);
@@ -719,23 +657,19 @@ body {
 
    The selector is doubled on purpose: dockview's own `.dv-render-overlay` rule
    declares `z-index: 1` at the same specificity and is loaded after this file,
-   so a bare `.si-live-surface` would lose the tie and sit at 1 alongside the
-   slot overlay -- which, being a later sibling, would then paint over the page
-   and swallow every click into it. */
+   so a bare `.si-live-surface` would lose the tie. */
 .dv-render-overlay.si-live-surface {
   position: absolute;
   display: flex;
   flex-direction: column;
   /* Above the (now empty) panel overlay standing in for it, which is a sibling
-     at z-index 1 and comes later in the DOM. Drop targets sit at 1000/9999 and
-     still paint over both. */
+     at z-index 1 and comes later in the DOM. */
   z-index: 2; /* design-system-exception: must be exactly one above dockview's own z-index:1 render-overlay (see comment above); the z scale has no "content + 1" layer */
 }
 
 /* While a tab is being dragged the surface stops taking pointer events, so the
    drag reaches the panel overlay underneath -- which is what forwards it to the
-   pane's drop target. Without this a drop over a pane would land inside the
-   framed page instead. */
+   pane's drop target. */
 .si-live-surface--drag {
   pointer-events: none;
 }
@@ -776,13 +710,11 @@ body {
    is now active" -- it usually already was, which is the whole reason nothing
    appeared to happen.
 
-   A wash of colour rather than the opacity blink this used to be: fading the
-   tab out and back read as the tab going away, which is the opposite of "here
-   it is". Amber because it is the one hue this workspace does not otherwise
-   use -- the accent means active and green, and grey is every resting state --
-   so the flash cannot be mistaken for a state the tab has entered and stayed
-   in. It paints ONLY for the animation's length, so the standing rule that an
-   inactive tab carries no background is untouched.
+   A wash of colour rather than an opacity blink: fading the tab out and back
+   reads as the tab going away, which is the opposite of "here it is". Amber
+   because it is the one hue this workspace does not otherwise use -- the
+   accent means active and green, and grey is every resting state -- so the
+   flash cannot be mistaken for a state the tab has entered and stayed in.
 
    Driven by a class rather than the Web Animations API so the keyframes sit
    with the rest of the tab's appearance, and so `prefers-reduced-motion` can
@@ -826,15 +758,13 @@ body > .dv-tab.dv-dragged {
   border-radius: var(--si-pane-radius) !important;
 }
 
-/* The ghost's INSIDE, for the same reason and with a sharper edge to it: the
-   clone carries the outer `.dv-tab`'s computed style as inline styles, but
-   only that element's -- its descendants keep their classes and lose every
-   rule that was scoped under `.dockview-theme-light`, because the clone hangs
-   off `<body>` and no longer has that ancestor. `padding` and `gap` are not
-   inherited, so the inner `.dv-default-tab` rendered with neither: the icon
-   sat flush against the ghost's left edge with the title against it. Restated
-   here from the same variables the live tab uses, so a dragged tab looks like
-   the tab it came from. */
+/* The ghost's INSIDE, for the same reason: the clone carries the outer
+   `.dv-tab`'s computed style as inline styles, but only that element's -- its
+   descendants keep their classes and lose every rule that was scoped under
+   `.dockview-theme-light`, because the clone hangs off `<body>` and no longer
+   has that ancestor (and `padding`/`gap` are not inherited). Restated here
+   from the same variables the live tab uses, so a dragged tab looks like the
+   tab it came from. */
 body > .dv-tab.dv-dragged .dv-default-tab {
   padding: var(--si-tab-padding);
   gap: var(--si-tab-gap);
@@ -845,8 +775,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* Hovering an inactive tab paints NOTHING. A fill at the strip's edges always
-   fights the pane's rounded corner below it (two attempts at that shape both
-   read as a boxy cutoff), so the hover affordance is everything except a
+   fights the pane's rounded corner below it and reads as a boxy cutoff,
+   so the hover affordance is everything except a
    background: the pointer cursor, the icon and title recoloring to the
    primary text color, and the tab's own action buttons appearing -- which the
    strip already reveals on hover. Spelled out down the whole chain because
@@ -860,10 +790,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: pointer;
 }
 
-/* ── Tab overflow: the "N more" dropdown at the strip's right edge ──
+/* Tab overflow: the "N more" dropdown at the strip's right edge.
    dockview builds this from theme variables this app sets to transparent (the
    divider is the tab gap, the group background is the canvas), so untouched it
-   rendered as bare text floating over the pane. It is a menu, so it wears the
+   renders as bare text floating over the pane. It is a menu, so it wears the
    same chrome as every other floating card: primary surface, hairline border,
    8px radius, the overlay shadow, and 32px rows with the shared hover fill. */
 .dockview-theme-light .dv-tabs-overflow-dropdown-default {
@@ -942,7 +872,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   height: 12px;
 }
 
-/* ── Drag and drop ──
+/* Drag and drop.
    A drop onto a PANE and a drop onto a TAB are different questions and get
    different answers. "Which side of this pane?" is a region, so it stays a
    filled wash -- but a neutral grey light enough to read the pane through,
@@ -1008,7 +938,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-top: none;
 }
 
-/* ── Add tab button ── */
 .dockview-add-tab-wrapper {
   position: relative;
   display: flex;
@@ -1043,12 +972,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--c-text-primary);
 }
 
-/* ── Project settings pickers ── */
 /* The color swatches and the squiggle cells of the project settings modal. They
    are the only toggles a modal carries, so ``aria-pressed`` is what tells them
    apart from its Cancel/Save row. Their size, fill and selection ring are set
    inline (the ring is the project's own color), leaving the grids' shared
-   feedback here -- scoped to the shared .modal-card the settings modal now uses. */
+   feedback here. */
 .modal-card button[aria-pressed] {
   transition: transform var(--dur-fast) ease-out;
 }
@@ -1069,14 +997,12 @@ body > .dv-tab.dv-dragged .dv-default-tab {
     0 0 0 4px var(--c-accent);
 }
 
-/* ── Custom tab renderer ──
-   4px normalizes the tab's internal spacing (icon to title, and title to the
+/* 4px normalizes the tab's internal spacing (icon to title, and title to the
    hover-revealed actions) to the sidebar's own icon-to-label gap (`gap-1` on
    the rail's row classes in Sidebar.ts). The selector has to repeat both
    classes: `createCustomTab` sets `className = "dv-default-tab dv-custom-tab"`
    on the same element, so a bare `.dv-custom-tab` here loses on specificity to
-   `.dockview-theme-light .dv-default-tab`'s own `gap: 8px` above -- which is
-   what left this at 8px despite this rule. */
+   `.dockview-theme-light .dv-default-tab`'s own `gap` above. */
 .dockview-theme-light .dv-default-tab.dv-custom-tab {
   gap: var(--si-tab-gap);
 }
@@ -1134,18 +1060,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   opacity: 0.45;
 }
 
-/* ── Hover tooltip ── */
-/* The one tooltip bubble in the workspace, built on <body> and positioned
-   (fixed) by views/hoverTooltip.ts. It is the single tooltip mechanism now:
-   every control uses it -- the composer toolbar and model bar, dockview's
-   draggable tabs (which suppress native `title`), the project rail. A CSS
-   `::after` bubble once handled the simple in-flow cases but is retired: it got
-   clipped by the tab strip's overflow and drifted from this one, so all callers
-   moved onto the shared hoverTooltipAttrs() helper.
-
-   Its skin is utilities at its creation site (TOOLTIP_CLASS in
-   views/hoverTooltip.ts), dark mode included -- nothing for it lives here. */
-
 /* The inline rename editor, swapped in for the title on a double-click. It
    takes the title's own box so the tab neither grows nor jumps as it opens,
    and inherits the tab's type so the name reads the same while it is being
@@ -1198,12 +1112,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--c-text-primary);
 }
 
-/* ── Modal enter animations ──────────────────────────────────────────────────
+/* Modal enter animations.
  * The modal shell itself (overlay + card + header/title + body copy + actions)
- * lives as utility class strings in views/primitives.ts, rendered by the
- * Modal() helper (views/Modal.ts). Only its @keyframes live here (Tailwind's
- * animate-[...] utilities reference them by name), plus the contextual
- * .modal-card rules further down. */
+ * lives as utility class strings in views/Modal.ts. Only its @keyframes live
+ * here (Tailwind's animate-[...] utilities reference them by name). */
 @keyframes modal-overlay-in {
   from {
     opacity: 0;
@@ -1224,25 +1136,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   }
 }
 
-/* ── Destroy confirmation dialog ── */
-/* The delete-confirmation dialog is the shared .modal-* shell (see Modal
-   primitive above and views/DestroyConfirmDialog.ts); its buttons use the .btn
-   primitive (btn--secondary = cancel, btn--destructive = confirm), and its body
-   copy uses .modal-message -- the same as every other dialog now on the shell. */
-
-/* ── Fast-mode grace-period prompt ── */
-/* The prompt is the shared .modal-* shell (see Modal primitive above); its
-   icon chip and inline "learn more" link are utilities in
-   views/FastModeModal.ts. */
-
-/* Share modal uses the shared Modal shell (.modal-*) + .btn; its former
-   bespoke overlay/card/title/footer/email-list CSS is deleted. */
-
-/* === Claude login modal === */
-/* The modal (views/ClaudeLoginModal.ts) is styled entirely with utilities in
-   its view; only its two entry animations live here as keyframes, referenced
-   from the markup via animate-[...] arbitrary values. */
-
+/* The Claude login modal's entry animations (views/ClaudeLoginModal.ts
+   references these keyframes via animate-[...] arbitrary values). */
 @keyframes claude-login-overlay-in {
   from {
     opacity: 0;
@@ -1263,15 +1158,12 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────
-   PROGRESS VIEW (per-turn task timeline rendered from tk tickets)
-
+/* Progress view (the per-turn task timeline rendered from tk tickets).
    The timeline's structure lives as utilities in views/ProgressBlock.ts and
    views/icons.ts. What stays here is what utilities cannot carry: the
    narration classes (they style markdown-rendered children, and the live
    one's shimmer is a keyframe + background-clip machine) and the expanded
-   panel's markdown/tool-block child rules.
-   ─────────────────────────────────────────────────────────────────── */
+   panel's markdown/tool-block child rules. */
 
 .pv-tl-narration {
   margin-top: 3px;
@@ -1299,9 +1191,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* Static (settled) narration: an unclosed step that went idle still shows
-   its mid-work narration, but without the live shimmer -- muted italic. The
-   markdown child styling below is shared with .pv-tl-narration via the
-   grouped selectors. */
+   its mid-work narration, but without the live shimmer -- muted italic. */
 .pv-tl-narration--static {
   margin-top: 3px;
   padding-left: --spacing(0.5);
@@ -1329,8 +1219,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   -webkit-background-clip: padding-box;
   background-clip: padding-box;
 }
-/* The live (shimmering) narration keeps its pre-unification borderless code
-   chip; only the settled/static narration adopts the bordered chip. */
+/* Deliberate asymmetry: the live (shimmering) narration's code chip is
+   borderless; only the settled/static narration carries the bordered chip. */
 .pv-tl-narration code {
   border: none;
 }
@@ -1384,12 +1274,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin: 0.5em 0;
 }
 
-/* ─────────────────────────────────────────────────────────────────────
-   ACTIVITY INDICATOR (replaces the generic "Running tool..." strip)
-   The strip is utilities in views/ActivityIndicator.ts; only the dot's pulse
-   keyframes live here (shared with the sub-agent card's status dot).
-   ─────────────────────────────────────────────────────────────────── */
-
+/* The activity indicator's dot pulse (views/ActivityIndicator.ts), shared
+   with the sub-agent card's status dot (views/message-renderers.ts). */
 @keyframes agent-activity-pulse {
   0%,
   100% {
@@ -1401,7 +1287,3 @@ body > .dv-tab.dv-dragged .dv-default-tab {
     transform: scale(1.15);
   }
 }
-
-/* The inline image lightbox (src/lightbox.ts) and the terminal lifecycle
-   banner (views/TerminalBanner.ts) are styled entirely with utilities in their
-   modules. */

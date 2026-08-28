@@ -38,17 +38,16 @@ interface ProgressBlockAttrs {
   id?: string;
 }
 
-/* ── Styling ──────────────────────────────────────────────────────────────────
+/* Styling.
  * Utilities in the markup; the pv-* class names stay as bare markers. What
  * remains in style.css for this view: the narration shimmer (a keyframe +
  * background-clip machine), the narration/expanded markdown-child rules
  * (rendered content), and the expanded panel's tool-block override (a
  * contextual rule over shared markup). */
 
-/** The step title button: a reset button carrying the row's typography. Every
- *  node is a step node, whose de-emphasized title (medium weight, soft color)
- *  outranked the per-status title colors in the old cascade -- so all statuses
- *  share this one look, with the status carried by the bullet icon instead. */
+/** The step title button: a reset button carrying the row's typography. All
+ *  statuses share this one de-emphasized look (medium weight, soft color);
+ *  the status is carried by the bullet icon instead. */
 const TITLE_CLASS =
   "pv-tl-title inline-flex cursor-pointer items-center appearance-none border-0 bg-transparent p-0 text-left " +
   "text-(length:--font-size-body) leading-[1.4] font-medium text-secondary disabled:cursor-default";

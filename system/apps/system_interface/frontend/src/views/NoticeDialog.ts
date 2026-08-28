@@ -40,11 +40,9 @@ export interface NoticeDialogAttrs {
   onDismiss: () => void;
 }
 
-/** Body copy, with guards for text this component does not control: the send-failure notice puts
- *  a server's own words in here, and those are not always the one tidy sentence the other callers
- *  pass. A proxy or an unhandled route answers with a whole HTML page, and an unbroken token (a
- *  URL, a traceback line) would otherwise widen the dialog past the viewport or push its OK button
- *  off the bottom. Harmless for fixed text. */
+/** Body copy, with wrap/scroll guards for text this component does not control: the send-failure
+ *  notice puts a server's own words in here, which can be a whole HTML page or an unbroken token
+ *  (a URL, a traceback line) rather than one tidy sentence. */
 const NOTICE_BODY_CLASS = `${MODAL_MESSAGE_CLASS} wrap-anywhere max-h-[40vh] overflow-y-auto`;
 
 /**

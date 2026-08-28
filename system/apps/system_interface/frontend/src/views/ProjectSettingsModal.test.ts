@@ -95,7 +95,7 @@ describe("ProjectSettingsModal delete confirmation", () => {
       onCancel: () => {},
     });
     // The "Delete" trigger (reveals the confirmation) is the only secondary button
-    // in the initial render; it moved onto the shared .btn primitive.
+    // in the initial render.
     const deleteButton = findByClass(modal.render(), "btn--secondary");
     expect(deleteButton).toBeDefined();
     clickVnode(deleteButton!);

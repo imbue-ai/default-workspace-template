@@ -23,8 +23,7 @@ import { renderToolBlock } from "./ToolCallBlock";
  *  `message-user` and `message-user-bubble` are bare markers -- the Python e2e
  *  suite locates chat rows by them -- and the styling is the utilities beside
  *  them. The row recipe carries no bottom margin: each caller sets its own
- *  rhythm (a committed row mb-5, queued/outgoing rows none, the collapsed
- *  chip mb-1). */
+ *  rhythm. */
 export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-end";
 
 /** wrap-break-word: long unbreakable tokens (API keys, URLs) wrap inside the

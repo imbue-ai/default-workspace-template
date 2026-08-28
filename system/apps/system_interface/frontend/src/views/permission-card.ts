@@ -177,7 +177,7 @@ export function initShellPermissionResolutions(): void {
   setEmbedderMessageHandler(PERMISSION_RESOLUTIONS, notePermissionResolutions);
 }
 
-/* ── Card styling ─────────────────────────────────────────────────────────────
+/* Card styling.
  * The card is styled with utilities at each call site below; the
  * permission-request-* class names stay as bare markers (the vitest suites and
  * the e2e tests query them). Shared fragments live here so the two card badges

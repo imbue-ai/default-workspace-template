@@ -1,8 +1,7 @@
 /**
  * The collapsible tool-call block: a "▸ header" strip that expands in place to
- * reveal monospace input/output panes. One shared renderer for the two views
- * that used to duplicate this markup -- assistant tool calls
- * (views/message-renderers.ts) and collapsed system/hook chips
+ * reveal monospace input/output panes. One shared renderer for assistant tool
+ * calls (views/message-renderers.ts) and collapsed system/hook chips
  * (views/user-message-display.ts). The markdown variant (fenced blocks wrapped
  * by src/markdown.ts) shares only the class NAMES; its look is the
  * `.markdown-content .tool-call-block` rules in style.css.
