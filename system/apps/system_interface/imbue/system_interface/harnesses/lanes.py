@@ -339,7 +339,7 @@ _AGY_PTY_COLUMNS: Final = 1000
 LANE_GOOGLE = Lane(
     id="google",
     provider_name="Google",
-    subtitle="Limited free usage of Google's latest models, with any Google account.",
+    subtitle="Use your Google AI subscription. All Google accounts have some limited free usage.",
     harness=HarnessType.ANTIGRAVITY,
     methods=(
         PtyMethod(
@@ -430,7 +430,7 @@ _PI_KEY_PROVIDERS: Final = tuple(
 LANE_OPENCODE_GO = Lane(
     id="opencode-go",
     provider_name="Opencode Go",
-    subtitle="Access the latest and greatest open models, for $10/mo.",
+    subtitle="Generous usage on the latest and greatest open models for $10/mo.",
     harness=HarnessType.PI_CODING,
     methods=(
         PasteMethod(
@@ -453,7 +453,7 @@ LANE_OPENCODE_GO = Lane(
 LANE_OPENROUTER = Lane(
     id="openrouter",
     provider_name="OpenRouter",
-    subtitle="One account, any model. Pay per token, not subscription.",
+    subtitle="One account, any model. Pay for only what you use, not subscription.",
     harness=HarnessType.PI_CODING,
     methods=(
         PasteMethod(
