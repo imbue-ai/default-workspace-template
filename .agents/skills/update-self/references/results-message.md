@@ -54,7 +54,7 @@ Write it for a non-technical reader skimming top to bottom, in this order:
 9. **The offer** -- see the language rules.
 
 When the report marks a surface's merge work nontrivial (the system interface,
-a user web service), name that surface, say what was reconciled, and attach the
+a user app), name that surface, say what was reconciled, and attach the
 rollback offer to exactly that piece: the live workspace is the review surface,
 since the unattended pass stands up no previews.
 
