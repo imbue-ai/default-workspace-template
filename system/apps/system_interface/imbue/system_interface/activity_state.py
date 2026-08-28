@@ -167,7 +167,9 @@ def resolve_is_agent_running(lifecycle_state: str, is_active_marker_present: boo
     tie: the observe stream can miss a short turn, so the reported state stays WAITING while the
     marker itself flips promptly -- trust the marker there. Any other state (STOPPED / EXITED /
     ...) reads as not running, so a hard-crashed agent's stale marker is never mistaken for a
-    live turn (the launch-time marker clear covers the rest).
+    live turn. Each harness's plugin also clears the marker at launch, so a
+    marker outliving its process cannot be mistaken for a live turn by anything that reads it
+    directly either.
     """
     if lifecycle_state in RUNNING_LIFECYCLE_STATES:
         return True

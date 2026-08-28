@@ -30,6 +30,8 @@ from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
 from imbue.mngr_antigravity.antigravity_config import CAPTURE_CONVERSATION_ID_SCRIPT_NAME
@@ -38,6 +40,7 @@ from imbue.mngr_antigravity.antigravity_config import ROOT_CONVERSATION_FILENAME
 from imbue.mngr_antigravity.antigravity_config import STATUSLINE_SCRIPT_NAME
 from imbue.mngr_antigravity.antigravity_config import build_onboarding_seed
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_conversations_dir
+from imbue.mngr_antigravity.antigravity_config import get_antigravity_global_rules_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_hooks_config_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_oauth_token_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_onboarding_cache_path
@@ -58,10 +61,10 @@ def test_antigravity_agent_config_has_correct_defaults() -> None:
     assert config.cli_args == ()
     assert config.parent_type is None
     assert config.auto_allow_permissions is False
-    # Default-off, matching mngr_claude's auto_dismiss_dialogs posture: trusting
+    # Default-off, matching mngr_claude's auto_dismiss_dialogs_at_startup posture: trusting
     # the source repo (writing to the user's shared global settings) should be an
-    # explicit choice (--yes or auto_dismiss_dialogs=True), not a default.
-    assert config.auto_dismiss_dialogs is False
+    # explicit choice (--yes or auto_dismiss_dialogs_at_startup=True), not a default.
+    assert config.auto_dismiss_dialogs_at_startup is False
     # Per-agent settings default to a copy of the user's real settings (claude-parity).
     assert config.sync_home_settings is True
     # No structured permission schema -- a free-form blob mirroring mngr_claude.
@@ -231,7 +234,7 @@ def test_provision_runs_install_check_when_enabled(
     ``command -v`` probe proves the install-check line executed.
     """
     agent = _make_antigravity_agent(
-        local_provider, tmp_path, AntigravityAgentConfig(check_installation=True, auto_dismiss_dialogs=True)
+        local_provider, tmp_path, AntigravityAgentConfig(check_installation=True, auto_dismiss_dialogs_at_startup=True)
     )
     stub_host: Any = _BinaryPresentStubHost(host_dir=tmp_path, is_local=True)
     agent.provision(
@@ -292,8 +295,10 @@ def antigravity_agent_auto_dismiss(
     local_provider: LocalProviderInstance,
     tmp_path: Path,
 ) -> AntigravityAgent:
-    """Agent with `auto_dismiss_dialogs=True` so provision() trusts silently."""
-    return _make_antigravity_agent(local_provider, tmp_path, AntigravityAgentConfig(auto_dismiss_dialogs=True))
+    """Agent with `auto_dismiss_dialogs_at_startup=True` so provision() trusts silently."""
+    return _make_antigravity_agent(
+        local_provider, tmp_path, AntigravityAgentConfig(auto_dismiss_dialogs_at_startup=True)
+    )
 
 
 class _ConfirmingAntigravityAgent(AntigravityAgent):
@@ -428,9 +433,23 @@ def test_assemble_command_launches_agy_under_per_agent_home(antigravity_agent: A
     agent = antigravity_agent
     command = str(agent.assemble_command(agent.host, (), command_override=None))
     home = str(agent._get_agy_home_dir())
-    assert f"env HOME={home} agy " in command
-    # HOME relocation comes after the cd into the workspace symlink, right before agy.
+    # Asserted as "on the same env prefix as agy", not as adjacency: the prefix also carries
+    # the policy-shim PATH entry, and pinning the exact spacing makes an unrelated addition to
+    # that prefix look like a broken HOME relocation.
+    assert f"env HOME={home} " in command
+    # HOME relocation comes after the cd into the workspace symlink, and before agy.
     assert command.index(f"env HOME={home}") < command.index(" agy ")
+
+
+def test_assemble_command_puts_the_policy_shim_ahead_of_bash(antigravity_agent: AntigravityAgent) -> None:
+    """agy resolves `bash` from PATH for every tool call, which is where the work dir's own
+    command guards run -- it has no usable PreToolUse hook. The entry must be on the agy
+    process only: setting it through the agent env file would follow the user into every
+    terminal they open in this agent's tmux session."""
+    agent = antigravity_agent
+    command = str(agent.assemble_command(agent.host, (), command_override=None))
+    assert "/system/scripts/agy_shim:$PATH" in command
+    assert command.index("agy_shim") < command.index(" agy ")
 
 
 def test_assemble_command_does_not_add_hooks_via_add_dir(antigravity_agent: AntigravityAgent) -> None:
@@ -739,7 +758,7 @@ def test_provision_persists_source_repo_under_auto_dismiss_dialogs(
     antigravity_agent_auto_dismiss: AntigravityAgent,
     isolated_home: Path,
 ) -> None:
-    """`auto_dismiss_dialogs=True` (per-agent-type opt-in) silently trusts the source repo."""
+    """`auto_dismiss_dialogs_at_startup=True` (per-agent-type opt-in) silently trusts the source repo."""
     agent = antigravity_agent_auto_dismiss
     _provision(agent)
     global_settings = _read_global_settings(isolated_home)
@@ -784,10 +803,10 @@ def test_provision_aborts_in_non_interactive_mode_without_opt_in(
     antigravity_agent: AntigravityAgent,
     isolated_home: Path,
 ) -> None:
-    """Non-interactive without --yes or auto_dismiss_dialogs: exit cleanly rather than run untrusted code.
+    """Non-interactive without --yes or auto_dismiss_dialogs_at_startup: exit cleanly rather than run untrusted code.
 
     Default mngr_ctx has is_interactive=False and is_auto_approve=False;
-    the antigravity_agent fixture defaults auto_dismiss_dialogs=False, so
+    the antigravity_agent fixture defaults auto_dismiss_dialogs_at_startup=False, so
     no path to a trust write exists and we must abort.
     """
     with pytest.raises(SystemExit) as excinfo:
@@ -949,7 +968,9 @@ def test_provision_writes_per_agent_settings_with_overrides_and_synced_base(
     )
     overrides = {"model": "Gemini 3.5 Flash (Medium)", "permissions": {"allow": ["command(git)"]}}
     agent = _make_antigravity_agent(
-        local_provider, tmp_path, AntigravityAgentConfig(auto_dismiss_dialogs=True, settings_overrides=overrides)
+        local_provider,
+        tmp_path,
+        AntigravityAgentConfig(auto_dismiss_dialogs_at_startup=True, settings_overrides=overrides),
     )
 
     _provision(agent)
@@ -970,7 +991,9 @@ def test_provision_per_agent_settings_ignores_user_base_when_sync_disabled(
     """sync_home_settings=False starts from an empty base, not the user's real settings."""
     get_antigravity_settings_path(isolated_home).write_text(json.dumps({"colorScheme": "dark"}))
     agent = _make_antigravity_agent(
-        local_provider, tmp_path, AntigravityAgentConfig(auto_dismiss_dialogs=True, sync_home_settings=False)
+        local_provider,
+        tmp_path,
+        AntigravityAgentConfig(auto_dismiss_dialogs_at_startup=True, sync_home_settings=False),
     )
 
     _provision(agent)
@@ -1010,7 +1033,9 @@ def test_provision_copies_oauth_token_when_symlink_disabled(
 ) -> None:
     """symlink_oauth_token=False copies the token for full isolation."""
     agent = _make_antigravity_agent(
-        local_provider, tmp_path, AntigravityAgentConfig(auto_dismiss_dialogs=True, symlink_oauth_token=False)
+        local_provider,
+        tmp_path,
+        AntigravityAgentConfig(auto_dismiss_dialogs_at_startup=True, symlink_oauth_token=False),
     )
     _provision(agent)
     dest = get_antigravity_oauth_token_path(agent._get_agy_home_dir())
@@ -1030,7 +1055,9 @@ def test_provision_symlinks_token_to_shared_path_even_when_shared_absent(
     Does NOT request ``isolated_home`` (so no shared token is seeded); ``$HOME``
     is still the autouse-isolated ``tmp_path``.
     """
-    agent = _make_antigravity_agent(local_provider, tmp_path, AntigravityAgentConfig(auto_dismiss_dialogs=True))
+    agent = _make_antigravity_agent(
+        local_provider, tmp_path, AntigravityAgentConfig(auto_dismiss_dialogs_at_startup=True)
+    )
 
     _provision(agent)
 
@@ -1053,7 +1080,9 @@ def test_provision_copy_mode_skips_when_shared_token_absent(
     autouse-isolated ``tmp_path``.
     """
     agent = _make_antigravity_agent(
-        local_provider, tmp_path, AntigravityAgentConfig(auto_dismiss_dialogs=True, symlink_oauth_token=False)
+        local_provider,
+        tmp_path,
+        AntigravityAgentConfig(auto_dismiss_dialogs_at_startup=True, symlink_oauth_token=False),
     )
 
     _provision(agent)
@@ -1181,7 +1210,7 @@ def test_provision_composes_user_statusline_from_settings_overrides(
         local_provider,
         tmp_path,
         AntigravityAgentConfig(
-            auto_dismiss_dialogs=True,
+            auto_dismiss_dialogs_at_startup=True,
             settings_overrides={"statusLine": {"type": "command", "command": "echo user-owned"}},
         ),
     )
@@ -1207,7 +1236,7 @@ def test_provision_warns_and_drops_non_composable_statusline(
         local_provider,
         tmp_path,
         AntigravityAgentConfig(
-            auto_dismiss_dialogs=True,
+            auto_dismiss_dialogs_at_startup=True,
             settings_overrides={"statusLine": {"type": "static", "text": "unsupported"}},
         ),
     )
@@ -1271,11 +1300,11 @@ def antigravity_agent_without_common_transcript(
     local_provider: LocalProviderInstance,
     tmp_path: Path,
 ) -> AntigravityAgent:
-    """Agent with `auto_dismiss_dialogs=True` so provision() can complete in tests."""
+    """Agent with `auto_dismiss_dialogs_at_startup=True` so provision() can complete in tests."""
     return _make_antigravity_agent(
         local_provider,
         tmp_path,
-        AntigravityAgentConfig(emit_common_transcript=False, auto_dismiss_dialogs=True),
+        AntigravityAgentConfig(emit_common_transcript=False, auto_dismiss_dialogs_at_startup=True),
     )
 
 
@@ -1711,3 +1740,86 @@ def test_on_before_create_noop_for_non_antigravity_agent(
         create_work_dir=True,
     )
     assert on_before_create(args, local_provider.mngr_ctx) is None
+
+
+def test_output_style_and_stacked_prompts_reach_the_rules_text(
+    local_provider: LocalProviderInstance, tmp_path: Path
+) -> None:
+    """agy has no output-style concept, so the style body and the append-prompt blocks share
+    one channel (the GEMINI.md rule). Blocks come first in stack order, style body last and
+    verbatim -- three sentinels, so a dropped or reordered piece is visible."""
+    agent = _make_antigravity_agent(
+        local_provider,
+        tmp_path,
+        AntigravityAgentConfig(
+            output_style=OutputStyleName("Engineering Subordinate"),
+            append_system_prompt=(SystemPromptText("SENTINEL_A"), SystemPromptText("SENTINEL_B")),
+        ),
+    )
+    styles_dir = Path(agent.work_dir) / ".agents" / "output-styles"
+    styles_dir.mkdir(parents=True)
+    (styles_dir / "engineering-subordinate.md").write_text(
+        "---\nname: Engineering Subordinate\n---\nSENTINEL_C", encoding="utf-8"
+    )
+
+    text = agent._build_agent_rules_text(agent.host)
+
+    assert text is not None
+    for sentinel in ("SENTINEL_A", "SENTINEL_B", "SENTINEL_C"):
+        assert sentinel in text, f"{sentinel} missing from the rules text"
+    assert text.index("SENTINEL_A") < text.index("SENTINEL_B") < text.index("SENTINEL_C")
+
+
+def test_rules_text_is_none_when_no_role_contributed_anything(antigravity_agent: AntigravityAgent) -> None:
+    assert antigravity_agent._build_agent_rules_text(antigravity_agent.host) is None
+
+
+def test_provision_writes_the_rules_file_from_a_role(local_provider: LocalProviderInstance, tmp_path: Path) -> None:
+    """A role's appended prompt lands in the per-agent GEMINI.md rule."""
+    agent = _make_antigravity_agent(
+        local_provider,
+        tmp_path,
+        AntigravityAgentConfig(append_system_prompt=(SystemPromptText("HELLO_RULE"),)),
+    )
+    agy_home = tmp_path / "agy_home"
+    agent._provision_agent_instructions(agent.host, agy_home)
+    assert get_antigravity_global_rules_path(agy_home).read_text() == "HELLO_RULE"
+
+
+def test_provision_omits_the_rules_file_when_no_role_contributes(
+    local_provider: LocalProviderInstance, tmp_path: Path
+) -> None:
+    """A bare agent (no role output_style / append_system_prompt) writes no GEMINI.md."""
+    agent = _make_antigravity_agent(local_provider, tmp_path, AntigravityAgentConfig())
+    agy_home = tmp_path / "agy_home"
+    agent._provision_agent_instructions(agent.host, agy_home)
+    assert not get_antigravity_global_rules_path(agy_home).exists()
+
+
+def test_provision_still_writes_the_rules_file_when_over_the_soft_limit(
+    local_provider: LocalProviderInstance, tmp_path: Path
+) -> None:
+    """Exceeding agy's 12k rule-file limit warns but never blocks the write (non-fatal)."""
+    big = "x" * 13000
+    agent = _make_antigravity_agent(
+        local_provider,
+        tmp_path,
+        AntigravityAgentConfig(append_system_prompt=(SystemPromptText(big),)),
+    )
+    agy_home = tmp_path / "agy_home"
+    agent._provision_agent_instructions(agent.host, agy_home)
+    assert get_antigravity_global_rules_path(agy_home).read_text() == big
+
+
+def test_assemble_command_stamps_the_process_started_marker(antigravity_agent: AntigravityAgent) -> None:
+    """Every launch/resume touches ``antigravity_process_started`` BEFORE agy runs.
+
+    Its mtime is what the workspace uses to bound transcript staleness: agy resumes from its
+    own store, so after a mid-turn restart the previous process's tail is still there --
+    including an unmatched tool call nothing will ever close -- and the chat's activity
+    indicator would latch on it. Ordering matters (the touch precedes the agy invocation), so
+    the marker can never be older than the process it stands for.
+    """
+    command = str(antigravity_agent.assemble_command(antigravity_agent.host, (), command_override=None))
+    assert "antigravity_process_started" in command
+    assert command.index("touch ") < command.index(" agy ")

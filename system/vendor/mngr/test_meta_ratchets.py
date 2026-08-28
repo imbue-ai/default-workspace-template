@@ -837,6 +837,11 @@ def _get_coverage_omit(pyproject: dict) -> list[str]:
     return [str(x) for x in pyproject.get("tool", {}).get("coverage", {}).get("run", {}).get("omit", [])]
 
 
+# Walks every subproject's pyproject + package tree; fast locally but observed
+# exceeding the default 10s pytest-timeout under CI load. See
+# test_no_import_layer_violations for the flaky/timeout rationale.
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     """Ensure the top-level pyproject.toml `--cov=` flags are exactly the union of the
     subprojects' `--cov=` flags, except for packages whose source is fully omitted in the
@@ -1084,10 +1089,17 @@ def test_standalone_project_ty_carve_outs_are_checked_by_the_root_workspace() ->
     )
 
 
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_top_level_coverage_omit_covers_subproject_omits() -> None:
     """For every file in a subproject's package tree that the subproject's
     `[tool.coverage.run].omit` patterns exclude, the top-level
     `[tool.coverage.run].omit` must also exclude it.
+
+    Walks every workspace package tree: well under a second locally, but under
+    offload's sandbox I/O contention the walk has hit the default 10s
+    pytest-timeout, so it gets the same budget and retry as the other
+    repo-wide tree walks here.
 
     Checks the file-level semantic (not pattern-level equality) because root and
     subproject pyproject.tomls use different path conventions: subprojects use globs
@@ -1477,10 +1489,10 @@ def _mngr_level_terminology_chunks(rule: RegexRatchetRule) -> list[RatchetMatchC
 def test_prevent_workspace_vocabulary_in_mngr_level_code() -> None:
     """Keep the minds-level 'workspace' vocabulary out of mngr-level code (count may only fall)."""
     chunks = _mngr_level_terminology_chunks(_PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE)
-    assert len(chunks) <= snapshot(370), _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+    assert len(chunks) <= snapshot(337), _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
 
 
 def test_prevent_minds_references_in_mngr_level_code() -> None:
     """Keep minds / default-workspace-template references out of mngr-level code (count may only fall)."""
     chunks = _mngr_level_terminology_chunks(_PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE)
-    assert len(chunks) <= snapshot(352), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+    assert len(chunks) <= snapshot(348), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))

@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PermissionResolutionEntry } from "./WorkspaceFrame";
 import {
   WORKSPACE_ORIGIN_FAMILY,
   buildEmbedHandlers,
+  fetchPermissionResolutionEntries,
+  pushResolutionSnapshot,
   requestIdFromMessage,
 } from "./WorkspaceFrame";
 
@@ -75,7 +78,9 @@ function makeContract() {
     OPEN_AI_KEYS_PAGE: "minds:open-ai-keys-page",
     OPEN_AI_KEYS_ACK: "minds:open-ai-keys-ack",
     BRING_APP_TO_FRONT: "minds:bring-app-to-front",
+    OPEN_SHARE_SETTINGS: "minds:open-share-settings",
     CLOSE_ACTIVE_TAB: "minds:close-active-tab",
+    PERMISSION_RESOLUTIONS: "minds:permission-resolutions",
     REQUEST_ID_PATTERN,
   } as Parameters<typeof buildEmbedHandlers>[0]["contract"];
 }
@@ -144,6 +149,29 @@ describe("buildEmbedHandlers", () => {
     });
   });
 
+  it("floats the Share tab over this workspace, focused on the asking app", () => {
+    // No ack: with no minds chrome present the Share click is simply a no-op.
+    const { contract, handlers, navigations, acks } = makeHandlers();
+    handlers[contract.OPEN_SHARE_SETTINGS]({ serviceName: "web" });
+    expect(navigations).toEqual([
+      {
+        path: `/workspace/${WORKSPACE_AGENT_ID}/options`,
+        params: { tab: "share", target: "web" },
+      },
+    ]);
+    expect(acks).toEqual([]);
+  });
+
+  it("lands the Share tab untargeted when the name is absent", () => {
+    // Unreachable through the real endpoint (the validator requires
+    // serviceName); pins the handler's own tolerance.
+    const { contract, handlers, navigations } = makeHandlers();
+    handlers[contract.OPEN_SHARE_SETTINGS]({});
+    expect(navigations).toEqual([
+      { path: `/workspace/${WORKSPACE_AGENT_ID}/options`, params: { tab: "share" } },
+    ]);
+  });
+
   it("floats help over this workspace, without opening the popup", () => {
     const { contract, handlers, navigations, popupOpens, frontCount } =
       makeHandlers();
@@ -154,5 +182,85 @@ describe("buildEmbedHandlers", () => {
     ]);
     expect(popupOpens).toEqual([]);
     expect(frontCount()).toBe(1);
+  });
+});
+
+describe("fetchPermissionResolutionEntries", () => {
+  afterEach(() => {
+    // restoreAllMocks does NOT undo vi.stubGlobal; only this does.
+    vi.unstubAllGlobals();
+  });
+
+  it("maps the wire shape onto entries, drops off-shape rows, and reports failures as null", async () => {
+    // Null (not an empty array) on failure: an empty answer would wrongly
+    // tell the workspace "asked and none are resolved".
+    const requested: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        requested.push(url);
+        return {
+          ok: true,
+          json: async () => ({
+            resolutions: [
+              { request_id: "evt-1", resolution: "granted" },
+              { request_id: "evt-2", resolution: "shredded" },
+              { resolution: "denied" },
+              { request_id: "evt-3", resolution: "denied" },
+            ],
+          }),
+        } as unknown as Response;
+      }),
+    );
+    expect(await fetchPermissionResolutionEntries("agent-ab12")).toEqual([
+      { requestId: "evt-1", resolution: "granted" },
+      { requestId: "evt-3", resolution: "denied" },
+    ]);
+    expect(requested).toEqual([
+      "/ui/api/inbox/resolutions?workspace=agent-ab12",
+    ]);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 500 }) as unknown as Response),
+    );
+    expect(await fetchPermissionResolutionEntries("agent-ab12")).toBeNull();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({ ok: true, json: async () => ({}) }) as unknown as Response,
+      ),
+    );
+    expect(await fetchPermissionResolutionEntries("agent-ab12")).toBeNull();
+  });
+});
+
+describe("pushResolutionSnapshot", () => {
+  it("pushes the workspace's verdicts into the frame, and nothing on a failed or empty lookup", async () => {
+    // The snapshot is what keeps a rebuilt page from offering Approve/Deny
+    // for an already-decided request; a failed lookup must stay silent (the
+    // cards then follow the transcript's own resolution notices), and an
+    // empty snapshot sends nothing -- there is nothing to flip.
+    const entries: PermissionResolutionEntry[] = [
+      { requestId: "evt-1", resolution: "granted" },
+    ];
+    const sends: PermissionResolutionEntry[][] = [];
+    await pushResolutionSnapshot(
+      async (ws) => (ws === "agent-ab12" ? entries : null),
+      (e) => sends.push(e),
+      "agent-ab12",
+    );
+    await pushResolutionSnapshot(
+      async () => null,
+      (e) => sends.push(e),
+      "agent-ab12",
+    );
+    await pushResolutionSnapshot(
+      async () => [],
+      (e) => sends.push(e),
+      "agent-ab12",
+    );
+    expect(sends).toEqual([entries]);
   });
 });

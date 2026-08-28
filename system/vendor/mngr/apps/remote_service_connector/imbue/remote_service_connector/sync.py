@@ -12,16 +12,28 @@ host_id column, while the PUT checks the path against the body's host_id and
 then addresses the row by the body's agent_id. The account key bundle holds the argon2id inputs and the
 password-wrapped data-encryption key (also opaque). All endpoints require
 user (SuperTokens) auth but are NOT paid-gated -- sync is a free feature.
+
+Records and pool leases are two views of one cloud workspace, and the
+connector keeps them consistent: a lease grant inserts a metadata-only record
+stub in the same transaction (``insert_lease_record_stub``), a release
+tombstones the record -- or deletes it while it is still that never-written
+stub -- in the same transaction as its ``removing`` flip
+(``retire_active_record_for_lease``), and a record whose workspace still
+holds a lease can be tombstoned but never hard-deleted -- neither by the
+DELETE routes nor by the retention reaper. The lease-vs-record sweep in
+``lease_records.py`` acts on the remaining drift.
 """
 
 import base64
 import binascii
 import functools
 import logging
+import re
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from typing import Final
 from typing import Protocol
 
 import psycopg2
@@ -37,6 +49,7 @@ from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
 from imbue.remote_service_connector.errors import ConnectorError
+from imbue.remote_service_connector.errors import WorkspaceRecordLeaseActiveError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.naming import bucket_owner_prefix
 
@@ -78,7 +91,11 @@ class WorkspaceRecordModel(BaseModel):
     color: str | None = Field(default=None, max_length=64, description="Workspace accent color (#rrggbb)")
     provider_kind: str = Field(
         max_length=_MAX_SYNC_TEXT_FIELD_LENGTH,
-        description="mngr provider backend kind; empty when not yet known (create-path seed records)",
+        description=(
+            "The mngr provider *instance* name the workspace is discovered under on its hosting "
+            "device (e.g. 'docker', 'lima', or 'imbue_cloud_<account-slug>' for cloud rows); empty "
+            "when not yet known (create-path seed records)"
+        ),
     )
     hosting_device_id: str | None = Field(
         default=None,
@@ -207,6 +224,127 @@ def _workspace_record_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "record_format": row[14],
         "backup_bucket": row[15],
     }
+
+
+# Every pool_hosts status under which a workspace still holds its lease: the
+# lifecycle statuses a user's row can be in, plus the in-flight release marker
+# (a ``removing`` row's VM may still exist). Rows in any of these keep their
+# record tombstone-only (never hard-deleted).
+LEASE_HOLDING_POOL_STATUSES: Final[tuple[str, ...]] = (
+    "leased",
+    "stopping",
+    "stopped",
+    "starting",
+    "crashed",
+    "removing",
+)
+LEASE_HOLDING_STATUSES_SQL: Final[str] = ", ".join(f"'{status}'" for status in LEASE_HOLDING_POOL_STATUSES)
+
+
+def user_id_prefix_sql(user_id_column: str) -> str:
+    """The SQL that derives a record's ``pool_hosts.leased_to_user`` key from its full ``user_id`` column.
+
+    ``pool_hosts.leased_to_user`` holds the 16-hex prefix of the SuperTokens
+    user id that ``workspace_records.user_id`` holds in full; every
+    lease/record join derives the prefix the same way
+    ``auth.derive_user_id_prefix`` does.
+    """
+    return f"SUBSTRING(REPLACE({user_id_column}, '-', ''), 1, 16)"
+
+
+# Records for imbue_cloud workspaces carry the desktop's per-account provider
+# instance name, ``imbue_cloud_<slug(email)>``; the slug rule mirrors minds'
+# ``imbue_cloud_provider_name_for_account`` (duplicated, not imported -- the
+# shipped connector package must not depend on the monorepo). The bare backend
+# name is the fallback for an account with no email on record.
+_LEASE_RECORD_PROVIDER_BACKEND: Final[str] = "imbue_cloud"
+
+
+def lease_record_provider_kind(account_email: str | None) -> str:
+    """The provider instance name a lease's record stub carries (see the note above)."""
+    if account_email is None:
+        return _LEASE_RECORD_PROVIDER_BACKEND
+    slug = re.sub(r"[^a-z0-9]+", "-", account_email.strip().lower()).strip("-")
+    if not slug:
+        return _LEASE_RECORD_PROVIDER_BACKEND
+    return f"{_LEASE_RECORD_PROVIDER_BACKEND}_{slug}"
+
+
+def insert_lease_record_stub(
+    cur: Any,
+    *,
+    user_id: str,
+    host_id: str,
+    agent_id: str,
+    display_name: str,
+    provider_kind: str,
+) -> None:
+    """Insert the metadata-only ACTIVE record for a freshly granted lease, on the caller's cursor.
+
+    Runs inside the lease transaction so a lease without a record can never
+    exist, even transiently. The stub carries no secrets (only clients hold
+    the account DEK); the owning desktop's reconcile enriches it through the
+    normal CAS push. An existing record for the workspace is left alone.
+    """
+    cur.execute(
+        "INSERT INTO workspace_records (user_id, host_id, agent_id, display_name, color, provider_kind, "
+        "hosting_device_id, device_label, state, restored_from_host_id, backup_bucket, encrypted_secrets, "
+        "revision, record_format, destroyed_at) "
+        "VALUES (%s, %s, %s, %s, NULL, %s, NULL, '', 'active', NULL, NULL, NULL, 1, 1, NULL) "
+        "ON CONFLICT (user_id, agent_id) DO NOTHING",
+        (user_id, host_id, agent_id, display_name, provider_kind),
+    )
+
+
+def retire_active_record_for_lease(cur: Any, *, user_id_prefix: str, agent_id: str) -> None:
+    """Retire the ACTIVE record of a workspace whose lease is being released, on the caller's cursor.
+
+    Runs inside the release transaction. A record no client ever wrote to --
+    still the lease-time stub, at revision 1 with no secrets and no backup
+    bucket -- is deleted outright: it belongs to a workspace the user never
+    took possession of (a create or web claim that failed after the lease) or
+    one with nothing to recover, and a tombstone would only surface a ghost in
+    every device's "recently destroyed" list. Every other record is
+    tombstoned, keeping its metadata and secrets for backup access; bumping
+    the revision keeps the CAS honest, so a client holding the pre-release
+    revision conflicts on its next push and rebases instead of resurrecting
+    the row. Revision 1 alone does not prove a stub: a record a client created
+    before the connector wrote stubs also sits at revision 1, with NULL
+    secrets while the account has no master password, so a record that names a
+    backup bucket is always kept.
+    """
+    cur.execute(
+        "DELETE FROM workspace_records "
+        f"WHERE agent_id = %s AND {user_id_prefix_sql('user_id')} = %s AND state = 'active' "
+        "AND revision = 1 AND encrypted_secrets IS NULL AND backup_bucket IS NULL",
+        (agent_id, user_id_prefix),
+    )
+    if cur.rowcount:
+        return
+    cur.execute(
+        "UPDATE workspace_records SET state = 'destroyed', destroyed_at = COALESCE(destroyed_at, NOW()), "
+        "revision = revision + 1, updated_at = NOW() "
+        f"WHERE agent_id = %s AND {user_id_prefix_sql('user_id')} = %s AND state = 'active'",
+        (agent_id, user_id_prefix),
+    )
+
+
+def _lease_holding_pool_row_sql(pool_column: str) -> str:
+    return (
+        f"SELECT 1 FROM pool_hosts WHERE {pool_column} = %s AND leased_to_user = %s "
+        f"AND status IN ({LEASE_HOLDING_STATUSES_SQL}) LIMIT 1"
+    )
+
+
+def _has_lease_holding_pool_row(cur: Any, *, user_id_prefix: str, agent_id: str | None, host_id: str | None) -> bool:
+    """Whether the user holds a pool lease for the workspace (by workspace id, else by host id)."""
+    if agent_id is not None:
+        cur.execute(_lease_holding_pool_row_sql("agent_id"), (agent_id, user_id_prefix))
+    elif host_id is not None:
+        cur.execute(_lease_holding_pool_row_sql("host_id"), (host_id, user_id_prefix))
+    else:
+        return False
+    return cur.fetchone() is not None
 
 
 class SyncStore(Protocol):
@@ -490,12 +628,20 @@ class PostgresSyncStore:
                     cur.execute("DELETE FROM account_key_bundles WHERE user_id = %s", (user_id,))
 
     def list_destroyed_records_before(self, cutoff: datetime) -> list[dict[str, Any]]:
+        # A tombstone whose workspace still holds a pool lease is the
+        # lease-vs-record sweep's evidence of a failed release; it is never
+        # reaped out from under that sweep (the lease's release reaps both).
         with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT user_id, host_id, agent_id, backup_bucket, destroyed_at FROM workspace_records "
-                    "WHERE state = 'destroyed' AND destroyed_at IS NOT NULL AND destroyed_at < %s "
-                    "ORDER BY destroyed_at",
+                    "SELECT r.user_id, r.host_id, r.agent_id, r.backup_bucket, r.destroyed_at "
+                    "FROM workspace_records r "
+                    "WHERE r.state = 'destroyed' AND r.destroyed_at IS NOT NULL AND r.destroyed_at < %s "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM pool_hosts p WHERE p.agent_id = r.agent_id "
+                    f"AND p.leased_to_user = {user_id_prefix_sql('r.user_id')} "
+                    f"AND p.status IN ({LEASE_HOLDING_STATUSES_SQL})) "
+                    "ORDER BY r.destroyed_at",
                     (cutoff,),
                 )
                 rows = cur.fetchall()
@@ -514,11 +660,11 @@ class PostgresSyncStore:
         self, user_id_prefix: str, bucket_name: str, short_name: str, excluding_workspace_id: str | None = None
     ) -> bool:
         # The bucket name carries only the 16-hex user-id prefix, so the match
-        # re-derives the prefix from user_id exactly as derive_user_id_prefix does.
+        # re-derives the prefix from user_id.
         query = (
             "SELECT 1 FROM workspace_records "
             "WHERE (backup_bucket = %s OR host_id = %s OR agent_id = %s) "
-            "AND SUBSTRING(REPLACE(user_id, '-', ''), 1, 16) = %s"
+            f"AND {user_id_prefix_sql('user_id')} = %s"
         )
         params: tuple[Any, ...] = (bucket_name, short_name, short_name, user_id_prefix)
         if excluding_workspace_id is not None:
@@ -722,20 +868,44 @@ def put_workspace_record_endpoint(request: Request, host_id: str, body: Workspac
         return _put_workspace_record(request, body)
 
 
+def _refuse_hard_delete_while_leased(user: UserAuth, agent_id: str | None, host_id: str | None) -> None:
+    """Tombstone-first: a record whose workspace still holds a pool lease may not be hard-deleted.
+
+    Destroying the workspace is what releases the lease (and retires the
+    record); hard-deleting the record first would leave a lease no client
+    lists -- exactly the orphan the lease-vs-record sweep exists to catch.
+    """
+    with db.pooled_db_connection() as conn:
+        with conn.cursor() as cur:
+            is_leased = _has_lease_holding_pool_row(
+                cur, user_id_prefix=user.user_id_prefix, agent_id=agent_id, host_id=host_id
+            )
+    if is_leased:
+        raise WorkspaceRecordLeaseActiveError(agent_id or host_id or "")
+
+
 @router.delete("/sync/records/by-workspace/{workspace_id}")
 def delete_workspace_record_by_workspace_endpoint(request: Request, workspace_id: str) -> dict[str, str]:
-    """Remove one workspace record outright by workspace id (disassociation; idempotent)."""
+    """Remove one workspace record outright by workspace id (disassociation; idempotent).
+
+    Refused (409 ``lease_active``) while the workspace holds a pool lease.
+    """
     with handle_endpoint_errors():
-        user_id = _sync_caller_user_id(request)
+        user, user_id = _sync_caller(request)
+        _refuse_hard_delete_while_leased(user, agent_id=workspace_id, host_id=None)
         get_sync_store().delete_record_by_workspace(user_id, workspace_id)
         return {"status": "deleted"}
 
 
 @router.delete("/sync/records/{host_id}")
 def delete_workspace_record_endpoint(request: Request, host_id: str) -> dict[str, str]:
-    """Remove one workspace record by its current host (compat shim; idempotent)."""
+    """Remove one workspace record by its current host (compat shim; idempotent).
+
+    Refused (409 ``lease_active``) while the workspace holds a pool lease.
+    """
     with handle_endpoint_errors():
-        user_id = _sync_caller_user_id(request)
+        user, user_id = _sync_caller(request)
+        _refuse_hard_delete_while_leased(user, agent_id=None, host_id=host_id)
         get_sync_store().delete_record(user_id, host_id)
         return {"status": "deleted"}
 

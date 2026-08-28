@@ -24,16 +24,16 @@ def test_create_bucket_returns_bucket_and_default_key(monkeypatch: pytest.Monkey
     resp = client.post("/buckets", json={"name": "my-data"}, headers=_user_headers())
     assert resp.status_code == 200
     body = resp.json()
-    assert body["bucket"]["bucket_name"] == "testuser--my-data"
+    assert body["bucket"]["bucket_name"] == f"{_USER_STUB_USER_ID_PREFIX}--my-data"
     assert body["bucket"]["s3_endpoint"] == "https://test-account.r2.cloudflarestorage.com"
     assert body["key"]["access"] == "readwrite"
-    assert body["key"]["bucket_name"] == "testuser--my-data"
+    assert body["key"]["bucket_name"] == f"{_USER_STUB_USER_ID_PREFIX}--my-data"
     access_key_id = body["key"]["access_key_id"]
     assert access_key_id
     # Secret is the sha256 of the fake token value, returned once.
     assert body["key"]["secret_access_key"] == derive_s3_secret_access_key(f"token-value-{access_key_id}")
     # Bucket actually created in the fake.
-    assert "testuser--my-data" in fake.buckets
+    assert f"{_USER_STUB_USER_ID_PREFIX}--my-data" in fake.buckets
     # Key metadata recorded; the secret/token value is NOT persisted.
     rows = store.list_keys(_USER_STUB_USER_ID, None)
     assert len(rows) == 1
@@ -79,7 +79,7 @@ def test_create_bucket_at_quota_returns_403(monkeypatch: pytest.MonkeyPatch) -> 
     detail = resp.json()["detail"]
     assert detail["code"] == "quota_exceeded"
     assert detail["entitlement"] == "max_buckets"
-    assert "testuser--one-more" not in fake.buckets
+    assert f"{_USER_STUB_USER_ID_PREFIX}--one-more" not in fake.buckets
 
 
 def test_list_buckets_returns_only_owned(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,11 +89,11 @@ def test_list_buckets_returns_only_owned(monkeypatch: pytest.MonkeyPatch) -> Non
     # A bucket owned by someone else, plus a crafted name that merely *contains*
     # the prefix -- the in-code startswith re-check must exclude it.
     fake.buckets["otheruser--secret"] = {"name": "otheruser--secret"}
-    fake.buckets["evil-testuser--x"] = {"name": "evil-testuser--x"}
+    fake.buckets[f"evil-{_USER_STUB_USER_ID_PREFIX}--x"] = {"name": f"evil-{_USER_STUB_USER_ID_PREFIX}--x"}
     resp = client.get("/buckets", headers=_user_headers())
     assert resp.status_code == 200
     names = sorted(b["bucket_name"] for b in resp.json())
-    assert names == ["testuser--a", "testuser--b"]
+    assert names == [f"{_USER_STUB_USER_ID_PREFIX}--a", f"{_USER_STUB_USER_ID_PREFIX}--b"]
 
 
 def test_get_bucket_info(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,7 +101,7 @@ def test_get_bucket_info(monkeypatch: pytest.MonkeyPatch) -> None:
     client.post("/buckets", json={"name": "data"}, headers=_user_headers())
     resp = client.get("/buckets/data", headers=_user_headers())
     assert resp.status_code == 200
-    assert resp.json()["bucket_name"] == "testuser--data"
+    assert resp.json()["bucket_name"] == f"{_USER_STUB_USER_ID_PREFIX}--data"
 
 
 def test_get_bucket_info_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -113,23 +113,25 @@ def test_get_bucket_info_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_destroy_bucket_non_empty_returns_409(monkeypatch: pytest.MonkeyPatch) -> None:
     client, fake, _store = _make_bucket_test_client(monkeypatch)
     client.post("/buckets", json={"name": "data"}, headers=_user_headers())
-    fake.bucket_objects["testuser--data"].append("obj1")
+    fake.bucket_objects[f"{_USER_STUB_USER_ID_PREFIX}--data"].append("obj1")
     resp = client.delete("/buckets/data", headers=_user_headers())
     assert resp.status_code == 409
-    assert "testuser--data" in fake.buckets
+    assert f"{_USER_STUB_USER_ID_PREFIX}--data" in fake.buckets
 
 
 def test_destroy_bucket_empty_cascades_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     client, fake, store = _make_bucket_test_client(monkeypatch)
     client.post("/buckets", json={"name": "data"}, headers=_user_headers())
     # A legacy second key (pre-single-key model) must be cascaded too.
-    extra = fake.create_bucket_token("testuser--data", "read", "mngr-r2:testuser--data:extra")
-    store.add_key(str(extra["id"]), _USER_STUB_USER_ID, "testuser--data", "read", "extra")
+    extra = fake.create_bucket_token(
+        f"{_USER_STUB_USER_ID_PREFIX}--data", "read", f"mngr-r2:{_USER_STUB_USER_ID_PREFIX}--data:extra"
+    )
+    store.add_key(str(extra["id"]), _USER_STUB_USER_ID, f"{_USER_STUB_USER_ID_PREFIX}--data", "read", "extra")
     assert len(store.list_keys(_USER_STUB_USER_ID, None)) == 2
     assert len(fake.account_tokens) == 2
     resp = client.delete("/buckets/data", headers=_user_headers())
     assert resp.status_code == 200
-    assert "testuser--data" not in fake.buckets
+    assert f"{_USER_STUB_USER_ID_PREFIX}--data" not in fake.buckets
     assert store.list_keys(_USER_STUB_USER_ID, None) == []
     assert fake.account_tokens == {}
 
@@ -145,7 +147,7 @@ def test_roll_key_returns_same_access_key_id_with_fresh_secret(monkeypatch: pyte
     assert rolled["access_key_id"] == original_key["access_key_id"]
     assert rolled["secret_access_key"] != original_key["secret_access_key"]
     # Still exactly one recorded key for the bucket.
-    assert len(store.list_keys(_USER_STUB_USER_ID, "testuser--data")) == 1
+    assert len(store.list_keys(_USER_STUB_USER_ID, f"{_USER_STUB_USER_ID_PREFIX}--data")) == 1
 
 
 def test_roll_key_reports_enforced_downgrade(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,11 +165,11 @@ def test_roll_key_mints_fresh_key_when_none_recorded(monkeypatch: pytest.MonkeyP
     client, _fake, store, _entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
     created = client.post("/buckets", json={"name": "data"}, headers=_user_headers()).json()
     client.delete(f"/bucket-keys/{created['key']['access_key_id']}", headers=_user_headers())
-    assert store.list_keys(_USER_STUB_USER_ID, "testuser--data") == []
+    assert store.list_keys(_USER_STUB_USER_ID, f"{_USER_STUB_USER_ID_PREFIX}--data") == []
     resp = client.post("/buckets/data/roll-key", headers=_user_headers())
     assert resp.status_code == 200
     assert resp.json()["access"] == "readwrite"
-    assert len(store.list_keys(_USER_STUB_USER_ID, "testuser--data")) == 1
+    assert len(store.list_keys(_USER_STUB_USER_ID, f"{_USER_STUB_USER_ID_PREFIX}--data")) == 1
 
 
 def test_roll_key_for_missing_bucket_returns_404(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,7 +212,7 @@ def test_create_bucket_works_for_unpaid_explorer_account(monkeypatch: pytest.Mon
     backend.install_on_app_module(app_mod, monkeypatch)
     resp = client.post("/buckets", json={"name": "x"}, headers=_user_headers())
     assert resp.status_code == 200
-    assert "testuser--x" in fake.buckets
+    assert f"{_USER_STUB_USER_ID_PREFIX}--x" in fake.buckets
 
 
 def test_r2_keys_migration_declares_all_persisted_columns() -> None:
@@ -296,7 +298,7 @@ def test_create_bucket_over_storage_quota_returns_403(monkeypatch: pytest.Monkey
     client, fake, _store, entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
     _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
     assert client.post("/buckets", json={"name": "a"}, headers=_user_headers()).status_code == 200
-    fake.usage_bytes_by_bucket["testuser--a"] = 1000
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 1000
     resp = client.post("/buckets", json={"name": "b"}, headers=_user_headers())
     assert resp.status_code == 403
     detail = resp.json()["detail"]
@@ -309,7 +311,7 @@ def test_create_bucket_storage_check_fails_open_on_usage_read_error(monkeypatch:
     client, fake, _store, entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
     _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
     assert client.post("/buckets", json={"name": "a"}, headers=_user_headers()).status_code == 200
-    fake.usage_bytes_by_bucket["testuser--a"] = 1000
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 1000
     fake.fail_bucket_usage_reads = True
     resp = client.post("/buckets", json={"name": "b"}, headers=_user_headers())
     assert resp.status_code == 200
@@ -359,7 +361,7 @@ def test_cleanup_grant_restores_keys_and_records_grant(monkeypatch: pytest.Monke
     _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
     created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
     key_id = created["key"]["access_key_id"]
-    fake.usage_bytes_by_bucket["testuser--a"] = 1000
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 1000
     _downgrade_key(fake, store, key_id)
 
     resp = client.post("/account/storage-cleanup-grant", headers=_user_headers())
@@ -388,7 +390,7 @@ def test_cleanup_grant_budget_exhausted_returns_403(monkeypatch: pytest.MonkeyPa
     _downgrade_key(fake, store, created["key"]["access_key_id"])
     # Burn the failed-grant budget: five grants settled without any decrease.
     for _ in range(5):
-        burned = grant_store.create_grant(_USER_STUB_USER_ID, "testuser", 1000, 60)
+        burned = grant_store.create_grant(_USER_STUB_USER_ID, _USER_STUB_USER_ID_PREFIX, 1000, 60)
         grant_store.settle_grant(int(burned["grant_id"]), 1000, False)
     resp = client.post("/account/storage-cleanup-grant", headers=_user_headers())
     assert resp.status_code == 403
@@ -403,11 +405,11 @@ def test_storage_recheck_settles_grant_success_and_keeps_keys(monkeypatch: pytes
     _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
     created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
     key_id = created["key"]["access_key_id"]
-    fake.usage_bytes_by_bucket["testuser--a"] = 1000
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 1000
     _downgrade_key(fake, store, key_id)
     assert client.post("/account/storage-cleanup-grant", headers=_user_headers()).status_code == 200
     # The client prunes: usage drops under both the baseline and the limit.
-    fake.usage_bytes_by_bucket["testuser--a"] = 40
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 40
 
     resp = client.post("/account/storage-recheck", headers=_user_headers())
     assert resp.status_code == 200
@@ -428,7 +430,7 @@ def test_storage_recheck_redowngrades_and_burns_budget_when_usage_did_not_drop(
     _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
     created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
     key_id = created["key"]["access_key_id"]
-    fake.usage_bytes_by_bucket["testuser--a"] = 1000
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 1000
     _downgrade_key(fake, store, key_id)
     assert client.post("/account/storage-cleanup-grant", headers=_user_headers()).status_code == 200
 
@@ -448,7 +450,7 @@ def test_storage_recheck_standalone_restores_without_grant(monkeypatch: pytest.M
     created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
     key_id = created["key"]["access_key_id"]
     _downgrade_key(fake, store, key_id)
-    fake.usage_bytes_by_bucket["testuser--a"] = 40
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 40
 
     resp = client.post("/account/storage-recheck", headers=_user_headers())
     assert resp.status_code == 200
@@ -531,3 +533,66 @@ def test_delete_bucket_interlock_applies_to_slugified_name(monkeypatch: pytest.M
 
     assert resp.status_code == 409
     assert "still active" in resp.json()["detail"]
+
+
+def test_create_bucket_while_enforcement_pending_mints_read_only_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An in-flight 'pending' marker counts as enforced: a fresh mint stays conservative."""
+    client, fake, store, _entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
+    first = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
+    store.set_enforced_access(first["key"]["access_key_id"], "pending")
+    resp = client.post("/buckets", json={"name": "b"}, headers=_user_headers())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["key"]["access"] == "read"
+    assert fake.account_tokens[body["key"]["access_key_id"]]["access"] == "read"
+
+
+def test_roll_key_reports_read_while_enforcement_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rolling a key whose enforcement transition is unconfirmed reports the conservative read scope."""
+    client, _fake, store, _entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
+    created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
+    store.set_enforced_access(created["key"]["access_key_id"], "pending")
+    rolled = client.post("/buckets/a/roll-key", headers=_user_headers())
+    assert rolled.status_code == 200
+    assert rolled.json()["access"] == "read"
+
+
+def test_storage_recheck_settles_a_pending_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crash-orphaned 'pending' key is re-asserted and settled by the on-demand recheck."""
+    client, fake, store, entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
+    created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
+    key_id = created["key"]["access_key_id"]
+    # Model a crashed downgrade: the Cloudflare write landed but the settling
+    # DB write never did.
+    fake.account_tokens[key_id]["access"] = "read"
+    store.set_enforced_access(key_id, "pending")
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 40
+
+    resp = client.post("/account/storage-recheck", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["is_over_quota"] is False
+    assert fake.account_tokens[key_id]["access"] == "readwrite"
+    settled_row = store.get_key(key_id)
+    assert settled_row is not None
+    assert settled_row["enforced_access"] is None
+
+
+def test_cleanup_grant_treats_a_pending_marker_as_downgraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A grant request covering only a 'pending' key still grants (and restores the key)."""
+    client, fake, store, entitlements_store, grant_store = _make_bucket_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
+    created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
+    key_id = created["key"]["access_key_id"]
+    fake.account_tokens[key_id]["access"] = "read"
+    store.set_enforced_access(key_id, "pending")
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 1000
+
+    resp = client.post("/account/storage-cleanup-grant", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "granted"
+    assert fake.account_tokens[key_id]["access"] == "readwrite"
+    restored_row = store.get_key(key_id)
+    assert restored_row is not None
+    assert restored_row["enforced_access"] is None
+    assert len(grant_store.grants_by_id) == 1

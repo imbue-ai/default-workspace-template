@@ -22,6 +22,16 @@ class _FailingConnection:
         raise duckdb.Error(f"boom-8271 while executing: {statement}")
 
 
+class _RecordingConnection:
+    """A stand-in connection that records every executed statement."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, statement: str) -> None:
+        self.statements.append(statement)
+
+
 def test_quote_sql_literal_wraps_plain_values() -> None:
     assert quote_sql_literal("analytics-metrics-dev") == snapshot("'analytics-metrics-dev'")
 
@@ -68,6 +78,22 @@ def test_create_duckdb_session_pins_the_timezone_to_utc() -> None:
     session = create_duckdb_session()
 
     assert session.execute("SELECT current_setting('TimeZone')").fetchone() == ("UTC",)
+
+
+def test_attach_postgres_readonly_disables_ctid_scans_after_attaching() -> None:
+    # The shared tiers' analytics_reader role is column-scoped on
+    # workspace_records, and reading the ctid system column needs table-level
+    # SELECT, so the session must not parallelize Postgres scans by ctid.
+    connection = _RecordingConnection()
+
+    attach_postgres_readonly(connection, alias="rsc", dsn="postgresql://x/y")
+
+    assert connection.statements == snapshot(
+        [
+            "ATTACH IF NOT EXISTS 'postgresql://x/y' AS rsc (TYPE postgres, READ_ONLY)",
+            "SET pg_use_ctid_scan = false",
+        ]
+    )
 
 
 def test_attach_helpers_wrap_duckdb_failures() -> None:

@@ -53,7 +53,6 @@ from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr_latchkey._spawn import spawn_detached_latchkey_ensure_browser
 from imbue.mngr_latchkey.additional_services import AdditionalServicesCatalogError
 from imbue.mngr_latchkey.additional_services import additional_service_registration_entries
-from imbue.mngr_latchkey.additional_services import shared_schemas_file_content
 from imbue.mngr_latchkey.encryption_key import LatchkeyEncryptionKeyPermissionError
 from imbue.mngr_latchkey.encryption_key import inject_encryption_key_into_env
 from imbue.mngr_latchkey.encryption_key import load_or_create_encryption_key
@@ -65,7 +64,6 @@ from imbue.mngr_latchkey.store import ensure_browser_log_path
 from imbue.mngr_latchkey.store import forward_events_log_path
 from imbue.mngr_latchkey.store import plugin_data_dir as _plugin_data_dir
 from imbue.mngr_latchkey.store import save_permissions
-from imbue.mngr_latchkey.store import write_shared_schemas_file
 
 # Default value for :attr:`Latchkey.latchkey_binary` -- the bare
 # command name, looked up on ``PATH`` by every spawn site via
@@ -137,7 +135,7 @@ CREDENTIALS_STORE_FILENAME: Final[str] = "credentials.json.enc"
 # the first to report the account whose credentials it injects to detent as
 # ``customMetadata.account`` -- what the per-account permission grants
 # (:mod:`imbue.mngr_latchkey.account_scopes`) read.
-LATCHKEY_MIN_VERSION: Final[str] = "3.6.0"
+LATCHKEY_MIN_VERSION: Final[str] = "3.9.0"
 
 # Fixed port that every containerized/VM/VPS agent sees on its own 127.0.0.1
 # when reaching the Latchkey gateway. A per-agent SSH reverse tunnel bridges
@@ -786,7 +784,7 @@ def _log_gateway_output_line(line: str, is_stdout: bool) -> None:
     own rotating, timestamped JSONL log -- the same ``make_jsonl_file_sink``
     every other mngr/minds log uses -- so gateway output is timestamped and
     size-rotated like the rest of the logs. ``mngr latchkey forward`` points
-    that log at ``<plugin_data_dir>/forward_logs/events.jsonl`` so the gateway's
+    that log at ``<plugin_data_dir>/events.jsonl`` so the gateway's
     (potentially chatty) output stays in one dedicated, rotated file.
     """
     del is_stdout
@@ -900,10 +898,7 @@ class Latchkey(MutableModel):
         migration that needs to inspect the credential store gets the
         latchkey directory and binary to do so.
 
-        Also materializes the shared additional-services schemas file that every
-        per-host permissions baseline references via detent's ``include`` (so a
-        granted custom scope resolves without inlining its schema per host), and
-        writes minds' state into latchkey's own ``config.json`` -- the hidden
+        Also writes this plugin's state into latchkey's own ``config.json`` -- the hidden
         built-in services and the registrations of minds' additional (custom)
         services (see :func:`merge_minds_latchkey_config`), so the gateway can
         resolve their requests and inject their credentials. This happens before
@@ -928,11 +923,6 @@ class Latchkey(MutableModel):
                 (non-zero exit, unparseable output, spawn error).
         """
         self._check_minimum_version()
-        # Materialize the shared additional-services schemas file before touching
-        # any host permissions file: every per-host baseline ``include``s it, so
-        # it must exist before the gateway evaluates a host file (and before the
-        # migration stamps the include into existing files).
-        write_shared_schemas_file(self.plugin_data_dir, shared_schemas_file_content())
         run_data_format_migrations(self.plugin_data_dir, self.latchkey_directory, self.latchkey_binary)
         _ensure_minds_latchkey_config(self.latchkey_directory)
         with self._lock:

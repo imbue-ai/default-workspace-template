@@ -6,9 +6,11 @@ from uuid import UUID
 import pytest
 
 import imbue.remote_service_connector.hosts as hosts_mod
+from imbue.remote_service_connector.testing import _ADMIN_KEY_TEST_VALUE
 from imbue.remote_service_connector.testing import _USER_STUB_EMAIL
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
+from imbue.remote_service_connector.testing import _admin_key_headers
 from imbue.remote_service_connector.testing import _make_pool_quota_test_client
 from imbue.remote_service_connector.testing import _make_pool_test_client
 from imbue.remote_service_connector.testing import _seed_entitlements_row
@@ -854,3 +856,238 @@ def test_split_box_health_output_reports_no_missing_binaries_on_a_healthy_box() 
     output = "md0 : active raid1 sda1[0] sdb1[1]\nMNGR_BOX_HEALTH_SPLIT\nswaps\nMNGR_BOX_HEALTH_SPLIT\n"
     _mdstat, _swaps, missing_binaries = hosts_mod._split_box_health_output(output)
     assert missing_binaries == []
+
+
+def _lease_body(host_name: str = "my-workspace") -> dict[str, object]:
+    return {
+        "ssh_public_key": "ssh-ed25519 AAAA testkey",
+        "host_name": host_name,
+        "attributes": {"version": "v0.1.0"},
+    }
+
+
+def test_lease_host_writes_a_metadata_only_record_stub_for_the_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lease grant inserts the workspace's ACTIVE record (no secrets) so a lease never lacks a record."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000a1"),
+        version="v0.1.0",
+        agent_id="agent-stub-a1",
+        host_id_str="host-stub-a1",
+    )
+
+    resp = client.post("/hosts/lease", json=_lease_body("stubbed-workspace"), headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert len(backend.sync_record_rows) == 1
+    stub = backend.sync_record_rows[0]
+    assert stub["user_id"] == _USER_STUB_USER_ID
+    assert stub["agent_id"] == "agent-stub-a1"
+    assert stub["host_id"] == "host-stub-a1"
+    assert stub["display_name"] == "stubbed-workspace"
+    assert stub["provider_kind"] == "imbue_cloud_testuser-example-com"
+    assert stub["state"] == "active"
+    assert stub["revision"] == 1
+    assert stub["encrypted_secrets"] is None
+    assert stub["hosting_device_id"] is None
+
+
+def test_lease_host_leaves_an_existing_record_for_the_workspace_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A workspace that already has a record keeps it: the stub insert is ON CONFLICT DO NOTHING."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000a2"),
+        version="v0.1.0",
+        agent_id="agent-stub-a2",
+        host_id_str="host-stub-a2",
+    )
+    backend.add_workspace_record(
+        user_id=_USER_STUB_USER_ID,
+        host_id="host-stub-a2",
+        agent_id="agent-stub-a2",
+        display_name="pre-existing",
+        provider_kind="docker",
+    )
+
+    resp = client.post("/hosts/lease", json=_lease_body("new-name"), headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert [row["display_name"] for row in backend.sync_record_rows] == ["pre-existing"]
+
+
+def test_lease_host_stub_is_not_written_when_the_lease_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stub rides the lease transaction: a lease that grants nothing writes no record."""
+    client, backend = _make_pool_test_client(monkeypatch)
+
+    resp = client.post("/hosts/lease", json=_lease_body(), headers=_user_headers())
+
+    assert resp.status_code == 503
+    assert backend.sync_record_rows == []
+
+
+def test_release_host_tombstones_the_workspaces_active_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Releasing a lease tombstones its client-written record in the same step as the removing flip."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_leased_workspace(
+        suffix="a3",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+        record_user_id=_USER_STUB_USER_ID_PREFIX,
+        record_revision=2,
+    )
+
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000a3/release", headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert backend.pool_rows == []
+    record = backend.sync_record_rows[0]
+    assert record["state"] == "destroyed"
+    assert record["destroyed_at"] is not None
+    assert record["revision"] == 3
+
+
+def test_release_host_deletes_a_never_written_record_stub_instead_of_tombstoning_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A record still at its lease-time stub (revision 1, no secrets, no backup bucket) has nothing to keep: no ghost tombstone."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_leased_workspace(
+        suffix="a2", leased_to_user=_USER_STUB_USER_ID_PREFIX, record_user_id=_USER_STUB_USER_ID_PREFIX
+    )
+
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000a2/release", headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert backend.pool_rows == []
+    assert backend.sync_record_rows == []
+
+
+def test_release_host_tombstones_a_revision_one_record_that_names_a_backup_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client-created record can sit at revision 1 with no secrets (metadata-only tier); its backup keeps it."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_leased_workspace(
+        suffix="b6", leased_to_user=_USER_STUB_USER_ID_PREFIX, record_user_id=_USER_STUB_USER_ID_PREFIX
+    )
+    backend.sync_record_rows[0]["backup_bucket"] = f"{_USER_STUB_USER_ID_PREFIX}--agent-b6"
+
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000b6/release", headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert backend.pool_rows == []
+    record = backend.sync_record_rows[0]
+    assert record["state"] == "destroyed"
+    assert record["revision"] == 2
+    assert record["backup_bucket"] == f"{_USER_STUB_USER_ID_PREFIX}--agent-b6"
+
+
+def test_release_host_tombstone_survives_a_teardown_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The destroy intent (removing + tombstone) is durable even when the VM teardown fails."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.slice_teardown_should_fail = True
+    backend.add_leased_workspace(
+        suffix="a4",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+        record_user_id=_USER_STUB_USER_ID_PREFIX,
+        record_revision=2,
+    )
+
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000a4/release", headers=_user_headers())
+
+    assert resp.status_code == 500
+    assert backend.pool_rows[0].status == "removing"
+    assert backend.sync_record_rows[0]["state"] == "destroyed"
+
+
+def test_release_host_retry_of_a_removing_row_lands_a_missed_tombstone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row left 'removing' by a release that failed before retiring its record still gets a tombstone on retry."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_removing_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000a5"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+        agent_id="agent-rel-a5",
+        host_id_str="host-rel-a5",
+    )
+    backend.add_workspace_record(
+        user_id=_USER_STUB_USER_ID_PREFIX, host_id="host-rel-a5", agent_id="agent-rel-a5", revision=2
+    )
+
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000a5/release", headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert backend.pool_rows == []
+    assert backend.sync_record_rows[0]["state"] == "destroyed"
+
+
+def test_release_host_leaves_other_users_records_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tombstone is scoped to the leasing user's record for the workspace."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_leased_workspace(suffix="a6", leased_to_user=_USER_STUB_USER_ID_PREFIX, record_user_id="someone-else")
+
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000a6/release", headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert backend.sync_record_rows[0]["state"] == "active"
+
+
+@pytest.mark.parametrize(
+    ("stderr_text", "is_absent"),
+    [
+        ('FATA[0000] instance "mngr-slice-x" not found', True),
+        ("Error: disk mngr-slice-x-data does not exist", True),
+        ('level=fatal msg="Instance Not Found"', True),
+        ("bash: limactl: command not found", False),
+        ("permission denied", False),
+        ("", False),
+    ],
+)
+def test_is_lima_target_absent_error_recognizes_limactl_missing_target_messages(
+    stderr_text: str, is_absent: bool
+) -> None:
+    assert hosts_mod._is_lima_target_absent_error(stderr_text) is is_absent
+
+
+def test_admin_release_workspace_requires_the_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000a7"),
+        version="v0.1.0",
+        leased_to_user="another-user",
+    )
+
+    resp = client.post("/admin/workspaces/00000000-0000-0000-0000-0000000000a7/release", headers=_user_headers())
+
+    assert resp.status_code in (401, 403)
+    assert backend.pool_rows[0].status == "leased"
+
+
+def test_admin_release_workspace_releases_any_users_lease(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The operator release runs the owner's exact chain, without the ownership check."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    row = backend.add_leased_workspace(
+        suffix="a8", leased_to_user="anotheruser", record_user_id="anotheruser", record_revision=2
+    )
+    # A stopped row is exactly the case the pool-destroy tooling cannot claim.
+    row.status = "stopped"
+    row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
+
+    resp = client.post("/admin/workspaces/00000000-0000-0000-0000-0000000000a8/release", headers=_admin_key_headers())
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+    assert len(backend.slice_teardowns) == 1
+    assert backend.sync_record_rows[0]["state"] == "destroyed"
+
+
+def test_admin_release_workspace_of_a_missing_row_is_already_released(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+
+    resp = client.post("/admin/workspaces/00000000-0000-0000-0000-0000000000a9/release", headers=_admin_key_headers())
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "already_released"

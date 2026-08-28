@@ -4,11 +4,13 @@ import math
 import time
 from concurrent.futures import Future
 from pathlib import Path
+from typing import Final
 
 from loguru import logger
 
 from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
 from imbue.imbue_common.model_update import to_update
+from imbue.imbue_common.pure import pure
 from imbue.mngr.api.create import bootstrap_backend_for_host_creation
 from imbue.mngr.api.create import create as api_create
 from imbue.mngr.api.create import resolve_target_host
@@ -64,6 +66,27 @@ REDUCER_INPUTS_DIRNAME = ".mapreduce_inputs"
 # Label key the framework stamps on every launched agent to classify it
 # within the run. Value is an ``AgentKind`` string.
 ROLE_LABEL_KEY = "mapreduce_role"
+
+# Fraction of a run's requested hosts that may fail to create before the run is
+# abandoned. Agents are placed round-robin over whatever hosts came back, so a
+# collapsed pool silently multiplies how many agents share each surviving host,
+# and their worktrees then exhaust that host's disk (on modal, its volume's
+# inode quota) in ways that surface as unrelated test failures.
+_MAX_HOST_CREATION_FAILURE_RATIO: Final[float] = 1.0 / 3.0
+
+
+class HostPoolCreationError(MngrError):
+    """Raised when too many of a run's hosts failed to create for the run to be worth running."""
+
+    ...
+
+
+@pure
+def is_host_pool_failure_ratio_exceeded(created_host_count: int, requested_host_count: int) -> bool:
+    if requested_host_count <= 0:
+        return False
+    failed_host_count = requested_host_count - created_host_count
+    return failed_host_count / requested_host_count >= _MAX_HOST_CREATION_FAILURE_RATIO
 
 
 def _make_mapper_identity(
@@ -406,6 +429,11 @@ def _create_host_pool(
                 logger.warning("Failed to create host: {}", exc)
 
     logger.info("Created {} host(s) for agent placement", len(hosts))
+    if is_host_pool_failure_ratio_exceeded(len(hosts), host_count):
+        raise HostPoolCreationError(
+            f"Only {len(hosts)} of the {host_count} requested hosts were created, so each one would take "
+            f"several times its intended share of this run's agents. Aborting the run."
+        )
     return hosts
 
 
