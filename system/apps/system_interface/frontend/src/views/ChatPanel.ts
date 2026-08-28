@@ -936,7 +936,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           // either rendering of it, which is the same reason it belongs to neither face.
           isStillBeingCreated(agentId)
             ? null
-            : m("div", { class: "composer-under-bar" }, [
+            : m("div", { class: "chat-under-bar" }, m("div", { class: "composer-under-bar" }, [
                 m(ModelBar, { agentId }),
                 m("div", { class: "composer-under-bar-actions" }, [
                   m(TerminalViewToggle, {
@@ -946,7 +946,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     },
                   }),
                 ]),
-              ]),
+              ])),
         ],
       );
     },
