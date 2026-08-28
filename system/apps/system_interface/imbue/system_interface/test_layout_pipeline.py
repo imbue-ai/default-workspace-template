@@ -257,9 +257,7 @@ def test_open_terminal_returns_ref_via_stdout_and_broadcasts_panel_id(
     # forward_port pipeline.
     state_dir = sandbox / "data" / ".state"
     state_dir.mkdir(parents=True)
-    (state_dir / "apps.toml").write_text(
-        '[[apps]]\nname = "terminal"\nurl = "http://localhost:9000/terminal"\n'
-    )
+    (state_dir / "apps.toml").write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:9000/terminal"\n')
 
     client_queue = broadcaster.register()
     broadcaster.set_client_info(client_queue, "client-1", "project-1", "desktop")

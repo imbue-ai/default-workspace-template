@@ -63,8 +63,8 @@ function allByClass(node: unknown, className: string): AnyVnode[] {
   });
 }
 
-function queuedMessage(queued_id: string, content: string): QueuedMessage {
-  return { queued_id, content, timestamp: "2026-08-07T00:00:00.000Z" };
+function queuedMessage(queued_id: string, content: string, is_sending = false): QueuedMessage {
+  return { queued_id, content, timestamp: "2026-08-07T00:00:00.000Z", is_sending };
 }
 
 describe("renderQueuedMessages", () => {
@@ -165,5 +165,34 @@ describe("renderQueuedMessages", () => {
     await pending;
     // Settled -> the button is live again.
     expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);
+  });
+
+  // A published entry is not necessarily a PARKED one. The backend flags an entry it is about
+  // to type, or is typing, as ``is_sending`` -- agy's send to an idle agent, codex's
+  // shoulder-tap resend. Those bubbles already render as "Sending…"; the group chrome around
+  // them was the only thing still claiming they were queued.
+  it("renders no queued-group chrome when every entry is sending", () => {
+    mocks.queued = [queuedMessage("q1", "beep", true)];
+
+    const rendered = renderQueuedMessages("agent-1");
+
+    expect(findByClass(rendered, "queued-header")).toBeUndefined();
+    expect(findByClass(rendered, "queued-action--flush")).toBeUndefined();
+    expect(findByClass(rendered, "queued-group")).toBeUndefined();
+    expect(renderedText(rendered)).not.toContain("Queued messages");
+    // Still visible, and still reading as Sending -- suppressing the chrome must not
+    // suppress the message (contract A1a).
+    expect(renderedText(rendered)).toContain("beep");
+    expect(renderedText(rendered)).toContain("Sending");
+  });
+
+  it("still shows the chrome when only some entries are sending", () => {
+    mocks.queued = [queuedMessage("q1", "beep", true), queuedMessage("q2", "boop")];
+
+    const rendered = renderQueuedMessages("agent-1");
+
+    expect(findByClass(rendered, "queued-header")).toBeDefined();
+    expect(findByClass(rendered, "queued-action--flush")).toBeDefined();
+    expect(renderedText(rendered)).toContain("Queued messages");
   });
 });

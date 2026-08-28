@@ -5,6 +5,7 @@ import os
 import queue
 import shutil
 import signal
+import tomllib
 import threading
 import time
 from datetime import datetime
@@ -281,9 +282,7 @@ def test_read_apps_reads_the_program_field(agent_manager: AgentManager, tmp_path
     assert apps[1].program == ""
 
 
-def test_read_apps_carries_probed_liveness_across_a_reread(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
+def test_read_apps_carries_probed_liveness_across_a_reread(agent_manager: AgentManager, tmp_path: Path) -> None:
     """Re-reading the registry (a registration, an icon change) must not flash
     a stopped app back to running until the next probe lands."""
     toml_file = tmp_path / "apps.toml"
@@ -291,8 +290,7 @@ def test_read_apps_carries_probed_liveness_across_a_reread(
     agent_manager._read_apps(toml_file)
     with agent_manager._lock:
         agent_manager._apps = [
-            app.model_copy_update(to_update(app.field_ref().is_running, False))
-            for app in agent_manager._apps
+            app.model_copy_update(to_update(app.field_ref().is_running, False)) for app in agent_manager._apps
         ]
 
     agent_manager._read_apps(toml_file)
@@ -1216,6 +1214,26 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
     # The chat carries user_created so the OOM launch wrapper puts it in the
     # dynamic chat band rather than the least-protected worker/unclassified band.
     assert "user_created=true" in argv
+
+
+def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
+    """Each harness's ``[agent_types.<harness>]`` sends its launch through the OOM band
+    wrapper, naming its own binary.
+
+    A harness with no ``command`` runs unbanded: earlyoom then sheds it by raw kernel
+    score instead of the user/worker tiering, so it can take a user's chat before a
+    worker's build subprocess. That is not loud -- nothing fails, the agent just becomes
+    disproportionately likely to be killed -- so it is pinned here rather than left to be
+    noticed. Driven off ``HarnessType`` so a newly registered harness fails this until it
+    is wired up, which is exactly how codex and pi went unbanded.
+    """
+    settings = tomllib.loads((Path(__file__).parents[5] / ".mngr" / "settings.toml").read_text())
+    agent_types = settings["agent_types"]
+    for harness in HarnessType:
+        command = agent_types[harness.value].get("command", "")
+        assert "oom_priority/bin/agent_oom_launch.py" in command, f"{harness} launches unbanded"
+        # The wrapper consumes argv[1] as the binary to exec, so it must actually be there.
+        assert command.split()[-1], f"{harness} names the wrapper with no binary to exec"
 
 
 def test_chat_create_argv_carries_no_launch_settings() -> None:
@@ -2653,7 +2671,7 @@ def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> Co
 
 
 def test_codex_model_options_is_none_without_a_cache_or_a_sidecar(agent_manager: AgentManager) -> None:
-    # No in-memory set and no sidecar on disk -> empty (the chip goes logo-only).
+    # No in-memory set and no sidecar on disk -> empty (the chip renders nothing).
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
     session = agent_manager._build_session("agent-1", HarnessType.CODEX)
     assert session.switch_options() == ()

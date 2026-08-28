@@ -28,6 +28,13 @@ from imbue.system_interface.agent_discovery import AgentInfo
 # Fanned out to the event queues (and so to the browser) and to the activity tracker.
 OnEventsCallback = Callable[[str, list[dict[str, Any]]], None]
 
+# Sends one message to the harness, returning whether it was accepted. Bound by the
+# composition root to the manager's send path (which resolves the agent's location).
+FlushSendCallback = Callable[[str], bool]
+
+# Whether the agent's process is currently alive -- see ``set_flush_hooks``.
+IsAliveCallback = Callable[[], bool]
+
 # Called with the full queued-message snapshot each time it changes. Harness-
 # agnostic wire shape (a list of ``{queued_id, content, timestamp}`` dicts); the
 # only harness-specific code is the populator that produces it (see
@@ -122,3 +129,50 @@ class AgentSessionWatcher(ABC):
     def notify_idle(self) -> list[dict[str, Any]]:
         """Apply the working->IDLE backstop and return the resulting snapshot (empty by default)."""
         return []
+
+    def take_unclaimed_queue(self) -> tuple[str, tuple[str, ...]]:
+        """Remove and return the queue entries no delivery has claimed, as one block.
+
+        Stop's return path, for a harness that holds the queue itself. It exists instead of
+        ``clear_queue`` because clearing cannot distinguish the entries stop accounted for from
+        ones the user sent while the cancel was settling, and wiping the latter leaves them in
+        no state at all (contract A1). Entries a delivery HAS claimed are deliberately left:
+        that send may still land, and returning them too would make one message both Delivered
+        and Returned. Empty by default.
+        """
+        return "", ()
+
+    def take_whole_queue(self) -> tuple[str, tuple[str, ...]]:
+        """Remove and return every queue entry, claimed included -- the restart path.
+
+        A restart kills the agent process, so an in-flight send dies with it and its entries
+        can be returned without risking a double. Taking them is mandatory: the shared restart
+        drain clears the queue as it goes, so anything left is destroyed unaccounted. Empty by
+        default.
+        """
+        return "", ()
+
+    def claim_queue_for_tap(self) -> tuple[str, tuple[str, ...], int]:
+        """Claim the queue on a shoulder-tap's behalf: returns (block, claimed ids, generation).
+
+        Claiming is what greys the tap button for the duration of the tap's own run, so a
+        second tap cannot arrive and deliver a second cancel key. Empty by default.
+        """
+        return "", (), 0
+
+    def release_tap_claim(self, claimed: tuple[str, ...], generation: int) -> None:
+        """Hand a tap's claim back unsettled, without charging a delivery attempt. No-op by default."""
+
+    def set_flush_hooks(self, send: "FlushSendCallback", is_alive: "IsAliveCallback") -> None:
+        """Give a watcher the two capabilities it needs to DELIVER its own queue. No-op by default.
+
+        Only a harness that holds the queue on the agent's behalf needs these -- antigravity,
+        whose parked messages live invisibly inside its TUI, so nothing else can deliver them.
+        Every other harness's queue is consumed by the harness itself and needs no sender.
+
+        ``is_alive`` is not optional politeness: mngr's text send AUTO-STARTS a stopped agent,
+        and the working->IDLE signal cannot distinguish "turn finished" from "process died". A
+        flush that skipped this check would resurrect a stopped agent and deliver its queue,
+        which the contract forbids outright ("NEVER auto-sent on resume"; "the queue is empty
+        whenever the agent is stopped").
+        """

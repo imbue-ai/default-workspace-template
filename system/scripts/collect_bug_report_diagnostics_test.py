@@ -26,9 +26,9 @@ import pytest
 
 _SCRIPT_PATH = Path(__file__).parent / "collect_bug_report_diagnostics.py"
 
-# A supervisord.conf in the shape the workspace writes: every service wrapped in
-# oom_tag_service.py, user-created apps passing the literal band "user", and one
-# built-in (cron) with no wrapper at all.
+# A supervisord.conf in the realistic shape the workspace writes. The collector
+# only consumes it via ``supervisorctl -c`` for the report's metadata, so the
+# programs' commands are never parsed.
 _FIXTURE_SUPERVISORD_CONF = """\
 [supervisord]
 logfile=/var/log/supervisor/supervisord.log
@@ -98,6 +98,15 @@ def _write_log(log_dir: Path, name: str, *, mtime: float, content: str = "") -> 
     return path
 
 
+def _stamp_seconds_ago(age_seconds: float) -> str:
+    """An ISO-8601 ``Z`` timestamp that many seconds before now, as transcripts carry them."""
+    return (
+        datetime.fromtimestamp(time.time() - age_seconds, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
 def _chat_events(marker: str, *, age_seconds: float = 60.0, source: str = "claude") -> str:
     """One conversation's JSONL, carrying ``marker`` and a timestamp of that age.
 
@@ -105,15 +114,10 @@ def _chat_events(marker: str, *, age_seconds: float = 60.0, source: str = "claud
     user_activity_time is unpopulated on real agents), and ``marker`` is what a
     content assertion looks for inside the archived member.
     """
-    stamp = (
-        datetime.fromtimestamp(time.time() - age_seconds, tz=timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
     return (
         json.dumps(
             {
-                "timestamp": stamp,
+                "timestamp": _stamp_seconds_ago(age_seconds),
                 "type": "user_message",
                 "source": f"{source}/common_transcript",
                 "seq": marker,
@@ -124,37 +128,31 @@ def _chat_events(marker: str, *, age_seconds: float = 60.0, source: str = "claud
 
 
 def _mngr_stub_for_chats(tmp_path: Path, chats: Mapping[str, str]) -> Path:
-    """An mngr stub answering for exactly these ``agent name -> events`` chats."""
-    return _write_mngr_stub(
-        tmp_path,
-        agents=tuple((name, "", "") for name in chats),
-        events_by_agent=chats,
-    )
+    """An mngr stub answering for exactly these ``agent name -> events`` conversations."""
+    return _write_mngr_stub(tmp_path, agents=tuple(chats), events_by_agent=chats)
 
 
 def _write_mngr_stub(
     tmp_path: Path,
     *,
-    agents: Sequence[tuple[str, str, str]] = (),
+    agents: Sequence[str] = (),
     events_by_agent: Mapping[str, str] | None = None,
     exit_code: int = 0,
 ) -> Path:
     """Write a stub standing in for the workspace's mngr.
 
-    The collector asks mngr two things -- which agents are chats, and what was
-    said in one -- so the stub answers exactly those two shapes: the pipe
-    template ``{name}|{type}|{labels.is_primary}|{labels.agent_created}`` for
-    ``list``, and raw JSONL for ``event``. ``agents`` entries are
-    ``(name, is_primary, agent_created)`` rendered into that template.
+    The collector asks mngr two things -- which agents exist, and what was said
+    in one -- so the stub answers exactly those two shapes: the pipe template
+    ``{name}|{name}@{host.name}.{host.provider_name}`` for ``list``, and raw
+    JSONL for ``event``. The event target arrives as the pinned
+    ``name@host.provider`` address the listing handed out, so the stub keys its
+    canned events by the name in front of the ``@``.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, events in (events_by_agent or {}).items():
         (events_dir / agent_name).write_text(events, encoding="utf-8")
-    listing = "".join(
-        f"{name}|chat|{is_primary}|{agent_created}\n"
-        for name, is_primary, agent_created in agents
-    )
+    listing = "".join(f"{name}|{name}@stub-host.local\n" for name in agents)
     listing_path = tmp_path / "stub-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
     argv_log = tmp_path / "stub-argv.log"
@@ -168,7 +166,8 @@ def _write_mngr_stub(
         "  exit 0\n"
         "fi\n"
         'if [ "$1" = "event" ]; then\n'
-        f'  f="{events_dir}/$2"\n'
+        '  agent_name="${2%%@*}"\n'
+        f'  f="{events_dir}/$agent_name"\n'
         '  if [ -f "$f" ]; then cat "$f"; fi\n'
         "  exit 0\n"
         "fi\n"
@@ -261,9 +260,17 @@ def _write_sleeping_stub_scan_gate(
     )
 
 
-def _zip_from_payload(payload: dict[str, Any]) -> zipfile.ZipFile:
-    """The archive a payload carries, decoded back out of its base64."""
-    return zipfile.ZipFile(io.BytesIO(base64.b64decode(payload["zip"], validate=True)))
+def _zip_from_stdout(stdout: str) -> zipfile.ZipFile:
+    """The archive main() printed: exactly one line, the base64 of a zip."""
+    assert stdout.endswith("\n") and stdout.count("\n") == 1, "the collector must print exactly one line"
+    return zipfile.ZipFile(io.BytesIO(base64.b64decode(stdout.strip(), validate=True)))
+
+
+def _notes_lines(archive: zipfile.ZipFile) -> list[str]:
+    """The collection-notes member's lines; empty when the archive carries none."""
+    if "collection-notes.txt" not in archive.namelist():
+        return []
+    return archive.read("collection-notes.txt").decode("utf-8").splitlines()
 
 
 # --- Caps and contract constants ---
@@ -289,90 +296,75 @@ def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
 
 def test_collector_caps_match_the_documented_limits() -> None:
     module = _load_collector()
-    assert module.CONTRACT_VERSION == 1
     assert module.MAX_LOG_FILES == 100
     assert module.MAX_LINES_PER_LOG == 200
+    assert module.MIN_TRANSCRIPT_COUNT == 5
+    assert module.LOG_RECENCY_WINDOW_SECONDS == 24 * 60 * 60
 
 
 def test_select_log_files_caps_at_the_newest_hundred_files(tmp_path: Path) -> None:
     log_dir = tmp_path / "supervisor"
     over_cap_count = 120
+    now = time.time()
+    # All inside the day window (the recency filter has its own test); one
+    # second apart so newest-first is a strict order.
     for index in range(over_cap_count):
-        _write_log(log_dir, f"svc-{index:03d}-stderr.log", mtime=1_000_000 + index)
+        _write_log(log_dir, f"svc-{index:03d}-stderr.log", mtime=now - index)
     module = _load_collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files(None)
+    selected = module.select_log_files()
 
     assert len(selected) == module.MAX_LOG_FILES
     expected_newest_first = [
-        str(log_dir / f"svc-{index:03d}-stderr.log")
-        for index in range(
-            over_cap_count - 1, over_cap_count - 1 - module.MAX_LOG_FILES, -1
-        )
+        str(log_dir / f"svc-{index:03d}-stderr.log") for index in range(module.MAX_LOG_FILES)
     ]
     assert selected == expected_newest_first
 
 
-# --- User-app log exclusion ---
-
-
-def test_load_user_program_names_finds_only_the_programs_tagged_with_the_user_band(
+def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     tmp_path: Path,
 ) -> None:
-    """The literal ``user`` band argument is how the workspace marks its own apps.
-
-    ``xvfb`` tags itself by name and ``cron`` has no wrapper; neither is a user
-    app, though both would be misread as one by a band-table lookup.
-    """
-    conf = tmp_path / "supervisord.conf"
-    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
-    module = _load_collector(supervisord_conf=conf)
-
-    assert module.load_user_program_names() == {"geopolitical-dashboard"}
-
-
-def test_load_user_program_names_is_none_when_the_config_cannot_be_read(
-    tmp_path: Path,
-) -> None:
-    module = _load_collector(supervisord_conf=tmp_path / "no-such-supervisord.conf")
-
-    assert module.load_user_program_names() is None
-
-
-def test_select_log_files_drops_user_app_logs_and_keeps_system_ones(
-    tmp_path: Path,
-) -> None:
+    """A service that has been silent for over a day is history, not diagnostics."""
     log_dir = tmp_path / "supervisor"
-    _write_log(log_dir, "system_interface-stderr.log", mtime=1_000_004)
-    _write_log(log_dir, "system_interface-stdout.log", mtime=1_000_003)
-    _write_log(log_dir, "terminal-stderr.log", mtime=1_000_002)
-    _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=1_000_001)
-    # Only system_interface's stdout is collected; every other program
-    # contributes stderr alone.
-    _write_log(log_dir, "terminal-stdout.log", mtime=1_000_005)
+    now = time.time()
+    _write_log(log_dir, "system_interface-stderr.log", mtime=now - 60)
+    _write_log(log_dir, "terminal-stderr.log", mtime=now - 23 * 60 * 60)
+    _write_log(log_dir, "xvfb-stderr.log", mtime=now - 25 * 60 * 60)
     module = _load_collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files({"geopolitical-dashboard"})
+    selected = module.select_log_files()
 
     assert [os.path.basename(path) for path in selected] == [
         "system_interface-stderr.log",
-        "system_interface-stdout.log",
         "terminal-stderr.log",
     ]
 
 
-def test_select_log_files_keeps_every_log_when_the_classification_is_unavailable(
+# --- No ownership or stream filtering ---
+
+
+def test_select_log_files_keeps_every_programs_logs_both_streams(
     tmp_path: Path,
 ) -> None:
+    """No log is filtered by owner or stream: an app's log -- user-created or
+    built-in, stdout or stderr, supervisord's own included -- can carry the bug,
+    so all of them ride (still day-bounded, capped, and secret-scanned)."""
     log_dir = tmp_path / "supervisor"
-    _write_log(log_dir, "system_interface-stderr.log", mtime=1_000_001)
-    _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=1_000_000)
+    now = time.time()
+    _write_log(log_dir, "supervisord.log", mtime=now)
+    _write_log(log_dir, "system_interface-stderr.log", mtime=now - 1)
+    _write_log(log_dir, "system_interface-stdout.log", mtime=now - 2)
+    _write_log(log_dir, "terminal-stdout.log", mtime=now - 3)
+    _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=now - 4)
     module = _load_collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files(None)
+    selected = module.select_log_files()
 
     assert [os.path.basename(path) for path in selected] == [
+        "supervisord.log",
         "system_interface-stderr.log",
+        "system_interface-stdout.log",
+        "terminal-stdout.log",
         "geopolitical-dashboard-stderr.log",
     ]
 
@@ -380,22 +372,24 @@ def test_select_log_files_keeps_every_log_when_the_classification_is_unavailable
 # --- Chat selection ---
 
 
-def test_chat_agents_exclude_the_services_agent_and_agent_spawned_workers(
+def test_every_agent_is_a_transcript_candidate(
     tmp_path: Path,
 ) -> None:
-    """The workspace's own marks decide what a chat is, mirroring system_interface.
-
-    is_primary is the services agent; agent_created is a worker another agent
-    spawned (caretaker runs, automations). Neither is a conversation a person
-    had, and an agent carrying neither mark is one.
+    """No agent is filtered out: chat, background worker, or the primary services
+    agent -- any of their conversations can carry the bug. An agent with no
+    transcript simply contributes no member downstream.
     """
     stub = _write_mngr_stub(
         tmp_path,
-        agents=(("chatty", "", ""), ("system-services", "true", ""), ("worker", "", "true")),
+        agents=("chatty", "system-services", "worker"),
     )
     collector = _load_collector(mngr_binary=stub)
 
-    assert collector.list_chat_agents(5.0) == ["chatty"]
+    assert collector.list_agents(5.0) == [
+        ("chatty", "chatty@stub-host.local"),
+        ("system-services", "system-services@stub-host.local"),
+        ("worker", "worker@stub-host.local"),
+    ]
 
 
 def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
@@ -409,7 +403,7 @@ def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
     """
     stub = _write_mngr_stub(
         tmp_path,
-        agents=(("chatty", "", ""),),
+        agents=("chatty",),
         events_by_agent={"chatty": _transcript_events("hello", source="claude")},
     )
     collector = _load_collector(mngr_binary=stub)
@@ -447,7 +441,7 @@ def test_the_transcript_query_asks_for_conversations_and_excludes_the_converter_
 
 
 def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> None:
-    stub = _write_mngr_stub(tmp_path, agents=(("chatty", "", ""),))
+    stub = _write_mngr_stub(tmp_path, agents=("chatty",))
     collector = _load_collector(mngr_binary=stub)
 
     assert collector.collect_transcript_members(5.0) == []
@@ -456,43 +450,74 @@ def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> 
 def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
     tmp_path: Path,
 ) -> None:
-    """A bug is rarely about exactly one conversation."""
-    now = time.time()
-
-    def stamp(offset: float) -> str:
-        return (
-            datetime.fromtimestamp(now - offset, tz=timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-
+    """A bug is rarely about exactly one conversation: a busy window sends more
+    than the floor, and a chat outside the window past the floor stays home."""
+    # Six chats inside the two-hour window (one more than the floor) and one
+    # outside it: every recent chat rides, the idle one does not.
+    recent_names = [f"busy-{index}" for index in range(6)]
+    events_by_agent = {
+        name: _transcript_events(name, timestamp=_stamp_seconds_ago(60 * (index + 1)))
+        for index, name in enumerate(recent_names)
+    }
+    events_by_agent["idle"] = _transcript_events("idle", timestamp=_stamp_seconds_ago(10_000))
     stub = _write_mngr_stub(
         tmp_path,
-        agents=(("older", "", ""), ("newer", "", ""), ("idle", "", "")),
-        events_by_agent={
-            "older": _transcript_events("a", timestamp=stamp(3_000)),
-            "newer": _transcript_events("b", timestamp=stamp(60)),
-            "idle": _transcript_events("c", timestamp=stamp(10_000)),
-        },
+        agents=tuple([*recent_names, "idle"]),
+        events_by_agent=events_by_agent,
     )
     collector = _load_collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
     assert [name for name, _, _ in members] == [
-        "chats/newer-claude.jsonl",
-        "chats/older-claude.jsonl",
+        f"chats/busy-{index}-claude.jsonl" for index in range(6)
     ]
 
 
-def test_an_idle_workspace_still_carries_its_single_most_recent_chat(
+def test_a_quiet_window_still_sends_the_five_newest_chats(
+    tmp_path: Path,
+) -> None:
+    """The floor: at least MIN_TRANSCRIPT_COUNT chats ride when the workspace has
+    them, however quiet the window -- a bug filed from a quiet workspace still
+    needs its recent history."""
+    # One chat inside the window, six outside it: the window's one plus the
+    # next-newest four make the floor of five; the two oldest stay home.
+    events_by_agent = {
+        "fresh": _transcript_events("fresh", timestamp=_stamp_seconds_ago(60)),
+        **{
+            f"stale-{index}": _transcript_events(
+                f"stale-{index}", timestamp=_stamp_seconds_ago(10_000 + 100 * index)
+            )
+            for index in range(6)
+        },
+    }
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=tuple(events_by_agent),
+        events_by_agent=events_by_agent,
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members] == [
+        "chats/fresh-claude.jsonl",
+        "chats/stale-0-claude.jsonl",
+        "chats/stale-1-claude.jsonl",
+        "chats/stale-2-claude.jsonl",
+        "chats/stale-3-claude.jsonl",
+    ]
+
+
+def test_an_idle_workspace_still_carries_its_most_recent_chats(
     tmp_path: Path,
 ) -> None:
     """Nothing was touched in the window, and a stale workspace is exactly where
-    the conversation is hardest to reconstruct from anything else."""
+    the conversation is hardest to reconstruct from anything else. Fewer chats
+    than the floor means all of them ride."""
     stub = _write_mngr_stub(
         tmp_path,
-        agents=(("stale", "", ""), ("staler", "", "")),
+        agents=("stale", "staler"),
         events_by_agent={
             "stale": _transcript_events("recent-ish", timestamp="2026-08-01T12:00:00Z"),
             "staler": _transcript_events("ancient", timestamp="2025-01-01T12:00:00Z"),
@@ -502,7 +527,10 @@ def test_an_idle_workspace_still_carries_its_single_most_recent_chat(
 
     members = collector.collect_transcript_members(5.0)
 
-    assert [name for name, _, _ in members] == ["chats/stale-claude.jsonl"]
+    assert [name for name, _, _ in members] == [
+        "chats/stale-claude.jsonl",
+        "chats/staler-claude.jsonl",
+    ]
 
 
 def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
@@ -510,10 +538,10 @@ def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
 ) -> None:
     """A failing mngr must read as no transcript, never as a crash: the collector
     asks mngr precisely so it does not re-derive this from the files itself."""
-    stub = _write_mngr_stub(tmp_path, agents=(("chatty", "", ""),), exit_code=3)
+    stub = _write_mngr_stub(tmp_path, agents=("chatty",), exit_code=3)
     collector = _load_collector(mngr_binary=stub)
 
-    assert collector.list_chat_agents(5.0) == []
+    assert collector.list_agents(5.0) == []
     assert collector.collect_transcript_members(5.0) == []
 
 
@@ -611,7 +639,7 @@ def test_scan_targets_drops_only_the_file_a_finding_names(tmp_path: Path) -> Non
 
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": None, "/tmp/transcript.txt": "secrets_found"}
+    assert verdicts == {"/tmp/logs.txt": None, "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND}
 
 
 @pytest.mark.parametrize(
@@ -643,8 +671,8 @@ def test_scan_targets_disqualifies_every_file_when_a_scanner_did_not_complete(
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": "scanner_unavailable",
-        "/tmp/transcript.txt": "scanner_unavailable",
+        "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
+        "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
     }
 
 
@@ -662,8 +690,8 @@ def test_scan_targets_drops_every_file_when_a_report_could_not_be_parsed(
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": "secrets_found",
-        "/tmp/transcript.txt": "secrets_found",
+        "/tmp/logs.txt": module.NOTE_SECRETS_FOUND,
+        "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND,
     }
 
 
@@ -681,8 +709,8 @@ def test_scan_targets_drops_every_file_when_a_finding_names_none_of_them(
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": "secrets_found",
-        "/tmp/transcript.txt": "secrets_found",
+        "/tmp/logs.txt": module.NOTE_SECRETS_FOUND,
+        "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND,
     }
 
 
@@ -695,7 +723,7 @@ def test_scan_targets_drops_every_file_when_a_failed_scan_said_nothing(
 
     verdicts = module.scan_targets(["/tmp/logs.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": "scanner_unavailable"}
+    assert verdicts == {"/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE}
 
 
 def test_scan_targets_fails_closed_when_the_scan_gate_is_absent(tmp_path: Path) -> None:
@@ -704,7 +732,7 @@ def test_scan_targets_fails_closed_when_the_scan_gate_is_absent(tmp_path: Path) 
 
     verdicts = module.scan_targets(["/tmp/logs.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": "scanner_unavailable"}
+    assert verdicts == {"/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE}
 
 
 def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> None:
@@ -715,20 +743,20 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 0.5)
 
     assert verdicts == {
-        "/tmp/logs.txt": "scanner_unavailable",
-        "/tmp/transcript.txt": "scanner_unavailable",
+        "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
+        "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
     }
 
 
 # --- End-to-end output shape ---
 
 
-def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_scan(
+def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The clean path: exactly one JSON line (no sentinels -- those belong to the
-    invoking shell), carrying one zip with the logs member and each recent chat
-    as its own member, newest chat first."""
+    """The clean path: exactly one line of base64, decoding to one zip with the
+    logs member and each recent chat as its own member, newest chat first, and
+    no notes member -- nothing was withheld, so there is nothing to say."""
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
     log_dir = tmp_path / "supervisor"
@@ -756,14 +784,7 @@ def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_sca
 
     module.main(["--logs", "--transcript"])
 
-    out = capsys.readouterr().out
-    assert out.endswith("\n") and out.count("\n") == 1, (
-        "the collector must print exactly one line"
-    )
-    payload = json.loads(out)
-    assert payload["contract_version"] == 1
-    assert payload["omissions"] == {}
-    with _zip_from_payload(payload) as archive:
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.testzip() is None
         assert archive.namelist() == [
             "metadata.json",
@@ -778,7 +799,6 @@ def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_sca
         )
         metadata = json.loads(archive.read("metadata.json").decode("utf-8"))
         assert set(metadata) == {"workspace", "host_health", "services"}
-        assert metadata["services"]["are_user_services_identified"] is True
         assert '"seq": "agent-newer"' in archive.read(
             "chats/agent-newer-codex.jsonl"
         ).decode("utf-8")
@@ -802,19 +822,17 @@ def test_main_reports_no_chat_transcript_when_the_agent_tree_is_empty(
 
     module.main(["--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "contract_version": 1,
-        "omissions": {"transcript": "no_chat_transcript"},
-    }
-    assert "zip" not in payload
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == ["recent chats: no chat transcripts exist in this workspace"]
 
 
-def test_main_omits_an_unrequested_content_type_from_both_zip_and_omissions(
+def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """--logs alone must not mention the transcript anywhere, even in a workspace
-    that has chats -- an unrequested type simply does not appear."""
+    that has chats -- an unrequested type appears in neither the members nor the
+    notes."""
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
     log_dir = tmp_path / "supervisor"
@@ -837,10 +855,8 @@ def test_main_omits_an_unrequested_content_type_from_both_zip_and_omissions(
 
     module.main(["--logs"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["omissions"] == {}
-    with _zip_from_payload(payload) as archive:
-        # Logs only: metadata plus the service logs, and no chats member at all.
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        # Logs only: metadata plus the service logs -- no chats, and no notes.
         assert archive.namelist() == ["metadata.json", "logs/system_interface.log"]
 
 
@@ -867,12 +883,9 @@ def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
 
     module.main(["--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "contract_version": 1,
-        "omissions": {"transcript": "secrets_found"},
-    }
-    assert "zip" not in payload
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == ["recent chats: withheld: the secret scan reported findings"]
 
 
 def test_main_scans_the_member_name_a_chat_will_be_archived_under(
@@ -894,11 +907,9 @@ def test_main_scans_the_member_name_a_chat_will_be_archived_under(
 
     module.main(["--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "contract_version": 1,
-        "omissions": {"transcript": "secrets_found"},
-    }
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == ["recent chats: withheld: the secret scan reported findings"]
 
 
 def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
@@ -930,11 +941,11 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
 
     module.main(["--logs", "--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["omissions"] == {"workspace_logs": "secrets_found"}
-    with _zip_from_payload(payload) as archive:
-        # Every logs member goes, metadata included; the clean chat still ships.
-        assert archive.namelist() == ["chats/agent-clean-claude.jsonl"]
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        # Every logs member goes, metadata included; the clean chat still
+        # ships, and the notes say what happened to the logs.
+        assert archive.namelist() == ["chats/agent-clean-claude.jsonl", "collection-notes.txt"]
+        assert _notes_lines(archive) == ["workspace logs: withheld: the secret scan reported findings"]
 
 
 def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
@@ -961,15 +972,12 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
 
     module.main(["--logs", "--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "contract_version": 1,
-        "omissions": {
-            "workspace_logs": "scanner_unavailable",
-            "transcript": "scanner_unavailable",
-        },
-    }
-    assert "zip" not in payload
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == [
+            "workspace logs: withheld: the secret scanner could not run, so nothing it was to check was released",
+            "recent chats: withheld: the secret scanner could not run, so nothing it was to check was released",
+        ]
 
 
 # --- The size cap ---
@@ -1001,9 +1009,7 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
 
     module.main(["--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["omissions"] == {}
-    with _zip_from_payload(payload) as archive:
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == [
             "chats/agent-c-claude.jsonl",
             "chats/agent-b-claude.jsonl",

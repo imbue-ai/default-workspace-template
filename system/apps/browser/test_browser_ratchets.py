@@ -44,7 +44,12 @@ def test_prevent_time_sleep() -> None:
     # poll in the Flask request thread (confirms xclip has claimed the X selection before
     # injecting Ctrl+V, so paste success is truthful). All are real hardware/display/daemon
     # settles, not event-loop sleeps.
-    rc.check_time_sleep(_DIR, snapshot(6))
+    # +3 for chrome_launcher.py, which owns the Chromium process directly now that
+    # browser-use is gone: the debug-port poll (Chromium publishes DevToolsActivePort
+    # asynchronously after exec), and two waits in reap_orphan while a SIGTERM/SIGKILL
+    # takes effect. All three run in a worker thread via asyncio.to_thread, so none of
+    # them blocks the event loop -- they are process settles, like the Xvfb one above.
+    rc.check_time_sleep(_DIR, snapshot(9))
 
 
 def test_prevent_global_keyword() -> None:
@@ -95,7 +100,21 @@ def test_prevent_broad_exception_catch() -> None:
     #    connection and must never die on a transient X error -- one guards opening the display
     #    (a failure just disables the guard) and one guards each tick (logged at debug, loop
     #    continues). ConnectionClosedError is caught narrowly above these.
-    rc.check_broad_exception_catch(_DIR, snapshot(25))
+    #  * +5 for the CDP layer that replaced browser-use, all `# noqa: BLE001` boundaries
+    #    where a raise would be worse than a degraded read: 2 in cdp_client.py (the read
+    #    loop treats ANY failure as "the socket is gone", and `ping` turns any failure into
+    #    a liveness verdict rather than an exception -- crash detection must return a bool,
+    #    never throw), 2 in cdp_proxy.py (one bad agent session must not take the whole
+    #    server down; a dead upstream must answer discovery with 502 rather than 500), and
+    #    1 in session.py's page-count helper, which backs the proxy's last-page guard and
+    #    must fail open rather than wedge the agent's socket.
+    #  * +1 in session.py's start(), around the fleet's CDP connect. websockets' handshake
+    #    errors and the JSON/KeyError from resolving the debug URL are all OUTSIDE
+    #    _BROWSER_ERRORS, so without this they escape the launch task entirely -- stranding
+    #    the browser in `init` while it holds its name and a slot against the fleet cap
+    #    forever, with Chromium and Xvfb still running and the viewer stuck on "Starting".
+    #    It re-raises as BrowserStartupError, which is what actually tears the browser down.
+    rc.check_broad_exception_catch(_DIR, snapshot(31))
 
 
 def test_prevent_builtin_exception_raises() -> None:
@@ -118,7 +137,8 @@ def test_prevent_inline_imports() -> None:
     # +1 (same MISFIRE shape) for telemetry.py's `try: import psutil except ImportError`
     # optional-dependency guard -- a module-level import the regex flags only because the
     # try body is indented; the resource sampler degrades gracefully when psutil is absent.
-    rc.check_inline_imports(_DIR, snapshot(3))
+    # Down from 3: two of the flagged imports were browser-use's, and went with it.
+    rc.check_inline_imports(_DIR, snapshot(1))
 
 
 def test_prevent_relative_imports() -> None:
@@ -129,7 +149,7 @@ def test_prevent_relative_imports() -> None:
 
 
 def test_prevent_asyncio_import() -> None:
-    # browser_use, the Playwright async API, and the per-browser ownership state
+    # The CDP client, the CDP proxy, and the per-browser ownership state
     # machine are all asyncio-native and run on ONE background event loop. Four files
     # rely on asyncio: session.py (the state machine + run loop), loop_bridge.py (the
     # single sync<->async quarantine loop -- the one place run.py's old asyncio usage
@@ -140,7 +160,11 @@ def test_prevent_asyncio_import() -> None:
     # +1 for telemetry_watch.py, the standalone terminal dashboard: it's an async
     # ``websockets`` client that reads the firehose and renders concurrently -- a separate
     # CLI process, not daemon code, where asyncio is the natural fit.
-    rc.check_asyncio_import(_DIR, snapshot(5))
+    # +3 for the CDP layer that replaced browser-use: cdp_client.py (the fleet's own
+    # connection), cdp_proxy.py (the agent's gated endpoint -- a websockets server), and
+    # cdp_proxy_test.py which drives them. Both modules live on the SAME single background
+    # loop behind loop_bridge; this is not a second event loop.
+    rc.check_asyncio_import(_DIR, snapshot(8))
 
 
 def test_prevent_dataclasses_import() -> None:

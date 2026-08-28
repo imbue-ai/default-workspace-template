@@ -63,7 +63,11 @@ def test_prevent_broad_exception_catch() -> None:
     # auth._run_apply_in_background: same thread-boundary shape --
     # anything escaping must surface as the FAILED restart phase in the
     # sign-in modal instead of dying silently in a daemon thread.
-    rc.check_broad_exception_catch(_DIR, snapshot(4))
+    # Bumped again for antigravity's flush worker in watcher._run_flush_worker:
+    # same thread-boundary shape. The worker is the ONLY thing that ever delivers
+    # a held message, so an escaping exception would strand every queued message
+    # for the life of the process; it logs and keeps looping instead.
+    rc.check_broad_exception_catch(_DIR, snapshot(5))
 
 
 def test_prevent_base_exception_catch() -> None:

@@ -1,0 +1,1 @@
+Realigned the vendored mngr snapshot (`system/vendor/mngr/`) to main's current copy while merging main into this branch. The permission-state changes themselves ship from the mngr side (imbue-ai/mngr-internal#596) and reach this snapshot through the normal release sync; the dev flow overlays the live mngr checkout regardless.

@@ -42,15 +42,26 @@ case "$tool_name" in
         ;;
 esac
 
-# For Bash calls, skip if the command is invoking tk (creating/managing
-# steps).
-if [[ "$tool_name" == "Bash" ]]; then
+# Shell calls are judged on the COMMAND, since the tool name alone says nothing about whether
+# the work is substantive. An empty tool_name is treated as a shell call: agy reaches this
+# through a `bash` shim, where every call is a shell call by construction.
+if [[ -z "$tool_name" || "$tool_name" == "Bash" ]]; then
     command=$(echo "$input" | jq -r '.tool_input.command // empty')
-    case "$command" in
-        tk\ *|*/tk\ *|*/ticket\ *|*tk\ *)
-            exit 0
-            ;;
-    esac
+
+    # Managing steps is not work. Anchored on a separator so `echo gtk stuff` is not mistaken
+    # for a tk call, and so a bare `ticket close s1` (no "tk" substring at all) still counts --
+    # the previous `*tk\ *` glob got both of those wrong.
+    if echo "$command" | grep -qE '(^|[;&|(]|[[:space:]])(tk|ticket)[[:space:]]'; then
+        exit 0
+    fi
+
+    # Read-only shell work: looking around should be as free as claude's Read/Grep/Glob, which
+    # are exempted by name above. Without this the nudge fires on `ls` and `cat` -- and on the
+    # harnesses reached through a shell (agy, codex code mode) that is ALL it would ever fire
+    # on, since their editing tools never reach this script.
+    if echo "$command" | grep -qE '^[[:space:]]*(cat|ls|grep|rg|find|wc|pwd|which|file|stat|du|df|tree|head|tail|git[[:space:]]+(status|diff|log|show|branch))([[:space:]]|$)'; then
+        exit 0
+    fi
 fi
 
 # If there's no tickets directory yet, skip -- the agent hasn't started

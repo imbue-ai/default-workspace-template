@@ -138,9 +138,7 @@ def submit_setup_token_code() -> Response:
     except (ValueError, TypeError) as e:
         return _error_response(f"Invalid request body: {e}")
     try:
-        status = service.submit_setup_token_code(
-            body.session_id, body.code, welcome_resender.check_and_resend_welcome
-        )
+        status = service.submit_setup_token_code(body.session_id, body.code, welcome_resender.check_and_resend_welcome)
     except auth.AuthStatusUnavailableError:
         return _error_response(_UNCONFIRMED_DETAIL, status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:
@@ -235,9 +233,7 @@ def submit_oauth_login_code() -> Response:
     except (ValueError, TypeError) as e:
         return _error_response(f"Invalid request body: {e}")
     try:
-        status = service.submit_oauth_login_code(
-            body.session_id, body.code, welcome_resender.check_and_resend_welcome
-        )
+        status = service.submit_oauth_login_code(body.session_id, body.code, welcome_resender.check_and_resend_welcome)
     except auth.AuthStatusUnavailableError:
         return _error_response(_UNCONFIRMED_DETAIL, status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:

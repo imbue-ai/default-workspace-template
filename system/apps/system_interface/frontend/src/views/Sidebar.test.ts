@@ -78,6 +78,14 @@ describe("placeMenu", () => {
     // Too wide to flip (the left side would start at -2), so it clamps instead.
     expect(placeMenu(anchor, { width: 992, height: 400 }, VIEWPORT, "right")).toEqual({ left: 6, top: 394 });
   });
+
+  it("stays flush with an anchor that sits nearer the edge than the margin", () => {
+    // The switcher's anchor is the rail card, whose border sits 4px from the
+    // window edge. The left floor must not push the menu right of it -- the
+    // flush left border is the point of anchoring there.
+    const anchor = { left: 4, right: 244, top: 4, bottom: 39, width: 240 };
+    expect(placeMenu(anchor, { width: 256, height: 200 }, VIEWPORT, "below")).toEqual({ left: 4, top: 39 });
+  });
 });
 
 describe("pinnedAppNamesForView", () => {

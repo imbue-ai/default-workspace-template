@@ -1,9 +1,9 @@
 /**
- * The composer model bar: [Logo][Model][Effort][Fast].
+ * The composer model bar: [Model][Effort][Fast].
  *
  * A self-contained component so it can sit wherever the layout wants it (its own
  * row below the chat input, next to the terminal/auth actions). Everything it
- * shows is data -- the static per-harness catalog (logo, options, efforts, switch
+ * shows is data -- the static per-harness catalog (options, efforts, switch
  * mode) from HarnessCatalog.ts, plus the agent's live `model_choice` pushed onto
  * the agents store. Which slots show is decided purely by the matched catalog
  * option (effort iff the model declares efforts; fast iff it supports fast); the
