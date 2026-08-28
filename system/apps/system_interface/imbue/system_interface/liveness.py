@@ -157,12 +157,17 @@ def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None
 def probe_all_app_liveness(probe_targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:
     """Derive ``is_running`` for every registry row in one sweep.
 
-    One batched supervisord RPC answers for all supervised rows, instead of one
-    unix-socket round trip per row per sweep. A row falls back to the TCP probe
-    when supervisord cannot answer at all, does not know the row's program, or
-    the row is unsupervised (no program).
+    At most one batched supervisord RPC answers for all supervised rows,
+    instead of one unix-socket round trip per row per sweep (and none at all
+    when no row is supervised -- the sweep runs on a timer regardless of
+    registry contents, so an idle registry must not cost an RPC per pass).
+    A row falls back to the TCP probe when supervisord cannot answer at all,
+    does not know the row's program, or the row is unsupervised (no program).
     """
-    is_running_by_program = fetch_supervisor_program_states(supervisor_socket_path())
+    is_any_row_supervised = any(program for _name, program, _url in probe_targets)
+    is_running_by_program = (
+        fetch_supervisor_program_states(supervisor_socket_path()) if is_any_row_supervised else None
+    )
     is_running_by_name: dict[str, bool] = {}
     for name, program, url in probe_targets:
         supervised_state = is_running_by_program.get(program) if is_running_by_program is not None else None
