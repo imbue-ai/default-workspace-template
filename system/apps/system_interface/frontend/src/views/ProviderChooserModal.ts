@@ -489,10 +489,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         type: "button",
         class: css.PICKER_BACKDROP,
         "aria-label": "Close provider menu",
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
+        // The shared helper, which this file already uses for the modal's own backdrop. A
+        // click fires wherever the press ENDED, so selecting text inside the menu and
+        // releasing past its edge read as "dismiss" -- which is the whole reason that helper
+        // exists, and this backdrop had been written without it.
+        ...backdropDismissAttrs(() => {
           keyMenuOpen = false;
-        },
+        }),
       }),
       m(
         "div",
