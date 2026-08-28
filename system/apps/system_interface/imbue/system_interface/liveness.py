@@ -12,6 +12,7 @@ import os
 import socket
 import urllib.parse
 import xmlrpc.client
+from collections.abc import Sequence
 from http.client import HTTPConnection
 from pathlib import Path
 from typing import Final
@@ -111,6 +112,66 @@ def stop_supervisor_program(program: str, socket_path: Path) -> None:
         raise SupervisorProgramActionError(f"supervisord refused to stop {program!r}: {e.faultString}") from e
     except (OSError, xmlrpc.client.ProtocolError, xmlrpc.client.ResponseError) as e:
         raise SupervisorProgramActionError(f"could not reach supervisord to stop {program!r}: {e}") from e
+
+
+def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None:
+    """Every supervised program's up/down state in one getAllProcessInfo RPC.
+
+    Returns None when supervisord cannot be reached (or answers with something
+    unmarshallable), so the caller falls back to per-row TCP probes rather than
+    presenting a guess as supervisord's answer. Keys are bare program names --
+    the same names ``forward_port.py --program`` registers and the per-program
+    RPCs use (this config defines no supervisord groups).
+    """
+    try:
+        # ``object`` collapses the marshallable union the proxy stub infers, so
+        # the isinstance checks below are the narrowing the reads rely on.
+        process_infos: object = _supervisor_proxy(socket_path).supervisor.getAllProcessInfo()
+    except xmlrpc.client.Fault as e:
+        _loguru_logger.debug("Supervisord refused getAllProcessInfo: {}", e.faultString)
+        return None
+    except (OSError, xmlrpc.client.ProtocolError, xmlrpc.client.ResponseError) as e:
+        _loguru_logger.debug("Failed to reach supervisord for getAllProcessInfo: {}", e)
+        return None
+    if not isinstance(process_infos, list):
+        return None
+    is_running_by_program: dict[str, bool] = {}
+    for process_info in process_infos:
+        if not isinstance(process_info, dict):
+            continue
+        # Read the two keys by iteration: the proxy stub's inferred dict
+        # variants make every keyed access an overload mismatch, while an
+        # argument-free ``items()`` walk types cleanly on all of them.
+        program_name = ""
+        statename = ""
+        for key, value in process_info.items():
+            if key == "name":
+                program_name = str(value)
+            elif key == "statename":
+                statename = str(value)
+        if program_name:
+            is_running_by_program[program_name] = statename in _RUNNING_STATE_NAMES
+    return is_running_by_program
+
+
+def probe_all_app_liveness(probe_targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:
+    """Derive ``is_running`` for every registry row in one sweep.
+
+    One batched supervisord RPC answers for all supervised rows, instead of one
+    unix-socket round trip per row per sweep. A row falls back to the TCP probe
+    when supervisord cannot answer at all, does not know the row's program, or
+    the row is unsupervised (no program) -- the same per-row semantics as
+    :func:`probe_app_liveness`.
+    """
+    is_running_by_program = fetch_supervisor_program_states(supervisor_socket_path())
+    is_running_by_name: dict[str, bool] = {}
+    for name, program, url in probe_targets:
+        supervised_state = is_running_by_program.get(program) if is_running_by_program is not None else None
+        if program and supervised_state is not None:
+            is_running_by_name[name] = supervised_state
+        else:
+            is_running_by_name[name] = probe_tcp_url(url)
+    return is_running_by_name
 
 
 def probe_supervisor_program(program: str, socket_path: Path) -> bool | None:
