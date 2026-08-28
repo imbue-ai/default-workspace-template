@@ -45,6 +45,7 @@ from imbue.system_interface import projects
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import account_dir
 from imbue.system_interface.accounts import claim_first_chat
+from imbue.system_interface.accounts import release_first_chat
 from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
@@ -1277,7 +1278,13 @@ class AgentManager:
         # `/welcome`. Claimed here rather than by the caller, so every path that starts a chat
         # is covered, and on demand rather than at boot, because a chat needs a provider
         # account and a fresh workspace has none.
-        if claim_first_chat():
+        #
+        # The claim is one-shot and there is no second chance at it, so a create that goes on
+        # to FAIL must give it back -- otherwise a workspace whose first create died on a bad
+        # credential or an OOM never delivers `/welcome` at all, and nothing in the app can
+        # reset it. Released on every failure path in `_run_creation`.
+        is_first_chat = claim_first_chat()
+        if is_first_chat:
             extra_role_templates = (*extra_role_templates, "first")
 
         cmd = _build_chat_create_command(
@@ -1307,7 +1314,9 @@ class AgentManager:
             labels["project"] = project_label
         labels["account"] = account.id
         canonical_name = canonical_agent_name(display_name)
-        self._launch_creation_thread(agent_id, canonical_name, cmd, Path(work_dir), log_queue, labels, harness)
+        self._launch_creation_thread(
+            agent_id, canonical_name, cmd, Path(work_dir), log_queue, labels, harness, is_first_chat
+        )
 
         return CreatedChatAgent(agent_id=agent_id, name=canonical_name, display_name=display_name)
 
@@ -1320,11 +1329,12 @@ class AgentManager:
         log_queue: queue.Queue[str | None],
         labels: dict[str, str],
         harness: HarnessType,
+        is_first_chat: bool = False,
     ) -> None:
         """Start a background thread to run agent creation and stream logs."""
         self._creation_cg.start_new_thread(
             target=self._run_creation,
-            args=(agent_id, agent_name, cmd, work_dir, log_queue, labels, harness),
+            args=(agent_id, agent_name, cmd, work_dir, log_queue, labels, harness, is_first_chat),
             name=f"create-{agent_id[:8]}",
             is_checked=False,
         )
@@ -1347,6 +1357,7 @@ class AgentManager:
         log_queue: queue.Queue[str | None],
         labels: dict[str, str],
         harness: HarnessType,
+        is_first_chat: bool = False,
     ) -> None:
         """Run mngr create in the background, capture output, and always emit completion.
 
@@ -1387,6 +1398,12 @@ class AgentManager:
                 error = str(e)
                 _loguru_logger.opt(exception=e).error("Error creating agent {}", agent_id)
 
+            # The workspace's one `/welcome` claim goes back if this create did not survive;
+            # see `claim_first_chat`. Outside the lock it guards nothing, and it takes the
+            # index lock of its own.
+            if not success and is_first_chat:
+                release_first_chat()
+
             with self._lock:
                 self._proto_agents.pop(agent_id, None)
                 self._log_queues.pop(agent_id, None)
@@ -1411,6 +1428,8 @@ class AgentManager:
             success = False
             error = f"Unexpected {type(e).__name__}: {e}"
             _loguru_logger.opt(exception=e).error("Unexpected error creating agent {}", agent_id)
+            if is_first_chat:
+                release_first_chat()
             # The proto-agent entry may still be sitting in _proto_agents if
             # the exception fired before the cleanup block. Try once more,
             # safely, before we broadcast completion.
