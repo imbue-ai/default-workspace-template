@@ -39,6 +39,7 @@ from imbue.system_interface import member_locations
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailedError
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
@@ -54,7 +55,6 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.harnesses.claude import auth_endpoints
-from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
@@ -816,15 +816,31 @@ def _send_message_endpoint(agent_id: str) -> Response:
         return _agent_not_found_response(agent_id)
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
-    agent_manager: AgentManager = get_state().agent_manager
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     message_id = send_message_request.message_id or uuid4().hex
+
+    # Ensure the watcher exists BEFORE the send, as the tap and stop endpoints already do. For
+    # a harness that holds its own queue (antigravity), the watcher owns the only thread that
+    # can ever deliver it -- so a send arriving here first (a headless client, or the first
+    # request after a restart) would otherwise enqueue a message with nothing running to drain
+    # it, and decide "is a turn open?" from an unpublished reading.
+    state.get_or_create_watcher(agent_info)
 
     # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
     # records the message as *Sending* around mngr's blocking delivery (greying the tap button
     # for the duration); the codex session hands it to its live ledger, passing ``message_id``
     # only as the correlation token the committed item echoes back (Fix 2).
     session = agent_manager.get_or_create_session(agent_info)
-    outcome = session.send(send_message_request.message, message_id)
+    try:
+        outcome = session.send(send_message_request.message, message_id)
+    except SendFailedError as send_failure:
+        # The harness said why it refused, in words written for the person who has to fix it
+        # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
+        # than the generic failure below -- it is the only thing here the user can act on.
+        # The kind travels beside the detail so the chat can decide what to offer: trying again
+        # can clear a blocked input and cannot help when there is nothing left to talk to.
+        return _json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
     if outcome is SendOutcome.NOT_READY:
         failure = ErrorResponse(
             detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
@@ -944,7 +960,9 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
 
     identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
     result = resolver.switch(
-        identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
+        identity,
+        frozenset(req.axes),
+        lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line) is None,
     )
     if not result.ok:
         detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
@@ -1232,10 +1250,11 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
 
     if block:
         agent_manager: AgentManager = get_state().agent_manager
-        is_sent = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
-        if not is_sent:
-            error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
-            return _json_response(error.model_dump(), status_code=500)
+        resend_failure = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        if resend_failure is not None:
+            # The harness said why; passing that on rather than a generic sentence is the whole
+            # point of carrying it this far.
+            return _json_response({"detail": resend_failure.reason, "kind": resend_failure.kind}, status_code=500)
 
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
@@ -1280,8 +1299,10 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     outcome = agent_manager.get_or_create_session(agent_info).shoulder_tap(
         agent_info,
         watcher,
-        press_chord=lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
-        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
+        press_chord=lambda: agent_manager.press_key_chord_on_agent(
+            AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
+        ),
+        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
     )
     if outcome.error_detail is not None:
         error = ErrorResponse(detail=outcome.error_detail)
@@ -1318,7 +1339,9 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
             watcher,
             restart_process,
             settle_activity,
-            lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+            lambda: agent_manager.press_key_chord_on_agent(
+                AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
+            ),
         )
     except AgentRestartError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
