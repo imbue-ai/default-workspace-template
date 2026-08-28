@@ -79,9 +79,8 @@ safelist it with `@source inline("...")`.
   xterm, scrollbars.
 - **Rendered content you don't render per-element**: markdown output
   (`.markdown-content …`), where classes can't be attached per element.
-- **Pseudo-element/keyframe machines**: `@keyframes`, the `.spinner`, the
-  `.toggle` — where the drawing lives in `::before/::after` or animation
-  state.
+- **Pseudo-element/keyframe machines**: `@keyframes`, the `.spinner` — where
+  the drawing lives in `::before/::after` or animation state.
 - **Contextual rules over shared markup**: e.g. `.queued-message
 .message-user-bubble { opacity: … }` — the bubble markup comes from shared
   code, so context classes are the mechanism. The chat message tree

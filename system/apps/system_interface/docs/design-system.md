@@ -19,6 +19,20 @@ document is the durable hand-off so any agent can pick the work up cold.
 
 ### Progress log
 
+- **Toggle primitive folded into Button (a selectable ghost) — DONE.** The
+  `.toggle` CSS block (`--on/--readonly/--inline`) is deleted; an on/off
+  icon-toggle is now `m(Button, {variant: "ghost", icon, sm, selected,
+  readonly})`. Button gained the `readonly` option — non-interactive without
+  `disabled` (resting look, default cursor, no hover/press, element stays
+  enabled so its tooltip works; the component marks it `aria-disabled`), the
+  model bar's read-only convention — and every variant's hover is now also
+  guarded off `[aria-disabled]` (previously only `:disabled`). Deliberate
+  normalization at the fast-mode control: 32px/8px-radius bespoke box → the
+  shared 28px `sm` icon Button (6px radius, accent border when selected, press
+  translate). The fast-mode modal's inline illustration reuses the exported
+  `BTN_SELECTED` tint. (The login/permission disclosure "toggles" are
+  text/caret expanders, not on/off switches, and stay as they are.)
+
 - **Primitives grab-bag dissolved (one file per primitive) — DONE.**
   `views/primitives.ts` is gone: the modal shell recipe (`MODAL_*_CLASS`) now
   lives beside the component that emits it in `views/Modal.ts`, the input and

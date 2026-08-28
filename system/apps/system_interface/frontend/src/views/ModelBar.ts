@@ -18,6 +18,7 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
+import { Button } from "./Button";
 import { clampDropdownLeft } from "./dropdown-position";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
@@ -481,19 +482,24 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             })
           : null;
 
+      // The on/off control is the shared Button as a selectable ghost;
+      // `readonly` (not `disabled`, which would kill the tooltip) is the
+      // read-only treatment, same as the triggers above.
       const fastSlot = matched.supports_fast
         ? m(
-            "button",
+            Button,
             {
-              type: "button",
-              class: `toggle${currentFast ? " toggle--on" : ""}` + (interactive ? "" : " toggle--readonly"),
-              // Not `disabled` for read-only (see the trigger above: disabled kills the tooltip).
+              variant: "ghost",
+              icon: true,
+              sm: true,
+              selected: currentFast,
+              readonly: !interactive,
+              extra: "model-fast-toggle shrink-0",
               ...hoverTooltipAttrs(
                 !interactive ? READ_ONLY_TOOLTIP : currentFast ? "Disable fast mode" : "Enable fast mode",
               ),
               "aria-label": currentFast ? "Disable fast mode" : "Enable fast mode",
               "aria-pressed": currentFast ? "true" : "false",
-              "aria-disabled": interactive ? undefined : "true",
               onclick: () => {
                 if (!interactive) return;
                 const nextIdentity: ModelIdentity = {

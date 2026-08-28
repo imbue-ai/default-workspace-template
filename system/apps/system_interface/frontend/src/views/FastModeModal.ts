@@ -14,7 +14,7 @@ import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, Modal } from "./Modal";
 import { getAgentById } from "../models/AgentManager";
 import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
 import { icon } from "./icons";
-import { Button } from "./Button";
+import { BTN_SELECTED, Button } from "./Button";
 
 const FAST_MODE_DOC_URL = "https://code.claude.com/docs/en/fast-mode";
 
@@ -93,10 +93,20 @@ export function FastModeModal(): m.Component {
           ]),
           m("p", { class: MODAL_MESSAGE_CLASS }, [
             "You can toggle Fast Mode at any time with the ",
-            // A copy of the composer's toggle, so "the button" has something to
-            // point at. Decorative: hidden from assistive tech, which gets the
-            // sentence on its own.
-            m("span.toggle.toggle--on.toggle--inline", { "aria-hidden": "true" }, m.trust(icon("zap", { size: 16 }))),
+            // A non-interactive copy of the composer's fast-mode button in its
+            // on state (the Button selected tint), sized down to sit in running
+            // text, so "the button" has something to point at. Decorative:
+            // hidden from assistive tech, which gets the sentence on its own.
+            m(
+              "span",
+              {
+                class:
+                  "fast-mode-modal-toggle-glyph inline-flex h-[26px] w-[26px] items-center justify-center " +
+                  `rounded-md border align-[-0.45em] ${BTN_SELECTED}`,
+                "aria-hidden": "true",
+              },
+              m.trust(icon("zap", { size: 16 })),
+            ),
             " button",
           ]),
         ],
