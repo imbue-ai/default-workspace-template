@@ -50,7 +50,18 @@ def test_lanes_carry_every_key_the_chooser_reads() -> None:
     lanes = response.get_json()["lanes"]
     assert lanes, "the chooser renders nothing without lanes"
     for lane in lanes:
-        assert set(lane) == {"id", "provider_name", "subtitle", "harness", "methods", "key_providers"}
+        # `harness_label` rides alongside `harness`: the id is what the frontend switches on and
+        # the label is what the sign-in header shows ("Runs on Claude Code").
+        assert set(lane) == {
+            "id",
+            "provider_name",
+            "subtitle",
+            "harness",
+            "harness_label",
+            "methods",
+            "key_providers",
+        }
+        assert lane["harness_label"], "the sign-in header has nothing to name the harness with"
         for method in lane["methods"]:
             assert set(method) == {"id", "label", "description", "signup_url", "shape", "is_primary"}
         for key_provider in lane["key_providers"]:
