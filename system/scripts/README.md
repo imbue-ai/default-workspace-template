@@ -9,7 +9,7 @@ Provisioning and utility scripts:
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
   `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi
   spawns their `*_check.py` checkers from `.pi/extensions/`. See
-  `POLICY_HOOKS.md` for what each one enforces.
+  `tool-call-policies.md` for what each one enforces.
 - Claude Code features with no counterpart on the other harnesses
   (`claude_status_line.sh`, `claude_update_plugin.sh`), wired in
   `.claude/settings.json`.

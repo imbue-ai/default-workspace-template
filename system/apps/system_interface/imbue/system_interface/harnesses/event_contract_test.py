@@ -11,6 +11,9 @@ event's keys checked against the shared requirement.
 import json
 from typing import Any
 
+from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedStep
+from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedToolCall
+from imbue.system_interface.harnesses.antigravity.session_parser import parse_step as agy_parse_step
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines as claude_parse_lines
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines as codex_parse_lines
 from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record
@@ -250,10 +253,7 @@ def test_codex_error_marker_survives_the_permission_rebuild() -> None:
     head with "...", so probing the truncated output would render a failed script as a
     clean success."""
     filler = "x" * 3000
-    output = (
-        "Script failed: boom\n" + filler
-        + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
-    )
+    output = "Script failed: boom\n" + filler + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
     event = codex_parse_lines(
         {
             "timestamp": "2026-01-01T00:00:05Z",
@@ -266,3 +266,35 @@ def test_codex_error_marker_survives_the_permission_rebuild() -> None:
     assert event["permission_request"]["request_id"] == "req-9"
     assert event["is_error"] is True
     assert not event["output"].startswith("Script failed")
+
+
+def test_antigravity_events_satisfy_the_contract() -> None:
+    """agy decodes from a protobuf ``steps`` row rather than JSONL, so its fixture is built
+    from :class:`DecodedStep` directly -- the decoder has its own tests. One step per core
+    type; the tool step yields BOTH the call and (once terminal) its result."""
+    base = DecodedStep(
+        conv_id="c1",
+        idx=0,
+        step_type_name="USER_INPUT",
+        status_name="DONE",
+        source_name="USER_EXPLICIT",
+        created_at="2026-01-01T00:00:00Z",
+        is_terminal=True,
+    )
+    user_step = base.model_copy_update(("user_text", "hi"))
+    assistant_step = base.model_copy_update(
+        ("idx", 1), ("step_type_name", "PLANNER_RESPONSE"), ("assistant_text", "hello")
+    )
+    tool_step = base.model_copy_update(
+        ("idx", 2),
+        ("step_type_name", "RUN_COMMAND"),
+        (
+            "tool_call",
+            DecodedToolCall(
+                call_id="t1", name="run_command", args='{"CommandLine": "ls"}', tool_summary="", tool_action=""
+            ),
+        ),
+        ("tool_result_text", "a.txt"),
+    )
+    events = [event for step in (user_step, assistant_step, tool_step) for event in agy_parse_step(step)]
+    _assert_contract(events, "antigravity")

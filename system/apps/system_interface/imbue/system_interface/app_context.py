@@ -8,6 +8,7 @@ from loguru import logger
 from pydantic import PrivateAttr
 
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
@@ -121,6 +122,17 @@ class SystemInterfaceState(MutableModel):
                 lambda snapshot: self.agent_manager.update_queued_messages(agent_info.id, snapshot)
             )
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
+            # A harness that holds the queue on its agent's behalf (antigravity) also needs to
+            # DELIVER it, which needs the manager's send path and a liveness check. No-op for
+            # every other harness, whose queue its own harness consumes.
+            watcher.set_flush_hooks(
+                # `is None` is the delivery test: send_message_to_agent returns the FAILURE
+                # (or None on success), while FlushSendCallback is declared to return True for
+                # delivered. Passing the result straight through inverts it, and antigravity's
+                # flush would count every failed send as delivered and drop the queue.
+                lambda text: self.agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
+                lambda: self.agent_manager.is_agent_alive(agent_info.id),
+            )
             self.watchers[agent_info.id] = watcher
 
         # Seed transcript-derived activity signals BEFORE starting the watcher

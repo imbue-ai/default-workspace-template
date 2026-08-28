@@ -22,15 +22,15 @@ import {
 } from "@minds/embed-contract";
 import * as embedContract from "@minds/embed-contract";
 
-// These types postdate the vendored embed_contract snapshot (they arrive with the next mngr
-// release sync; this repo deliberately does not edit system/vendor by hand). A named import of
-// a missing export fails the rollup build, so probe the namespace and fall back to the literal.
-// Until the sync lands, each side simply drops the (to it) unknown type before any handler
-// runs; the moment the sync lands the feature goes live with no code change here.
-export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved" =
-  "PERMISSION_REQUEST_RESOLVED" in embedContract
-    ? embedContract.PERMISSION_REQUEST_RESOLVED
-    : "minds:permission-request-resolved";
+// These types can postdate the vendored embed_contract snapshot (they arrive
+// with the next mngr release sync; this repo does not edit system/vendor by
+// hand). A named import of a missing export fails the rollup build, so probe
+// the namespace and fall back to the literal. A stale vendored endpoint's
+// validator drops the (to it) unknown type until the sync lands -- permission
+// cards keep the transcript-driven flip in the meantime, and share settings
+// simply goes live with no code change here once the sync lands.
+export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
+  "PERMISSION_RESOLUTIONS" in embedContract ? embedContract.PERMISSION_RESOLUTIONS : "minds:permission-resolutions";
 // Workspace -> embedder: open the minds shell's Share tab focused on one app.
 // Payload: { serviceName }.
 export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
@@ -62,7 +62,7 @@ function getEndpoint(): ContractEndpoint {
       handlers: {
         [CLOSE_ACTIVE_TAB]: (message) => handlerByType[CLOSE_ACTIVE_TAB]?.(message),
         [OPEN_AI_KEYS_ACK]: (message) => handlerByType[OPEN_AI_KEYS_ACK]?.(message),
-        [PERMISSION_REQUEST_RESOLVED]: (message) => handlerByType[PERMISSION_REQUEST_RESOLVED]?.(message),
+        [PERMISSION_RESOLUTIONS]: (message) => handlerByType[PERMISSION_RESOLUTIONS]?.(message),
       },
     });
   }

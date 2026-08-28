@@ -79,6 +79,10 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   display_body?: string;
   // permission_resolution only: the verdict written onto the earlier card.
   resolution?: "granted" | "denied" | "error";
+  // permission_resolution only: the resolved request's own id, when the notice
+  // carries one (absent for a notice recorded before request-id embedding shipped,
+  // which the walk instead correlates by arrival order -- see turn-grouping.ts).
+  request_id?: string;
   // The activity path's signal that no model reply follows this message (model-bar
   // traffic, framework injections). Read by the backend's own activity derivation;
   // carried on the wire for completeness.

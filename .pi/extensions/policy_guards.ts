@@ -10,7 +10,7 @@
 // reason on stderr. `match` keeps a checker off the commands it has nothing to say
 // about, which matters because every entry here costs a process per bash tool call.
 //
-// See system/scripts/POLICY_HOOKS.md for what each one enforces and how the three
+// See system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md for what each one enforces and how the harnesses
 // harnesses reach it.
 
 import { spawnSync } from "node:child_process";

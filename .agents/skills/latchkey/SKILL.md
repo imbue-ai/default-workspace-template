@@ -169,7 +169,8 @@ routed to the user's computer so they will fail if it's offline.
 - Return code, stdout and stderr are passed back from curl
 - Unless the user explicitly asks about it, don't discuss Latchkey or the technical details (it's easy for the user to get confused).
 - Do not ask the user to run Latchkey commands.
-- Unless the user explicitly asks you to do that, do not directly call `latchkey auth browser` or `latchkey auth browser-prepare`. (The Minds app is supposed to do that as part of the permission request approval process.)
+- Do not explicitly call `latchkey auth` commands! They are run automatically by the Minds app on the user's computer as part of the permission request approval process. Even for services that do not support browser auth, the Minds app usually provides an interface for the user to paste manually obtained credentials (e.g. an API key).
+
 
 ## Currently supported services
 

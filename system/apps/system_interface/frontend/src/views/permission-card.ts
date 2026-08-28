@@ -14,7 +14,7 @@
 import m from "mithril";
 import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
-import { PERMISSION_REQUEST_RESOLVED, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
+import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
@@ -42,87 +42,8 @@ export interface PermissionRequestDetails {
   access: string | null;
 }
 
-/** The gateway generates every request_id as a dash-stripped UUIDv4 (see
- *  `generateRequestId` in the latchkey extension's permission_requests.mjs). The
- *  strict parse doesn't need this -- JSON structure already proves the value is
- *  the response's request_id -- but the truncation recovery below reconstructs
- *  its text, so it demands the id also *look* gateway-minted before the modal is
- *  opened with it. */
-const GENERATED_REQUEST_ID_PATTERN = /^[0-9a-f]{32}$/;
-
 function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
-}
-
-/**
- * The longest prefix of `body` that is a complete JSON object, re-closed, or
- * null if not even its first member completed.
- *
- * Truncation cuts the response mid-object so `JSON.parse` throws on the whole
- * thing. But the gateway writes the fields this card needs first and the bulk
- * that overflows the limit (`target`, `effect`) last -- see handleCreateRequest
- * in the latchkey extension -- so every member up to the last completed one is
- * intact. Cut at that boundary (the last `,` at nesting depth 1, outside any
- * string) and close the object.
- *
- * The walk only ever DISCARDS a trailing member and appends `}`: it never
- * invents a key nor lifts a value out of its context, so the repaired object is
- * always a subset of what the sender wrote.
- */
-function completeTopLevelPrefix(body: string): string | null {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let lastComplete = -1;
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (c === "\\") escaped = true;
-      else if (c === '"') inString = false;
-      continue;
-    }
-    if (c === '"') inString = true;
-    else if (c === "{" || c === "[") depth++;
-    else if (c === "}" || c === "]") depth--;
-    else if (c === "," && depth === 1) lastComplete = i;
-  }
-  return lastComplete < 0 ? null : `${body.slice(0, lastComplete)}}`;
-}
-
-/** The response object the creation POST echoed, parsed strictly if the output
- *  survived intact and otherwise recovered from its truncated head. */
-function parseResponseObject(output: string): Record<string, unknown> | null {
-  // curl writes a progress meter before the response body; the JSON object
-  // starts at the first `{`.
-  const start = output.indexOf("{");
-  if (start < 0) {
-    return null;
-  }
-  const body = output.slice(start);
-  try {
-    return asObject(JSON.parse(body));
-  } catch {
-    // Truncated mid-object. The backend now preserves the whole object past its
-    // output limit, so this is the path for a transcript parsed by an older
-    // backend: recover the head rather than dropping the whole card.
-  }
-  const repaired = completeTopLevelPrefix(body);
-  if (repaired === null) {
-    return null;
-  }
-  let recovered: Record<string, unknown> | null;
-  try {
-    recovered = asObject(JSON.parse(repaired));
-  } catch {
-    return null;
-  }
-  if (recovered === null) {
-    return null;
-  }
-  return typeof recovered.request_id === "string" && GENERATED_REQUEST_ID_PATTERN.test(recovered.request_id)
-    ? recovered
-    : null;
 }
 
 /** Map the gateway's response object onto the fields the card renders. The one
@@ -155,29 +76,12 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
  * An agent asks the user for permission by POSTing to the reserved
  * `latchkey-self.invalid/permission-requests` host (see the latchkey skill).
  * The created request's JSON -- request_id, rationale, request_type, and a
- * type-specific payload -- is echoed back on stdout, after curl's progress
- * meter.
- *
- * That response routinely runs past the transcript's per-result output limit,
- * so it is read from the `permission_request` field the backend parsed off the
- * untruncated output. The output scan below is the fallback for the one case
- * the backend deliberately refuses to preserve: a response past its
- * preservation ceiling (an agent's rationale has no length limit), which
- * arrives with no structured field and a head-truncated body. The scan then
- * repairs what it can of that body rather than abandoning a request the user
- * still has to answer.
- *
- * Returns the parsed details when the call is such a creation POST that
- * succeeded and carries a request_id; otherwise null (the request is still
- * pending, errored, or nothing could be read -- the caller then shows a
- * pending card and keeps the raw output available).
- *
- * The `request_id` this reads is what the "Review & respond" button opens the
- * approval dialog with, so a filing whose echo never reaches its own tool result
- * renders a card the user cannot act on. The PreToolUse gate in
- * `system/scripts/agent_latchkey_request_standalone.sh` blocks the forms that
- * would do that; if this parser learns to read a filing the gate refuses, or
- * stops reading one it allows, the two need updating together.
+ * type-specific payload -- routinely runs past the transcript's per-result
+ * output limit, so it is read from the `permission_request` field the backend
+ * parsed off the untruncated output; there is no output-scanning fallback.
+ * Returns null when the call is not such a creation POST, errored, or carries
+ * no structured field (a transcript from an older backend) -- the caller then
+ * shows the honest can't-read state pointing at the Permissions tab.
  */
 export function parsePermissionRequest(
   toolCall: ToolCall,
@@ -192,27 +96,20 @@ export function parsePermissionRequest(
     return null;
   }
   const structured = asObject(toolResult.permission_request);
-  if (structured !== null) {
-    const details = detailsFromResponseObject(structured);
-    if (details !== null) {
-      return details;
-    }
-  }
-  const parsed = parseResponseObject(toolResult.output || "");
-  return parsed === null ? null : detailsFromResponseObject(parsed);
+  return structured === null ? null : detailsFromResponseObject(structured);
 }
 
-/** True when a permission-request call has something for the user to answer.
+/** Whether this tool call is a permission request the gateway actually FILED.
  *
- *  Filing one is a plain HTTP POST, and plenty of ways to fail leave a tool call
- *  that looks like a filing but created nothing: a PreToolUse guard refusing the
- *  command, or the gateway rejecting the body (`curl` exits 0 on a 4xx, so the
- *  call does not even read as failed). Rendering those as a permission card sends
- *  the user to a Permissions tab that has nothing in it, so they render as the
- *  ordinary tool calls they are -- with whatever the error was.
+ *  The card renders for a request the user can act on (or has acted on). A
+ *  call the harness refused, one whose curl failed outright, or one the
+ *  gateway rejected (`curl` exits 0 on a 4xx, so the call does not even read
+ *  as failed) produced no pending request -- rendering those as a permission
+ *  card sends the user to a Permissions tab that has nothing in it, so they
+ *  render as the ordinary tool calls they are.
  *
- *  A call with no result YET does count: that is the request in flight, which is
- *  exactly when it most needs to be visible.
+ *  A call with no result YET does count: that is the request in flight, which
+ *  is exactly when it most needs to be visible.
  */
 export function isFiledPermissionRequest(toolCall: ToolCall, toolResult: ToolResultEvent | null): boolean {
   if (!isPermissionRequestCall(toolCall)) return false;
@@ -229,26 +126,22 @@ export function openPermissionRequest(requestId: string): void {
   sendToEmbedder(OPEN_REQUEST_MODAL, { requestId });
 }
 
-// -- Shell-resolved requests --------------------------------------------------
+// -- Shell-reported verdicts --------------------------------------------------
 //
-// When the Minds app's review popup resolves a request, the shell sends
-// `minds:permission-request-resolved` over the embed contract, which admits it
-// only from this page's own embedder and only with a well-shaped payload. The
-// matching card flips to its verdict immediately instead of waiting for the
-// resolution message's round trip through the agent transcript; once that
-// message lands, the classified resolution takes over (and agrees with the
-// verdict recorded here).
+// Verdicts learned over `minds:permission-resolutions`, which arrives two ways
+// with one meaning: unsolicited with a single entry the moment the user
+// resolves a request in the review popup (the card flips ahead of the
+// resolution message's transcript round trip), and as the recent-verdicts
+// snapshot the chrome pushes whenever this page (re)loads -- this in-memory
+// cache dies with the page, and without the snapshot a rebuilt page would
+// offer Approve/Deny for a request decided while it was not live. The
+// endpoint admits the message only from this page's embedder with a
+// well-shaped payload; the transcript's classified resolution takes over once
+// it lands. Sends need no vendored-contract support but a stale vendored
+// endpoint drops the message until the sync lands, leaving cards
+// transcript-driven (also the direct-share behavior, where no embedder
+// exists).
 const shellResolutions = new Map<string, PermissionResolution>();
-
-/** Record the verdict a resolution message carries. Returns whether one was
- *  (so the caller knows to redraw). */
-function noteShellPermissionResolution(message: ContractMessage): boolean {
-  const { requestId, resolution } = message;
-  if (typeof requestId !== "string" || requestId === "") return false;
-  if (resolution !== "granted" && resolution !== "denied") return false;
-  shellResolutions.set(requestId, resolution);
-  return true;
-}
 
 /** The shell-reported verdict for a request, or null if the shell hasn't
  *  reported one. */
@@ -256,11 +149,31 @@ export function shellPermissionResolutionFor(requestId: string): PermissionResol
   return shellResolutions.get(requestId) ?? null;
 }
 
+/** Record every verdict a `minds:permission-resolutions` message carries --
+ *  a query answer or the shell's unsolicited single-entry push. */
+export function notePermissionResolutions(message: ContractMessage): void {
+  const { resolutions } = message;
+  if (!Array.isArray(resolutions)) return;
+  let isAnyRecorded = false;
+  for (const entry of resolutions) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { requestId, resolution } = entry as ContractMessage;
+    if (typeof requestId !== "string" || requestId === "") continue;
+    if (resolution !== "granted" && resolution !== "denied") continue;
+    shellResolutions.set(requestId, resolution);
+    isAnyRecorded = true;
+  }
+  if (isAnyRecorded) m.redraw();
+}
+
+/** Drop the verdict cache so the next test starts from a quiet page. */
+export function resetShellPermissionResolutionsForTesting(): void {
+  shellResolutions.clear();
+}
+
 /** Subscribe the cards to the shell's verdicts. Called once at app bootstrap. */
 export function initShellPermissionResolutions(): void {
-  setEmbedderMessageHandler(PERMISSION_REQUEST_RESOLVED, (message) => {
-    if (noteShellPermissionResolution(message)) m.redraw();
-  });
+  setEmbedderMessageHandler(PERMISSION_RESOLUTIONS, notePermissionResolutions);
 }
 
 /** The key that heads every card state's eyebrow. 13px is the size of the

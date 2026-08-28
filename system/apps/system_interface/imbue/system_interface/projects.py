@@ -198,9 +198,7 @@ def validated_shortcut_id(shortcut_id: str) -> str:
     if shortcut_id.startswith(APP_SHORTCUT_PREFIX) and len(shortcut_id) > len(APP_SHORTCUT_PREFIX):
         return shortcut_id
     known = ", ".join(sorted(SHORTCUT_NAMES))
-    raise ProjectShortcutError(
-        f"Unknown shortcut {shortcut_id!r} (known shortcuts: {known}, or 'app:<service-name>')"
-    )
+    raise ProjectShortcutError(f"Unknown shortcut {shortcut_id!r} (known shortcuts: {known}, or 'app:<service-name>')")
 
 
 class ShortcutOverride(FrozenModel):
@@ -390,11 +388,7 @@ def _entry_shortcut_overrides(entry: Mapping[str, Any]) -> dict[str, dict[str, A
     legacy_unpinned = entry.get("unpinned_shortcuts")
     if not isinstance(legacy_unpinned, list):
         return {}
-    return {
-        name: {"is_pinned": False}
-        for name in legacy_unpinned
-        if isinstance(name, str) and name in SHORTCUT_NAMES
-    }
+    return {name: {"is_pinned": False} for name in legacy_unpinned if isinstance(name, str) and name in SHORTCUT_NAMES}
 
 
 @pure

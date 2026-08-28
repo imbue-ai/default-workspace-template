@@ -97,16 +97,21 @@ def _visible_text(content: str) -> str:
     return content[: match.start()].rstrip()
 
 
-# When a latchkey permission request is resolved, the app injects a plain user message
-# announcing the outcome. The phrasing is authored by the latchkey handlers in the mngr
-# repo (apps/minds/imbue/minds/desktop_client/latchkey/handlers/) -- a copy edit there
-# strands cards here, so keep the two in step. The patterns require only
-# "Your ... request ... was granted/denied" (anchored to the start), because the exact
-# phrasing differs per request type; the frontend only consults the decision while a
-# request is actually awaiting one, so a prose look-alike stays unlikely.
+# When a latchkey permission request is resolved, minds injects a plain user message
+# announcing the outcome, tagged machine-readably by ``format_resolution_notice`` in the
+# mngr repo's ``latchkey/handlers/messaging.py``: "(resolution: granted, request_id: <id>)".
+# The tag is the classification contract -- no reading of the handler-authored English.
+_RESOLUTION_TAG_RE = re.compile(r"\(resolution:\s*(granted|denied|error),\s*request_id:\s*([^)\s]+)\)")
+
+# Legacy notices predating the tag carry only prose (possibly with a bare request_id
+# suffix); recognise them loosely so historical transcripts keep their verdicts hidden
+# and classified. New notices never take this path.
+# CLEANUP: remove these prose fallbacks once no live workspace transcript predates the
+# tagged notices (minds desktop clients older than embed contract v3).
 _RESOLUTION_GRANTED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas granted\b")
 _RESOLUTION_DENIED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas denied\b")
 _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be completed\b")
+_RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 
 
 class MessageDisplay(FrozenModel):
@@ -120,6 +125,10 @@ class MessageDisplay(FrozenModel):
     display_body: str | None = None
     # PERMISSION_RESOLUTION only: granted / denied / error.
     resolution: str | None = Field(default=None, pattern="^(granted|denied|error)$")
+    # PERMISSION_RESOLUTION only: the resolved request's own id, when the notice carries
+    # one (see _RESOLUTION_REQUEST_ID_RE). None for a notice recorded before request-id
+    # embedding shipped.
+    request_id: str | None = None
 
     def apply_to(self, event: dict[str, Any]) -> None:
         """Stamp the decision's present fields onto ``event`` (absent fields stay absent)."""
@@ -204,13 +213,16 @@ def _match_bash_block(content: str) -> MessageDisplay | None:
         return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_INPUT_LABEL, display_body=body)
     streams = [part.strip() for part in _BASH_OUTPUT_RE.findall(content) if part.strip()]
     # An empty result still gets a chip: the alternative is a bare bubble of raw XML.
-    return MessageDisplay(
-        display=DisplayKind.CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams)
-    )
+    return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams))
 
 
 def _match_permission_resolution(content: str) -> MessageDisplay | None:
     """A latchkey permission-request verdict, injected as a plain user message."""
+    tag = _RESOLUTION_TAG_RE.search(content)
+    if tag is not None:
+        return MessageDisplay(
+            display=DisplayKind.PERMISSION_RESOLUTION, resolution=tag.group(1), request_id=tag.group(2)
+        )
     if _RESOLUTION_GRANTED_RE.search(content) is not None:
         resolution = "granted"
     elif _RESOLUTION_DENIED_RE.search(content) is not None:
@@ -219,7 +231,9 @@ def _match_permission_resolution(content: str) -> MessageDisplay | None:
         resolution = "error"
     else:
         return None
-    return MessageDisplay(display=DisplayKind.PERMISSION_RESOLUTION, resolution=resolution)
+    request_id_match = _RESOLUTION_REQUEST_ID_RE.search(content)
+    request_id = request_id_match.group(1) if request_id_match is not None else None
+    return MessageDisplay(display=DisplayKind.PERMISSION_RESOLUTION, resolution=resolution, request_id=request_id)
 
 
 # Most-specific first; classify_user_message takes the first match.

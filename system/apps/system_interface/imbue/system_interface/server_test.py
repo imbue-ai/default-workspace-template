@@ -1626,7 +1626,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.system_interface.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent", return_value=True) as mock_send,
+        patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
 
@@ -2218,6 +2218,7 @@ def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> N
     fake_watcher = SimpleNamespace(
         set_queue_snapshot_callback=lambda _callback: None,
         notify_idle=lambda: [],
+        set_flush_hooks=lambda _send, _is_alive: None,
         get_all_events=_record_get_all_events,
         start=lambda: calls.append("start"),
     )
@@ -5312,9 +5313,7 @@ def test_deleting_an_instance_sweeps_membership_title_recency_and_location(
         client.post("/api/member-locations", json={"ref": instance_member_ref, "path": "/notes/"}).status_code == 200
     )
 
-    delete_response = client.post(
-        f"/api/projects/panels/{panel_id}/delete", json={"ref": instance_member_ref}
-    )
+    delete_response = client.post(f"/api/projects/panels/{panel_id}/delete", json={"ref": instance_member_ref})
 
     assert delete_response.status_code == 200
     assert delete_response.get_json()["project_ids"] == ["project-1"]

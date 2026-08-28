@@ -39,9 +39,10 @@ import time
 from pathlib import Path
 from typing import Final
 
+from loguru import logger as _loguru_logger
+
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.projects import validated_member_ref
-from loguru import logger as _loguru_logger
 
 _LAST_USED_FILENAME: Final[str] = "member_last_used.json"
 

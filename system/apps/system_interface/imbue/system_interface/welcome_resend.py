@@ -42,6 +42,7 @@ from loguru import logger as _loguru_logger
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 
 logger = _loguru_logger
@@ -63,7 +64,8 @@ class WelcomeResendError(RuntimeError):
 
 ResolveAgentFn = Callable[[str], AgentInfo | None]
 TranscriptReadFn = Callable[[AgentInfo], str | None]
-MessageSendFn = Callable[[AgentId, str], bool]
+# Returns None when the message was delivered, or the failure describing why it was not.
+MessageSendFn = Callable[[AgentId, str], SendFailure | None]
 
 
 def _strip_frontmatter(body: str) -> str:
@@ -263,8 +265,8 @@ class WelcomeResender(FrozenModel):
             return False
 
         logger.info("Resending /welcome to agent {} (transcript missing opening line)", agent.id)
-        sent = self.send_message_fn(AgentId(agent.id), _WELCOME_COMMAND)
-        if not sent:
-            logger.warning("Failed to dispatch /welcome to agent {}", agent.id)
+        failure_reason = self.send_message_fn(AgentId(agent.id), _WELCOME_COMMAND)
+        if failure_reason is not None:
+            logger.warning("Failed to dispatch /welcome to agent {}: {}", agent.id, failure_reason)
             return False
         return True

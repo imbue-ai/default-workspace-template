@@ -6,6 +6,7 @@ import {
   isSkillExpansionUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
+  resolutionRequestIdOf,
 } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 
@@ -103,5 +104,17 @@ describe("resolutionOf", () => {
     expect(resolutionOf({ display: "permission_resolution", resolution: "error" })).toBe("error");
     expect(resolutionOf({ display: "hidden" })).toBeNull();
     expect(resolutionOf({})).toBeNull();
+  });
+});
+
+describe("resolutionRequestIdOf", () => {
+  it("reads the request id off a permission_resolution and nothing else", () => {
+    expect(resolutionRequestIdOf({ display: "permission_resolution", request_id: "req-1" })).toBe("req-1");
+    expect(resolutionRequestIdOf({ display: "hidden", request_id: "req-1" })).toBeNull();
+    expect(resolutionRequestIdOf({})).toBeNull();
+  });
+
+  it("is null for a resolution recorded before request-id embedding shipped", () => {
+    expect(resolutionRequestIdOf({ display: "permission_resolution" })).toBeNull();
   });
 });

@@ -1,8 +1,10 @@
 import pytest
 
-from imbue.system_interface.harnesses.codex.tool_labels import is_tk_lifecycle
+from imbue.system_interface.harnesses.codex.tool_labels import CODE_MODE_TOOL_NAME
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
+from imbue.system_interface.harnesses.codex.tool_labels import shell_command
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
+from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
 
 
 @pytest.mark.parametrize(
@@ -204,4 +206,31 @@ def test_batched_tk_command_keeps_full_input_but_is_not_hidden() -> None:
     raw_input = f'await tools.exec_command({{"cmd": "cd /code && tk create {long_titles}"}});'
     assert len(raw_input) > 200
     assert keeps_full_tool_input("exec", raw_input) is True
-    assert is_tk_lifecycle("exec", raw_input) is False
+    command = shell_command("exec", raw_input)
+    assert command is not None
+    assert is_pure_tk_lifecycle_command(command) is False
+
+
+def test_shell_command_finds_the_command_inside_code_mode_js() -> None:
+    """codex runs the shell from inside emitted JavaScript, so the command is an argument of
+    an exec_command call rather than a tool input of its own."""
+    js = 'tools.exec_command({ cmd: "tk start s1", workdir: "/code" })'
+    assert shell_command(CODE_MODE_TOOL_NAME, js) == "tk start s1"
+    assert shell_command("some_other_tool", js) is None
+    assert shell_command(CODE_MODE_TOOL_NAME, 'tools.read_file({ path: "/x" })') is None
+
+
+def test_keeps_full_tool_input_still_exempts_both_apply_patch_forms() -> None:
+    """codex's file-body exemption keys off the INNER function, not the tool name, and has a
+    second form where the patch was front-loaded into a variable so no call is visible in the
+    preview. Neither can be expressed as a set of tool names -- writing this clause from the
+    shared template would truncate every codex diff at the preview limit."""
+    visible = 'tools.apply_patch({ patch: "*** Begin Patch\\n*** End Patch" })'
+    assert keeps_full_tool_input(CODE_MODE_TOOL_NAME, visible) is True
+    front_loaded = 'const p = "*** Begin Patch\\n*** Update File: a.py\\n*** End Patch";'
+    assert keeps_full_tool_input(CODE_MODE_TOOL_NAME, front_loaded) is True
+
+
+def test_keeps_full_tool_input_exempts_a_batched_tk_plan() -> None:
+    js = 'tools.exec_command({ cmd: "cd /code && tk create --step \\"a\\"", workdir: "/code" })'
+    assert keeps_full_tool_input(CODE_MODE_TOOL_NAME, js) is True

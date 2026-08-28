@@ -17,7 +17,7 @@ covering the bridge and its wiring together. ``tk_workflow.ts`` reads step state
 from the vendored ``ticket`` script, so those tests point it at a temp tree with
 a stub ``ticket`` whose output a test can drive.
 
-See ``system/scripts/POLICY_HOOKS.md`` for what each rule enforces on each
+See ``system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md`` for what each rule enforces on each
 harness.
 """
 

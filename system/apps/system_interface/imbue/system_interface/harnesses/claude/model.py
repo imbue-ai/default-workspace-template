@@ -268,9 +268,7 @@ class ClaudeModelResolver(HarnessModelResolver):
         self._state_dir = agent_info.agent_state_dir
         return self
 
-    def switch(
-        self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
-    ) -> SwitchResult:
+    def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
         # Model, effort, and fast are three distinct Claude Code commands. Send only
         # the axes the click actually changed -- the frontend computes that against
         # the value the user saw (the optimistic overlay), so a fast toggle does not
@@ -289,7 +287,10 @@ class ClaudeModelResolver(HarnessModelResolver):
             if not send("/fast on" if identity.fast else "/fast off"):
                 return SwitchResult(ok=False, detail="Failed to deliver /fast to the agent")
             # Claude Code leaves no durable record of fast off, so record it into the
-            # agent's launch settings -- that is what a restart comes back with.
+            # agent's launch settings -- that is what a restart comes back with. Nothing
+            # reconciles it against a later model change, and nothing needs to: a fast
+            # flag that outlives the model it was chosen for is dropped when the choice is
+            # read (resolve_model_choice), for every harness, rather than repaired here.
             write_path = _get_agent_fast_mode_write_path(self._config_dir, self._state_dir)
             try:
                 _write_fast_mode_setting(write_path, identity.fast)

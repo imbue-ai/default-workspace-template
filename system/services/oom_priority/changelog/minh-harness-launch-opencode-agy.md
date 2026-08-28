@@ -1,0 +1,1 @@
+The band wrapper's exec test now covers every harness binary the workspace launches (opencode and antigravity as well as claude, codex and pi), so the set it exercises matches the set wired up in `.mngr/settings.toml`.
