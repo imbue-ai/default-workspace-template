@@ -770,7 +770,10 @@ def reap_orphaned_auth_processes(home: Path | None = None) -> int:
     Never raises. This runs at boot and nothing here is worth refusing to start over.
     """
     signatures = _auth_command_signatures()
-    scoping_values = {f"={accounts.accounts_root(home)}"}
+    # Compared as BYTES. `/proc/<pid>/environ` is whatever the process was given and need not be
+    # valid UTF-8, and a lossy decode to go looking for a substring would be inventing
+    # characters to answer a question that does not need them.
+    scoping_value = f"={accounts.accounts_root(home)}".encode()
     reaped = 0
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
@@ -783,8 +786,7 @@ def reap_orphaned_auth_processes(home: Path | None = None) -> int:
             signature = (Path(cmdline[0]).name, *cmdline[1:])
             if signature not in signatures:
                 continue
-            environ = entry.joinpath("environ").read_bytes().decode(errors="replace")
-            if not any(value in environ for value in scoping_values):
+            if scoping_value not in entry.joinpath("environ").read_bytes():
                 continue
             os.kill(int(entry.name), signal.SIGKILL)
             reaped += 1
