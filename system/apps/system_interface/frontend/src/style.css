@@ -17,7 +17,7 @@
  * This is a convention for the default UI, not an enforced rule. If the user
  * wants their interface restyled to their own taste, build exactly that and
  * ignore these tokens freely — nothing enforces them. Background:
- * ../style_guide.md and ../docs/design-system.md. */
+ * ../style_guide.md. */
 @import "tailwindcss" source(none);
 @import "dockview-core/dist/styles/dockview.css";
 
@@ -91,7 +91,7 @@
   --dur-fast: 80ms;
   --dur-base: 120ms;
   --dur-slow: 200ms;
-  /* Z-index scale — names the workspace's stacking layers (see design-system.md).
+  /* Z-index scale — names the workspace's stacking layers.
      Modal backdrops + the image lightbox sit at --z-overlay; the JS hover-tooltip
      clears them at --z-tooltip. */
   --z-content: 1;
@@ -198,9 +198,9 @@ body {
  * and work inside @apply. Each bundles font-size + weight + line-height; COLOR
  * is orthogonal — compose with text-primary / text-secondary / text-faint.
  * Prefer these (or the --font-size-* / --weight-* tokens) over hand-set
- * font-size/weight. See docs/design-system.md. `medium` (500) is a valid
- * weight but is intentionally NOT used on interactive controls (buttons/tabs)
- * — that treatment comes with the Button/Tab primitive. */
+ * font-size/weight. `medium` (500) is a valid weight but is intentionally NOT
+ * used on interactive controls (buttons/tabs) — that treatment comes with the
+ * Button/Tab primitive. */
 @utility type-heading-lg {
   font-size: var(--font-size-heading-lg);
   font-weight: var(--weight-bold);
