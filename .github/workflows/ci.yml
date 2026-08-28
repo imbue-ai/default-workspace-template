@@ -91,10 +91,11 @@ jobs:
       - name: Install Playwright browsers
         run: uv run playwright install --with-deps chromium
 
-      - name: Build system/apps/system_interface frontend
+      - name: Build and test system/apps/system_interface frontend
         working-directory: system/apps/system_interface/frontend
         run: |
           npm ci
+          npm run test
           npm run build
 
       - name: Run root tests
