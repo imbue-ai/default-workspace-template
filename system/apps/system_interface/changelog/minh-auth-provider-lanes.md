@@ -1028,3 +1028,25 @@ and is now reachable one.
 Side-by-side is given up deliberately. Two live ttyd clients on one tmux window keep resizing it
 out from under each other -- `window-size latest` means the most recent attach wins -- so two
 views of one terminal were never really two views.
+
+# Two pi lanes stop sharing one tab name
+
+Chat tabs count under a word chosen by harness, which is right until two lanes share one:
+Opencode Go and OpenRouter both run on pi, so both fleets minted "Pi 1", "Pi 2", and the tab
+strip could not say which provider a chat was spending. A lane may now carry its own word, and
+only the two that collide do.
+
+# Two documents that this branch made false
+
+`test_workspace_claude_config.py` said every claude in a workspace resolves the shared
+`~/.claude`. A chat agent does not: it runs against the account it was created against, with
+`CLAUDE_CONFIG_DIR` set on its own process. Its assertions were still right -- what they actually
+pin is that nothing pins that variable at a level everything else INHERITS, which is what keeps
+the ambient default working for a bare `claude`, `claude_p.py` and the services -- so the
+docstring now says that instead, and says why an exported value would silently put every chat
+back on one shared credential.
+
+`billing-and-credentialing.md` still described credentials living in one shared
+`~/.claude/settings.json` written by a single sign-in modal. Corrected: a chat's credential lives
+in its account folder, one env var per harness names it, and the shared path is now only the
+ambient default a bare `claude` falls back to.

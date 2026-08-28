@@ -192,10 +192,21 @@ class Lane(FrozenModel):
     key_providers: tuple[KeyProvider, ...] = ()
 
 
+# The word a LANE's chat tabs count under, where the harness's own word would be ambiguous.
+#
+# Tab names come from the harness (`AUTO_NAME_WORD_BY_HARNESS`), which is right until two lanes
+# share one: Opencode Go and OpenRouter both run on pi, so both minted "Pi 1", "Pi 2", and a
+# glance at the tab strip could not tell you which provider a chat was spending. Only the lanes
+# that collide are listed; everything else keeps the harness's word.
+AUTO_NAME_WORD_BY_LANE: Final[dict[str, str]] = {
+    "opencode-go": "Opencode",
+    "openrouter": "OpenRouter",
+}
+
+
 # The harness name shown in parentheses after a provider. Distinct from
-# `AUTO_NAME_WORD_BY_HARNESS`, which names chat TABS ("Codex 2") -- these two are different
-# strings for different surfaces, so they are separate tables rather than one pretending to
-# serve both.
+# `AUTO_NAME_WORD_BY_HARNESS` and the table above, which name chat TABS -- different strings for
+# different surfaces, so they are separate tables rather than one pretending to serve both.
 HARNESS_LABEL: Final[dict[HarnessType, str]] = {
     HarnessType.CLAUDE: "Claude Code",
     HarnessType.CODEX: "Codex",
