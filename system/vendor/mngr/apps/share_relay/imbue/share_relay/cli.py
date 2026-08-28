@@ -17,6 +17,7 @@ from pathlib import Path
 import click
 from loguru import logger
 from pydantic import AnyHttpUrl
+from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.logging import setup_logging
@@ -66,12 +67,27 @@ def _admin_key_from_env() -> str:
     return admin_key
 
 
-def _relay_configuration(relay_id: str, region: str, content_domain: str, plugin_auth_url: str) -> RelayConfiguration:
+def _plugin_auth_secret_from_env() -> SecretStr:
+    # From the environment rather than argv so the secret never lands in shell
+    # history or `ps` output (mirrors how MINDS_ADMIN_KEY is passed).
+    plugin_auth_secret = os.environ.get("FRPS_AUTH_SECRET", "")
+    if not plugin_auth_secret:
+        raise click.UsageError(
+            "FRPS_AUTH_SECRET is not set (the relay -> connector plugin auth secret, "
+            "from the tier's Vault entry secrets/minds/<tier>/sharing)"
+        )
+    return SecretStr(plugin_auth_secret)
+
+
+def _relay_configuration(
+    relay_id: str, region: str, content_domain: str, plugin_auth_url: str, plugin_auth_secret: SecretStr
+) -> RelayConfiguration:
     return RelayConfiguration(
         relay_id=RelayId(relay_id),
         region=RegionCode(region),
         content_domain=ContentDomain(content_domain),
         plugin_auth_url=AnyHttpUrl(plugin_auth_url),
+        plugin_auth_secret=plugin_auth_secret,
         vhost_https_port=DEFAULT_VHOST_HTTPS_PORT,
         tunnel_control_port=DEFAULT_TUNNEL_CONTROL_PORT,
         healthcheck_port=DEFAULT_HEALTHCHECK_PORT,
@@ -84,7 +100,14 @@ def _relay_configuration(relay_id: str, region: str, content_domain: str, plugin
 )
 @click.option("--region", required=True, help="Region code, the label under the content apex (e.g. us1)")
 @click.option("--content-domain", required=True, help="Content domain apex (e.g. imbueminds.com)")
-@click.option("--plugin-auth-url", required=True, help="Connector URL the frps plugin calls to authorize tunnels")
+@click.option(
+    "--plugin-auth-url",
+    required=True,
+    help=(
+        "Connector frps-auth endpoint WITHOUT any secret (https://<connector>/frps/auth); "
+        "the plugin secret is read from FRPS_AUTH_SECRET in the environment"
+    ),
+)
 @click.option(
     "--out-dir",
     required=True,
@@ -93,13 +116,14 @@ def _relay_configuration(relay_id: str, region: str, content_domain: str, plugin
 )
 def render(relay_id: str, region: str, content_domain: str, plugin_auth_url: str, out_dir: Path) -> None:
     """Render a relay's frps / nftables / :80-redirect config into OUT_DIR."""
-    config = _relay_configuration(relay_id, region, content_domain, plugin_auth_url)
+    config = _relay_configuration(relay_id, region, content_domain, plugin_auth_url, _plugin_auth_secret_from_env())
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, content in render_all_artifacts(config).items():
         artifact_path = out_dir / name
         artifact_path.write_text(content)
-        # frps.toml embeds the connector auth secret in the plugin URL path;
-        # keep every rendered artifact owner-only (same hardening as deploy).
+        # frps.toml embeds the connector auth secret in the plugin addr's
+        # userinfo; keep every rendered artifact owner-only (same hardening as
+        # deploy).
         artifact_path.chmod(0o600)
         logger.info("Wrote {}", artifact_path)
 
@@ -183,7 +207,10 @@ def provision(
 @click.option(
     "--plugin-auth-url",
     required=True,
-    help="Connector frps-auth URL INCLUDING the shared secret path segment (https://<connector>/frps/auth/<secret>)",
+    help=(
+        "Connector frps-auth endpoint WITHOUT any secret (https://<connector>/frps/auth); "
+        "the plugin secret is read from FRPS_AUTH_SECRET in the environment"
+    ),
 )
 @click.option(
     "--work-dir",
@@ -196,7 +223,7 @@ def deploy(
     host: str, ssh_user: str, relay_id: str, region: str, content_domain: str, plugin_auth_url: str, work_dir: Path
 ) -> None:
     """Render the relay's config, install the pinned frps + healthcheck, and (re)start its services."""
-    config = _relay_configuration(relay_id, region, content_domain, plugin_auth_url)
+    config = _relay_configuration(relay_id, region, content_domain, plugin_auth_url, _plugin_auth_secret_from_env())
     with ConcurrencyGroup(name="share-relay-deploy") as concurrency_group:
         deploy_relay(
             concurrency_group=concurrency_group, host=host, ssh_user=ssh_user, config=config, work_dir=work_dir

@@ -8,6 +8,7 @@ from harbor.models.agent.context import AgentContext
 from pydantic import ValidationError
 
 from imbue.minds_evals import evidence_collection
+from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
@@ -376,6 +377,24 @@ def _reply_events(reply_text: str, usage: dict | None = None) -> list[dict]:
     ]
 
 
+def _proxy_rules(usage_log: str) -> list[ScriptedExecRule]:
+    """What a box with a healthy in-box proxy answers: the liveness probe, the workspace's SSH
+    endpoint for the reverse tunnel, the tunnel's readiness marker, and the metering log itself."""
+    ssh_listing = json.dumps(
+        {
+            "agents": [
+                {"id": "ws-1", "host": {"ssh": {"user": "root", "host": "1.2.3.4", "port": "22", "key_path": "/k"}}}
+            ]
+        }
+    )
+    return [
+        ScriptedExecRule("health/liveliness", [ok_result("200")]),
+        ScriptedExecRule("mngr list --format json", [ok_result(ssh_listing)]),
+        ScriptedExecRule(minds_bridge.TUNNEL_LOG_FILENAME, [ok_result("TUNNEL_READY")]),
+        ScriptedExecRule(minds_bridge.BOX_PROXY_USAGE_LOG_PATH, [ok_result(usage_log)]),
+    ]
+
+
 def _run_driver(
     tmp_path: Path,
     prompts: tuple[str, ...],
@@ -384,6 +403,7 @@ def _run_driver(
     timeout_seconds: float,
     rules: list[ScriptedExecRule] | None = None,
     expectations: Expectations | None = None,
+    is_proxy_enabled: bool = False,
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, AgentContext]:
     logs_dir = tmp_path / "jobs" / trial_name / "agent"
     logs_dir.mkdir(parents=True)
@@ -391,6 +411,7 @@ def _run_driver(
         logs_dir=logs_dir,
         modal_config_path=str(_write_modal_config(tmp_path)),
         poll_seconds=0.01,
+        proxy=is_proxy_enabled,
         # The key the driver signs the workspace in with, supplied the way harbor supplies it.
         extra_env={"ANTHROPIC_API_KEY": "sk-eval-test"},
     )
@@ -573,6 +594,79 @@ def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separat
     trajectory = json.loads((driver.logs_dir / "trajectory.json").read_text())
     assert trajectory["final_metrics"]["total_cached_tokens"] == 11_000
     assert trajectory["final_metrics"]["total_cost_usd"] == context.cost_usd
+
+
+def test_driver_reports_the_proxys_account_everywhere_when_a_proxy_metered_the_trial(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[
+            _reply_events(
+                "Delegating the build.",
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 100,
+                    "cache_read_tokens": 5_000,
+                    "cache_write_tokens": 2_000,
+                },
+            )
+        ],
+    )
+    # Behind the proxy the workspace is signed in with a key plus a base URL, which the product
+    # reports as the "imbue" auth mode rather than a bare api_key.
+    conversation.expected_auth_mode = minds_bridge.AUTH_MODE_IMBUE
+    # The proxy sees delegated calls the transcript never does, so its totals are strictly larger --
+    # which is what makes it detectable when a consumer reads the wrong source.
+    proxy_log = "\n".join(
+        json.dumps(record)
+        for record in (
+            {
+                "model": "claude-opus-4-8",
+                "input_tokens": 40,
+                "output_tokens": 400,
+                "cache_read_tokens": 9_000,
+                "cache_write_tokens": 3_000,
+                "speed": None,
+            },
+            {
+                "model": "claude-opus-4-8",
+                "input_tokens": 7,
+                "output_tokens": 70,
+                "cache_read_tokens": 1_000,
+                "cache_write_tokens": 0,
+                "speed": None,
+            },
+        )
+    )
+    driver, _environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__proxy1",
+        timeout_seconds=1800.0,
+        rules=_proxy_rules(proxy_log) + _setup_rules(),
+        is_proxy_enabled=True,
+    )
+
+    assert context.metadata is not None
+    assert context.metadata["usage_source"] == "proxy"
+    # The transcript is still recorded, and still disagrees -- so the assertions below are about
+    # which source was chosen, not about the two happening to match.
+    assert context.metadata["transcript_usage"]["tokens"]["output"] == 100
+    assert context.n_output_tokens == 470
+    assert context.n_cache_tokens == 10_000
+    assert context.n_input_tokens == 47 + 10_000 + 3_000
+    assert context.cost_usd is not None and context.cost_usd > 0
+
+    # Harbor's own fields, the usage artifact, and the trajectory all describe one trial.
+    usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
+    assert usage_artifact["workspace_agent"]["cost_usd"] == context.cost_usd
+    final_metrics = json.loads((driver.logs_dir / "trajectory.json").read_text())["final_metrics"]
+    assert final_metrics["total_completion_tokens"] == context.n_output_tokens
+    assert final_metrics["total_cached_tokens"] == context.n_cache_tokens
+    assert final_metrics["total_prompt_tokens"] == context.n_input_tokens
+    assert final_metrics["total_cost_usd"] == context.cost_usd
 
 
 def test_driver_leaves_usage_unset_when_the_transcript_carries_none(tmp_path: Path) -> None:

@@ -13,8 +13,8 @@ All commands are env-aware: with an activated env (`eval "$(uv run minds-admin e
 - `minds-admin server {pricing, order, await-delivery, setup, prep, list, register, set-status}` -- bare-metal box fleet management.
 - `minds-admin paid {domain, email} {add, remove, list}` -- the connector's paid lists (ally-plan eligibility).
 - `minds-admin account {show, set-plan, set-quota, suspend, unsuspend, revoke-sessions}` -- per-account entitlements and reversible suspension.
-- `minds-admin workspaces {stop, abandon}` -- workspace-lifecycle escape hatches (operator force-stop; mark-crashed).
-- `minds-admin sweep r2` -- on-demand connector sweeps.
+- `minds-admin workspaces {stop, abandon, release}` -- workspace-lifecycle escape hatches (operator force-stop; mark-crashed; release a confirmed-abandoned lease through the connector's own destroy chain, any lifecycle status).
+- `minds-admin sweep {r2, lease-records}` -- on-demand connector sweeps (`lease-records --dry-run` is the audit view of pool-lease vs workspace-record drift).
 - `minds-admin relays {list, add, remove}` -- the sharing relay fleet inventory.
 - `minds-admin repair-keys` -- fleet sweep for the historical slice authorized_keys wipe.
 

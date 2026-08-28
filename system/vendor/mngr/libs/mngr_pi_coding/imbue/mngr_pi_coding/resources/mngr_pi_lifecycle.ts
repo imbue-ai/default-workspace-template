@@ -53,6 +53,7 @@
 //     itself is installed (npm, brew, bundled binary). Event/message shapes are
 //     declared locally as the minimal structural types we read.
 
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
@@ -340,7 +341,7 @@ function partsFromContent(content: ContentBlock[] | undefined): Array<Record<str
   return parts;
 }
 
-// --- Shell-command safety guards (see system/scripts/POLICY_HOOKS.md). -------
+// --- Shell-command safety guards (see system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md). -------
 //
 // Rules that hold for every pi agent, applied in the `tool_call` handler: return
 // `{block, reason}` to refuse a command, or mutate `event.input.command` to
@@ -364,17 +365,28 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/** The reason to block a command, or null if it is allowed. Cannot throw. */
+/** The reason to block a command, or null if it is allowed. Cannot throw.
+ *
+ * These strings are copied VERBATIM from system/scripts/agent_block_pipe_tail_head.sh and
+ * agent_prevent_commit_rewrite.sh, which claude/codex/agy run directly. pi has no shell-hook
+ * surface, so it re-expresses the rules here -- and the tool-call policy contract requires a
+ * harness that reproduces rather than executes to copy the wording verbatim, so an agent gets
+ * an identical explanation on every harness. Change the scripts and this together.
+ */
 function commandBlockReason(command: string): string | null {
   if (PIPE_TAIL_HEAD_RE.test(command)) {
-    return "Do not pipe commands through tail or head. Redirect to a temp file (e.g. cmd > /tmp/out.txt) and read that instead.";
+    return (
+      "Do not pipe commands through tail or head. Instead, redirect output to a temp file " +
+      "(e.g. cmd > /tmp/output.txt) and then read from that file separately using the Read tool " +
+      "or a separate tail/head command on the file."
+    );
   }
-  if (GIT_REBASE_RE.test(command)) return "git rebase is not allowed.";
+  if (GIT_REBASE_RE.test(command)) return "Blocked: git rebase commands are not allowed";
   if (GIT_COMMIT_RE.test(command) && GIT_COMMIT_REWRITE_RE.test(command)) {
-    return "git commit with --amend or --fixup is not allowed.";
+    return "Blocked: git commit with --amend or --fixup is not allowed";
   }
   if (GIT_PULL_RE.test(command) && GIT_PULL_REBASE_RE.test(command)) {
-    return "git pull --rebase is not allowed (use git pull --merge instead).";
+    return "Blocked: git pull --rebase commands are not allowed (use git pull --merge instead)";
   }
   return null;
 }
@@ -450,14 +462,19 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // USAGE_SOURCE_NAME.
   const emitUsage = existsSync(join(stateDir, "pi_emit_usage"));
   const usagePath = join(stateDir, "events", "pi-coding", "usage", "events.jsonl");
-  let usageSeq = emitUsage ? countLines(usagePath) : 0;
 
-  // event_id must be unique within commonPath so `mngr transcript`'s dedupe set
-  // never drops a real record. Seed the counter from the existing line count so
-  // ids keep climbing across stop/start (a `--continue` restart reuses the same
-  // session id but only fires message_end for *new* messages, so a per-session
-  // reset would collide with ids written before the restart).
-  let commonSeq = emitCommon ? countLines(commonPath) : 0;
+  // Event ids hash the message's own timestamp and content: unique per event
+  // globally (analytics dedupes transcripts fleet-wide by event id), and
+  // stable for the single moment each message is appended.
+  const makeEventId = (prefix: string, message: AgentMessage): string => {
+    const rawContent = (message as { content?: unknown }).content ?? "";
+    const contentText = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+    const digest = createHash("sha256")
+      .update(`${isoTimestamp(message)}:${contentText.slice(0, 1024)}`)
+      .digest("hex")
+      .slice(0, 32);
+    return `${prefix}-${digest}`;
+  };
 
   // Record this (main) agent's session file so the plugin can resume it
   // explicitly with `pi --session <file>` -- more robust than `--continue`,
@@ -780,6 +797,11 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     controlTimer.unref();
   }
 
+  // Also covers /new, /resume and fork: pi fires session_start for each with
+  // `reason: "new" | "resume" | "fork"`, so recording here is enough. A separate
+  // `session_switch` handler used to sit below this one; pi declares no such event and emits
+  // it nowhere, so it never ran -- and `pi.on()` does not validate event names, so a wrong
+  // one is a silent no-op rather than an error.
   pi.on("session_start", (_event, ctx) => {
     safe("session_start", () => {
       // Hold the ctx so the control-file drain can reach ctx.modelRegistry (see drainControl).
@@ -792,12 +814,6 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       recordModelState(ctx);
       mkdirSync(dirname(sentinelPath), { recursive: true });
       writeFileSync(sentinelPath, "1");
-    });
-  });
-
-  pi.on("session_switch", (_event, ctx) => {
-    safe("session_switch", () => {
-      recordSessionFile(ctx);
     });
   });
 
@@ -827,7 +843,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
 
   // Policy guard: block disallowed bash commands and rewrite the rest with the
   // oom self-tag + git identity (see the "Policy guards" section above and
-  // system/scripts/POLICY_HOOKS.md). NOT wrapped in safe() -- a guard that
+  // system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md). NOT wrapped in safe() -- a guard that
   // swallowed its error would fail OPEN. The block check is a pure regex over a
   // string and cannot throw; the best-effort rewrite is isolated so a failure
   // leaves the command unchanged rather than blocking a legitimate command.
@@ -841,15 +857,27 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     if (typeof command !== "string" || !command) return;
     const reason = commandBlockReason(command);
     if (reason !== null) return { block: true, reason };
+    // Record the agent's own command BEFORE rewriting it, in its own try.
+    //
+    // The rewrite prepends `export ...; test -w ...; `, and pi calls every extension's
+    // tool_call handler on this same event -- and the project extensions load AFTER this one
+    // (CLI `-e` paths come first in resource-loader's mergePaths), so `.pi/extensions/`
+    // guards always read a command this handler has already rewritten. They therefore rely on
+    // `mngrOriginalCommand`; without it they see the prefix as a command chained ahead of the
+    // agent's and refuse EVERY permission request and EVERY `tk start`/`tk close`.
+    //
+    // These were one try block, recording after the rewrite so "a frozen event cannot cost the
+    // rewrite itself". That trade is the wrong way round: if the event ever became partly
+    // frozen, the rewrite would land, the recording would throw, the catch would swallow it,
+    // and the guards would then block every request -- fail-closed-wrong. Losing the rewrite
+    // only costs an OOM band; losing the recording breaks the guards.
+    try {
+      event.mngrOriginalCommand = command;
+    } catch {
+      // Nothing to do: the guards fall back to `input.command`, which is still unrewritten here.
+    }
     try {
       input.command = rewriteBashCommand(command);
-      // The rewrite prepends `export ...; test -w ...; `, and pi calls every extension's
-      // tool_call handler on this same event: a guard in another extension that reads
-      // `input.command` after us would see the prefix as a command chained ahead of the
-      // agent's, and refuse it. On claude/codex the rewriter runs LAST for exactly this
-      // reason; pi offers no ordering control, so carry the agent's own command instead.
-      // Recorded after the rewrite so a frozen event cannot cost the rewrite itself.
-      event.mngrOriginalCommand = command;
     } catch {
       // Rewrite is best-effort (matches claude's pass-through-on-failure); never block on it.
     }
@@ -890,7 +918,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
             return "";
           }
         })();
-        const usageRecord = toUsageRecord(message, sessionFile, () => `evt-pi-usage-${usageSeq++}`);
+        const usageRecord = toUsageRecord(message, sessionFile, () => makeEventId("evt-pi-usage", message));
         if (usageRecord !== null) {
           appendLine(usagePath, JSON.stringify(usageRecord));
         }
@@ -898,7 +926,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       if (!emitCommon) {
         return;
       }
-      const record = toCommonRecord(message, commonSource, () => `pi-${commonSeq++}`);
+      const record = toCommonRecord(message, commonSource, () => makeEventId("pi", message));
       if (record !== null) {
         appendLine(commonPath, JSON.stringify(record));
       }
@@ -960,7 +988,7 @@ export function toUsageRecord(
 // Convert a pi AgentMessage into an mngr common-transcript record, or null for
 // message roles the common schema does not represent (bashExecution, custom,
 // branchSummary, compactionSummary). `nextId` is called at most once and only
-// for emitted records, so the id counter stays dense.
+// for emitted records.
 export function toCommonRecord(
   message: AgentMessage,
   source: string,

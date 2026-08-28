@@ -96,7 +96,7 @@ def main() -> None:
 
         resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
         resolver.add_known_agent(instance_key)
-        resolver.update_services(instance_key, {"system_interface": "http://stub-backend:8000"})
+        resolver.update_services(instance_key, {"system_interface": "http://stub-backend:8000"}, {})
         resolver.update_ssh_info(
             instance_key, RemoteSSHInfo(user="root", host="stub-host", port=22, key_path=key_path)
         )

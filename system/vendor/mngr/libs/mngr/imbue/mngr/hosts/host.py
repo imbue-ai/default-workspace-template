@@ -70,6 +70,7 @@ from imbue.mngr.hosts.outer_host import OuterHost
 from imbue.mngr.hosts.outer_host import SSH_CHANNEL_OPEN_TIMEOUT_SECONDS
 from imbue.mngr.hosts.outer_host import is_transient_ssh_error
 from imbue.mngr.hosts.outer_host import retry_on_transient_ssh_error
+from imbue.mngr.hosts.tmux import AGENT_PANE_ID_OPTION
 from imbue.mngr.hosts.tmux import TmuxSessionTarget
 from imbue.mngr.hosts.tmux import TmuxWindowTarget
 from imbue.mngr.interfaces.agent import AgentInterface
@@ -747,13 +748,6 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
     # read_file, write_file, read_text_file, write_text_file, _get_file_mtime,
     # and get_file_mtime are inherited unchanged from OuterHost.
 
-    def _is_directory(self, path: Path) -> bool:
-        """Check if a path is a directory on the host."""
-        if self.is_local:
-            return path.is_dir()
-        result = self.execute_idempotent_command(f"test -d '{str(path)}'")
-        return result.success
-
     def _list_directory(self, path: Path, timeout_seconds: float | None = None) -> list[str]:
         """List files in a directory on the host.
 
@@ -1304,8 +1298,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         which causes the agent to launch in the wrong place. This method detects the
         missing directory early and raises a clear error with a recovery command.
         """
-        check = self.execute_idempotent_command(f"test -d {shlex.quote(str(agent.work_dir))}")
-        if check.success:
+        if self.is_directory(agent.work_dir):
             return
 
         branch = agent.get_created_branch_name()
@@ -1358,7 +1351,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
     def get_reported_plugin_state_files(self, plugin_name: str) -> list[str]:
         """List all plugin state files."""
         plugin_dir = self.host_dir / "plugin" / plugin_name
-        if not self._is_directory(plugin_dir):
+        if not self.is_directory(plugin_dir):
             return []
         return self._list_directory(plugin_dir)
 
@@ -1505,14 +1498,14 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
     def get_agents(self) -> list[AgentInterface]:
         """Get all agents on this host."""
         agents_dir = get_agents_root_dir(self.host_dir)
-        if not self._is_directory(agents_dir):
+        if not self.is_directory(agents_dir):
             logger.trace("Failed to find agents directory for host {}", self.id)
             return []
 
         agents: list[AgentInterface] = []
         for agent_id_str in self._list_directory(agents_dir):
             agent_dir = agents_dir / agent_id_str
-            if self._is_directory(agent_dir):
+            if self.is_directory(agent_dir):
                 agent = self._load_agent_from_dir(agent_dir)
                 if agent is not None:
                     agents.append(agent)
@@ -1557,7 +1550,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                         else:
                             content = self.read_text_file(data_path)
                     except FileNotFoundError:
-                        if not self._is_directory(agent_dir):
+                        if not self.is_directory(agent_dir):
                             logger.warning("Could not load agent reference from {}", data_path)
                         continue
                     try:
@@ -4024,6 +4017,23 @@ def _build_start_agent_shell_command(
     steps.append(f"(tmux source-file {shlex.quote(str(tmux_config_path))} || true)")
 
     quoted_exact_agent_window = TmuxWindowTarget(session_name=session_name, window=primary_window_name).as_shell_arg()
+
+    # Record the agent pane's ID, so every later send targets THAT pane rather than whichever
+    # pane happens to be active. `session:window` resolves to the active pane, so a single split
+    # sends the message into the new shell instead -- silently, with no error. `session:window.0`
+    # is no better, because panes renumber when one closes. A pane ID is unique for the pane's
+    # life and fails loudly once it is gone, which is the behaviour we want.
+    #
+    # A tmux session user-option is the right home: `@`-prefixed names are tmux's user namespace
+    # (stored, never interpreted), and the value lives and dies with the session -- so there is no
+    # file to go stale, nothing to clean up, and a restarted agent writes a fresh ID rather than
+    # inheriting a dead one. `|| true` because an agent whose pane cannot be read must still
+    # start; the send path falls back to the window target when the option is missing.
+    quoted_exact_agent_session = f"{shlex.quote('=' + session_name + ':')}"
+    steps.append(
+        f"(tmux set-option -t {quoted_exact_agent_session} {AGENT_PANE_ID_OPTION}"
+        f" \"$(tmux display-message -p -t {quoted_exact_agent_window} '#{{pane_id}}')\" || true)"
+    )
 
     # Pin the agent window to a stable, usable geometry. tmux's default window-size
     # policy ("latest") sizes a window to the most recent client -- and a brand-new

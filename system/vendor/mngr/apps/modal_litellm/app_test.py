@@ -4,6 +4,8 @@ from types import ModuleType
 
 from imbue.modal_app_kit.testing import imported_module_names
 from imbue.modal_app_kit.testing import is_module_within_package
+from imbue.modal_app_kit.testing import modal_functions_missing_logging_bootstrap
+from imbue.modal_app_kit.testing import uses_dunder_name_logger
 
 
 def test_is_connection_failure_output_matches_only_connection_error_codes(app_module: ModuleType) -> None:
@@ -31,6 +33,31 @@ def test_entrypoint_imports_only_shipped_dependencies() -> None:
             continue
         violations.append(module_name)
     assert violations == []
+
+
+def test_entrypoint_logger_is_named_under_imbue() -> None:
+    """In the container the entrypoint is module ``app``, so a ``__name__`` logger would drop its INFO lines."""
+    assert not uses_dunder_name_logger(Path(__file__).parent / "app.py")
+
+
+def test_every_modal_function_bootstraps_logging_first() -> None:
+    """The JSON root handler exists only once ``configure_logging()`` runs; a function that skips it drops its INFO lines."""
+    assert modal_functions_missing_logging_bootstrap(Path(__file__).parent / "app.py") == []
+
+
+def test_litellm_logging_env_updates_turn_on_json_logs_at_info(app_module: ModuleType) -> None:
+    assert app_module._litellm_logging_env_updates({}) == {"JSON_LOGS": "1", "LITELLM_LOG": "INFO"}
+
+
+def test_litellm_logging_env_updates_preserve_operator_supplied_knobs(app_module: ModuleType) -> None:
+    # A dev env debugging the proxy can raise LiteLLM's level through the
+    # stamped secret; the default must not clobber it.
+    assert app_module._litellm_logging_env_updates({"LITELLM_LOG": "DEBUG"}) == {"JSON_LOGS": "1"}
+    assert app_module._litellm_logging_env_updates({"JSON_LOGS": "", "LITELLM_LOG": "DEBUG"}) == {}
+
+
+def test_litellm_config_enables_json_logs(app_module: ModuleType) -> None:
+    assert app_module.LITELLM_CONFIG["litellm_settings"]["json_logs"] is True
 
 
 def test_litellm_sentry_env_updates_are_empty_without_a_dsn(app_module: ModuleType) -> None:

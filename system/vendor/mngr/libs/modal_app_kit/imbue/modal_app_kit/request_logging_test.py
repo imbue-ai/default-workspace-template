@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 
 import pytest
@@ -8,6 +9,7 @@ from imbue.modal_app_kit.request_logging import ACCESS_LOG_SUPPRESS_SUCCESS_STAT
 from imbue.modal_app_kit.request_logging import AUTHENTICATED_USER_STATE_KEY
 from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
 from imbue.modal_app_kit.request_logging import client_ip_from_asgi_scope
+from imbue.modal_app_kit.request_logging import ensure_info_log_handler
 from imbue.modal_app_kit.request_logging import format_request_log_line
 
 
@@ -269,3 +271,21 @@ def test_format_request_log_line_stamps_the_minds_env_when_deployed(monkeypatch:
 
     assert stamped["minds_env"] == "dev-alice"
     assert "minds_env" not in unstamped
+
+
+def test_ensure_info_log_handler_emits_the_record_as_one_json_line_carrying_the_level(
+    no_minds_env: None, capsys: pytest.CaptureFixture[str], throwaway_logger: logging.Logger
+) -> None:
+    ensure_info_log_handler(throwaway_logger)
+    ensure_info_log_handler(throwaway_logger)
+    throwaway_logger.info("%s", format_request_log_line(_http_scope(method="POST"), 403, 1.25))
+    stderr_lines = capsys.readouterr().err.splitlines()
+
+    assert len(stderr_lines) == 1
+    parsed = json.loads(stderr_lines[0])
+    assert parsed["level"] == "INFO"
+    assert parsed["logger"] == throwaway_logger.name
+    assert parsed["type"] == "http_request"
+    assert (parsed["method"], parsed["path"], parsed["status"]) == ("POST", "/hosts/lease", 403)
+    assert "message" not in parsed
+    assert throwaway_logger.propagate is False

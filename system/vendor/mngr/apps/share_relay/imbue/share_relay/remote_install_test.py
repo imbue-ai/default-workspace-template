@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import AnyHttpUrl
+from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.share_relay.data_types import RelayConfiguration
@@ -61,6 +62,7 @@ def _deploy_config() -> RelayConfiguration:
         region=RegionCode("us1"),
         content_domain=ContentDomain("imbueminds.com"),
         plugin_auth_url=AnyHttpUrl("https://connector.example.com/frps/auth"),
+        plugin_auth_secret=SecretStr("f0e1d2c3b4a5968788796a5b4c3d2e1f"),
     )
 
 

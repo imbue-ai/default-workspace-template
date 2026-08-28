@@ -14,6 +14,7 @@ transparently (fakes are never retained in the pool -- see
 
 import os
 import threading
+import time
 from collections.abc import Callable
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -33,6 +34,15 @@ from imbue.modal_app_kit.metrics import emit_metric
 # concurrently-served request can never be warm-useful, and each retained
 # connection holds a slot on the Neon side.
 _MAX_IDLE_CONNECTIONS: Final[int] = 8
+
+# A connection idle longer than this is probed (``SELECT 1``) before it is
+# handed out. The failures the probe catches -- Neon suspending the compute,
+# the pooler cutting an idle client -- only ever follow idleness, so gating
+# the probe on idle age keeps a busy container's hot path (the frps Ping
+# heartbeats, which recycle every connection within seconds) free of the
+# extra round trip while a container waking from a quiet spell never hands a
+# dead connection to a request.
+_IDLE_PROBE_THRESHOLD_SECONDS: Final[float] = 60.0
 
 
 def get_pool_db_connection() -> Any:
@@ -59,17 +69,48 @@ class PooledConnectionAllocator(BaseModel):
     # Whether a connection may be retained for reuse; anything else is closed
     # on check-in exactly as before the pool existed.
     is_poolable_connection: Callable[[Any], bool]
+    # Idle age past which a checked-out connection is probed before reuse.
+    idle_probe_threshold_seconds: float = _IDLE_PROBE_THRESHOLD_SECONDS
+    # Injected clock (monotonic seconds) so tests can age connections.
+    monotonic: Callable[[], float] = time.monotonic
 
     _lock: Any = PrivateAttr(default_factory=threading.Lock)
-    _idle_connections: list[Any] = PrivateAttr(default_factory=list)
+    # Idle connections paired with the monotonic time they were checked in.
+    _idle_connections: list[tuple[Any, float]] = PrivateAttr(default_factory=list)
 
     def checkout(self) -> Any:
+        idle_entry = self._pop_idle_connection()
+        while idle_entry is not None and not self._is_ready_for_reuse(idle_entry):
+            idle_entry = self._pop_idle_connection()
+        return idle_entry[0] if idle_entry is not None else self.connection_factory()
+
+    def _pop_idle_connection(self) -> tuple[Any, float] | None:
+        """The most recently checked-in idle connection (with its check-in time), or None when the pool is empty."""
         with self._lock:
-            while self._idle_connections:
-                connection = self._idle_connections.pop()
-                if not connection.closed:
-                    return connection
-        return self.connection_factory()
+            if not self._idle_connections:
+                return None
+            return self._idle_connections.pop()
+
+    def _is_ready_for_reuse(self, idle_entry: tuple[Any, float]) -> bool:
+        """Whether an idle connection can be handed out: open, and fresh or probed alive."""
+        connection, idle_since = idle_entry
+        if connection.closed:
+            return False
+        if self.monotonic() - idle_since < self.idle_probe_threshold_seconds:
+            return True
+        return self._is_probe_passing(connection)
+
+    def _is_probe_passing(self, connection: Any) -> bool:
+        """Round-trip ``SELECT 1``; a failure closes the connection so a dead one is never handed out."""
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+        except psycopg2.Error:
+            emit_metric("db_pooled_connection_discarded", 1, {"reason": "checkout_probe"})
+            connection.close()
+            return False
+        return True
 
     def check_in(self, connection: Any) -> None:
         # Only genuine psycopg2 connections are retained: anything else (test
@@ -88,12 +129,12 @@ class PooledConnectionAllocator(BaseModel):
         try:
             connection.rollback()
         except psycopg2.Error:
-            emit_metric("db_pooled_connection_discarded", 1, {})
+            emit_metric("db_pooled_connection_discarded", 1, {"reason": "check_in_rollback"})
             connection.close()
             return
         with self._lock:
             if len(self._idle_connections) < self.max_idle_connections:
-                self._idle_connections.append(connection)
+                self._idle_connections.append((connection, self.monotonic()))
                 return
         connection.close()
 

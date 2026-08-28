@@ -29,6 +29,7 @@ from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
+from imbue.modal_app_kit.log_format import configure_logging
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 
 _DEPLOY_ENV = read_deploy_env()
@@ -65,6 +66,7 @@ def _analytics_secrets() -> list[modal.Secret]:
     timeout=900,
 )
 def aggregation() -> dict[str, int]:
+    configure_logging()
     return run_aggregation_job()
 
 
@@ -79,6 +81,7 @@ def aggregation() -> dict[str, int]:
     timeout=1800,
 )
 def lake_maintenance() -> dict[str, int]:
+    configure_logging()
     return run_lake_maintenance_job()
 
 
@@ -106,4 +109,5 @@ _COLLECTION_POLL_CRON = os.environ.get("ANALYTICS_COLLECTION_POLL_CRON", "*/15 *
     timeout=850,
 )
 def collection_poll() -> dict[str, int]:
+    configure_logging()
     return run_collection_poll_job()

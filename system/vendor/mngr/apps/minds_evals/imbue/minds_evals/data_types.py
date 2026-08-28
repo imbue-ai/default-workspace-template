@@ -75,9 +75,10 @@ class DeliverableExpectation(FrozenModel):
 class FlowSurface(LowerCaseStrEnum):
     """Where a flow enters the delivered app.
 
-    ORIGIN goes straight to the app's forwarded origin -- the URL the client's app tab iframes --
-    which is one origin with no frame-piercing and exercises the real serving path (forward proxy,
-    tunnel, label origin, origin-scoped cookies).
+    ORIGIN goes straight to the app's forwarded origin -- its own label on the workspace's
+    agent-keyed origin, where the proxy serves it -- which is one origin with no frame-piercing and
+    exercises the real serving path (forward proxy, tunnel, label origin, the proxy's family-scoped
+    session cookie).
 
     The reserved `minds-ui` surface, which drives the Minds client UI and reaches the app as an
     embedded iframe, has no member here on purpose: it is rejected by name at parse time, so it can
@@ -229,7 +230,7 @@ class RegisteredApp(FrozenModel):
     name: str = Field(description="The registered service name")
     url: str = Field(description="The workspace-local origin the app is served on")
     # The unguessable `<name>-<rand>` origin label forward_port.py mints, and the component the
-    # forwarded origin is built from: `https://<label>.host-<hex>.localhost:<port>/`. The forward
+    # forwarded origin is built from: `https://<label>.agent-<hex>.localhost:<port>/`. The forward
     # proxy maps the label back to the service name itself, so the label -- not the name -- is what
     # a URL must carry. Defaulted rather than required because "no label" is a real registry state
     # and not an omission: a row written before labels existed has none, and forward routes it under

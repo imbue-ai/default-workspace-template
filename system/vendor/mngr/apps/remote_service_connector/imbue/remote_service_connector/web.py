@@ -24,6 +24,7 @@ from imbue.remote_service_connector.errors import ReportingProbeError
 from imbue.remote_service_connector.hosts import router as hosts_router
 from imbue.remote_service_connector.http_api import handle_unexpected_exception
 from imbue.remote_service_connector.http_api import is_exception_detail_exposed
+from imbue.remote_service_connector.lease_records import router as lease_records_router
 from imbue.remote_service_connector.llm_keys import router as llm_keys_router
 from imbue.remote_service_connector.r2.buckets import router as r2_buckets_router
 from imbue.remote_service_connector.r2.grants import router as r2_grants_router
@@ -70,6 +71,7 @@ web_app.include_router(llm_keys_router)
 web_app.include_router(accounts_router)
 web_app.include_router(suspension_admin_router)
 web_app.include_router(retention_router)
+web_app.include_router(lease_records_router)
 
 
 # Public env var name the deployed connector reads at startup to expose

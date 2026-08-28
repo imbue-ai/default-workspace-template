@@ -45,8 +45,8 @@ import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.shares as shares_module
+from imbue.modal_app_kit.log_format import deployed_minds_env_name
 from imbue.modal_app_kit.metrics import emit_metric
-from imbue.modal_app_kit.request_logging import deployed_minds_env_name
 from imbue.modal_app_kit.request_logging import ensure_info_log_handler
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 

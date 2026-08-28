@@ -1,4 +1,4 @@
-"""R2 key-metadata and cleanup-grant stores (Neon-backed).
+"""R2 key-metadata, cleanup-grant, and enforcement-lease stores (Neon-backed).
 
 Tracks the *existence* of each bucket-scoped key (access key id, owner,
 bucket, scope, alias) so the connector can list + revoke them. The secret
@@ -12,21 +12,48 @@ explicit recheck or, as a fallback, when the sweep finds it expired; a
 grant that settles without any usage decrease counts against a rolling
 failed-grant budget, so genuine cleanup is unlimited while write-under-
 cover-of-cleanup abuse is bounded.
+
+An enforcement lease is the per-owner mutex serializing everything that
+flips bucket-key token policies (the sweep, grants, rechecks, suspension).
+See :func:`r2_enforcement_lease` for why it is a lease row rather than an
+advisory lock.
 """
 
 import contextlib
 import functools
 import logging
+import random
+import time
 from collections.abc import Iterator
 from typing import Any
 from typing import Final
 from typing import Protocol
+from typing import runtime_checkable
+from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import BaseModel
+from pydantic import ConfigDict
 
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
+from imbue.remote_service_connector.errors import R2EnforcementLeaseLostError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseUnavailableError
 
 logger = logging.getLogger(__name__)
+
+# Write-ahead marker for an in-flight quota-enforcement transition on a key:
+# ``enforced_access = 'pending'`` is written BEFORE the Cloudflare policy
+# call, so the live token policy is recorded as untrusted until the settling
+# write lands. Consumers treat it conservatively (as enforced/read-only) and
+# every enforcement pass re-asserts the desired state for pending keys.
+R2_ENFORCEMENT_PENDING: Final = "pending"
+# The suspension counterparts. Directional, unlike the quota marker, because
+# the two suspension transitions are undone with different Cloudflare verbs
+# (a policy update vs a token-status flip), so reconciliation must know which
+# transition was in flight.
+R2_SUSPENSION_PENDING_READ: Final = "pending_read"
+R2_SUSPENSION_PENDING_DISABLED: Final = "pending_disabled"
 
 
 _R2_KEY_COLUMNS = (
@@ -270,17 +297,147 @@ def get_grant_store() -> GrantStore:
     return PostgresGrantStore()
 
 
-@contextlib.contextmanager
-def r2_enforcement_lock(owner_user_id: str) -> Iterator[None]:
-    """Hold a per-owner advisory lock while flipping bucket-key token policies.
+# How long one acquired enforcement lease lives before a contender may take
+# it over. Renewed between per-key Cloudflare calls, so it only needs to
+# outlast a single key's work (at most ~two Cloudflare round trips at the
+# 30s httpx timeout), with generous headroom.
+R2_ENFORCEMENT_LEASE_DURATION_SECONDS: Final = 180.0
+# Base delay between acquisition attempts while another holder has the lease
+# (each attempt adds up to one extra base interval of jitter).
+_LEASE_POLL_INTERVAL_SECONDS: Final = 0.5
 
-    Serializes the sweep, cleanup grants, and rechecks for one owner so
-    overlapping runs cannot interleave Cloudflare policy writes with the
-    ``enforced_access`` bookkeeping (same xact-lock pattern as the lease
-    path's per-user serialization).
+
+# Substitutable wait seam, mirroring stop_start._sleep.
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+@runtime_checkable
+class LeaseStore(Protocol):
+    """Abstraction over the r2_enforcement_leases table so enforcement is unit-testable."""
+
+    def try_acquire(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool: ...
+    def renew(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool: ...
+    def release(self, owner_user_id: str, claim_id: str) -> None: ...
+
+
+class PostgresLeaseStore:
+    """LeaseStore backed by the connector's existing Neon DB (all expiry math is DB NOW()).
+
+    Every operation is one short single-statement transaction, so no
+    connection or transaction is ever held while the lease is held.
     """
-    with db.pooled_db_connection() as conn:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"r2-enforce:{owner_user_id}",))
-            yield
+
+    def try_acquire(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        with db.pooled_db_connection() as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO r2_enforcement_leases (owner_user_id, claim_id, expires_at) "
+                        "VALUES (%s, %s, NOW() + make_interval(secs => %s)) "
+                        "ON CONFLICT (owner_user_id) DO UPDATE "
+                        "SET claim_id = EXCLUDED.claim_id, expires_at = EXCLUDED.expires_at "
+                        "WHERE r2_enforcement_leases.expires_at <= NOW()",
+                        (owner_user_id, claim_id, duration_seconds),
+                    )
+                    return cur.rowcount == 1
+
+    def renew(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        # A matching claim_id proves continuity even past expiry: acquire
+        # always overwrites the claim, so as long as ours is still recorded
+        # nobody else has held the lease since we took it.
+        with db.pooled_db_connection() as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE r2_enforcement_leases SET expires_at = NOW() + make_interval(secs => %s) "
+                        "WHERE owner_user_id = %s AND claim_id = %s",
+                        (duration_seconds, owner_user_id, claim_id),
+                    )
+                    return cur.rowcount == 1
+
+    def release(self, owner_user_id: str, claim_id: str) -> None:
+        with db.pooled_db_connection() as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM r2_enforcement_leases WHERE owner_user_id = %s AND claim_id = %s",
+                        (owner_user_id, claim_id),
+                    )
+
+
+@functools.cache
+def get_lease_store() -> LeaseStore:
+    return PostgresLeaseStore()
+
+
+class EnforcementLease(BaseModel):
+    """Handle to a held per-owner enforcement lease.
+
+    Call :meth:`renew_or_raise` between per-key Cloudflare calls: it extends
+    the lease and, in the same round trip, proves this holder still owns it,
+    so a holder that stalled past expiry and was taken over aborts at the
+    next key boundary instead of interleaving writes with the new holder.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    store: LeaseStore
+    owner_user_id: str
+    claim_id: str
+
+    def renew_or_raise(self) -> None:
+        """Raises R2EnforcementLeaseLostError when the lease was taken over."""
+        if not self.store.renew(self.owner_user_id, self.claim_id, R2_ENFORCEMENT_LEASE_DURATION_SECONDS):
+            emit_metric("r2_enforcement_lease_lost", 1, {})
+            logger.warning(
+                "Aborted an enforcement pass: the lease for owner %s was taken over", self.owner_user_id[:8]
+            )
+            raise R2EnforcementLeaseLostError(self.owner_user_id)
+
+
+@contextlib.contextmanager
+def r2_enforcement_lease(
+    owner_user_id: str,
+    wait_timeout_seconds: float,
+    store: LeaseStore | None = None,
+) -> Iterator[EnforcementLease]:
+    """Hold the per-owner mutex while flipping bucket-key token policies.
+
+    Serializes the sweep, cleanup grants, rechecks, and account suspension
+    for one owner so overlapping runs cannot interleave Cloudflare policy
+    writes with the ``enforced_access`` / ``suspension_access`` bookkeeping.
+
+    Implemented as a DB lease row (short acquire/renew/release transactions
+    plus client-side poll-waiting) rather than an advisory lock, so no
+    pooled connection or open transaction is held across the critical
+    section's Cloudflare calls, and losing a DB connection degrades into a
+    bounded, observable takeover-after-expiry instead of a silent unlock.
+
+    Residual race, accepted by design: Cloudflare writes cannot be fenced,
+    so if a holder stalls past the lease expiry mid-HTTP-call, its one
+    in-flight write can land after a contender's -- bounded to a single
+    call by the per-key renewals, and recorded by the write-ahead 'pending'
+    key markers unless the stale holder also dies in the gap between its
+    Cloudflare write and its settling DB write.
+
+    Raises R2EnforcementLeaseUnavailableError when the lease is still held
+    by someone else after ``wait_timeout_seconds`` of polling.
+    """
+    lease_store = store if store is not None else get_lease_store()
+    claim_id = uuid4().hex
+    deadline = time.monotonic() + wait_timeout_seconds
+    attempt_count = 0
+    while not lease_store.try_acquire(owner_user_id, claim_id, R2_ENFORCEMENT_LEASE_DURATION_SECONDS):
+        attempt_count += 1
+        if time.monotonic() >= deadline:
+            emit_metric("r2_enforcement_lease_wait_timeout", 1, {})
+            raise R2EnforcementLeaseUnavailableError(owner_user_id, wait_timeout_seconds)
+        _sleep(_LEASE_POLL_INTERVAL_SECONDS * (1.0 + random.random()))
+    if attempt_count:
+        emit_metric("r2_enforcement_lease_contended", 1, {})
+    lease = EnforcementLease(store=lease_store, owner_user_id=owner_user_id, claim_id=claim_id)
+    try:
+        yield lease
+    finally:
+        lease_store.release(owner_user_id, claim_id)

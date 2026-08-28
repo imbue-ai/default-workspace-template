@@ -86,6 +86,10 @@ TEMPLATE_CONFIG_REGISTRATIONS: Final[frozenset[str]] = frozenset({"system_interf
 SCRIPT_REGISTERED_APPS: Final[frozenset[str]] = frozenset({"terminal", "owner-exec"})
 TEMPLATE_PREEXISTING_APPS: Final[frozenset[str]] = TEMPLATE_CONFIG_REGISTRATIONS | SCRIPT_REGISTERED_APPS
 
+# A workspace agent id in the shape the forward proxy routes on (`agent-<32 hex>`). Mixed digits
+# rather than one repeated character, so a wrong slice of it can never accidentally match.
+FAKE_WORKSPACE_AGENT_ID: Final[str] = "agent-" + "0123456789abcdef" * 2
+
 
 def probe_sections(**named_bodies: str) -> str:
     """What a multi-section box probe prints: each body under its section marker, in order."""

@@ -8,7 +8,7 @@ rebuilt from ``/logs/agent/full_transcript.jsonl`` on every grade, so ``harbor t
 re-scores captured trials under the current rendering with no conversation re-run.
 
 The rendering keeps only the real back-and-forth: one ``[USER]`` block per real client turn (dropping
-the ``/welcome`` trigger and the ``is_meta`` skill-body ingestions) and one ``[AGENT - message N]``
+the ``/welcome`` trigger and the ``is_meta`` skill-body ingestions) and one ``[AGENT · message N]``
 block per non-empty assistant message (N running across the whole conversation). Tool calls, tool
 results, empty assistant events, and the driver's appended ``decider_message`` audit events carry no
 client-facing message and are omitted. Runs in the verifier container: stdlib only, absolute paths.
@@ -28,7 +28,7 @@ WELCOME_COMMAND = "/welcome"
 
 def render_judge_transcript(events: list[dict[str, Any]]) -> str:
     """The judged transcript for the given raw event stream: ``[USER]`` blocks for real client turns
-    and ``[AGENT - message N]`` blocks for each non-empty agent message, blank-line separated."""
+    and ``[AGENT · message N]`` blocks for each non-empty agent message, blank-line separated."""
     blocks: list[str] = []
     agent_message_index = 0
     for event in events:

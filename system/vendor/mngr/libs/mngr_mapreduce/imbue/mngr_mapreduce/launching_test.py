@@ -15,6 +15,7 @@ from imbue.mngr_mapreduce.data_types import LaunchConfig
 from imbue.mngr_mapreduce.launching import ROLE_LABEL_KEY
 from imbue.mngr_mapreduce.launching import _build_agent_options
 from imbue.mngr_mapreduce.launching import _make_reducer_identity
+from imbue.mngr_mapreduce.launching import is_host_pool_failure_ratio_exceeded
 
 
 def _make_config(
@@ -179,3 +180,28 @@ def test_reducer_suffix_distinguishes_a_reintegration() -> None:
     _, reintegrated, _ = _make_reducer_identity("tmr-mngr", "20260721085455", "r12345")
     assert reintegrated == "tmr-mngr/20260721085455/reducer-r12345"
     assert reintegrated != original
+
+
+# --- host pool failure ratio ---
+
+
+def test_full_host_pool_is_accepted() -> None:
+    assert not is_host_pool_failure_ratio_exceeded(created_host_count=87, requested_host_count=87)
+
+
+def test_host_pool_missing_under_a_third_is_accepted() -> None:
+    assert not is_host_pool_failure_ratio_exceeded(created_host_count=80, requested_host_count=87)
+
+
+def test_host_pool_missing_exactly_a_third_is_rejected() -> None:
+    assert is_host_pool_failure_ratio_exceeded(created_host_count=2, requested_host_count=3)
+
+
+def test_collapsed_host_pool_is_rejected() -> None:
+    """The shape of the 20260823 TMR run: 5 of 87 hosts, which put ~69 agents on each survivor."""
+    assert is_host_pool_failure_ratio_exceeded(created_host_count=5, requested_host_count=87)
+
+
+def test_no_requested_hosts_is_accepted() -> None:
+    """A run with nothing to place (no tasks, or a local provider) has no pool to judge."""
+    assert not is_host_pool_failure_ratio_exceeded(created_host_count=0, requested_host_count=0)

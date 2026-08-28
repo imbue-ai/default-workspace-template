@@ -9,7 +9,6 @@ A library for managing threads and processes in a structured way. It provides th
 - Support nested concurrency groups
 - Propagate shutdown events to all threads and processes
 - Detect and report timeouts and failures
-- Optionally run a child in its own session, so killing it cannot signal-stop the caller
 
 ## Basic Usage
 

@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from typing import Final
 
 import httpx
 import psycopg2
@@ -41,10 +42,15 @@ from imbue.remote_service_connector.auth_proxy import require_supertokens_config
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import MissingStorageConfigError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseLostError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseUnavailableError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.naming import r2_token_name
 from imbue.remote_service_connector.r2.stores import KeyStore
-from imbue.remote_service_connector.r2.stores import r2_enforcement_lock
+from imbue.remote_service_connector.r2.stores import R2_ENFORCEMENT_PENDING
+from imbue.remote_service_connector.r2.stores import R2_SUSPENSION_PENDING_DISABLED
+from imbue.remote_service_connector.r2.stores import R2_SUSPENSION_PENDING_READ
+from imbue.remote_service_connector.r2.stores import r2_enforcement_lease
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +59,25 @@ router = APIRouter()
 # Exception types a fan-out step may fail with without failing the whole
 # suspend/unsuspend request: the step is recorded as errored in the report
 # and the operator re-runs. HTTPException covers litellm_request's admin-API
-# failures; anything outside this tuple is a programming error and surfaces
-# as the usual 500.
+# failures; the lease errors cover a contended/taken-over enforcement lease;
+# anything outside this tuple is a programming error and surfaces as the
+# usual 500.
 _STEP_ERROR_TYPES = (
     HTTPException,
     httpx.HTTPError,
     CloudflareApiError,
     MissingStorageConfigError,
+    R2EnforcementLeaseLostError,
+    R2EnforcementLeaseUnavailableError,
     SuperTokensSessionError,
     SuperTokensGeneralError,
     psycopg2.Error,
 )
+
+# How long the suspend/unsuspend storage steps wait for the account's
+# enforcement lease. An operator is watching the request, so waiting out a
+# whole in-flight grant/recheck/sweep pass is preferable to a partial report.
+_SUSPENSION_LEASE_WAIT_SECONDS: Final = 60.0
 
 
 class SuspendAccountRequest(BaseModel):
@@ -113,10 +127,54 @@ def _block_llm_keys_step(user_id: str, is_blocking: bool) -> dict[str, Any]:
 
 
 def _effective_key_access(row: dict[str, Any]) -> str:
-    """The access scope the key's Cloudflare policies currently grant."""
-    if row.get("suspension_access") == "read" or row.get("enforced_access") == "read":
+    """The access scope the key's Cloudflare policies currently grant.
+
+    Conservative about in-flight markers: a quota-'pending', suspension
+    'pending_read', or suspension 'pending_disabled' key is treated as
+    read-only (the unconfirmed transition targeted read, or overwrote an
+    earlier read downgrade's marker), so the scope reported here never
+    overstates what the token grants.
+    """
+    if row.get("suspension_access") in (
+        "read",
+        R2_SUSPENSION_PENDING_READ,
+        R2_SUSPENSION_PENDING_DISABLED,
+    ) or row.get("enforced_access") in (
+        "read",
+        R2_ENFORCEMENT_PENDING,
+    ):
         return "read"
     return str(row["access"])
+
+
+def _desired_suspension_transition(row: dict[str, Any], is_storage_blocked: bool) -> tuple[str, str] | None:
+    """The (pending_marker, settled_marker) pair to drive for one key, or None to leave it alone.
+
+    Blocked runs disable everything not already disabled (escalation, and the
+    retry of any in-flight marker). Non-blocked runs downgrade untouched keys
+    to read-only unless their read-only state is *confirmed* (natively read,
+    or a settled quota downgrade -- a quota-'pending' key's live policy is
+    unconfirmed and may still be readwrite, and the sweep that would settle
+    it skips suspended accounts, so suspension must re-drive it), and finish
+    in-flight transitions in their original direction -- a 'pending_disabled'
+    left by an earlier blocked run is re-driven to 'disabled', never
+    de-escalated.
+    """
+    suspension_marker = row.get("suspension_access")
+    if is_storage_blocked:
+        if suspension_marker == "disabled":
+            return None
+        return (R2_SUSPENSION_PENDING_DISABLED, "disabled")
+    if suspension_marker in ("read", "disabled"):
+        return None
+    if suspension_marker == R2_SUSPENSION_PENDING_DISABLED:
+        return (R2_SUSPENSION_PENDING_DISABLED, "disabled")
+    if suspension_marker == R2_SUSPENSION_PENDING_READ:
+        return (R2_SUSPENSION_PENDING_READ, "read")
+    is_confirmed_read_only = str(row["access"]) == "read" or row.get("enforced_access") == "read"
+    if not is_confirmed_read_only:
+        return (R2_SUSPENSION_PENDING_READ, "read")
+    return None
 
 
 def _suspend_storage_keys_step(
@@ -126,38 +184,40 @@ def _suspend_storage_keys_step(
 
     Default: flip effectively-readwrite keys to read-only in place (backups
     stay retrievable). ``is_storage_blocked``: disable the tokens outright.
-    The per-key ``suspension_access`` marker is written only after the
-    Cloudflare call succeeds, so a re-run retries exactly the keys that
-    failed; the marker also tells the quota sweep and the unsuspend restore
+    Each key's transition writes its directional pending marker BEFORE the
+    Cloudflare call and settles it after, so a crash mid-transition leaves
+    the key recorded as in-flight (re-driven on the next run) instead of
+    untouched; a re-run retries exactly the keys that failed or were left
+    pending. The marker also tells the quota sweep and the unsuspend restore
     what to undo. Per-key failures are counted and reported, not fatal.
     """
     downgraded_count = 0
     disabled_count = 0
     failed_count = 0
-    with r2_enforcement_lock(user_id):
+    with r2_enforcement_lease(user_id, wait_timeout_seconds=_SUSPENSION_LEASE_WAIT_SECONDS) as lease:
         for row in key_store.list_keys(user_id):
+            transition = _desired_suspension_transition(row, is_storage_blocked)
+            if transition is None:
+                continue
+            pending_marker, settled_marker = transition
             access_key_id = str(row["access_key_id"])
             bucket_name = str(row["bucket_name"])
             token_name = r2_token_name(bucket_name, row.get("alias"))
+            lease.renew_or_raise()
             try:
-                if is_storage_blocked and row.get("suspension_access") != "disabled":
+                if row.get("suspension_access") != pending_marker:
+                    key_store.set_suspension_access(access_key_id, pending_marker)
+                if settled_marker == "disabled":
                     ops.set_bucket_token_status(
                         access_key_id, bucket_name, _effective_key_access(row), token_name, "disabled"
                     )
-                    key_store.set_suspension_access(access_key_id, "disabled")
-                    disabled_count += 1
-                elif (
-                    not is_storage_blocked
-                    and row.get("suspension_access") is None
-                    and _effective_key_access(row) == "readwrite"
-                ):
-                    ops.update_bucket_token_access(access_key_id, bucket_name, "read", token_name)
-                    key_store.set_suspension_access(access_key_id, "read")
-                    downgraded_count += 1
                 else:
-                    # Already in the desired suspension state (or natively
-                    # read-only with nothing to downgrade).
-                    pass
+                    ops.update_bucket_token_access(access_key_id, bucket_name, "read", token_name)
+                key_store.set_suspension_access(access_key_id, settled_marker)
+                if settled_marker == "disabled":
+                    disabled_count += 1
+                else:
+                    downgraded_count += 1
             except (CloudflareApiError, httpx.HTTPError) as exc:
                 emit_metric("cloudflare_api_failed", 1, {"operation": "suspend_key"})
                 logger.warning("Suspension failed to update R2 key %s", access_key_id, exc_info=exc)
@@ -184,16 +244,25 @@ def _restore_storage_keys_step(ops: CloudflareOps, key_store: KeyStore, user_id:
     """
     restored_count = 0
     failed_count = 0
-    with r2_enforcement_lock(user_id):
+    with r2_enforcement_lease(user_id, wait_timeout_seconds=_SUSPENSION_LEASE_WAIT_SECONDS) as lease:
         for row in key_store.list_keys(user_id):
             if row.get("suspension_access") is None:
                 continue
             access_key_id = str(row["access_key_id"])
             bucket_name = str(row["bucket_name"])
             token_name = r2_token_name(bucket_name, row.get("alias"))
-            desired_access = str(row.get("enforced_access") or row["access"])
+            # A quota marker ('read', or the unconfirmed 'pending') keeps the
+            # restored policy read-only; the next sweep/recheck settles it.
+            desired_access = "read" if row.get("enforced_access") is not None else str(row["access"])
+            lease.renew_or_raise()
             try:
-                if row["suspension_access"] == "disabled":
+                # An in-flight 'pending_disabled' may or may not have landed;
+                # the status flip to active also re-asserts the policies, so
+                # it reconciles both outcomes. Restores need no write-ahead
+                # marker of their own: the suspension marker is cleared only
+                # after the Cloudflare call succeeds, so a crashed restore is
+                # simply retried.
+                if row["suspension_access"] in ("disabled", R2_SUSPENSION_PENDING_DISABLED):
                     ops.set_bucket_token_status(access_key_id, bucket_name, desired_access, token_name, "active")
                 else:
                     ops.update_bucket_token_access(access_key_id, bucket_name, desired_access, token_name)

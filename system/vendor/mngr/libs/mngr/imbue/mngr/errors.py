@@ -1,4 +1,5 @@
 import re
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -20,6 +21,15 @@ from imbue.mngr.primitives import ImageReference
 from imbue.mngr.primitives import PluginKind
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import SnapshotId
+
+# Process exit code for "the named agent or host does not exist", as opposed to a
+# transient or environmental failure. Distinct from the generic error code so
+# out-of-process callers can tell the two apart from (exit code, stderr) alone --
+# notably mngr_forward, which runs a `mngr event --follow` child per agent and must
+# decide whether respawning it could ever succeed. Defined here, beside the classes
+# that carry it, because cli/exit_codes.py cannot be imported from this module (it
+# imports interfaces.data_types, which imports this module).
+EXIT_CODE_TARGET_NOT_FOUND: Final[int] = 8
 
 
 class MngrError(ClickException):
@@ -58,6 +68,16 @@ class UserInputError(MngrError):
     """Raised when user input is invalid."""
 
     user_help_text = "Check the command syntax with 'mngr --help' or 'mngr <command> --help'."
+
+
+class NoMatchingHostsError(UserInputError):
+    """Raised when a host identifier matches no host that discovery can see."""
+
+    # Not the inherited "check the command syntax" text: the identifier is
+    # usually well-formed and the host is simply gone or not yet discovered,
+    # which is what `mngr list` answers. Mirrors AgentNotFoundError's help.
+    user_help_text = "Use 'mngr list' to see available hosts and agents."
+    exit_code = EXIT_CODE_TARGET_NOT_FOUND
 
 
 class ParseSpecError(MngrError, ValueError):
@@ -205,6 +225,18 @@ class AgentNotFoundError(AgentError):
         super().__init__(f"Agent not found: {agent_identifier}")
 
 
+class AgentIdNotFoundError(AgentNotFoundError):
+    """No agent matched, and every identifier looked for was an agent *id*.
+
+    The exit code lives here rather than on the base because the base is also
+    raised for user-typed names, where a miss is as likely a typo as a gone
+    agent. An id is machine-generated, so a miss really does mean the target is
+    gone -- which is the only thing an out-of-process caller can act on.
+    """
+
+    exit_code = EXIT_CODE_TARGET_NOT_FOUND
+
+
 class AgentNotFoundOnHostError(AgentError):
     """No agent with this ID exists on the specified host."""
 
@@ -216,12 +248,32 @@ class AgentNotFoundOnHostError(AgentError):
         super().__init__(f"Agent {agent_id} not found on host {host_id}")
 
 
+class SendFailureKind(StrEnum):
+    """What KIND of thing stopped a send, for a client deciding what to offer the user.
+
+    The reason a send failed is written for a human and varies per harness, which makes it
+    useless for choosing between "let them try again" and "only a restart will help". This is
+    the machine-readable half: small, closed, and about the agent rather than about any UI.
+    mngr does not know what a button is, so it names the situation and stops there.
+    """
+
+    # A dialog, shell mode, or anything else holding the TUI's input. Resolvable in place.
+    INPUT_BLOCKED = "input_blocked"
+    # The harness is not accepting messages yet. Worth trying again shortly.
+    NOT_READY = "not_ready"
+    # There is nothing to talk to -- the pane is gone. Trying again cannot help.
+    AGENT_UNREACHABLE = "agent_unreachable"
+    # Unclassified. The default, so an unlabelled failure keeps whatever the client does today.
+    UNKNOWN = "unknown"
+
+
 class SendMessageError(AgentError):
     """Failed to send a message to an agent."""
 
-    def __init__(self, agent_name: str, reason: str) -> None:
+    def __init__(self, agent_name: str, reason: str, kind: SendFailureKind = SendFailureKind.UNKNOWN) -> None:
         self.agent_name = agent_name
         self.reason = reason
+        self.kind = kind
         super().__init__(f"Failed to send message to agent {agent_name}: {reason}")
 
 

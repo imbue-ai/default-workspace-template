@@ -8,7 +8,10 @@ bounded per pass and resumable -- a partially-emptied bucket continues on
 the next pass, and the bucket + record deletion lands on the pass that
 finishes -- so a single cron invocation never runs long. The client-side
 reaper in minds does the same work faster where a client is running; every
-step here is idempotent so the two never conflict.
+step here is idempotent so the two never conflict. A tombstone whose workspace
+still holds a pool lease is never a candidate (``list_destroyed_records_before``
+excludes it): it is the lease-vs-record sweep's evidence of a failed release,
+and that sweep's release of the lease is what makes it reapable.
 """
 
 import logging

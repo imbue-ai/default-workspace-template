@@ -34,13 +34,17 @@ def render_frps_toml(config: RelayConfiguration) -> str:
 
     frps builds the plugin callback URL by concatenating ``addr`` + ``path``,
     so the configured auth URL is split into its origin (``addr``) and its URL
-    path (``path``) rather than rendered whole. The relay's own id is appended
-    as the final path segment so the connector can attribute every callback
-    (and the per-relay tunnel-login stamps) to this relay.
+    path (``path``) rather than rendered whole. The shared auth secret rides as
+    the addr's URL userinfo: Go's HTTP client turns userinfo into an
+    ``Authorization: Basic`` header (secret as the username), which keeps the
+    secret out of the URL path that the connector's access logs record (the
+    behavior is pinned by the frp_verification harness). The relay's own id is
+    the final path segment so the connector can attribute every callback (and
+    the per-relay tunnel-login stamps) to this relay.
     """
     ops = ", ".join(f'"{op}"' for op in _PLUGIN_OPS)
     auth_url = urlsplit(str(config.plugin_auth_url))
-    plugin_addr = f"{auth_url.scheme}://{auth_url.netloc}"
+    plugin_addr = f"{auth_url.scheme}://{config.plugin_auth_secret.get_secret_value()}@{auth_url.netloc}"
     plugin_path = f"{auth_url.path.rstrip('/')}/{config.relay_id}"
     return f"""\
 # Rendered by imbue.share_relay -- do not edit on the host; re-render and redeploy.

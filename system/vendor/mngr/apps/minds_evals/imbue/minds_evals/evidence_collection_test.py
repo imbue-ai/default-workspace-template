@@ -27,6 +27,7 @@ from imbue.minds_evals.mock_verification_agent_test import ScriptedVerificationA
 from imbue.minds_evals.mock_verification_agent_test import click_action
 from imbue.minds_evals.mock_verification_agent_test import done_action
 from imbue.minds_evals.mock_verification_agent_test import reading
+from imbue.minds_evals.testing import FAKE_WORKSPACE_AGENT_ID
 from imbue.minds_evals.testing import SCRIPT_REGISTERED_APPS
 from imbue.minds_evals.testing import TEMPLATE_CONFIG_REGISTRATIONS
 from imbue.minds_evals.testing import TEMPLATE_PREEXISTING_APPS
@@ -918,7 +919,6 @@ def test_oracle_evidence_inventory_satisfies_declared_file_globs() -> None:
 # --- driving UI flows through the forwarded origin ---
 
 
-_HOST_ID = "host-" + "a" * 32
 _FLOWS = [
     {"name": "add-complete-delete", "steps": "Add 'buy milk'. Delete 'walk dog'.", "expect": "'buy milk' is visible."},
 ]
@@ -943,7 +943,7 @@ def _step_result(
                 "is_ok": is_ok,
                 "reason": reason,
                 "detail": detail,
-                "url": "https://todo-x.{}.localhost:8431/".format(_HOST_ID),
+                "url": "https://todo-x.{}.localhost:8431/".format(FAKE_WORKSPACE_AGENT_ID),
                 "title": "Todo",
                 "snapshot": snapshot,
                 "screenshot_path": screenshot_path,
@@ -976,7 +976,7 @@ def _flow_collector(
     agent: ScriptedVerificationAgent | None,
     rules: list[ScriptedExecRule],
     flows: list[dict[str, str]] | None = None,
-    host_id: str = _HOST_ID,
+    agent_id: str = FAKE_WORKSPACE_AGENT_ID,
     preexisting_registrations: frozenset[str] | None = TEMPLATE_PREEXISTING_APPS,
 ) -> tuple[evidence_collection.EvidenceCollector, MockBoxEnvironment]:
     environment = MockBoxEnvironment(tmp_path, rules)
@@ -985,7 +985,7 @@ def _flow_collector(
     collector = evidence_collection.EvidenceCollector(
         environment=environment,
         box_env={"MINDS_ENV": "staging"},
-        workspace_agent_id="ws-1",
+        workspace_agent_id=agent_id,
         case=_case_config(_authored(ui_flows=flows if flows is not None else _FLOWS)),
         clone_base_sha="a" * 40,
         dwt_tip_sha="e" * 40,
@@ -994,7 +994,6 @@ def _flow_collector(
         deadline=time.monotonic() + 600.0,
         verification_agent=agent,
         verifier_model="claude-opus-4-8",
-        workspace_host_id=host_id,
         readiness_poll_seconds=0.0,
         preauth_cookie=SecretStr("preauth-token"),
         browser_bridge_token=SecretStr("bridge-token"),
@@ -1017,8 +1016,8 @@ def _flow_entries(collector: evidence_collection.EvidenceCollector) -> list[Mani
 
 
 def test_collector_drives_the_flow_at_the_apps_forwarded_origin(tmp_path: Path) -> None:
-    # The whole point of this executor: the browser sees the app at the URL the client's app tab
-    # iframes, built from the registry row's LABEL on the workspace's host origin.
+    # The whole point of this executor: the browser drives the app where the proxy serves it, at the
+    # registry row's LABEL on the workspace's agent-keyed origin.
     agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
 
     collector, environment = _run_flow_collector(tmp_path, agent)
@@ -1030,11 +1029,11 @@ def test_collector_drives_the_flow_at_the_apps_forwarded_origin(tmp_path: Path) 
     opening = next(command for command in environment.exec_commands if "box_flow_step.py" in command)
     # `todo-bb` is the row's LABEL; the service name is plain `todo`, so this also pins that the
     # URL is built from the label rather than the name.
-    assert "https://todo-bb.{}.localhost:8431/".format(_HOST_ID) in opening
-    # The session cookie rides that first request, so the opening navigation is already
-    # authenticated rather than bouncing off the proxy's login redirect.
+    assert "https://todo-bb.{}.localhost:8431/".format(FAKE_WORKSPACE_AGENT_ID) in opening
+    # The session cookie rides that first request, at the family scope the proxy issues its own at.
     assert "preauth-token" in opening
     assert "mngr_forward_session" in opening
+    assert ".{}.localhost".format(FAKE_WORKSPACE_AGENT_ID) in opening
 
 
 def test_the_flow_drives_an_app_that_actually_answers(tmp_path: Path) -> None:
@@ -1080,7 +1079,7 @@ def test_the_flow_drives_an_app_that_actually_answers(tmp_path: Path) -> None:
     _collector, environment = _flow_collector(tmp_path, agent, rules)
 
     opening = next(command for command in environment.exec_commands if "box_flow_step.py" in command)
-    assert "https://todo-bb.{}.localhost:8431/".format(_HOST_ID) in opening
+    assert "https://todo-bb.{}.localhost:8431/".format(FAKE_WORKSPACE_AGENT_ID) in opening
     assert "gallery-aa" not in opening
 
 
@@ -1317,18 +1316,18 @@ def test_collector_records_flows_as_unmeasured_without_a_preexisting_set(tmp_pat
     assert (entry.status, entry.reason) == (CheckStatus.ERROR, evidence_collection.REASON_PREEXISTING_UNKNOWN)
 
 
-def test_collector_will_not_build_an_origin_from_a_missing_host_id(tmp_path: Path) -> None:
-    # The host id is a separate uuid4 from the agent id and has to be looked up; without it the URL
-    # would be one the proxy silently declines to route. Failing to look it up is the harness losing
-    # track of the workspace, so it is an error -- the registry here lists a healthy delivered app.
+def test_collector_will_not_build_an_origin_from_an_unroutable_agent_id(tmp_path: Path) -> None:
+    # The agent id is the origin coordinate; one the proxy does not route on would produce a URL it
+    # silently declines rather than an error. Holding an unaddressable identity is the harness
+    # losing track of the workspace, so it is an error -- the registry here lists a healthy app.
     agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
 
     collector, environment = _flow_collector(
-        tmp_path, agent, [*_executor_rules(), *_collector_rules()], host_id="agent-72fdb075"
+        tmp_path, agent, [*_executor_rules(), *_collector_rules()], agent_id="agent-72fdb075"
     )
 
     entry = _flow_entries(collector)[0]
-    assert (entry.status, entry.reason) == (CheckStatus.ERROR, ui_flows.REASON_HOST_ID_UNKNOWN)
+    assert (entry.status, entry.reason) == (CheckStatus.ERROR, ui_flows.REASON_WORKSPACE_UNADDRESSABLE)
     assert not any("box_flow_step.py" in command for command in environment.exec_commands)
 
 

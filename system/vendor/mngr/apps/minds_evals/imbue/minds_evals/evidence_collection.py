@@ -392,8 +392,8 @@ def parse_supervised_registrations(supervisord_conf: str) -> dict[str, str]:
     The join goes through the `forward_port.py` invocations inside each `[program:*]` block rather
     than through name equality, because the two are not the same thing: a multi-port app registers
     extra origin-label rows (`<name>-admin`) that have no program of their own, and a program is
-    free to register a row under any name. This is the same join the workspace template's own
-    migration tooling uses.
+    free to register a row under any name. The workspace template joins the two the same way, in
+    `.agents/skills/migrate-workspace/scripts/migrate_workspace.py`.
     """
     program_by_registration: dict[str, str] = {}
     matches = list(_PROGRAM_SECTION_PATTERN.finditer(supervisord_conf))
@@ -835,9 +835,6 @@ class EvidenceCollector(MutableModel):
         frozen=True, default=None, description="Decides each flow's next action and reads its final state"
     )
     verifier_model: str = Field(frozen=True, default="", description="Model the UI-flow agent reasons with")
-    workspace_host_id: str = Field(
-        frozen=True, default="", description="The workspace's mngr host id; the forwarded origin's host component"
-    )
     # Minted per trial. The driver owns the forward instance precisely so it knows this, rather
     # than having to discover a cookie the minds backend minted for itself.
     preauth_cookie: SecretStr = Field(
@@ -1331,7 +1328,7 @@ class EvidenceCollector(MutableModel):
             )
         )
         probe = forward_instance.forward_probe_command(
-            forward_instance.FORWARD_PORT, self.preauth_cookie.get_secret_value(), self.workspace_host_id
+            forward_instance.FORWARD_PORT, self.preauth_cookie.get_secret_value(), self.workspace_agent_id
         )
         for _attempt in range(_FORWARD_READY_ATTEMPT_COUNT):
             if self._remaining_seconds <= 0:
@@ -1435,15 +1432,14 @@ class EvidenceCollector(MutableModel):
             )
             await self._finish_flow_phase(started_at)
             return
-        if not forward_instance.is_host_id(self.workspace_host_id):
-            # Without the host id there is no origin to build, whatever the workspace is serving. That
-            # is the harness failing to look it up, so it must not be charged to the agent the way an
-            # empty registry is.
+        if not forward_instance.is_agent_id(self.workspace_agent_id):
+            # The agent id is the origin coordinate, so one the proxy does not route on leaves no
+            # origin to build, whatever the workspace is serving.
             self._record_flow_error(
                 expectations.ui_flow_checks,
-                ui_flows.REASON_HOST_ID_UNKNOWN,
-                "no usable workspace host id ({!r}), so no forwarded origin can be addressed".format(
-                    self.workspace_host_id
+                ui_flows.REASON_WORKSPACE_UNADDRESSABLE,
+                "workspace agent id {!r} is not an origin coordinate, so no forwarded origin can be addressed".format(
+                    self.workspace_agent_id
                 ),
             )
             await self._finish_flow_phase(started_at)
@@ -1480,11 +1476,10 @@ class EvidenceCollector(MutableModel):
         await self._flush_record()
 
     def _flow_target_url(self, delivered_apps: Sequence[RegisteredApp]) -> str:
-        """The forwarded origin of the app a flow drives -- the URL the client's app tab iframes.
+        """The forwarded origin of the app a flow drives: its label on the workspace's agent-keyed origin.
 
         Empty means the workspace registered nothing to drive, which is the agent's shortfall; the
-        caller has already established that the host id is usable, so that harness-side failure can
-        never reach this answer.
+        caller has already established that the agent id is addressable.
 
         An app that ANSWERED its root-path probe wins over one that merely holds a registry row.
         With more than one delivered row, taking the first would point the flow at whichever
@@ -1502,7 +1497,7 @@ class EvidenceCollector(MutableModel):
         serving = [app for app in addressable if app.name in self.serving_app_names]
         for app in serving or addressable:
             return forward_instance.forwarded_origin(
-                app.label or app.name, self.workspace_host_id, forward_instance.FORWARD_PORT
+                app.label or app.name, self.workspace_agent_id, forward_instance.FORWARD_PORT
             )
         return ""
 
@@ -1533,7 +1528,7 @@ class EvidenceCollector(MutableModel):
         endpoint = ui_flows.cdp_endpoint(ui_flows.flow_browser_port(flow_index))
 
         # The session cookie rides this first request, so the opening navigation is already
-        # authenticated rather than bouncing off the proxy's login redirect.
+        # authenticated (`forward_instance.session_cookie_domain` for the scope it carries).
         opening = ui_flows.FlowAction(
             kind=ui_flows.FlowActionKind.OPEN, role="", target="", text=target_url, amount=0, reasoning="open the app"
         )
@@ -1543,7 +1538,7 @@ class EvidenceCollector(MutableModel):
                 self._flow_screenshot_path(slug, 0),
                 cdp_endpoint_url=endpoint,
                 preauth_cookie=self.preauth_cookie.get_secret_value(),
-                origin=target_url,
+                cookie_domain=forward_instance.session_cookie_domain(self.workspace_agent_id),
             )
         )
         if not outcome.is_ok:
@@ -1610,7 +1605,7 @@ class EvidenceCollector(MutableModel):
                     self._flow_screenshot_path(slug, step_index),
                     cdp_endpoint_url=endpoint,
                     preauth_cookie="",
-                    origin=target_url,
+                    cookie_domain="",
                 )
             )
             if ui_flows.is_instrument_reason(outcome.reason):

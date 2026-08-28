@@ -1,12 +1,11 @@
 """Test utilities for remote_service_connector."""
 
 import base64
-import contextlib
 import json
 import re
 import secrets
+import threading
 import uuid
-from collections.abc import Iterator
 from collections.abc import MutableMapping
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -124,9 +123,13 @@ class FakeCloudflareOps:
         # Failure-injection knobs: the next delete_bucket_token call raises,
         # exercising the sweep revoke-retry paths. While
         # fail_bucket_usage_reads is set, every per-bucket REST usage read
-        # raises (the sweep/gate fail-open paths).
+        # raises (the sweep/gate fail-open paths). The next
+        # update_bucket_token_access call raises while
+        # fail_next_update_token_access is set (the pending-marker retry
+        # paths).
         self.fail_next_delete_bucket_token = False
         self.fail_bucket_usage_reads = False
+        self.fail_next_update_token_access = False
 
     def create_bucket(self, name: str) -> dict[str, Any]:
         if name in self.buckets:
@@ -175,6 +178,9 @@ class FakeCloudflareOps:
         self.account_tokens.pop(token_id, None)
 
     def update_bucket_token_access(self, token_id: str, bucket_name: str, access: str, token_name: str) -> None:
+        if self.fail_next_update_token_access:
+            self.fail_next_update_token_access = False
+            raise CloudflareApiError(status_code=500, errors=[{"message": "simulated token update failure"}])
         token = self.account_tokens.get(token_id)
         if token is None:
             raise CloudflareApiError(status_code=404, errors=[{"message": f"token not found: {token_id}"}])
@@ -1273,6 +1279,30 @@ class FakeCursor:
             # single-threaded so the lock itself is a no-op.
             self._results = [(True,)]
 
+        elif query_lower.startswith("insert into r2_enforcement_leases"):
+            # PostgresLeaseStore.try_acquire: insert, or take over an expired
+            # claim. Expiry is the backend's explicit test knob (no clock).
+            owner_user_id, claim_id, _duration = params
+            current_claim = self._backend.enforcement_lease_claim_by_owner.get(owner_user_id)
+            if current_claim is None or owner_user_id in self._backend.enforcement_lease_expired_owners:
+                self._backend.enforcement_lease_claim_by_owner[owner_user_id] = claim_id
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
+
+        elif query_lower.startswith("update r2_enforcement_leases"):
+            # PostgresLeaseStore.renew: succeeds only while our claim stands.
+            _duration, owner_user_id, claim_id = params
+            if self._backend.enforcement_lease_claim_by_owner.get(owner_user_id) == claim_id:
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
+
+        elif query_lower.startswith("delete from r2_enforcement_leases"):
+            owner_user_id, claim_id = params
+            if self._backend.enforcement_lease_claim_by_owner.get(owner_user_id) == claim_id:
+                del self._backend.enforcement_lease_claim_by_owner[owner_user_id]
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
+
         elif "select count(*) from pool_hosts" in query_lower:
             user_id_prefix = params[0]
             counted_statuses = _statuses_in_query(query_lower) or {"leased"}
@@ -1574,13 +1604,10 @@ class FakeCursor:
             and "leased_to_user" in query_lower
             and "select leased_to_user" in query_lower
         ):
-            # Release endpoint: lookup by id. The connector stringifies
-            # the UUID before passing it as a bind param (psycopg2 can't
-            # adapt Python ``UUID`` directly), so accept either form.
-            # Returns ``(leased_to_user, status, lima_instance_name,
-            # lima_disk_name, bare_metal_server_id)`` so the route can distinguish
-            # already-released / removing / leased and has the slice's lima fields
-            # needed for VM teardown.
+            # The release projection (``hosts._read_pool_row_for_release``
+            # reads it, in this column order). The connector stringifies the
+            # UUID before passing it as a bind param (psycopg2 can't adapt
+            # Python ``UUID`` directly), so accept either form.
             raw_host_id = params[0]
             host_id = UUID(raw_host_id) if isinstance(raw_host_id, str) else raw_host_id
             for row in self._backend.pool_rows:
@@ -1593,6 +1620,7 @@ class FakeCursor:
                             row.lima_disk_name,
                             row.bare_metal_server_id,
                             row.host_id_str,
+                            row.agent_id,
                         )
                     ]
                     break
@@ -1692,8 +1720,68 @@ class FakeCursor:
                 if row["user_id"] == params[0]
             ]
 
+        elif query_lower.startswith("insert into workspace_records") and "do nothing" in query_lower:
+            # The lease-time record stub: no-op when the workspace already has
+            # a record (ON CONFLICT (user_id, agent_id) DO NOTHING).
+            self._backend.insert_lease_record_stub(params)
+
         elif query_lower.startswith("insert into workspace_records"):
             self._results = [self._backend.sync_record_tuple(self._backend.insert_sync_record(params))]
+
+        elif query_lower.startswith("update workspace_records set state = 'destroyed'"):
+            # The release-time tombstone, addressed by (agent_id, user-id prefix).
+            agent_id, user_id_prefix = params
+            for row in self._backend.sync_record_rows:
+                if (
+                    row["agent_id"] == agent_id
+                    and derive_user_id_prefix(row["user_id"]) == user_id_prefix
+                    and row["state"] == "active"
+                ):
+                    row["state"] = "destroyed"
+                    row["destroyed_at"] = row.get("destroyed_at") or datetime.now(timezone.utc)
+                    row["revision"] = int(row["revision"]) + 1
+                    row["updated_at"] = _SYNC_ROW_UPDATED_AT
+                    self.rowcount += 1
+
+        elif query_lower.startswith("select 1 from pool_hosts"):
+            # The tombstone-first guard: does the user hold a lease for the
+            # workspace (by agent id) or its current host (by host id)?
+            key, user_id_prefix = params
+            held_statuses = _statuses_in_query(query_lower)
+            for row in self._backend.pool_rows:
+                row_key = row.agent_id if "where agent_id" in query_lower else row.host_id_str
+                if row_key == key and row.leased_to_user == user_id_prefix and row.status in held_statuses:
+                    self._results = [(1,)]
+                    break
+
+        elif "from pool_hosts p left join workspace_records r" in query_lower:
+            # The lease-vs-record sweep's join: every lease-holding row paired
+            # with the owner's record for the same workspace (or NULLs).
+            held_statuses = _statuses_in_query(query_lower)
+            for row in self._backend.pool_rows:
+                if row.status not in held_statuses:
+                    continue
+                record = next(
+                    (
+                        candidate
+                        for candidate in self._backend.sync_record_rows
+                        if candidate["agent_id"] == row.agent_id
+                        and derive_user_id_prefix(candidate["user_id"]) == row.leased_to_user
+                    ),
+                    None,
+                )
+                self._results.append(
+                    (
+                        row.host_id,
+                        row.status,
+                        row.agent_id,
+                        row.host_id_str,
+                        row.leased_to_user,
+                        row.released_at,
+                        record["state"] if record is not None else None,
+                        record.get("destroyed_at") if record is not None else None,
+                    )
+                )
 
         elif query_lower.startswith("update workspace_records set encrypted_secrets = null"):
             self.rowcount = self._backend.scrub_sync_secrets(params[0])
@@ -1702,6 +1790,25 @@ class FakeCursor:
             updated_row = self._backend.update_sync_record(query, params)
             if updated_row is not None:
                 self._results = [self._backend.sync_record_tuple(updated_row)]
+
+        elif query_lower.startswith("delete from workspace_records") and "revision = 1" in query_lower:
+            # The release-time retirement of a never-written lease stub.
+            agent_id, user_id_prefix = params
+            kept_rows = []
+            for row in self._backend.sync_record_rows:
+                is_untouched_stub = (
+                    row["agent_id"] == agent_id
+                    and derive_user_id_prefix(row["user_id"]) == user_id_prefix
+                    and row["state"] == "active"
+                    and int(row["revision"]) == 1
+                    and row.get("encrypted_secrets") is None
+                    and row.get("backup_bucket") is None
+                )
+                if is_untouched_stub:
+                    self.rowcount += 1
+                else:
+                    kept_rows.append(row)
+            self._backend.sync_record_rows = kept_rows
 
         elif query_lower.startswith("delete from workspace_records"):
             user_id, record_key = params
@@ -1728,7 +1835,7 @@ class FakeCursor:
                 )
                 if excluded_workspace_id is not None and row["agent_id"] == excluded_workspace_id:
                     continue
-                if is_referenced and row["user_id"].replace("-", "")[:16] == user_id_prefix:
+                if is_referenced and derive_user_id_prefix(row["user_id"]) == user_id_prefix:
                     self._results = [(1,)]
                     break
 
@@ -1742,13 +1849,24 @@ class FakeCursor:
                 self._results = [(1,)]
 
         elif query_lower.startswith(
-            "select user_id, host_id, agent_id, backup_bucket, destroyed_at from workspace_records"
+            "select r.user_id, r.host_id, r.agent_id, r.backup_bucket, r.destroyed_at from workspace_records r"
         ):
+            # Aged tombstones, minus those whose workspace still holds a lease
+            # (the NOT EXISTS against pool_hosts).
             cutoff = params[0]
+            held_statuses = _statuses_in_query(query_lower) - {"destroyed"}
             reapable = [
                 (row["user_id"], row["host_id"], row["agent_id"], row.get("backup_bucket"), row["destroyed_at"])
                 for row in self._backend.sync_record_rows
-                if row["state"] == "destroyed" and row.get("destroyed_at") is not None and row["destroyed_at"] < cutoff
+                if row["state"] == "destroyed"
+                and row.get("destroyed_at") is not None
+                and row["destroyed_at"] < cutoff
+                and not any(
+                    pool_row.agent_id == row["agent_id"]
+                    and pool_row.leased_to_user == derive_user_id_prefix(row["user_id"])
+                    and pool_row.status in held_statuses
+                    for pool_row in self._backend.pool_rows
+                )
             ]
             self._results = sorted(reapable, key=lambda reap_row: reap_row[4])
 
@@ -2047,9 +2165,15 @@ def _make_fake_cursor(backend: "FakePoolBackend") -> FakeCursor:
 
 
 class FakeConnection:
-    """In-memory connection that simulates psycopg2 connection behavior."""
+    """In-memory connection that simulates psycopg2 connection behavior.
+
+    Open/close bookkeeping feeds the backend's ``open_connection_count`` so
+    tests can assert on connection lifetime (e.g. that no DB connection is
+    held across a Cloudflare call).
+    """
 
     _backend: "FakePoolBackend"
+    _is_closed: bool
 
     def cursor(self) -> FakeCursor:
         return _make_fake_cursor(self._backend)
@@ -2058,7 +2182,9 @@ class FakeConnection:
         pass
 
     def close(self) -> None:
-        pass
+        if not self._is_closed:
+            self._is_closed = True
+            self._backend.open_connection_count -= 1
 
     def __enter__(self) -> "FakeConnection":
         return self
@@ -2070,6 +2196,8 @@ class FakeConnection:
 def _make_fake_connection(backend: "FakePoolBackend") -> FakeConnection:
     conn = FakeConnection()
     conn._backend = backend
+    conn._is_closed = False
+    backend.open_connection_count += 1
     return conn
 
 
@@ -2223,6 +2351,14 @@ class FakePoolBackend:
     # (mirroring share_tunnel_logins).
     relay_rows: list[dict[str, Any]]
     share_tunnel_login_rows: list[dict[str, Any]]
+    # R2 enforcement leases (mirroring r2_enforcement_leases): the current
+    # claim per owner, plus the owners whose lease a test has marked expired
+    # (the fake has no clock, so expiry is an explicit test knob).
+    enforcement_lease_claim_by_owner: dict[str, str]
+    enforcement_lease_expired_owners: set[str]
+    # Currently-open fake DB connections (created minus closed), so tests can
+    # assert nothing holds a connection across external (Cloudflare) work.
+    open_connection_count: int
 
     def add_relay(
         self,
@@ -2642,6 +2778,57 @@ class FakePoolBackend:
         self.sync_record_rows.append(row)
         return row
 
+    def insert_lease_record_stub(self, params: tuple[Any, ...]) -> None:
+        """Simulate the lease-time metadata-only record INSERT ... ON CONFLICT DO NOTHING."""
+        user_id, host_id, agent_id, display_name, provider_kind = params
+        if self.find_sync_record_by_agent(user_id, agent_id) is not None:
+            return
+        self.add_workspace_record(
+            user_id=user_id,
+            host_id=host_id,
+            agent_id=agent_id,
+            display_name=display_name,
+            provider_kind=provider_kind,
+        )
+
+    def add_workspace_record(
+        self,
+        *,
+        user_id: str,
+        host_id: str,
+        agent_id: str,
+        display_name: str = "ws",
+        provider_kind: str = "imbue_cloud_x",
+        state: str = "active",
+        destroyed_at: datetime | None = None,
+        # Revision 1 is the untouched lease stub; a client's first push lands
+        # at 2, which is what makes a release tombstone the record instead of
+        # deleting it.
+        revision: int = 1,
+    ) -> dict[str, Any]:
+        """Seed a metadata-only workspace record (the lease stub's shape) and return the row."""
+        row = {
+            "user_id": user_id,
+            "host_id": host_id,
+            "agent_id": agent_id,
+            "display_name": display_name,
+            "color": None,
+            "provider_kind": provider_kind,
+            "hosting_device_id": None,
+            "device_label": "",
+            "state": state,
+            "restored_from_host_id": None,
+            "backup_bucket": None,
+            "encrypted_secrets": None,
+            "revision": revision,
+            "record_format": 1,
+            "created_at": _SYNC_ROW_CREATED_AT,
+            "updated_at": _SYNC_ROW_CREATED_AT,
+            "destroyed_at": destroyed_at,
+        }
+        self.sync_record_rows.append(row)
+        return row
+
     def update_sync_record(self, query: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         """Simulate the workspace_records preserve-on-absent UPDATE; returns the updated row or None.
 
@@ -2693,7 +2880,6 @@ class FakePoolBackend:
 
     def clean_up_slice_on_box(
         self,
-        conn: Any,
         host_db_id: Any,
         bare_metal_server_id: Any,
         lima_instance_name: str | None,
@@ -2862,6 +3048,41 @@ class FakePoolBackend:
         self.pool_rows.append(row)
         return row
 
+    def add_leased_workspace(
+        self,
+        *,
+        suffix: str,
+        leased_to_user: str,
+        record_user_id: str,
+        record_state: str = "active",
+        destroyed_at: datetime | None = None,
+        record_revision: int = 1,
+    ) -> FakePoolRow:
+        """Seed a leased pool row plus its workspace record, both keyed by ``suffix``.
+
+        The row id is ``00000000-0000-0000-0000-0000000000<suffix>`` (two hex
+        chars) and the workspace/host ids are ``agent-<suffix>`` /
+        ``host-<suffix>``. ``record_user_id`` is separate from the lease's
+        ``leased_to_user`` prefix so a test can seed another user's record for
+        the same workspace.
+        """
+        row = self.add_leased_host(
+            host_id=UUID(f"00000000-0000-0000-0000-0000000000{suffix}"),
+            version="v0.1.0",
+            leased_to_user=leased_to_user,
+            agent_id=f"agent-{suffix}",
+            host_id_str=f"host-{suffix}",
+        )
+        self.add_workspace_record(
+            user_id=record_user_id,
+            host_id=f"host-{suffix}",
+            agent_id=f"agent-{suffix}",
+            state=record_state,
+            destroyed_at=destroyed_at,
+            revision=record_revision,
+        )
+        return row
+
 
 def make_fake_pool_backend() -> FakePoolBackend:
     """Construct an empty in-memory pool backend (no pool rows, empty paid lists)."""
@@ -2893,6 +3114,9 @@ def make_fake_pool_backend() -> FakePoolBackend:
     # mutate ``relay_rows`` directly.
     backend.relay_rows = []
     backend.share_tunnel_login_rows = []
+    backend.enforcement_lease_claim_by_owner = {}
+    backend.enforcement_lease_expired_owners = set()
+    backend.open_connection_count = 0
     backend.add_relay(_RELAY_ID_US1, "us1", _RELAY_ENDPOINT_US1, ip_address="198.51.100.1")
     backend.add_relay(_RELAY_ID_US2, "us2", _RELAY_ENDPOINT_US2, ip_address="198.51.100.2")
     backend.box_rows = []
@@ -3025,7 +3249,7 @@ class InMemorySyncStore:
     ) -> bool:
         return any(
             (record.get("backup_bucket") == bucket_name or short_name in (record["host_id"], key[1]))
-            and key[0].replace("-", "")[:16] == user_id_prefix
+            and derive_user_id_prefix(key[0]) == user_id_prefix
             and (excluding_workspace_id is None or key[1] != excluding_workspace_id)
             for key, record in self.records_by_key.items()
         )
@@ -3180,11 +3404,41 @@ def make_fake_entitlements_store() -> InMemoryEntitlementsStore:
 # ---------------------------------------------------------------------------
 
 
-@contextlib.contextmanager
-def noop_enforcement_lock(owner_user_id: str) -> Iterator[None]:
-    """Lock stand-in for direct run_r2_quota_sweep calls (no DB in unit tests)."""
-    del owner_user_id
-    yield
+class InMemoryLeaseStore:
+    """In-memory LeaseStore with real acquire/renew/release semantics (no clock).
+
+    Thread-safe so serialization tests can contend from multiple threads.
+    Expiry is modeled as an explicit test action: assigning a different
+    claim to ``claim_by_owner`` simulates a takeover, after which the
+    superseded holder's renewals fail.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.claim_by_owner: dict[str, str] = {}
+
+    def try_acquire(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        del duration_seconds
+        with self._lock:
+            if owner_user_id in self.claim_by_owner:
+                return False
+            self.claim_by_owner[owner_user_id] = claim_id
+            return True
+
+    def renew(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        del duration_seconds
+        with self._lock:
+            return self.claim_by_owner.get(owner_user_id) == claim_id
+
+    def release(self, owner_user_id: str, claim_id: str) -> None:
+        with self._lock:
+            if self.claim_by_owner.get(owner_user_id) == claim_id:
+                del self.claim_by_owner[owner_user_id]
+
+
+def make_fake_lease_store() -> InMemoryLeaseStore:
+    """Construct an empty in-memory LeaseStore for tests."""
+    return InMemoryLeaseStore()
 
 
 class InMemoryGrantStore:
@@ -3371,13 +3625,15 @@ def make_fake_litellm_backend() -> FakeLiteLLMBackend:
 _USER_STUB_TOKEN = "user-stub-jwt"
 
 
-_USER_STUB_USER_ID_PREFIX = "testuser"
-
-
 _USER_STUB_EMAIL = "testuser@example.com"
 
 
 _USER_STUB_USER_ID = "12345678-1234-5678-1234-567812345678"
+
+
+# What `pool_hosts.leased_to_user` stores for the stub user, so fakes joining
+# leases against workspace records line up.
+_USER_STUB_USER_ID_PREFIX = derive_user_id_prefix(_USER_STUB_USER_ID)
 
 
 _ADMIN_KEY_TEST_VALUE = "admin-key-secret-9f3a2b"
@@ -3964,8 +4220,8 @@ def hold_stable_download_link(url: str | None) -> None:
     ``GET /download`` resolves the stable channel manifest over the network, so
     every test runs with an entry held (see the autouse fixture) and none of
     them reach the live feed. Tests that care what the link resolves to hold
-    their own; the resolver's own tests call ``resolve_stable_mac_arm64_url``,
-    which does not read this cache.
+    their own; the parsing tests call ``_arm64_dmg_url_from``, which does not
+    read this cache.
     """
     cache = _stable_download_cache()
     cache.clear()
@@ -3975,6 +4231,19 @@ def hold_stable_download_link(url: str | None) -> None:
 def clear_stable_download_link() -> None:
     """Drop the held link, so the next read reaches the live feed."""
     _stable_download_cache().clear()
+
+
+def read_stable_download_link() -> str | None:
+    """What the last resolution left in the cache; ``None`` is a read that failed.
+
+    Reading the cache rather than calling the resolver is what tells a route
+    that resolved from one that never asked: the call would fill an empty cache
+    itself.
+    """
+    cache = _stable_download_cache()
+    key = hashkey()
+    assert key in cache, "nothing has resolved the stable download link"
+    return cache[key]
 
 
 def _stable_download_cache() -> MutableMapping[Any, Any]:

@@ -23,7 +23,7 @@ import logging
 from collections.abc import Mapping
 from typing import Final
 
-from imbue.modal_app_kit.request_logging import deployed_minds_env_name
+from imbue.modal_app_kit.log_format import deployed_minds_env_name
 from imbue.modal_app_kit.request_logging import ensure_info_log_handler
 
 logger = logging.getLogger(__name__)

@@ -1,9 +1,12 @@
 import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from imbue.remote_service_connector.errors import ConnectorError
 from imbue.remote_service_connector.errors import R2BucketNotFoundError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseLostError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseUnavailableError
 from imbue.remote_service_connector.http_api import INTERNAL_ERROR_MESSAGE
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.http_api import handle_unexpected_exception
@@ -103,3 +106,17 @@ def test_web_app_registers_the_unexpected_exception_handler() -> None:
     line in web.py that connects it to the deployed app.
     """
     assert web_app.exception_handlers[Exception] is handle_unexpected_exception
+
+
+def test_enforcement_lease_unavailable_maps_to_retryable_503() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        raise_as_http(R2EnforcementLeaseUnavailableError("user-1", 30.0))
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "enforcement_busy"
+
+
+def test_enforcement_lease_lost_maps_to_retryable_503() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        raise_as_http(R2EnforcementLeaseLostError("user-1"))
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "enforcement_interrupted"

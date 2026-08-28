@@ -62,3 +62,26 @@ template `{% extends %}` it and fills the slots instead of forking the contract
 body. `apps/minds/tmr/behaviors_mapper.j2` is the exemplar. Fork a
 self-contained copy (as the docstring-recipe minds variant does) only when a
 variant must *remove* parts of the packaged contract.
+
+## Host cleanup
+
+TMR does not destroy the hosts it creates: they idle-shut-down but keep their
+records, and on a shared provider namespace those records accumulate until they
+slow host creation to the point of failing it.
+`scripts/prune_tmr_hosts.py` sweeps them up. It keeps each variant's most
+recent run -- so its mappers stay available to re-attach to for debugging --
+plus any run too young to be sure it has finished, and destroys the rest along
+with their records:
+
+```bash
+uv run --project libs/mngr_tmr python libs/mngr_tmr/scripts/prune_tmr_hosts.py --dry-run
+```
+
+CI runs it daily against the shared `tmr-ci` namespace ahead of the scheduled
+runs (`.github/workflows/tmr-cleanup.yml`). To run it by hand against that
+namespace, point `MNGR_HOST_DIR` at the host dir `scripts/setup_tmr_ci_debug.py`
+creates.
+
+A pruned run can no longer be reintegrated: `--reintegrate` rediscovers a run's
+mappers by label, and pruning destroys them. Raise `--keep-runs` (in the
+workflow's `keep_runs` input) to keep more than the most recent run around.

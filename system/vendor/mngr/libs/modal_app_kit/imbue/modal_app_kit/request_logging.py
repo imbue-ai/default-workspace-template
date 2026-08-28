@@ -29,13 +29,15 @@ the real one carries a credential in a path segment.
 
 import json
 import logging
-import os
 import time
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
+
+from imbue.modal_app_kit.log_format import StructuredRecordJsonLogFormatter
+from imbue.modal_app_kit.log_format import deployed_minds_env_name
 
 logger = logging.getLogger(__name__)
 
@@ -64,21 +66,6 @@ ACCESS_LOG_SUPPRESS_SUCCESS_STATE_KEY: Final[str] = "access_log_suppress_success
 # segment (the frps plugin-auth shared secret), which must not land in the
 # tier's log store.
 ACCESS_LOG_PATH_OVERRIDE_STATE_KEY: Final[str] = "access_log_path_override"
-
-# The deployed env's name, pushed into the app's Modal Secret set by
-# ``minds-admin env deploy`` (dev envs: the env name; shared tiers: the tier
-# name). Stamped into every structured log line so downstream consumers of the
-# shared per-tier log store (the analytics aggregation's log views) can filter
-# one env's lines out of the mix, and used by the connector to scope
-# env-owned maintenance (the slice-box reconcile) on shared infrastructure.
-# Empty when the container predates the stamping or runs outside a minds
-# deploy; log lines omit the field and env-scoped maintenance skips.
-_MINDS_ENV_NAME_ENV_VAR: Final[str] = "MINDS_ENV_NAME"
-
-
-def deployed_minds_env_name() -> str:
-    """The deployed env's name from MINDS_ENV_NAME ('' when not deployed via minds)."""
-    return os.environ.get(_MINDS_ENV_NAME_ENV_VAR, "")
 
 
 def _first_header_value(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> str:
@@ -164,21 +151,23 @@ def format_request_log_line(scope: dict[str, Any], status_code: int | None, dura
 
 
 def ensure_info_log_handler(target_logger: logging.Logger) -> None:
-    """Make a logger's INFO lines reach the container's stderr.
+    """Make a logger's INFO lines reach the container's stderr as JSON, regardless of the root logger.
 
-    Python's root logger defaults to WARNING with no configured handler, so
-    without this the structured lines would be silently dropped in a container
-    whose app never calls ``logging.basicConfig``. Attaching a handler to the
-    target logger (with ``propagate=False``) keeps the lines flowing without
-    touching the host app's logging configuration -- and without duplicating
-    lines if the host app later configures the root logger. Idempotent. Also
-    used by app-side structured event lines (e.g. the connector's share-visit
-    records) that must reach the log store at INFO.
+    The structured record lines must flow even in a process that never
+    configured the root logger (unit tests, a container before
+    ``configure_logging`` ran), and must not double up once it has: a
+    dedicated handler on the target logger with ``propagate=False`` gives
+    both. The handler renders with ``StructuredRecordJsonLogFormatter``, which
+    flattens the JSON-object message into the JSON envelope (level, timestamp,
+    logger) -- so every message logged through the target logger MUST be a
+    structured record. Idempotent. Also used by app-side structured event
+    lines (e.g. the connector's share-visit records) that must reach the log
+    store at INFO.
     """
     if target_logger.handlers:
         return
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    handler.setFormatter(StructuredRecordJsonLogFormatter())
     target_logger.addHandler(handler)
     target_logger.setLevel(logging.INFO)
     target_logger.propagate = False

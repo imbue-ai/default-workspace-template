@@ -110,11 +110,19 @@ def test_session_start_writes_readiness_sentinel(tmp_path: Path) -> None:
 
 
 def test_session_file_recorded_on_start_and_switch(tmp_path: Path) -> None:
+    """A switch is just another session_start: pi fires it for /new, /resume and fork alike
+    (its event carries `reason`), so the recorded file follows the live session.
+
+    This used to drive a `session_switch` event. pi declares no such event and emits it
+    nowhere, so the handler it exercised could never run in production -- the test passed
+    because it invoked the handler directly. Driving the real event keeps the behaviour pinned
+    without asserting on a code path pi will never take.
+    """
     state = _run_extension(
         tmp_path,
         [
             {"event": "session_start", "sessionId": "s1", "sessionFile": "/s/s1.jsonl"},
-            {"event": "session_switch", "sessionId": "s2", "sessionFile": "/s/s2.jsonl"},
+            {"event": "session_start", "sessionId": "s2", "sessionFile": "/s/s2.jsonl"},
         ],
     )
     assert (state / "pi_session_file").read_text() == "/s/s2.jsonl"
@@ -125,8 +133,8 @@ def test_in_memory_session_does_not_clobber_recorded_file(tmp_path: Path) -> Non
         tmp_path,
         [
             {"event": "session_start", "sessionId": "s1", "sessionFile": "/s/s1.jsonl"},
-            # session_switch with no sessionFile models an in-memory session.
-            {"event": "session_switch", "sessionId": "mem"},
+            # A session_start with no sessionFile models an in-memory session.
+            {"event": "session_start", "sessionId": "mem"},
         ],
     )
     assert (state / "pi_session_file").read_text() == "/s/s1.jsonl"
@@ -379,9 +387,9 @@ def test_raw_transcript_captures_every_message(tmp_path: Path) -> None:
 def test_common_transcript_event_ids_stay_unique_across_restart(tmp_path: Path) -> None:
     """A second process (resume) must not reuse event_ids written by the first.
 
-    event_id is seeded from the existing line count, so ids keep climbing across
-    a stop/start even though the resumed session reuses its id and only new
-    messages fire message_end.
+    event_id hashes the message's own timestamp and content, so ids stay
+    unique across a stop/start even though the resumed session reuses its id
+    and only new messages fire message_end.
     """
     events = [{"event": "message_end", "payload": {"message": {"role": "user", "content": "hi", "timestamp": 1}}}]
     # First run writes one record.

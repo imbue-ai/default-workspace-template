@@ -34,6 +34,8 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.types import Event
 from sentry_sdk.types import Hint
 
+logger = logging.getLogger(__name__)
+
 # Kill switch: set to "1" at deploy time (or in a test run's env) to disable
 # reporting entirely without editing any Vault entry.
 SENTRY_DISABLED_ENV_VAR: Final[str] = "MINDS_SENTRY_DISABLED"
@@ -222,16 +224,22 @@ def capture_unexpected_exception(exc: BaseException) -> str | None:
 
 @contextmanager
 def capture_and_reraise() -> Iterator[None]:
-    """Report any escaping exception to Sentry, then re-raise it.
+    """Report any escaping exception to Sentry and log it as one ERROR line, then re-raise it.
 
     For Modal cron / spawned functions: Modal owns their top-level exception
-    handling, so the SDK's excepthook integration never sees their failures.
-    A no-op when :func:`init_sentry` never activated (capture on an inactive
-    client is discarded by the SDK).
+    handling, so the SDK's excepthook integration never sees their failures,
+    and the traceback Modal itself prints for the re-raised exception arrives
+    in the log store as one level-less line per traceback line. The
+    ``logger.error`` here puts a single JSON line carrying ``level: ERROR``
+    and the folded traceback in the store; the SDK's Dedupe integration drops
+    the logging integration's capture of the same exception instance, so
+    Bugsink still gets one event. A no-op for Sentry when :func:`init_sentry`
+    never activated (capture on an inactive client is discarded by the SDK).
     """
     try:
         yield
-    except Exception:
+    except Exception as exc:
         sentry_sdk.capture_exception()
+        logger.error("Unhandled exception in Modal function", exc_info=exc)
         sentry_sdk.flush(timeout=5)
         raise

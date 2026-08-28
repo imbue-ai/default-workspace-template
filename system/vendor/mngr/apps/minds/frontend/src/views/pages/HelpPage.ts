@@ -7,6 +7,7 @@
 import m from "mithril";
 import { HelpModel, setPendingHelpLaunch } from "../../models/help";
 import { Button } from "../components/Button";
+import { Icon16 } from "../components/Icon";
 import { Spinner } from "../components/Spinner";
 
 function closeHelpSurface(): void {
@@ -134,15 +135,14 @@ function workspaceDiagnosticsChoices(model: HelpModel): m.Children {
     diagnosticsChoice(model, {
       id: "help-include-logs",
       label: "Include workspace logs",
-      reason: "We'll need these to send a fix.",
+      reason: "We'll need these to diagnose the issue.",
       isChecked: model.isLogsIncluded,
       onChange: (value) => model.setLogsIncluded(value),
     }),
     diagnosticsChoice(model, {
       id: "help-include-transcript",
       label: "Include recent chats",
-      reason:
-        "We'll need these to diagnose the issue. We will never access them without your consent.",
+      reason: "We'll need these to diagnose the issue.",
       isChecked: model.isTranscriptIncluded,
       onChange: (value) => model.setTranscriptIncluded(value),
     }),
@@ -292,17 +292,6 @@ function agentErrorPhase(model: HelpModel): m.Children {
   ]);
 }
 
-/** Whether this report asked for anything that may still be uploading behind its ID.
- *
- * The ID arrives as soon as the report is filed; the machine's logs and chats are
- * collected and uploaded after that, so a report that asked for either owes the
- * user a word about it rather than looking finished when it is not.
- */
-function isDiagnosticsUploadPending(model: HelpModel): boolean {
-  if (!model.launch.workspaceAgentId) return false;
-  return model.isLogsIncluded || model.isTranscriptIncluded;
-}
-
 export function sentPhase(model: HelpModel): m.Children {
   return m("div", { class: "p-4 text-center" }, [
     m("h2", { class: "type-heading text-primary mb-2" }, "Thanks!"),
@@ -311,31 +300,40 @@ export function sentPhase(model: HelpModel): m.Children {
       { class: "type-body text-secondary mb-4" },
       "Your report was sent to Imbue.",
     ),
-    isDiagnosticsUploadPending(model)
-      ? m(
-          "p",
-          {
-            id: "help-diagnostics-pending",
-            class: "type-helper text-tertiary mb-4",
-          },
-          "The logs and chats you included finish uploading in the background — your report is already filed.",
-        )
-      : null,
     model.sentEventId !== null
       ? m("div", { class: "mb-4 text-left" }, [
           m("p", { class: "type-label text-secondary mb-1" }, "Report ID"),
+          // The same click-to-copy chip as the share-link: the whole box is the
+          // button, and the icon flashes a check while the copy is fresh.
           m(
-            "code",
+            "button",
             {
+              id: "help-report-id",
+              type: "button",
               class:
-                "block truncate rounded-md border border-default bg-fill-subtle px-2 py-1 type-label text-primary font-mono",
+                "flex w-full items-center gap-2 rounded-md border border-default bg-fill-subtle " +
+                "px-2 py-1 type-label text-primary font-mono cursor-pointer hover:bg-fill-hover " +
+                "transition-colors",
+              style: model.isReportIdCopied
+                ? "border-color: var(--c-success); background-color: var(--c-success-surface);"
+                : "",
+              "aria-label": "Copy the report ID",
+              onclick: () => void model.copyReportId(),
             },
-            model.sentEventId,
+            [
+              m("span", { class: "truncate" }, model.sentEventId),
+              m(Icon16, {
+                name: model.isReportIdCopied ? "check" : "copy",
+                extra: model.isReportIdCopied
+                  ? "shrink-0 text-primary"
+                  : "shrink-0 text-tertiary",
+              }),
+            ],
           ),
           m(
             "p",
             { class: "type-helper text-tertiary mt-1" },
-            "Quote this ID when you follow up so we can find your report.",
+            "Click to copy. Quote this ID when you follow up so we can find your report.",
           ),
         ])
       : null,
@@ -386,13 +384,33 @@ function HelpPageComponent(): m.Component {
       else if (activeModel.phase === "sent") body = sentPhase(activeModel);
       else body = formPhase(activeModel);
       // Rendered inside the AppOverlay card (Shell), which supplies the card
-      // chrome, padding, scroll, and close X.
+      // chrome and close X. The title row and the scroller below it are this
+      // page's own.
       return [
-        m("h1", { class: "type-section text-primary mb-4" }, "Ran into a bug?"),
-        body,
+        titleRow(),
+        m("div", { class: "min-h-0 flex-1 overflow-y-auto px-6 py-5" }, body),
       ];
     },
   };
+}
+
+/** The page's title row, mirroring the notification feed's header exactly
+ * (same 56px row, icon left, hairline below): the two anchored surfaces are
+ * one window shown two ways, so their headers sit on one line. 56px centers
+ * the row on the same line the panel's close X sits on (see
+ * NotificationsPage's title row for the arithmetic). */
+export function titleRow(): m.Children {
+  return m(
+    "div",
+    {
+      class: "flex h-[56px] shrink-0 items-center border-b border-subtle px-3",
+    },
+    m(
+      "h1",
+      { class: "flex items-center gap-1.5 type-label text-primary" },
+      [m(Icon16, { name: "bug", size: "sm" }), "Ran into a bug?"],
+    ),
+  );
 }
 
 export const HelpPage: m.ComponentTypes = HelpPageComponent;

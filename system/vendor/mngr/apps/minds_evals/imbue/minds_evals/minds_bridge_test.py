@@ -18,7 +18,6 @@ from imbue.minds_evals.minds_bridge import fetch_events_window
 from imbue.minds_evals.minds_bridge import fetch_minds_activation_env
 from imbue.minds_evals.minds_bridge import load_modal_token_env
 from imbue.minds_evals.minds_bridge import parse_activation_exports
-from imbue.minds_evals.minds_bridge import parse_agent_host_id
 from imbue.minds_evals.minds_bridge import parse_agent_ssh_info
 from imbue.minds_evals.minds_bridge import run_in_workspace
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
@@ -273,37 +272,6 @@ def test_parse_agent_ssh_info_picks_the_requested_agent() -> None:
 
 def test_parse_agent_ssh_info_returns_none_for_an_absent_agent() -> None:
     assert parse_agent_ssh_info(_SSH_LISTING, "nope") is None
-
-
-_HOST_LISTING = json.dumps(
-    {
-        "agents": [
-            {"id": "sys-1", "host": {"id": "host-" + "1" * 32}},
-            {"id": "ws-1", "host": {"id": "host-" + "2" * 32}},
-        ]
-    }
-)
-
-
-def test_parse_agent_host_id_picks_the_requested_agents_host() -> None:
-    # The host id is a separate uuid4 from the agent id, so it has to be read off the listing rather
-    # than formatted from the id the driver already holds -- and read off the RIGHT row.
-    assert parse_agent_host_id(_HOST_LISTING, "ws-1") == "host-" + "2" * 32
-
-
-@pytest.mark.parametrize(
-    "listed_json,agent_id",
-    [
-        (_HOST_LISTING, "nope"),
-        (json.dumps({"agents": [{"id": "ws-1"}]}), "ws-1"),
-        ("mngr: command not found", "ws-1"),
-    ],
-    ids=["absent_agent", "no_host", "not_json"],
-)
-def test_parse_agent_host_id_answers_empty_when_there_is_no_host_to_report(listed_json: str, agent_id: str) -> None:
-    # Empty is what makes the collector record the flows as unmeasurable; a guessed id would produce
-    # a URL the proxy silently declines to route.
-    assert parse_agent_host_id(listed_json, agent_id) == ""
 
 
 def test_parse_agent_ssh_info_returns_none_when_the_agent_has_no_ssh_endpoint() -> None:

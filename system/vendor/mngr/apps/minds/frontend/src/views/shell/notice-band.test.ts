@@ -8,26 +8,26 @@ describe("noticeBandFor", () => {
 
   it("bands a machine that stops answering, and keeps one payload across the recovery states", () => {
     const stuck = noticeBandFor("stuck", "healthy", true);
-    const restarting = noticeBandFor("restarting", "healthy", true);
+    const recovering = noticeBandFor("recovering", "healthy", true);
     expect(stuck?.key).toBe("workspace-recovering");
-    // Recovery steps between stuck and restarting on its own; sharing the
+    // Recovery steps between stuck and recovering on its own; sharing the
     // payload is what keeps the strip from rewriting itself mid-read.
-    expect(restarting).toEqual(stuck);
+    expect(recovering).toEqual(stuck);
     expect(stuck?.action?.kind).toBe("open-recovery");
   });
 
   it("separates a spent restart from one still in progress", () => {
-    const failed = noticeBandFor("restart_failed", "healthy", true);
+    const failed = noticeBandFor("recovery_failed", "healthy", true);
     expect(failed?.key).toBe("workspace-restart-failed");
     expect(failed?.variant).toBe("error");
     expect(failed?.message).not.toBe(noticeBandFor("stuck", "healthy", true)?.message);
   });
 
   it("states the condition without recounting a restart the user never made", () => {
-    // The app restarts a wedged machine unasked, so an account of a failed
-    // restart usually describes an event the user never caused and never saw.
+    // The app starts a wedged machine unasked, so an account of a failed
+    // recovery usually describes an event the user never caused and never saw.
     // The remedy and its cost live on the card behind the action.
-    expect(noticeBandFor("restart_failed", "healthy", true)?.message).toBe("This machine stopped responding.");
+    expect(noticeBandFor("recovery_failed", "healthy", true)?.message).toBe("This machine stopped responding.");
   });
 
   it("names the backend it cannot reach instead of the machine that reads stuck because of it", () => {
@@ -43,7 +43,7 @@ describe("noticeBandFor", () => {
     expect(band?.message).toBe("Can't connect to Imbue Cloud");
     expect(band?.action?.kind).toBe("open-recovery");
     // The card behind it carries the provider's own error verbatim.
-    expect(noticeBandFor("restart_failed", "healthy", true, { unreachableProviderLabel: "Imbue Cloud" })?.message).toBe(
+    expect(noticeBandFor("recovery_failed", "healthy", true, { unreachableProviderLabel: "Imbue Cloud" })?.message).toBe(
       band?.message,
     );
   });
@@ -64,7 +64,7 @@ describe("noticeBandFor", () => {
     expect(band?.key).toBe("workspace-recovering");
     expect(band?.action?.kind).toBe("open-recovery");
     // The terminal state is the same condition better explained, so it reads alike.
-    expect(noticeBandFor("restart_failed", "healthy", true, { isDeviceCannotConnect: true })?.message).toBe(
+    expect(noticeBandFor("recovery_failed", "healthy", true, { isDeviceCannotConnect: true })?.message).toBe(
       band?.message,
     );
     // A machine that is answering is not one this device cannot reach.
@@ -94,11 +94,11 @@ describe("noticeBandFor", () => {
 
   it("withholds the band from hub pages, which have no machine behind it", () => {
     expect(noticeBandFor("stuck", "healthy", false)).toBeNull();
-    expect(noticeBandFor("restart_failed", "blocked", false)).toBeNull();
+    expect(noticeBandFor("recovery_failed", "blocked", false)).toBeNull();
   });
 
   it("names this device's dead network rather than the machine that reads stuck because of it", () => {
-    const band = noticeBandFor("stuck", "healthy", true, { deviceEnvironmentBlock: "OFFLINE" });
+    const band = noticeBandFor("stuck", "healthy", true, { deviceEnvironment: "OFFLINE" });
     // Still "lost contact, still trying", so it shares the recovering key and
     // does not rewrite the strip as the condition is diagnosed.
     expect(band?.key).toBe("workspace-recovering");
@@ -110,7 +110,7 @@ describe("noticeBandFor", () => {
     // On an SSH-blocking network the user can see their browser working, so
     // claiming they are offline is a claim they know to be false -- and they
     // would discount whatever the app says next.
-    const band = noticeBandFor("stuck", "healthy", true, { deviceEnvironmentBlock: "SSH_BLOCKED" });
+    const band = noticeBandFor("stuck", "healthy", true, { deviceEnvironment: "SSH_BLOCKED" });
     expect(band?.message).toBe("This network blocks the connection to your machines.");
   });
 
@@ -120,7 +120,7 @@ describe("noticeBandFor", () => {
     // backend that is working for a condition the user can actually fix.
     const band = noticeBandFor("stuck", "healthy", true, {
       unreachableProviderLabel: "Imbue Cloud",
-      deviceEnvironmentBlock: "OFFLINE",
+      deviceEnvironment: "OFFLINE",
     });
     expect(band?.message).toBe("No network connection.");
   });
@@ -130,7 +130,7 @@ describe("noticeBandFor", () => {
     // and the hub page's own notice is not mounted here. Without the device's
     // condition the page says nothing at all while the frame visibly fails to
     // load.
-    const band = noticeBandFor("healthy", "healthy", true, { deviceEnvironmentBlock: "OFFLINE" });
+    const band = noticeBandFor("healthy", "healthy", true, { deviceEnvironment: "OFFLINE" });
     expect(band?.message).toBe("No network connection.");
     // Nothing is stuck, so there is no recovery card to open.
     expect(band?.action).toBeNull();
@@ -139,9 +139,9 @@ describe("noticeBandFor", () => {
   it("keeps naming the device over a machine whose restart already failed", () => {
     // The terminal state is the one most likely to be read as the machine's own
     // fault, and it is where a restart the network doomed ends up. Left to the
-    // restart_failed branch, the band would say "This machine stopped
+    // recovery_failed branch, the band would say "This machine stopped
     // responding." about a machine nothing here ever reached.
-    const failed = noticeBandFor("restart_failed", "healthy", true, { deviceEnvironmentBlock: "SSH_BLOCKED" });
+    const failed = noticeBandFor("recovery_failed", "healthy", true, { deviceEnvironment: "SSH_BLOCKED" });
     expect(failed?.message).toBe("This network blocks the connection to your machines.");
   });
 
@@ -153,30 +153,67 @@ describe("noticeBandFor", () => {
     // network cannot touch, and send the user to a card whose restart would
     // have worked.
     const band = noticeBandFor("stuck", "healthy", true, {
-      deviceEnvironmentBlock: "OFFLINE",
+      deviceEnvironment: "OFFLINE",
       isWorkspaceNetworkDependent: false,
     });
     expect(band?.message).toBe("Lost connection to this machine. Reconnecting…");
     const healthy = noticeBandFor("healthy", "healthy", true, {
-      deviceEnvironmentBlock: "OFFLINE",
+      deviceEnvironment: "OFFLINE",
       isWorkspaceNetworkDependent: false,
     });
     expect(healthy).toBeNull();
   });
 
-  it("lets a restart that is actually running narrate itself", () => {
+  it("lets the restart the user asked for narrate itself", () => {
     // The band reports the restart rather than waiting for a network: the
-    // restart is in flight either way, and its progress is what the user asked
-    // to see.
-    const band = noticeBandFor("restarting", "healthy", true, { deviceEnvironmentBlock: "OFFLINE" });
+    // user's own stop+start bounce is in flight either way, and its progress
+    // is what they asked to see.
+    const band = noticeBandFor("recovering", "healthy", true, {
+      deviceEnvironment: "OFFLINE",
+      recoveryKind: "restart",
+    });
     expect(band?.message).toBe("Lost connection to this machine. Reconnecting…");
+  });
+
+  it("keeps naming the device over the app's own unattended start", () => {
+    // The app enters "recovering" on its own within seconds of any network
+    // flap, and stays there for as long as the network is down -- the whole of
+    // the episode the device's condition exists to explain. Hiding it behind
+    // the dispatch left a user with a dead wifi reading "Lost connection" for
+    // the length of a lid-closed sleep. The tracker's word ("start") and no
+    // word at all (null) both decline the exception; only the user's click
+    // earns it.
+    for (const recoveryKind of ["start", null] as const) {
+      const band = noticeBandFor("recovering", "healthy", true, {
+        deviceEnvironment: "OFFLINE",
+        recoveryKind,
+      });
+      expect(band?.message).toBe("No network connection.");
+    }
+  });
+
+  it("blames nobody while this device's network is unmeasured", () => {
+    // After a wake the reading is blank until a probe lands, and the provider's
+    // own poll errored because the laptop was asleep. Naming the provider then
+    // is the wrong headline; the generic recovering line still says contact
+    // was lost, without saying whose fault it is.
+    const band = noticeBandFor("stuck", "healthy", true, {
+      deviceEnvironment: "UNKNOWN",
+      unreachableProviderLabel: "Imbue Cloud",
+      isDeviceCannotConnect: true,
+    });
+    expect(band?.key).toBe("workspace-recovering");
+    expect(band?.message).toBe("Lost connection to this machine. Reconnecting…");
+    // And there is nothing to say over a healthy machine, or on a hub page.
+    expect(noticeBandFor("healthy", "healthy", true, { deviceEnvironment: "UNKNOWN" })).toBeNull();
+    expect(localPageNoticeFor("healthy", true, "UNKNOWN")).toBeNull();
   });
 
   it("does not rewrite the strip as the machine it already speaks for goes stuck", () => {
     // Same key and same line across the edge, so the band is replaced in place
     // rather than torn down and rebuilt as the condition is finally attributed.
-    const before = noticeBandFor("healthy", "healthy", true, { deviceEnvironmentBlock: "OFFLINE" });
-    const after = noticeBandFor("stuck", "healthy", true, { deviceEnvironmentBlock: "OFFLINE" });
+    const before = noticeBandFor("healthy", "healthy", true, { deviceEnvironment: "OFFLINE" });
+    const after = noticeBandFor("stuck", "healthy", true, { deviceEnvironment: "OFFLINE" });
     expect(before?.key).toBe(after?.key);
     expect(before?.message).toBe(after?.message);
   });

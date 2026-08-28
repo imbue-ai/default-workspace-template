@@ -34,7 +34,12 @@ def test_prevent_time_sleep() -> None:
     # poll loop (a deadline-bounded poll, exactly what the rule prescribes;
     # the shared wait_for helper lives in imbue_common, which the shipped
     # connector may not import). The seam is faked in unit tests.
-    rc.check_time_sleep(_DIR, snapshot(1))
+    # 2: r2.stores._sleep paces the enforcement-lease acquisition poll loop
+    # (same deadline-bounded-poll shape and the same imbue_common
+    # restriction); tests keep waits negligible via zero wait windows or
+    # pre-released leases, except the serialization test, which exercises
+    # the real poll loop and pays at most one sub-second poll interval.
+    rc.check_time_sleep(_DIR, snapshot(2))
 
 
 def test_prevent_global_keyword() -> None:

@@ -1,10 +1,13 @@
 """The `mngr forward` instance the flow executor drives the delivered app through.
 
 `mngr forward` is what serves a workspace's apps to the client: it binds a loopback port, routes by
-Host header (`<label>.host-<hex>.localhost`), and reaches the workspace over the same per-host SSH
-tunnel the eval's exec and rsync already ride. Driving flows through it means the browser sees the
-app at the exact origin the client's app tab iframes -- through the product's serving path rather
-than under it at a raw in-container socket.
+Host header, and reaches the workspace over the same per-host SSH tunnel the eval's exec and rsync
+already ride. Driving flows through it means the browser sees the app on the product's serving path
+rather than under it at a raw in-container socket.
+
+Origins are keyed by AGENT id: the bare `agent-<hex>.localhost` origin serves the shell service and
+each registered service owns `<label>.agent-<hex>.localhost`, with one session cookie scoped to the
+whole family. The agent id is the coordinate because it survives the agent moving between hosts.
 
 The driver starts its OWN instance rather than discovering the one the headless minds backend may
 have spawned: a driver-owned instance has a known port and a known pre-auth token, and does not
@@ -30,7 +33,7 @@ from imbue.imbue_common.pure import pure
 # OS-assigned port the driver would then have to discover.
 FORWARD_PORT: Final[int] = 8431
 
-# The service the bare `host-<hex>` origin resolves to, matching minds. Flows never navigate to the
+# The service the bare `agent-<hex>` origin resolves to, matching minds. Flows never navigate to the
 # bare origin -- they go straight to a delivered app's label -- but the flag is required and the
 # value is what decides the shell backend, so it stays at parity.
 FORWARD_SHELL_SERVICE: Final[str] = "system_interface"
@@ -52,7 +55,12 @@ BOX_FORWARD_LOG_PATH: Final[str] = "/logs/agent/mngr_forward.jsonl"
 _LISTENING_EVENT: Final[str] = "listening"
 _BACKEND_FAILURE_EVENT: Final[str] = "system_interface_backend_failure"
 
-_HOST_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^host-[0-9a-f]{32}$")
+# The origin coordinate the proxy routes on, mirroring the `agent-<32hex>` alternative of
+# mngr_forward's own FORWARD_SUBDOMAIN_PATTERN. Mirrored rather than imported because this project
+# resolves outside the monorepo workspace and does not depend on the forward plugin; a test checks
+# every candidate it classifies against the plugin's own pattern, so the two cannot drift apart
+# unnoticed.
+_AGENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^agent-[0-9a-f]{32}$")
 
 
 def mint_forward_secret() -> str:
@@ -140,7 +148,7 @@ def forward_start_command(argv: tuple[str, ...], mngr_dir: str, log_path: str) -
 
 
 @pure
-def forward_probe_command(port: int, preauth_cookie: str, host_id: str) -> str:
+def forward_probe_command(port: int, preauth_cookie: str, agent_id: str) -> str:
     """Probe the instance the way minds does: an HTTP request carrying the session cookie.
 
     Readiness is NOT the `listening` envelope. That fires from the server's lifespan hook before
@@ -155,7 +163,7 @@ def forward_probe_command(port: int, preauth_cookie: str, host_id: str) -> str:
         "curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 -k "
         "-H {host_header} -H {cookie} https://127.0.0.1:{port}/"
     ).format(
-        host_header=shlex.quote("Host: {}.localhost:{}".format(host_id, port)),
+        host_header=shlex.quote("Host: {}.localhost:{}".format(agent_id, port)),
         cookie=shlex.quote("Cookie: {}={}".format(SESSION_COOKIE_NAME, preauth_cookie)),
         port=port,
     )
@@ -176,16 +184,33 @@ def forward_stop_command(port: int) -> str:
 
 
 @pure
-def is_host_id(candidate: str) -> bool:
-    """Whether a string is a mngr host id. Checked before it is formatted into an origin, because a
-    malformed one produces a URL the proxy silently declines to route rather than an error."""
-    return bool(_HOST_ID_PATTERN.match(candidate))
+def is_agent_id(candidate: str) -> bool:
+    """Whether a string is a mngr agent id, and so an origin coordinate the proxy routes on.
+
+    Checked before any URL is built from it.
+    """
+    return bool(_AGENT_ID_PATTERN.match(candidate))
 
 
 @pure
-def forwarded_origin(label: str, host_id: str, port: int) -> str:
-    """The URL the client's app tab iframes: the app's own label on the workspace's host origin."""
-    return "https://{label}.{host_id}.localhost:{port}/".format(label=label, host_id=host_id, port=port)
+def forwarded_origin(label: str, agent_id: str, port: int) -> str:
+    """The app's own label on the workspace's agent-keyed origin, which is where the proxy serves it."""
+    return "https://{label}.{agent_id}.localhost:{port}/".format(label=label, agent_id=agent_id, port=port)
+
+
+@pure
+def session_cookie_domain(agent_id: str) -> str:
+    """The scope `mngr forward` gives its session cookie: the workspace's whole origin family.
+
+    The proxy issues ONE cookie, `Domain=agent-<hex>.localhost`, covering the bare origin and every
+    service label under it. A browser armed any more narrowly -- against the single origin a flow
+    opens on -- takes the proxy's login redirect the moment the app sends it to another label, and
+    the flow is then scored against a login page it can do nothing with.
+
+    The leading dot is how Playwright spells "and every subdomain"; a browser stores it as exactly
+    the cookie the proxy's own `Domain=` attribute produces.
+    """
+    return ".{agent_id}.localhost".format(agent_id=agent_id)
 
 
 @pure

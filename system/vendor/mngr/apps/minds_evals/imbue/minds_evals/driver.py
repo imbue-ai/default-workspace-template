@@ -578,9 +578,6 @@ class MindsPersonaDriver(BaseAgent):
             deadline=time.monotonic() + self._case.verification_timeout_seconds,
             verifier_model=self._verifier_model,
             verification_agent=self._build_verification_agent(),
-            workspace_host_id=await minds_bridge.fetch_agent_host_id(
-                environment, self._box_env, self._workspace_agent_id
-            ),
             preauth_cookie=SecretStr(forward_instance.mint_forward_secret()),
             browser_bridge_token=SecretStr(forward_instance.mint_forward_secret()),
         )
@@ -1122,6 +1119,11 @@ class MindsPersonaDriver(BaseAgent):
             local_path.write_text(content)
             await environment.upload_file(local_path, "{}/{}".format(minds_bridge.BOX_LOGS_DIR, filename))
 
+    def _resolve_workspace_usage(self) -> usage_accounting.ResolvedWorkspaceUsage:
+        """The one resolution of the workspace agent's spend that every usage writer in this driver
+        reads from; the choice between the two accounts is ``resolve_workspace_usage``'s."""
+        return usage_accounting.resolve_workspace_usage(self._latest_events, self._proxy_usage_records)
+
     def _populate_context_metadata(self, context: AgentContext) -> None:
         turn_word_counts = _words_per_agent_turn(self._conversation)
         message_word_counts = self._agent_message_word_counts
@@ -1129,15 +1131,8 @@ class MindsPersonaDriver(BaseAgent):
         # Harbor's token/cost fields describe the agent under test, so they carry the workspace
         # agent's consumption. The decider is the harness's own spend and goes to metadata; putting
         # it here would report the simulated user's tokens as the agent's.
-        transcript_usage = usage_accounting.summarize_workspace_usage(self._latest_events)
-        proxy_usage = (
-            usage_accounting.summarize_proxy_usage(self._proxy_usage_records) if self._proxy_usage_records else None
-        )
-        # The proxy is the complete account when one ran: it is the boundary every call crosses, so
-        # it includes delegated work the transcript never sees. On a delegating case the two differ
-        # by that work -- measured at 45% of the real cost -- so preferring the transcript here would
-        # publish the understated figure.
-        workspace_usage = proxy_usage if proxy_usage is not None else transcript_usage
+        resolved_usage = self._resolve_workspace_usage()
+        workspace_usage = resolved_usage.reported
         decider_usage = usage_accounting.summarize_decider_usage(decider_results, self._decider_model)
         if workspace_usage.message_count:
             context.n_input_tokens = workspace_usage.n_input_tokens
@@ -1195,8 +1190,8 @@ class MindsPersonaDriver(BaseAgent):
             "workspace_usage": usage_accounting.workspace_usage_metadata(workspace_usage),
             # Both sources, so the two can be reconciled after the fact: they agree exactly when the
             # agent delegates nothing, and differ by the delegated spend when it does.
-            "usage_source": "proxy" if proxy_usage is not None else "transcript",
-            "transcript_usage": usage_accounting.workspace_usage_metadata(transcript_usage),
+            "usage_source": "proxy" if resolved_usage.is_from_proxy else "transcript",
+            "transcript_usage": usage_accounting.workspace_usage_metadata(resolved_usage.transcript),
             "decider_usage": usage_accounting.decider_usage_metadata(decider_usage),
             # The UI-flow verification agent is harness spend just like the decider: it measures
             # what the eval costs to run, never what the agent under test consumed.
@@ -1238,7 +1233,7 @@ class MindsPersonaDriver(BaseAgent):
             # ATIF requires at least one step; a trial that died before any
             # exchange has no conversation to render.
             return
-        workspace_usage = usage_accounting.summarize_workspace_usage(self._latest_events)
+        workspace_usage = self._resolve_workspace_usage().reported
         trajectory = Trajectory(
             schema_version="ATIF-v1.7",
             session_id=self.session_id,

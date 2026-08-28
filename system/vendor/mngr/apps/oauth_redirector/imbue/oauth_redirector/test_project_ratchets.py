@@ -11,7 +11,9 @@ from pathlib import Path
 
 from imbue.modal_app_kit.testing import imported_module_names
 from imbue.modal_app_kit.testing import is_module_within_package
+from imbue.modal_app_kit.testing import modal_functions_missing_logging_bootstrap
 from imbue.modal_app_kit.testing import shipped_module_files
+from imbue.modal_app_kit.testing import uses_dunder_name_logger
 from imbue.oauth_redirector.deploy_constants import THIRD_PARTY_IMPORT_ROOTS
 
 _PACKAGE_DIR = Path(__file__).parent
@@ -67,3 +69,13 @@ def test_only_the_entrypoint_imports_modal() -> None:
         if any(m == "modal" or m.startswith("modal.") for m in imported_module_names(path))
     ]
     assert not violations, f"Only app.py may import modal: {violations}"
+
+
+def test_entrypoint_logger_is_named_under_imbue() -> None:
+    """In the container the entrypoint is module ``app``, so a ``__name__`` logger would drop its INFO lines."""
+    assert not uses_dunder_name_logger(_PACKAGE_DIR / "app.py")
+
+
+def test_every_modal_function_bootstraps_logging_first() -> None:
+    """The JSON root handler exists only once ``configure_logging()`` runs; a function that skips it drops its INFO lines."""
+    assert modal_functions_missing_logging_bootstrap(_PACKAGE_DIR / "app.py") == []
