@@ -42,6 +42,10 @@ from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostName
 from imbue.system_interface import client_activity
 from imbue.system_interface import projects
+from imbue.system_interface.accounts import AccountError
+from imbue.system_interface.accounts import account_dir
+from imbue.system_interface.accounts import claim_first_chat
+from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import is_lifecycle_dead
@@ -51,21 +55,18 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.agent_discovery import delivered_or_raise
 from imbue.system_interface.agent_discovery import discover_agents
-from imbue.system_interface.accounts import AccountError
-from imbue.system_interface.accounts import claim_first_chat
-from imbue.system_interface.accounts import account_dir
-from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.agent_discovery import get_host_dir
+from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.binding import BindingError
 from imbue.system_interface.harnesses.binding import create_args as binding_create_args
 from imbue.system_interface.harnesses.binding import harness_for
 from imbue.system_interface.harnesses.binding import resolve_binding
-from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
-from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
+from imbue.system_interface.harnesses.lanes import AUTO_NAME_WORD_BY_LANE
 from imbue.system_interface.harnesses.model import ModelChoice
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import read_model_identity
@@ -87,7 +88,6 @@ from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import CreatedChatAgent
 from imbue.system_interface.models import QueuedMessageState
-from imbue.system_interface.harnesses.lanes import AUTO_NAME_WORD_BY_LANE
 from imbue.system_interface.naming import AUTO_NAME_WORD_BY_HARNESS
 from imbue.system_interface.naming import canonical_agent_name
 from imbue.system_interface.naming import first_free_numbered_name
@@ -1253,7 +1253,17 @@ class AgentManager:
         # Launching on an account makes it the most recently used one, which is what the
         # new-tab picker offers next time. Set here rather than in the picker so a chat
         # started from the rail's shortcut counts the same.
-        set_mru(account.id)
+        #
+        # Best-effort, and deliberately so: the mru is a convenience, not an input to
+        # correctness. It also runs AFTER the proto agent is registered and outside the try
+        # that converts AccountError above -- so an account deleted in this window used to
+        # escape as a 500 before the creation thread started, leaving a proto entry nothing
+        # ever popped: the name burned forever and every new socket replaying a chat stuck at
+        # "creating".
+        try:
+            set_mru(account.id)
+        except AccountError as e:
+            _loguru_logger.warning("Could not record {} as most-recently-used: {}", account.id, e)
         account_args = [
             *binding_create_args(harness, account_dir(account.id), self._get_agent_state_dir(agent_id)),
             # The binding is invisible from the outside once mngr has baked the command, so

@@ -188,7 +188,14 @@ def submit_flow(flow_id: str) -> Response:
 
 
 def abort_flow(flow_id: str) -> Response:
-    get_state().auth_flows.abort(flow_id)
+    # Abort is what a closed modal calls on its way out, so it has to succeed even when the
+    # flow it is abandoning is in a bad state -- a folder deleted underneath it, an unreadable
+    # index. A 500 here reaches a UI that has already gone, and the user sees a failed request
+    # for something they did not ask for.
+    try:
+        get_state().auth_flows.abort(flow_id)
+    except (accounts.AccountError, OSError) as e:
+        logger.warning("Aborting sign-in flow {} did not unwind cleanly: {}", flow_id, e)
     return _json_response({"status": "ok"})
 
 

@@ -31,6 +31,7 @@ import shutil
 import threading
 import uuid
 from collections.abc import Iterator
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -172,6 +173,11 @@ def read_index(home: Path | None = None) -> AccountIndex:
     if not isinstance(payload, dict):
         raise AccountError(f"account index at {path} is not an object: {type(payload).__name__}")
     version = payload.get("version", 0)
+    # `.get`'s default only covers an ABSENT key, so `{"version": null}` yields None and
+    # `None > int` raises TypeError -- which boot does not catch (it catches AccountError), so
+    # supervisord restarts forever. A string version does the same. Validated before comparing.
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise AccountError(f"account index at {path} has a non-numeric version: {version!r}")
     if version > INDEX_VERSION:
         raise AccountError(
             f"account index at {path} is version {version}, but this build understands "
@@ -235,6 +241,15 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
         # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
         existing = next((a for a in index.accounts if a.id == account_id), None)
         if existing is not None:
+            # `Account.lane` is immutable, and this is where that is enforced. Silently keeping
+            # the old value let a re-auth on the WRONG lane commit: the row still said anthropic
+            # while codex's config had been written into its folder, and every chat bound there
+            # resolved a claude harness against codex credentials.
+            if existing.lane != lane:
+                raise AccountError(
+                    f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; "
+                    "an account's lane never changes"
+                )
             if existing.display != display:
                 existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
             rows = tuple(existing if a.id == account_id else a for a in index.accounts)
@@ -265,6 +280,21 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
 # with it. Deleting a credential is reversible by signing in again; deleting a transcript
 # is not.
 KEPT_ON_DISCARD: Final = ("projects",)
+
+# Where a re-auth parks the credential it is about to replace.
+#
+# A re-auth has to delete the working credential before driving the CLI -- three of the four
+# promote probes are presence checks, so a flow judged against the file already there reports
+# success without anything having changed. That leaves a window in which the only copy of a
+# working credential is in process memory, and a stop, a snapshot, an OOM kill or a supervisord
+# restart in that window destroys it with no trace on disk: the row still points at a folder
+# that exists, so nothing notices, and every chat bound there fails on its next turn looking
+# signed in. Parking it here instead makes the window survivable -- `reconcile` puts it back at
+# boot -- and it is inside the account folder so deleting the account takes the backup with it.
+REAUTH_BACKUP_DIRNAME: Final = ".minds-reauth-backup"
+# Marks a backed-up file that did not exist before the flow, so restoring it means deleting it.
+_ABSENT_SUFFIX: Final = ".absent"
+KEPT_ON_DISCARD_ALL: Final = (*KEPT_ON_DISCARD, REAUTH_BACKUP_DIRNAME)
 
 
 def discard_account_dir(account_id: str, home: Path | None = None) -> None:
@@ -372,6 +402,66 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
     raise AccountError(f"no such account: {account_id}")
 
 
+def _reauth_backup_dir(account_id: str, home: Path | None = None) -> Path:
+    return account_dir(account_id, home) / REAUTH_BACKUP_DIRNAME
+
+
+def save_reauth_backup(account_id: str, files: Mapping[Path, bytes | None], home: Path | None = None) -> None:
+    """Park the credential a re-auth is about to delete, so it outlives this process.
+
+    Keyed by file NAME rather than by path: every credential a harness reads sits directly in
+    the account folder, and a name is what survives being written to disk and read back by a
+    later process that has no memory of the flow. A file that did not exist is recorded as an
+    empty marker, so the restore knows to remove rather than to write.
+    """
+    backup = _reauth_backup_dir(account_id, home)
+    shutil.rmtree(backup, ignore_errors=True)
+    backup.mkdir(parents=True, exist_ok=True)
+    backup.chmod(0o700)
+    for path, content in files.items():
+        target = backup / path.name
+        if content is None:
+            target.write_bytes(b"")
+            (backup / f"{path.name}{_ABSENT_SUFFIX}").write_bytes(b"")
+        else:
+            target.write_bytes(content)
+        target.chmod(0o600)
+
+
+def clear_reauth_backup(account_id: str, home: Path | None = None) -> None:
+    """Drop the parked copy. Called once the new credential is committed."""
+    shutil.rmtree(_reauth_backup_dir(account_id, home), ignore_errors=True)
+
+
+def restore_reauth_backup(account_id: str, home: Path | None = None) -> int:
+    """Put a parked credential back, returning how many files it covered.
+
+    Zero when there is nothing parked, which is the ordinary case. Only ever called with the
+    index lock held, so it cannot race a flow that is mid-commit.
+    """
+    backup = _reauth_backup_dir(account_id, home)
+    if not backup.is_dir():
+        return 0
+    folder = account_dir(account_id, home)
+    if not folder.is_dir():
+        shutil.rmtree(backup, ignore_errors=True)
+        return 0
+    restored = 0
+    for child in sorted(backup.iterdir()):
+        if child.name.endswith(_ABSENT_SUFFIX):
+            continue
+        target = folder / child.name
+        if (backup / f"{child.name}{_ABSENT_SUFFIX}").exists():
+            # It did not exist before the flow, so putting it "back" means removing it.
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(child.read_bytes())
+            target.chmod(0o600)
+        restored += 1
+    shutil.rmtree(backup, ignore_errors=True)
+    return restored
+
+
 def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Make the index and the folders agree, in BOTH directions. Called at boot.
 
@@ -395,6 +485,17 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
     with _index_lock(home):
         index = read_index(home)
         known = {a.id for a in index.accounts}
+        # Before anything else: a re-auth that died mid-flight left the only copy of a working
+        # credential parked in the account folder. Put it back, so the account this boot
+        # inherits is the one the user had rather than a signed-out husk that still looks fine.
+        for account in index.accounts:
+            restored = restore_reauth_backup(account.id, home)
+            if restored:
+                logger.warning(
+                    "Restored {} credential file(s) for account {} from an interrupted re-auth",
+                    restored,
+                    account.id,
+                )
         removed = []
         for child in sorted(root.iterdir()):
             if child.name == _LOCK_FILENAME:
@@ -406,7 +507,7 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
             # left behind. Removing it here would undo that one boot later. An EMPTY folder
             # is debris and must still go, which is why this asks for a non-empty subset.
             contents = {c.name for c in child.iterdir()}
-            if contents and contents <= set(KEPT_ON_DISCARD):
+            if contents and contents <= set(KEPT_ON_DISCARD_ALL):
                 continue
             shutil.rmtree(child, ignore_errors=True)
             removed.append(child.name)
