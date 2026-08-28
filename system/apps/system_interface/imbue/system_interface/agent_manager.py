@@ -1255,10 +1255,10 @@ class AgentManager:
         # started from the rail's shortcut counts the same.
         #
         # Best-effort, and deliberately so: the mru is a convenience, not an input to
-        # correctness. It also runs AFTER the proto agent is registered and outside the try
-        # that converts AccountError above -- so an account deleted in this window used to
-        # escape as a 500 before the creation thread started, leaving a proto entry nothing
-        # ever popped: the name burned forever and every new socket replaying a chat stuck at
+        # correctness. It runs AFTER the proto agent is registered and outside the try that
+        # converts AccountError above, so an account deleted in this window would otherwise
+        # escape as a 500 before the creation thread starts -- leaving a proto entry nothing
+        # ever pops, its name burned forever and every new socket replaying a chat stuck at
         # "creating".
         try:
             set_mru(account.id)
@@ -1274,9 +1274,9 @@ class AgentManager:
         ]
 
         # The workspace's very first chat gets the `first` template, which is what delivers
-        # `/welcome`. Bootstrap used to own this by creating a chat at boot; it cannot now,
-        # because a chat needs a provider account and a fresh workspace has none. Claimed
-        # here rather than by the caller so every path that starts a chat is covered.
+        # `/welcome`. Claimed here rather than by the caller, so every path that starts a chat
+        # is covered, and on demand rather than at boot, because a chat needs a provider
+        # account and a fresh workspace has none.
         if claim_first_chat():
             extra_role_templates = (*extra_role_templates, "first")
 

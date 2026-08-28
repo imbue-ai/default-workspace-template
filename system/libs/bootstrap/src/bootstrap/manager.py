@@ -602,9 +602,9 @@ def main() -> None:
     # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.
     _ensure_git_identity()
 
-    # Commit the rsynced template and put the work_dir on `main`. Its own one-shot signal:
-    # it used to share the initial chat's, which tied "does this workspace have a main
-    # branch" to "does it have a chat" -- two questions with different answers.
+    # Commit the rsynced template and put the work_dir on `main`. Its OWN one-shot signal:
+    # "does this workspace have a main branch" and "does it have a chat" are different
+    # questions with different answers, so they cannot share one.
     _initialize_workspace_main_branch()
 
     # Converge the workspace venv BEFORE the initial chat agent is created

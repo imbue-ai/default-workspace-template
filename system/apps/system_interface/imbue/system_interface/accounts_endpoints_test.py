@@ -163,8 +163,8 @@ def test_an_unknown_lane_is_a_404_with_a_clean_message() -> None:
     assert response.status_code == 404
     detail = response.get_json()["detail"]
     assert "bogus" in detail
-    # It used to subclass KeyError, whose `__str__` is `repr(args[0])` -- so a message written
-    # for a person arrived here wrapped in its own quotes.
+    # `AccountError` must not subclass KeyError, whose `__str__` is `repr(args[0])`: a message
+    # written for a person would arrive wrapped in its own quotes.
     assert not detail.startswith("'"), f"the message is double-quoted: {detail}"
 
 

@@ -53,8 +53,8 @@ _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 _ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
 
 # Marks that this workspace has had its first chat. Beside the accounts root rather than in
-# bootstrap's state dir: "has anyone chatted here yet" is workspace state, and the workspace
-# no longer creates a chat at boot for bootstrap to know about.
+# bootstrap's state dir: "has anyone chatted here yet" is workspace state, and the chat that
+# answers it is created on demand rather than at boot.
 _FIRST_CHAT_FILENAME: Final = "first_chat_started"
 
 _INDEX_THREAD_LOCK = threading.Lock()
@@ -143,8 +143,8 @@ def claim_first_chat(home: Path | None = None) -> bool:
     """True exactly once per workspace, for the first chat anyone starts.
 
     The caller stacks the `first` create template on that chat -- which is what delivers
-    `/welcome`. Bootstrap used to own this by creating a chat at boot; it cannot any more,
-    because a chat needs a provider account and a fresh workspace has none.
+    `/welcome`. It is claimed here rather than by bootstrap because a chat needs a provider
+    account, and a fresh workspace has none until someone signs in.
 
     Claim-and-mark in one call so two creates racing cannot both be first.
     """
@@ -241,10 +241,10 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
         # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
         existing = next((a for a in index.accounts if a.id == account_id), None)
         if existing is not None:
-            # `Account.lane` is immutable, and this is where that is enforced. Silently keeping
-            # the old value let a re-auth on the WRONG lane commit: the row still said anthropic
-            # while codex's config had been written into its folder, and every chat bound there
-            # resolved a claude harness against codex credentials.
+            # `Account.lane` is immutable, and this is where that is enforced. Keeping the
+            # stored value and ignoring the argument would let a re-auth on the WRONG lane
+            # commit: the row still says anthropic while codex's config sits in its folder, and
+            # every chat bound there resolves a claude harness against codex credentials.
             if existing.lane != lane:
                 raise AccountError(
                     f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; "

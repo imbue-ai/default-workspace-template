@@ -399,9 +399,8 @@ export function renderAssistantMessageChildren(
       //
       // An auth error gets a button as well. It is the one failure the user can actually
       // fix, and the fix is not obvious from the provider's wording -- which is usually a
-      // raw 401 body. Deliberately inline rather than a modal: an auth failure used to
-      // throw the sign-in modal over whatever you were doing, and having it interrupt is
-      // what made it hated. This waits to be clicked.
+      // raw 401 body. Inline rather than a modal, so it waits to be clicked instead of
+      // throwing a sign-in screen over whatever the user was doing.
       children.push(
         m("div.message-api-error", [
           m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }),
