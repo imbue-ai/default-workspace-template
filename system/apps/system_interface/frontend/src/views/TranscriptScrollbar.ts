@@ -125,9 +125,11 @@ export function TranscriptScrollbar(): m.Component<TranscriptScrollbarAttrs> {
           onpointerup: (event: PointerEvent) => {
             isDragging = false;
             (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+            engine.scrollbarRelease();
           },
           onpointercancel: () => {
             isDragging = false;
+            engine.scrollbarRelease();
           },
         },
         m("div", {
