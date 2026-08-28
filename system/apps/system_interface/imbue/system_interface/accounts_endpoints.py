@@ -11,6 +11,7 @@ starts a flow and the polls that advance it.
 from __future__ import annotations
 
 import json
+from typing import Any
 from typing import Final
 
 from flask import Flask
@@ -21,6 +22,7 @@ from loguru import logger as _loguru_logger
 from imbue.system_interface import accounts
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.harnesses.auth_flows import FlowError
+from imbue.system_interface.harnesses.claude.auth import ClaudeAuthError
 from imbue.system_interface.harnesses.auth_flows import flow_shape
 from imbue.system_interface.harnesses.lanes import HARNESS_LABEL
 from imbue.system_interface.harnesses.lanes import LANES
@@ -144,8 +146,27 @@ def list_accounts() -> Response:
     return _json_response({"accounts": rows, "mru": index.mru})
 
 
+def _json_object_body() -> dict[str, Any] | Response:
+    """The request body as a JSON object, or a 400.
+
+    `request.get_json(silent=True) or {}` only rescues a FALSY body, so a non-empty array,
+    string or number is truthy and `payload.get(...)` raises AttributeError -- a 500 for a
+    malformed request. A twin of `server._parse_json_object_body` rather than a shared import:
+    `server` imports this module to register its routes, so importing back is a cycle.
+    """
+    try:
+        body = json.loads(request.get_data())
+    except (json.JSONDecodeError, ValueError):
+        return _error_response("Invalid JSON in request body")
+    if not isinstance(body, dict):
+        return _error_response("Request body must be a JSON object")
+    return body
+
+
 def start_flow() -> Response:
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object_body()
+    if isinstance(payload, Response):
+        return payload
     lane_id = str(payload.get("lane_id", ""))
     method_id = str(payload.get("method_id", ""))
     account_id = payload.get("account_id") or None
@@ -171,7 +192,9 @@ def poll_flow(flow_id: str) -> Response:
 
 def submit_flow(flow_id: str) -> Response:
     """Accept whatever the flow's shape asks the user for: a pasted code, or a key."""
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object_body()
+    if isinstance(payload, Response):
+        return payload
     service = get_state().auth_flows
     try:
         if "code" in payload:
@@ -186,7 +209,11 @@ def submit_flow(flow_id: str) -> Response:
             status = service.submit_key(flow_id, str(payload["api_key"]).strip(), raw_provider or None)
         else:
             return _error_response("expected a code or an api_key")
-    except FlowError as e:
+    except (FlowError, ClaudeAuthError) as e:
+        # ClaudeAuthError too: a paste that fails claude's strict env-block parse raises
+        # CredentialPasteError, which is a sibling of FlowError rather than a subclass. Escaping
+        # here made a typo'd key a 500, and threw away the one message that says WHICH key was
+        # wrong -- the user saw a generic failure instead of "Unsupported keys in paste: ...".
         return _error_response(str(e))
     return _json_response(status.model_dump())
 
@@ -215,7 +242,9 @@ def delete_account(account_id: str) -> Response:
 
 def rename_account(account_id: str) -> Response:
     """Set or clear an account's user-chosen name. Display only -- see `accounts.rename_account`."""
-    payload = request.get_json(silent=True) or {}
+    payload = _json_object_body()
+    if isinstance(payload, Response):
+        return payload
     raw_name = payload.get("name", "")
     # `str(None)` is "None" -- a four-character name the user never typed, under the cap and
     # therefore silently accepted. A null means "clear it", which is the empty string.

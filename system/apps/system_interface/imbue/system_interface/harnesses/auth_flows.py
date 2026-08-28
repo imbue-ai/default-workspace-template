@@ -280,15 +280,6 @@ class AuthFlowService:
                 account_path = accounts.account_dir(account_id, self._home)
             seed_account(lane.harness, account_path, self._work_dir)
 
-            if isinstance(method, PasteMethod):
-                # Nothing to drive; the caller supplies the credential on submit. It still
-                # gets a deadline: a closed browser tab would otherwise leave the session
-                # PENDING and its minted folder on disk until the next sign-in or the next
-                # boot, and the service is single-flight, so that session is in the way.
-                self._session = _new_session(lane, method, account_id, minted)
-                self._arm_deadline_locked(self._session, method.flow_deadline_s)
-                return FlowStart(flow_id=self._session.flow_id, shape=FlowShape.PASTE)
-
             session = _new_session(lane, method, account_id, minted)
             self._session = session
             # Take the old credential away first. Three of the four promote probes are
@@ -310,6 +301,22 @@ class AuthFlowService:
                 accounts.save_reauth_backup(account_id, session.cleared_credentials, self._home)
                 for path in session.cleared_credentials:
                     path.unlink(missing_ok=True)
+
+            if isinstance(method, PasteMethod):
+                # Nothing to drive; the caller supplies the credential on submit. It still
+                # gets a deadline: a closed browser tab would otherwise leave the session
+                # PENDING and its minted folder on disk until the next sign-in or the next
+                # boot, and the service is single-flight, so that session is in the way.
+                #
+                # Below the clearing block on purpose. Returning above it left a paste re-auth
+                # judged against the credential that was already there: paste a dead key over a
+                # working OAuth login and `claude auth status` still says logged-in, so the
+                # probe returned YES and the bad key was committed -- while at runtime the key
+                # OUTRANKS the OAuth credential, so the account was broken and the UI said
+                # "signed in again". Every failure path restores from the park, same as a PTY
+                # flow.
+                self._arm_deadline_locked(session, method.flow_deadline_s)
+                return FlowStart(flow_id=session.flow_id, shape=FlowShape.PASTE)
             # A `finally` rather than a catch-all: the credential is already unlinked by here,
             # so what matters is that the restore cannot be MISSED, which is what `finally`
             # guarantees and a catch-all only approximates. A missing binary raises pexpect.ExceptionPexpect and a CLI that
@@ -614,6 +621,17 @@ class AuthFlowService:
         # restore -- and restoring would undo what the user just did. The parked copy goes with
         # it, or the next boot would put the OLD credential back over the new one.
         self._unwind_credentials_locked(session, restore=False)
+        # A RE-AUTH commits into a row that must still be there. Another tab can delete the
+        # account while this flow is mid-probe, and both outcomes were wrong: for a harness
+        # whose folder goes with it, `commit_account` raised AccountError -- which `poll_flow`
+        # does not catch, so a 500 every two seconds for the rest of the deadline, each one
+        # re-running the probe under the service lock. For claude the `projects/` husk keeps
+        # the folder alive, so the commit SUCCEEDED and silently resurrected the row the user
+        # had just deleted, with a fresh seq. Refused as a flow failure: the account is gone
+        # because they removed it, and that is an answer, not an error.
+        if not session.minted and not accounts.account_exists(session.account_id, self._home):
+            self._fail_locked(session, "That account was removed while you were signing in.")
+            raise FlowError(session.detail or "account removed")
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's

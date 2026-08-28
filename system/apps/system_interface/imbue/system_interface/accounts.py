@@ -402,6 +402,16 @@ def set_mru(account_id: str, home: Path | None = None) -> None:
         _write_index(index.model_copy_update(to_update(index.field_ref().mru, account_id)), home)
 
 
+def account_exists(account_id: str, home: Path | None = None) -> bool:
+    """Whether the index still names this account. No folder check, deliberately.
+
+    Used by a re-auth about to commit, to tell "the user deleted this while I was working" from
+    "the folder is momentarily odd". Deletion drops the ROW; the folder may outlive it when
+    something in `KEPT_ON_DISCARD` survives, so the row is the honest question.
+    """
+    return any(a.id == account_id for a in read_index(home).accounts)
+
+
 def resolve_account(account_id: str, home: Path | None = None) -> Account:
     """Resolve an explicit id to its row, checking that its folder is still there.
 

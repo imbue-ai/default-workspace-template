@@ -1251,3 +1251,37 @@ So an existing workspace updating to this build re-ran work that is destructive 
 `git add -A`, a commit of whatever the user had in flight, then `git branch -D main` -- which on
 a work_dir sitting on any other branch force-deletes their `main` and renames their branch over
 it. The old signal now counts as done.
+
+# Correctness fixes found by a second independent review
+
+**Backing out of an alternate sign-in method no longer turns a re-auth into a new account.**
+`back()` re-entered the lane's primary method without carrying `accountId`, so the flow silently
+became a mint: the user finished the sign-in, got a second row for the same provider, and the
+account they were reviving stayed dead along with every chat bound to it -- the exact outcome
+in-place re-auth exists to prevent.
+
+**A paste re-auth clears the old credential like a browser one does.** The paste branch returned
+before the clearing block, so the probe was judged against the file already there. Paste a dead
+key over a working OAuth login and `claude auth status` still reports logged-in, so the key was
+committed -- and at runtime it OUTRANKS the OAuth credential, leaving the account broken while
+the UI said "signed in again".
+
+**Deleting an account mid-re-auth is answered, not crashed.** Another tab can remove the account
+while a flow is probing. For a harness whose folder goes with the row, the commit raised
+`AccountError`, which `poll_flow` does not catch: a 500 every two seconds for the rest of the
+deadline, each re-running the probe under the service lock. For claude the `projects/` husk kept
+the folder alive, so the commit succeeded and silently RESURRECTED the row the user had deleted,
+with a fresh number. The flow now fails with "That account was removed while you were signing
+in."
+
+**A malformed request body is a 400.** `request.get_json(silent=True) or {}` only rescues a
+FALSY body, so a non-empty array, string or number was truthy and `payload.get` raised
+`AttributeError`. Three endpoints, all now through a twin of `server._parse_json_object_body`
+(a twin rather than an import: `server` imports this module to register its routes).
+
+**A rejected paste says why.** `CredentialPasteError` is a sibling of `FlowError`, not a
+subclass, so a typo'd env block escaped the handler as a 500 and the user got a generic failure
+instead of "Unsupported keys in paste: ...". And on the Imbue keys path, `auth_mode` was derived
+by re-parsing the paste with the STRICT env parser, outside the try and after the account was
+already committed -- so pasting a plain `sk-ant-...` minted the account, made it most-recently
+used, and then answered 500. It is derived from the same function that decided what to write.
