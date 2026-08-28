@@ -54,7 +54,12 @@ export interface AccountRowOptions {
  * reads "Anthropic" looks like the name was just lost. */
 function beginRename(state: AccountRowState, row: ProviderAccount): void {
   state.renamingId = row.id;
-  state.renameDraft = row.name !== "" ? row.name : row.provider;
+  // Seeded from the user's own name, or left EMPTY -- never from `provider`, which carries the
+  // disambiguating number ("Anthropic 2"). Seeding that meant pressing the pencil on an unnamed
+  // duplicate and hitting Enter filed "Anthropic 2" as a real chosen name: it then survives the
+  // account it was counting against being deleted, and the numbering starts counting around a
+  // literal. The placeholder shows what the row is called while the field is blank.
+  state.renameDraft = row.name;
 }
 
 /** Take the field down. Redraws itself: the paths out that file nothing -- Escape, and a
@@ -106,6 +111,7 @@ function renameField(opts: AccountRowOptions): m.Vnode {
     type: "text",
     class: css.ROW_RENAME_INPUT,
     value: state.renameDraft,
+    placeholder: row.provider,
     "aria-label": `Rename ${row.provider}`,
     oncreate: (vnode: m.VnodeDOM) => {
       const input = vnode.dom as HTMLInputElement;

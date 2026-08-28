@@ -571,7 +571,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         {
           type: "button",
           class: `${css.PRIMARY_BTN} whitespace-nowrap`,
-          disabled: busy || keyInput.trim() === "" || (withPicker && keyProvider === null),
+          // `getFlow() === null` too: a paste screen renders BEFORE its flow exists -- there is
+          // nothing to wait for, so `begin` shows the form and lets the mint land behind it --
+          // and submitting without one returns silently, so the button did nothing at all with
+          // no spinner and no error to say why.
+          disabled:
+            busy || getFlow() === null || keyInput.trim() === "" || (withPicker && keyProvider === null),
           "data-e2e": "save-key",
           onclick: () => void send(() => submitKey(keyInput.trim(), keyProvider)),
         },

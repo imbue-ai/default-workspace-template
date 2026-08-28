@@ -1305,3 +1305,15 @@ Session transcripts are capped at the last 64k characters. Every poll appended a
 output and every failure pattern was re-scanned over the whole string, so both memory and CPU
 grew with how long the user took -- worst on agy, which is 1000 columns of animating TUI for as
 long as the sign-in page is open. The patterns and the value scrapes all read recent output.
+
+# Two smaller ones in the same surfaces
+
+Renaming an unnamed account starts from an EMPTY field, with the row's current name as the
+placeholder. It was seeded from `provider`, which carries the disambiguating number -- so
+pressing the pencil on a second Anthropic account and hitting Enter filed "Anthropic 2" as a
+real chosen name, which then outlives the account it was counting against and makes the
+numbering count around a literal.
+
+Save on the API-key screen is disabled until its flow exists. A paste screen renders before the
+mint lands -- deliberately, since there is nothing to wait for -- and submitting in that window
+returned silently, so the button did nothing with no spinner and no error to say why.
