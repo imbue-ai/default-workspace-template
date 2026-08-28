@@ -42,6 +42,8 @@ from imbue.remote_service_connector.errors import R2BucketExistsError
 from imbue.remote_service_connector.errors import R2BucketNotEmptyError
 from imbue.remote_service_connector.errors import R2BucketNotFoundError
 from imbue.remote_service_connector.errors import R2BucketOwnershipError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseLostError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseUnavailableError
 from imbue.remote_service_connector.errors import R2ReservedBucketNameError
 from imbue.remote_service_connector.errors import R2StorageResultTruncatedError
 from imbue.remote_service_connector.errors import RelayNotFoundError
@@ -121,6 +123,16 @@ def raise_as_http(exc: Exception) -> NoReturn:
                 "window_hours": exc.window_hours,
                 "message": str(exc),
             },
+        ) from exc
+    if isinstance(exc, R2EnforcementLeaseUnavailableError):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "enforcement_busy", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, R2EnforcementLeaseLostError):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "enforcement_interrupted", "message": str(exc)},
         ) from exc
     if isinstance(exc, R2StorageResultTruncatedError):
         raise HTTPException(status_code=502, detail=str(exc)) from exc

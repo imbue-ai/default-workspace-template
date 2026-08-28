@@ -17,10 +17,12 @@ has the extras revoked (newest wins), which doubles as the one-time cleanup
 of multi-key buckets minted before this model.
 """
 
-import contextlib
 import logging
 from collections.abc import Callable
+from datetime import datetime
+from datetime import timezone
 from typing import Any
+from typing import Final
 
 import httpx
 from supertokens_python.exceptions import GeneralError as SuperTokensGeneralError
@@ -28,18 +30,68 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.entitlements as entitlements_module
+import imbue.remote_service_connector.sync as sync_module
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.entitlements import EntitlementsStore
 from imbue.remote_service_connector.errors import CloudflareApiError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseLostError
+from imbue.remote_service_connector.errors import R2EnforcementLeaseUnavailableError
 from imbue.remote_service_connector.r2.buckets import measure_live_owner_usage_bytes
+from imbue.remote_service_connector.r2.naming import DESTROYED_WORKSPACE_BACKUP_RETENTION_SECONDS
 from imbue.remote_service_connector.r2.naming import R2_BUCKET_NAME_SEP
+from imbue.remote_service_connector.r2.naming import parse_workspace_backup_bucket_name
 from imbue.remote_service_connector.r2.naming import r2_token_name
+from imbue.remote_service_connector.r2.stores import EnforcementLease
 from imbue.remote_service_connector.r2.stores import GrantStore
 from imbue.remote_service_connector.r2.stores import KeyStore
-from imbue.remote_service_connector.r2.stores import r2_enforcement_lock
+from imbue.remote_service_connector.r2.stores import LeaseStore
+from imbue.remote_service_connector.r2.stores import R2_ENFORCEMENT_PENDING
+from imbue.remote_service_connector.r2.stores import r2_enforcement_lease
 
 logger = logging.getLogger(__name__)
+
+# How far past the backup-retention window an orphaned bucket may sit unreaped
+# before the sweep treats it as a problem instead of a pending cleanup. The
+# retention reaper is hourly and bounded per pass, so give it real headroom.
+_ORPHAN_REAP_OVERDUE_SLACK_SECONDS: Final[float] = 60.0 * 60.0 * 24.0 * 7.0
+
+
+def _orphan_first_seen_via_store(bucket_name: str) -> datetime | None:
+    return sync_module.get_orphan_bucket_store().get_first_seen(bucket_name)
+
+
+def _find_orphan_reap_overdue_bucket(
+    owner_buckets: list[str],
+    orphan_first_seen_getter: Callable[[str], datetime | None],
+    now: datetime,
+    # the first bucket the retention reaper should have removed by now but has not (None when none is overdue)
+) -> str | None:
+    """Check a deleted owner's buckets against the reaper's orphan clock.
+
+    A deleted account's key rows are cleaned up by the retention reaper when it
+    reaps the account's orphaned workspace-backup buckets, so the sweep expects
+    to keep seeing the owner until each bucket's orphan stamp ages past the
+    retention window. A bucket well past that window -- or a bucket the reaper
+    will never touch because it is not workspace-backup-shaped -- means the
+    cleanup is not coming on its own.
+    """
+    for bucket_name in owner_buckets:
+        if parse_workspace_backup_bucket_name(bucket_name) is None:
+            return bucket_name
+        first_seen = orphan_first_seen_getter(bucket_name)
+        if first_seen is None:
+            continue
+        overdue_age_seconds = DESTROYED_WORKSPACE_BACKUP_RETENTION_SECONDS + _ORPHAN_REAP_OVERDUE_SLACK_SECONDS
+        if (now - first_seen).total_seconds() > overdue_age_seconds:
+            return bucket_name
+    return None
+
+
+# How long the sweep waits for one owner's enforcement lease before skipping
+# that owner. Contention means a grant/recheck/suspension is mid-flight for
+# the owner; the sweep simply retries next hour, so a short wait suffices.
+_SWEEP_LEASE_WAIT_SECONDS: Final = 5.0
 
 
 def _sweep_owner_email(user_id: str, email_getter: Callable[[str], str | None]) -> str | None:
@@ -131,8 +183,19 @@ def enforce_owner_key_access(
     rows: list[dict[str, Any]],
     is_over_quota: bool,
     counters: dict[str, int],
+    lease: EnforcementLease,
 ) -> None:
     """Downgrade (or restore) one owner's bucket-key token policies around the storage quota.
+
+    Must run under the owner's enforcement lease; the lease is renewed (and
+    ownership proven) before each key's Cloudflare call, so a taken-over
+    pass aborts at a key boundary (raising R2EnforcementLeaseLostError)
+    instead of interleaving with the new holder. A ``'pending'``
+    ``enforced_access`` marker is written before every transition's
+    Cloudflare call (downgrades and restores alike), so a crash
+    mid-transition leaves the key recorded as untrusted (and re-asserted on
+    the next pass) rather than confidently recorded in a state the live
+    token policy may no longer match.
 
     A failed Cloudflare token update is logged and counted, skipping only
     that key.
@@ -144,22 +207,29 @@ def enforce_owner_key_access(
         # account's state changed mid-pass).
         if row.get("suspension_access") is not None:
             continue
+        # The desired end state for this key under the current quota verdict.
+        # A 'pending' marker never equals the desired marker, so an in-flight
+        # transition is always re-asserted rather than trusted.
+        is_downgrade_wanted = is_over_quota and str(row["access"]) == "readwrite"
+        desired_policy = "read" if is_downgrade_wanted else str(row["access"])
+        desired_marker = "read" if is_downgrade_wanted else None
+        if row.get("enforced_access") == desired_marker:
+            continue
         access_key_id = str(row["access_key_id"])
         bucket_name = str(row["bucket_name"])
         token_name = r2_token_name(bucket_name, row.get("alias"))
+        lease.renew_or_raise()
         try:
-            if is_over_quota and row["access"] == "readwrite" and row.get("enforced_access") != "read":
-                ops.update_bucket_token_access(access_key_id, bucket_name, "read", token_name)
-                key_store.set_enforced_access(access_key_id, "read")
-                counters["keys_downgraded"] += 1
-            elif not is_over_quota and row.get("enforced_access") is not None:
-                ops.update_bucket_token_access(access_key_id, bucket_name, str(row["access"]), token_name)
-                key_store.set_enforced_access(access_key_id, None)
-                counters["keys_restored"] += 1
-            else:
-                # The key already reflects the desired state (intentionally
-                # read-only, already downgraded, or already restored).
-                pass
+            if row.get("enforced_access") != R2_ENFORCEMENT_PENDING:
+                # Write-ahead marker: recorded before the Cloudflare call so
+                # the policy state is never silently unknown. Restores need it
+                # too -- a restore that crashed after its Cloudflare write
+                # would otherwise keep its settled 'read' marker, which a
+                # later over-quota pass trusts as already-downgraded.
+                key_store.set_enforced_access(access_key_id, R2_ENFORCEMENT_PENDING)
+            ops.update_bucket_token_access(access_key_id, bucket_name, desired_policy, token_name)
+            key_store.set_enforced_access(access_key_id, desired_marker)
+            counters["keys_downgraded" if desired_marker is not None else "keys_restored"] += 1
         except (CloudflareApiError, httpx.HTTPError) as exc:
             emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_update_token"})
             logger.warning("Sweep failed to update token %s for bucket %s", access_key_id, bucket_name, exc_info=exc)
@@ -198,8 +268,11 @@ def run_r2_quota_sweep(
     entitlements_store: EntitlementsStore,
     grant_store: GrantStore,
     email_getter: Callable[[str], str | None] = auth_module.get_backfill_email,
-    enforcement_lock: Callable[[str], contextlib.AbstractContextManager[None]] = r2_enforcement_lock,
+    # None resolves the Neon-backed store; tests inject an in-memory one.
+    lease_store: LeaseStore | None = None,
+    lease_wait_seconds: float = _SWEEP_LEASE_WAIT_SECONDS,
     only_user_id: str | None = None,
+    orphan_first_seen_getter: Callable[[str], datetime | None] = _orphan_first_seen_via_store,
 ) -> dict[str, int]:
     """Run one storage-quota sweep pass; returns counters for the cron log.
 
@@ -220,11 +293,15 @@ def run_r2_quota_sweep(
         "users_skipped": 0,
         "users_skipped_for_grant": 0,
         "users_skipped_suspended": 0,
+        "users_skipped_orphan_pending_reap": 0,
+        "users_skipped_orphan_reap_overdue": 0,
         "key_update_failures": 0,
         "grants_settled": 0,
         "grant_settle_failures": 0,
         "downgrades_cancelled_by_live_usage": 0,
         "live_usage_read_failures": 0,
+        "users_skipped_lease_contended": 0,
+        "users_aborted_lease_lost": 0,
     }
 
     # Enforce the single-key-per-bucket invariant first: newest key per
@@ -266,9 +343,30 @@ def run_r2_quota_sweep(
             owner_user_id, owner_prefix, entitlements_store, email_getter, owner_entitlements_row
         )
         if limit_bytes is None:
-            logger.warning(
-                "Sweep skipping user %s: no resolvable verified email for lazy plan assignment", owner_user_id[:8]
+            # An owner SuperTokens cannot resolve is a deleted account whose
+            # key rows are cleaned up when the retention reaper reaps its
+            # orphaned buckets -- an expected, self-healing state worth
+            # counting, not warning about on every sweep. It becomes a
+            # warning only when the reaper's cleanup is demonstrably not
+            # coming: a bucket well past the reap window, or one the reaper
+            # never touches (not workspace-backup-shaped).
+            overdue_bucket = _find_orphan_reap_overdue_bucket(
+                owner_buckets, orphan_first_seen_getter, datetime.now(timezone.utc)
             )
+            if overdue_bucket is None:
+                emit_metric("r2_sweep_orphan_owner_pending_reap", 1, {})
+                logger.debug(
+                    "Sweep skipping deleted owner %s: buckets pending the retention reaper", owner_user_id[:8]
+                )
+                counters["users_skipped_orphan_pending_reap"] += 1
+            else:
+                emit_metric("r2_sweep_orphan_reap_overdue", 1, {})
+                logger.warning(
+                    "Sweep found bucket %s of deleted owner %s still unreaped well past the retention window",
+                    overdue_bucket,
+                    owner_user_id[:8],
+                )
+                counters["users_skipped_orphan_reap_overdue"] += 1
             counters["users_skipped"] += 1
             continue
 
@@ -292,14 +390,28 @@ def run_r2_quota_sweep(
 
         if is_over_quota:
             counters["users_over_quota"] += 1
-        with enforcement_lock(owner_user_id):
-            # Re-check under the lock before downgrading: a cleanup grant may
-            # have been created (restoring the keys under this same lock)
-            # between the loop-top check and lock acquisition, and a
-            # downgrade here would break the mid-cleanup guarantee. Restores
-            # need no re-check -- restoring is exactly what a grant wants.
-            if is_over_quota and grant_store.get_active_grant(owner_user_id) is not None:
-                counters["users_skipped_for_grant"] += 1
-                continue
-            enforce_owner_key_access(ops, key_store, rows, is_over_quota, counters)
+        try:
+            with r2_enforcement_lease(
+                owner_user_id, wait_timeout_seconds=lease_wait_seconds, store=lease_store
+            ) as lease:
+                # Re-check under the lease before downgrading: a cleanup grant
+                # may have been created (restoring the keys under this same
+                # lease) between the loop-top check and lease acquisition, and
+                # a downgrade here would break the mid-cleanup guarantee.
+                # Restores need no re-check -- restoring is exactly what a
+                # grant wants.
+                if is_over_quota and grant_store.get_active_grant(owner_user_id) is not None:
+                    counters["users_skipped_for_grant"] += 1
+                    continue
+                # Re-read the keys under the lease: the pass-start rows may
+                # predate a concurrent grant/suspension transition, and the
+                # enforcement decisions key off the recorded markers.
+                locked_rows = key_store.list_keys(owner_user_id, None)
+                enforce_owner_key_access(ops, key_store, locked_rows, is_over_quota, counters, lease)
+        except R2EnforcementLeaseUnavailableError:
+            # A grant/recheck/suspension is mid-flight for this owner; the
+            # next hourly pass retries.
+            counters["users_skipped_lease_contended"] += 1
+        except R2EnforcementLeaseLostError:
+            counters["users_aborted_lease_lost"] += 1
     return counters

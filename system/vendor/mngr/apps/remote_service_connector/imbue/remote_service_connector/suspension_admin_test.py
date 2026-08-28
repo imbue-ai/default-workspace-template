@@ -277,3 +277,118 @@ def test_revoke_sessions_requires_the_admin_key(monkeypatch: pytest.MonkeyPatch)
     resp = client.post(f"/admin/accounts/{_TARGET_EMAIL}/revoke-sessions")
 
     assert resp.status_code == 401
+
+
+def test_suspend_failed_key_update_leaves_pending_marker_and_rerun_settles(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The write-ahead marker: a downgrade whose Cloudflare call fails is recorded as in-flight and retried."""
+    client, backend, _store, _litellm, st_backend, fake_cf, key_store = _make_suspension_admin_test_client(monkeypatch)
+    user_id = _create_target_account(st_backend)
+    backend.storage_config = make_storage_config()
+    token_id = _seed_r2_key(fake_cf, key_store, user_id)
+    fake_cf.fail_next_update_token_access = True
+
+    failed = client.post(
+        f"/admin/accounts/{_TARGET_EMAIL}/suspend", json={"reason": "abuse"}, headers=_admin_key_headers()
+    )
+    assert failed.json()["steps"]["storage_keys"]["failed_count"] == 1
+    pending_key = key_store.get_key(token_id)
+    assert pending_key is not None
+    assert pending_key["suspension_access"] == "pending_read"
+    assert fake_cf.account_tokens[token_id]["access"] == "readwrite"
+
+    retried = client.post(
+        f"/admin/accounts/{_TARGET_EMAIL}/suspend", json={"reason": "abuse"}, headers=_admin_key_headers()
+    )
+    assert retried.json()["status"] == "ok"
+    assert fake_cf.account_tokens[token_id]["access"] == "read"
+    settled_key = key_store.get_key(token_id)
+    assert settled_key is not None
+    assert settled_key["suspension_access"] == "read"
+
+
+def test_suspend_downgrades_a_key_with_an_unconfirmed_quota_pending_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A quota-'pending' key may still be live-readwrite, so suspend must re-drive the read downgrade.
+
+    The sweep that would normally settle the marker skips suspended
+    accounts, so treating 'pending' as already-read here would leave a
+    writable key for the whole suspension.
+    """
+    client, backend, _store, _litellm, st_backend, fake_cf, key_store = _make_suspension_admin_test_client(monkeypatch)
+    user_id = _create_target_account(st_backend)
+    backend.storage_config = make_storage_config()
+    token_id = _seed_r2_key(fake_cf, key_store, user_id)
+    # Model a crashed quota downgrade whose Cloudflare write never landed:
+    # marker pending, live token still readwrite.
+    key_store.set_enforced_access(token_id, "pending")
+
+    resp = client.post(
+        f"/admin/accounts/{_TARGET_EMAIL}/suspend", json={"reason": "abuse"}, headers=_admin_key_headers()
+    )
+
+    assert resp.json()["status"] == "ok"
+    assert fake_cf.account_tokens[token_id]["access"] == "read"
+    suspended_key = key_store.get_key(token_id)
+    assert suspended_key is not None
+    assert suspended_key["suspension_access"] == "read"
+    # The quota marker is left for the sweep/recheck to settle after unsuspend.
+    assert suspended_key["enforced_access"] == "pending"
+
+
+def test_suspend_leaves_a_confirmed_quota_downgraded_key_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A settled enforced_access='read' key is confirmed read-only: nothing to downgrade."""
+    client, backend, _store, _litellm, st_backend, fake_cf, key_store = _make_suspension_admin_test_client(monkeypatch)
+    user_id = _create_target_account(st_backend)
+    backend.storage_config = make_storage_config()
+    token_id = _seed_r2_key(fake_cf, key_store, user_id)
+    fake_cf.account_tokens[token_id]["access"] = "read"
+    key_store.set_enforced_access(token_id, "read")
+
+    resp = client.post(
+        f"/admin/accounts/{_TARGET_EMAIL}/suspend", json={"reason": "abuse"}, headers=_admin_key_headers()
+    )
+
+    assert resp.json()["status"] == "ok"
+    assert resp.json()["steps"]["storage_keys"]["downgraded_count"] == 0
+    untouched_key = key_store.get_key(token_id)
+    assert untouched_key is not None
+    assert untouched_key["suspension_access"] is None
+
+
+def test_suspend_rerun_finishes_an_inflight_disable_without_deescalating(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 'pending_disabled' left by a crashed blocked run is driven to disabled even by a non-blocked re-run."""
+    client, backend, _store, _litellm, st_backend, fake_cf, key_store = _make_suspension_admin_test_client(monkeypatch)
+    user_id = _create_target_account(st_backend)
+    backend.storage_config = make_storage_config()
+    token_id = _seed_r2_key(fake_cf, key_store, user_id)
+    key_store.set_suspension_access(token_id, "pending_disabled")
+
+    resp = client.post(
+        f"/admin/accounts/{_TARGET_EMAIL}/suspend", json={"reason": "abuse"}, headers=_admin_key_headers()
+    )
+
+    assert resp.json()["status"] == "ok"
+    assert fake_cf.account_tokens[token_id]["status"] == "disabled"
+    # The prior policy is unknowable behind a 'pending_disabled' marker, so
+    # the retried disable records the conservative read scope.
+    assert fake_cf.account_tokens[token_id]["access"] == "read"
+    settled_key = key_store.get_key(token_id)
+    assert settled_key is not None
+    assert settled_key["suspension_access"] == "disabled"
+
+
+def test_unsuspend_reconciles_an_inflight_disable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unsuspending a key stuck at 'pending_disabled' re-activates it whether or not the disable landed."""
+    client, backend, _store, _litellm, st_backend, fake_cf, key_store = _make_suspension_admin_test_client(monkeypatch)
+    user_id = _create_target_account(st_backend)
+    backend.storage_config = make_storage_config()
+    token_id = _seed_r2_key(fake_cf, key_store, user_id)
+    key_store.set_suspension_access(token_id, "pending_disabled")
+
+    resp = client.post(f"/admin/accounts/{_TARGET_EMAIL}/unsuspend", headers=_admin_key_headers())
+
+    assert resp.status_code == 200
+    assert fake_cf.account_tokens[token_id]["status"] == "active"
+    assert fake_cf.account_tokens[token_id]["access"] == "readwrite"
+    restored_key = key_store.get_key(token_id)
+    assert restored_key is not None
+    assert restored_key["suspension_access"] is None

@@ -254,6 +254,42 @@ class QuotaExceededError(ConnectorError, RuntimeError):
         super().__init__(message)
 
 
+class R2EnforcementLeaseUnavailableError(ConnectorError, TimeoutError):
+    """Raised when the per-owner R2 enforcement lease cannot be acquired within the wait window.
+
+    Mapped to a structured 503 (``code: enforcement_busy``): another
+    storage-enforcement operation (sweep, cleanup grant, recheck, or
+    suspension) is still running for the account, and the caller should
+    simply retry shortly.
+    """
+
+    def __init__(self, owner_user_id: str, wait_timeout_seconds: float) -> None:
+        self.owner_user_id = owner_user_id
+        self.wait_timeout_seconds = wait_timeout_seconds
+        super().__init__(
+            f"Another storage-enforcement operation for this account is still running "
+            f"(waited {wait_timeout_seconds:g}s); retry shortly."
+        )
+
+
+class R2EnforcementLeaseLostError(ConnectorError, RuntimeError):
+    """Raised when a lease renewal discovers the holder's enforcement lease was taken over mid-run.
+
+    Only happens when the holder stalled past the lease expiry and a
+    contender took over; the holder must abort its remaining per-key work
+    immediately (each key's transition is idempotent and self-contained, so
+    aborting at a key boundary is clean). Mapped to a structured 503
+    (``code: enforcement_interrupted``).
+    """
+
+    def __init__(self, owner_user_id: str) -> None:
+        self.owner_user_id = owner_user_id
+        super().__init__(
+            "The storage-enforcement lease for this account was taken over by a newer operation; "
+            "the interrupted pass stopped early. Retry shortly."
+        )
+
+
 class R2StorageResultTruncatedError(ConnectorError, RuntimeError):
     """Raised when the sweep's GraphQL usage response fills its row budget and may be truncated."""
 

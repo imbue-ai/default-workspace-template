@@ -3513,3 +3513,55 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .terminal-banner-btn:hover {
   background: var(--color-bg-hover, #eef2f7);
 }
+
+/* --- Transcript custom scrollbar (transcript-smooth-scroll spec) ----------- */
+
+/* The transcript scroll container hides its native scrollbar entirely; the
+   TranscriptScrollbar overlay replaces it (physical region in pixel space,
+   virtual regions in index space). */
+.transcript-scroll {
+  scrollbar-width: none;
+  outline: none;
+  /* The engine owns viewport stability (anchor-derived scrollTop each frame);
+     the browser's native scroll anchoring would fight those writes with its
+     own adjustments, so it is disabled for this scroller entirely. */
+  overflow-anchor: none;
+}
+
+.transcript-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Overlay track along the panel's right edge. Auto-hides: transparent unless
+   scrolled recently, hovered, or mid-drag (the -shown class). Pointer events
+   stay on so the edge is grabbable even while faded out. */
+.transcript-scrollbar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  right: 2px;
+  width: 12px;
+  z-index: 20;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  touch-action: none;
+}
+
+.transcript-scrollbar-shown,
+.transcript-scrollbar:hover {
+  opacity: 1;
+}
+
+.transcript-scrollbar-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 5px;
+  background: var(--color-border);
+  pointer-events: none;
+}
+
+.transcript-scrollbar:hover .transcript-scrollbar-thumb,
+.transcript-scrollbar-shown .transcript-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text-secondary) 55%, transparent);
+}

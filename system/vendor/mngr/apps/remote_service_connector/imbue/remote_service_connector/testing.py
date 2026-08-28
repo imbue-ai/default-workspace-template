@@ -1,12 +1,11 @@
 """Test utilities for remote_service_connector."""
 
 import base64
-import contextlib
 import json
 import re
 import secrets
+import threading
 import uuid
-from collections.abc import Iterator
 from collections.abc import MutableMapping
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -124,9 +123,13 @@ class FakeCloudflareOps:
         # Failure-injection knobs: the next delete_bucket_token call raises,
         # exercising the sweep revoke-retry paths. While
         # fail_bucket_usage_reads is set, every per-bucket REST usage read
-        # raises (the sweep/gate fail-open paths).
+        # raises (the sweep/gate fail-open paths). The next
+        # update_bucket_token_access call raises while
+        # fail_next_update_token_access is set (the pending-marker retry
+        # paths).
         self.fail_next_delete_bucket_token = False
         self.fail_bucket_usage_reads = False
+        self.fail_next_update_token_access = False
 
     def create_bucket(self, name: str) -> dict[str, Any]:
         if name in self.buckets:
@@ -175,6 +178,9 @@ class FakeCloudflareOps:
         self.account_tokens.pop(token_id, None)
 
     def update_bucket_token_access(self, token_id: str, bucket_name: str, access: str, token_name: str) -> None:
+        if self.fail_next_update_token_access:
+            self.fail_next_update_token_access = False
+            raise CloudflareApiError(status_code=500, errors=[{"message": "simulated token update failure"}])
         token = self.account_tokens.get(token_id)
         if token is None:
             raise CloudflareApiError(status_code=404, errors=[{"message": f"token not found: {token_id}"}])
@@ -1273,6 +1279,30 @@ class FakeCursor:
             # single-threaded so the lock itself is a no-op.
             self._results = [(True,)]
 
+        elif query_lower.startswith("insert into r2_enforcement_leases"):
+            # PostgresLeaseStore.try_acquire: insert, or take over an expired
+            # claim. Expiry is the backend's explicit test knob (no clock).
+            owner_user_id, claim_id, _duration = params
+            current_claim = self._backend.enforcement_lease_claim_by_owner.get(owner_user_id)
+            if current_claim is None or owner_user_id in self._backend.enforcement_lease_expired_owners:
+                self._backend.enforcement_lease_claim_by_owner[owner_user_id] = claim_id
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
+
+        elif query_lower.startswith("update r2_enforcement_leases"):
+            # PostgresLeaseStore.renew: succeeds only while our claim stands.
+            _duration, owner_user_id, claim_id = params
+            if self._backend.enforcement_lease_claim_by_owner.get(owner_user_id) == claim_id:
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
+
+        elif query_lower.startswith("delete from r2_enforcement_leases"):
+            owner_user_id, claim_id = params
+            if self._backend.enforcement_lease_claim_by_owner.get(owner_user_id) == claim_id:
+                del self._backend.enforcement_lease_claim_by_owner[owner_user_id]
+                self._backend.enforcement_lease_expired_owners.discard(owner_user_id)
+                self.rowcount = 1
+
         elif "select count(*) from pool_hosts" in query_lower:
             user_id_prefix = params[0]
             counted_statuses = _statuses_in_query(query_lower) or {"leased"}
@@ -2135,9 +2165,15 @@ def _make_fake_cursor(backend: "FakePoolBackend") -> FakeCursor:
 
 
 class FakeConnection:
-    """In-memory connection that simulates psycopg2 connection behavior."""
+    """In-memory connection that simulates psycopg2 connection behavior.
+
+    Open/close bookkeeping feeds the backend's ``open_connection_count`` so
+    tests can assert on connection lifetime (e.g. that no DB connection is
+    held across a Cloudflare call).
+    """
 
     _backend: "FakePoolBackend"
+    _is_closed: bool
 
     def cursor(self) -> FakeCursor:
         return _make_fake_cursor(self._backend)
@@ -2146,7 +2182,9 @@ class FakeConnection:
         pass
 
     def close(self) -> None:
-        pass
+        if not self._is_closed:
+            self._is_closed = True
+            self._backend.open_connection_count -= 1
 
     def __enter__(self) -> "FakeConnection":
         return self
@@ -2158,6 +2196,8 @@ class FakeConnection:
 def _make_fake_connection(backend: "FakePoolBackend") -> FakeConnection:
     conn = FakeConnection()
     conn._backend = backend
+    conn._is_closed = False
+    backend.open_connection_count += 1
     return conn
 
 
@@ -2311,6 +2351,14 @@ class FakePoolBackend:
     # (mirroring share_tunnel_logins).
     relay_rows: list[dict[str, Any]]
     share_tunnel_login_rows: list[dict[str, Any]]
+    # R2 enforcement leases (mirroring r2_enforcement_leases): the current
+    # claim per owner, plus the owners whose lease a test has marked expired
+    # (the fake has no clock, so expiry is an explicit test knob).
+    enforcement_lease_claim_by_owner: dict[str, str]
+    enforcement_lease_expired_owners: set[str]
+    # Currently-open fake DB connections (created minus closed), so tests can
+    # assert nothing holds a connection across external (Cloudflare) work.
+    open_connection_count: int
 
     def add_relay(
         self,
@@ -3066,6 +3114,9 @@ def make_fake_pool_backend() -> FakePoolBackend:
     # mutate ``relay_rows`` directly.
     backend.relay_rows = []
     backend.share_tunnel_login_rows = []
+    backend.enforcement_lease_claim_by_owner = {}
+    backend.enforcement_lease_expired_owners = set()
+    backend.open_connection_count = 0
     backend.add_relay(_RELAY_ID_US1, "us1", _RELAY_ENDPOINT_US1, ip_address="198.51.100.1")
     backend.add_relay(_RELAY_ID_US2, "us2", _RELAY_ENDPOINT_US2, ip_address="198.51.100.2")
     backend.box_rows = []
@@ -3353,11 +3404,41 @@ def make_fake_entitlements_store() -> InMemoryEntitlementsStore:
 # ---------------------------------------------------------------------------
 
 
-@contextlib.contextmanager
-def noop_enforcement_lock(owner_user_id: str) -> Iterator[None]:
-    """Lock stand-in for direct run_r2_quota_sweep calls (no DB in unit tests)."""
-    del owner_user_id
-    yield
+class InMemoryLeaseStore:
+    """In-memory LeaseStore with real acquire/renew/release semantics (no clock).
+
+    Thread-safe so serialization tests can contend from multiple threads.
+    Expiry is modeled as an explicit test action: assigning a different
+    claim to ``claim_by_owner`` simulates a takeover, after which the
+    superseded holder's renewals fail.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.claim_by_owner: dict[str, str] = {}
+
+    def try_acquire(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        del duration_seconds
+        with self._lock:
+            if owner_user_id in self.claim_by_owner:
+                return False
+            self.claim_by_owner[owner_user_id] = claim_id
+            return True
+
+    def renew(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        del duration_seconds
+        with self._lock:
+            return self.claim_by_owner.get(owner_user_id) == claim_id
+
+    def release(self, owner_user_id: str, claim_id: str) -> None:
+        with self._lock:
+            if self.claim_by_owner.get(owner_user_id) == claim_id:
+                del self.claim_by_owner[owner_user_id]
+
+
+def make_fake_lease_store() -> InMemoryLeaseStore:
+    """Construct an empty in-memory LeaseStore for tests."""
+    return InMemoryLeaseStore()
 
 
 class InMemoryGrantStore:

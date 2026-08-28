@@ -44,6 +44,10 @@ GIT_NUMSTAT_SOURCE: Final[str] = "git_numstat"
 WORKSPACE_STATE_SOURCE: Final[str] = "workspace_state"
 RUN_SUMMARY_SOURCE: Final[str] = "run_summary"
 
+# error_by_source key for a wholesale-absent workspace layout (not a feed:
+# no records are ever emitted under this name).
+WORKSPACE_LAYOUT_ERROR_SOURCE: Final[str] = "workspace_layout"
+
 _GIT_LOG_TIMEOUT_SECONDS: Final[float] = 120.0
 _GIT_FIELD_SEPARATOR: Final[str] = "\x1f"
 _MAX_COMMITS_PER_RUN: Final[int] = 10_000
@@ -361,6 +365,25 @@ def _agent_type_counts(host_dir: Path) -> dict[str, int]:
     return counts
 
 
+def missing_workspace_layout_detail(workspace_root: Path, host_dir: Path) -> str | None:
+    """Describe a wholesale-absent workspace layout, or None when it looks present.
+
+    Old workspace generations keep their data at different paths, so
+    collection connects and runs but reads an empty world. When neither
+    layout marker exists, the caller records this detail in the run summary,
+    making a hollow "ok" collection visible in the server-side audit instead
+    of indistinguishable from a genuinely empty workspace.
+    """
+    is_repo_present = (workspace_root / ".git").exists()
+    is_agents_dir_present = (host_dir / "agents").is_dir()
+    if is_repo_present or is_agents_dir_present:
+        return None
+    return (
+        f"expected workspace layout entirely missing (no git repo at {workspace_root},"
+        f" no agents dir at {host_dir}); this workspace generation likely keeps its data elsewhere"
+    )
+
+
 def read_workspace_state_snapshot(workspace_root: Path, host_dir: Path, run_id: str) -> FeedOutput:
     """One stateless snapshot record: sharing state, installed apps, agents, template version.
 
@@ -375,6 +398,10 @@ def read_workspace_state_snapshot(workspace_root: Path, host_dir: Path, run_id: 
         "source": WORKSPACE_STATE_SOURCE,
         "is_sharing_enabled": (workspace_root / "data" / ".secrets" / "share.env").is_file(),
         "is_owner_email_present": (workspace_root / "data" / ".state" / "share" / "owner_email").is_file(),
+        # Layout markers: false on workspace generations that keep their data
+        # at other paths, so hollow snapshots are queryable in the lake.
+        "is_workspace_repo_present": (workspace_root / ".git").exists(),
+        "is_host_agents_dir_present": (host_dir / "agents").is_dir(),
         "installed_app_names": _installed_app_names(workspace_root),
         "agent_count": sum(agent_type_counts.values()),
         "agent_type_counts": agent_type_counts,
