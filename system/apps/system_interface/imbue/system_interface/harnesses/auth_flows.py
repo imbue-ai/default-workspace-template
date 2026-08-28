@@ -214,7 +214,9 @@ class AuthFlowService:
     _work_dir: Path
     # Restarts the agents bound to an account, by account id. Injected so the flow does not
     # reach into the agent manager, and so a test can watch it without running mngr.
-    _restart_bound_agents: Callable[[str], int]
+    # Returns nothing: the restart runs on its own thread, because it is serial subprocesses
+    # with a 60s timeout each and this service holds one lock across every route.
+    _restart_bound_agents: Callable[[str], None]
     _lock: threading.Lock
     _session: _Session | None
     _spawner: Callable[..., Any]
@@ -227,7 +229,7 @@ class AuthFlowService:
         work_dir: Path | None = None,
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
-        restart_bound_agents: Callable[[str], int] | None = None,
+        restart_bound_agents: Callable[[str], None] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -243,7 +245,7 @@ class AuthFlowService:
         service._session = None
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
-        service._restart_bound_agents = restart_bound_agents or (lambda _account_id: 0)
+        service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
         return service
 
     # -- lifecycle ------------------------------------------------------------------------
@@ -537,7 +539,9 @@ class AuthFlowService:
 
     def _settle_locked(self, session: _Session, method: PtyMethod) -> FlowStatus:
         """Read what the CLI has said so far and decide, without blocking on it."""
-        session.output = drain_pty_stream(session.process, session.output, lambda _: False, deadline_seconds=1.0)
+        session.output = _bounded(
+            drain_pty_stream(session.process, session.output, lambda _: False, deadline_seconds=1.0)
+        )
 
         for pattern, copy in method.failures:
             match = re.search(pattern, session.output)
@@ -597,7 +601,15 @@ class AuthFlowService:
             # Keep the folder: a network blink is not evidence the sign-in failed, and the
             # user may have just finished a browser round trip we would be throwing away.
             return FlowStatus(state=FlowState.PENDING)
-        if method.eof_policy is EofPolicy.FAILURE and not alive:
+        # The CLI is gone and its own probe says no. Whatever the method's EOF policy means for
+        # a clean exit, there is nothing left that could still turn this into a success.
+        #
+        # Without this, a SUCCESS-policy method that exits non-zero -- codex's device auth when
+        # the user denies the request or lets the code expire -- fell through to PENDING and sat
+        # there for the full 900-second deadline, polling every two seconds and spawning a
+        # `codex login status` subprocess each time, roughly 450 of them, before finally saying
+        # it timed out. It knew within a second.
+        if not alive:
             self._fail_locked(session, "The sign-in did not complete.")
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)
         return FlowStatus(state=FlowState.PENDING)
@@ -639,8 +651,12 @@ class AuthFlowService:
         # a per-harness table built on untested assumptions -- a restart after a deliberate
         # sign-in is cheap, and being wrong the other way leaves a chat dead with no sign of it.
         if not session.minted:
-            restarted = self._restart_bound_agents(account.id)
-            logger.info("Re-auth of account {} restarted {} bound agents", account.id, restarted)
+            # Off-thread, and this is not an optimisation. It runs one `mngr start --restart`
+            # per bound agent serially with a 60s timeout each, and this whole method runs
+            # under the auth service's single lock -- so an account with eight chats held every
+            # poll, submit and abort for eight minutes. The user could not even close the modal,
+            # because the abort needs the same lock.
+            self._restart_bound_agents(account.id)
         session.state = FlowState.OK
         self._teardown_locked(session, keep_folder=True)
         return FlowStatus(state=FlowState.OK, account_id=account.id)
@@ -819,6 +835,19 @@ def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple
 def _read_credentials(paths: Sequence[Path]) -> dict[Path, bytes | None]:
     """The bytes of an account's credential files, or None where the file is absent."""
     return {path: (path.read_bytes() if path.exists() else None) for path in paths}
+
+
+# How much PTY transcript a session keeps. Every poll appends a second of output and every
+# failure pattern is re-scanned over the whole string, so an unbounded buffer is both memory and
+# CPU that grows with how long the user takes. agy is the case that showed it: 1000 columns of
+# animating TUI, captured for as long as the sign-in page is open. The patterns and the value
+# scrapes all read recent output, so keeping the tail loses nothing.
+_MAX_SESSION_OUTPUT_CHARS: Final = 64_000
+
+
+def _bounded(output: str) -> str:
+    """The tail of `output`, capped. Whole-string ops downstream stay O(cap)."""
+    return output if len(output) <= _MAX_SESSION_OUTPUT_CHARS else output[-_MAX_SESSION_OUTPUT_CHARS:]
 
 
 def _restore_credentials(before: Mapping[Path, bytes | None]) -> None:

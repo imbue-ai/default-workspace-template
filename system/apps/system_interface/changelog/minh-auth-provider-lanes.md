@@ -1285,3 +1285,23 @@ instead of "Unsupported keys in paste: ...". And on the Imbue keys path, `auth_m
 by re-parsing the paste with the STRICT env parser, outside the try and after the account was
 already committed -- so pasting a plain `sk-ant-...` minted the account, made it most-recently
 used, and then answered 500. It is derived from the same function that decided what to write.
+
+# The auth service stops holding its lock across subprocesses
+
+Every auth route -- poll, submit, abort -- takes one service lock, and a commit ran the bound-
+agent restart underneath it: one `mngr start --restart` per chat, serially, 60s timeout each. An
+account with eight chats held that lock for eight minutes, during which every 2s poll parked
+another Flask worker behind it and the user could not even close the modal, because the abort
+needs the same lock. The restart now runs on its own thread. Nothing waited on its answer: the
+flow is already committed and the user already told they are signed in.
+
+A dead CLI whose own probe says no is a failure, whatever its EOF policy means for a clean exit.
+codex's device auth exits non-zero when the user denies the request or lets the code expire, and
+its policy is SUCCESS -- so it fell through to PENDING and sat for the full 900-second deadline,
+spawning a `codex login status` subprocess every two seconds, ~450 of them, before reporting a
+timeout. It knew within a second.
+
+Session transcripts are capped at the last 64k characters. Every poll appended a second of PTY
+output and every failure pattern was re-scanned over the whole string, so both memory and CPU
+grew with how long the user took -- worst on agy, which is 1000 columns of animating TUI for as
+long as the sign-in page is open. The patterns and the value scrapes all read recent output.
