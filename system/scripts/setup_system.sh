@@ -269,9 +269,6 @@ opencode --version >/dev/null
 npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
 command -v pi >/dev/null
 
-# Playwright's own CLI (pinned; npm-installed): the interface agents drive the
-# agentic-browser-fleet's browsers with, over the gated CDP endpoint the fleet
-# prints.
 npm install -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}"
 command -v playwright-cli >/dev/null
 
