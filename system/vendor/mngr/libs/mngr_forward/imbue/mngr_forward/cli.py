@@ -345,7 +345,6 @@ def forward(ctx: click.Context, **kwargs: Any) -> None:
     strategy = _build_strategy(opts)
     resolver = ForwardResolver(
         strategy=strategy,
-        envelope_writer=envelope_writer,
         service_map_cache=service_map_cache,
     )
     tunnel_manager = SSHTunnelManager()
@@ -367,11 +366,11 @@ def forward(ctx: click.Context, **kwargs: Any) -> None:
         del kept  # used internally by the helper
         stream_manager: ForwardStreamManager | None = None
     else:
-        # Seed the resolver's service map from the previous run's cache so a
-        # restored window resolves as soon as discovery supplies membership +
-        # SSH info, instead of waiting on the slow per-agent event stream. The
-        # live stream still runs and overwrites the seed as it delivers; an
-        # empty/absent cache is a no-op (today's behavior).
+        # Seed the resolver's service + origin-label maps from the previous
+        # run's cache so a restored window (shell AND app origins) resolves as
+        # soon as discovery supplies membership + SSH info, instead of waiting
+        # on the slow per-agent event stream. The live stream still runs and
+        # overwrites the seed as it delivers; an empty/absent cache is a no-op.
         resolver.seed_services(service_map_cache.load())
         discovery_events_path = get_discovery_events_path(mngr_ctx.config) if opts.observe_via_file else None
         stream_manager = ForwardStreamManager(

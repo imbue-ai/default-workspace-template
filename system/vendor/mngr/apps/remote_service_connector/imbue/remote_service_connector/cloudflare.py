@@ -41,27 +41,6 @@ def cf_check(response: httpx.Response) -> dict[str, Any]:
     return data
 
 
-# Env var the deployed connector reads at startup to identify which
-# minds env it belongs to. The value is pushed by ``minds env deploy``
-# into the per-tier ``litellm-connector-<tier>`` Modal Secret. For
-# dev-tier deploys this is the per-developer dev env name (e.g.
-# ``josh-3``); for tier deploys it's the tier itself (``staging`` /
-# ``production``). Used to scope the slice-box reconcile audit to this
-# env's stamped slices, so the hourly cron is safe on a bare-metal box
-# shared by multiple dev envs.
-MINDS_ENV_NAME_VAR = "MINDS_ENV_NAME"
-
-
-def current_minds_env_name() -> str:
-    """Return the value of ``MINDS_ENV_NAME`` or empty string.
-
-    Empty when the deploy didn't push one (e.g. a pre-this-branch
-    deploy); the slice reconcile then skips rather than auditing with
-    an unscoped view.
-    """
-    return os.environ.get(MINDS_ENV_NAME_VAR, "")
-
-
 # --- R2 bucket + account-token operations ---
 
 
@@ -181,6 +160,28 @@ def cf_update_account_token_policies(
 ) -> dict[str, Any]:
     """Replace an account token's policy list in place (the token value is unchanged)."""
     response = client.put(f"/accounts/{account_id}/tokens/{token_id}", json={"name": name, "policies": policies})
+    return cf_check(response)["result"]
+
+
+def cf_set_account_token_status(
+    client: httpx.Client,
+    account_id: str,
+    token_id: str,
+    name: str,
+    policies: list[dict[str, Any]],
+    status: str,
+) -> dict[str, Any]:
+    """Set an account token's status (``active`` / ``disabled``) in place.
+
+    The update PUT requires the full token body (name + policies), so the
+    caller supplies the token's current policy list; the token id and secret
+    value are unchanged, which is what makes a disable fully reversible on
+    the same S3 credentials.
+    """
+    response = client.put(
+        f"/accounts/{account_id}/tokens/{token_id}",
+        json={"name": name, "policies": policies, "status": status},
+    )
     return cf_check(response)["result"]
 
 
@@ -336,6 +337,9 @@ class CloudflareOps(Protocol):
     def create_bucket_token(self, bucket_name: str, access: str, token_name: str) -> dict[str, Any]: ...
     def delete_bucket_token(self, token_id: str) -> None: ...
     def update_bucket_token_access(self, token_id: str, bucket_name: str, access: str, token_name: str) -> None: ...
+    def set_bucket_token_status(
+        self, token_id: str, bucket_name: str, access: str, token_name: str, status: str
+    ) -> None: ...
     def roll_bucket_token_value(self, token_id: str) -> dict[str, Any]: ...
     def get_bucket_usage_bytes(self, bucket_name: str) -> int: ...
     def query_r2_storage_by_bucket(self) -> dict[str, int]: ...
@@ -393,6 +397,14 @@ class HttpCloudflareOps:
     def update_bucket_token_access(self, token_id: str, bucket_name: str, access: str, token_name: str) -> None:
         policies = build_r2_bucket_token_policies(self.account_id, bucket_name, self._r2_permission_group_id(access))
         cf_update_account_token_policies(self.client, self.account_id, token_id, token_name, policies)
+
+    def set_bucket_token_status(
+        self, token_id: str, bucket_name: str, access: str, token_name: str, status: str
+    ) -> None:
+        # ``access`` names the token's current effective scope so the PUT's
+        # required policy list re-asserts it unchanged.
+        policies = build_r2_bucket_token_policies(self.account_id, bucket_name, self._r2_permission_group_id(access))
+        cf_set_account_token_status(self.client, self.account_id, token_id, token_name, policies, status)
 
     def roll_bucket_token_value(self, token_id: str) -> dict[str, Any]:
         return {"value": cf_roll_account_token_value(self.client, self.account_id, token_id)}

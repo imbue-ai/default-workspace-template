@@ -122,6 +122,14 @@ jobs:
         with:
           ref: ${{ steps.resolve.outputs.mngr_sha }}
 
+      # `latest` matches default-workspace-template's own CI, so the two agree on
+      # lock formatting.
+      - name: install uv
+        if: steps.resolve.outputs.should_sync == 'true'
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
       - name: sync system/vendor/mngr into default-workspace-template main
         id: sync
         if: steps.resolve.outputs.should_sync == 'true'
@@ -144,9 +152,10 @@ jobs:
           git config user.email "vendor-sync@imbue.com"
 
           # Re-derive from a fresh main on every attempt rather than rebasing a
-          # prepared commit: `git archive` of a fixed SHA is byte-deterministic, so
-          # replaying it onto whatever main now is always yields the same tree and
-          # a concurrent push can never produce a conflict to resolve.
+          # prepared commit: `git archive` of a fixed SHA is byte-deterministic and
+          # `uv lock` under one uv is a fixpoint on its own output, so replaying onto
+          # whatever main now is always yields the same tree and a concurrent push can
+          # never produce a conflict to resolve.
           did_push=false
           for attempt in 1 2 3; do
             git fetch --quiet origin main
@@ -154,7 +163,10 @@ jobs:
             rm -rf system/vendor/mngr
             mkdir -p system/vendor/mngr
             git -C "$GITHUB_WORKSPACE" archive "$MNGR_SHA" | tar -x -C system/vendor/mngr
-            git add -A system/vendor/mngr
+            # The template's root uv.lock pins the vendored mngr libs as editable
+            # path deps, so a refresh that moves their dependencies strands it.
+            uv lock
+            git add -A system/vendor/mngr uv.lock
             if git diff --cached --quiet; then
               echo "vendor already equals mngr $MNGR_SHA -- nothing to push"
               break
@@ -1004,7 +1016,9 @@ jobs:
     needs: [check_should_run, build]
     if: needs.check_should_run.outputs.should_run == 'true'
     runs-on: macos-latest
-    timeout-minutes: 30
+    # Each macos-lifecycle case relaunches the app (the windowless states are
+    # only reachable from a cold start), so this is no longer a single-launch job.
+    timeout-minutes: 45
     steps:
       # Checkout the trigger ref (not the frozen mngr SHA) so the e2e
       # harness (playwright spec + fixtures) is the version being iterated,
@@ -1030,27 +1044,27 @@ jobs:
       - name: pnpm install (apps/minds dev deps incl. playwright)
         working-directory: apps/minds
         run: pnpm install --frozen-lockfile
-      # The renderer-contract specs launch a plain chromium (macos-launch
-      # itself drives the installed Electron app over CDP and needs no
-      # browser download).
+      # Neither spec launches a browser -- both drive the installed Electron
+      # app over CDP. This is here for the ffmpeg that rides along with the
+      # chromium download, which backs the config's `video: retain-on-failure`.
       - name: install playwright chromium
         working-directory: apps/minds
         run: pnpm exec playwright install chromium
-      - name: run macos-launch + renderer-contract specs
+      - name: run macos-launch + macos-lifecycle specs
         working-directory: apps/minds
         run: |
           # Headless on CI; the specs assert DOM state and the chrome
           # iframe sources -- no display dependency. `html` reporter writes
           # a browsable report with embedded screenshots and traces;
           # Playwright skips opening it when stdout isn't a TTY (CI is fine).
-          # The renderer-contract specs (embed-flow, local-swap,
-          # recovery-redirect, landing-stopped-mind-restart) drive the REAL
-          # shell scripts in a plain chromium against the local harness
-          # server -- no Electron, no backend -- so they add only seconds.
+          # macos-lifecycle covers the macOS windowless states (all windows
+          # closed, then reopened from the dock); each of its cases relaunches
+          # the app, hence this job's timeout. The four renderer-contract
+          # specs that used to be listed here went away with the legacy shell
+          # scripts in the Mithril SPA migration.
           pnpm exec playwright test \
             --config=test/e2e/playwright.config.js \
-            macos-launch.spec.js embed-flow.spec.js local-swap.spec.js \
-            recovery-redirect.spec.js landing-stopped-mind-restart.spec.js \
+            macos-launch.spec.js macos-lifecycle.spec.js \
             --reporter=list,html
       - name: upload Playwright report
         if: always()

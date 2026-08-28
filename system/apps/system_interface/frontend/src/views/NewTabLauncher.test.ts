@@ -10,6 +10,14 @@ vi.mock("../base-path", () => ({
   areIntroductoryAgentsEnabled: () => introductoryAgentsEnabled,
 }));
 
+// The launcher asks the machine's app list whether a "files" app backs its
+// file-viewer tile; a mutable stand-in lets each case pose a different machine
+// (AgentManager's real list is module state fed by the WebSocket).
+const appState: { apps: { name: string; url: string; label: string }[] } = { apps: [] };
+vi.mock("../models/AgentManager", () => ({
+  getApps: () => appState.apps,
+}));
+
 // Mithril captures `requestAnimationFrame` at import time so it can schedule
 // redraws. Vitest's default (node) environment has no such global, so provide
 // a polyfill before any import is evaluated.
@@ -26,6 +34,7 @@ import {
   filterRowsByKind,
   formatRecency,
   kindsInRows,
+  openNewTiles,
   resetHiddenKinds,
   sortRowsByRecency,
   type LauncherRow,
@@ -45,8 +54,7 @@ const EMPTY_INVENTORY: MachineInventory = {
   chatAgents: [],
   terminals: [],
   browsers: [],
-  apps: [],
-  urlTabs: [],
+  appInstances: [],
 };
 
 describe("buildLauncherRows", () => {
@@ -57,7 +65,7 @@ describe("buildLauncherRows", () => {
         chatAgents: [{ name: "agent-1", label: "Build the Newsreader" }],
         terminals: [{ name: "build", label: "build" }],
         browsers: [{ name: "gazette", label: "Gazette (signed in)" }],
-        apps: [{ name: "newsreader", label: "Newsreader" }],
+        appInstances: [{ serviceName: "newsreader", instanceName: "newsreader-1", label: "Newsreader 1" }],
       },
       {},
     );
@@ -65,7 +73,7 @@ describe("buildLauncherRows", () => {
       ["chat:agent-1", "chat"],
       ["terminal:build", "terminal"],
       ["service:browser?session=gazette", "browser"],
-      ["service:newsreader", "app"],
+      ["service:newsreader?instance=newsreader-1", "app"],
     ]);
     expect(rows[0].label).toBe("Build the Newsreader");
   });
@@ -274,6 +282,15 @@ function buttonsOf(tree: unknown): VnodeLike[] {
   return tagsOf(tree, "button");
 }
 
+/** Just the "Open new" tiles, which share a class no other button carries.
+ *  `buttonsOf` also returns the tables' row buttons, which have no tile state
+ *  of their own to assert on. */
+function tilesOf(tree: unknown): VnodeLike[] {
+  // Mithril moves a `class` attr onto `className` during normalization, so that
+  // is where a rendered vnode's classes actually are.
+  return buttonsOf(tree).filter((button) => String(button.attrs?.className ?? "").includes("new-tab-launcher-tile"));
+}
+
 /** The open filter menu's checkboxes, one per kind that table holds. */
 function inputsOf(tree: unknown): VnodeLike[] {
   return tagsOf(tree, "input");
@@ -317,13 +334,24 @@ describe("NewTabLauncher", () => {
     expect(tiles[0].attrs?.onclick).toBeTypeOf("function");
   });
 
+  it("lets the file viewer act once a files app backs it", () => {
+    appState.apps = [{ name: "files", url: "http://files.test", label: "files-abc123" }];
+    try {
+      const tiles = buttonsOf(render()).slice(0, 4);
+      expect(tiles[1].attrs?.["aria-disabled"]).toBeUndefined();
+      expect(tiles[1].attrs?.onclick).toBeTypeOf("function");
+    } finally {
+      appState.apps = [];
+    }
+  });
+
   it("offers the harness tiles only where the host enables the alt harnesses", () => {
     // The real flag caches a meta-tag read; the mock above keeps it a plain
     // switch so this test cannot leak an enabled flag into its neighbours.
     otherHarnessesEnabled = true;
     try {
       const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
-      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex agent", "Pi agent"]);
+      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex chat", "Pi chat"]);
     } finally {
       otherHarnessesEnabled = false;
     }
@@ -346,9 +374,62 @@ describe("NewTabLauncher", () => {
 
   it("starts a new object of the tile's kind", () => {
     const started: string[] = [];
-    const tiles = buttonsOf(render({ onOpenNew: (kind) => started.push(kind) }));
+    const tiles = buttonsOf(render({ onOpenNew: (target) => started.push(target.kind) }));
     (tiles[3].attrs?.onclick as () => void)();
     expect(started).toEqual(["terminal"]);
+  });
+
+  it("hands the clicked tile's harness straight through", () => {
+    otherHarnessesEnabled = true;
+    try {
+      const started: string[] = [];
+      const tiles = buttonsOf(
+        render({ onOpenNew: (target) => started.push(target.kind === "chat" ? target.harness : target.kind) }),
+      );
+      // Chat, Codex chat, Pi chat, then the non-chat tiles.
+      (tiles[2].attrs?.onclick as () => void)();
+      expect(started).toEqual(["pi-coding"]);
+    } finally {
+      otherHarnessesEnabled = false;
+    }
+  });
+
+  it("stands every tile down while this pane is starting something", () => {
+    // `mngr create` takes seconds. The launcher used to sit there untouched
+    // for all of it, so an impatient second click started a SECOND object.
+    const tiles = tilesOf(render({ isAwaitingCreate: true }));
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.attrs?.["aria-disabled"]).toBe("true");
+      expect(tile.attrs?.onclick).toBeUndefined();
+    }
+  });
+
+  it("says it is starting, so the click is visibly acknowledged", () => {
+    expect(texts(render({ isAwaitingCreate: true }))).toContain("Starting…");
+    expect(texts(render())).not.toContain("Starting…");
+  });
+
+  it("drops the file-viewer tooltip while starting, since every tile is down", () => {
+    // The tooltip explains why THAT one tile cannot act. Leaving it up while
+    // all of them are down would explain the wrong thing. It is attached
+    // through an `oncreate` hook (see hoverTooltipAttrs), so its absence is
+    // what says the tooltip is gone.
+    expect(tilesOf(render({ isAwaitingCreate: true })).some((tile) => tile.attrs?.oncreate !== undefined)).toBe(false);
+    // ...and it is still there when the launcher is idle.
+    expect(tilesOf(render()).some((tile) => tile.attrs?.oncreate !== undefined)).toBe(true);
+  });
+
+  it("gives every idle tile a tooltip", () => {
+    // Each tile says what it starts (the rail's copy for the same kinds), and
+    // the unbacked file viewer says why it cannot act instead. The tooltip is
+    // attached through an `oncreate` hook (see hoverTooltipAttrs), so its
+    // presence on every tile is what says each one carries a tooltip.
+    const tiles = tilesOf(render());
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.attrs?.oncreate).toBeDefined();
+    }
   });
 
   it("splits the machine into the two tables, most recent first", () => {
@@ -438,5 +519,55 @@ describe("NewTabLauncher", () => {
     const checkbox = inputsOf(component.view(vnode))[0];
     (checkbox.attrs?.onchange as () => void)();
     expect(texts(component.view(vnode))).toContain("No tabs match this filter.");
+  });
+});
+
+describe("openNewTiles", () => {
+  // A chat tile's harness reaches `mngr create --type` verbatim. The tile's own
+  // word for pi is "Pi"; mngr's agent type is "pi-coding" ("pi" is only an
+  // mngr-side alias, which the create endpoint's enum rejects outright), so a
+  // tile carrying its own word instead of the agent type could not create at all.
+  const harnessOf = (label: string) => {
+    const target = openNewTiles().find((tile) => tile.label === label)?.target;
+    return target?.kind === "chat" ? target.harness : undefined;
+  };
+
+  it("names mngr's agent type on every chat tile", () => {
+    otherHarnessesEnabled = true;
+    try {
+      expect(harnessOf("Chat")).toBe("claude");
+      expect(harnessOf("Codex chat")).toBe("codex");
+      expect(harnessOf("Pi chat")).toBe("pi-coding");
+      // Same trap as pi: the tile's word is "Agy", but mngr's agent type is
+      // "antigravity" ("agy" is only an alias the create endpoint's enum rejects).
+      expect(harnessOf("Agy chat")).toBe("antigravity");
+    } finally {
+      otherHarnessesEnabled = false;
+    }
+  });
+
+  it("puts an introductory tile on its harness, asking only for the `first` template", () => {
+    introductoryAgentsEnabled = true;
+    try {
+      expect(harnessOf("Introductory Pi chat")).toBe("pi-coding");
+      const intro = openNewTiles().find((tile) => tile.label === "Introductory Pi chat")?.target;
+      expect(intro).toEqual({ kind: "chat", harness: "pi-coding", first: true });
+      // The plain tiles are the same create without that template.
+      expect(openNewTiles().find((tile) => tile.label === "Chat")?.target).toEqual({
+        kind: "chat",
+        harness: "claude",
+        first: false,
+      });
+    } finally {
+      introductoryAgentsEnabled = false;
+    }
+  });
+
+  it("gives the non-chat tiles no harness to send", () => {
+    // Their kinds are the launcher's own vocabulary and never reach mngr.
+    const kinds = openNewTiles()
+      .filter((tile) => tile.target.kind !== "chat")
+      .map((tile) => tile.target.kind);
+    expect(kinds).toEqual(["files", "browser", "terminal"]);
   });
 });

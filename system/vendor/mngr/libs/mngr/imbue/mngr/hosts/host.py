@@ -67,8 +67,10 @@ from imbue.mngr.hosts.offline_host import BaseHost
 from imbue.mngr.hosts.offline_host import apply_rename_to_agent_data
 from imbue.mngr.hosts.outer_host import ActiveRemoteLock
 from imbue.mngr.hosts.outer_host import OuterHost
+from imbue.mngr.hosts.outer_host import SSH_CHANNEL_OPEN_TIMEOUT_SECONDS
 from imbue.mngr.hosts.outer_host import is_transient_ssh_error
 from imbue.mngr.hosts.outer_host import retry_on_transient_ssh_error
+from imbue.mngr.hosts.tmux import AGENT_PANE_ID_OPTION
 from imbue.mngr.hosts.tmux import TmuxSessionTarget
 from imbue.mngr.hosts.tmux import TmuxWindowTarget
 from imbue.mngr.interfaces.agent import AgentInterface
@@ -647,23 +649,15 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
             "_retry_delay": _retry_delay,
             "_retry_until": _retry_until,
         }
-        with self._notify_on_connection_error():
-            try:
-                return self._run_shell_command_with_transient_retry(command, pyinfra_kwargs)
-            except TimeoutError as e:
-                # ``TimeoutError`` is a subclass of ``OSError``, so this
-                # must precede the OSError branch below. Reached when the
-                # retry decorator has exhausted its attempts on transient
-                # SSH read timeouts; surface as a structured
-                # HostConnectionError so callers don't see a raw timeout.
-                raise HostConnectionError("SSH command timed out reading output") from e
-            except OSError as e:
-                if "Socket is closed" in str(e):
-                    raise HostConnectionError("Connection was closed while running command") from e
-                else:
-                    raise
-            except (EOFError, SSHException) as e:
-                raise HostConnectionError("Could not execute command due to connection error") from e
+        with (
+            self._notify_on_connection_error(),
+            self._translate_ssh_errors(
+                timed_out="SSH command timed out reading output",
+                closed="Connection was closed while running command",
+                failed="Could not execute command due to connection error",
+            ),
+        ):
+            return self._run_shell_command_with_transient_retry(command, pyinfra_kwargs)
 
     # _run_shell_command_with_transient_retry and _run_shell_command_local
     # are inherited unchanged from OuterHost. _get_file*, _put_file*,
@@ -753,13 +747,6 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
 
     # read_file, write_file, read_text_file, write_text_file, _get_file_mtime,
     # and get_file_mtime are inherited unchanged from OuterHost.
-
-    def _is_directory(self, path: Path) -> bool:
-        """Check if a path is a directory on the host."""
-        if self.is_local:
-            return path.is_dir()
-        result = self.execute_idempotent_command(f"test -d '{str(path)}'")
-        return result.success
 
     def _list_directory(self, path: Path, timeout_seconds: float | None = None) -> list[str]:
         """List files in a directory on the host.
@@ -1006,7 +993,9 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         self._ensure_connected()
         transport = self._get_paramiko_transport()
         try:
-            channel = transport.open_session()
+            # Bounded open: a wedged sshd that accepts TCP but no longer
+            # services channel opens would otherwise hang here forever.
+            channel = transport.open_session(timeout=SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
         except (OSError, EOFError, SSHException) as e:
             if is_transient_ssh_error(e):
                 logger.debug("Transient SSH error opening host-lock channel: {}, disconnecting for retry", e)
@@ -1168,14 +1157,22 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         )
         self._ensure_connected()
         transport = self._get_paramiko_transport()
-        channel = transport.open_session()
+        channel = transport.open_session(timeout=SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
+        # The confirmation is one round trip on a healthy sshd, so bound the read on
+        # the same budget as the open: an sshd that accepts the channel but stops
+        # servicing it would otherwise block here forever.
+        channel.settimeout(SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
         try:
             channel.exec_command(command)
             # Wait for the launch confirmation so the holder forks before we release.
             marker_bytes = _LOCK_HOLDER_LAUNCHED_MARKER.encode()
             buffer = b""
             while marker_bytes not in buffer:
-                chunk = channel.recv(4096)
+                try:
+                    chunk = channel.recv(4096)
+                except TimeoutError:
+                    logger.warning("Detached host-lock holder did not confirm launch within the read timeout")
+                    break
                 if not chunk:
                     logger.warning("Detached host-lock holder did not confirm launch")
                     break
@@ -1301,8 +1298,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         which causes the agent to launch in the wrong place. This method detects the
         missing directory early and raises a clear error with a recovery command.
         """
-        check = self.execute_idempotent_command(f"test -d {shlex.quote(str(agent.work_dir))}")
-        if check.success:
+        if self.is_directory(agent.work_dir):
             return
 
         branch = agent.get_created_branch_name()
@@ -1355,7 +1351,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
     def get_reported_plugin_state_files(self, plugin_name: str) -> list[str]:
         """List all plugin state files."""
         plugin_dir = self.host_dir / "plugin" / plugin_name
-        if not self._is_directory(plugin_dir):
+        if not self.is_directory(plugin_dir):
             return []
         return self._list_directory(plugin_dir)
 
@@ -1495,17 +1491,21 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         """Persist agent data to external storage via the provider."""
         self.provider_instance.persist_agent_data(self.id, agent_data)
 
+    def remove_agent_data(self, agent_id: AgentId) -> None:
+        """Remove agent data from external storage via the provider."""
+        self.provider_instance.remove_persisted_agent_data(self.id, agent_id)
+
     def get_agents(self) -> list[AgentInterface]:
         """Get all agents on this host."""
         agents_dir = get_agents_root_dir(self.host_dir)
-        if not self._is_directory(agents_dir):
+        if not self.is_directory(agents_dir):
             logger.trace("Failed to find agents directory for host {}", self.id)
             return []
 
         agents: list[AgentInterface] = []
         for agent_id_str in self._list_directory(agents_dir):
             agent_dir = agents_dir / agent_id_str
-            if self._is_directory(agent_dir):
+            if self.is_directory(agent_dir):
                 agent = self._load_agent_from_dir(agent_dir)
                 if agent is not None:
                     agents.append(agent)
@@ -1550,7 +1550,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                         else:
                             content = self.read_text_file(data_path)
                     except FileNotFoundError:
-                        if not self._is_directory(agent_dir):
+                        if not self.is_directory(agent_dir):
                             logger.warning("Could not load agent reference from {}", data_path)
                         continue
                     try:
@@ -3107,7 +3107,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
 
                 # Remove persisted agent data from external storage (e.g., Modal volume).
                 try:
-                    self.provider_instance.remove_persisted_agent_data(self.id, agent.id)
+                    self.remove_agent_data(agent.id)
                 except MngrError as e:
                     logger.warning(
                         "Failed to remove persisted data for agent {} on host {}: {}", agent.name, self.id, e
@@ -3517,6 +3517,21 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         (SIP restriction), so this is a best-effort no-op there -- the tree walk
         handles the typical macOS case where the pane process is still alive.
 
+        The shared tmux server (comm ``tmux: server``) is exempt from the scan even
+        when its environ carries the marker. The server hosts *every* agent's session
+        on the host, so it is never a legitimate member of one agent's process tree --
+        but it inherits the environment of whichever process happens to fork it, and
+        when that was an agent-context ``mngr start`` (e.g. a project template's
+        boot units, which source the system-services agent's env before relaunching
+        it), the marker brands the server as that agent's. Sweeping it up then kills
+        every agent on the host, and when the sweep was requested from inside one of
+        those sessions (an in-container ``mngr start --restart``), the caller dies
+        mid-operation and the restart's start half never runs. The accepted trade-off:
+        an agent-private tmux server on a separate socket now outlives its agent as an
+        idle process instead of being reaped -- strictly better than the shared server
+        being killed. (``_build_start_agent_shell_command`` also unsets the marker
+        before ``tmux new-session``, so mngr-forked servers are not branded at all.)
+
         Why an env-marker scan instead of a process-group / setsid mechanism: prior
         attempts to manage the agent process tree via process groups have been
         deliberately retired. setsid-wrapping the pane command was removed in
@@ -3561,7 +3576,13 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
             'if [ "$(uname -s)" = "Linux" ]; then '
             '  for f in $(grep -lza "^MNGR_AGENT_ID=$AGENT_ID" /proc/[0-9]*/environ 2>/dev/null); do '
             "    pid=${f#/proc/}; pid=${pid%/environ}; "
-            '    [ "$pid" = "$SELF" ] || echo "$pid"; '
+            '    [ "$pid" = "$SELF" ] && continue; '
+            # The shared tmux server must survive a single agent's stop even when its
+            # environ carries the marker (see the docstring). Matches are few, so a
+            # read per matched pid stays off the hot path the single-grep design
+            # above protects.
+            '    case "$(cat "/proc/$pid/comm" 2>/dev/null)" in "tmux: server") continue ;; esac; '
+            '    echo "$pid"; '
             "  done; "
             "fi; true"
         )
@@ -3951,6 +3972,17 @@ def _build_start_agent_shell_command(
     for var_name in unset_vars:
         steps.append(f"unset {shlex.quote(var_name)}")
 
+    # When no tmux server is running yet, the new-session below forks one, and the
+    # server inherits this shell's environment. An MNGR_AGENT_ID inherited from the
+    # invoking context (a boot unit that sources the agent's env before calling
+    # ``mngr start``, or an in-container mngr run from another agent's shell) would
+    # brand the shared server as belonging to that one agent, and the stop-time env
+    # sweep would then treat the server -- and with it every agent's session on the
+    # host -- as that agent's process tree. The pane does not need this variable from
+    # the environment: its command sources the agent's own env file. (The sweep also
+    # exempts the server by comm; see _collect_pids_by_agent_id_env.)
+    steps.append("unset MNGR_AGENT_ID")
+
     # Create a detached tmux session with env vars sourced.
     # Explicitly set -x/-y to force tmux to initialize the PTY dimensions
     # directly. Without these flags, the pane's logical size (per list-panes)
@@ -3985,6 +4017,23 @@ def _build_start_agent_shell_command(
     steps.append(f"(tmux source-file {shlex.quote(str(tmux_config_path))} || true)")
 
     quoted_exact_agent_window = TmuxWindowTarget(session_name=session_name, window=primary_window_name).as_shell_arg()
+
+    # Record the agent pane's ID, so every later send targets THAT pane rather than whichever
+    # pane happens to be active. `session:window` resolves to the active pane, so a single split
+    # sends the message into the new shell instead -- silently, with no error. `session:window.0`
+    # is no better, because panes renumber when one closes. A pane ID is unique for the pane's
+    # life and fails loudly once it is gone, which is the behaviour we want.
+    #
+    # A tmux session user-option is the right home: `@`-prefixed names are tmux's user namespace
+    # (stored, never interpreted), and the value lives and dies with the session -- so there is no
+    # file to go stale, nothing to clean up, and a restarted agent writes a fresh ID rather than
+    # inheriting a dead one. `|| true` because an agent whose pane cannot be read must still
+    # start; the send path falls back to the window target when the option is missing.
+    quoted_exact_agent_session = f"{shlex.quote('=' + session_name + ':')}"
+    steps.append(
+        f"(tmux set-option -t {quoted_exact_agent_session} {AGENT_PANE_ID_OPTION}"
+        f" \"$(tmux display-message -p -t {quoted_exact_agent_window} '#{{pane_id}}')\" || true)"
+    )
 
     # Pin the agent window to a stable, usable geometry. tmux's default window-size
     # policy ("latest") sizes a window to the most recent client -- and a brand-new

@@ -8,7 +8,7 @@ Five fixtures, mirroring the spec:
 * ``verified_user`` -- function-scoped, pre-verified user created via the
   shared env's SuperTokens admin API and deleted in teardown.
 * ``ephemeral_env`` -- function-scoped, mints a fresh ``ci-...`` env
-  via ``minds env deploy`` and unconditionally tears it down in finally.
+  via ``minds-admin env deploy`` and unconditionally tears it down in finally.
 * ``signup_email`` -- function-scoped, fresh ``+<uuid>`` address against
   the per-run shared mail.tm account plus poll helpers.
 
@@ -157,20 +157,16 @@ def ci_test_user() -> tuple[NonEmptyStr, SecretStr]:
         pytest.skip(f"CI test-user credentials not in env vars and Vault read failed: {exc}")
 
 
-@pytest.fixture
-def verified_user(
-    shared_env: Callable[[str], SharedEnvHandle],
-) -> Generator[VerifiedUserHandle, None, None]:
-    """Function-scoped pre-verified user against the ``default`` shared env's SuperTokens.
+def _provision_verified_user(handle: SharedEnvHandle) -> Generator[VerifiedUserHandle, None, None]:
+    """Create a throwaway pre-verified user against ``handle``'s SuperTokens; delete it on close.
 
-    Implementation calls the env's SuperTokens admin API to create the
-    user + mark the email verified + mint a session token; teardown
-    deletes the user. Tests that need a user against a different shared
-    env should call ``shared_env('<other-role>')`` themselves and invoke
-    the same provisioning code directly (or we add a second fixture
-    parametrized on role once that need actually materializes).
+    The shared body of the ``verified_user`` / ``second_verified_user``
+    fixtures: mint a random email + password, create the user + mark the email
+    verified + mint a session token via the env's SuperTokens admin API, and
+    delete the user in teardown (tolerating failures -- the session-scoped
+    sweep + the shared env's SuperTokens app teardown at run-end are the
+    safety nets).
     """
-    handle = shared_env("default")
     email = NonEmptyStr(f"test-{get_short_random_string()}@example.test")
     password = SecretStr(f"pw-{uuid4().hex}")
     user_id, session_token = create_verified_user_via_admin_api(
@@ -204,11 +200,35 @@ def verified_user(
 
 
 @pytest.fixture
+def verified_user(
+    shared_env: Callable[[str], SharedEnvHandle],
+) -> Generator[VerifiedUserHandle, None, None]:
+    """Function-scoped pre-verified user against the ``default`` shared env's SuperTokens.
+
+    Implementation calls the env's SuperTokens admin API to create the
+    user + mark the email verified + mint a session token; teardown
+    deletes the user. Tests that need a user against a different shared
+    env should call ``shared_env('<other-role>')`` themselves and invoke
+    the same provisioning code directly (or we add a second fixture
+    parametrized on role once that need actually materializes).
+    """
+    yield from _provision_verified_user(shared_env("default"))
+
+
+@pytest.fixture
+def second_verified_user(
+    shared_env: Callable[[str], SharedEnvHandle],
+) -> Generator[VerifiedUserHandle, None, None]:
+    """A second pre-verified user against the ``default`` shared env, for cross-user isolation tests."""
+    yield from _provision_verified_user(shared_env("default"))
+
+
+@pytest.fixture
 def ephemeral_env(deployment_envs_config: DeploymentEnvsConfig) -> Generator[EphemeralEnvHandle, None, None]:
     """Function-scoped fresh ``ci-<timestamp>-<uuid>`` env for ``minds_deployment`` tests.
 
-    Shells out to ``minds env deploy`` (matching how an operator would
-    invoke it) and unconditionally tears down via ``minds env destroy``
+    Shells out to ``minds-admin env deploy`` (matching how an operator would
+    invoke it) and unconditionally tears down via ``minds-admin env destroy``
     in finally. The orchestrator-side name+age sweep is the leak safety
     net if both this teardown AND the orchestrator's per-run cleanup
     fail.
@@ -266,8 +286,8 @@ _STALE_TEST_USER_MAX_AGE_SECONDS = 30 * 60
 # CLIs (``vault``, ``modal``) find their auth files at the expected
 # paths under the redirected HOME.
 #
-# - ``.vault-token``: HashiCorp Vault CLI auth token. ``minds env
-#   deploy`` calls ``_load_dev_credentials_from_vault`` which shells out
+# - ``.vault-token``: HashiCorp Vault CLI auth token. ``minds-admin
+#   env deploy`` calls ``_load_dev_credentials_from_vault`` which shells out
 #   to ``vault`` and expects this file.
 # - ``.modal.toml``: Modal CLI auth tokens per workspace.
 #   ``modal deploy`` / ``modal app history`` / ``modal app rollback``
@@ -291,7 +311,7 @@ def _copy_operator_credentials_into_test_home(
     per-test tmpdir for filesystem isolation, which we generally want
     -- it keeps any test-driven file writes from landing in the
     operator's real home. The downside is that the in-test subprocess
-    ``minds env deploy`` shells out to ``vault`` (reads
+    ``minds-admin env deploy`` shells out to ``vault`` (reads
     ``$HOME/.vault-token``) and ``modal`` (reads ``$HOME/.modal.toml``)
     which then find empty / missing auth files and fail with 403s.
 
@@ -401,7 +421,7 @@ def _mint_ephemeral_env_name() -> DevEnvName:
 
 _MINDS_DEPLOY_TIMEOUT_SECONDS = 15 * 60
 _MINDS_DESTROY_TIMEOUT_SECONDS = 10 * 60
-# ``minds env deploy/destroy`` validate that they're being run from
+# ``minds-admin env deploy/destroy`` validate that they're being run from
 # inside the monorepo (they write a ``.minds-deploy-recover-target-<env>.json``
 # at the repo root). Pytest changes cwd to a tmpdir for each test, so
 # the subprocess inherits that tmpdir and would fail the check. Pin
@@ -410,9 +430,9 @@ _REPO_ROOT_FOR_SUBPROCESS = Path(__file__).resolve().parents[3]
 
 
 def _deploy_ephemeral_env(*, name: DevEnvName, run_id: str) -> EphemeralEnvHandle:
-    """``mkdir -p <env-root>`` + ``uv run minds env deploy``; parse client.toml; return handle.
+    """``mkdir -p <env-root>`` + ``uv run minds-admin env deploy``; parse client.toml; return handle.
 
-    Shells out to the same ``minds env deploy`` CLI an operator would
+    Shells out to the same ``minds-admin env deploy`` CLI an operator would
     run, with the activation env vars set (so the subprocess targets
     ``<name>`` without needing a prior ``eval activate``). Captures
     output to the test's stdout via ``check_output``. On failure,
@@ -430,7 +450,7 @@ def _deploy_ephemeral_env(*, name: DevEnvName, run_id: str) -> EphemeralEnvHandl
     sub_env = build_minds_env_subprocess_env(name)
     logger.info("ephemeral_env: deploying {!r}", name)
     completed = subprocess.run(
-        ["uv", "run", "minds", "env", "deploy"],
+        ["uv", "run", "minds-admin", "env", "deploy"],
         env=sub_env,
         cwd=str(_REPO_ROOT_FOR_SUBPROCESS),
         capture_output=True,
@@ -440,13 +460,13 @@ def _deploy_ephemeral_env(*, name: DevEnvName, run_id: str) -> EphemeralEnvHandl
     )
     if completed.returncode != 0:
         raise MindError(
-            f"`minds env deploy` for {name!r} exited {completed.returncode}.\n"
+            f"`minds-admin env deploy` for {name!r} exited {completed.returncode}.\n"
             f"--- stdout ---\n{completed.stdout}\n--- stderr ---\n{completed.stderr}"
         )
     client_toml = client_config_file(name)
     if not client_toml.is_file():
         raise MindError(
-            f"`minds env deploy` for {name!r} completed but did not write {client_toml}. "
+            f"`minds-admin env deploy` for {name!r} completed but did not write {client_toml}. "
             "This usually means the deploy succeeded the modal side but failed the local-state write step."
         )
     client_config = load_client_config(client_toml)
@@ -458,10 +478,10 @@ def _deploy_ephemeral_env(*, name: DevEnvName, run_id: str) -> EphemeralEnvHandl
 
 
 def _destroy_ephemeral_env(*, name: DevEnvName) -> None:
-    """``uv run minds env destroy`` for ``name``. Idempotent against missing env root.
+    """``uv run minds-admin env destroy`` for ``name``. Idempotent against missing env root.
 
     Returns silently if the env root doesn't exist (already destroyed
-    or never created). Otherwise shells out to ``minds env destroy``
+    or never created). Otherwise shells out to ``minds-admin env destroy``
     which is itself idempotent per-resource. Any non-zero exit raises
     so the caller can log + log a leak warning.
     """
@@ -471,7 +491,7 @@ def _destroy_ephemeral_env(*, name: DevEnvName) -> None:
     sub_env = build_minds_env_subprocess_env(name)
     logger.info("ephemeral_env: destroying {!r}", name)
     completed = subprocess.run(
-        ["uv", "run", "minds", "env", "destroy"],
+        ["uv", "run", "minds-admin", "env", "destroy"],
         env=sub_env,
         cwd=str(_REPO_ROOT_FOR_SUBPROCESS),
         capture_output=True,
@@ -481,6 +501,6 @@ def _destroy_ephemeral_env(*, name: DevEnvName) -> None:
     )
     if completed.returncode != 0:
         raise MindError(
-            f"`minds env destroy` for {name!r} exited {completed.returncode}.\n"
+            f"`minds-admin env destroy` for {name!r} exited {completed.returncode}.\n"
             f"--- stdout ---\n{completed.stdout}\n--- stderr ---\n{completed.stderr}"
         )

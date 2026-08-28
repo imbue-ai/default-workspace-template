@@ -14,7 +14,9 @@ from pathlib import Path
 
 from imbue.modal_app_kit.testing import imported_module_names
 from imbue.modal_app_kit.testing import is_module_within_package
+from imbue.modal_app_kit.testing import modal_functions_missing_logging_bootstrap
 from imbue.modal_app_kit.testing import shipped_module_files
+from imbue.modal_app_kit.testing import uses_dunder_name_logger
 from imbue.remote_service_connector.deploy_constants import THIRD_PARTY_IMPORT_ROOTS
 
 _PACKAGE_DIR = Path(__file__).parent
@@ -47,6 +49,12 @@ _MODULE_ATTRIBUTE_SEAMS = (
     "_sdk_get_browser_session",
     "_verify_turnstile_token",
     "get_device_code_store",
+    "_client_ip",
+    "delete_user",
+    "get_signup_attempt_store",
+    "get_ip_reputation_cache",
+    "get_ip_reputation_provider",
+    "get_tor_exit_list",
 )
 
 
@@ -123,3 +131,13 @@ def test_runtime_seams_are_referenced_through_their_module() -> None:
         "Runtime seams must be called through their owning module "
         f"(e.g. ``stores.get_key_store()``), not from-imported: {violations}"
     )
+
+
+def test_entrypoint_logger_is_named_under_imbue() -> None:
+    """In the container the entrypoint is module ``app``, so a ``__name__`` logger would drop its INFO lines."""
+    assert not uses_dunder_name_logger(_PACKAGE_DIR / "app.py")
+
+
+def test_every_modal_function_bootstraps_logging_first() -> None:
+    """The JSON root handler exists only once ``configure_logging()`` runs; a function that skips it drops its INFO lines."""
+    assert modal_functions_missing_logging_bootstrap(_PACKAGE_DIR / "app.py") == []

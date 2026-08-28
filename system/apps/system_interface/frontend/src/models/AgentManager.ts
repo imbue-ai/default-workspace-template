@@ -81,6 +81,11 @@ export interface AppEntry {
   // origin uses (see ``system/scripts/forward_port.py``). Empty for legacy
   // rows written before labels existed; ``labelForService`` falls back to the
   // name in that case.
+  // CLEANUP: treat an empty label as an error (and drop labelForService's
+  // legacy-row fallback) once no supported workspace's apps.toml predates
+  // minds-v0.3.12, the first release whose forward_port.py mints labels --
+  // services re-register (and mint) on boot, so any workspace booted on
+  // >=0.3.12 has labeled rows.
   label: string;
   // The app's own icon as SVG markup (a single ``<svg>`` element), registered
   // by the app via ``forward_port.py --icon`` and validated there and again by
@@ -92,6 +97,15 @@ export interface AppEntry {
   // no page of its own (e.g. owner-exec, a loopback exec server the share
   // gateway routes through). Consumers offering apps to open must exclude it.
   internal?: boolean;
+  // The supervisord program running this app, registered via ``forward_port.py
+  // --program``. Its presence is what makes the app stoppable/startable from
+  // the workspace; absent/empty means unsupervised (or registered before the
+  // field existed).
+  program?: string;
+  // Backend-derived liveness: supervisord's process state for ``program``
+  // rows, a TCP probe of the backend URL otherwise. Absent reads as running
+  // (see ``isAppRunning``).
+  is_running?: boolean;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start
@@ -239,6 +253,15 @@ type WsEvent =
       type: "member_last_used_changed";
       ref: string;
       at_ms: number | null;
+    }
+  | {
+      // One object beaconed where it is looking, machine-wide; ``path`` is
+      // null when the entry was dropped (the object was destroyed, or it
+      // beaconed a blank). A location belongs to the object rather than to a
+      // panel, so this reaches clients that could open it anywhere.
+      type: "member_location_changed";
+      ref: string;
+      path: string | null;
     };
 
 /** Agent-driven view-switch requests pushed over the WebSocket (the ``load``
@@ -285,6 +308,13 @@ export type MemberTitleListener = (ref: string, title: string | null) => void;
  */
 export type MemberLastUsedListener = (ref: string, atMs: number | null) => void;
 
+/**
+ * Notified when one object's machine-wide beaconed location changed; ``path``
+ * is null when the entry was dropped. Delivered to every client, because a
+ * location is a fact about the machine rather than about any one view.
+ */
+export type MemberLocationListener = (ref: string, path: string | null) => void;
+
 export type LayoutOpListener = (event: LayoutOpEvent) => void;
 export type AgentsUpdatedListener = (agents: AgentState[]) => void;
 /**
@@ -322,6 +352,7 @@ let layoutSyncListeners: LayoutSyncListener[] = [];
 let projectSyncListeners: ProjectSyncListener[] = [];
 let memberTitleListeners: MemberTitleListener[] = [];
 let memberLastUsedListeners: MemberLastUsedListener[] = [];
+let memberLocationListeners: MemberLocationListener[] = [];
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let terminalSessionListeners: TerminalSessionListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
@@ -547,6 +578,12 @@ function handleEvent(event: WsEvent): void {
         listener(event.ref, event.at_ms);
       }
       break;
+
+    case "member_location_changed":
+      for (const listener of memberLocationListeners) {
+        listener(event.ref, event.path);
+      }
+      break;
   }
 }
 
@@ -645,6 +682,9 @@ export function labelForService(name: string): string {
   // is genuinely unregistered (the shell itself, or a legacy row). Either way
   // the only fallback is the bare name, which routes locally but not on a
   // share -- so this is a last resort, not a silent default.
+  // CLEANUP: narrow case (2) to the shell / unregistered names only (no
+  // legacy label-less rows) once no supported workspace's apps.toml predates
+  // minds-v0.3.12, the first release whose forward_port.py mints labels.
   if (!appsLoaded) {
     console.warn(
       `[si] labelForService("${name}") fell back to the bare name because the app list has not loaded yet; ` +
@@ -723,6 +763,14 @@ export function removeMemberLastUsedListener(listener: MemberLastUsedListener): 
   memberLastUsedListeners = memberLastUsedListeners.filter((l) => l !== listener);
 }
 
+export function addMemberLocationListener(listener: MemberLocationListener): void {
+  memberLocationListeners.push(listener);
+}
+
+export function removeMemberLocationListener(listener: MemberLocationListener): void {
+  memberLocationListeners = memberLocationListeners.filter((l) => l !== listener);
+}
+
 export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {
   agentsUpdatedListeners.push(listener);
 }
@@ -798,6 +846,15 @@ export async function allocateTerminalName(): Promise<string> {
   return data.session_name;
 }
 
+/** The chat harnesses a create can stack.
+ *
+ *  These are mngr's own agent type names -- what ``mngr create --type`` resolves
+ *  and what the create endpoint validates ``harness`` against. Pi's is
+ *  ``pi-coding``; ``pi`` is only an mngr-side alias the endpoint's enum does not
+ *  accept. Declared here, beside the request that carries it, so no view has to
+ *  restate the set. */
+export type ChatHarness = "claude" | "codex" | "pi-coding" | "opencode" | "antigravity";
+
 /** A freshly-created chat agent's identity: its id and its name pair (the
  *  canonical true name plus the human-readable display name the server minted
  *  or accepted). */
@@ -823,7 +880,7 @@ export interface CreatedChatAgent {
  */
 export async function createChatAgent(
   projectId: string,
-  harness: "claude" | "codex" | "pi" = "claude",
+  harness: ChatHarness = "claude",
   isFirst: boolean = false,
 ): Promise<CreatedChatAgent> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {

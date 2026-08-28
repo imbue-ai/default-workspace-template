@@ -90,20 +90,78 @@ def test_load_accounts_requires_user_id_column(tmp_path: Path) -> None:
         delete_accounts_module._load_accounts(accounts_file)
 
 
-def test_resolve_secret_prefers_explicit_then_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_secret_prefers_explicit_then_env_then_local_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOME_SECRET_ENV", "from-env")
+    local_values = {"SOME_SECRET_ENV": "from-local"}
     assert (
-        delete_accounts_module._resolve_secret("explicit", "SOME_SECRET_ENV", "production", "svc", "K") == "explicit"
+        delete_accounts_module._resolve_secret("explicit", "SOME_SECRET_ENV", "production", "svc", "K", local_values)
+        == "explicit"
     )
-    assert delete_accounts_module._resolve_secret(None, "SOME_SECRET_ENV", "production", "svc", "K") == "from-env"
+    assert (
+        delete_accounts_module._resolve_secret(None, "SOME_SECRET_ENV", "production", "svc", "K", local_values)
+        == "from-env"
+    )
+    monkeypatch.delenv("SOME_SECRET_ENV")
+    assert (
+        delete_accounts_module._resolve_secret(None, "SOME_SECRET_ENV", "production", "svc", "K", local_values)
+        == "from-local"
+    )
+
+
+def test_load_env_local_secrets_reads_the_secrets_table(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    env_dir = tmp_path / ".minds-dev-alice"
+    env_dir.mkdir()
+    (env_dir / "secrets.toml").write_text('[secrets]\nNEON_HOST_POOL_DSN = "postgresql://local/host_pool"\n')
+
+    values = delete_accounts_module._load_env_local_secrets("dev-alice")
+
+    assert values == {"NEON_HOST_POOL_DSN": "postgresql://local/host_pool"}
+    # No env named: nothing to read, no error.
+    assert delete_accounts_module._load_env_local_secrets(None) == {}
+
+
+def test_load_env_local_secrets_fails_loudly_on_missing_or_malformed_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    with pytest.raises(delete_accounts_module.AccountDeletionError, match="does not exist"):
+        delete_accounts_module._load_env_local_secrets("dev-alice")
+
+    env_dir = tmp_path / ".minds-dev-alice"
+    env_dir.mkdir()
+    (env_dir / "secrets.toml").write_text('secrets = "not-a-table"\n')
+    with pytest.raises(delete_accounts_module.AccountDeletionError, match="not a table"):
+        delete_accounts_module._load_env_local_secrets("dev-alice")
 
 
 def test_resolve_optional_secret_returns_env_value(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPTIONAL_SECRET_ENV", "opt-value")
     assert (
-        delete_accounts_module._resolve_optional_secret(None, "OPTIONAL_SECRET_ENV", "production", "svc", "K")
+        delete_accounts_module._resolve_optional_secret(None, "OPTIONAL_SECRET_ENV", "production", "svc", "K", {})
         == "opt-value"
     )
+
+
+def test_resolve_analytics_secret_values_skips_only_a_fully_absent_entry() -> None:
+    """No analytics keys at all means 'not provisioned' (skip); all keys means proceed."""
+    assert delete_accounts_module._resolve_analytics_secret_values("production", lambda key: None) is None
+
+    values = delete_accounts_module._resolve_analytics_secret_values("production", lambda key: f"value-for-{key}")
+    assert values is not None
+    assert set(values) == set(delete_accounts_module._ANALYTICS_SECRET_KEYS)
+    assert values["ANALYTICS_OPS_DATABASE_URL"] == "value-for-ANALYTICS_OPS_DATABASE_URL"
+
+
+def test_resolve_analytics_secret_values_refuses_a_partially_populated_entry() -> None:
+    """A misconfigured (partial) analytics entry must abort, never silently skip deletion."""
+
+    def resolve_all_but_ops(key: str) -> str | None:
+        return None if key == "ANALYTICS_OPS_DATABASE_URL" else f"value-for-{key}"
+
+    with pytest.raises(delete_accounts_module.AccountDeletionError, match="ANALYTICS_OPS_DATABASE_URL"):
+        delete_accounts_module._resolve_analytics_secret_values("production", resolve_all_but_ops)
 
 
 def test_delete_db_rows_keys_each_table_by_the_correct_identifier() -> None:

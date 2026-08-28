@@ -74,8 +74,10 @@ from supertokens_python.types import RecipeUserId
 from supertokens_python.types.base import AccountInfoInput
 
 import imbue.remote_service_connector.auth as auth_module
+import imbue.remote_service_connector.suspension as suspension_module
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.auth import require_admin_key
 from imbue.remote_service_connector.errors import EmailNotVerifiedError
 from imbue.remote_service_connector.errors import MissingAuthWebsiteDomainError
@@ -182,7 +184,7 @@ class AuthResponse(BaseModel):
     status: str = Field(
         description=(
             "OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, ACCOUNT_EXISTS_WITH_OTHER_METHOD, "
-            "SIGNUP_DISABLED, FIELD_ERROR, or ERROR"
+            "SIGNUP_DISABLED, ACCOUNT_SUSPENDED, FIELD_ERROR, or ERROR"
         )
     )
     message: str | None = Field(default=None, description="Human-readable message for non-OK statuses")
@@ -203,7 +205,7 @@ class RefreshSessionRequest(BaseModel):
 
 
 class RefreshSessionResponse(BaseModel):
-    status: str = Field(description="OK or ERROR")
+    status: str = Field(description="OK, ACCOUNT_SUSPENDED, or ERROR")
     tokens: SessionTokens | None = Field(default=None, description="New tokens when status is OK")
     message: str | None = Field(default=None, description="Error detail if status is not OK")
 
@@ -376,7 +378,8 @@ def _send_verification_email_best_effort(user_id: str, email: str) -> bool:
             email=email,
         )
     except (HTTPException, SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Could not send the verification email for %s: %s", email, exc)
+        emit_metric("verification_email_send_failed", 1, {"caller": "auth_proxy"})
+        logger.warning("Could not send the verification email for %s", email, exc_info=exc)
         return False
 
 
@@ -619,6 +622,13 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
                 return AuthResponse(status="ERROR", message="Sign-up failed")
 
             user = result.user
+            # Defensive: a just-created account has no suspension row, but
+            # every session-creation path carries the gate.
+            if suspension_module.is_user_suspended_at_gate(user.id, gate="json_signup"):
+                return AuthResponse(
+                    status=suspension_module.ACCOUNT_SUSPENDED_STATUS,
+                    message=suspension_module.SUSPENDED_USER_MESSAGE,
+                )
             tokens = build_session_tokens(user.id)
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during signup", exc_info=exc)
@@ -672,6 +682,11 @@ def auth_signin(body: SignInRequest) -> AuthResponse:
                 return AuthResponse(status="ERROR", message="Sign-in failed")
 
             user = result.user
+            if suspension_module.is_user_suspended_at_gate(user.id, gate="json_signin"):
+                return AuthResponse(
+                    status=suspension_module.ACCOUNT_SUSPENDED_STATUS,
+                    message=suspension_module.SUSPENDED_USER_MESSAGE,
+                )
             tokens = build_session_tokens(user.id)
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during signin", exc_info=exc)
@@ -695,6 +710,19 @@ def auth_refresh_session(body: RefreshSessionRequest) -> RefreshSessionResponse:
             new_session = refresh_session_without_request_response(refresh_token=body.refresh_token)
         except (SuperTokensSessionError, SuperTokensGeneralError, ValueError, TypeError) as exc:
             return RefreshSessionResponse(status="ERROR", message=str(exc))
+        # Suspension gate: the suspend action revokes every session (which
+        # kills refresh tokens too), so this only closes the race where a
+        # refresh lands between the flag being set and the revocation. The
+        # just-minted session is revoked so nothing usable escapes.
+        if suspension_module.is_user_suspended_at_gate(new_session.get_user_id(), gate="session_refresh"):
+            try:
+                revoke_session(new_session.get_handle())
+            except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+                logger.warning("Could not revoke a suspended account's refreshed session", exc_info=exc)
+            return RefreshSessionResponse(
+                status=suspension_module.ACCOUNT_SUSPENDED_STATUS,
+                message=suspension_module.SUSPENDED_USER_MESSAGE,
+            )
         raw = new_session.get_all_session_tokens_dangerously()
         return RefreshSessionResponse(
             status="OK",
@@ -892,7 +920,7 @@ def auth_forgot_password(body: ForgotPasswordRequest) -> dict[str, str]:
             if result == "UNKNOWN_USER_ID_ERROR":
                 logger.warning("Failed to send password reset email for user %s", user_id)
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-            logger.warning("Auth backend error during forgot-password; returning generic success: %s", exc)
+            logger.warning("Auth backend error during forgot-password; returning generic success", exc_info=exc)
         return success
 
 
@@ -963,7 +991,11 @@ def complete_oauth_code_exchange(
         # missing"). Escaping here would turn a routine mid-sign-in hiccup
         # into a raw 500 in the user's browser instead of the structured
         # ERROR both callers render cleanly.
-        logger.error("OAuth callback failed for %s", provider_id, exc_info=exc)
+        # Reported at warning: routine mid-sign-in hiccups (a consumed or
+        # expired authorization code) land here alongside real provider
+        # problems, and the metric's rate separates the two.
+        emit_metric("oauth_callback_failed", 1, {"provider": provider_id})
+        logger.warning("OAuth callback failed for %s", provider_id, exc_info=exc)
         return AuthResponse(status="ERROR", message=str(exc))
 
     if oauth_user.email is None or oauth_user.email.id is None:

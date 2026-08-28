@@ -8,11 +8,14 @@ from pathlib import Path
 
 import pytest
 import tomlkit
+import yaml
 from inline_snapshot import snapshot
 
 from imbue.imbue_common.ratchet_testing.common_ratchets import RegexRatchetRule
+from imbue.imbue_common.ratchet_testing.common_ratchets import check_ratchet_rule
 from imbue.imbue_common.ratchet_testing.common_ratchets import check_ratchet_rule_all_files
 from imbue.imbue_common.ratchet_testing.core import BINARY_FILE_EXCLUSION
+from imbue.imbue_common.ratchet_testing.core import RatchetMatchChunk
 from imbue.imbue_common.ratchet_testing.core import _get_all_files_with_extension
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_import_lint_errors
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
@@ -34,7 +37,10 @@ _IS_SOURCE_OF_TRUTH = (_REPO_ROOT / "mirror").exists()
 _EXCLUDED_PROJECTS: frozenset[str] = frozenset()
 
 _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
-_DATA_FILE_EXCLUSION: tuple[str, ...] = ("*.jsonl",)
+# Machine-generated data files whose contents are not human-written text:
+# npm lockfiles carry random base64 integrity hashes that can contain any
+# short letter run (e.g. "mng"), so they are excluded from content scans.
+_DATA_FILE_EXCLUSION: tuple[str, ...] = ("*.jsonl", "package-lock.json")
 _MIGRATION_SCRIPT_EXCLUSION: tuple[str, ...] = (
     "migrate_code_mng_to_mngr.sh",
     "migrate_state_mng_to_mngr.sh",
@@ -55,6 +61,49 @@ def _get_all_project_dirs() -> list[Path]:
     return [
         get_project_dir(name, _REPO_ROOT) for name in pyproject_projects(_REPO_ROOT) if name not in _EXCLUDED_PROJECTS
     ]
+
+
+def _get_workspace_project_dirs() -> list[Path]:
+    """Return the project directories that are members of the root uv workspace.
+
+    A project listed in the root ``[tool.uv.workspace].exclude`` is a standalone
+    uv project: it has its own lockfile and CI job, the root ``uv sync
+    --all-packages`` never installs it, and the root pytest run never collects
+    it. Anything that reasons about *root* pytest/coverage configuration must
+    look at this list rather than every directory that happens to hold a
+    pyproject.toml, otherwise it demands root config for packages that cannot
+    be imported there.
+    """
+    root_pyproject = tomlkit.parse((_REPO_ROOT / "pyproject.toml").read_text())
+    excluded_globs = [str(p) for p in root_pyproject["tool"]["uv"]["workspace"].get("exclude", [])]
+    # Spell each glob without a trailing slash. Two other readers match this same
+    # list with their own matchers -- scripts/utils.py's iter_standalone_project_dirs
+    # globs the pattern directly, and scripts/snapshot_minds_e2e_state.py matches
+    # `f"{glob}/*"` -- and none of the three normalizes a trailing slash. With one,
+    # this function stops recognizing the exclusion, _get_standalone_project_dirs()
+    # goes empty, the standalone-project ratchets below pass vacuously, and
+    # scripts/release.py quietly stops advancing that project's cooldown cutoff. An
+    # absent `exclude` key is fine (the public-mirror overlay has none); only the
+    # ambiguous spelling is rejected.
+    assert all(not glob.endswith("/") for glob in excluded_globs), (
+        "[tool.uv.workspace].exclude entries must not end in '/': "
+        f"{[glob for glob in excluded_globs if glob.endswith('/')]}"
+    )
+    return [
+        d
+        for d in _get_all_project_dirs()
+        if not any(fnmatch.fnmatch(str(d.relative_to(_REPO_ROOT)), glob) for glob in excluded_globs)
+    ]
+
+
+def _get_standalone_project_dirs() -> list[Path]:
+    """Return the project directories that are NOT members of the root uv workspace.
+
+    The complement of ``_get_workspace_project_dirs``, expressed as a difference so
+    the exclusion globs are read in exactly one place.
+    """
+    workspace_dirs = set(_get_workspace_project_dirs())
+    return [d for d in _get_all_project_dirs() if d not in workspace_dirs]
 
 
 def _find_test_ratchets_file(project_dir: Path) -> Path | None:
@@ -169,6 +218,18 @@ def test_no_import_layer_violations() -> None:
 
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
+def test_no_import_layer_violations_minds_admin() -> None:
+    """Ensure minds_admin production code has zero import layer violations.
+
+    Enforces the ``minds_admin layers contract`` (main > cli > envs > bake >
+    slices). See ``test_no_import_layer_violations`` for the flaky/timeout
+    rationale.
+    """
+    check_no_import_lint_errors(_REPO_ROOT, contract_name="minds_admin layers contract")
+
+
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_no_import_layer_violations_mngr_imbue_cloud() -> None:
     """Ensure mngr_imbue_cloud production code has zero import layer violations.
 
@@ -258,13 +319,54 @@ def test_cli_docs_are_up_to_date() -> None:
     )
 
 
+_NUMBERED_MIGRATION_RE = re.compile(r"^(\d+)_.+\.sql$")
+
+
+def test_numbered_sql_migrations_have_unique_numbers() -> None:
+    """Ensure no migrations/ directory holds two ``NNN_*.sql`` files with the same number.
+
+    The schema_migrations runners record applied migrations by *filename*, so
+    two files sharing a number both apply -- but their relative order degrades
+    to a lexicographic accident, and the duplicate breaks the "highest number
+    is the newest schema" convention operators and reviewers rely on. This is
+    exactly what concurrent branches produce (it happened once in the
+    connector: two branches each landed an 029), so it is checked repo-wide
+    for every directory named ``migrations`` that contains numbered SQL files.
+    """
+    migration_files_by_dir: dict[Path, list[Path]] = {}
+    for sql_file in _get_all_files_with_extension(_REPO_ROOT, ".sql"):
+        if sql_file.parent.name == "migrations" and _NUMBERED_MIGRATION_RE.match(sql_file.name):
+            migration_files_by_dir.setdefault(sql_file.parent, []).append(sql_file)
+    # The check must actually be exercising something; if the discovery ever
+    # finds no numbered migrations at all, the glob logic has rotted.
+    assert migration_files_by_dir, "No numbered SQL migrations found anywhere; the discovery logic is broken"
+
+    duplicate_descriptions: list[str] = []
+    for migrations_dir, files in sorted(migration_files_by_dir.items()):
+        # Keyed on the numeric value, not the raw prefix, so a padding mismatch
+        # (29_foo.sql vs 029_bar.sql) still counts as the same number.
+        files_by_number: dict[int, list[str]] = {}
+        for migration_file in files:
+            match = _NUMBERED_MIGRATION_RE.match(migration_file.name)
+            assert match is not None
+            files_by_number.setdefault(int(match.group(1)), []).append(migration_file.name)
+        for number, names in sorted(files_by_number.items()):
+            if len(names) > 1:
+                relative_dir = migrations_dir.relative_to(_REPO_ROOT)
+                duplicate_descriptions.append(f"  {relative_dir}: {number} -> {sorted(names)}")
+    assert len(duplicate_descriptions) == 0, (
+        "Duplicate migration numbers found (renumber the newer file to the next free number):\n"
+        + "\n".join(duplicate_descriptions)
+    )
+
+
 def test_prevent_bash_without_strict_mode() -> None:
     """Ensure all bash scripts in the repo use 'set -euo pipefail' for strict error handling.
 
     The secret-file templates at ``.minds/template/*.sh`` are excluded entirely
     by ``find_bash_scripts_without_strict_mode`` (not merely accommodated in the
     count): they are shell-sourceable env declarations (commented ``export KEY=``
-    files consumed by ``scripts/push_vault_from_file.py`` and ``minds env
+    files consumed by ``scripts/push_vault_from_file.py`` and ``minds-admin env
     deploy`` when seeding HCP Vault / Modal secrets), not executable scripts, so
     ``set -euo pipefail`` is meaningless for them and would only leak strict mode
     into whatever shell sources them.
@@ -302,7 +404,7 @@ def test_prevent_bash_without_strict_mode() -> None:
     violations = [
         v for v in find_bash_scripts_without_strict_mode(_REPO_ROOT) if Path(v).resolve().is_relative_to(checkout_root)
     ]
-    assert len(violations) <= snapshot(12), "Bash scripts missing 'set -euo pipefail':\n" + "\n".join(
+    assert len(violations) <= snapshot(8), "Bash scripts missing 'set -euo pipefail':\n" + "\n".join(
         f"  - {v}" for v in violations
     )
 
@@ -735,10 +837,19 @@ def _get_coverage_omit(pyproject: dict) -> list[str]:
     return [str(x) for x in pyproject.get("tool", {}).get("coverage", {}).get("run", {}).get("omit", [])]
 
 
+# Walks every subproject's pyproject + package tree; fast locally but observed
+# exceeding the default 10s pytest-timeout under CI load. See
+# test_no_import_layer_violations for the flaky/timeout rationale.
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     """Ensure the top-level pyproject.toml `--cov=` flags are exactly the union of the
     subprojects' `--cov=` flags, except for packages whose source is fully omitted in the
     top-level `[tool.coverage.run].omit` (e.g. `libs/mngr_modal/imbue/mngr_modal/*`).
+
+    Standalone (non-workspace-member) projects are out of scope: the root run cannot
+    import them at all, so a root ``--cov=`` flag for one would only ever warn that the
+    module was never imported. They own their coverage in their own project.
 
     Keeps the root coverage scope in sync with the per-project scopes so a new subproject
     cannot silently drop out of combined coverage collection.
@@ -751,7 +862,7 @@ def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     )
 
     subproject_cov: set[str] = set()
-    for project_dir in _get_all_project_dirs():
+    for project_dir in _get_workspace_project_dirs():
         pyproject = tomlkit.parse((project_dir / "pyproject.toml").read_text())
         # Only consider --cov= flags that target the `imbue.<pkg>` namespace;
         # the top-level pyproject.toml only exposes that shape via its `source =
@@ -782,16 +893,222 @@ def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     assert len(errors) == 0, "Top-level --cov= flags out of sync with subprojects:\n" + "\n".join(errors)
 
 
+def test_standalone_project_ci_gates_list_every_in_repo_dependency() -> None:
+    """A standalone project's CI job must be gated on all of its in-repo dependencies.
+
+    A standalone project is invisible to the offload run, so one path-gated job is the
+    only thing that exercises it. It resolves its in-repo dependencies as editable path
+    sources, which means a change to any of them lands in that project's venv without
+    touching the project directory -- and a gate that does not list the dependency
+    simply does not run, reporting green for a change it never built. The lock is the
+    authority on what those dependencies are, so the gate is checked against it rather
+    than against a second hand-written list.
+    """
+    workflow = yaml.safe_load((_REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    missing: list[str] = []
+    for project_dir in _get_standalone_project_dirs():
+        rel_project = project_dir.relative_to(_REPO_ROOT)
+        lock_text = (project_dir / "uv.lock").read_text()
+        # `source = { editable = "../../libs/foo" }` -- the project's own entry is "."
+        editable_deps = {
+            (project_dir / raw).resolve().relative_to(_REPO_ROOT.resolve())
+            for raw in re.findall(r'source = \{ editable = "([^"]+)" \}', lock_text)
+            if raw != "."
+        }
+        gate = _find_ci_path_gate(workflow, rel_project)
+        assert gate is not None, f"no path-gated CI job found for standalone project {rel_project}"
+        # Compare whole shell words, not substrings: `libs/mngr` is a substring of the
+        # listed `libs/mngr_usage`, so a substring test would report a gate that omits
+        # `libs/mngr` as complete.
+        gate_words = set(gate.split())
+        missing.extend(
+            f"{rel_project}: CI gate omits {dep}" for dep in sorted(editable_deps) if str(dep) not in gate_words
+        )
+    assert not missing, (
+        "Standalone projects' CI path gates must list every in-repo editable dependency in their "
+        "uv.lock:\n" + "\n".join(f"  - {m}" for m in missing)
+    )
+
+
+def _find_ci_path_gate(workflow: dict, project_dir: Path) -> str | None:
+    """The shell body of the `git diff --name-only` step that gates ``project_dir``'s CI job.
+
+    Returned with backslash-newline continuations collapsed to spaces, so the gate's
+    path arguments -- one per continued line -- are plain whitespace-delimited words
+    that callers can match exactly.
+    """
+    for job in workflow.get("jobs", {}).values():
+        for step in job.get("steps", []):
+            run = step.get("run", "").replace("\\\n", " ")
+            if "git diff --name-only" in run and f" {project_dir} " in run:
+                return run
+    return None
+
+
+# ty logs this instead of a diagnostic when every path it was handed is excluded.
+# It is the only thing that distinguishes "checked, and clean" from "not checked at
+# all", both of which otherwise print "All checks passed!" and exit 0.
+_TY_NO_FILES_FOUND = "No python files found under the given path(s)"
+
+
+def _run_root_ty_probe(path: Path, is_force_exclude_enabled: bool) -> str:
+    """Run the root workspace's ty over a single path and return everything it printed.
+
+    ty ignores `[tool.ty.src].exclude` for paths named on the command line unless
+    `--force-exclude` is passed, so this asks ty's own matcher whether the path is
+    covered instead of reimplementing its gitignore-style glob semantics. Passing
+    ``is_force_exclude_enabled=False`` asks the complementary question: whether ty
+    finds the file at all once the exclude list no longer applies to it.
+    """
+    command = ["uv", "run", "ty", "check", "--output-format=concise"]
+    if is_force_exclude_enabled:
+        command.append("--force-exclude")
+    result = subprocess.run([*command, str(path)], cwd=_REPO_ROOT, capture_output=True, text=True)
+    # 0 is a clean check and 1 is diagnostics found; anything else is ty never getting
+    # as far as reading the file, whose output the caller would otherwise read as
+    # "this path was checked".
+    assert result.returncode in (0, 1), f"ty exited {result.returncode} for {path}:\n{result.stdout}{result.stderr}"
+    return result.stdout + result.stderr
+
+
+def _get_root_ty_excluded_python_files() -> tuple[Path, ...]:
+    """Return the Python files the root's own ``[tool.ty.src].exclude`` names.
+
+    Entries that are globs, or that no longer resolve on disk, are skipped: this is a
+    source of paths ty is known to exclude, not an audit of the list.
+    """
+    root_exclude = tomlkit.parse((_REPO_ROOT / "pyproject.toml").read_text())["tool"]["ty"]["src"]["exclude"]
+    excluded_files: list[Path] = []
+    for entry in root_exclude:
+        if "*" in str(entry):
+            continue
+        path = _REPO_ROOT / str(entry)
+        if path.is_dir():
+            excluded_files.extend(_get_all_files_with_extension(path, ".py"))
+        elif path.is_file() and path.suffix == ".py":
+            excluded_files.append(path)
+    return tuple(excluded_files)
+
+
+def _assert_root_ty_probe_can_see_exclusions(paths_that_must_stay_checked: frozenset[Path]) -> None:
+    """Fail unless the probe can still tell an excluded path from a checked one.
+
+    "Not checked" reaches the probe as a log line rather than an exit code, so a ty
+    release that reworded or dropped that line would silently turn every clean probe
+    result into a vacuous pass. The control is a Python file the root's own
+    `[tool.ty.src].exclude` names, probed twice: without `--force-exclude` ty must
+    find it, with `--force-exclude` ty must not. That covers both halves of what
+    callers rely on -- the marker still means what they read it to mean, and ty still
+    applies its *configured* exclude list to a path named on the command line. A
+    control excluded by `--exclude` on the command line would show only the first
+    half, and stay green through a ty release that stopped honouring the config.
+
+    ``paths_that_must_stay_checked`` are paths the caller is about to assert ty does
+    check; none of them can double as the control, since the two assertions would
+    then contradict each other and the caller's failure is the one worth reading.
+    """
+    candidates = [path for path in _get_root_ty_excluded_python_files() if path not in paths_that_must_stay_checked]
+    assert candidates, (
+        "no entry in the root [tool.ty.src] exclude resolves to a Python file usable as a control, "
+        "so there is no way left to show that ty still reports an excluded path as unchecked. Add a "
+        "non-glob entry naming a path that exists, or teach _get_root_ty_excluded_python_files to "
+        "expand glob entries."
+    )
+    control = min(candidates)
+
+    unforced_output = _run_root_ty_probe(control, is_force_exclude_enabled=False)
+    assert _TY_NO_FILES_FOUND not in unforced_output, (
+        f"{control.relative_to(_REPO_ROOT)} was picked as a control because the root "
+        "[tool.ty.src] excludes it, but ty does not find it even with the exclude list switched "
+        f"off, so it proves nothing about exclusion:\n{unforced_output}"
+    )
+
+    forced_output = _run_root_ty_probe(control, is_force_exclude_enabled=True)
+    assert _TY_NO_FILES_FOUND in forced_output, (
+        f"cannot tell whether ty checked a path: the root [tool.ty.src] excludes "
+        f"{control.relative_to(_REPO_ROOT)}, yet probing it did not produce {_TY_NO_FILES_FOUND!r}. "
+        "Either ty stopped applying its configured excludes under --force-exclude or it reworded "
+        f"that line; either way this check is now blind:\n{forced_output}"
+    )
+
+
+@pytest.mark.timeout(120)
+def test_standalone_project_ty_carve_outs_are_checked_by_the_root_workspace() -> None:
+    """Whatever a standalone project excludes from its own type check must be checked here.
+
+    A standalone project excludes a path when its own venv cannot resolve that path's
+    imports -- typically because the file is shipped elsewhere and runs against the
+    monorepo venv, which is this workspace. That makes the root the only place left
+    that can check it, and nothing fails if the root stops: the file is type-checked
+    nowhere while both projects stay green. Each side's exclude reads as reasonable on
+    its own; only the pair is wrong, so only a check that spans both can see it.
+
+    This has to live at the repo root rather than in the standalone project, because
+    the project's CI job is path-gated on the project's own directory and its in-repo
+    dependencies -- an edit to the root exclude alone would never run it.
+    """
+    carve_out_files: list[Path] = []
+    unprobeable: list[str] = []
+    for project_dir in _get_standalone_project_dirs():
+        tool_config = tomlkit.parse((project_dir / "pyproject.toml").read_text()).get("tool", {})
+        for entry in tool_config.get("ty", {}).get("src", {}).get("exclude", []):
+            # An entry has to name a path that can be handed straight back to ty. A
+            # glob would have to be expanded first, and guessing at how ty expands it
+            # is the reimplementation this check exists to avoid. A carve-out this
+            # check cannot probe is a carve-out it cannot guard, so it is reported.
+            carve_out = project_dir / str(entry)
+            if carve_out.is_dir():
+                carve_out_files.extend(_get_all_files_with_extension(carve_out, ".py"))
+            elif carve_out.is_file():
+                # A non-Python file is not something either type check would read.
+                if carve_out.suffix == ".py":
+                    carve_out_files.append(carve_out)
+            else:
+                unprobeable.append(f"{project_dir.relative_to(_REPO_ROOT)}: {entry}")
+
+    assert not unprobeable, (
+        "these [tool.ty.src] exclude entries do not name an existing directory or file, so this "
+        "check cannot hand them to ty and cannot tell whether the root workspace still covers "
+        "them. Respell each as a path, or teach this check to expand the pattern:\n"
+        + "\n".join(f"  - {entry}" for entry in unprobeable)
+    )
+    assert carve_out_files, (
+        "no standalone project excludes a path from its own [tool.ty.src] any more; "
+        "this check has nothing left to guard and should be deleted with the last carve-out"
+    )
+
+    _assert_root_ty_probe_can_see_exclusions(frozenset(carve_out_files))
+
+    unchecked = [
+        f for f in carve_out_files if _TY_NO_FILES_FOUND in _run_root_ty_probe(f, is_force_exclude_enabled=True)
+    ]
+    assert not unchecked, (
+        "the root [tool.ty.src] exclude covers files that their own standalone project also "
+        "excludes, so they are type-checked nowhere:\n"
+        + "\n".join(f"  - {f.relative_to(_REPO_ROOT)}" for f in sorted(unchecked))
+    )
+
+
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_top_level_coverage_omit_covers_subproject_omits() -> None:
     """For every file in a subproject's package tree that the subproject's
     `[tool.coverage.run].omit` patterns exclude, the top-level
     `[tool.coverage.run].omit` must also exclude it.
+
+    Walks every workspace package tree: well under a second locally, but under
+    offload's sandbox I/O contention the walk has hit the default 10s
+    pytest-timeout, so it gets the same budget and retry as the other
+    repo-wide tree walks here.
 
     Checks the file-level semantic (not pattern-level equality) because root and
     subproject pyproject.tomls use different path conventions: subprojects use globs
     like `*/testing.py`, while root can use either globs or fully-qualified paths like
     `libs/<pkg>/imbue/<pkg>/testing.py`. Walking concrete files and matching via
     fnmatch (the same matcher coverage.py uses) makes both forms equivalent.
+
+    Standalone (non-workspace-member) projects are out of scope: the root run never
+    measures them, so the root omit list has nothing to say about their files.
 
     Prevents a new subproject from silently omitting files that combined coverage
     still counts at the root.
@@ -802,7 +1119,7 @@ def test_top_level_coverage_omit_covers_subproject_omits() -> None:
         return any(fnmatch.fnmatch(rel_repo_path, pat) for pat in top_omit)
 
     missing: dict[str, list[str]] = {}
-    for project_dir in _get_all_project_dirs():
+    for project_dir in _get_workspace_project_dirs():
         pkg_root = project_dir / "imbue" / project_dir.name
         if not pkg_root.exists():
             continue
@@ -920,6 +1237,11 @@ def test_offload_version_pinned_consistently() -> None:
 def _collect_class_defs_for_model_config_checks() -> tuple[dict[str, set[str]], dict[str, list[str]]]:
     """Collect, repo-wide, each class's base names and any extra="forbid" declarations in its body.
 
+    Cached: three tests share this repo-wide AST walk, and the meta-ratchet
+    xdist group runs them in one process, so the repo is parsed once instead
+    of three times (the walk alone can approach a 10s timeout on a loaded CI
+    sandbox).
+
     Returns ``(base_names_by_class, forbid_locations_by_class)``. Classes are keyed
     by bare name; two same-named classes in different files have their bases merged,
     which can only over-approximate a base's subclass set (acceptable for guards
@@ -1007,6 +1329,8 @@ def _config_value_sets_extra_forbid(value: ast.expr) -> bool:
     return False
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_event_envelope_subclasses_never_re_forbid_extra() -> None:
@@ -1036,6 +1360,8 @@ def test_event_envelope_subclasses_never_re_forbid_extra() -> None:
     )
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_wire_model_subclasses_never_re_forbid_extra() -> None:
@@ -1066,6 +1392,8 @@ def test_wire_model_subclasses_never_re_forbid_extra() -> None:
     )
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_wire_types_files_contain_only_wire_models_and_wire_enums() -> None:
@@ -1096,3 +1424,75 @@ def test_wire_types_files_contain_only_wire_models_and_wire_enums() -> None:
         "Every class in a wire_types.py must inherit WireModel or WireEnum (directly or transitively) "
         "so connector response shapes stay forward compatible:\n" + "\n".join(f"  - {v}" for v in violations)
     )
+
+
+# --- Machine/workspace terminology (see specs/machine-workspace-naming/decisions.md) ---
+
+# Non-test .py files under these globs are mngr-level: they speak host/agent and must
+# not use the minds-level machine/workspace vocabulary or reference minds itself.
+_MNGR_LEVEL_DIR_GLOB = "libs/mngr*"
+
+# Test-infrastructure files are exempt: they may exercise higher-level scenarios and
+# uv-workspace tooling, and their prose is not part of the shipped vocabulary.
+_TERMINOLOGY_TEST_EXCLUSIONS: tuple[str, ...] = ("*_test.py", "test_*.py", "conftest.py", "testing.py")
+
+# mngr_imbue_cloud carve-outs: the wire layer (and the primitives feeding it) mirrors
+# the connector's own vocabulary, which says "workspace"; the bake/slice/admin-CLI
+# operator tooling is minds-level infrastructure living in the plugin until it moves
+# (https://github.com/imbue-ai/mngr-internal/issues/461).
+_IMBUE_CLOUD_TERMINOLOGY_EXEMPT: tuple[str, ...] = (
+    "wire.py",
+    "wire_types.py",
+    "primitives.py",
+    "bake/*.py",
+    "slices/*.py",
+    "cli/*.py",
+    "connector/*.py",
+)
+
+_PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE = RegexRatchetRule(
+    rule_name="workspace vocabulary in mngr-level code",
+    rule_description=(
+        "mngr-level code (libs/mngr and the mngr plugins) speaks host/agent; 'workspace' is the "
+        "minds-level term for the logical unit identified by its system-services agent id. Say "
+        "host, agent, work dir, or project as appropriate (see "
+        "specs/machine-workspace-naming/decisions.md). The uv sense must be spelled 'uv-workspace'."
+    ),
+    # The uv sense is allowed when spelled "uv-workspace" (the lookbehind).
+    pattern_string=r"(?i)(?<!uv-)\bworkspaces?\b",
+)
+
+_PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE = RegexRatchetRule(
+    rule_name="minds references in mngr-level code",
+    rule_description=(
+        "mngr-level code must not reference minds, default-workspace-template, or the "
+        "/home/user/workspace container path -- those are higher-level concerns layered on top "
+        "of mngr (see specs/machine-workspace-naming/decisions.md). Describe the behavior "
+        "generically (e.g. 'a caller may...') instead of naming the higher-level product."
+    ),
+    pattern_string=r"(?i)\bminds\b|default[-_]workspace[-_]template|/home/user/workspace",
+)
+
+
+def _mngr_level_terminology_chunks(rule: RegexRatchetRule) -> list[RatchetMatchChunk]:
+    chunks: list[RatchetMatchChunk] = []
+    for level_dir in sorted(_REPO_ROOT.glob(_MNGR_LEVEL_DIR_GLOB)):
+        if not level_dir.is_dir():
+            continue
+        exclusions = _TERMINOLOGY_TEST_EXCLUSIONS
+        if level_dir.name == "mngr_imbue_cloud":
+            exclusions = exclusions + _IMBUE_CLOUD_TERMINOLOGY_EXEMPT
+        chunks.extend(check_ratchet_rule(rule, level_dir, exclusions))
+    return chunks
+
+
+def test_prevent_workspace_vocabulary_in_mngr_level_code() -> None:
+    """Keep the minds-level 'workspace' vocabulary out of mngr-level code (count may only fall)."""
+    chunks = _mngr_level_terminology_chunks(_PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE)
+    assert len(chunks) <= snapshot(337), _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+
+
+def test_prevent_minds_references_in_mngr_level_code() -> None:
+    """Keep minds / default-workspace-template references out of mngr-level code (count may only fall)."""
+    chunks = _mngr_level_terminology_chunks(_PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE)
+    assert len(chunks) <= snapshot(352), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))

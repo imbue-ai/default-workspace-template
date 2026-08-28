@@ -29,12 +29,9 @@ from pathlib import Path
 from typing import Final
 
 import click
-from flask import Flask
 from loguru import logger
-from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds.bootstrap import MindsRoot
 from imbue.minds.bootstrap import minds_data_dir_for
 from imbue.minds.bootstrap import resolve_effective_mngr_host_dir
@@ -43,14 +40,15 @@ from imbue.minds.build_info import resolve_git_sha
 from imbue.minds.build_info import resolve_release_id
 from imbue.minds.config.data_types import DEFAULT_DESKTOP_CLIENT_HOST
 from imbue.minds.config.data_types import DEFAULT_DESKTOP_CLIENT_PORT
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.config.data_types import MNGR_BINARY
-from imbue.minds.config.data_types import WorkspacePaths
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.agent_creator import sweep_orphaned_scratch_clones
 from imbue.minds.desktop_client.api_key_store import generate_api_key
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.app import start_discovery_health_watchdog_loop
+from imbue.minds.desktop_client.app import start_sleep_heartbeat_loop
 from imbue.minds.desktop_client.app import start_system_interface_health_probe_loop
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
@@ -59,6 +57,8 @@ from imbue.minds.desktop_client.backup_reaper import make_quota_evictor
 from imbue.minds.desktop_client.device_identity import get_or_create_device_id
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
 from imbue.minds.desktop_client.discovery_health import SupervisorProducerRemediator
+from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
+from imbue.minds.desktop_client.environment_signals import SleepTracker
 from imbue.minds.desktop_client.forward_cli import ForwardSubprocessConfig
 from imbue.minds.desktop_client.forward_cli import start_mngr_forward
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
@@ -70,6 +70,7 @@ from imbue.minds.desktop_client.latchkey.handlers.file_sharing import FileSharin
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.workspace import WorkspacePermissionGrantHandler
+from imbue.minds.desktop_client.latchkey.pending_requests import GatewayPendingRequests
 from imbue.minds.desktop_client.latchkey.permission_requests_consumer import PermissionRequestsConsumer
 from imbue.minds.desktop_client.latchkey_auto_register import LatchkeyAutoRegister
 from imbue.minds.desktop_client.lima_image_prefetch import LimaImageCreateGate
@@ -80,11 +81,6 @@ from imbue.minds.desktop_client.lima_image_prefetch import resolve_release_tag_c
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptStore
-from imbue.minds.desktop_client.request_events import LatchkeyFileSharingPermissionRequestEvent
-from imbue.minds.desktop_client.request_events import LatchkeyPredefinedPermissionRequestEvent
-from imbue.minds.desktop_client.request_events import RequestEvent
-from imbue.minds.desktop_client.request_events import RequestInbox
-from imbue.minds.desktop_client.request_events import load_response_events
 from imbue.minds.desktop_client.server import desktop_client_runtime
 from imbue.minds.desktop_client.server import serve_desktop_client
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
@@ -93,13 +89,15 @@ from imbue.minds.desktop_client.startup_reconcile import StartupHostReconciler
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forward_supervisor
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
+from imbue.minds.desktop_client.system_interface_health import BackendFailureRecorder
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
-from imbue.minds.desktop_client.system_interface_health import should_enroll_suspect_for_backend_failure
 from imbue.minds.desktop_client.workspace_defaults import DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
 from imbue.minds.desktop_client.workspace_defaults import FALLBACK_BRANCH
 from imbue.minds.desktop_client.workspace_defaults import is_local_workspace_defaults_opt_in
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.minds.desktop_client.workspace_record_store import read_device_label
+from imbue.minds.desktop_client.workspace_recovery import ProviderErrorConnectivityTrigger
+from imbue.minds.desktop_client.workspace_recovery import WorkspaceSshEndpointSource
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.envs.docker_cleanup import start_active_env_state_container
 from imbue.minds.mngr_settings.imbue_cloud_accounts import reconcile_imbue_cloud_providers_from_sessions
@@ -115,16 +113,13 @@ from imbue.minds.utils.sentry.core import setup_sentry
 from imbue.minds.utils.sentry.core import write_latchkey_forward_sentry_consent
 from imbue.mngr.api.discovery_events import get_discovery_events_dir
 from imbue.mngr.config.data_types import MngrConfig
-from imbue.mngr.primitives import AgentId
-from imbue.mngr.primitives import HostId
+from imbue.mngr.utils.logging import get_default_cli_events_log_dir
 from imbue.mngr.utils.parent_process import start_grandparent_death_watcher
-from imbue.mngr_latchkey.agent_setup import maybe_recover_host_permissions_for_agent
 from imbue.mngr_latchkey.core import LATCHKEY_BINARY
 from imbue.mngr_latchkey.core import Latchkey
 from imbue.mngr_latchkey.core import LatchkeyError
 from imbue.mngr_latchkey.forward_supervisor import LatchkeyForwardSupervisor
 from imbue.mngr_latchkey.services_catalog import ServicesCatalog
-from imbue.mngr_latchkey.store import LatchkeyStoreError
 
 # How long `minds run` waits for the spawned `mngr forward` plugin to report
 # its bound port via a `listening` envelope before treating startup as failed.
@@ -183,9 +178,9 @@ MINDS_API_PROXY_KEY_ENV_VAR: Final[str] = "LATCHKEY_EXTENSION_MINDS_API_KEY"
     envvar="MINDS_CLIENT_CONFIG_PATH",
     help=(
         "Path to the per-env client config TOML. Falls back to the "
-        "MINDS_CLIENT_CONFIG_PATH env var (set by `minds env activate <name>`); "
+        "MINDS_CLIENT_CONFIG_PATH env var (set by `minds-admin env activate <name>`); "
         "no implicit default beyond that. Refuses to start when neither is set "
-        '-- run `eval "$(minds env activate <name>)"` first. Bundled Electron '
+        '-- run `eval "$(minds-admin env activate <name>)"` first. Bundled Electron '
         "builds pass this flag explicitly from MINDS_CLIENT_CONFIG_BUNDLE."
     ),
 )
@@ -201,13 +196,13 @@ def run(
     if config_file is None:
         raise click.ClickException(
             "No client config file is set. Activate an env first: "
-            '`eval "$(uv run minds env activate <name>)"` (e.g. '
+            '`eval "$(uv run minds-admin env activate <name>)"` (e.g. '
             "`dev-<your-user>`, `staging`, or `production`), then re-run."
         )
     root_name = resolve_minds_root_name()
     data_directory = minds_data_dir_for(root_name)
     minds_config = MindsConfig(data_dir=data_directory)
-    paths = WorkspacePaths(data_dir=data_directory)
+    paths = InstallationPaths(data_dir=data_directory)
 
     # Initialize Sentry for the minds backend process. ``setup_logging`` already ran
     # in the CLI group callback, so the loguru sinks Sentry layers on top of exist.
@@ -219,7 +214,7 @@ def run(
     # read live, so a change takes effect without restarting. Manual bug reports are always sent (with
     # full diagnostics) regardless of ``report_unexpected_errors``.
     #
-    # The activated minds env (from `minds env activate`) selects the Sentry DSN and, for
+    # The activated minds env (from `minds-admin env activate`) selects the Sentry DSN and, for
     # production/staging, which S3 attachment bucket: production and staging each get their own, while
     # every other env (dev-*, ci-*, or no activated env) reports to the dev project. We treat "not
     # activated" as dev so an un-activated `minds run` never accidentally reports to the production
@@ -245,6 +240,7 @@ def run(
         is_error_reporting_enabled=minds_config.get_report_unexpected_errors,
         latchkey_plugin_data_dir=latchkey.plugin_data_dir,
         discovery_events_dir=get_discovery_events_dir(MngrConfig(default_host_dir=mngr_host_dir)),
+        mngr_cli_events_dir=get_default_cli_events_log_dir(mngr_host_dir),
     )
     client_config_path = config_file
     client_env_config = load_client_config(client_config_path)
@@ -268,7 +264,13 @@ def run(
 
     auth_store = FileAuthStore(data_directory=paths.auth_dir)
     is_electron = os.getenv("MINDS_ELECTRON") == "1"
-    notification_dispatcher = NotificationDispatcher(is_electron=is_electron)
+    # The master notifications toggle is read live on every dispatch, so a
+    # Settings change silences (or re-enables) every producer without a
+    # restart -- agent-sent notifications and backup failures included.
+    notification_dispatcher = NotificationDispatcher.create(
+        is_electron=is_electron,
+        is_enabled_provider=minds_config.get_notifications_enabled,
+    )
     backend_resolver = MngrCliBackendResolver(
         last_good_agents_path=paths.data_dir / "last_good_agent_topology.json",
     )
@@ -372,6 +374,57 @@ def run(
     # orphan tree running across restarts.
     start_grandparent_death_watcher(root_concurrency_group)
 
+    # Sleep detector: a ~1s heartbeat whose wall-clock gaps mark the windows in
+    # which this process was not running. Started this early because it can only
+    # account for sleep that happens after its first tick, and everything that
+    # reasons over elapsed time (the stuck-threshold failure run, the discovery
+    # staleness baseline) is downstream of it.
+    sleep_tracker = SleepTracker()
+    start_sleep_heartbeat_loop(sleep_tracker, root_concurrency_group)
+
+    # Connectivity detector: answers whether this device can reach anything, and
+    # whether the network it is on passes SSH at all. Probed only when a decision
+    # depends on it, and repeatedly only while a bad answer is outstanding. A wake
+    # invalidates whatever it last found -- the laptop may be somewhere else now.
+    connectivity_detector = ConnectivityDetector(
+        # Measured against the endpoints minds itself dials rather than port 22:
+        # an imbue_cloud machine's host answers on a box-forwarded port in the
+        # 22000-32000 range, so :22 says nothing about whether this device can
+        # reach it.
+        workspace_ssh_endpoints_fn=WorkspaceSshEndpointSource(backend_resolver=backend_resolver),
+        # So a probe in flight at quit stops opening connections instead of
+        # holding the group's drain for a round of timeouts -- which on a dead
+        # network, where a round was measured at 9.25s, is most of the time.
+        shutdown_event=root_concurrency_group.shutdown_event,
+        # And so each of the probe's rounds asks its endpoints at once rather
+        # than one after another, which is what made a round the sum of every
+        # budget instead of the slowest single endpoint.
+        concurrency_group=root_concurrency_group,
+    )
+    sleep_tracker.add_on_wake_callback(connectivity_detector.invalidate_after_wake)
+    # The earliest evidence a cold start on a dead network produces: discovery's
+    # first poll of a remote provider fails, long before the user clicks into a
+    # machine and gives the STUCK edge something to gate.
+    backend_resolver.add_on_change_callback(
+        ProviderErrorConnectivityTrigger(
+            backend_resolver=backend_resolver,
+            connectivity_detector=connectivity_detector,
+            concurrency_group=root_concurrency_group,
+        )
+    )
+    root_concurrency_group.start_new_thread(
+        target=connectivity_detector.run_background_loop,
+        args=(root_concurrency_group,),
+        name="connectivity-detector",
+        daemon=True,
+        # Best-effort: a detector failure must never tear down the app. The loop
+        # fences its own probe, because unchecked is not the same as harmless
+        # here -- this thread is the only thing that can observe the network
+        # coming back, so losing it while a bad reading is outstanding would
+        # strand every owed restart rather than fall back to dispatching.
+        is_checked=False,
+    )
+
     # Run ``mngr message`` (and other ``mngr`` CLI calls) in a pre-warmed,
     # single-use ``mngr`` process instead of spawning (and importing) a fresh
     # interpreter each time, so UI actions like Approve/Deny don't pay the
@@ -393,6 +446,7 @@ def run(
     file_sharing_handler = FileSharingGrantHandler(
         data_dir=data_directory,
         gateway_client=gateway_client,
+        latchkey=latchkey,
         mngr_message_sender=mngr_message_sender,
     )
     workspace_permission_handler = WorkspacePermissionGrantHandler(
@@ -408,6 +462,7 @@ def run(
     imbue_cloud_cli = ImbueCloudCli(
         mngr_caller=mngr_caller,
         connector_url=client_env_config.connector_url,
+        accounts_base_url=client_env_config.accounts_base_url,
     )
     workspace_record_store = WorkspaceRecordStore(
         paths=paths,
@@ -419,7 +474,13 @@ def run(
         device_label=read_device_label(),
     )
     session_store = MultiAccountSessionStore(
-        data_dir=data_directory, cli=imbue_cloud_cli, record_store=workspace_record_store
+        data_dir=data_directory,
+        cli=imbue_cloud_cli,
+        record_store=workspace_record_store,
+        # Lets the identity cache detect out-of-band `mngr imbue_cloud auth
+        # signin`/`signout` runs (a terminal under this host dir) by
+        # fingerprinting the plugin's on-disk sessions directory.
+        mngr_host_dir=mngr_host_dir,
     )
     backup_reaper = BackupReaperManager(
         paths=paths,
@@ -440,10 +501,9 @@ def run(
         backup_reaper=backup_reaper,
     )
     sync_scheduler.start(root_concurrency_group)
-    response_events = load_response_events(data_directory)
-    request_inbox = RequestInbox()
-    for resp in response_events:
-        request_inbox = request_inbox.add_response(resp)
+    # The one answer to "what permission requests are pending?": gateway-backed
+    # reads plus the verdict index seeded from the response event log.
+    pending_requests = GatewayPendingRequests.load(gateway_client=gateway_client, data_dir=data_directory)
 
     # Spawn the plugin and attach the envelope consumer that feeds the
     # surviving resolver from the plugin's stdout stream. We no longer
@@ -469,6 +529,10 @@ def run(
     consumer, preauth_cookie, browser_bridge_token = start_mngr_forward(
         config=forward_config,
         resolver=backend_resolver,
+        # So a provider poll that straddled a sleep is not consumed as the
+        # provider's last word: its error says the laptop went away, not the
+        # backend.
+        sleep_tracker=sleep_tracker,
     )
 
     # App-global discovery-pipeline health watchdog. Detects a stalled pipeline
@@ -489,18 +553,21 @@ def run(
     # be threaded into both AgentCreator (for record_probe_success) and the
     # consumer's failure callback (registered before consumer.start() below;
     # otherwise early failures would dispatch against an empty list).
-    system_interface_health_tracker = SystemInterfaceHealthTracker()
+    # The sleep tracker is threaded in so a probe-failure run that straddles a
+    # laptop sleep restarts from the wake instead of convicting a workspace of
+    # seconds during which no probe ran at all.
+    system_interface_health_tracker = SystemInterfaceHealthTracker(sleep_tracker=sleep_tracker)
 
     # The plugin reports every backend failure it observes; minds decides which
     # ones count. Only envelopes carrying no status code, or an infrastructure
     # 5xx, enroll a suspect -- application errors (and UNRESOLVED, a routeless
     # warm-up) are left alone. STALLED enrolls despite not reporting a failed
     # request at all: a wedged backend and a slow one look identical until the
-    # probe adjudicates.
+    # probe adjudicates. The connection-class ones additionally record which
+    # cause the plugin classified, which is what the recovery surfaces read to
+    # avoid blaming the workspace for a failure on this device's side.
     consumer.add_on_system_interface_backend_failure_callback(
-        lambda agent_id, reason, status_code: system_interface_health_tracker.record_failure(agent_id)
-        if should_enroll_suspect_for_backend_failure(reason, status_code)
-        else None
+        BackendFailureRecorder(tracker=system_interface_health_tracker)
     )
 
     # All callbacks registered -- now safe to start the envelope reader
@@ -666,7 +733,7 @@ def run(
         session_store=session_store,
         minds_config=minds_config,
         client_env_config=client_env_config,
-        request_inbox=request_inbox,
+        pending_requests=pending_requests,
         request_event_handlers=(
             latchkey_permission_handler,
             file_sharing_handler,
@@ -685,6 +752,7 @@ def run(
         minds_api_key=minds_api_key,
         latchkey_forward_supervisor=latchkey_forward_supervisor,
         discovery_health_watchdog=discovery_health_watchdog,
+        connectivity_detector=connectivity_detector,
         sync_scheduler=sync_scheduler,
     )
 
@@ -696,6 +764,7 @@ def run(
         watchdog=discovery_health_watchdog,
         backend_resolver=backend_resolver,
         root_concurrency_group=root_concurrency_group,
+        sleep_tracker=sleep_tracker,
     )
 
     # Background probe loop: flips STUCK/RESTARTING agents back to HEALTHY
@@ -708,6 +777,10 @@ def run(
         mngr_forward_port=mngr_forward_port,
         mngr_forward_preauth_cookie=preauth_cookie,
         root_concurrency_group=root_concurrency_group,
+        # The same tracker the failure runs are aged against, so the first pass
+        # after a wake establishes that wake before it convicts anything of the
+        # seconds nobody was watching.
+        sleep_tracker=sleep_tracker,
     )
 
     # Wire the permission-requests streaming consumer once the Flask
@@ -716,7 +789,10 @@ def run(
     # ``root_concurrency_group``.
     permission_requests_consumer = PermissionRequestsConsumer(
         gateway_client=gateway_client,
-        on_request=_StreamedPermissionRequestHandler(app=app, backend_resolver=backend_resolver, latchkey=latchkey),
+        # A new request only needs to wake the chrome SSE: every surface
+        # (badge, inbox, notification feed) re-reads pending state from the
+        # gateway-backed view on the way back down.
+        on_new_request=backend_resolver.notify_change,
     )
     permission_requests_consumer.start(root_concurrency_group)
     # Stash on the app state so the shutdown teardown can stop() the consumer
@@ -748,146 +824,10 @@ def run(
         serve_desktop_client(app, get_state(app), host=host, port=port)
 
 
-class _StreamedPermissionRequestHandler(FrozenModel):
-    """Callable that appends a streamed permission request to the app inbox.
-
-    The handler runs on the permission-requests consumer thread (not a
-    request thread), so it only does thread-safe work: appending to the
-    immutable :class:`RequestInbox` produces a new instance per mutation
-    and Python attribute assignment is atomic for our purposes here. Same
-    trick the legacy JSONL ``_handle_request_event_callback`` already uses.
-    """
-
-    app: Flask = Field(
-        frozen=True,
-        description="Desktop-client Flask instance whose state ``request_inbox`` is mutated on receipt.",
-    )
-    backend_resolver: MngrCliBackendResolver = Field(
-        frozen=True,
-        description="Resolver whose ``notify_change()`` wakes the chrome SSE so the panel updates promptly.",
-    )
-    latchkey: Latchkey = Field(
-        frozen=True,
-        description=(
-            "Latchkey instance used to repair a host whose canonical "
-            "``latchkey_permissions.json`` is missing when a fresh request arrives."
-        ),
-    )
-
-    # ``Flask``, ``MngrCliBackendResolver`` and ``Latchkey`` are not
-    # pydantic natives; tolerate them with ``arbitrary_types_allowed``.
-    model_config = {"arbitrary_types_allowed": True, "frozen": True, "extra": "forbid"}
-
-    def __call__(self, event: RequestEvent) -> None:
-        current: RequestInbox | None = get_state(self.app).request_inbox
-        if current is None:
-            return
-        # The gateway re-emits every still-pending request on each
-        # stream reconnect (and the consumer reconnects every couple of
-        # seconds when idle, see ``_FOLLOW_READ_TIMEOUT``). Once we've
-        # ingested a given ``event_id`` the redeliveries carry no new
-        # information, so we no-op rather than append a duplicate to
-        # the requests list (it would grow unbounded), log again, and
-        # wake the SSE for nothing.
-        if current.get_request_by_id(str(event.event_id)) is not None:
-            return
-        # Repair a host whose canonical permissions file was never
-        # materialized *before* surfacing the request, so the user's
-        # eventual approval actually takes effect. Best-effort: failures
-        # are logged and the request is still surfaced.
-        self._maybe_recover_host_permissions(event)
-        get_state(self.app).request_inbox = current.add_request(event)
-        if isinstance(event, LatchkeyPredefinedPermissionRequestEvent):
-            logger.info(
-                "Streamed latchkey permission request for agent {} (scope={}, request_id={})",
-                event.agent_id,
-                event.scope,
-                event.event_id,
-            )
-        elif isinstance(event, LatchkeyFileSharingPermissionRequestEvent):
-            logger.info(
-                "Streamed file-sharing permission request for agent {} (path={}, request_id={})",
-                event.agent_id,
-                event.path,
-                event.event_id,
-            )
-        else:
-            logger.info(
-                "Streamed permission request for agent {} (request_type={}, request_id={})",
-                event.agent_id,
-                event.request_type,
-                event.event_id,
-            )
-        self.backend_resolver.notify_change()
-
-    def _maybe_recover_host_permissions(self, event: RequestEvent) -> None:
-        """Recreate a missing per-host permissions file for the request's agent.
-
-        The streamed request carries ``permissions_target_path`` -- the
-        agent's opaque permissions handle (what its gateway JWT resolves
-        to). :func:`maybe_recover_host_permissions_for_agent` swings that
-        handle into the canonical host path when the latter is missing (so grants
-        written by the approval flow are visible to the agent) and
-        idempotently re-registers the agent in the host's allowlist. No-op
-        when the target is absent (non-latchkey request) or the host is
-        not yet known to discovery.
-        """
-        if not isinstance(
-            event,
-            (LatchkeyPredefinedPermissionRequestEvent, LatchkeyFileSharingPermissionRequestEvent),
-        ):
-            return
-        target = event.permissions_target_path
-        if target is None:
-            return
-        agent_id = AgentId(event.agent_id)
-        host_id = self._resolve_host_id(agent_id)
-        if host_id is None:
-            return
-        try:
-            did_recover = maybe_recover_host_permissions_for_agent(
-                latchkey=self.latchkey,
-                host_id=host_id,
-                agent_id=agent_id,
-                opaque_permissions_path=Path(target),
-            )
-        except LatchkeyStoreError as e:
-            logger.opt(exception=e).error(
-                "Could not recover missing latchkey permissions file for host {} (agent {}): {}",
-                host_id,
-                event.agent_id,
-                e,
-            )
-            return
-        if did_recover:
-            logger.info(
-                "Recovered missing latchkey permissions file for host {} (agent {}) from opaque handle {}",
-                host_id,
-                event.agent_id,
-                target,
-            )
-
-    def _resolve_host_id(self, agent_id: AgentId) -> HostId | None:
-        """Resolve the host an agent runs on, or ``None`` when discovery hasn't caught up.
-
-        Mirrors the resolution the permission-grant handler does: the
-        backend resolver maps the agent id to its host id, and the
-        placeholder ``"localhost"`` string (used by static / in-memory
-        resolvers) is treated as "unknown host".
-        """
-        info = self.backend_resolver.get_agent_display_info(agent_id)
-        if info is None:
-            return None
-        try:
-            return HostId(info.host_id)
-        except ValueError:
-            return None
-
-
 def _resolve_backup_quota_evictor(
     session_store: MultiAccountSessionStore,
     workspace_record_store: WorkspaceRecordStore,
-    paths: WorkspacePaths,
+    paths: InstallationPaths,
     imbue_cloud_cli: ImbueCloudCli,
     account_email: str,
 ) -> Callable[[], bool] | None:

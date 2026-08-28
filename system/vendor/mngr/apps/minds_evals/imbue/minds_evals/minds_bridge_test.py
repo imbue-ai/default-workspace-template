@@ -10,6 +10,7 @@ from imbue.minds_evals.errors import WorkspaceCreateError
 from imbue.minds_evals.minds_bridge import _resolve_chat_agent_id
 from imbue.minds_evals.minds_bridge import build_box_env
 from imbue.minds_evals.minds_bridge import build_create_payload
+from imbue.minds_evals.minds_bridge import build_credential_lines
 from imbue.minds_evals.minds_bridge import create_workspace_and_wait
 from imbue.minds_evals.minds_bridge import destroy_workspaces
 from imbue.minds_evals.minds_bridge import fetch_event_total
@@ -17,6 +18,7 @@ from imbue.minds_evals.minds_bridge import fetch_events_window
 from imbue.minds_evals.minds_bridge import fetch_minds_activation_env
 from imbue.minds_evals.minds_bridge import load_modal_token_env
 from imbue.minds_evals.minds_bridge import parse_activation_exports
+from imbue.minds_evals.minds_bridge import parse_agent_ssh_info
 from imbue.minds_evals.minds_bridge import run_in_workspace
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
 from imbue.minds_evals.mock_environment_test import ScriptedExecRule
@@ -53,7 +55,6 @@ def test_build_box_env_scopes_the_trial_and_disables_other_providers() -> None:
     env = build_box_env(
         activation_env=_ACTIVATION_ENV,
         modal_token_env={"MODAL_TOKEN_ID": "ak", "MODAL_TOKEN_SECRET": "as"},
-        anthropic_api_key="sk-test",
         user_id="trial-1-cafe1234",
         mngr_sha="c" * 40,
         minds_env="staging",
@@ -65,30 +66,35 @@ def test_build_box_env_scopes_the_trial_and_disables_other_providers() -> None:
     # Without MNGR_PREFIX from the activation env, exec'd mngr commands resolve
     # the wrong Modal environment and silently see no workspaces.
     assert env["MNGR_PREFIX"] == "minds-staging-"
-    assert env["ANTHROPIC_API_KEY"] == "sk-test"
-    # The box-level manifest carries the key AND the config-dir override (which
-    # makes the workspace's claude agent pre-approve the key) into every create.
-    assert env["MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR"] == "true"
-    assert env["MINDS_EXTRA_PASS_HOST_ENV"].split() == [
-        "ANTHROPIC_API_KEY",
-        "MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR",
-    ]
     assert env["MINDS_MODAL_EXTRA_TEMPLATE"] == "modal_eval"
 
 
-def test_build_box_env_omits_anthropic_key_when_empty() -> None:
+def test_build_box_env_carries_no_ai_credentials() -> None:
+    # Workspaces are signed in after create through the product's own endpoint. A credential in the
+    # box env would be forwarded into the workspace host env file, a regime production never enters.
     env = build_box_env(
         activation_env=_ACTIVATION_ENV,
         modal_token_env={"MODAL_TOKEN_ID": "ak", "MODAL_TOKEN_SECRET": "as"},
-        anthropic_api_key="",
         user_id="trial",
         mngr_sha="c" * 40,
         minds_env="staging",
     )
 
     assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_BASE_URL" not in env
     assert "MINDS_EXTRA_PASS_HOST_ENV" not in env
     assert "MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR" not in env
+
+
+def test_build_credential_lines_emits_a_bare_key_without_a_base_url() -> None:
+    assert build_credential_lines("sk-test", "") == "ANTHROPIC_API_KEY=sk-test\n"
+
+
+def test_build_credential_lines_pairs_a_base_url_with_the_key() -> None:
+    # The proxy form: a base URL is only accepted alongside a key.
+    assert build_credential_lines("sk-test", "https://proxy.invalid") == (
+        "ANTHROPIC_API_KEY=sk-test\nANTHROPIC_BASE_URL=https://proxy.invalid\n"
+    )
 
 
 def test_parse_activation_exports_reads_exports_and_ignores_unsets() -> None:
@@ -140,7 +146,7 @@ def test_resolve_chat_agent_id_returns_none_when_ambiguous() -> None:
 
 def test_fetch_minds_activation_env_raises_without_the_critical_exports(tmp_path: Path) -> None:
     environment = MockBoxEnvironment(
-        tmp_path, [ScriptedExecRule("minds env activate", [ok_result("export MINDS_ROOT_NAME=minds-staging\n")])]
+        tmp_path, [ScriptedExecRule("minds-admin env activate", [ok_result("export MINDS_ROOT_NAME=minds-staging\n")])]
     )
 
     with pytest.raises(BoxCommandError, match="MNGR_HOST_DIR"):
@@ -237,3 +243,54 @@ def test_destroy_workspaces_retries_once_when_agents_remain(tmp_path: Path) -> N
 
     destroy_calls = [command for command in environment.exec_commands if "mngr destroy - --force" in command]
     assert len(destroy_calls) == 2
+
+
+_SSH_LISTING = json.dumps(
+    {
+        "agents": [
+            {
+                "id": "sys-1",
+                "host": {"ssh": {"user": "root", "host": "h1.modal.host", "port": 2201, "key_path": "/k1"}},
+            },
+            {
+                "id": "ws-1",
+                "host": {"ssh": {"user": "user", "host": "h2.modal.host", "port": 2202, "key_path": "/k2"}},
+            },
+        ]
+    }
+)
+
+
+def test_parse_agent_ssh_info_picks_the_requested_agent() -> None:
+    assert parse_agent_ssh_info(_SSH_LISTING, "ws-1") == {
+        "user": "user",
+        "host": "h2.modal.host",
+        "port": "2202",
+        "key_path": "/k2",
+    }
+
+
+def test_parse_agent_ssh_info_returns_none_for_an_absent_agent() -> None:
+    assert parse_agent_ssh_info(_SSH_LISTING, "nope") is None
+
+
+def test_parse_agent_ssh_info_returns_none_when_the_agent_has_no_ssh_endpoint() -> None:
+    # A provider that exposes no SSH (or an agent listed before its host is up) must read as "no
+    # tunnel possible" rather than yielding a half-built endpoint.
+    listing = json.dumps({"agents": [{"id": "ws-1", "host": {}}]})
+
+    assert parse_agent_ssh_info(listing, "ws-1") is None
+
+
+def test_parse_agent_ssh_info_tolerates_a_bare_list_payload() -> None:
+    listing = json.dumps([{"id": "ws-1", "host": {"ssh": {"host": "h.modal.host", "port": 22, "key_path": "/k"}}}])
+
+    parsed = parse_agent_ssh_info(listing, "ws-1")
+
+    assert parsed is not None
+    # An absent user defaults rather than failing the lookup.
+    assert parsed["user"] == "root"
+
+
+def test_parse_agent_ssh_info_returns_none_on_unparseable_output() -> None:
+    assert parse_agent_ssh_info("not json at all", "ws-1") is None

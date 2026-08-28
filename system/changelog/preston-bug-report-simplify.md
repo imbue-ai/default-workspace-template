@@ -1,0 +1,5 @@
+The bug-report diagnostics collector's output contract is now one line: the base64 of the archive. The JSON envelope, contract version, and omissions mapping are gone -- anything withheld (a secret-scan finding, a scanner that could not run, a workspace with no conversations) is a plain-words line in the archive's own `collection-notes.txt` member, so the archive explains itself.
+
+Collection scope widened and tightened at once: every agent's conversation is a transcript candidate (chats, background workers, and the primary services agent alike -- previously only human-opened chats), at least the five newest ride along on top of everything written to in the last two hours, and every program's log in the supervisor dir is sent (owner and stream unfiltered, supervisord's own included) so long as it was written to in the last day.
+
+The collector's mngr calls are scoped to what can answer from inside a container: `mngr list --provider local` skips the cloud-provider probing that used to consume most of the collection budget, and each `mngr event` targets the pinned `name@host.provider` address the listing handed out.

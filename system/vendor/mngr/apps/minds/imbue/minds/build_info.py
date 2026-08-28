@@ -34,9 +34,9 @@ UNKNOWN_GIT_SHA = "unknown"
 # exact template snapshot it was verified against. Bumped by the release
 # process (see docs/deploy/release.md); bump to a newer tag only after re-verifying
 # launch-to-msg CI against (this binary, the new tag). Lives here (not in the
-# desktop client) so deploy-time code (`minds env deploy`) can read it
+# desktop client) so deploy-time code (`minds-admin env deploy`) can read it
 # without importing the whole desktop client.
-FALLBACK_BRANCH: Final[str] = "minds-v0.4.1"
+FALLBACK_BRANCH: Final[str] = "minds-v0.4.2"
 
 # The canonical repo key the pool bake stamps into row attributes for the
 # default workspace template (`host/org/repo`), the default the web-create

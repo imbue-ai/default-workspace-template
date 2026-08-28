@@ -13,6 +13,7 @@ import {
   fetchBackfillEvents,
   fetchForwardEvents,
   fetchWindowAtOffset,
+  getConversationLoadState,
   getEventsForAgent,
   getEventCount,
   getFirstOffset,
@@ -102,8 +103,6 @@ function isProtoAgent(agentId: string): boolean {
 }
 
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
-  let loading = false;
-  let loadingError: string | null = null;
   let currentAgentId: string | null = null;
 
   // Whether this panel is the visible (selected) tab in its dockview group.
@@ -306,8 +305,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     logWs.onmessage = (event: MessageEvent) => {
       const data = JSON.parse(event.data as string) as
-        | { line: string }
-        | { done: true; success: boolean; error: string | null };
+        { line: string } | { done: true; success: boolean; error: string | null };
 
       if ("line" in data) {
         logLines.push(data.line);
@@ -364,29 +362,52 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   async function loadAgent(agentId: string): Promise<void> {
-    loading = true;
-    loadingError = null;
-
     try {
       // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
       // snapshot replace in fetchEvents cannot drop a live event on first load.
       await loadSnapshotWithStream(agentId);
       if (agentId === currentAgentId) {
-        loading = false;
-        loadingError = null;
         checkLatestAssistantForAuthError(agentId);
       }
     } catch (error) {
-      if (agentId === currentAgentId) {
-        loading = false;
-        // mithril attaches the parsed JSON error body to `.response`; the server
-        // sends the human-readable reason there as `detail`. Reading `.message`
-        // alone surfaces the raw body object as "[object Object]".
-        const errResp = (error as { response?: { detail?: string } }).response;
-        loadingError = errResp?.detail ?? (error as Error).message ?? String(error);
-      }
+      // Where the load got to is recorded against the agent by `fetchEvents` and
+      // read back in the view, so that a later attempt -- from any caller,
+      // including the stream's own reconnect -- supersedes it. Nothing to hold
+      // here, and nothing to guard on the agent having been switched away from:
+      // the record is per-agent, so a stale load cannot speak for the new one.
+      // Still logged, as the paging and reconnect paths do -- an attempt that a
+      // newer one has superseded is recorded nowhere at all, so the log is the
+      // only trace of one that keeps losing the race.
+      console.warn(`Failed to load the transcript for agent ${agentId}`, error);
     }
   }
+
+  // A user-initiated reload is outstanding; guards against stacking them.
+  let reloadInFlight = false;
+
+  /**
+   * Re-run the load that the panel is currently reporting a failure for.
+   *
+   * Identical to what the tab menu's Refresh does, offered where the user is
+   * already looking: an error screen whose only remedy lives behind a menu they
+   * have no particular reason to open reads as a dead end. Redraws on settle
+   * because a *failed* reload writes only the load state, which no redraw
+   * follows on its own (a successful one repaints when it places the window).
+   */
+  function reloadAfterFailure(agentId: string): void {
+    if (reloadInFlight) {
+      return;
+    }
+    reloadInFlight = true;
+    loadAgent(agentId).finally(() => {
+      reloadInFlight = false;
+      m.redraw();
+    });
+  }
+
+  const RELOAD_BUTTON_CLASS =
+    "message-list-reload cursor-pointer rounded-md border border-border px-3 py-1 text-sm " +
+    "text-text-primary hover:bg-bg-hover";
 
   function manageStreamConnection(agentId: string): void {
     if (!isConversationNotFound(agentId)) {
@@ -612,7 +633,24 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       ]);
     }
 
-    if (loading) {
+    // A message the user just sent counts as content even before any event
+    // exists for it: it may be queued (the harness parked it) or still in flight
+    // (an optimistic "Sending…" bubble). All three whole-panel states below are
+    // about having nothing to show, so they share one answer -- otherwise a
+    // reload firing under a fresh chat replaces that bubble with a spinner or an
+    // error screen.
+    const tailNodes =
+      getEventCount(agentId) === 0 ? [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)] : [];
+    const hasNothingToShow = getEventCount(agentId) === 0 && tailNodes.length === 0;
+
+    // Read per-render rather than latched at load time, so the panel leaves the
+    // error state as soon as any reload succeeds -- the tab's Refresh or the
+    // stream's background reconnect, neither of which goes through loadAgent.
+    // Reading the phase (not just the error) is what keeps those two from
+    // falling through to "No events yet for this agent." while they are in
+    // flight, which is a lie the panel used to tell for the whole of a retry.
+    const load = getConversationLoadState(agentId);
+    if (hasNothingToShow && load.phase === "loading") {
       return m(
         "div",
         { class: "message-list-loading flex items-center justify-center h-full" },
@@ -620,13 +658,26 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       );
     }
 
-    if (loadingError) {
-      return m(
-        "div",
-        { class: "message-list-error flex items-center justify-center h-full" },
-        m("p", { class: "text-red-500" }, `Error: ${loadingError}`),
-      );
+    if (hasNothingToShow && load.error !== null) {
+      return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
+        m("p", { class: "text-red-500" }, `Error: ${load.error}`),
+        m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+      ]);
     }
+
+    // The same failure, over a transcript that is already on screen. Keeping the
+    // transcript is right -- blanking it loses more than the error tells -- but
+    // staying silent is not: the user may have just asked for this reload
+    // themselves, and got no answer either way. So it reports as a strip above the
+    // transcript rather than in place of it, carrying the same retry the error
+    // screen offers.
+    const failedReloadNotice =
+      load.error === null
+        ? null
+        : m("div", { class: "message-list-stale-notice flex items-center gap-3 border-b border-border px-3 py-1.5" }, [
+            m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
+            m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+          ]);
 
     // Whether a live text selection is anchored in this panel's transcript. Gates
     // both eviction (below) and the tail-follow pin's effect on the window (via the
@@ -649,10 +700,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const events = getEventsForAgent(agentId);
 
     if (events.length === 0) {
-      // No transcript yet -- but a message the user just sent may already be
-      // queued (the harness parked it) or still in flight (an optimistic
-      // "Sending…" bubble), so render those rather than the empty-state placeholder.
-      const tailNodes = [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)];
+      // No transcript yet -- but render any queued or in-flight message rather
+      // than the empty-state placeholder (see tailNodes above).
       if (tailNodes.length === 0) {
         return m(
           "div",
@@ -660,7 +709,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
         );
       }
-      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, tailNodes)]);
+      return m("div", { class: "message-list-wrapper" }, [
+        failedReloadNotice,
+        m("div", { class: MESSAGE_LIST_CLASS }, tailNodes),
+      ]);
     }
 
     const agent = getAgentById(agentId);
@@ -738,6 +790,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     });
 
     return m("div", { class: "message-list-wrapper" }, [
+      failedReloadNotice,
       // The queued-message group renders after the virtualized rows so it sits at
       // the live tail, below the last committed turn. It is a full snapshot from
       // the harness, replaced wholesale on each push.

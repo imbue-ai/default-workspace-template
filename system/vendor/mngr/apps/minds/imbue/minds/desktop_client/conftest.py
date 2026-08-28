@@ -17,7 +17,7 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
@@ -32,6 +32,7 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthAccount
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthSession
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudLeaseActiveCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import LiteLLMKeyMaterial
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
@@ -226,12 +227,16 @@ class FakeImbueCloudCli(ImbueCloudCli):
     # -- In-memory workspace-sync backend (mirrors the connector's semantics) --
 
     sync_records_by_email: dict[str, dict[str, dict[str, object]]] = Field(
-        default_factory=dict, description="email -> host_id -> wire record (the fake server state)"
+        default_factory=dict, description="email -> workspace id -> wire record (the fake server state)"
     )
     sync_bundle_by_email: dict[str, dict[str, object]] = Field(
         default_factory=dict, description="email -> key bundle (the fake server state)"
     )
     is_sync_offline: bool = Field(default=False, description="When True, every sync call raises (connector down)")
+    lease_holding_workspace_ids: set[str] = Field(
+        default_factory=set,
+        description="Workspace ids whose record delete the fake connector refuses with lease_active (a live lease)",
+    )
 
     def _check_sync_online(self, command_repr: str) -> None:
         if self.is_sync_offline:
@@ -243,28 +248,33 @@ class FakeImbueCloudCli(ImbueCloudCli):
 
     def sync_record_push(self, account: str, record: Mapping[str, object]) -> dict[str, object]:
         self._check_sync_online("sync records push")
-        by_host = self.sync_records_by_email.setdefault(account, {})
-        host_id = str(record["host_id"])
-        existing = by_host.get(host_id)
+        # Mirrors the workspace-keyed connector: one row per workspace id,
+        # host_id is a mutable attribute, CAS on the row's revision.
+        by_workspace = self.sync_records_by_email.setdefault(account, {})
+        workspace_id = str(record["agent_id"])
+        existing = by_workspace.get(workspace_id)
         pushed_revision = int(str(record["revision"]))
         if existing is not None and pushed_revision != int(str(existing["revision"])) + 1:
             conflict = ImbueCloudSyncConflictCliError("sync records push: revision conflict")
             conflict.stored_record = dict(existing)
             raise conflict
-        if str(record.get("state")) == "active":
-            for other_host_id, other in by_host.items():
-                is_other = other_host_id != host_id
-                if is_other and other.get("agent_id") == record.get("agent_id") and other.get("state") == "active":
-                    agent_conflict = ImbueCloudSyncConflictCliError("sync records push: active agent conflict")
-                    agent_conflict.stored_record = None
-                    raise agent_conflict
         stored = dict(record)
-        by_host[host_id] = stored
+        by_workspace[workspace_id] = stored
         return dict(stored)
 
-    def sync_record_delete(self, account: str, host_id: str) -> None:
+    def sync_record_delete(self, account: str, record_id: str) -> None:
         self._check_sync_online("sync records delete")
-        self.sync_records_by_email.get(account, {}).pop(host_id, None)
+        if record_id in self.lease_holding_workspace_ids:
+            raise ImbueCloudLeaseActiveCliError("sync records delete: the workspace still holds its cloud lease")
+        by_workspace = self.sync_records_by_email.get(account, {})
+        if record_id in by_workspace:
+            del by_workspace[record_id]
+            return
+        # Legacy host-id addressing resolves through the row's host column.
+        for workspace_id, record in list(by_workspace.items()):
+            if record.get("host_id") == record_id:
+                del by_workspace[workspace_id]
+                return
 
     def sync_scrub_secrets(self, account: str) -> int:
         self._check_sync_online("sync scrub-secrets")
@@ -298,9 +308,11 @@ class SucceedingCreateShareCli(FakeImbueCloudCli):
     recorded for seam assertions.
     """
 
-    create_share_calls: list[tuple[str, str, str | None, str | None]] = Field(
+    create_share_calls: list[tuple[str, str, str | None, str | None, str | None]] = Field(
         default_factory=list,
-        description="(account email, host id, entry label, preferred region) for every create_share call, in order",
+        description=(
+            "(account email, host id, entry label, preferred region, workspace id) for every create_share call, in order"
+        ),
     )
 
     def create_share(
@@ -310,8 +322,9 @@ class SucceedingCreateShareCli(FakeImbueCloudCli):
         host_id: str,
         entry_label: str | None = None,
         preferred_region: str | None = None,
+        workspace_id: str | None = None,
     ) -> ShareCliInfo:
-        self.create_share_calls.append((account, host_id, entry_label, preferred_region))
+        self.create_share_calls.append((account, host_id, entry_label, preferred_region, workspace_id))
         self.add_share(account, host_id)
         return ShareCliInfo(
             host_id=host_id,
@@ -394,16 +407,24 @@ def make_fake_imbue_cloud_cli() -> FakeImbueCloudCli:
     )
 
 
-def make_session_store_for_test(data_dir: Path, cli: ImbueCloudCli | None = None) -> MultiAccountSessionStore:
-    """Build a :class:`MultiAccountSessionStore` (with its record store) over a fake CLI by default."""
+def make_session_store_for_test(
+    data_dir: Path, cli: ImbueCloudCli | None = None, mngr_host_dir: Path | None = None
+) -> MultiAccountSessionStore:
+    """Build a :class:`MultiAccountSessionStore` (with its record store) over a fake CLI by default.
+
+    ``mngr_host_dir`` (default None: disabled) enables the identity cache's
+    on-disk sessions-dir coherence check, exactly as the app wires it.
+    """
     effective_cli = cli or make_fake_imbue_cloud_cli()
     record_store = WorkspaceRecordStore(
-        paths=WorkspacePaths(data_dir=data_dir),
+        paths=InstallationPaths(data_dir=data_dir),
         cli=effective_cli,
         device_id=device_id_for_test("session-store"),
         device_label="test-device",
     )
-    return MultiAccountSessionStore(data_dir=data_dir, cli=effective_cli, record_store=record_store)
+    return MultiAccountSessionStore(
+        data_dir=data_dir, cli=effective_cli, record_store=record_store, mngr_host_dir=mngr_host_dir
+    )
 
 
 def build_desktop_client_for_test(
@@ -435,12 +456,14 @@ def build_desktop_client_for_test(
 
 @pytest.fixture
 def root_concurrency_group() -> Iterator[ConcurrencyGroup]:
-    """Root ``ConcurrencyGroup`` for tests that construct an ``AgentCreator``.
+    """Root ``ConcurrencyGroup`` for tests that construct something requiring one.
 
-    ``AgentCreator.root_concurrency_group`` is required (in production it is
-    owned by ``start_desktop_client`` and brackets the FastAPI lifespan); this
-    fixture enters an equivalent group for the test's duration and exits it
-    cleanly afterwards so any strand tracking / shutdown semantics match.
+    Several components take it as a required field -- ``AgentCreator``,
+    ``ConnectivityDetector``, ``WorkspaceViewRefresher`` -- and in production all
+    of them are handed the one group ``start_desktop_client`` owns, which
+    brackets the app's lifespan. This fixture enters an equivalent group for the
+    test's duration and exits it cleanly afterwards so any strand tracking /
+    shutdown semantics match.
     """
     cg = ConcurrencyGroup(name="test-root")
     with cg:

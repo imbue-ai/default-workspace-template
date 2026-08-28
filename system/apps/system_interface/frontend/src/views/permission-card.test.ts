@@ -1,5 +1,5 @@
 import m from "mithril";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as embedContract from "@minds/embed-contract";
 import { resetEmbedEndpointForTesting } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
@@ -7,10 +7,13 @@ import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import {
   PermissionCard,
+  isFiledPermissionRequest,
   initShellPermissionResolutions,
+  notePermissionResolutions,
   openPermissionRequest,
   parsePermissionRequest,
   renderPermissionCard,
+  resetShellPermissionResolutionsForTesting,
   shellPermissionResolutionFor,
 } from "./permission-card";
 
@@ -65,6 +68,22 @@ function makeToolCall(inputPreview: string, display?: "permission_request"): Too
 }
 
 function makeResult(output: string, isError = false, permissionRequest?: Record<string, unknown>): ToolResultEvent {
+  // Mirror the backend: it parses the untruncated output and attaches the
+  // response object as `permission_request` whenever one is present. The card
+  // reads ONLY that field now, so the helper attaches it for parseable
+  // outputs unless a test passes one explicitly.
+  let derived = permissionRequest;
+  if (derived === undefined && !isError) {
+    const start = output.indexOf("{");
+    if (start >= 0) {
+      try {
+        const parsed: unknown = JSON.parse(output.slice(start));
+        if (typeof parsed === "object" && parsed !== null) derived = parsed as Record<string, unknown>;
+      } catch {
+        derived = undefined;
+      }
+    }
+  }
   return {
     timestamp: "2026-01-01T00:00:00Z",
     type: "tool_result",
@@ -75,7 +94,7 @@ function makeResult(output: string, isError = false, permissionRequest?: Record<
     tool_name: "Bash",
     output,
     is_error: isError,
-    ...(permissionRequest === undefined ? {} : { permission_request: permissionRequest }),
+    ...(derived === undefined ? {} : { permission_request: derived }),
   };
 }
 
@@ -136,75 +155,6 @@ const ACCOUNTS_OUTPUT = `{"request_id":"acct-1","rationale":"check which account
 // (`_MAX_PERMISSION_REQUEST_LENGTH`, 8000): such an event arrives with no
 // structured `permission_request` field and only this head-truncated body, so
 // these fixtures are exactly what the card sees then.
-const BACKEND_MAX_OUTPUT_LENGTH = 2000;
-
-function truncateAt(output: string, length: number): string {
-  return output.length <= length ? output : `${output.slice(0, length)}...`;
-}
-
-function truncateLikeBackend(output: string): string {
-  return truncateAt(output, BACKEND_MAX_OUTPUT_LENGTH);
-}
-
-// curl's progress meter, which precedes the body and eats into the budget.
-const CURL_METER =
-  "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n" +
-  "                                 Dload  Upload   Total   Spent    Left  Speed\n" +
-  "100  2637  100  2399  100   317  12000   1687 --:--:-- --:--:-- --:--:-- 13000\n";
-
-const TRUNCATED_REQUEST_ID = "c1f0a4b78e9d4f2ab6c35d81e07f42a9";
-const TRUNCATED_RATIONALE = "Export a backup of the old workspace so I can diff its notes against this one.";
-const TRUNCATED_PERMISSIONS = ["minds-workspaces-backups-export", "minds-workspaces-read", "minds-workspaces-message"];
-
-/** One generated JSON-Schema fragment, the shape the gateway's `computeEffect`
- *  emits per granted verb. Several of these are what push a workspace request's
- *  response past the output cap. */
-function verbSchema(verb: string): Record<string, unknown> {
-  return {
-    name: verb,
-    schema: {
-      type: "object",
-      properties: {
-        target_workspace_id: { type: "string", description: "The workspace this verb acts on." },
-        confirm: { type: "boolean", description: "Whether the user confirmed this action." },
-      },
-      required: ["target_workspace_id"],
-      additionalProperties: false,
-    },
-  };
-}
-
-// The gateway's create response, in its real shape: pretty-printed at indent 2
-// (sendJson), request_id first, and the request's `target` and generated
-// `effect` last -- the two fields the card never reads, and the bulk of what
-// pushes the response past the cap. Spreading `overrides` last keeps each key in
-// the gateway's own order (see handleCreateRequest).
-function createResponseOutput(overrides: Record<string, unknown> = {}): string {
-  const body = {
-    request_id: TRUNCATED_REQUEST_ID,
-    agent_id: "agent-a3b7b469ee8341779c9ede1a798c447f",
-    rationale: TRUNCATED_RATIONALE,
-    request_type: "workspace",
-    payload: {
-      permissions: TRUNCATED_PERMISSIONS,
-      target_workspace_id: "agent-a3b7b469ee8341779c9ede1a798c447f",
-    },
-    target: "/home/user/.latchkey/permissions.json",
-    effect: {
-      rules: [{ "minds-workspaces::agent-a3b7b469ee8341779c9ede1a798c447f": ["minds-workspaces-backups-export"] }],
-      schemas: TRUNCATED_PERMISSIONS.map(verbSchema),
-    },
-    ...overrides,
-  };
-  return `${CURL_METER}${JSON.stringify(body, null, 2)}\n`;
-}
-
-/** The index just inside `key`'s value in a create response, for a test that
- *  needs the cut to land in a specific field. */
-function insideField(output: string, key: string): number {
-  return output.indexOf(`"${key}"`) + key.length + 8;
-}
-
 describe("parsePermissionRequest", () => {
   it("parses the rich details of a successful predefined creation POST", () => {
     const result = parsePermissionRequest(
@@ -306,102 +256,6 @@ describe("parsePermissionRequest", () => {
       access: null,
     });
   });
-
-  it("the truncation fixture really does exceed the backend's output cap", () => {
-    // Guards the fixture: if it ever shrinks under the cap, the recovery tests
-    // below would silently start exercising the strict parse instead.
-    expect(createResponseOutput().length).toBeGreaterThan(BACKEND_MAX_OUTPUT_LENGTH);
-  });
-
-  it("recovers a response past the backend's preservation ceiling too", () => {
-    // The scan's real reason to exist: past _MAX_PERMISSION_REQUEST_LENGTH
-    // (8000) the backend deliberately refuses to preserve the object, so the
-    // event arrives with no structured field at all -- an agent's rationale has
-    // no length limit, and this is what such a request looks like. The id sits
-    // inside the head-truncated body, so the card can still name and open it.
-    const oversized = createResponseOutput({ rationale: "x".repeat(9000) });
-    expect(oversized.length).toBeGreaterThan(8000);
-
-    const details = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(CURL_METER + oversized), false),
-    );
-    expect(details?.requestId).toBe(TRUNCATED_REQUEST_ID);
-  });
-
-  it("recovers the id, rationale, type and payload from a backend-truncated response", () => {
-    const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(createResponseOutput())),
-    );
-    expect(result).toEqual({
-      requestId: TRUNCATED_REQUEST_ID,
-      requestType: "workspace",
-      rationale: TRUNCATED_RATIONALE,
-      scope: null,
-      permissions: TRUNCATED_PERMISSIONS,
-      path: null,
-      access: null,
-    });
-  });
-
-  it("drops fields that did not survive the cut instead of guessing at them", () => {
-    // A cut inside `payload` -- shorter than the real cap, to put the boundary
-    // in a chosen field. Recovery is subtractive: the members before it are
-    // returned verbatim and the half-written one is dropped, not reconstructed.
-    const output = createResponseOutput();
-    const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateAt(output, insideField(output, "payload"))),
-    );
-    expect(result).toMatchObject({
-      requestId: TRUNCATED_REQUEST_ID,
-      rationale: TRUNCATED_RATIONALE,
-      requestType: "workspace",
-      scope: null,
-      permissions: [],
-    });
-  });
-
-  it("is not fooled by braces, quotes, or commas inside the rationale", () => {
-    const rationale = 'Read {"a": 1}, then "summarise", ok?';
-    const output = createResponseOutput({
-      rationale,
-      request_type: "predefined",
-      payload: { scope: "slack-api", permissions: ["slack-read-all"] },
-    });
-    const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(output)),
-    );
-    expect(result?.rationale).toBe(rationale);
-    expect(result?.scope).toBe("slack-api");
-  });
-
-  it("returns null when the cut falls before the first complete field", () => {
-    const output = createResponseOutput();
-    const cut = truncateAt(output, output.indexOf("{") + 40);
-    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(cut))).toBeNull();
-  });
-
-  it("returns null when a truncated body's request id is not gateway-generated", () => {
-    // The recovery path reconstructs the id's text, and that id is handed
-    // straight to the shell's modal, so it must look gateway-minted.
-    const output = createResponseOutput({ request_id: "not-a-uuid" });
-    expect(
-      parsePermissionRequest(
-        makeToolCall(PERMISSION_INPUT, "permission_request"),
-        makeResult(truncateLikeBackend(output)),
-      ),
-    ).toBeNull();
-  });
-
-  it("returns null for a truncated gateway error body", () => {
-    const errorBody = '{\n  "error": "Invalid request body.",\n  "status": 400,\n  "detail": "rat';
-    expect(
-      parsePermissionRequest(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(errorBody)),
-    ).toBeNull();
-  });
 });
 
 // Depth-first search for the first vnode matching a predicate.
@@ -477,6 +331,41 @@ const LOCK_RECT = '<rect x="3" y="11"';
 const UNBUNDLED_SERVICE_OUTPUT =
   '{"request_id":"x1","request_type":"predefined","rationale":"look something up","payload":{"scope":"madeup-api"}}';
 
+describe("isFiledPermissionRequest", () => {
+  // A PreToolUse guard refusing the command is the common way this happens: the
+  // harness returns the block message as an errored result and nothing ever
+  // reaches the gateway. Rendering that as a permission card sent the user to a
+  // Permissions tab with nothing in it.
+  const call = makeToolCall(PERMISSION_INPUT, "permission_request");
+
+  it("counts a request whose result has not arrived yet", () => {
+    expect(isFiledPermissionRequest(call, null)).toBe(true);
+  });
+
+  it("counts a request the gateway answered", () => {
+    expect(isFiledPermissionRequest(call, makeResult(PERMISSION_OUTPUT))).toBe(true);
+  });
+
+  it("does not count a call the harness refused", () => {
+    const blocked = makeResult("PreToolUse:Bash hook error: Blocked: file ONE latchkey permission request", true);
+    expect(isFiledPermissionRequest(call, blocked)).toBe(false);
+  });
+
+  it("does not count a body the gateway rejected", () => {
+    // curl exits 0 on a 4xx, so this does not even read as a failed call -- but no
+    // request was created, so there is nothing in the Permissions tab to send the
+    // user to. Verbatim from a gateway that refused a malformed payload.
+    const rejected = makeResult(
+      '{\n  "error": "Invalid request body: payload.\'scope\' is required and must be a non-empty string."\n}',
+    );
+    expect(isFiledPermissionRequest(call, rejected)).toBe(false);
+  });
+
+  it("does not count an ordinary tool call", () => {
+    expect(isFiledPermissionRequest(makeToolCall('{"command":"echo hi"}'), null)).toBe(false);
+  });
+});
+
 describe("renderPermissionCard", () => {
   it("shows the eyebrow, title, rationale, and review button on a pending card", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT));
@@ -535,76 +424,6 @@ describe("renderPermissionCard", () => {
     // The toggle is this state's only control, so it must not disappear with
     // the rest of the card.
     expect(findByClass(vnode, "permission-request-raw-toggle")).not.toBeNull();
-  });
-
-  it("renders a titled card with a working review button for a backend-truncated pending request", () => {
-    const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(createResponseOutput())),
-    );
-
-    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Other machines");
-    expect(textOf(findByClass(vnode, "permission-request-reason"))).toBe(TRUNCATED_RATIONALE);
-    // The apologetic fallback is not what a still-pending request shows.
-    expect(findByClass(vnode, "permission-request-status")).toBeNull();
-
-    const button = findReviewButton(vnode) as { attrs?: { onclick?: (e: Event) => void } } | null;
-    expect(textOf(button)).toBe("Review & respond");
-    const postMessage = vi.fn();
-    withStubbedEmbedder({ postMessage }, () =>
-      button?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event),
-    );
-    expect(postMessage).toHaveBeenCalledWith(
-      { type: "minds:open-request-modal", requestId: TRUNCATED_REQUEST_ID },
-      "*",
-    );
-  });
-
-  it("shows the rationale and button, and no redundant title, when the type was lost to the cut", () => {
-    // Cut inside `request_type`: the rationale survives but nothing names the
-    // subject, so a generic title row would only repeat the eyebrow.
-    const output = createResponseOutput();
-    const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateAt(output, insideField(output, "request_type"))),
-    );
-
-    expect(findByClass(vnode, "permission-request-title")).toBeNull();
-    expect(textOf(findByClass(vnode, "permission-request-reason"))).toBe(TRUNCATED_RATIONALE);
-    expect(findByClass(vnode, "permission-request-status")).toBeNull();
-    expect(findReviewButton(vnode)).not.toBeNull();
-  });
-
-  it("falls back to the generic subject when neither a title nor a rationale survived", () => {
-    // Cut inside `rationale`: only the id came back, and the body must not be a
-    // bare badge, so the generic subject stands in.
-    const output = createResponseOutput();
-    const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateAt(output, insideField(output, "rationale"))),
-    );
-
-    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Permission request");
-    expect(findByClass(vnode, "permission-request-reason")).toBeNull();
-    expect(findReviewButton(vnode)).not.toBeNull();
-  });
-
-  it("keeps the raw disclosure on a truncated card so the dropped fields stay reachable", () => {
-    const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(createResponseOutput())),
-      null,
-      null,
-      true,
-    );
-
-    expect(textOf(findByClass(vnode, "permission-request-raw-toggle"))).toBe("Hide raw request");
-    const raw = findByClass(vnode, "permission-request-raw");
-    const rawTextNode = findVnode(
-      raw,
-      (v) => v.tag === "#" && typeof (v as { children?: unknown }).children === "string",
-    );
-    expect(rawTextNode?.children as string).toContain("...");
   });
 
   it("titles a file-sharing request 'Local files'", () => {
@@ -836,64 +655,44 @@ describe("openPermissionRequest", () => {
   });
 });
 
-// The instant card flip works only once the vendored embed contract defines
-// PERMISSION_REQUEST_RESOLVED: the workspace endpoint validates incoming types
-// against the vendored contract and drops unknown ones before any handler
-// runs (mngr-internal#224 adds the type; this repo deliberately does not edit
-// system/vendor by hand). Until the release sync lands, cards fall back to
-// the transcript-driven flip and these tests skip -- and un-skip themselves
-// the moment the sync arrives, since the probe reads the vendored contract
-// itself.
-const HAS_RESOLVED_MESSAGE = "PERMISSION_REQUEST_RESOLVED" in embedContract;
+// -- Shell-reported verdicts ---------------------------------------------------
 
-describe.skipIf(!HAS_RESOLVED_MESSAGE)("shell permission resolutions", () => {
-  it("rejects an off-shape payload without recording anything", () => {
-    // Delivered through the real contract, so this covers the validation the
-    // shell's messages actually pass through -- not a second copy of it.
-    deliverFromEmbedder({
-      type: "minds:permission-request-resolved",
-      requestId: "req-rejected",
-      resolution: "error",
-    });
-    deliverFromEmbedder({ type: "minds:permission-request-resolved", requestId: "req-rejected" });
-    deliverFromEmbedder({ type: "minds:permission-request-resolved", resolution: "granted" });
-    expect(shellPermissionResolutionFor("req-rejected")).toBeNull();
-
-    // The same delivery with a verdict the contract accepts does record, so
-    // the rejections above are the payloads' doing and not a dead harness.
-    deliverFromEmbedder({
-      type: "minds:permission-request-resolved",
-      requestId: "req-rejected",
-      resolution: "granted",
-    });
-    expect(shellPermissionResolutionFor("req-rejected")).toBe("granted");
+describe("shell-reported verdicts", () => {
+  beforeEach(() => {
+    resetShellPermissionResolutionsForTesting();
+    vi.spyOn(m, "redraw").mockImplementation(() => undefined);
   });
 
-  it("ignores a resolution from anyone but this page's embedder", () => {
-    deliverFromEmbedder(
-      { type: "minds:permission-request-resolved", requestId: "req-nested", resolution: "granted" },
-      { isFromEmbedder: false },
-    );
-    expect(shellPermissionResolutionFor("req-nested")).toBeNull();
+  afterEach(() => {
+    resetShellPermissionResolutionsForTesting();
+    vi.restoreAllMocks();
   });
 
-  it("records the verdict the shell reports", () => {
-    deliverFromEmbedder({
-      type: "minds:permission-request-resolved",
-      requestId: "req-recorded",
-      resolution: "denied",
+  it("records the verdicts a resolutions message carries and redraws", () => {
+    notePermissionResolutions({
+      type: "minds:permission-resolutions",
+      resolutions: [
+        { requestId: "req-a", resolution: "denied" },
+        { requestId: "req-b", resolution: "granted" },
+        { requestId: "req-c", resolution: "maybe" },
+        { requestId: "", resolution: "granted" },
+      ],
     });
-    expect(shellPermissionResolutionFor("req-recorded")).toBe("denied");
+    expect(shellPermissionResolutionFor("req-a")).toBe("denied");
+    expect(shellPermissionResolutionFor("req-b")).toBe("granted");
+    // Off-shape entries are dropped without poisoning the rest.
+    expect(shellPermissionResolutionFor("req-c")).toBeNull();
+    expect(m.redraw).toHaveBeenCalled();
   });
 
-  it("flips the live card to the shell's verdict before the transcript resolution lands", () => {
-    // The shell (the Minds review popup) reported this request granted; the
-    // transcript walk hasn't classified a resolution yet (`resolution: null`),
-    // but the card should already render the Approved receipt.
-    deliverFromEmbedder({
-      type: "minds:permission-request-resolved",
-      requestId: "fs-1",
-      resolution: "granted",
+  it("flips the live card once the shell reports its verdict", () => {
+    // The shell reported this request granted -- as the live one-entry push or
+    // the page-load snapshot; the transcript walk hasn't classified a
+    // resolution yet (`resolution: null`), but the card should already render
+    // the Approved receipt.
+    notePermissionResolutions({
+      type: "minds:permission-resolutions",
+      resolutions: [{ requestId: "fs-1", resolution: "granted" }],
     });
     const card = PermissionCard();
     const vnode = card.view({
@@ -907,5 +706,44 @@ describe.skipIf(!HAS_RESOLVED_MESSAGE)("shell permission resolutions", () => {
     expect(verdict).not.toBeNull();
     expect(textOf(verdict)).toBe("Approved");
     expect(findReviewButton(vnode)).toBeNull();
+  });
+});
+
+// Delivery through the real endpoint needs the vendored contract to know
+// PERMISSION_RESOLUTIONS (a stale snapshot's validator drops the type before
+// any handler runs; this repo deliberately does not edit system/vendor by
+// hand). These un-skip themselves the moment the vendor sync lands, and cover
+// the source and payload checks the shell's messages actually pass through.
+const HAS_RESOLUTIONS_MESSAGE = "PERMISSION_RESOLUTIONS" in embedContract;
+
+describe.skipIf(!HAS_RESOLUTIONS_MESSAGE)("shell resolutions via the contract", () => {
+  beforeEach(() => {
+    resetShellPermissionResolutionsForTesting();
+  });
+
+  afterEach(() => {
+    resetShellPermissionResolutionsForTesting();
+  });
+
+  it("records verdicts from this page's embedder, and only from it", () => {
+    deliverFromEmbedder({
+      type: "minds:permission-resolutions",
+      resolutions: [{ requestId: "req-hydrated", resolution: "granted" }],
+    });
+    deliverFromEmbedder(
+      {
+        type: "minds:permission-resolutions",
+        resolutions: [{ requestId: "req-forged", resolution: "granted" }],
+      },
+      { isFromEmbedder: false },
+    );
+    // The contract validator rejects the whole message on one off-shape entry.
+    deliverFromEmbedder({
+      type: "minds:permission-resolutions",
+      resolutions: [{ requestId: "req-rejected", resolution: "error" }],
+    });
+    expect(shellPermissionResolutionFor("req-hydrated")).toBe("granted");
+    expect(shellPermissionResolutionFor("req-forged")).toBeNull();
+    expect(shellPermissionResolutionFor("req-rejected")).toBeNull();
   });
 });

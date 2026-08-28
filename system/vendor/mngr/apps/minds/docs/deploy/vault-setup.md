@@ -52,11 +52,20 @@ secrets/minds/<tier>/litellm
 secrets/minds/<tier>/litellm-connector
 secrets/minds/<tier>/neon
 secrets/minds/<tier>/pool-ssh
+secrets/minds/<tier>/sentry      # error-reporting DSNs; empty until
+                                 #   `just provision-bugsink` fills them
+                                 #   (see bugsink-bringup.md)
 secrets/minds/<tier>/sharing
 secrets/minds/<tier>/supertokens
 ```
 
-**Read only by `minds env deploy` on a developer's laptop** (never
+The self-hosted Bugsink error tracker's own config lives in
+`secrets/minds/<tier>/bugsink` (every tier except ci; dev holds the SHARED
+dev/ci instance's config). Like `observability`, that entry is
+operator-only: it is read by the `just provision-bugsink` recipes and never
+pushed to Modal. See [bugsink-bringup.md](./bugsink-bringup.md).
+
+**Read only by `minds-admin env deploy` on a developer's laptop** (never
 pushed to Modal -- the connector's runtime doesn't need
 create-project permissions):
 
@@ -67,13 +76,13 @@ secrets/minds/<tier>/neon-admin   # NEON_API_TOKEN (every tier);
 ```
 
 **Sourced manually by the operator** (never pushed to Modal, never read
-by `minds env deploy` -- no deployed service or deploy step makes
+by `minds-admin env deploy` -- no deployed service or deploy step makes
 supplier API calls):
 
 ```
 secrets/minds/<tier>/ovh          # OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET,
                                   #   OVH_CONSUMER_KEY (shared per-tier bare-metal box
-                                  #   supplier credentials, for `mngr imbue_cloud admin server`);
+                                  #   supplier credentials, for `minds-admin server`);
                                   #   OVH_CLOUD_PROJECT_ID (the Public Cloud project that
                                   #   share-relay instances are provisioned in)
 secrets/minds/<tier>/relay-ssh    # RELAY_SSH_PRIVATE_KEY, RELAY_SSH_PUBLIC_KEY (the tier's
@@ -84,16 +93,16 @@ secrets/minds/<tier>/relay-ssh    # RELAY_SSH_PRIVATE_KEY, RELAY_SSH_PUBLIC_KEY 
 
 The dev-tier `neon-admin` token must have *project-create* scope on
 the dev tier's Neon org (not just project-scoped permissions). Every
-`minds env deploy` against a dev env creates a brand-new Neon
+`minds-admin env deploy` against a dev env creates a brand-new Neon
 *project* named `minds-<env>` under `NEON_ORG_ID`, with `host_pool`
-and `litellm_cost` databases inside; `minds env destroy` deletes the
+and `litellm_cost` databases inside; `minds-admin env destroy` deletes the
 project outright.
 
 Staging / production keep a single tier-shared project each, named
 by `NEON_PROJECT_ID` in the same Vault entry. The token there only
 needs branch-create + restore scope on that project (a project-scoped
-token is fine and preferable). `minds env deploy` snapshots the
-project's default branch before mutating anything, and `minds env
+token is fine and preferable). `minds-admin env deploy` snapshots the
+project's default branch before mutating anything, and `minds-admin env
 recover` restores from that snapshot if the deploy fails -- without
 `NEON_PROJECT_ID`, the deploy refuses to start because it can't be
 rolled back. The actual runtime DSNs for these tiers live in
@@ -103,8 +112,8 @@ for the connector + proxy at runtime).
 The `ovh` entry holds the bare-metal box supplier credentials
 (currently OVH). These order + manage the bare-metal boxes that Imbue
 Cloud slices are carved on. The operator sources them into their shell
-when running `mngr imbue_cloud admin server ...`; no deployed service or
-`minds env deploy` / `destroy` step reads them. Generate the AK/AS/CK
+when running `minds-admin server ...`; no deployed service or
+`minds-admin env deploy` / `destroy` step reads them. Generate the AK/AS/CK
 trio at <https://api.us.ovhcloud.com/createApp> for the supplier
 endpoint the pool uses (`ovh-us` by default). The shared per-tier
 credential is intentionally account-wide so any operator can order +
@@ -112,7 +121,7 @@ manage boxes for the tier.
 
 The schema for each `<service>` is the corresponding file under
 `.minds/template/<service>.sh` at the repo root. For staging /
-production (`creates_resources=false`), `minds env deploy` validates
+production (`creates_resources=false`), `minds-admin env deploy` validates
 every key declared by a Modal-pushed template against the Vault entry
 before pushing anything to Modal and hard-fails the deploy on a
 missing key or an unreadable entry -- shipping a placeholder or
@@ -128,7 +137,7 @@ tombstones with a warning; to actually remove a key from a service,
 use `vault kv metadata delete` so the listing is clean too.
 
 `<tier>` is one of `dev`, `staging`, `production`. Per-dev-env secrets
-(the values `minds env deploy` generates per developer for a dev env)
+(the values `minds-admin env deploy` generates per developer for a dev env)
 are **not** stored in Vault -- they live on the developer's machine
 only in `~/.minds-<name>/secrets.toml` (mode 0600).
 
@@ -151,22 +160,22 @@ for cleanup.
 ## Deploying
 
 All deploys (dev / staging / production) flow through the unified
-`minds env deploy` CLI on the activated env:
+`minds-admin env deploy` CLI on the activated env:
 
 ```bash
 # Tier deploys (staging / production):
-eval "$(uv run minds env activate --deploy staging)"
-uv run minds env deploy --yes-i-mean-staging
+eval "$(uv run minds-admin env activate --deploy staging)"
+uv run minds-admin env deploy --yes-i-mean-staging
 
 # Dev env deploys (per-developer):
-eval "$(uv run minds env activate --deploy dev-<your-user>)"
-uv run minds env deploy
+eval "$(uv run minds-admin env activate --deploy dev-<your-user>)"
+uv run minds-admin env deploy
 ```
 
-(`--deploy` is required: `minds env deploy` refuses without it. See
+(`--deploy` is required: `minds-admin env deploy` refuses without it. See
 `docs/environments.md` for the use-vs-deploy split.)
 
-`minds env deploy` reads `apps/minds/imbue/minds/config/envs/<tier>/deploy.toml`
+`minds-admin env deploy` reads `apps/minds/imbue/minds/config/envs/<tier>/deploy.toml`
 for the Modal workspace name + the list of services to push from
 Vault, then runs `modal deploy` for both `llm-<tier>` and
 `rsc-<tier>`. Tier deploys write nothing to disk
@@ -176,13 +185,13 @@ and per-env secrets (Neon DSN, SuperTokens connection URI + API key)
 to `~/.minds-<name>/secrets.toml` (mode 0600).
 
 The `--yes-i-mean-<tier>` flag is a mandatory safety bar for tier
-deploys. `minds env destroy` is dev-env-only and hard-refuses for
+deploys. `minds-admin env destroy` is dev-env-only and hard-refuses for
 `production` / `staging` -- tier teardown is operator-managed outside
 this CLI.
 
 ## Dynamic dev envs and Vault
 
-`minds env deploy` (when run with a dev env activated) reads a small
+`minds-admin env deploy` (when run with a dev env activated) reads a small
 set of dev-tier secrets from Vault (the dev-tier Neon API token and the
 dev-tier SuperTokens admin key) to
 provision per-dev-env resources. The resulting per-dev-env state

@@ -1,6 +1,8 @@
+import html
 import json
 import os
 import queue
+import shlex
 import socket
 import threading
 import time
@@ -23,17 +25,21 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import NotFound
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
+from imbue.system_interface import app_instances
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import member_last_used
+from imbue.system_interface import member_locations
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailedError
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
@@ -49,7 +55,6 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.harnesses.claude import auth_endpoints
-from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
@@ -71,6 +76,11 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
+from imbue.system_interface.layout_ops import terminal_origin_label
+from imbue.system_interface.liveness import SupervisorProgramActionError
+from imbue.system_interface.liveness import start_supervisor_program
+from imbue.system_interface.liveness import stop_supervisor_program
+from imbue.system_interface.liveness import supervisor_socket_path
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
@@ -79,6 +89,7 @@ from imbue.system_interface.models import AgentListResponse
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentRestartError
+from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
@@ -95,6 +106,7 @@ from imbue.system_interface.models import SendMessageResponse
 from imbue.system_interface.models import SetModelChoiceRequest
 from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
+from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -105,9 +117,250 @@ logger = _loguru_logger
 
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 
-_FRONTEND_NOT_BUILT_HTML = (
-    "<html><body><p>Frontend not built. Run <code>npm run build</code> in <code>frontend/</code>.</p></body></html>"
+# Stamped on every app-shell response so a caller can tell the real app from
+# the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
+# response. The reveal flow's frontend health check reads it.
+FRONTEND_BUILT_HEADER = "X-Frontend-Built"
+
+# How often the placeholder asks whether the bundle is back. Also the interval
+# of the scriptless fallback below, so both routes behave the same.
+_NOT_BUILT_POLL_SECONDS = 10
+
+# The ``mngr`` invocation the placeholder offers for standing up an agent to
+# repair the workspace. It mirrors what ``agent_manager._build_chat_create_command``
+# runs for a chat -- ``--template chat`` for the shared work directory, the output
+# style, and running in the workspace tree rather than a worktree of it, plus the
+# ``user_created`` label that puts the agent in the dynamic chat memory band.
+# Where it differs from that builder:
+#
+# No ``--type``, which is the one thing that builder cannot leave out: it is
+# serving a menu entry, so the harness is a choice the user already made. This
+# page has no such choice to carry, so leaving the flag off lets ``mngr`` resolve
+# the harness from ``[commands.create] type`` -- whatever this workspace is
+# configured to open chats as, rather than whatever it was when this string was
+# written. ``--template chat`` supplies the rest either way: it is harness-
+# agnostic (``output_style`` is honored by the claude, codex and pi plugins
+# alike), so it does not pick one and must not be relied on to.
+#
+# No ``--transfer none`` either, for a different reason: the ``chat`` template
+# already sets it, and the builder spells it out only because it is assembling
+# an argv rather than a line for a reader. It is not optional the way the harness
+# is -- an agent in a worktree would repair a copy of the workspace instead of
+# the workspace -- so ``server_test.py`` reads the template and fails if that
+# setting ever leaves it, rather than trusting this comment.
+#
+# ``--connect`` instead of its ``--no-connect``, which exists to keep a headless
+# caller from attaching. Someone typing this wants the opposite, and connecting
+# is what turns the create into a conversation. Not merely explicit for the
+# reader's sake: the workspace's own ``[commands.create] connect = false`` is
+# the default this overrides.
+#
+# ``--message`` so the agent opens already knowing what the reader is looking at.
+# It quotes the page's own heading, which is the one detail a reader on this page
+# can be certain of and the one the agent can act on without being told anything
+# else.
+#
+# No name, so mngr mints one. A reload, a second tab, or a first attempt that did
+# not finish therefore starts a fresh conversation rather than rejoining an
+# earlier one.
+#
+# Written as the shell line a reader sees and copies, because that string is the
+# artifact; the argv is derived from it by the same parse a shell performs, so
+# what is offered cannot drift from what runs. Quoted with ``"`` rather than as
+# ``shlex.join`` would (``'i'"'"'m ...``): the message carries apostrophes, and
+# this is the one line on the page a reader has to be able to read in full.
+#
+# Kept in sync with that builder by ``server_test.py``, which also validates it
+# against the live CLI. It is a suggestion, not a dispatch: the server never
+# runs it, so an agent is created only if the reader decides to.
+_NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
+    "mngr create --connect --template chat --label user_created=true "
+    '--message "i\'m seeing \\"this workspace\'s interface needs to be rebuilt, can you fix it?\\""'
 )
+
+_NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = tuple(shlex.split(_NOT_BUILT_REPAIR_MNGR_COMMAND))
+
+# ``mngr connect`` refuses to attach from inside tmux unless ``is_nested_tmux_allowed``
+# is set (see ``mngr.api.connect``, which gates purely on ``$TMUX``), and it is the
+# connect half of the create above that would hit it. The workspace's own terminal
+# tabs are tmux sessions, so a reader who runs this in one gets a created agent and
+# an error instead of a conversation. Dropping ``TMUX`` for this one command is
+# exactly what mngr does for itself once the check passes, and scoping it with
+# ``env -u`` leaves the reader's own shell alone.
+_NOT_BUILT_REPAIR_COMMAND: Final[str] = "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
+
+# Served in place of the app whenever the compiled bundle is missing. The bundle
+# is gitignored build output, so a code refresh that replaces the tree can leave
+# the workspace here. The page offers a way out and returns to the interface on
+# its own once there is one, so a bundle restored by anything else -- most often
+# the reveal flow's rollback -- brings the reader back without them having to
+# know to retry.
+#
+# The way out is a terminal, not a "rebuild" button. A button has to be right
+# about what went wrong; the states that strand a workspace here are dominated
+# by ones where a build dispatched from the server would fail too (no registry,
+# no memory, a lockfile that does not resolve), and it would fail with nowhere
+# to say so, on a page with no application to render the failure. It would also
+# inherit the server's memory band, which puts it ahead of the user's chats and
+# agents in a shed. A shell is the general case of every repair rather than one
+# of them, and ttyd is already running and already *more* protected than this
+# server, so the page is pointing at something that outlives it rather than
+# starting anything.
+#
+# Nothing here is part of the compiled bundle -- this is a string in the
+# backend -- so the script below ships whether or not the frontend has ever
+# been built. That is what lets the page be more than static text in exactly
+# the state where the frontend is missing.
+_FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Interface not built</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; display: flex;
+         align-items: center; justify-content: center; min-height: 100vh;
+         background: #14161a; color: #e6e8eb; }
+  main { max-width: 48rem; padding: 2rem; width: 100%; box-sizing: border-box; }
+  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.75rem; }
+  p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; max-width: 34rem; }
+  code { background: #1d2026; border-radius: 4px; padding: 0.1rem 0.3rem;
+         font-size: 0.9em; }
+  /* The command wraps rather than scrolling: a horizontal scrollbar hides
+     most of it behind a control nobody looks for, and this is the one line on
+     the page a reader has to be able to read in full. */
+  #repair { position: relative; }
+  pre { background: #1d2026; border-radius: 6px; padding: 0.75rem 1rem;
+        margin: 0 0 1rem; font-size: 0.85em; color: #e6e8eb;
+        white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* Room for the copy button, so the last line never runs underneath it. */
+  #repair-command { padding-right: 5.5rem; }
+  #copy-repair { position: absolute; top: 0.5rem; right: 0.5rem;
+                 font: inherit; font-size: 0.8em; padding: 0.25rem 0.6rem;
+                 color: #e6e8eb; background: #2a2f37; border: 1px solid #3a414b;
+                 border-radius: 4px; cursor: pointer; }
+  #copy-repair:hover { background: #333a44; }
+  #copy-repair[hidden] { display: none; }
+  #terminal-slot[hidden] { display: none; }
+  #terminal { width: 100%; height: 24rem; border: 1px solid #2a2f37;
+              border-radius: 6px; background: #000; }
+</style>
+<!-- The scriptless fallback for the poll at the end of the body. Whole-page
+     reloads and a live terminal cannot coexist -- a refresh every ten seconds
+     would destroy the session the reader is typing into -- so this runs only
+     where there is no script to poll with, and therefore no terminal either. -->
+<noscript><meta http-equiv="refresh" content="__POLL_SECONDS__"></noscript>
+</head>
+<body>
+<main>
+  <h1>This workspace's interface needs to be rebuilt</h1>
+  <p>The compiled interface is missing, so there is nothing to show yet. Your
+     work and your agents are untouched -- only the interface itself is gone,
+     and this page returns to the interface on its own once it is back.</p>
+  <p>If you would rather not work the repair out yourself, this creates an agent
+     and tells it what you are looking at:</p>
+  <div id="repair">
+    <pre id="repair-command">__REPAIR_COMMAND__</pre>
+    <!-- Hidden until the script confirms it can actually copy, so the page
+         never shows a button that does nothing. -->
+    <button id="copy-repair" type="button" hidden>Copy</button>
+  </div>
+  <!-- The lead-in belongs to the terminal, not to the command: the command
+       stands on its own wherever the reader finds a shell, so it keeps its own
+       introduction above and is never left orphaned when there is no terminal
+       to offer. -->
+  <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
+     in this workspace's terminal, below.</p>
+  <div id="terminal-slot" hidden>
+    <iframe id="terminal" title="Workspace terminal"></iframe>
+  </div>
+</main>
+<script>
+(function () {
+  // The terminal's hostname label, minted per workspace, or "" when there is
+  // no terminal registered to offer.
+  var terminalLabel = __TERMINAL_LABEL__;
+
+  // Mirrors deriveServiceOrigin/workspaceHostCoordinate in
+  // frontend/src/origin.ts, which is canonical: a service origin is its label
+  // prefixed onto the workspace host COORDINATE -- the host-<hex> label and
+  // everything after it -- and never onto this page's host verbatim, which
+  // would nest the service under the shell's own label and route back here.
+  //
+  // It differs from origin.ts in one way, deliberately: no coordinate label
+  // means no origin, rather than falling back to the host unchanged. The shell
+  // can assume it is running inside a workspace; this page cannot (a direct
+  // hit on the loopback port has no coordinate), and a made-up origin would
+  // show the reader a broken frame instead of the prose that still helps them.
+  function serviceOrigin(label) {
+    var labels = window.location.host.split(".");
+    for (var index = 0; index < labels.length; index++) {
+      // The port rides on whichever label is last, so it is stripped before
+      // matching -- otherwise a coordinate that happens to BE the last label
+      // reads as an ordinary one and the terminal is silently not offered.
+      // The slice below keeps it, which is what the origin needs.
+      if (/^(?:host|agent)-[a-f0-9]+$/i.test(labels[index].split(":")[0])) {
+        return window.location.protocol + "//" + label + "." +
+               labels.slice(index).join(".") + "/";
+      }
+    }
+    return null;
+  }
+
+  // The command is long enough to be worth not retyping, and the reader may be
+  // copying it into a terminal on the far side of a share. Shown only when the
+  // clipboard is actually reachable: it needs a secure context, which every
+  // workspace origin is (``*.localhost`` locally, https on a share) but which a
+  // direct hit on the loopback port is not.
+  var copyButton = document.getElementById("copy-repair");
+  if (navigator.clipboard && window.isSecureContext) {
+    copyButton.hidden = false;
+    copyButton.addEventListener("click", function () {
+      navigator.clipboard
+        .writeText(document.getElementById("repair-command").textContent)
+        .then(function () {
+          copyButton.textContent = "Copied";
+          setTimeout(function () {
+            copyButton.textContent = "Copy";
+          }, 2000);
+        })
+        // A denied permission is the realistic failure. Selecting the text puts
+        // the reader one keystroke from the same result rather than leaving a
+        // button that silently did nothing.
+        .catch(function () {
+          window.getSelection().selectAllChildren(document.getElementById("repair-command"));
+          copyButton.textContent = "Press to copy";
+        });
+    });
+  }
+
+  var origin = terminalLabel ? serviceOrigin(terminalLabel) : null;
+  if (origin) {
+    document.getElementById("terminal").src = origin;
+    document.getElementById("terminal-slot").hidden = false;
+    document.getElementById("terminal-intro").hidden = false;
+  }
+
+  // Ask whether the bundle is back rather than reloading blind. The reply
+  // carries the same header the reveal flow's own health check reads, so a
+  // rebuild by ANY route -- a rollback, a build run in the terminal above --
+  // brings the interface back with no further action. Asking (rather than
+  // refreshing) is what lets the terminal stay alive between checks.
+  setInterval(function () {
+    fetch(window.location.pathname, { method: "HEAD", cache: "no-store" })
+      .then(function (response) {
+        if (response.headers.get("__BUILT_HEADER__") === "true") {
+          window.location.reload();
+        }
+      })
+      // The backend restarting is the expected way for this to fail, and it is
+      // also a moment when the bundle may be arriving. Say nothing and ask again.
+      .catch(function () {});
+  }, __POLL_SECONDS__ * 1000);
+})();
+</script>
+</body>
+</html>
+"""
 
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
@@ -122,13 +375,14 @@ _BROWSER_SERVICE_NAME = "browser"
 # its own row would leave the workspace with no origin to serve the UI from.
 _SHELL_SERVICE_NAME = "system_interface"
 
-# The two member-ref forms whose objects this workspace can stop when a project
-# is deleted: a named tmux session and one browser out of the fleet. Every other
-# ref kind (a supervised app, a chat agent, an ad-hoc URL) has no stop control
-# here and is reported back untouched instead.
-_TERMINAL_REF_PREFIX = "terminal:"
+# The services the stop/start endpoints refuse outright: the shell that serves
+# the UI, and the terminal service whose ttyd carries every terminal tab.
+# Neither registers a ``program`` (see system/supervisord.conf), so this is
+# defense in depth for hand-edited registries. Everything else with a
+# ``program`` -- the browser fleet daemon included -- is stoppable.
+_ESSENTIAL_SERVICE_NAMES = frozenset({_SHELL_SERVICE_NAME, "terminal"})
+
 _SERVICE_REF_PREFIX = "service:"
-_BROWSER_SESSION_REF_PREFIX = f"{_SERVICE_REF_PREFIX}{_BROWSER_SERVICE_NAME}?session="
 
 # ``system/scripts/forward_port.py`` owns the app registry at
 # ``data/.state/apps.toml`` -- its lock file and its atomic replace -- so
@@ -219,6 +473,19 @@ def _html_response(html_content: str, status_code: int = 200) -> Response:
     return response
 
 
+def _shell_response(html_content: str, *, is_frontend_built: bool) -> Response:
+    """Return an app-shell response, stamped with whether it is the real app.
+
+    Both the app and the not-built placeholder are HTTP 200 HTML, so nothing
+    downstream can tell them apart from the status line alone. The header says
+    which one this is, so a health check does not have to pattern-match markup
+    that is free to change.
+    """
+    response = _html_response(html_content)
+    response.headers[FRONTEND_BUILT_HEADER] = "true" if is_frontend_built else "false"
+    return response
+
+
 def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
     meta_tag = f'<meta name="system-interface-base-path" content="{root_path}">'
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
@@ -273,7 +540,7 @@ def _is_feature_flag_enabled(env_var: str) -> bool:
 # for what they create is never gated, so an agent made while a flag was on keeps
 # working with it off.
 _FEATURE_FLAG_META_TAGS: Final[dict[str, str]] = {
-    # The "New Codex agent" / "New Pi agent" launchers. Claude is the workspace default
+    # The "Codex chat" / "Pi chat" launchers. Claude is the workspace default
     # and is never gated.
     "FEATURE_FLAG_ENABLE_OTHER_HARNESSES": "system-interface-enable-other-harnesses",
     # The "New introductory <harness> chat" launchers, which stack the `first` create
@@ -305,8 +572,58 @@ def _index() -> Response:
         html_content = _inject_feature_flag_meta_tags(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
-        return _html_response(html_content)
-    return _html_response(_FRONTEND_NOT_BUILT_HTML)
+        return _shell_response(html_content, is_frontend_built=True)
+    return _frontend_not_built_response()
+
+
+def render_frontend_not_built_page(terminal_label: str | None) -> str:
+    """Fill the not-built placeholder in, given the terminal's origin label.
+
+    Takes the label rather than reading the registry itself so the page can be
+    rendered for a workspace with no terminal (pass ``None``) without touching
+    the filesystem, which is the case worth testing and the one hardest to
+    arrange for real.
+
+    The label is substituted as a JSON literal, so the script receives a string
+    however it is spelled, and ``""`` -- which the script treats as "no
+    terminal" -- when there is none. ``layout_ops.terminal_origin_label``
+    has already rejected anything that is not a single DNS label, so no value
+    that reaches here can close the script element.
+
+    The repair command goes in as HTML text rather than markup. It is a shell
+    line written for a reader, so ``&`` and ``<`` are ordinary characters in it
+    that the browser would otherwise take as an entity reference or a tag --
+    which would show something other than the command, and hand the copy button
+    (which reads ``textContent``) something other than what the tests validated.
+    Quotes are left alone: this is text content, and the line is full of them.
+    """
+    return (
+        _FRONTEND_NOT_BUILT_TEMPLATE.replace("__TERMINAL_LABEL__", json.dumps(terminal_label or ""))
+        .replace("__REPAIR_COMMAND__", html.escape(_NOT_BUILT_REPAIR_COMMAND, quote=False))
+        .replace("__BUILT_HEADER__", FRONTEND_BUILT_HEADER)
+        .replace("__POLL_SECONDS__", str(_NOT_BUILT_POLL_SECONDS))
+    )
+
+
+def _frontend_not_built_response() -> Response:
+    """Render the placeholder shown when there is no compiled bundle to serve.
+
+    A ``HEAD`` gets the header and nothing else. That is the placeholder's own
+    poll asking whether the bundle is back yet -- every ten seconds, for every
+    open tab, for as long as the outage lasts -- and answering it in full would
+    re-read the app registry and re-render the page each time, and bury the one
+    diagnostic below in six repetitions a minute of itself. Werkzeug drops the
+    body of a HEAD response anyway, so the caller sees no difference.
+    """
+    if request.method == "HEAD":
+        return _shell_response("", is_frontend_built=False)
+    # Logged with the resolved directory because the usual cause is that the
+    # served tree was replaced under a running service, which is otherwise
+    # invisible from the supervisor logs.
+    _loguru_logger.warning(
+        "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
+    )
+    return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
 
 def _index_catch_all(path: str) -> Response:
@@ -329,7 +646,18 @@ def _favicon() -> Response:
 
 def _serve_asset(filename: str) -> Response:
     assets_directory = STATIC_DIRECTORY / "assets"
-    return send_from_directory(assets_directory, filename)
+    # A missing asset is a plain 404, as for the favicon above, rather than the
+    # HTML error page ``send_from_directory`` would raise. Existence and safety
+    # are both left to ``send_from_directory``: ``filename`` arrives with any
+    # ``..`` segments intact, so joining it onto the directory ourselves would
+    # stat paths outside it -- an existence oracle for the whole filesystem.
+    # What keeps an asset request off the SPA catch-all is the route itself,
+    # registered unconditionally in ``create_application``; nothing here
+    # decides that.
+    try:
+        return send_from_directory(assets_directory, filename)
+    except NotFound:
+        return Response(status=404)
 
 
 def _discover_with_filters() -> list[AgentInfo]:
@@ -488,15 +816,31 @@ def _send_message_endpoint(agent_id: str) -> Response:
         return _agent_not_found_response(agent_id)
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
-    agent_manager: AgentManager = get_state().agent_manager
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     message_id = send_message_request.message_id or uuid4().hex
+
+    # Ensure the watcher exists BEFORE the send, as the tap and stop endpoints already do. For
+    # a harness that holds its own queue (antigravity), the watcher owns the only thread that
+    # can ever deliver it -- so a send arriving here first (a headless client, or the first
+    # request after a restart) would otherwise enqueue a message with nothing running to drain
+    # it, and decide "is a turn open?" from an unpublished reading.
+    state.get_or_create_watcher(agent_info)
 
     # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
     # records the message as *Sending* around mngr's blocking delivery (greying the tap button
     # for the duration); the codex session hands it to its live ledger, passing ``message_id``
     # only as the correlation token the committed item echoes back (Fix 2).
     session = agent_manager.get_or_create_session(agent_info)
-    outcome = session.send(send_message_request.message, message_id)
+    try:
+        outcome = session.send(send_message_request.message, message_id)
+    except SendFailedError as send_failure:
+        # The harness said why it refused, in words written for the person who has to fix it
+        # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
+        # than the generic failure below -- it is the only thing here the user can act on.
+        # The kind travels beside the detail so the chat can decide what to offer: trying again
+        # can clear a blocked input and cannot help when there is nothing left to talk to.
+        return _json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
     if outcome is SendOutcome.NOT_READY:
         failure = ErrorResponse(
             detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
@@ -616,7 +960,9 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
 
     identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
     result = resolver.switch(
-        identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
+        identity,
+        frozenset(req.axes),
+        lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line) is None,
     )
     if not result.ok:
         detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
@@ -904,10 +1250,11 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
 
     if block:
         agent_manager: AgentManager = get_state().agent_manager
-        is_sent = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
-        if not is_sent:
-            error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
-            return _json_response(error.model_dump(), status_code=500)
+        resend_failure = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        if resend_failure is not None:
+            # The harness said why; passing that on rather than a generic sentence is the whole
+            # point of carrying it this far.
+            return _json_response({"detail": resend_failure.reason, "kind": resend_failure.kind}, status_code=500)
 
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
@@ -952,8 +1299,10 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     outcome = agent_manager.get_or_create_session(agent_info).shoulder_tap(
         agent_info,
         watcher,
-        press_chord=lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
-        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
+        press_chord=lambda: agent_manager.press_key_chord_on_agent(
+            AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
+        ),
+        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
     )
     if outcome.error_detail is not None:
         error = ErrorResponse(detail=outcome.error_detail)
@@ -990,7 +1339,9 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
             watcher,
             restart_process,
             settle_activity,
-            lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+            lambda: agent_manager.press_key_chord_on_agent(
+                AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
+            ),
         )
     except AgentRestartError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
@@ -1280,17 +1631,73 @@ def _broadcast_members_changed(project_ids: list[str]) -> None:
     get_state().broadcaster.broadcast({"type": "project_members_changed", "project_ids": project_ids})
 
 
+def _set_project_shortcut_endpoint(project_id: str) -> Response:
+    """Record one shortcut's pin or mode override on this project.
+
+    Which starting points a project keeps to hand -- and what clicking each
+    does (focus the most recent member of its kind, or always create) -- are
+    properties of that project, so both are stored per project rather than per
+    user. The body is ``{shortcut, is_pinned?, mode?}`` with at least one of
+    the optional fields present; ``shortcut`` accepts the built-in names and
+    ``app:<service-name>`` (whose pinning stays membership, so only ``mode``
+    applies there). The response carries the project's full effective override
+    map, so clients settle on one authoritative answer.
+
+    Not a member call: none of the built-ins is an object with a ref. "chat"
+    is a create, and the terminal and browser services are fleets reached by
+    making a session rather than by opening the service, so there is no
+    membership here to add or drop and this rides its own field instead.
+
+    No primary agent configured (dev/test) means nothing persists, so after
+    validating the body this answers the same soft no-op the add-member
+    endpoint does, rather than 500ing on every pin click.
+    """
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    shortcut = body.get("shortcut")
+    is_pinned = body.get("is_pinned")
+    mode = body.get("mode")
+    if not isinstance(shortcut, str) or not shortcut.strip():
+        return _json_response(ErrorResponse(detail="'shortcut' must be a non-empty string").model_dump(), 400)
+    if is_pinned is not None and not isinstance(is_pinned, bool):
+        return _json_response(ErrorResponse(detail="'is_pinned' must be a boolean").model_dump(), 400)
+    if mode is not None and not isinstance(mode, str):
+        return _json_response(ErrorResponse(detail="'mode' must be a string").model_dump(), 400)
+    if is_pinned is None and mode is None:
+        return _json_response(
+            ErrorResponse(detail="At least one of 'is_pinned' and 'mode' must be present").model_dump(), 400
+        )
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"project_id": project_id, "shortcut_overrides": {}})
+    try:
+        overrides = projects.set_shortcut_override(layout_dir, project_id, shortcut.strip(), is_pinned, mode)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    except projects.ProjectShortcutError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    # The same broadcast a membership change rides: both move what a project's
+    # rail shows, and a client with the project unmounted still has to catch up.
+    _broadcast_members_changed([project_id])
+    return _json_response({"project_id": project_id, "shortcut_overrides": overrides})
+
+
 def _add_project_member_endpoint(project_id: str) -> Response:
     """Add one ref to this project's member list.
 
     Idempotent, and deliberately indifferent to what else shows the ref: a
     project is a view, so the same object appearing in several at once is
     ordinary rather than a conflict.
+
+    No primary agent configured (dev/test) means nothing persists, so this
+    answers like the read side of the same resource does (``GET
+    /api/projects/members``, which reports an empty map rather than raising)
+    instead of 500ing on every add.
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return _json_response({"project_id": project_id, "members": []})
     parsed = _parse_member_ref_body()
     if isinstance(parsed, Response):
         return parsed
@@ -1525,129 +1932,119 @@ def _touch_member_last_used_endpoint() -> Response:
     return _json_response({"ref": ref.strip(), "at_ms": stored_ms})
 
 
-def _stop_project_members(refs: list[str]) -> dict[str, list[str]]:
-    """Tear down the members of a deleted project that have a stop verb.
+def _broadcast_member_location_changed(ref: str, path: str | None) -> None:
+    """Tell every client where this object is looking now; None means nowhere again.
 
-    Terminals and fleet browsers are the two kinds this workspace can stop, and
-    both go through the same teardown the terminal-destroy and browser-destroy
-    endpoints use. Everything else is reported rather than acted on: a
-    supervised app has no stop control here, and a chat is an agent -- deleting
-    a project must not destroy one, it just leaves the chat project-less. The
-    three lists are what the client reports back after the confirmation it
-    already collected.
+    A location belongs to the object rather than to a panel, so a client that
+    could open it from a launcher this one never touched still has to know
+    where it would open. Hence a plain broadcast, as renames get.
     """
-    stopped: list[str] = []
-    failed: list[str] = []
-    left_running: list[str] = []
-    for ref in refs:
-        if ref.startswith(_TERMINAL_REF_PREFIX):
-            is_stopped = _stop_terminal_member(ref[len(_TERMINAL_REF_PREFIX) :])
-            outcome = stopped if is_stopped else failed
-            outcome.append(ref)
-        elif ref.startswith(_BROWSER_SESSION_REF_PREFIX):
-            is_stopped = _close_fleet_browser(ref[len(_BROWSER_SESSION_REF_PREFIX) :])
-            outcome = stopped if is_stopped else failed
-            outcome.append(ref)
-        else:
-            left_running.append(ref)
-    return {"stopped": stopped, "failed": failed, "left_running": left_running}
+    get_state().broadcaster.broadcast({"type": "member_location_changed", "ref": ref, "path": path})
 
 
-def _deterministic_panel_id_for_ref(ref: str) -> str | None:
-    """The panel id a ref's tab is always filed under, or None when there is none.
+def _list_member_locations_endpoint() -> Response:
+    """Where each beaconing object was last looking, keyed by its ref.
 
-    A named terminal's panel id is deterministic (``terminal-session-<name>``,
-    mirroring the frontend's ``TERMINAL_PANEL_ID_PREFIX``), so its saved panel
-    can be addressed without a client in the loop. Browser and app pane ids are
-    minted per open, so those sweeps rely on ref-resolution instead.
+    One flat map for the whole machine: a location belongs to the object, so
+    the same opening path is what every view uses, and a ref that is absent
+    has simply never beaconed -- the caller opens at the service origin.
     """
-    if ref.startswith(_TERMINAL_REF_PREFIX):
-        return f"terminal-session-{ref[len(_TERMINAL_REF_PREFIX) :]}"
-    return None
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"locations": {}})
+    return _json_response({"locations": member_locations.read_locations(layout_dir)})
 
 
-def _sweep_destroyed_ref(layout_dir: Path, ref: str) -> None:
-    """Drop a just-destroyed object's panel and membership from every view.
+def _set_member_location_endpoint() -> Response:
+    """Record where one object is looking, machine-wide, or clear it with a blank.
 
-    The same sweep the panel-delete endpoint runs, for destroys that happen
-    server-side (a project delete stopping its terminals and browsers): the
-    object is gone machine-wide, so its saved panels -- Everything's included
-    -- and its member entries must go too, or the next view to restore would
-    bring back a dead tab (for a terminal, one that silently respawns a fresh
-    session under the old id). Broadcasts what changed so clients still showing
-    the object drop it live instead of autosaving it back.
+    The shell is the writer: it has already validated the beacon's origin and
+    resolved the posting pane to its ref, so this end only checks shape (a
+    rooted path within the cap). The stored path comes back in the response
+    and the broadcast, ``null`` when the entry was cleared.
     """
-    swept_project_ids = projects.remove_panel_from_all_projects(layout_dir, _deterministic_panel_id_for_ref(ref), ref)
-    if not swept_project_ids:
-        return
-    get_state().broadcaster.broadcast(
-        {
-            "type": "project_panel_removed",
-            "panel_id": _deterministic_panel_id_for_ref(ref),
-            "ref": ref,
-            "project_ids": swept_project_ids,
-        }
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    ref = body.get("ref")
+    path = body.get("path")
+    if not isinstance(ref, str) or not ref.strip():
+        error = ErrorResponse(detail="'ref' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    if not isinstance(path, str):
+        error = ErrorResponse(detail="'path' must be a string (an empty one clears the location)")
+        return _json_response(error.model_dump(), status_code=400)
+    try:
+        stored_path = member_locations.set_location(layout_dir, ref, path)
+    except member_locations.MemberLocationError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    _broadcast_member_location_changed(ref.strip(), stored_path)
+    return _json_response({"ref": ref.strip(), "path": stored_path})
+
+
+def _list_app_instances_endpoint() -> Response:
+    """Every app instance the machine holds, by service name.
+
+    An instance exists while any project's member list or any view's saved
+    layout references it (see ``app_instances``), so this is the machine
+    inventory's app half: the tab lists and launchers list instances, never
+    bare services.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"instances": {}})
+    return _json_response({"instances": app_instances.list_app_instances(layout_dir)})
+
+
+def _allocate_app_instance_endpoint(name: str) -> Response:
+    """Mint the next free ``<name>-<N>`` instance of one registered app.
+
+    The instance does not exist yet when this answers -- existence is derived
+    from references, and the caller's open is what files the first one -- so
+    the allocator's in-flight reservation set is what keeps two rapid mints
+    apart. 404 for a name no registered app answers to: minting is an open
+    surface's act, and every open surface starts from a registered app.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    if get_state().agent_manager.get_app_by_name(name) is None:
+        error = ErrorResponse(detail=f"No registered app named {name!r}")
+        return _json_response(error.model_dump(), status_code=404)
+    instance_name = app_instances.allocate_app_instance(layout_dir, name)
+    return _json_response(
+        {"name": name, "instance": instance_name, "ref": app_instances.instance_ref(name, instance_name)}
     )
-    # Everything has no member list, so it never belongs in a members-changed
-    # event.
-    member_project_ids = [
-        swept_project_id for swept_project_id in swept_project_ids if swept_project_id != projects.EVERYTHING_VIEW_ID
-    ]
-    if member_project_ids:
-        _broadcast_members_changed(member_project_ids)
 
 
 def _delete_project_endpoint(project_id: str) -> Response:
-    """Delete a project, stop what it showed, and report what actually happened.
+    """Delete a project: a pure view operation, nothing more.
 
-    The confirmation is the client's, which enumerates the members first, so by
-    the time this runs the user has already agreed to the teardown. What can be
-    stopped is stopped and what cannot is listed instead, so nothing is
-    silently killed and nothing silently survives. The last remaining project
-    cannot be deleted, since the fallback clients switch to is always another
-    project. Whatever actually stopped also loses the name it was given, exactly
-    as a destroyed tab's object does.
+    Only the project's registry entry, member list and saved content go, which
+    is exactly what ``projects.delete_project`` does -- every object it showed
+    keeps running untouched, stays in Everything, and stays in any other
+    project already showing it. A machine may end up with zero projects;
+    Everything is always there to fall back to, and the frontend's confirmation
+    says as much before this is ever called.
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
         return _json_response(error.model_dump(), status_code=500)
     try:
-        members = projects.list_members(layout_dir, project_id)
         fallback_id = projects.delete_project(layout_dir, project_id)
     except projects.ProjectNotFoundError:
         return _project_not_found_response(project_id)
-    except projects.LastProjectDeletionError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    stop_report = _stop_project_members(members)
-    # A stopped object's name and recency go with it, for the same reason a
-    # destroyed one's do: refs are handed out again -- the terminal allocator
-    # reuses the lowest free ``terminal-<N>`` -- so either left behind would
-    # land on whatever answers to that ref next. Only what actually stopped is
-    # cleared; anything still running keeps the name it is known by everywhere
-    # else, and its place in the launcher.
-    for stopped_ref in stop_report["stopped"]:
-        if member_titles.clear_title(layout_dir, stopped_ref):
-            _broadcast_member_title_changed(stopped_ref, None)
-        if member_last_used.clear_last_used(layout_dir, stopped_ref):
-            _broadcast_member_last_used_changed(stopped_ref, None)
-        # A stopped object's saved panels and memberships go too, everywhere:
-        # the deleted project's own file went with the delete, but a panel left
-        # in another project's file -- or in Everything's -- would restore as a
-        # dead tab, and for a terminal silently respawn a session under the
-        # reused ref.
-        _sweep_destroyed_ref(layout_dir, stopped_ref)
-    logger.info(
-        "Deleted project {} (stopped {}, failed {}, left running {})",
-        project_id,
-        len(stop_report["stopped"]),
-        len(stop_report["failed"]),
-        len(stop_report["left_running"]),
-    )
+    logger.info("Deleted project {} (fallback {})", project_id, fallback_id)
     get_state().broadcaster.broadcast(
-        {"type": "project_deleted", "project_id": project_id, "fallback_id": fallback_id, **stop_report}
+        {"type": "project_deleted", "project_id": project_id, "fallback_id": fallback_id}
     )
-    return _json_response({"fallback_id": fallback_id, **stop_report})
+    return _json_response({"fallback_id": fallback_id})
 
 
 def _delete_project_panel_endpoint(panel_id: str) -> Response:
@@ -1701,6 +2098,17 @@ def _delete_project_panel_endpoint(panel_id: str) -> Response:
     # surface at the top of the launcher on the strength of a dead object.
     if ref is not None and member_last_used.clear_last_used(layout_dir, ref):
         _broadcast_member_last_used_changed(ref, None)
+    # And the stored location: instance names are reused too, and a location
+    # left behind would aim the next holder of this ref at a folder it never
+    # visited.
+    if ref is not None and member_locations.clear_location(layout_dir, ref):
+        _broadcast_member_location_changed(ref, None)
+    # A deleted app instance's allocator reservation goes with it, so its
+    # number frees up immediately (mirroring the terminal allocator's discard
+    # on destroy).
+    parsed_instance = app_instances.parse_instance_ref(ref) if ref is not None else None
+    if parsed_instance is not None:
+        app_instances.release_app_instance(layout_dir, parsed_instance[1])
     return _json_response({"project_ids": changed_project_ids})
 
 
@@ -1783,19 +2191,6 @@ def _kill_terminal_session(session_name: str) -> str | None:
     with _terminal_allocate_lock:
         _recently_allocated_terminal_names.discard(session_name)
     return None
-
-
-def _stop_terminal_member(session_name: str) -> bool:
-    """Kill the tmux session behind one ``terminal:<name>`` member, reporting success.
-
-    Same refusal as the destroy endpoint: a ref naming an mngr agent session is
-    left alone (and reported as not stopped) rather than taking an agent down
-    with a project.
-    """
-    if not is_destroyable_terminal_session(session_name, _tmux_prefix()):
-        _loguru_logger.warning("Refusing to stop non-terminal session {} for a deleted project", session_name)
-        return False
-    return _kill_terminal_session(session_name) is None
 
 
 def _destroy_terminal(session_name: str) -> Response:
@@ -1924,42 +2319,13 @@ def _terminal_notify_endpoint() -> Response:
 def _browser_backend_url(path: str) -> str | None:
     """The registered browser daemon's URL for ``path``, or None when unregistered.
 
-    One resolver for every caller that talks to the daemon -- the fleet
-    passthroughs and the project-delete teardown -- so they agree on which
-    service entry the browser fleet lives behind.
+    One resolver for every fleet passthrough, so they agree on which service
+    entry the browser fleet lives behind.
     """
     base_url = get_state().agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
     if base_url is None:
         return None
     return f"{base_url.rstrip('/')}/{path}"
-
-
-def _close_fleet_browser(session_name: str) -> bool:
-    """Retire one fleet browser through the daemon, reporting whether it closed.
-
-    Companion to the destroy passthrough for the project-delete teardown, which
-    has no client response to relay: an unregistered or unreachable daemon, and
-    a daemon that refused, all come back as "not stopped" so the caller reports
-    the browser as still running instead of claiming it is gone.
-    """
-    backend_url = _browser_backend_url(f"browsers/{session_name}")
-    if backend_url is None:
-        _loguru_logger.warning("Cannot stop browser {}: the browser service is not registered", session_name)
-        return False
-    try:
-        backend_response = get_state().http_client.delete(backend_url)
-    except httpx.HTTPError as e:
-        _loguru_logger.warning("Browser service DELETE to {} failed: {}", backend_url, e)
-        return False
-    if backend_response.is_success:
-        return True
-    _loguru_logger.warning(
-        "Browser service refused to close {} ({}): {}",
-        session_name,
-        backend_response.status_code,
-        backend_response.text,
-    )
-    return False
 
 
 def _browsers_passthrough() -> Response:
@@ -2083,6 +2449,78 @@ def _deregister_app_endpoint(name: str) -> Response:
         _broadcast_members_changed(project_ids)
     logger.info("Deregistered app {} (left {} project(s); its process was not stopped)", name, len(project_ids))
     return _json_response({"name": name, "project_ids": project_ids, "is_process_stopped": False})
+
+
+def _resolve_stoppable_app(name: str) -> "AppEntry | Response":
+    """The registered app behind a stop/start request, or the refusal response.
+
+    Shared by the two endpoints so what may be stopped and what may be started
+    stay the same set: 404 for an unknown name, 400 for the essential services
+    (defense in depth against a hand-edited registry granting them a
+    ``program``), 400 for a row without a ``program`` (nothing here supervises
+    the process behind it).
+    """
+    if name in _ESSENTIAL_SERVICE_NAMES:
+        error = ErrorResponse(detail=f"{name!r} is an essential service and cannot be stopped or started here")
+        return _json_response(error.model_dump(), status_code=400)
+    app_entry = get_state().agent_manager.get_app_by_name(name)
+    if app_entry is None:
+        error = ErrorResponse(detail=f"No registered app named {name!r}")
+        return _json_response(error.model_dump(), status_code=404)
+    if not app_entry.program:
+        error = ErrorResponse(
+            detail=(
+                f"App {name!r} has no supervised program registered, so it cannot be "
+                "stopped or started from the workspace (it is managed outside it)"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+    return app_entry
+
+
+def _finish_app_lifecycle_action(name: str) -> Response:
+    """Land a stop/start's outcome: re-probe liveness now and answer the new state.
+
+    The refresh broadcasts ``apps_updated`` itself when anything changed, so
+    every client's dimming and placeholders flip in the same beat as the
+    response.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    agent_manager.refresh_app_liveness()
+    refreshed = agent_manager.get_app_by_name(name)
+    return _json_response({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
+
+
+def _stop_app_endpoint(name: str) -> Response:
+    """Stop one app's supervisord program. Idempotent; the registry row stays.
+
+    The service level of the two-level lifecycle: the app stays listed, stays
+    filed in its projects, and keeps its origin -- only the program behind it
+    stops. Reversible in one click, so no confirmation gate anywhere on the
+    callers.
+    """
+    resolved = _resolve_stoppable_app(name)
+    if isinstance(resolved, Response):
+        return resolved
+    try:
+        stop_supervisor_program(resolved.program, supervisor_socket_path())
+    except SupervisorProgramActionError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=502)
+    logger.info("Stopped app {} (program {})", name, resolved.program)
+    return _finish_app_lifecycle_action(name)
+
+
+def _start_app_endpoint(name: str) -> Response:
+    """Start one app's supervisord program. Idempotent."""
+    resolved = _resolve_stoppable_app(name)
+    if isinstance(resolved, Response):
+        return resolved
+    try:
+        start_supervisor_program(resolved.program, supervisor_socket_path())
+    except SupervisorProgramActionError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=502)
+    logger.info("Started app {} (program {})", name, resolved.program)
+    return _finish_app_lifecycle_action(name)
 
 
 def _get_screen_capture(agent_id: str) -> Response:
@@ -2451,6 +2889,57 @@ def _destroy_agent(agent_id: str) -> Response:
     return _json_response(DestroyAgentResponse(status="ok").model_dump())
 
 
+def _build_stop_command(agent_name: str) -> list[str]:
+    """Build the ``mngr stop`` argv for one agent.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``server_test.py``).
+    """
+    return ["mngr", "stop", agent_name]
+
+
+def _stop_agent(agent_id: str) -> Response:
+    """Stop an agent's process by running ``mngr stop`` -- the reversible
+    counterpart to ``_destroy_agent``.
+
+    The agent keeps its transcript, name, and project memberships; messaging
+    it (or the start endpoint) brings it back. Refuses the ``is_primary=true``
+    services agent for the same reason destroy does: stopping it would take
+    down every supervised service in the workspace. The agent stays in the
+    manager's tracked state -- the observe stream reports the STOPPED state on
+    its own.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    agent_state = agent_manager.get_agent_by_id(agent_id)
+    if agent_state is None:
+        error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
+        return _json_response(error.model_dump(), status_code=404)
+
+    if agent_state.labels.get("is_primary") == "true":
+        error = ErrorResponse(
+            detail=(
+                f"Refusing to stop agent '{agent_state.name}': it carries "
+                "the is_primary=true label (services agent for this workspace)"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+
+    # Stopping is lighter work than a destroy (no resource teardown), but it
+    # rides the same mngr CLI startup and host-lock path, so it shares the
+    # destroy's generous bound.
+    result = run_local_command_modern_version(
+        command=_build_stop_command(agent_state.name),
+        cwd=None,
+        is_checked=False,
+        timeout=_DESTROY_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        error = ErrorResponse(detail=f"Failed to stop agent '{agent_state.name}': {result.stderr.strip()}")
+        return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(StopAgentResponse(status="ok").model_dump())
+
+
 def _start_agent(agent_id: str) -> Response:
     """Ensure an agent is running so its terminal session is attachable.
 
@@ -2559,9 +3048,7 @@ def _default_view_id(layout_dir: Path | None) -> str | None:
     the best single answer there is. None only without a registry to fall back
     on (dev/test with no layout dir and no agreeing client).
     """
-    distinct_views = {
-        info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()
-    }
+    distinct_views = {info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()}
     if len(distinct_views) == 1:
         return next(iter(distinct_views))
     if layout_dir is None:
@@ -2964,6 +3451,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(
         "/api/projects/<project_id>/members/remove", view_func=_remove_project_member_endpoint, methods=["POST"]
     )
+    application.add_url_rule(
+        "/api/projects/<project_id>/shortcuts", view_func=_set_project_shortcut_endpoint, methods=["POST"]
+    )
     application.add_url_rule("/api/projects/<project_id>/delete", view_func=_delete_project_endpoint, methods=["POST"])
     application.add_url_rule(
         "/api/projects/panels/<panel_id>/delete", view_func=_delete_project_panel_endpoint, methods=["POST"]
@@ -2985,6 +3475,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/<agent_id>/stop", view_func=_stop_agent, methods=["POST"])
     application.add_url_rule("/api/terminals", view_func=_list_terminals, methods=["GET"])
     application.add_url_rule("/api/terminals/allocate", view_func=_allocate_terminal, methods=["POST"])
     application.add_url_rule(
@@ -3009,6 +3500,21 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(
         "/api/apps/<string:name>/deregister", view_func=_deregister_app_endpoint, methods=["POST"]
     )
+    application.add_url_rule("/api/apps/<string:name>/stop", view_func=_stop_app_endpoint, methods=["POST"])
+    application.add_url_rule("/api/apps/<string:name>/start", view_func=_start_app_endpoint, methods=["POST"])
+    application.add_url_rule("/api/apps/instances", view_func=_list_app_instances_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/apps/<string:name>/instances/allocate",
+        view_func=_allocate_app_instance_endpoint,
+        methods=["POST"],
+    )
+    application.add_url_rule("/api/member-locations", view_func=_list_member_locations_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/member-locations",
+        view_func=_set_member_location_endpoint,
+        methods=["POST"],
+        endpoint="_set_member_location_endpoint",
+    )
     auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
@@ -3026,9 +3532,14 @@ def create_application(state: SystemInterfaceState) -> Flask:
     sock.route("/api/proto-agents/<agent_id>/logs")(_proto_agent_logs_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
 
-    assets_directory = STATIC_DIRECTORY / "assets"
-    if assets_directory.is_dir():
-        application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
+    # Registered unconditionally, even when the bundle is absent at startup: the
+    # directory can appear later (a rebuild), and a route decided at construction
+    # time can never notice. Without the route, asset requests fall through to
+    # the catch-all below and come back as index.html with a text/html type,
+    # which the browser refuses as a module script -- a blank screen instead of
+    # the recoverable placeholder. A file that really is missing gets the plain
+    # 404 ``_serve_asset`` answers with itself.
+    application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
 
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
 

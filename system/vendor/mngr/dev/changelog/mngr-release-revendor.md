@@ -1,0 +1,7 @@
+The `sync_vendor` job in `.github/workflows/minds-launch-to-msg.yml` now regenerates default-workspace-template's root `uv.lock` as part of each vendor refresh, and commits it alongside `system/vendor/mngr`.
+
+The template's root `uv.lock` pins the vendored mngr libraries as editable path dependencies, so a refresh that moves any of their dependencies strands it. Nothing regenerated it, and every template build path installs with `uv sync --frozen`, which takes the lock as the source of truth without checking it against the manifests -- so the workspace venv silently gets the previous dependency set. The template's own `uv lock --check` gate catches the mismatch, but only after the job has already pushed, which turns its `main` red for everyone.
+
+The job's skip-if-unchanged behavior is preserved under a fixed uv: `uv lock` is a fixpoint on its own output, so a run whose mngr SHA has not moved produces no commit, no push, and an unchanged pair key. The job installs `latest`, matching the uv default-workspace-template's own CI runs, so a uv release that changes lock formatting rewrites unrelated marker lines once and lands as a cosmetic refresh commit. An unresolvable lock now fails the job rather than pushing a refresh that cannot build.
+
+`just sync-vendor-mngr` (`private.just`), the local release path, gets the same relock: it runs `uv lock` in the template root and stages `uv.lock` with the snapshot. Its skip-if-unchanged check widened to cover the lock, so a run where only the lock has drifted commits rather than reporting nothing to do.

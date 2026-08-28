@@ -2,12 +2,13 @@
 
 Derives the per-env relay coordinates (region label = env name as a DNS
 label, content domain from the tier's deploy.toml, plugin-auth URL from the
-activated env's client.toml + the tier's frps auth secret) and pulls the
-relay SSH keypair plus the OVH / Cloudflare credentials from Vault. Writes
+activated env's client.toml) and pulls the relay SSH keypair plus the
+OVH / Cloudflare credentials and the frps plugin secret from Vault. Writes
 into the given work dir:
 
 - ``relay_key`` / ``relay_key.pub`` -- the tier's relay SSH keypair (0600).
-- ``relay.env`` -- shell-sourceable exports (OVH_*, CLOUDFLARE_*, MINDS_ADMIN_KEY).
+- ``relay.env`` -- shell-sourceable exports (OVH_*, CLOUDFLARE_*,
+  MINDS_ADMIN_KEY, FRPS_AUTH_SECRET).
 - ``params.json`` -- ``{region, content_domain, plugin_auth_url, connector_url}``.
 
 Run from the repo root via ``uv run python scripts/provision_dev_relay_config.py``
@@ -19,11 +20,11 @@ import sys
 import tomllib
 from pathlib import Path
 
-from imbue.minds.cli.paid import admin_key_from_supertokens_secret
 from imbue.minds.envs.primitives import DevEnvName
-from imbue.minds.envs.provisioning import relay_region_for_env
 from imbue.minds.envs.vault_reader import VaultPath
+from imbue.minds.envs.vault_reader import admin_key_from_supertokens_secret
 from imbue.minds.envs.vault_reader import read_vault_kv
+from imbue.minds_admin.envs.provisioning import relay_region_for_env
 
 
 def _shell_quoted(value: str) -> str:
@@ -63,9 +64,13 @@ def main() -> None:
     # and errors clearly (naming the Vault path) when the key is absent.
     admin_key = admin_key_from_supertokens_secret(supertokens, vault_prefix)
     export_lines.append(f"export MINDS_ADMIN_KEY={_shell_quoted(admin_key)}")
+    # The plugin secret travels via the environment (relay.env), never inside
+    # the URL: `share-relay deploy` reads FRPS_AUTH_SECRET and renders it as
+    # the plugin addr's userinfo.
+    export_lines.append(f"export FRPS_AUTH_SECRET={_shell_quoted(sharing['FRPS_AUTH_SECRET'])}")
     (work_dir / "relay.env").write_text("\n".join(export_lines) + "\n")
 
-    plugin_auth_url = f"{connector_url}/frps/auth/{sharing['FRPS_AUTH_SECRET']}"
+    plugin_auth_url = f"{connector_url}/frps/auth"
     (work_dir / "params.json").write_text(
         json.dumps(
             {

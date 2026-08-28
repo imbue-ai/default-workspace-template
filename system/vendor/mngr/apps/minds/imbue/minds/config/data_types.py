@@ -27,8 +27,8 @@ DEFAULT_DESKTOP_CLIENT_PORT: Final[int] = 8420
 MNGR_BINARY: Final[str] = "mngr"
 
 
-class WorkspacePaths(FrozenModel):
-    """Resolved filesystem paths for minds data storage."""
+class InstallationPaths(FrozenModel):
+    """Resolved filesystem paths of one minds installation (one data directory on one device)."""
 
     data_dir: Path = Field(description="Root directory for minds data (e.g. ~/.minds)")
 
@@ -63,13 +63,12 @@ class ClientEnvConfig(FrozenModel):
     The non-secret half of an env's on-disk state. Used in two places:
 
     * Staging / production: ``apps/minds/imbue/minds/config/envs/<tier>/client.toml``
-      is committed to the repo. The deploy writer is forbidden from ever
-      adding fields beyond the URLs declared here -- a separate
-      :class:`PublicClientEnvConfig` type and a runtime guard in
-      ``envs/local_store.py`` make sure no secret can sneak into a
-      committed file.
+      is committed to the repo, so it must never carry a secret. What keeps
+      it that way is ``write_client_config`` in ``envs/local_store.py``:
+      it names every key it emits, one at a time, rather than serializing
+      whatever this model happens to hold.
     * Dev envs: ``~/.minds-<env-name>/client.toml`` (chmod 0644) is
-      written by ``minds env deploy <name>``; secrets land in a separate
+      written by ``minds-admin env deploy <name>``; secrets land in a separate
       chmod-0600 ``secrets.toml`` next to it (see :class:`DevEnvSecretsModel`
       in ``envs/local_store.py``).
 
@@ -100,6 +99,16 @@ class ClientEnvConfig(FrozenModel):
             "is verified against. Required alongside `lima_image_base_url`."
         ),
     )
+    update_feed_base_url: AnyUrl | None = Field(
+        default=None,
+        description=(
+            "Root URL serving the release-channel manifests for this env, every channel "
+            "including stable. A build carrying no value here falls back to ToDesktop's own "
+            "feed and offers stable only; production always sets one, so that fallback is a "
+            "guard rather than a path anything takes. Set together with the promotion job "
+            "that writes those manifests; see specs/minds-release-channels/spec.md."
+        ),
+    )
     accounts_base_url: AnyUrl | None = Field(
         default=None,
         description=(
@@ -109,6 +118,17 @@ class ClientEnvConfig(FrozenModel):
             "wherever no dedicated accounts domain exists yet, e.g. dev envs)."
         ),
     )
+
+    def accounts_origin_url(self) -> str:
+        """The tier's browser accounts origin, without a trailing slash.
+
+        Prefers ``accounts_base_url`` (production: https://accounts.imbue.com)
+        and falls back to ``connector_url``, which serves the same pages on
+        tiers without a dedicated accounts domain.
+        """
+        if self.accounts_base_url is not None:
+            return str(self.accounts_base_url).rstrip("/")
+        return str(self.connector_url).rstrip("/")
 
 
 class DeploySecretsConfig(FrozenModel):
@@ -229,7 +249,7 @@ class DeployLifecycleConfig(FrozenModel):
 class MinContainersConfig(FrozenModel):
     """Warm-pool sizes for each Modal app the tier deploy ships.
 
-    Read by ``minds env deploy`` and threaded into each ``modal deploy``
+    Read by ``minds-admin env deploy`` and threaded into each ``modal deploy``
     invocation as the matching ``MINDS_<APP>_MIN_CONTAINERS`` env var.
     The Modal app reads its value at module load (which is the moment
     ``modal deploy`` serializes the function spec) so the deployed
@@ -252,10 +272,26 @@ class MinContainersConfig(FrozenModel):
     )
 
 
+class AnalyticsDeployConfig(FrozenModel):
+    """Whether the tier deploys the analytics app (``analytics-<tier>``).
+
+    The tier default: off everywhere until the once-per-tier bringup runbook
+    (apps/analytics/docs/bringup.md) has provisioned the Neon project, R2
+    buckets, and Vault entry the app needs. Dynamic dev envs override the
+    tier default with the sticky ``minds env deploy --with-analytics`` /
+    ``--without-analytics`` flag (persisted in the env's local state).
+    """
+
+    is_deployed: bool = Field(
+        default=False,
+        description="Deploy the analytics app (push its Modal Secret, run its ops migrations, `modal deploy`).",
+    )
+
+
 class ScaledownWindowConfig(FrozenModel):
     """Idle-before-scaledown windows (seconds) for each Modal app the tier ships.
 
-    Read by ``minds env deploy`` and threaded into each ``modal deploy``
+    Read by ``minds-admin env deploy`` and threaded into each ``modal deploy``
     invocation as the matching ``MINDS_<APP>_SCALEDOWN_WINDOW`` env var,
     which the Modal app reads at module load and passes to its function's
     ``scaledown_window``. This keeps a container alive for the configured
@@ -280,10 +316,31 @@ class ScaledownWindowConfig(FrozenModel):
     )
 
 
+class StorageDeployConfig(FrozenModel):
+    """The ``[storage]`` block of a ``deploy.toml`` -- git-owned workspace-storage knobs.
+
+    The tier's storage *credentials* stay in Vault (the ``storage`` service
+    entry); this block carries only the deploy-time-owned settings stamped
+    over them into the pushed Modal Secret.
+    """
+
+    stop_retention_seconds: NonNegativeInt | None = Field(
+        default=None,
+        description=(
+            "Seconds a stopped workspace's halted VM lingers on its box for instant "
+            "restart-in-place before the retention finalize frees the slot. Stamped as "
+            "``WORKSPACE_STOP_RETENTION_SECONDS`` over the Vault entry at deploy time; "
+            "unset defers to the Vault value (or the connector's 3600s default). ci/dev "
+            "set this low so stop/start tests finish in minutes rather than waiting out "
+            "an hour-long window."
+        ),
+    )
+
+
 class PaidDefaultsConfig(FrozenModel):
     """Default paid-access entries seeded into the connector's paid tables on deploy.
 
-    After the pool-hosts schema migrations run, ``minds env deploy`` seeds
+    After the pool-hosts schema migrations run, ``minds-admin env deploy`` seeds
     these into ``paid_domains`` / ``paid_emails`` (as ``is_paid = true``)
     using ``INSERT ... ON CONFLICT DO NOTHING`` -- i.e. **seed-if-absent**:
     it sets the tier's initial default but never re-activates an entry an
@@ -336,7 +393,7 @@ class PlanQuotasConfig(FrozenModel):
 class WebWorkspacesConfig(FrozenModel):
     """The ``[web_workspaces]`` block of a ``deploy.toml`` -- the tier's pinned web-create template.
 
-    Read by ``minds env deploy`` and pushed into the connector's per-deploy
+    Read by ``minds-admin env deploy`` and pushed into the connector's per-deploy
     Modal Secret as ``MINDS_WEB_TEMPLATE_*`` / ``MINDS_WEB_SHAPE_*`` env vars.
     The connector's ``POST /hosts/claim`` (browser-driven workspace creation)
     leases only pool hosts whose baked attributes match this pin exactly.
@@ -429,7 +486,7 @@ class OriginsConfig(FrozenModel):
 
 
 class DeployEnvConfig(FrozenModel):
-    """Per-tier deploy-time config read by deploy scripts and `minds env create`.
+    """Per-tier deploy-time config read by deploy scripts and `minds-admin env create`.
 
     Names the Modal workspace + tier-specific Vault path prefix and the
     list of services whose ``.minds/template/<service>.sh`` schemas must
@@ -480,6 +537,14 @@ class DeployEnvConfig(FrozenModel):
             "0 means use Modal's own default."
         ),
     )
+    analytics: AnalyticsDeployConfig = Field(
+        default_factory=AnalyticsDeployConfig,
+        description=(
+            "Whether this tier deploys the analytics app. Off by default (and in every "
+            "committed deploy.toml) until the tier's analytics bringup has run; dynamic dev "
+            "envs override via the sticky --with-analytics deploy flag."
+        ),
+    )
     paid: PaidDefaultsConfig = Field(
         default_factory=PaidDefaultsConfig,
         description=(
@@ -500,6 +565,13 @@ class DeployEnvConfig(FrozenModel):
         description=(
             "Pinned template + blessed compute shape for browser-driven workspace creation "
             "(the connector's POST /hosts/claim). None (the default) disables web creates on the tier."
+        ),
+    )
+    storage: StorageDeployConfig | None = Field(
+        default=None,
+        description=(
+            "Git-owned workspace-storage knobs stamped over the Vault ``storage`` entry at "
+            "deploy time. None (the default) leaves the Vault values untouched."
         ),
     )
     origins: OriginsConfig | None = Field(

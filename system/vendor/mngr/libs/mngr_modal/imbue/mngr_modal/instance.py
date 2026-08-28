@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import tempfile
 import threading
@@ -26,6 +27,10 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
 from pyinfra.api import Host as PyinfraHost
+from tenacity import retry
+from tenacity import retry_if_exception_type
+from tenacity import stop_after_attempt
+from tenacity import wait_exponential
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
@@ -98,6 +103,7 @@ from imbue.mngr.providers.host_key_store import remove_host_key_record
 from imbue.mngr.providers.listing_utils import build_listing_collection_script
 from imbue.mngr.providers.listing_utils import parse_listing_collection_output
 from imbue.mngr.providers.ssh_host_setup import REQUIRED_HOST_PACKAGES
+from imbue.mngr.providers.ssh_host_setup import SSHD_START_OPTIONS
 from imbue.mngr.providers.ssh_host_setup import build_add_authorized_keys_command
 from imbue.mngr.providers.ssh_host_setup import build_add_known_hosts_command
 from imbue.mngr.providers.ssh_host_setup import build_check_and_install_packages_command
@@ -119,7 +125,7 @@ from imbue.mngr_modal.ssh_utils import load_or_create_per_host_host_keypair
 from imbue.mngr_modal.ssh_utils import per_host_key_dir
 from imbue.mngr_modal.ssh_utils import resolve_per_host_client_keypair
 from imbue.mngr_modal.ssh_utils import resolve_per_host_host_keypair
-from imbue.mngr_modal.ssh_utils import wait_for_sshd
+from imbue.mngr_modal.ssh_utils import wait_for_sshd_with_retry
 from imbue.mngr_modal.volume import ModalVolume
 from imbue.modal_proxy.data_types import StreamType
 from imbue.modal_proxy.errors import ModalProxyAuthError
@@ -160,6 +166,11 @@ DEFAULT_BASE_IMAGE: Final[str] = "python:3.12-slim-trixie"
 DEFAULT_SANDBOX_TIMEOUT: Final[int] = 2 * 60
 # Seconds to wait for sshd to be ready
 SSH_CONNECT_TIMEOUT: Final[int] = 60
+
+# SSH user mngr connects as inside sandboxes. The client key is authorized for
+# exactly this user by _start_sshd_in_sandbox, so every SSH connection
+# (readiness probes included) must authenticate as this user.
+DEFAULT_SSH_USER: Final[str] = "root"
 
 # Tag key constants for sandbox metadata stored in Modal tags.
 # Only host_id and host_name are stored as tags (for discovery). All other
@@ -990,7 +1001,7 @@ class ModalProviderInstance(BaseProviderInstance):
         client_public_key: str,
         host_private_key: str,
         host_public_key: str,
-        ssh_user: str = "root",
+        ssh_user: str = DEFAULT_SSH_USER,
         known_hosts: Sequence[str] | None = None,
         authorized_keys: Sequence[str] | None = None,
     ) -> None:
@@ -1040,23 +1051,32 @@ class ModalProviderInstance(BaseProviderInstance):
         with log_span("Starting sshd in sandbox"):
             # Start sshd (-D: don't detach, -E: log to file instead of syslog)
             # stdout/stderr are suppressed so Modal doesn't track them for performance/stability reasons.
+            # The rest of the options come from the shared constant, so a sandbox's
+            # sshd is configured identically to every other container sshd mngr starts.
             self._ssh_process = sandbox.exec(
                 "/usr/sbin/sshd",
                 "-D",
-                "-o",
-                "MaxSessions=100",
+                *shlex.split(SSHD_START_OPTIONS),
                 "-E",
                 sshd_log_path,
                 stdout=StreamType.DEVNULL,
                 stderr=StreamType.DEVNULL,
             )
 
+    @retry(
+        wait=wait_exponential(min=1, max=5),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(ModalProxyError),
+        reraise=True,
+    )
     def _get_ssh_info_from_sandbox(self, sandbox: SandboxInterface, *, tunnel_timeout: int = 50) -> tuple[str, int]:
         """Extract SSH connection info from a running sandbox.
 
         ``tunnel_timeout`` is forwarded to the Modal SDK's ``tunnels()`` call
         and controls how many seconds the backend will wait for the sandbox to
         be ready before raising ``SandboxTimeoutError``.
+
+        Retries on ModalProxyError to absorb cold-start latency.
         """
         try:
             tunnels = sandbox.tunnels(timeout=tunnel_timeout)
@@ -1067,9 +1087,12 @@ class ModalProviderInstance(BaseProviderInstance):
         ssh_tunnel = tunnels[CONTAINER_SSH_PORT]
         return ssh_tunnel.tcp_socket
 
-    def _wait_for_sshd(self, hostname: str, port: int, timeout_seconds: float = SSH_CONNECT_TIMEOUT) -> None:
+    def _wait_for_sshd(
+        self, hostname: str, port: int, host_id: HostId, timeout_seconds: float = SSH_CONNECT_TIMEOUT
+    ) -> None:
         """Wait for sshd to be ready to accept connections."""
-        wait_for_sshd(hostname, port, timeout_seconds)
+        private_key_path, _ = self._get_ssh_keypair(host_id)
+        wait_for_sshd_with_retry(hostname, port, timeout_seconds, private_key_path, username=DEFAULT_SSH_USER)
 
     def _create_pyinfra_host(self, hostname: str, port: int, private_key_path: Path) -> PyinfraHost:
         """Create a pyinfra host with SSH connector."""
@@ -1189,7 +1212,7 @@ class ModalProviderInstance(BaseProviderInstance):
 
             # Wait for sshd to be ready
             with info_span("Waiting for sshd to be ready..."):
-                self._wait_for_sshd(ssh_host, ssh_port, self.config.ssh_connect_timeout)
+                self._wait_for_sshd(ssh_host, ssh_port, host_id, self.config.ssh_connect_timeout)
 
             with log_span("Executing post-ssh operations"):
                 # Create pyinfra host and connector
@@ -3136,7 +3159,7 @@ log "=== Shutdown script completed ==="
             # same window.
             ssh_host, ssh_port = self._get_ssh_info_from_sandbox(sandbox)
             with log_span("Waiting for the SSH tunnel to recover after the snapshot"):
-                self._wait_for_sshd(ssh_host, ssh_port, self.config.ssh_connect_timeout)
+                self._wait_for_sshd(ssh_host, ssh_port, host_id, self.config.ssh_connect_timeout)
         host.set_certified_data(updated_certified_data)
         logger.debug(
             "Created snapshot: id={}, name={}",

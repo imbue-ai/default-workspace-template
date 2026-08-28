@@ -49,9 +49,9 @@ These four forks were decided with the user before writing this spec.
 
 ## Task generation
 
-* The generator resolves `mngr_branch` to an exact SHA at generation time (port of `box.remote_tip`) and records it in each task's `[metadata]`.
+* The generator resolves `mngr_branch` to an exact SHA at generation time (port of `box.remote_tip`) and records it in each task's `[metadata]`. `dwt_branch` is pinned the same way (`dwt_sha`), and the box clones that SHA, so a dataset's workspace template is fixed at generation time rather than at trial time.
 * Each task directory is named after the case id; `[task].name = "minds-evals/<case-id>"`.
-* `instruction.md` carries the persona and prompt list in prose plus a fenced JSON block with the full case config (persona, prompts, `timeout_seconds`, `mngr_sha`, `dwt_repo`, `dwt_branch`). The driver parses that block out of the `instruction` argument to `run()`, which is necessary because custom harbor agents do not receive the task directory.
+* `instruction.md` carries the persona and prompt list in prose plus a fenced JSON block with the full case config (persona, prompts, `timeout_seconds`, `mngr_sha`, `dwt_repo`, `dwt_branch`, `dwt_sha`). The driver parses that block out of the `instruction` argument to `run()`, which is necessary because custom harbor agents do not receive the task directory.
 * The same case data is also written to `tests/case.json` for the verifier's programmatic checks (expected turn counts).
 * `environment/` is identical across all tasks in a dataset: an adapted copy of the box `Dockerfile` and `entrypoint.sh` (owned by the new app) plus a staged shallow clone of mngr-internal at the resolved SHA (port of `box._fetch_mngr_source`).
 * The old harness's in-box app overlay (`box._stage_app_overlay`, and the Dockerfile's `rm -rf`/`COPY` of `apps/mngr_minds_eval`) is dropped from the adapted Dockerfile: the driver is host-side, so no harness code runs inside the box.
@@ -62,7 +62,7 @@ These four forks were decided with the user before writing this spec.
   * `[environment]`: `cpus = 6`, `memory_mb = 16384`, `workdir = "/work/mngr"`.
   * `[agent]`: `timeout_sec = <timeout_seconds from config>`.
   * `[verifier]`: `timeout_sec = 600`, `environment_mode = "separate"`, `env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }` (host-templated; `harbor run` needs `-y` or interactive approval for it).
-  * `[metadata]`: `mngr_branch`, `mngr_sha`, `dwt_repo`, `dwt_branch`, case id.
+  * `[metadata]`: `mngr_branch`, `mngr_sha`, `dwt_repo`, `dwt_branch`, `dwt_sha`, case id.
 * There is no `[environment.env]` section: the driver starts the backend itself (see below) and supplies all secrets and per-trial env at that exec, which exec'd processes inherit.
 * The driver parses the Modal token pair out of `~/.modal.toml` on the host (direct port of `box._modal_token_env`), so nothing secret is required in the shell environment or in task files.
 
@@ -80,8 +80,9 @@ These four forks were decided with the user before writing this spec.
 
 ## The driver agent
 
-* Invocation: `uv run harbor run -p <dataset> -a imbue.minds_evals.driver:MindsPersonaDriver -e modal -n 4 -y ...` from the monorepo root.
-* `harbor[modal]==0.21.0` is a pinned dependency of `apps/minds_evals`, so `uv run harbor` gets the right harbor version AND makes the driver import path resolvable; a bare `uvx harbor` would run in an isolated env that cannot import the monorepo packages.
+* Invocation: `uv run --project apps/minds_evals harbor run -p <dataset> -a imbue.minds_evals.driver:MindsPersonaDriver -e modal -n 4 -y ...` from the monorepo root.
+* `harbor[modal]==0.21.0` is a pinned dependency of `apps/minds_evals`, so `uv run --project apps/minds_evals harbor` gets the right harbor version AND makes the driver import path resolvable; a bare `uvx harbor` would run in an isolated env that cannot import the app.
+* `apps/minds_evals` is a standalone uv project rather than a member of the monorepo's uv workspace: harbor's `rich>=14.1.0` and `modal>=1.5.1` floors cannot co-resolve with the workspace's `litellm[proxy]` (`rich<14`) and `modal==1.4.3` pins, and uv allows one version per package per workspace. It therefore carries its own `uv.lock`, and its tests and type check run under `just test-minds-evals` via a dedicated path-gated CI job instead of the root offload run.
 * `run()` implements the existing turn semantics exactly:
   1. Create the per-case dwt clone inside the box (port of `launch._ensure_base`/`_prepare_clone`, minus writing `test_case_metadata.json`, which only the retired in-workspace eval worker consumed) and create the workspace through the Minds API (`workspace.build_payload` semantics unchanged: `launch_mode=MODAL`, `backup_provider=CONFIGURE_LATER`), polling the create operation to `agent_id`.
   2. For each prompt: wait until the workspace agent reaches `WAITING`, send the turn (literal, or `decider.py` for `DECIDE_FROM_PERSONA`), and wait for the reply. That wait is a bridged poll: `environment.exec` into the box, then mngr's remote-exec path into the workspace, then curl against the workspace-local system_interface -- the same API the old worker polled (the exact mngr CLI invocation is a PR1 verification item).
@@ -208,7 +209,7 @@ points = 10
 * **Per-trial backend boot**: every trial boots its own box (Electron + backend), adding a few minutes per trial that the shared-box design amortized across a batch. Image-build cost is amortized by the Modal layer cache; boot cost is accepted for isolation.
 * **Workspace sandbox leaks**: if the harbor runner is killed hard (no `finally`), nested sandboxes survive until their 3h timeout; the driver's cleanup plus the timeout backstop bound the cost.
 * **Judge nondeterminism**: rewardkit likert judges make oracle assertions and cross-run comparisons statistical, not exact; PR2 must report means over multiple trials (`-k/--n-attempts`) rather than single runs.
-* **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run harbor`), and the only remaining uvx call -- rewardkit inside `tests/test.sh` -- pins its version explicitly.
+* **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run --project apps/minds_evals harbor`), and the only remaining uvx call -- rewardkit inside `tests/test.sh` -- pins its version explicitly.
 
 ## Resolved questions
 
@@ -221,7 +222,7 @@ points = 10
 Where the built harness (PR #344) diverged from the design above. These correct the record; the design's decisions all held (no fork was reevaluated).
 
 * **Workspace agent auth (the load-bearing one).** The design assumed `ANTHROPIC_API_KEY` reaches the workspace via the dwt `modal` template's `pass_host_env`. It does not -- that template has none. The key is instead named in the box-level `MINDS_EXTRA_PASS_HOST_ENV` manifest, which the in-box minds backend turns into `--pass-host-env`. But dwt pins claude agents to shared config-dir mode (`agent_types.claude.isolate_local_config_dir = false`), and in shared mode mngr_claude skips the create-time path that pre-approves the key in `.claude.json` -- so the workspace's claude chat agent deadlocked on Claude Code's "use this custom API key?" TUI dialog and produced empty transcripts. Fixed by also forwarding `MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR=true` (an `MNGR__*` config-override that outranks the dwt settings file), which flips the chat agent to isolated mode and restores the approval. No dwt or product code change.
-* **Dependencies.** PyPI `harbor 0.21.0` postdates the workspace supply-chain cooldown cutoff, so harbor is pinned via its upstream **git tag v0.21.0**. The `[modal]` extra's `modal>=1.5.1` floor conflicts with the workspace-wide `modal==1.4.3` pin, so the app depends on bare harbor plus `dockerfile-parse` and the workspace's modal. harbor's `rich>=14.1` floor can never co-resolve with `litellm[proxy]` (`rich<14`), so the root gains `override-dependencies = ["rich>=13.9.4,<14.0"]`. The filelock/platformdirs bumps this pulls forward refresh the root and public-mirror-overlay `uv.lock` files and two `image_requirements.txt` exports.
+* **Dependencies.** harbor is pinned to its upstream **git tag v0.21.0** -- the same release the PyPI wheel carries, pinned exactly and independently of the supply-chain cooldown window that the PyPI upload was inside of when this was written. Its declared floors cannot be met inside the monorepo's uv workspace: the `[modal]` extra wants `modal>=1.5.1` against the workspace's `modal==1.4.3` pin, and harbor wants `rich>=14.1` against `litellm[proxy]`'s `rich<14` cap, and uv permits one version of a package per workspace. The app is therefore a standalone uv project with its own lock (see the driver-agent section above), which lets it take the genuine `harbor[modal]==0.21.0`.
 * **Reward gating.** rewardkit's `required_pass`/`all_pass` aggregations binarize a score (`> 0`), and programmatic `.py` criteria cannot use `[scoring]` at all, so they cannot express "a failed gate zeroes an otherwise weighted-mean reward". The verifier's `test.sh` runs rewardkit and then a `finalize.py` step that composes `reward = gates_all_passed ? quality : 0`, stamps the `timed_out` marker, and -- on a judge/grading-infrastructure failure (a judge API error) -- leaves no reward file so harbor **errors** the trial rather than recording a fake 0.0.
 * **Judged artifact.** The judge grades a clean per-turn `conversation.jsonl` (the eval's own turns plus the agent's replies, filtered free of tool output and framework `/welcome`/injected messages), not the raw event stream. The driver writes it alongside the raw `full_transcript.jsonl`; both, plus `state.json`, are declared artifacts.
 * **Exact-SHA reproducibility.** Modal's build-context upload drops `.git`, so the staged clone ships without it and the exact mngr SHA travels as a generated `/work/mngr_sha` file (read by the driver at setup).

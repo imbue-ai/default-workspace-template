@@ -3,7 +3,7 @@
 Exercises the connector's entitlements paths against the real Neon DB (lazy
 row creation, plan resolution, the quota rejections) using a fresh verified
 user, who -- being created after the feature-ship cutoff with a non-paid-listed
-email -- must land on the explorer plan.
+email and no explicit signup plan choice -- must land on the free plan.
 
 The lease *cap* itself (403 at max_remote_workspaces) is unit-tested only: the
 ci env's pool has no baked hosts and the test fixtures have no admin key
@@ -71,11 +71,11 @@ def _delete_cleanup_grants(env: SharedEnvHandle, user_id: str) -> None:
 
 
 @pytest.mark.timeout(180)
-def test_fresh_account_lands_on_explorer_and_cannot_mint_llm_keys(
+def test_fresh_account_lands_on_free_and_cannot_mint_llm_keys(
     shared_env: Callable[[str], SharedEnvHandle],
     verified_user: VerifiedUserHandle,
 ) -> None:
-    """A new non-paid account gets the explorer plan; its $0 LLM budget refuses key minting."""
+    """A new account with no signup plan choice gets the free plan; its $0 LLM budget refuses key minting."""
     env = shared_env("default")
     wait_for_env_ready(env)
     connector_url = _connector_url(env)
@@ -84,9 +84,10 @@ def test_fresh_account_lands_on_explorer_and_cannot_mint_llm_keys(
         account = client.get(f"{connector_url}/account", headers=_auth_header(verified_user))
         assert account.status_code == 200, f"GET /account failed: {account.text[:400]!r}"
         body = account.json()
-        assert body["plan_name"] == "explorer", f"fresh account landed on {body['plan_name']!r}, not explorer"
+        assert body["plan_name"] == "free", f"fresh account landed on {body['plan_name']!r}, not free"
         assert body["entitlements"]["monthly_llm_spend_usd"] == 0
         assert "ally" in body["available_plans"], "plans table is not seeded with the launch plans"
+        assert "explorer" in body["available_plans"], "plans table is not seeded with the launch plans"
 
         key_response = client.post(
             f"{connector_url}/keys/create",
@@ -94,7 +95,7 @@ def test_fresh_account_lands_on_explorer_and_cannot_mint_llm_keys(
             json={},
         )
         assert key_response.status_code == 403, (
-            f"explorer key minting should be refused, got {key_response.status_code}: {key_response.text[:400]!r}"
+            f"free-plan key minting should be refused, got {key_response.status_code}: {key_response.text[:400]!r}"
         )
         detail = key_response.json()["detail"]
         assert detail["code"] == "quota_exceeded"

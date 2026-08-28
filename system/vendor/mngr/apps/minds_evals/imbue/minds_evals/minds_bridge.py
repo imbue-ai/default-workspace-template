@@ -11,6 +11,7 @@ import json
 import shlex
 import time
 import tomllib
+from importlib import resources
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -25,9 +26,41 @@ from imbue.minds_evals.errors import WorkspaceCreateError
 
 BOX_MNGR_DIR: Final[str] = "/work/mngr"
 BOX_LOGS_DIR: Final[str] = "/logs/agent"
+# Scripts this app runs inside the box, shipped in the package and uploaded per trial. They are not
+# baked into the box image because it is layer-cached per mngr SHA and has to stay byte-identical
+# across a dataset, so changing them would cost a rebuild -- and because the image is built from the
+# pinned mngr SHA, which predates them.
+_RESOURCES = resources.files("imbue.minds_evals") / "resources"
+BOX_REVERSE_TUNNEL_FILENAME: Final[str] = "box_reverse_tunnel.py"
+BOX_REVERSE_TUNNEL_PATH: Final[str] = "/tmp/box_reverse_tunnel.py"
+BOX_PROXY_HOOKS_FILENAME: Final[str] = "box_proxy_hooks.py"
+BOX_FLOW_STEP_FILENAME: Final[str] = "box_flow_step.py"
+# The request and result models both sides share. It rides into the box beside the step script
+# and is imported by it as a plain module, so the two files must land in the same directory.
+BOX_FLOW_PROTOCOL_FILENAME: Final[str] = "flow_step_protocol.py"
+BOX_PROXY_DIR: Final[str] = "/tmp/eval_proxy"
+PROXY_CONFIG_FILENAME: Final[str] = "proxy_config.yaml"
+BOX_PROXY_USAGE_LOG_PATH: Final[str] = "/tmp/eval_proxy/usage_proxy.jsonl"
+TUNNEL_LOG_FILENAME: Final[str] = "reverse_tunnel.log"
+PROXY_LOG_FILENAME: Final[str] = "proxy.log"
+# Read by the uploaded hooks; named here so the two sides cannot drift apart.
+PROXY_KEY_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_KEY"
+PROXY_USAGE_LOG_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_USAGE_LOG"
 # The workspace-local system_interface the old in-workspace eval worker polled
 # (unauthenticated loopback inside the workspace sandbox).
 WORKSPACE_SYSTEM_INTERFACE: Final[str] = "http://127.0.0.1:8000"
+
+# The workspace's own claude sign-in API -- the endpoints the product's in-UI login modal posts to.
+# Authenticating through these rather than through the create-time host env keeps the workspace in
+# the same shared-config regime real workspaces run in.
+CLAUDE_AUTH_STATUS_PATH: Final[str] = "/api/claude-auth/status"
+CLAUDE_AUTH_SUBMIT_PATH: Final[str] = "/api/claude-auth/submit-credentials"
+ANTHROPIC_API_KEY_ENV_VAR: Final[str] = "ANTHROPIC_API_KEY"
+ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
+# The auth mode the workspace derives from which credential keys it was given: a key on its own is
+# "api_key", a key plus a base URL (the proxy form) is "imbue".
+AUTH_MODE_API_KEY: Final[str] = "api_key"
+AUTH_MODE_IMBUE: Final[str] = "imbue"
 
 _QUICK_EXEC_TIMEOUT_SECONDS: Final[int] = 180
 _SLOW_EXEC_TIMEOUT_SECONDS: Final[int] = 900
@@ -72,7 +105,7 @@ def load_modal_token_env(config_path: Path) -> dict[str, str]:
 
 @pure
 def parse_activation_exports(activation_script: str) -> dict[str, str]:
-    """Parse the `export KEY=VALUE` lines out of `minds env activate` output (a shell snippet meant
+    """Parse the `export KEY=VALUE` lines out of `minds-admin env activate` output (a shell snippet meant
     for `eval`); `unset` lines and comments are ignored -- we build the exec env from scratch, so
     an unset variable is simply never set."""
     exports: dict[str, str] = {}
@@ -90,12 +123,12 @@ def parse_activation_exports(activation_script: str) -> dict[str, str]:
 
 
 async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: str) -> dict[str, str]:
-    """The env vars `minds env activate` exports (MNGR_PREFIX, MNGR_HOST_DIR, ...). Bridge execs do
+    """The env vars `minds-admin env activate` exports (MNGR_PREFIX, MNGR_HOST_DIR, ...). Bridge execs do
     not go through the entrypoint, so without these mngr's modal provider computes the wrong
     environment name and silently sees no workspaces -- fail fast if the critical vars are absent."""
     result = await check_run_in_box(
         environment,
-        "cd {} && uv run minds env activate {}".format(BOX_MNGR_DIR, shlex.quote(minds_env)),
+        "cd {} && uv run minds-admin env activate {}".format(BOX_MNGR_DIR, shlex.quote(minds_env)),
         {"MINDS_ENV": minds_env},
         _QUICK_EXEC_TIMEOUT_SECONDS,
     )
@@ -103,7 +136,7 @@ async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: st
     for required_key in ("MNGR_HOST_DIR", "MNGR_PREFIX"):
         if not activation_env.get(required_key):
             raise BoxCommandError(
-                "minds env activate did not export {} (got: {}) -- bridge mngr commands would "
+                "minds-admin env activate did not export {} (got: {}) -- bridge mngr commands would "
                 "silently see no workspaces".format(required_key, sorted(activation_env))
             )
     return activation_env
@@ -114,7 +147,6 @@ def build_box_env(
     *,
     activation_env: dict[str, str],
     modal_token_env: dict[str, str],
-    anthropic_api_key: str,
     user_id: str,
     mngr_sha: str,
     minds_env: str,
@@ -137,25 +169,12 @@ def build_box_env(
     for provider in _DISABLED_PROVIDERS:
         env["MNGR__PROVIDERS__{}__IS_ENABLED".format(provider)] = "false"
     env.update(modal_token_env)
-    if anthropic_api_key:
-        env["ANTHROPIC_API_KEY"] = anthropic_api_key
-        # dwt pins claude agents to shared config-dir mode
-        # (agent_types.claude.isolate_local_config_dir = false), and in shared
-        # mode mngr_claude skips the create-time path that records the key's
-        # approval in .claude.json -- so the workspace's claude chat agent would
-        # otherwise deadlock on the interactive "use this API key?" TUI dialog.
-        # Flipping it to isolated mode via the MNGR__* config-override layer
-        # (which outranks the dwt settings file) restores the approval; the chat
-        # agent type inherits it through parent_type = "claude".
-        env["MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR"] = "true"
-        # The dwt modal template carries no pass_host_env of its own (verified
-        # against current dwt main), so name what the workspace needs in the
-        # box-level manifest: the in-box minds backend turns each name into
-        # `--pass-host-env` on every create, forwarding the value from its own
-        # env into the workspace host env, which the in-workspace chat-agent
-        # create then inherits (the key to approve, and the override that makes
-        # the approval happen).
-        env["MINDS_EXTRA_PASS_HOST_ENV"] = "ANTHROPIC_API_KEY MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR"
+    # No AI credentials here on purpose. The workspace is authenticated after create, through the
+    # same /api/claude-auth/submit-credentials endpoint the product's own sign-in modal posts to --
+    # see authenticate_workspace. Injecting a key into the host env at create time instead would put
+    # the workspace in a regime production never enters: dwt's auth module states credentials must
+    # never go in the mngr host env file, because that file is frozen into supervisord and its
+    # services at boot, and the host-env route was deliberately removed from the product.
     return env
 
 
@@ -419,6 +438,253 @@ async def fetch_chat_agent_id(
                 return chat_agent_id
         await asyncio.sleep(poll_seconds)
     return None
+
+
+@pure
+def build_credential_lines(anthropic_api_key: str, anthropic_base_url: str) -> str:
+    """The credential paste body the workspace's sign-in endpoint accepts: newline-separated
+    ``NAME=value`` lines. A base URL routes the workspace through a proxy and requires an
+    accompanying key, which is the shape the product's own Imbue-credential blob uses."""
+    lines = ["{}={}".format(ANTHROPIC_API_KEY_ENV_VAR, anthropic_api_key)]
+    if anthropic_base_url:
+        lines.append("{}={}".format(ANTHROPIC_BASE_URL_ENV_VAR, anthropic_base_url))
+    return "\n".join(lines) + "\n"
+
+
+async def wait_for_auth_endpoint(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    deadline: float,
+    poll_seconds: float,
+) -> bool:
+    """Block until the workspace's claude-auth endpoint answers, so credentials are not posted at a
+    system_interface that is still coming up. This is a real readiness gate for auth, which the
+    turn loop otherwise lacks -- without it a failure surfaces only as an agent that replies with
+    'not logged in' text."""
+    while time.time() < deadline:
+        body = await workspace_curl_json(environment, env, workspace_agent_id, CLAUDE_AUTH_STATUS_PATH, None)
+        if isinstance(body, dict):
+            return True
+        await asyncio.sleep(poll_seconds)
+    return False
+
+
+async def authenticate_workspace(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    anthropic_api_key: str,
+    anthropic_base_url: str,
+) -> bool:
+    """Sign the workspace in the way a user does, via the product's own credential endpoint.
+
+    The endpoint writes the credentials into the shared claude settings env block, records the key's
+    approval so claude never challenges it, and restarts the claude agents -- so callers must wait
+    for the chat agent to reach WAITING again afterwards.
+    """
+    payload = json.dumps({"credentials": build_credential_lines(anthropic_api_key, anthropic_base_url)})
+    body = await workspace_curl_json(environment, env, workspace_agent_id, CLAUDE_AUTH_SUBMIT_PATH, body_json=payload)
+    if not isinstance(body, dict):
+        return False
+    # A rejected paste answers with an error detail rather than an auth status.
+    if body.get("detail"):
+        logger.warning("The workspace rejected the submitted credentials: {}", body["detail"])
+        return False
+    # The endpoint deliberately runs no credential probe, so a wrong key or base URL is accepted
+    # here and surfaces only later, as the agent replying that it is not logged in -- which the
+    # judge would then grade as if it were the agent's own behaviour. Check what the workspace
+    # reports rather than treating a non-error response as success.
+    expected_mode = AUTH_MODE_IMBUE if anthropic_base_url else AUTH_MODE_API_KEY
+    actual_mode = str(body.get("auth_mode") or "none")
+    if not body.get("logged_in") or actual_mode != expected_mode:
+        logger.error(
+            "The workspace did not come back signed in (logged_in={}, auth_mode={}, expected {})",
+            body.get("logged_in"),
+            actual_mode,
+            expected_mode,
+        )
+        return False
+    return True
+
+
+@pure
+def parse_agent_ssh_info(listed_json: str, agent_id: str) -> dict[str, str] | None:
+    """The workspace's SSH endpoint out of `mngr list --format json`, the same payload mngr's own
+    forwarding parses. None when the agent is absent or carries no SSH block."""
+    try:
+        payload = json.loads(listed_json)
+    except ValueError:
+        return None
+    agents = payload.get("agents") if isinstance(payload, dict) else payload
+    for entry in agents or []:
+        if not isinstance(entry, dict) or str(entry.get("id")) != agent_id:
+            continue
+        ssh = (entry.get("host") or {}).get("ssh")
+        if not isinstance(ssh, dict) or not ssh.get("host"):
+            return None
+        return {
+            "user": str(ssh.get("user") or "root"),
+            "host": str(ssh["host"]),
+            "port": str(ssh.get("port") or 22),
+            "key_path": str(ssh.get("key_path") or ""),
+        }
+    return None
+
+
+async def fetch_agent_ssh_info(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+) -> dict[str, str] | None:
+    result = await run_in_box(
+        environment, "cd {} && uv run mngr list --format json".format(BOX_MNGR_DIR), env, _QUICK_EXEC_TIMEOUT_SECONDS
+    )
+    return parse_agent_ssh_info(result.stdout or "", workspace_agent_id)
+
+
+async def start_reverse_tunnel(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    ssh_info: dict[str, str],
+    port: int,
+    hold_seconds: float,
+    is_probe_token_served: bool,
+) -> None:
+    """Upload the tunnel holder and start it in the background in the box.
+
+    Uploaded at run time rather than baked into the box image: the image is layer-cached per mngr SHA
+    and has to stay byte-identical across a dataset, so shipping this in it would cost a rebuild.
+    """
+    with resources.as_file(_RESOURCES / BOX_REVERSE_TUNNEL_FILENAME) as script_path:
+        await environment.upload_file(script_path, BOX_REVERSE_TUNNEL_PATH)
+    command = (
+        "cd {mngr} && setsid nohup uv run python {script} --agent-id {agent} --ssh-user {user} "
+        "--ssh-host {host} --ssh-port {ssh_port} --ssh-key {key} --port {port} "
+        "--hold-seconds {hold}{probe} > {logs}/{log} 2>&1 < /dev/null &"
+    ).format(
+        mngr=BOX_MNGR_DIR,
+        script=BOX_REVERSE_TUNNEL_PATH,
+        agent=shlex.quote(workspace_agent_id),
+        user=shlex.quote(ssh_info["user"]),
+        host=shlex.quote(ssh_info["host"]),
+        ssh_port=shlex.quote(ssh_info["port"]),
+        key=shlex.quote(ssh_info["key_path"]),
+        port=port,
+        hold=hold_seconds,
+        probe=" --serve-probe-token" if is_probe_token_served else "",
+        logs=BOX_LOGS_DIR,
+        log=TUNNEL_LOG_FILENAME,
+    )
+    await check_run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
+
+
+async def upload_flow_step_script(environment: BaseEnvironment, target_path: str) -> None:
+    """Put the UI-flow step script, and the protocol module it imports, in the box.
+
+    Both land in the target's directory, because the script imports the protocol as a plain module
+    beside it. Uploaded per trial rather than baked into the box image for the same reason the
+    reverse-tunnel holder is: the image is layer-cached per mngr SHA and has to stay byte-identical
+    across a dataset, so a change here would otherwise cost a full rebuild.
+    """
+    box_dir = target_path.rsplit("/", 1)[0]
+    for filename, destination in (
+        (BOX_FLOW_STEP_FILENAME, target_path),
+        (BOX_FLOW_PROTOCOL_FILENAME, "{}/{}".format(box_dir, BOX_FLOW_PROTOCOL_FILENAME)),
+    ):
+        with resources.as_file(_RESOURCES / filename) as source_path:
+            await environment.upload_file(source_path, destination)
+
+
+async def read_box_file(environment: BaseEnvironment, env: dict[str, str], path: str) -> str:
+    result = await run_in_box(
+        environment, "cat {} 2>/dev/null || true".format(shlex.quote(path)), env, _QUICK_EXEC_TIMEOUT_SECONDS
+    )
+    return (result.stdout or "").strip()
+
+
+async def start_proxy(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    config_text: str,
+    anthropic_api_key: str,
+    proxy_key: str,
+    port: int,
+) -> None:
+    """Upload the proxy's config and hooks and start it in the background in the box.
+
+    The upstream credential and the trial's key reach the proxy through its environment, never
+    through the uploaded config, so neither is written to a file the workspace could read even if it
+    could reach the box's filesystem (it cannot).
+    """
+    await check_run_in_box(environment, "mkdir -p {}".format(BOX_PROXY_DIR), env, _QUICK_EXEC_TIMEOUT_SECONDS)
+    with resources.as_file(_RESOURCES / BOX_PROXY_HOOKS_FILENAME) as hooks_path:
+        await environment.upload_file(hooks_path, "{}/{}".format(BOX_PROXY_DIR, BOX_PROXY_HOOKS_FILENAME))
+    await write_box_file(environment, env, "{}/{}".format(BOX_PROXY_DIR, PROXY_CONFIG_FILENAME), config_text)
+    proxy_env = dict(env)
+    proxy_env.update(
+        {
+            "ANTHROPIC_API_KEY": anthropic_api_key,
+            PROXY_KEY_ENV_VAR: proxy_key,
+            PROXY_USAGE_LOG_ENV_VAR: BOX_PROXY_USAGE_LOG_PATH,
+            # litellm imports the hooks by module name, so the directory holding them must be on the
+            # path; it is not the working directory, which stays the monorepo for `uv run`.
+            "PYTHONPATH": BOX_PROXY_DIR,
+        }
+    )
+    command = (
+        "cd {mngr} && setsid nohup uv run --package modal-litellm litellm --config {config} "
+        "--port {port} --host 127.0.0.1 > {logs}/{log} 2>&1 < /dev/null &"
+    ).format(
+        mngr=BOX_MNGR_DIR,
+        config="{}/{}".format(BOX_PROXY_DIR, PROXY_CONFIG_FILENAME),
+        port=port,
+        logs=BOX_LOGS_DIR,
+        log=PROXY_LOG_FILENAME,
+    )
+    await check_run_in_box(environment, command, proxy_env, _QUICK_EXEC_TIMEOUT_SECONDS)
+
+
+async def wait_for_proxy(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    port: int,
+    deadline: float,
+    poll_seconds: float,
+) -> bool:
+    """Block until the proxy answers its liveness endpoint inside the box."""
+    command = "curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 http://127.0.0.1:{}/health/liveliness".format(
+        port
+    )
+    while time.time() < deadline:
+        result = await run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
+        if (result.stdout or "").strip().endswith("200"):
+            return True
+        await asyncio.sleep(poll_seconds)
+    return False
+
+
+async def write_box_file(environment: BaseEnvironment, env: dict[str, str], path: str, content: str) -> None:
+    """Write text into the box via a heredoc, avoiding a temp file on the host for small payloads."""
+    await check_run_in_box(
+        environment,
+        "cat > {} <<'MINDS_EVALS_BOX_FILE_EOF'\n{}\nMINDS_EVALS_BOX_FILE_EOF".format(shlex.quote(path), content),
+        env,
+        _QUICK_EXEC_TIMEOUT_SECONDS,
+    )
+
+
+async def fetch_from_workspace(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    url: str,
+) -> str:
+    """Fetch a URL from inside the workspace, over the bridge the driver already uses."""
+    inner_command = " ".join(shlex.quote(part) for part in ["curl", "-s", "--max-time", "20", url])
+    _is_success, stdout = await run_in_workspace(environment, env, workspace_agent_id, inner_command, 60)
+    return stdout.strip()
 
 
 async def fetch_chat_agent_state(

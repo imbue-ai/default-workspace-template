@@ -57,6 +57,7 @@ _BUCKET_DESTROY_TIMEOUT_SECONDS = 600.0
 # kept duplicated here to avoid pulling the plugin's config module into the
 # desktop client.
 _CONNECTOR_URL_SUBPROCESS_ENV: str = "MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL"
+_ACCOUNTS_URL_SUBPROCESS_ENV: str = "MNGR__PROVIDERS__IMBUE_CLOUD__ACCOUNTS_URL"
 
 # The plugin's error_class marker for a structured quota refusal, as written
 # into its JSON stderr body by handle_imbue_cloud_errors. Substring-matched
@@ -72,6 +73,12 @@ _EMAIL_NOT_VERIFIED_ERROR_CLASS_SIGNAL = "ImbueCloudEmailNotVerifiedError"
 # "client too old" refusal, written by handle_imbue_cloud_errors. Substring-
 # matched like the quota signal.
 _CLIENT_TOO_OLD_ERROR_CLASS_SIGNAL = "ImbueCloudClientTooOldError"
+
+# The connector's structured code for refusing to hard-delete the record of a
+# workspace that still holds its pool lease (a 409 relayed by the plugin's
+# ``sync records delete``). Substring-matched like the quota signal: the code
+# rides inside the relayed connector body.
+_LEASE_ACTIVE_CODE_SIGNAL = "lease_active"
 
 # The plugin's error_class marker for a structured auth rejection, written by
 # ``_persist_auth_response`` in the plugin's auth CLI whenever the connector
@@ -144,6 +151,15 @@ class ImbueCloudAuthFailedCliError(ImbueCloudCliError):
 
     auth_status: str = "ERROR"
     auth_message: str = ""
+
+
+class ImbueCloudLeaseActiveCliError(ImbueCloudCliError):
+    """The connector refused to hard-delete a record because its workspace still holds a pool lease.
+
+    Tombstone-first: destroying the workspace is what releases the lease (and
+    retires the record), so the remedy is destroy, not remove-from-list.
+    Deterministic -- retrying cannot succeed while the lease exists.
+    """
 
 
 class ImbueCloudSyncConflictCliError(ImbueCloudCliError):
@@ -334,6 +350,17 @@ class ImbueCloudCli(MutableModel):
             "env var; the plugin has no baked-in default."
         ),
     )
+    accounts_base_url: AnyUrl | None = Field(
+        default=None,
+        frozen=True,
+        description=(
+            "Base URL of the tier's browser accounts origin (client.toml `accounts_base_url`, "
+            "e.g. https://accounts.imbue.com on production). Passed to the plugin via the "
+            "MNGR__PROVIDERS__IMBUE_CLOUD__ACCOUNTS_URL env var so `auth login` opens the hosted "
+            "login page on the origin where Google OAuth and session cookies actually work. None "
+            "on tiers without a dedicated accounts domain (the connector host serves the pages)."
+        ),
+    )
 
     def _run(
         self,
@@ -349,6 +376,8 @@ class ImbueCloudCli(MutableModel):
         # MNGR_HOST_DIR etc. from the minds backend, so only this override is
         # needed.
         env_overrides = {_CONNECTOR_URL_SUBPROCESS_ENV: str(self.connector_url).rstrip("/")}
+        if self.accounts_base_url is not None:
+            env_overrides[_ACCOUNTS_URL_SUBPROCESS_ENV] = str(self.accounts_base_url).rstrip("/")
         # Run from $HOME like every other laptop-side mngr invocation, so this
         # does not resolve project config from minds' cwd (the monorepo root in
         # a dev checkout). Otherwise `mngr imbue_cloud auth list` loads
@@ -411,6 +440,14 @@ class ImbueCloudCli(MutableModel):
             quota_exc.stdout = result.stdout
             quota_exc.stderr = result.stderr
             raise quota_exc
+        if _LEASE_ACTIVE_CODE_SIGNAL in result.stderr:
+            lease_active_exc = ImbueCloudLeaseActiveCliError(
+                f"{command_repr}: the workspace still holds its cloud lease; destroy it instead"
+            )
+            lease_active_exc.exit_code = exit_code
+            lease_active_exc.stdout = result.stdout
+            lease_active_exc.stderr = result.stderr
+            raise lease_active_exc
         if _EMAIL_NOT_VERIFIED_ERROR_CLASS_SIGNAL in result.stderr:
             verification_body = _parse_stderr_error_body(result.stderr) or {}
             verification_message = _parse_stderr_error_message(result.stderr)
@@ -670,6 +707,7 @@ class ImbueCloudCli(MutableModel):
         host_id: str,
         entry_label: str | None = None,
         preferred_region: str | None = None,
+        workspace_id: str | None = None,
     ) -> ShareCliInfo:
         """Enable sharing for a workspace host; the returned relay token is only ever returned here.
 
@@ -681,6 +719,8 @@ class ImbueCloudCli(MutableModel):
         keeps an existing share's region.
         """
         args = ["shares", "create", host_id, "--account", account]
+        if workspace_id:
+            args.extend(["--workspace-id", workspace_id])
         if entry_label:
             args.extend(["--entry-label", entry_label])
         if preferred_region:
@@ -890,9 +930,14 @@ class ImbueCloudCli(MutableModel):
         body = self._expect_success(result, "sync records push")
         return body if isinstance(body, dict) else {}
 
-    def sync_record_delete(self, account: str, host_id: str) -> None:
+    def sync_record_delete(self, account: str, record_id: str) -> None:
+        """Delete one record by workspace id (``agent-<hex>``, preferred) or host id.
+
+        Raises ``ImbueCloudLeaseActiveCliError`` when the connector refuses
+        because the workspace still holds its pool lease.
+        """
         result = self._run(
-            ["sync", "records", "delete", host_id, "--account", account],
+            ["sync", "records", "delete", record_id, "--account", account],
             cg_name="imbue-cloud-sync-record-delete",
         )
         self._expect_success(result, "sync records delete")

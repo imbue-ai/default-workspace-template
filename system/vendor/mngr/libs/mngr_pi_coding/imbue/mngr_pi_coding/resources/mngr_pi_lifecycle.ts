@@ -53,7 +53,7 @@
 //     itself is installed (npm, brew, bundled binary). Event/message shapes are
 //     declared locally as the minimal structural types we read.
 
-import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
@@ -341,20 +341,16 @@ function partsFromContent(content: ContentBlock[] | undefined): Array<Record<str
   return parts;
 }
 
-// --- Shell-command safety guards (see system/scripts/POLICY_HOOKS.md). -------
+// --- Shell-command safety guards (see system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md). -------
 //
-// The same shell-command policies claude/codex enforce via PreToolUse hooks, in
-// the form pi's extension API allows: a `tool_call` handler that returns
-// `{block, reason}` to refuse a command, or mutates `event.input.command` to
-// rewrite it. Kept in step with the claude scripts of the same purpose:
-//   claude_block_pipe_tail_head.sh, claude_prevent_commit_rewrite.sh,
-//   claude_rewrite_bash_command.py.
-// (The tk workflow-discipline guards -- require-steps, tk-standalone, carryover,
-// stop nudge -- are defined further down, just above the extension.)
+// Rules that hold for every pi agent, applied in the `tool_call` handler: return
+// `{block, reason}` to refuse a command, or mutate `event.input.command` to
+// rewrite it. A rule that belongs to the repo an agent runs in goes in that
+// repo's own `.pi/extensions/`, which pi loads alongside this one.
 
-// Block: a command that pipes into tail/head (mirrors claude_block_pipe_tail_head.sh).
+// Block: a command that pipes into tail/head.
 const PIPE_TAIL_HEAD_RE = /\|\s*(tail|head)(\s|$)/;
-// Block: git history-rewriting commands (mirrors claude_prevent_commit_rewrite.sh).
+// Block: git history-rewriting commands.
 const GIT_REBASE_RE = /^git\s+rebase/;
 const GIT_COMMIT_RE = /^git\s+commit\b/;
 const GIT_COMMIT_REWRITE_RE = /--(amend|fixup)/;
@@ -369,17 +365,28 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/** The reason to block a command, or null if it is allowed. Cannot throw. */
+/** The reason to block a command, or null if it is allowed. Cannot throw.
+ *
+ * These strings are copied VERBATIM from system/scripts/agent_block_pipe_tail_head.sh and
+ * agent_prevent_commit_rewrite.sh, which claude/codex/agy run directly. pi has no shell-hook
+ * surface, so it re-expresses the rules here -- and the tool-call policy contract requires a
+ * harness that reproduces rather than executes to copy the wording verbatim, so an agent gets
+ * an identical explanation on every harness. Change the scripts and this together.
+ */
 function commandBlockReason(command: string): string | null {
   if (PIPE_TAIL_HEAD_RE.test(command)) {
-    return "Do not pipe commands through tail or head. Redirect to a temp file (e.g. cmd > /tmp/out.txt) and read that instead.";
+    return (
+      "Do not pipe commands through tail or head. Instead, redirect output to a temp file " +
+      "(e.g. cmd > /tmp/output.txt) and then read from that file separately using the Read tool " +
+      "or a separate tail/head command on the file."
+    );
   }
-  if (GIT_REBASE_RE.test(command)) return "git rebase is not allowed.";
+  if (GIT_REBASE_RE.test(command)) return "Blocked: git rebase commands are not allowed";
   if (GIT_COMMIT_RE.test(command) && GIT_COMMIT_REWRITE_RE.test(command)) {
-    return "git commit with --amend or --fixup is not allowed.";
+    return "Blocked: git commit with --amend or --fixup is not allowed";
   }
   if (GIT_PULL_RE.test(command) && GIT_PULL_REBASE_RE.test(command)) {
-    return "git pull --rebase is not allowed (use git pull --merge instead).";
+    return "Blocked: git pull --rebase commands are not allowed (use git pull --merge instead)";
   }
   return null;
 }
@@ -395,8 +402,8 @@ function readDataField(path: string, field: string): string | null {
 }
 
 /** The `export GIT_AUTHOR_.../GIT_COMMITTER_...; ` prefix, or "" when unresolved.
- * Mirrors claude_rewrite_bash_command.py's resolve_commit_identity: name from
- * <state_dir>/data.json (fallback MNGR_AGENT_NAME), email <agent_id>@<host_id>. */
+ * Name from <state_dir>/data.json (fallback MNGR_AGENT_NAME), email
+ * <agent_id>@<host_id>. */
 function gitIdentityPrefix(): string {
   const agentId = process.env.MNGR_AGENT_ID;
   const stateDir = process.env.MNGR_AGENT_STATE_DIR;
@@ -423,127 +430,6 @@ function oomTagPrefix(): string {
 /** Prepend the git-identity (if resolvable) + oom-tag prefixes to a command. */
 function rewriteBashCommand(command: string): string {
   return gitIdentityPrefix() + oomTagPrefix() + command;
-}
-
-// --- tk workflow-discipline guards (see system/scripts/POLICY_HOOKS.md). -----
-//
-// The step/progress-view discipline claude enforces via its tk hooks, re-expressed
-// for pi. pi shells out to the vendored `ticket` binary for step state (the same
-// source the claude scripts read) and reuses the python tk-standalone checker
-// verbatim; the reminder text is copied from the scripts so all harnesses read
-// identically. Mapping to pi's SDK channels:
-//   * tk-standalone block  -> the tool_call handler ({block, reason}).
-//   * require-steps nudge  -> the tool_result handler (append to the result content;
-//     pi's tool_call result cannot inject non-blocking context, so the reminder
-//     rides the tool result -- same visible effect, one tool-round later).
-//   * open-steps carryover -> before_agent_start (append to the turn's systemPrompt).
-//   * open-steps stop nudge-> agent_settled (stderr only).
-
-const WORK_DIR = process.env.MNGR_AGENT_WORK_DIR || process.cwd();
-const TICKET_SCRIPT = join(WORK_DIR, "system", "vendor", "tk", "ticket");
-const TK_STANDALONE_CHECKER = join(WORK_DIR, "system", "scripts", "claude_tk_standalone_check.py");
-const TICKETS_DIR = process.env.TICKETS_DIR || join(WORK_DIR, ".tickets");
-
-// pi's read-only tools -- the substantive-work reminder never fires for these
-// (mirrors the skip list in claude_require_steps_pretool.sh).
-const READONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
-
-// A bash command that itself invokes tk/ticket -- the require-steps reminder skips
-// it so the agent can freely create/manage steps (mirrors the script's tk skip).
-const TK_COMMAND_RE = /(^|[|&;]\s*|\/)(tk|ticket)\s/;
-
-// Reminder text copied verbatim from claude_require_steps_pretool.sh /
-// claude_open_tickets_reminder.sh so every harness reads identically.
-const REQUIRE_STEPS_NONE =
-  "\n[Step tracking reminder]\n\n" +
-  "You are about to do work without declaring any step records. The chat progress view requires steps to render your work as a structured timeline.\n\n" +
-  'Before continuing, declare your plan as step records (each prints `Created <id>: <title>`):\n' +
-  '  tk create --step "Description of first step"\n' +
-  '  tk create --step "Description of second step"\n' +
-  "  ...\n" +
-  "Then start the first step with its literal id: tk start <id>\n\n" +
-  "See CLAUDE.md > Task management for the full protocol.\n";
-const REQUIRE_STEPS_NOT_STARTED =
-  "\n[Step tracking reminder]\n\n" +
-  "You have declared step records but none is currently in_progress. Call `tk start <id>` on your next step before doing more work. Steps must be serial -- only one in_progress at a time.\n";
-
-/** Run `ticket steps [args]` and return non-empty step lines, or null when tk
- * cannot be consulted (no tickets dir / script). "" means consulted, no steps.
- * Never throws. */
-function ticketSteps(args: string[]): string | null {
-  if (!existsSync(TICKETS_DIR) || !existsSync(TICKET_SCRIPT)) return null;
-  try {
-    // Invoke via `bash` (the ticket script is bash) rather than exec'ing it directly,
-    // so it works even when it sits on a noexec mount. TICKETS_DIR is exported explicitly:
-    // the constant may be the WORK_DIR fallback (env var unset), and the child must read
-    // the same tickets dir this guard checked -- the shell hooks these mirror export it too.
-    const res = spawnSync("bash", [TICKET_SCRIPT, "steps", ...args], {
-      encoding: "utf-8",
-      env: { ...process.env, TICKETS_DIR },
-    });
-    // tk exits non-zero when there are no steps at all; that is "" (consulted), not null.
-    const out = res.status === 0 && typeof res.stdout === "string" ? res.stdout : "";
-    return out.split("\n").filter((line) => line.trim() !== "").join("\n");
-  } catch {
-    return null;
-  }
-}
-
-/** The require-steps reminder to inject, or null to stay silent. Mirrors
- * claude_require_steps_pretool.sh: silent when a step is in_progress or tk can't be
- * consulted; "not started" when steps exist but none is in_progress; else "no steps". */
-function requireStepsReminder(): string | null {
-  const inProgress = ticketSteps(["--status=in_progress"]);
-  if (inProgress === null || inProgress !== "") return null;
-  const openAll = ticketSteps([]);
-  if (openAll === null) return null;
-  return openAll !== "" ? REQUIRE_STEPS_NOT_STARTED : REQUIRE_STEPS_NONE;
-}
-
-/** The open-steps carryover reminder to inject, or null when there are none.
- * Mirrors claude_open_tickets_reminder.sh. */
-function carryoverReminder(): string | null {
-  const openAll = ticketSteps([]);
-  if (!openAll) return null;
-  return (
-    "\n[Open task reminder from default-workspace-template]\n\n" +
-    "You have step records that are not yet closed:\n\n" +
-    openAll +
-    "\n\n" +
-    "For each one, decide before continuing: keep working on it (call `tk start <id>` if it's not already in_progress), " +
-    'replace it with a fresh step, or close it now with `tk close <id> "<summary>"` (the positional summary is required for steps). ' +
-    "The summary is a concise one-line description of the *work done* in this step (the caption a non-technical user sees), not the outcome -- " +
-    "the outcome goes in your final assistant message. Steps are sequential: do not start a new step until the previous one is closed.\n\n" +
-    "See CLAUDE.md > Task management for the full protocol.\n"
-  );
-}
-
-/** Count this agent's still-open step records (for the stop nudge). */
-function openStepCount(): number {
-  const openAll = ticketSteps([]);
-  return openAll ? openAll.split("\n").filter((line) => line.trim() !== "").length : 0;
-}
-
-/** The block reason when a bash command is a non-standalone tk start/close, else
- * null. Reuses the exact shlex tokenizing checker the claude hook runs. Never throws
- * (fails open: a checker error blocks nothing). */
-function tkStandaloneReason(command: string): string | null {
-  if (!/\b(tk|ticket)\b/.test(command) || !existsSync(TK_STANDALONE_CHECKER)) return null;
-  try {
-    // TICKETS_DIR is exported for the same reason as in ticketSteps: the checker must see
-    // the resolved dir even when only the WORK_DIR fallback names it.
-    const res = spawnSync("python3", [TK_STANDALONE_CHECKER, command], {
-      encoding: "utf-8",
-      env: { ...process.env, TICKETS_DIR },
-    });
-    if (res.status === 2) {
-      const reason = typeof res.stderr === "string" ? res.stderr.trim() : "";
-      return reason || "Run `tk start` / `tk close` as the only command in the tool call.";
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 // --- Extension. -------------------------------------------------------------
@@ -576,14 +462,19 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // USAGE_SOURCE_NAME.
   const emitUsage = existsSync(join(stateDir, "pi_emit_usage"));
   const usagePath = join(stateDir, "events", "pi-coding", "usage", "events.jsonl");
-  let usageSeq = emitUsage ? countLines(usagePath) : 0;
 
-  // event_id must be unique within commonPath so `mngr transcript`'s dedupe set
-  // never drops a real record. Seed the counter from the existing line count so
-  // ids keep climbing across stop/start (a `--continue` restart reuses the same
-  // session id but only fires message_end for *new* messages, so a per-session
-  // reset would collide with ids written before the restart).
-  let commonSeq = emitCommon ? countLines(commonPath) : 0;
+  // Event ids hash the message's own timestamp and content: unique per event
+  // globally (analytics dedupes transcripts fleet-wide by event id), and
+  // stable for the single moment each message is appended.
+  const makeEventId = (prefix: string, message: AgentMessage): string => {
+    const rawContent = (message as { content?: unknown }).content ?? "";
+    const contentText = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+    const digest = createHash("sha256")
+      .update(`${isoTimestamp(message)}:${contentText.slice(0, 1024)}`)
+      .digest("hex")
+      .slice(0, 32);
+    return `${prefix}-${digest}`;
+  };
 
   // Record this (main) agent's session file so the plugin can resume it
   // explicitly with `pi --session <file>` -- more robust than `--continue`,
@@ -906,6 +797,11 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     controlTimer.unref();
   }
 
+  // Also covers /new, /resume and fork: pi fires session_start for each with
+  // `reason: "new" | "resume" | "fork"`, so recording here is enough. A separate
+  // `session_switch` handler used to sit below this one; pi declares no such event and emits
+  // it nowhere, so it never ran -- and `pi.on()` does not validate event names, so a wrong
+  // one is a silent no-op rather than an error.
   pi.on("session_start", (_event, ctx) => {
     safe("session_start", () => {
       // Hold the ctx so the control-file drain can reach ctx.modelRegistry (see drainControl).
@@ -918,12 +814,6 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       recordModelState(ctx);
       mkdirSync(dirname(sentinelPath), { recursive: true });
       writeFileSync(sentinelPath, "1");
-    });
-  });
-
-  pi.on("session_switch", (_event, ctx) => {
-    safe("session_switch", () => {
-      recordSessionFile(ctx);
     });
   });
 
@@ -953,7 +843,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
 
   // Policy guard: block disallowed bash commands and rewrite the rest with the
   // oom self-tag + git identity (see the "Policy guards" section above and
-  // system/scripts/POLICY_HOOKS.md). NOT wrapped in safe() -- a guard that
+  // system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md). NOT wrapped in safe() -- a guard that
   // swallowed its error would fail OPEN. The block check is a pure regex over a
   // string and cannot throw; the best-effort rewrite is isolated so a failure
   // leaves the command unchanged rather than blocking a legitimate command.
@@ -967,65 +857,30 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     if (typeof command !== "string" || !command) return;
     const reason = commandBlockReason(command);
     if (reason !== null) return { block: true, reason };
-    // Hard-block a chained/redirected tk start/close (mirrors claude_tk_standalone.sh).
-    const tkReason = tkStandaloneReason(command);
-    if (tkReason !== null) return { block: true, reason: tkReason };
+    // Record the agent's own command BEFORE rewriting it, in its own try.
+    //
+    // The rewrite prepends `export ...; test -w ...; `, and pi calls every extension's
+    // tool_call handler on this same event -- and the project extensions load AFTER this one
+    // (CLI `-e` paths come first in resource-loader's mergePaths), so `.pi/extensions/`
+    // guards always read a command this handler has already rewritten. They therefore rely on
+    // `mngrOriginalCommand`; without it they see the prefix as a command chained ahead of the
+    // agent's and refuse EVERY permission request and EVERY `tk start`/`tk close`.
+    //
+    // These were one try block, recording after the rewrite so "a frozen event cannot cost the
+    // rewrite itself". That trade is the wrong way round: if the event ever became partly
+    // frozen, the rewrite would land, the recording would throw, the catch would swallow it,
+    // and the guards would then block every request -- fail-closed-wrong. Losing the rewrite
+    // only costs an OOM band; losing the recording breaks the guards.
+    try {
+      event.mngrOriginalCommand = command;
+    } catch {
+      // Nothing to do: the guards fall back to `input.command`, which is still unrewritten here.
+    }
     try {
       input.command = rewriteBashCommand(command);
     } catch {
       // Rewrite is best-effort (matches claude's pass-through-on-failure); never block on it.
     }
-  });
-
-  // Require-steps soft nudge (mirrors claude_require_steps_pretool.sh). pi's tool_call
-  // result can only block, so the non-blocking reminder rides the tool RESULT: when a
-  // substantive tool ran with no in-progress step, append the reminder to the result the
-  // model reads. Skipped for read-only tools and for bash commands that invoke tk itself.
-  // Not wrapped in safe(): it must return a value, and it already fails silent internally.
-  pi.on("tool_result", (event: any) => {
-    try {
-      const toolName = event?.toolName;
-      if (typeof toolName !== "string" || READONLY_TOOLS.has(toolName)) return undefined;
-      if (toolName === "bash") {
-        const command = event?.input?.command;
-        if (typeof command === "string" && TK_COMMAND_RE.test(command)) return undefined;
-      }
-      const reminder = requireStepsReminder();
-      if (reminder === null) return undefined;
-      const content = Array.isArray(event?.content) ? event.content : [];
-      return { content: [...content, { type: "text", text: reminder }] };
-    } catch {
-      return undefined;
-    }
-  });
-
-  // Open-steps carryover (mirrors claude_open_tickets_reminder.sh): when a new turn
-  // starts with still-open steps, append the reminder to this turn's system prompt --
-  // the guaranteed model-visible channel; pi resets the override each turn.
-  pi.on("before_agent_start", (event: any) => {
-    try {
-      const reminder = carryoverReminder();
-      if (reminder === null) return undefined;
-      const base = typeof event?.systemPrompt === "string" ? event.systemPrompt : "";
-      return { systemPrompt: `${base}\n\n${reminder}` };
-    } catch {
-      return undefined;
-    }
-  });
-
-  // Open-steps stop nudge (mirrors claude_open_tickets_stop_nudge.sh): a non-blocking,
-  // stderr-only note when the run settles with steps still open. agent_settled is pi's
-  // true "run fully settled" signal (fires after any retry/continuation drains).
-  pi.on("agent_settled", () => {
-    safe("agent_settled nudge", () => {
-      const count = openStepCount();
-      if (count > 0) {
-        process.stderr.write(
-          `[task-management] Stopping with ${count} step record(s) still open. ` +
-            "They'll appear at the top of the next turn's progress block.\n",
-        );
-      }
-    });
   });
 
   pi.on("agent_end", (_event, _ctx) => {
@@ -1063,7 +918,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
             return "";
           }
         })();
-        const usageRecord = toUsageRecord(message, sessionFile, () => `evt-pi-usage-${usageSeq++}`);
+        const usageRecord = toUsageRecord(message, sessionFile, () => makeEventId("evt-pi-usage", message));
         if (usageRecord !== null) {
           appendLine(usagePath, JSON.stringify(usageRecord));
         }
@@ -1071,7 +926,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       if (!emitCommon) {
         return;
       }
-      const record = toCommonRecord(message, commonSource, () => `pi-${commonSeq++}`);
+      const record = toCommonRecord(message, commonSource, () => makeEventId("pi", message));
       if (record !== null) {
         appendLine(commonPath, JSON.stringify(record));
       }
@@ -1133,7 +988,7 @@ export function toUsageRecord(
 // Convert a pi AgentMessage into an mngr common-transcript record, or null for
 // message roles the common schema does not represent (bashExecution, custom,
 // branchSummary, compactionSummary). `nextId` is called at most once and only
-// for emitted records, so the id counter stays dense.
+// for emitted records.
 export function toCommonRecord(
   message: AgentMessage,
   source: string,

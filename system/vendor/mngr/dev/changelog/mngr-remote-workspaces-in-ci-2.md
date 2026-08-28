@@ -1,0 +1,3 @@
+Add the advisory `warm-minds-pool-cache` job to ci.yml (phase 2 of specs/remote-workspaces-in-ci.md): on release-tier dispatches it runs in parallel with `build-minds-ci-env` and pre-seeds the CI box's content-addressed image tar via a throwaway `ci-warm` slice, so the run's one cold workspace-image build overlaps the per-run env deploy instead of following it. No job depends on it and its failure never fails the workflow (the bake stage's own seed phase is the fallback); coordination with the bake happens entirely on-box via the tar and the seed build lock.
+
+Update specs/remote-workspaces-in-ci.md with the measured phase-1 stage timings (env deploy 4.1 min, bake step 11.5 min with a ~5.4 min seed build) and the phase-2 seed-phase handoff design.

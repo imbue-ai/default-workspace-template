@@ -32,12 +32,14 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr_forward.ssh_tunnel import RemoteSSHInfo
 from imbue.mngr_forward.ssh_tunnel import SSHTunnelError
 from imbue.mngr_forward.ssh_tunnel import SSHTunnelManager
+from imbue.mngr_forward.ssh_tunnel import SSHTunnelPhase
 from imbue.mngr_latchkey.additional_services import additional_service_registration_entries
 from imbue.mngr_latchkey.cli import _run_gateway_health_check_loop
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import CredentialStatus
 from imbue.mngr_latchkey.core import HIDDEN_BUILTIN_SERVICES
+from imbue.mngr_latchkey.core import LATCHKEY_CREDENTIAL_TYPE_OAUTH
 from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION
 from imbue.mngr_latchkey.core import Latchkey
 from imbue.mngr_latchkey.core import LatchkeyBinaryNotFoundError
@@ -1119,6 +1121,7 @@ class _RecordingTunnelManager(SSHTunnelManager):
 
     _calls: list[tuple[RemoteSSHInfo, int, int, str | None]] = PrivateAttr(default_factory=list)
     _removed_agent_ids: list[str] = PrivateAttr(default_factory=list)
+    _removed_endpoints: list[tuple[RemoteSSHInfo, int]] = PrivateAttr(default_factory=list)
 
     def setup_reverse_tunnel(
         self,
@@ -1134,6 +1137,10 @@ class _RecordingTunnelManager(SSHTunnelManager):
         self._removed_agent_ids.append(agent_id)
         return 0
 
+    def remove_reverse_tunnel(self, ssh_info: RemoteSSHInfo, local_port: int) -> bool:
+        self._removed_endpoints.append((ssh_info, local_port))
+        return False
+
 
 class _RaisingTunnelManager(SSHTunnelManager):
     """SSHTunnelManager whose reverse-tunnel setup always fails (no SSH)."""
@@ -1145,7 +1152,7 @@ class _RaisingTunnelManager(SSHTunnelManager):
         remote_port: int = 0,
         agent_id: str | None = None,
     ) -> int:
-        raise SSHTunnelError("simulated reverse-tunnel failure")
+        raise SSHTunnelError("simulated reverse-tunnel failure", SSHTunnelPhase.HOST_CONNECT)
 
     def remove_reverse_tunnels_for_agent(self, agent_id: str) -> int:
         return 0
@@ -1528,7 +1535,11 @@ def test_discovery_route_resolution_failure_wires_nothing_then_retries(
             poll_event.wait(timeout=_POLL_INTERVAL_SECONDS)
 
         assert handler._resolve_calls == 2
-        assert tunnel_manager._removed_agent_ids == [_instance_tag(agent_id, host_id)]
+        # The stale-tunnel cleanup is keyed by the container endpoint, never by
+        # the agent tag: an agent-keyed removal would also drop the
+        # desktop->VPS tunnel set up on the same cycle.
+        assert tunnel_manager._removed_agent_ids == []
+        assert tunnel_manager._removed_endpoints == [(agent_ssh_info, host_side_port)]
         # The only tunnel ever opened is the desktop->VPS one, once the route resolved.
         assert tunnel_manager._calls == [
             (_VPS_OUTER_SSH_INFO, host_side_port, DESKTOP_GATEWAY_VPS_PORT, _instance_tag(agent_id, host_id))
@@ -1575,7 +1586,11 @@ def test_discovery_handler_routes_remote_workspace_only_through_vps_gateway(
                 _instance_tag(agent_id, host_id),
             )
         ]
-        assert tunnel_manager._removed_agent_ids == [_instance_tag(agent_id, host_id)]
+        # Any stale desktop->container tunnel is cleared by endpoint, not by
+        # agent tag -- the agent-keyed removal would take the desktop->VPS
+        # tunnel above down with it on every discovery cycle.
+        assert tunnel_manager._removed_agent_ids == []
+        assert tunnel_manager._removed_endpoints == [(ssh_info, host_side_port)]
         assert handler._provisioned == [(agent_id, host_id)]
         manager.stop_gateway()
 
@@ -2303,6 +2318,30 @@ def test_auth_list_parses_accounts_keyed_by_service(tmp_path: Path) -> None:
     assert [a.account for a in result["github"]] == [""]
     # ``--offline`` is forwarded (and omitted when not requested).
     assert json.loads((tmp_path / "argv_report").read_text()) == ["auth", "list", "--offline"]
+
+
+def test_auth_list_reports_the_credential_kind_so_callers_can_find_expiring_ones(tmp_path: Path) -> None:
+    """Only an OAuth credential can expire, so the kind has to survive parsing."""
+    payload = json.dumps(
+        {
+            "google-gmail": {"someone@example.com": {"credentialType": "oauth", "credentialStatus": "unknown"}},
+            "github": {"": {"credentialType": "authorizationBearer", "credentialStatus": "unknown"}},
+            # A kind this parser has never heard of, and one latchkey omitted entirely.
+            "newthing": {"": {"credentialType": "somethingNew", "credentialStatus": "unknown"}},
+            "typeless": {"": {"credentialStatus": "unknown"}},
+        }
+    )
+    binary = _make_auth_list_binary(tmp_path, payload_json=payload)
+    latchkey = Latchkey(latchkey_directory=tmp_path, latchkey_binary=str(binary))
+
+    result = latchkey.auth_list(is_offline=True)
+
+    assert result["google-gmail"][0].credential_type == LATCHKEY_CREDENTIAL_TYPE_OAUTH
+    assert result["github"][0].credential_type == "authorizationBearer"
+    # An unrecognized kind reads through unchanged rather than being flattened,
+    # so it is simply "not OAuth" instead of needing a parser update first.
+    assert result["newthing"][0].credential_type == "somethingNew"
+    assert result["typeless"][0].credential_type is None
 
 
 def test_auth_list_without_offline_omits_flag(tmp_path: Path) -> None:

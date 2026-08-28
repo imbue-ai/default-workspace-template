@@ -59,6 +59,7 @@ from playwright.sync_api import sync_playwright
 
 from imbue.imbue_common.logging import setup_logging
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealth
+from imbue.minds.desktop_client.environment_signals import EnvironmentBlock
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.ui_api import read_vite_entry_tags
 from imbue.minds.desktop_client.ui_models import ProviderPanelStatus
@@ -67,7 +68,10 @@ from imbue.minds.desktop_client.ui_models import UiAccountsMessage
 from imbue.minds.desktop_client.ui_models import UiBootstrap
 from imbue.minds.desktop_client.ui_models import UiBootstrapSeed
 from imbue.minds.desktop_client.ui_models import UiDiscoveryHealthMessage
+from imbue.minds.desktop_client.ui_models import UiEnvironmentMessage
 from imbue.minds.desktop_client.ui_models import UiHealthMessage
+from imbue.minds.desktop_client.ui_models import UiNotificationEntry
+from imbue.minds.desktop_client.ui_models import UiNotificationsMessage
 from imbue.minds.desktop_client.ui_models import UiProviderEntry
 from imbue.minds.desktop_client.ui_models import UiProvidersMessage
 from imbue.minds.desktop_client.ui_models import UiRequestsMessage
@@ -294,8 +298,30 @@ def _build_spa_fixture_bootstrap() -> UiBootstrap:
                 "req-00000000000000000000000000000002",
             ),
         ),
+        notifications=UiNotificationsMessage(
+            entries=(
+                UiNotificationEntry(
+                    id="req-00000000000000000000000000000001",
+                    created_at="2026-01-01T00:00:00+00:00",
+                    is_resolved=False,
+                    outcome=None,
+                    title="Sign in to Slack",
+                    body="alpha wants to connect your Slack account.",
+                    request_id="req-00000000000000000000000000000001",
+                    workspace_agent_id="agent-00000000000000000000000000000001",
+                    workspace_name="alpha",
+                    workspace_accent="#7c9885",
+                    service_name="slack",
+                ),
+            ),
+            unresolved_count=1,
+        ),
         health=(UiHealthMessage(agent_id="agent-00000000000000000000000000000002", status=AgentHealth.STUCK),),
         discovery_health=UiDiscoveryHealthMessage(state=DiscoveryHealth.HEALTHY),
+        # The baseline every route is captured against, so no device condition:
+        # seeding one would put a notice band over every machine page in every
+        # capture. Flip it to see the two environment states.
+        environment=UiEnvironmentMessage(state=EnvironmentBlock.NONE),
     )
     seed = UiBootstrapSeed(accent="#7c9885", is_mac=True, mngr_forward_origin="https://localhost:8421")
     return UiBootstrap(seed=seed, schema_version=UI_SCHEMA_VERSION, snapshot=snapshot)

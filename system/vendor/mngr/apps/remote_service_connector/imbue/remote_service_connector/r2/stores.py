@@ -29,7 +29,9 @@ from imbue.remote_service_connector import db
 logger = logging.getLogger(__name__)
 
 
-_R2_KEY_COLUMNS = "access_key_id, owner_user_id, bucket_name, access, alias, created_at, enforced_access"
+_R2_KEY_COLUMNS = (
+    "access_key_id, owner_user_id, bucket_name, access, alias, created_at, enforced_access, suspension_access"
+)
 
 
 def _r2_key_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -41,6 +43,11 @@ def _r2_key_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "alias": row[4],
         "created_at": str(row[5]) if row[5] is not None else "",
         "enforced_access": row[6],
+        # What account suspension did to this key ('read' = policy flipped
+        # read-only, 'disabled' = token status disabled, None = untouched).
+        # Distinct from the quota sweep's enforced_access so the sweep can
+        # never "restore" a suspended key.
+        "suspension_access": row[7],
     }
 
 
@@ -56,6 +63,7 @@ class KeyStore(Protocol):
     def delete_key(self, access_key_id: str) -> None: ...
     def delete_keys_for_bucket(self, owner_user_id: str, bucket_name: str) -> list[dict[str, Any]]: ...
     def set_enforced_access(self, access_key_id: str, enforced_access: str | None) -> None: ...
+    def set_suspension_access(self, access_key_id: str, suspension_access: str | None) -> None: ...
 
 
 class PostgresKeyStore:
@@ -64,8 +72,7 @@ class PostgresKeyStore:
     def add_key(
         self, access_key_id: str, owner_user_id: str, bucket_name: str, access: str, alias: str | None
     ) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -73,12 +80,9 @@ class PostgresKeyStore:
                         "VALUES (%s, %s, %s, %s, %s)",
                         (access_key_id, owner_user_id, bucket_name, access, alias),
                     )
-        finally:
-            conn.close()
 
     def list_keys(self, owner_user_id: str, bucket_name: str | None = None) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 if bucket_name is None:
                     cur.execute(
@@ -92,54 +96,48 @@ class PostgresKeyStore:
                         (owner_user_id, bucket_name),
                     )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_r2_key_row_to_dict(row) for row in rows]
 
     def list_all_keys(self) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT {_R2_KEY_COLUMNS} FROM r2_keys ORDER BY owner_user_id, bucket_name, created_at")
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_r2_key_row_to_dict(row) for row in rows]
 
     def get_key(self, access_key_id: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT {_R2_KEY_COLUMNS} FROM r2_keys WHERE access_key_id = %s", (access_key_id,))
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return _r2_key_row_to_dict(row) if row is not None else None
 
     def set_enforced_access(self, access_key_id: str, enforced_access: str | None) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE r2_keys SET enforced_access = %s WHERE access_key_id = %s",
                         (enforced_access, access_key_id),
                     )
-        finally:
-            conn.close()
+
+    def set_suspension_access(self, access_key_id: str, suspension_access: str | None) -> None:
+        with db.pooled_db_connection() as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE r2_keys SET suspension_access = %s WHERE access_key_id = %s",
+                        (suspension_access, access_key_id),
+                    )
 
     def delete_key(self, access_key_id: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM r2_keys WHERE access_key_id = %s", (access_key_id,))
-        finally:
-            conn.close()
 
     def delete_keys_for_bucket(self, owner_user_id: str, bucket_name: str) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -147,8 +145,6 @@ class PostgresKeyStore:
                         (owner_user_id, bucket_name),
                     )
                     rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_r2_key_row_to_dict(row) for row in rows]
 
 
@@ -200,8 +196,7 @@ class PostgresGrantStore:
     def create_grant(
         self, user_id: str, user_id_prefix: str, baseline_bytes: int, expiry_minutes: int
     ) -> dict[str, Any]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -210,15 +205,12 @@ class PostgresGrantStore:
                         (user_id, user_id_prefix, baseline_bytes, expiry_minutes),
                     )
                     row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             raise HTTPException(status_code=500, detail="Failed to record the cleanup grant")
         return _r2_grant_row_to_dict(row)
 
     def get_active_grant(self, user_id: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_R2_GRANT_COLUMNS} FROM r2_cleanup_grants "
@@ -227,13 +219,10 @@ class PostgresGrantStore:
                     (user_id,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return _r2_grant_row_to_dict(row) if row is not None else None
 
     def list_unsettled_grants(self, user_id: str) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_R2_GRANT_COLUMNS} FROM r2_cleanup_grants "
@@ -241,26 +230,20 @@ class PostgresGrantStore:
                     (user_id,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_r2_grant_row_to_dict(row) for row in rows]
 
     def list_expired_unsettled_grants(self) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_R2_GRANT_COLUMNS} FROM r2_cleanup_grants "
                     "WHERE settled_at IS NULL AND expires_at <= NOW() ORDER BY granted_at",
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_r2_grant_row_to_dict(row) for row in rows]
 
     def settle_grant(self, grant_id: int, settled_bytes: int, is_decreased: bool) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -268,12 +251,9 @@ class PostgresGrantStore:
                         "WHERE grant_id = %s AND settled_at IS NULL",
                         (settled_bytes, is_decreased, grant_id),
                     )
-        finally:
-            conn.close()
 
     def count_failed_grants_in_window(self, user_id: str, window_hours: int) -> int:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT COUNT(*) FROM r2_cleanup_grants "
@@ -282,8 +262,6 @@ class PostgresGrantStore:
                     (user_id, window_hours),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return int(row[0]) if row is not None else 0
 
 
@@ -301,11 +279,8 @@ def r2_enforcement_lock(owner_user_id: str) -> Iterator[None]:
     ``enforced_access`` bookkeeping (same xact-lock pattern as the lease
     path's per-user serialization).
     """
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"r2-enforce:{owner_user_id}",))
             yield
-    finally:
-        conn.close()

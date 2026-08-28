@@ -55,16 +55,36 @@ class ConversationModel:
         chat_agent_name: str,
         pre_events: list[dict],
         turn_reply_events: list[list[dict]],
+        trailing_events: list[dict] | None = None,
     ) -> None:
         self.chat_agent_id = chat_agent_id
         self.chat_agent_name = chat_agent_name
         self.events: list[dict] = list(pre_events)
         self._turn_reply_events = turn_reply_events
         self._turn_index = 0
+        # Work the agent does *after* reporting WAITING on the final turn -- the workspace's own
+        # turn-end flow behaves this way. Appended when the state is queried and every turn has
+        # already replied, which is exactly the window in which the driver could stop reading.
+        self._trailing_events = list(trailing_events or [])
+        # The workspace sign-in surface: whether the auth endpoint answers at all, and the raw
+        # submit commands, so tests can assert what the driver posted.
+        self.is_auth_endpoint_up = True
+        self.submitted_credential_commands: list[str] = []
+        # What the workspace reports after a submit; a mode other than the one the driver asked for
+        # is how a bad credential shows up, since the endpoint itself never validates.
+        self.expected_auth_mode = "api_key"
 
     def handle(self, command: str) -> str | None:
         """Return the curl-body stdout for a system_interface call, or None if this command is not
         one (so the caller falls back to scripted rules)."""
+        if "/api/claude-auth/submit-credentials" in command:
+            self.submitted_credential_commands.append(command)
+            return mngr_exec_json(json.dumps({"logged_in": True, "auth_mode": self.expected_auth_mode}))
+        if "/api/claude-auth/status" in command:
+            if not self.is_auth_endpoint_up:
+                # An unparseable body is what the bridge sees while the endpoint is still coming up.
+                return mngr_exec_json("")
+            return mngr_exec_json(json.dumps({"logged_in": False, "auth_mode": "none"}))
         if "/api/agents/{}/message".format(self.chat_agent_id) in command:
             if self._turn_index < len(self._turn_reply_events):
                 self.events.extend(self._turn_reply_events[self._turn_index])
@@ -78,6 +98,9 @@ class ConversationModel:
             body = {"total": len(self.events), "events": self.events[offset : offset + limit]}
             return mngr_exec_json(json.dumps(body))
         if "/api/agents" in command and "curl" in command:
+            if self._trailing_events and self._turn_index >= len(self._turn_reply_events):
+                self.events.extend(self._trailing_events)
+                self._trailing_events = []
             body = {
                 "agents": [
                     {"id": "sys-1", "name": "system-services", "state": "WAITING"},

@@ -336,6 +336,7 @@ def load_config(
     config_dict["is_allowed_in_pytest"] = config.is_allowed_in_pytest
     config_dict["pre_command_scripts"] = config.pre_command_scripts
     config_dict["work_dir_extra_paths"] = config.work_dir_extra_paths
+    config_dict["strict_host_record_parsing"] = config.strict_host_record_parsing
     config_dict["default_destroyed_host_persisted_seconds"] = config.default_destroyed_host_persisted_seconds
     config_dict["default_min_online_host_age_seconds"] = config.default_min_online_host_age_seconds
     config_dict["agent_ready_timeout"] = config.agent_ready_timeout
@@ -830,7 +831,7 @@ def _parse_agent_types(
     for name, raw_config in raw_types.items():
         # Custom types with a parent_type should use the parent's config class,
         # since the parent type defines the valid fields (e.g., ClaudeAgentConfig
-        # has auto_dismiss_dialogs). Without this, unregistered custom type names
+        # has auto_dismiss_dialogs_at_startup). Without this, unregistered custom type names
         # fall back to the base AgentTypeConfig which rejects parent-specific fields.
         # A parent_type may itself be an alias (e.g. parent_type = "agy"), so
         # resolve it to the canonical type before looking up the config class.
@@ -1144,6 +1145,7 @@ def parse_config(
     kwargs["is_allowed_in_pytest"] = raw.pop("is_allowed_in_pytest", None)
     kwargs["pre_command_scripts"] = raw.pop("pre_command_scripts", None)
     kwargs["work_dir_extra_paths"] = raw.pop("work_dir_extra_paths", None)
+    kwargs["strict_host_record_parsing"] = raw.pop("strict_host_record_parsing", None)
     kwargs["default_destroyed_host_persisted_seconds"] = raw.pop("default_destroyed_host_persisted_seconds", None)
     kwargs["default_min_online_host_age_seconds"] = raw.pop("default_min_online_host_age_seconds", None)
     kwargs["agent_ready_timeout"] = raw.pop("agent_ready_timeout", None)

@@ -7,7 +7,7 @@ import pytest
 from flask.testing import FlaskClient
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.conftest import build_desktop_client_for_test
 from imbue.minds.desktop_client.notification import NotificationDispatcher
@@ -72,6 +72,11 @@ def test_form_defaults_seed_the_shipped_template_repo_and_ref(tmp_path: Path, mo
     assert payload["branch"] == FALLBACK_BRANCH
 
 
+# Observed once hanging for ~33 minutes on a leaked forked child blocked in read,
+# with the test itself long finished; killing the child let the run continue, and
+# it has not recurred. Retried rather than diagnosed: the leak is in the fork, not
+# in what this test asserts, and a hang has no failure to read.
+@pytest.mark.flaky
 def test_form_defaults_honor_the_operator_worktree_only_when_opted_in(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -171,7 +176,7 @@ def _make_client_with_store(
     """A desktop-client test app whose agent creator carries a pending-create-attempt store."""
     store = PendingCreateAttemptStore(records_dir=tmp_path / "pending")
     creator = AgentCreator(
-        paths=WorkspacePaths(data_dir=tmp_path / "minds"),
+        paths=InstallationPaths(data_dir=tmp_path / "minds"),
         root_concurrency_group=root_concurrency_group,
         notification_dispatcher=notification_dispatcher,
         system_interface_health_tracker=SystemInterfaceHealthTracker(),
@@ -181,7 +186,7 @@ def _make_client_with_store(
         tmp_path,
         is_authenticated=True,
         agent_creator=creator,
-        paths=WorkspacePaths(data_dir=tmp_path / "minds"),
+        paths=InstallationPaths(data_dir=tmp_path / "minds"),
         root_concurrency_group=root_concurrency_group,
     )
     return client, store, creator

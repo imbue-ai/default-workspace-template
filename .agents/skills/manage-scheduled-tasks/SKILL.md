@@ -1,6 +1,8 @@
 ---
 name: manage-scheduled-tasks
 description: Query and edit the recurring scheduled jobs that run on this host. Use when you (or the user, via you) want to see what is scheduled, add a new recurring job, change when something runs, or stop a job from running. Recurring jobs that must not be missed run through the run_job.sh runner (any cadence from minutes to weeks, with catch-up after downtime and retry of failed runs); exact-time fire-and-forget schedules are ordinary cron lines. Also covers how the built-in weekly Caretaker job is wired (off by default) and where all the scheduling configuration lives.
+metadata:
+  author: imbue
 ---
 
 # Managing scheduled tasks

@@ -21,7 +21,16 @@
  * overflow, clamped to the viewport, dropped on leave / blur / click / scroll /
  * resize) so a tooltip here is indistinguishable from one in the surrounding
  * chrome. The measuring dance in ``showBubble`` mirrors the shell's
- * ``tooltip_triggers.js`` for the same reason.
+ * ``tooltip_triggers.js`` for the same reason. That centered-below placement
+ * is therefore the default everywhere and callers should not opt out of it
+ * lightly -- it is what keeps this tooltip visually identical to the shell's.
+ *
+ * The one deliberate exception is the project rail: a rail row sits directly
+ * above the row it is being compared against (e.g. the shortcut a hover is
+ * about to reveal versus the one below it), so a centered-below bubble covers
+ * exactly the row the tooltip is meant to help someone choose. ``placeTooltip``
+ * takes an optional ``placement`` for that one case, defaulting to the shared
+ * centered-below behavior everywhere else.
  */
 
 import type m from "mithril";
@@ -59,11 +68,20 @@ export interface TooltipPosition {
 }
 
 /**
- * Where the bubble goes: centered under the trigger with a ``TOOLTIP_GAP``
- * gap, flipped above when it would otherwise overflow the bottom (and there is
- * room up there), then clamped ``TOOLTIP_MARGIN`` from the viewport edges.
+ * ``"below"`` (the default everywhere) centers the bubble under the trigger.
+ * ``"right"`` is the rail's exception -- see the module doc comment -- and
+ * places the bubble beside the trigger instead, so it never covers the row
+ * underneath.
  */
-export function placeTooltip(anchor: TooltipAnchor, bubble: TooltipSize, viewport: TooltipSize): TooltipPosition {
+export type TooltipPlacement = "below" | "right";
+
+/**
+ * Where the bubble goes for the default ``"below"`` placement: centered under
+ * the trigger with a ``TOOLTIP_GAP`` gap, flipped above when it would
+ * otherwise overflow the bottom (and there is room up there), then clamped
+ * ``TOOLTIP_MARGIN`` from the viewport edges.
+ */
+function placeTooltipBelow(anchor: TooltipAnchor, bubble: TooltipSize, viewport: TooltipSize): TooltipPosition {
   const centered = anchor.left + anchor.width / 2 - bubble.width / 2;
   const below = anchor.bottom + TOOLTIP_GAP;
   const above = anchor.top - bubble.height - TOOLTIP_GAP;
@@ -73,6 +91,48 @@ export function placeTooltip(anchor: TooltipAnchor, bubble: TooltipSize, viewpor
     left: Math.max(TOOLTIP_MARGIN, Math.min(centered, viewport.width - TOOLTIP_MARGIN - bubble.width)),
     top: Math.max(TOOLTIP_MARGIN, top),
   };
+}
+
+/**
+ * Where the bubble goes for ``"right"`` placement: vertically centered on the
+ * trigger, offset ``TOOLTIP_GAP`` to its right, flipped to the trigger's left
+ * when it would otherwise overflow the right edge (and there is room over
+ * there). Unlike the below/above flip, both axes get the full min-and-max
+ * clamp here rather than only the near-edge one: a rail row's tooltip must
+ * never run off the right edge of the viewport (the one direction "below"
+ * tolerates overflowing, in the pathological case of a trigger taller than
+ * the viewport, has no equivalent excuse on this axis), so this clamps hard
+ * both ways instead of reproducing that allowance.
+ */
+function placeTooltipRight(anchor: TooltipAnchor, bubble: TooltipSize, viewport: TooltipSize): TooltipPosition {
+  const verticalCenter = anchor.top + (anchor.bottom - anchor.top) / 2 - bubble.height / 2;
+  const right = anchor.left + anchor.width + TOOLTIP_GAP;
+  const left = anchor.left - bubble.width - TOOLTIP_GAP;
+  const overflowsRight = right + bubble.width > viewport.width - TOOLTIP_MARGIN;
+  const preferredLeft = overflowsRight && left >= TOOLTIP_MARGIN ? left : right;
+  return {
+    left: Math.max(TOOLTIP_MARGIN, Math.min(preferredLeft, viewport.width - TOOLTIP_MARGIN - bubble.width)),
+    top: Math.max(TOOLTIP_MARGIN, Math.min(verticalCenter, viewport.height - TOOLTIP_MARGIN - bubble.height)),
+  };
+}
+
+/**
+ * Where the bubble goes, given where the trigger and the bubble itself are.
+ * ``placement`` defaults to ``"below"`` -- the shared, shell-matched
+ * behavior every caller gets unless it explicitly asks for ``"right"``.
+ */
+export function placeTooltip(
+  anchor: TooltipAnchor,
+  bubble: TooltipSize,
+  viewport: TooltipSize,
+  placement: TooltipPlacement = "below",
+): TooltipPosition {
+  switch (placement) {
+    case "below":
+      return placeTooltipBelow(anchor, bubble, viewport);
+    case "right":
+      return placeTooltipRight(anchor, bubble, viewport);
+  }
 }
 
 // One bubble is enough: only one tooltip is ever visible, so every trigger
@@ -115,7 +175,7 @@ function dropTooltip(): void {
   hideBubble();
 }
 
-function showBubble(target: Element, text: string): void {
+function showBubble(target: Element, text: string, placement: TooltipPlacement): void {
   const element = ensureBubble();
   element.textContent = text;
   // Measure at the natural width: clear the width a previous show fixed, and
@@ -131,10 +191,12 @@ function showBubble(target: Element, text: string): void {
   // content a fraction short and wraps the last word. Ceil instead.
   const measured = element.getBoundingClientRect();
   const size = { width: Math.ceil(measured.width), height: Math.ceil(measured.height) };
-  const position = placeTooltip(target.getBoundingClientRect(), size, {
-    width: window.innerWidth,
-    height: window.innerHeight,
-  });
+  const position = placeTooltip(
+    target.getBoundingClientRect(),
+    size,
+    { width: window.innerWidth, height: window.innerHeight },
+    placement,
+  );
   // Fix the width so the bubble does not reflow if the viewport later changes.
   element.style.width = `${size.width}px`;
   element.style.left = `${position.left}px`;
@@ -155,7 +217,12 @@ function wireWindowListeners(): void {
   window.addEventListener("blur", dropTooltip);
 }
 
-export function attachHoverTooltip(target: Element): HoverTooltip {
+/**
+ * ``placement`` is fixed for the lifetime of the attachment (unlike the text,
+ * it is not expected to change), and defaults to the shared centered-below
+ * behavior -- see the module doc comment for the rail's ``"right"`` exception.
+ */
+export function attachHoverTooltip(target: Element, placement: TooltipPlacement = "below"): HoverTooltip {
   let text: string | null = null;
 
   wireWindowListeners();
@@ -174,7 +241,7 @@ export function attachHoverTooltip(target: Element): HoverTooltip {
   const showNow = (): void => {
     cancelPending();
     if (text !== null) {
-      showBubble(target, text);
+      showBubble(target, text, placement);
     }
   };
 
@@ -207,7 +274,7 @@ export function attachHoverTooltip(target: Element): HoverTooltip {
       if (text === null) {
         dismiss();
       } else if (shownFor === target) {
-        showBubble(target, text);
+        showBubble(target, text, placement);
       }
     },
     dispose(): void {
@@ -227,12 +294,14 @@ const tooltipsByElement = new WeakMap<Element, HoverTooltip>();
  * The mithril form: spread into an element's attrs in place of a native
  * ``title``, e.g. ``m("button", { onclick, ...hoverTooltipAttrs("Close") })``.
  * The element keeps its own ``aria-label`` -- the bubble is decoration, not an
- * accessible name.
+ * accessible name. ``placement`` defaults to the shared centered-below
+ * behavior; pass ``"right"`` only for the rail's exception (see the module
+ * doc comment).
  */
-export function hoverTooltipAttrs(text: string): m.Attributes {
+export function hoverTooltipAttrs(text: string, placement: TooltipPlacement = "below"): m.Attributes {
   return {
     oncreate: (vnode: m.VnodeDOM): void => {
-      const tooltip = attachHoverTooltip(vnode.dom);
+      const tooltip = attachHoverTooltip(vnode.dom, placement);
       tooltip.setText(text);
       tooltipsByElement.set(vnode.dom, tooltip);
     },

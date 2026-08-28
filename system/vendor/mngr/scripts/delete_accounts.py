@@ -15,13 +15,17 @@ R2 backup buckets are intentionally NOT deleted here: removing an account's
 ``workspace_records`` orphans its ``host-<hex>`` backup buckets, and the
 connector's existing backup-retention reaper empties, deletes, and de-keys
 those orphans on its schedule (force it sooner with
-``mngr imbue_cloud admin sweep`` if needed). Leaving them to that purpose-built
+``minds-admin sweep r2`` if needed). Leaving them to that purpose-built
 path keeps this tool from duplicating bounded S3 object deletion.
 
 The tool is **dry-run by default**: it prints exactly what it would delete and
 changes nothing until ``--execute`` is passed. Credentials are resolved, per
-value, from an explicit flag, else the matching environment variable, else the
-tier's HCP Vault entries (via the ``vault`` CLI -- run ``vault login`` first).
+value, from an explicit flag, else the matching environment variable, else
+(when ``--env <name>`` is passed) the env's local
+``~/.minds-<env>/secrets.toml``, else the tier's HCP Vault entries (via the
+``vault`` CLI -- run ``vault login`` first). ``--env`` is required for per-env
+(dev) targets: their host_pool DSN and analytics stack live only in the local
+state ``minds-admin env deploy`` wrote, never in Vault.
 
 Usage:
     export VAULT_TOKEN=...              # or a prior `vault login`
@@ -41,6 +45,10 @@ import csv
 import json
 import os
 import subprocess
+import tomllib
+from collections.abc import Callable
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -49,6 +57,15 @@ import click
 import httpx
 import psycopg2
 from loguru import logger
+
+from imbue.analytics.deletion import delete_account_transcripts
+from imbue.analytics.errors import AnalyticsError
+from imbue.analytics.lake import TRANSCRIPTS_RAW_TABLE_DDL_STATEMENTS
+from imbue.analytics.lake import attach_ducklake
+from imbue.analytics.lake import create_duckdb_session
+from imbue.analytics.lake import create_r2_secret
+from imbue.analytics.lake import ensure_raw_tables
+from imbue.analytics.lake import install_session_extensions
 
 # Vault addr / namespace default to the imbue HCP cluster so the tool works in a
 # shell that only ran `vault login` (no VAULT_ADDR export). An operator override
@@ -109,17 +126,49 @@ def _read_vault_value(tier: str, service: str, key: str) -> str:
     return result.stdout.strip()
 
 
-def _resolve_secret(explicit: str | None, env_var: str, tier: str, service: str, key: str) -> str:
-    """Resolve one required secret: explicit flag > environment variable > tier Vault entry."""
+def _load_env_local_secrets(env_name: str | None) -> dict[str, str]:
+    """The ``[secrets]`` table of ``~/.minds-<env>/secrets.toml`` for a per-env (dev) target.
+
+    Dev envs keep their provisioned values (host_pool DSN, SuperTokens creds,
+    the per-env analytics stack) in local state rather than Vault, so
+    ``--env <name>`` threads that file into the resolution chain. Raises when
+    the env was named but has no local state on this machine -- resolving a
+    dev env's deletion from tier-level Vault entries would target the wrong
+    (or no) backends.
+    """
+    if not env_name:
+        return {}
+    secrets_path = Path.home() / f".minds-{env_name}" / "secrets.toml"
+    if not secrets_path.is_file():
+        raise AccountDeletionError(
+            f"--env {env_name!r} was given but {secrets_path} does not exist on this machine; "
+            "dev-env deletions must run on the machine that deployed the env."
+        )
+    parsed = tomllib.loads(secrets_path.read_text())
+    secrets_table = parsed.get("secrets", {})
+    if not isinstance(secrets_table, dict):
+        raise AccountDeletionError(f"{secrets_path} [secrets] is not a table")
+    return {str(key): str(value) for key, value in secrets_table.items()}
+
+
+def _resolve_secret(
+    explicit: str | None, env_var: str, tier: str, service: str, key: str, local_values: dict[str, str]
+) -> str:
+    """Resolve one required secret: explicit flag > env var > env local state > tier Vault entry."""
     if explicit:
         return explicit
     from_env = os.environ.get(env_var)
     if from_env:
         return from_env
+    from_local = local_values.get(env_var, "")
+    if from_local:
+        return from_local
     return _read_vault_value(tier, service, key)
 
 
-def _resolve_optional_secret(explicit: str | None, env_var: str, tier: str, service: str, key: str) -> str | None:
+def _resolve_optional_secret(
+    explicit: str | None, env_var: str, tier: str, service: str, key: str, local_values: dict[str, str]
+) -> str | None:
     """Resolve an optional secret; return None (rather than raising) when it is not configured anywhere.
 
     Used for the LiteLLM proxy URL + master key: LiteLLM user cleanup is
@@ -127,10 +176,98 @@ def _resolve_optional_secret(explicit: str | None, env_var: str, tier: str, serv
     skips it rather than failing the whole run.
     """
     try:
-        return _resolve_secret(explicit, env_var, tier, service, key)
+        return _resolve_secret(explicit, env_var, tier, service, key, local_values)
     except AccountDeletionError as exc:
         logger.trace("Optional secret {} unavailable ({}); skipping.", env_var, exc)
         return None
+
+
+class AnalyticsDeletionContext:
+    """Open connections to the tier's analytics backends (transcripts lake + ops DB).
+
+    Built only when the tier's ``analytics`` Vault entry is fully populated;
+    tiers without an analytics bringup simply skip the analytics step.
+    """
+
+    def __init__(self, lake_connection: Any, ops_connection: Any) -> None:
+        self.lake_connection = lake_connection
+        self.ops_connection = ops_connection
+
+    def close(self) -> None:
+        self.lake_connection.close()
+        self.ops_connection.close()
+
+
+_ANALYTICS_SECRET_KEYS: Final[tuple[str, ...]] = (
+    "ANALYTICS_TRANSCRIPTS_CATALOG_URL",
+    "ANALYTICS_OPS_DATABASE_URL",
+    "ANALYTICS_TRANSCRIPTS_R2_BUCKET",
+    "ANALYTICS_TRANSCRIPTS_R2_ACCESS_KEY_ID",
+    "ANALYTICS_TRANSCRIPTS_R2_SECRET_ACCESS_KEY",
+    "ANALYTICS_R2_ACCOUNT_ID",
+)
+
+
+def _resolve_analytics_secret_values(
+    tier: str, resolve_optional: Callable[[str], str | None]
+) -> dict[str, str] | None:
+    """The analytics keys, or None when the tier has no analytics bringup at all.
+
+    Reads the same keys the analytics Modal secret uses (schema:
+    .minds/template/analytics.sh). Only a fully-absent entry is a skip:
+    raises AccountDeletionError on a partially-populated entry, because
+    silently skipping transcript deletion on a misconfigured tier would break
+    the deletion promise unrecoverably (the identity is removed afterwards, so
+    no re-run could finish the job).
+    """
+    value_by_key = {key: resolve_optional(key) for key in _ANALYTICS_SECRET_KEYS}
+    missing_keys = sorted(key for key, value in value_by_key.items() if not value)
+    if len(missing_keys) == len(_ANALYTICS_SECRET_KEYS):
+        logger.warning("Analytics is not provisioned for tier '{}'; skipping transcript deletion.", tier)
+        return None
+    if missing_keys:
+        raise AccountDeletionError(
+            f"The analytics Vault entry for tier {tier!r} is only partially populated"
+            f" (missing: {', '.join(missing_keys)}); fix the entry (or empty it entirely) before deleting accounts,"
+            " because the transcript-deletion step cannot be skipped safely on a tier with an analytics bringup."
+        )
+    return {key: value for key, value in value_by_key.items() if value}
+
+
+def _build_analytics_deletion_context(tier: str, local_values: dict[str, str]) -> AnalyticsDeletionContext | None:
+    """Connect to the target's transcripts lake + analytics ops DB, or None when not provisioned.
+
+    Raises AccountDeletionError when the tier's analytics Vault entry is only
+    partially populated (see _resolve_analytics_secret_values). Per-env (dev)
+    targets resolve the same keys from the env's local state via
+    ``local_values`` instead of Vault.
+    """
+    values = _resolve_analytics_secret_values(
+        tier, lambda key: _resolve_optional_secret(None, key, tier, "analytics", key, local_values)
+    )
+    if values is None:
+        return None
+    lake_connection = create_duckdb_session()
+    install_session_extensions(lake_connection)
+    create_r2_secret(
+        lake_connection,
+        secret_name="transcripts_bucket_secret",
+        key_id=values["ANALYTICS_TRANSCRIPTS_R2_ACCESS_KEY_ID"],
+        secret=values["ANALYTICS_TRANSCRIPTS_R2_SECRET_ACCESS_KEY"],
+        account_id=values["ANALYTICS_R2_ACCOUNT_ID"],
+        bucket=values["ANALYTICS_TRANSCRIPTS_R2_BUCKET"],
+    )
+    attach_ducklake(
+        lake_connection,
+        alias="transcripts",
+        catalog_dsn=values["ANALYTICS_TRANSCRIPTS_CATALOG_URL"],
+        data_path=f"r2://{values['ANALYTICS_TRANSCRIPTS_R2_BUCKET']}/lake/",
+    )
+    # A tier whose collection never ran has no raw table yet; ensure it so
+    # deletion is a clean no-op instead of an error.
+    ensure_raw_tables(lake_connection, TRANSCRIPTS_RAW_TABLE_DDL_STATEMENTS)
+    ops_connection = psycopg2.connect(values["ANALYTICS_OPS_DATABASE_URL"])
+    return AnalyticsDeletionContext(lake_connection=lake_connection, ops_connection=ops_connection)
 
 
 class DeletionCredentials:
@@ -261,6 +398,23 @@ def _delete_supertokens_user(credentials: DeletionCredentials, user_id: str) -> 
         raise AccountDeletionError(f"SuperTokens /user/remove for {user_id} returned status {status!r}")
 
 
+def _delete_analytics_transcripts(analytics_context: AnalyticsDeletionContext, user_id: str) -> int:
+    """The analytics deletion path: transcript-lake DELETE + deletion_events fact row.
+
+    Raises AccountDeletionError on failure so the cascade stops before the
+    SuperTokens identity is removed and a re-run can finish the job.
+    """
+    try:
+        return delete_account_transcripts(
+            analytics_context.lake_connection,
+            analytics_context.ops_connection,
+            account_id=user_id,
+            now=datetime.now(timezone.utc),
+        )
+    except (AnalyticsError, psycopg2.Error) as exc:
+        raise AccountDeletionError(f"Analytics transcript deletion for {user_id} failed: {exc}") from exc
+
+
 def _delete_one_account(
     connection: Any,
     credentials: DeletionCredentials,
@@ -268,6 +422,8 @@ def _delete_one_account(
     user_id: str,
     existing_tables: set[str],
     is_execute: bool,
+    analytics_context: AnalyticsDeletionContext | None,
+    is_analytics_provisioned: bool,
 ) -> dict[str, Any]:
     """Run (or, in dry-run, describe) the full deletion cascade for one account."""
     leased = _count_leased_hosts_for_user(connection, user_id)
@@ -289,19 +445,25 @@ def _delete_one_account(
             "dry_run": True,
             "would_delete_tables": would_delete_tables,
             "would_delete_litellm_user": would_delete_litellm,
+            "would_delete_analytics_transcripts": is_analytics_provisioned,
             "would_delete_supertokens_user": True,
         }
-    # DB rows first, then LiteLLM, then the identity last (so a partial failure
-    # is re-runnable and never orphans a running VM or a live identity's data).
+    # DB rows first, then LiteLLM and analytics transcripts, then the identity
+    # last (so a partial failure is re-runnable and never orphans a running VM
+    # or a live identity's data).
     db_counts = _delete_db_rows_for_user(connection, user_id, existing_tables)
     connection.commit()
     litellm_deleted = _delete_litellm_user(credentials, user_id)
+    analytics_transcript_rows = (
+        _delete_analytics_transcripts(analytics_context, user_id) if analytics_context is not None else None
+    )
     _delete_supertokens_user(credentials, user_id)
     return {
         "email": email,
         "user_id": user_id,
         "db_rows_deleted": db_counts,
         "litellm_user_deleted": litellm_deleted,
+        "analytics_transcript_rows_deleted": analytics_transcript_rows,
         "supertokens_user_deleted": True,
     }
 
@@ -331,6 +493,16 @@ def _delete_one_account(
 @click.option("--litellm-url", default=None, help="Override the LiteLLM proxy URL (else env, else Vault).")
 @click.option("--litellm-key", default=None, help="Override the LiteLLM master key (else env, else Vault).")
 @click.option(
+    "--env",
+    "env_name",
+    default=None,
+    help=(
+        "Per-env (dev) target: resolve credentials from ~/.minds-<env>/secrets.toml -- the local state "
+        "minds-admin env deploy wrote -- before falling back to Vault. Required for dev envs, whose "
+        "host_pool DSN and analytics stack are per-env and never in Vault."
+    ),
+)
+@click.option(
     "--report-file",
     type=click.Path(path_type=Path),
     default=None,
@@ -345,20 +517,31 @@ def delete_accounts(
     supertokens_api_key: str | None,
     litellm_url: str | None,
     litellm_key: str | None,
+    env_name: str | None,
     report_file: Path | None,
 ) -> None:
     """Fully delete the accounts listed in ACCOUNTS-FILE from TIER's live backends."""
     accounts = _load_accounts(accounts_file)
+    local_values = _load_env_local_secrets(env_name)
     credentials = DeletionCredentials(
-        database_url=_resolve_secret(database_url, "NEON_HOST_POOL_DSN", tier, "neon", "DATABASE_URL"),
+        database_url=_resolve_secret(database_url, "NEON_HOST_POOL_DSN", tier, "neon", "DATABASE_URL", local_values),
         supertokens_uri=_resolve_secret(
-            supertokens_uri, "SUPERTOKENS_CONNECTION_URI", tier, "supertokens", "SUPERTOKENS_CONNECTION_URI"
+            supertokens_uri,
+            "SUPERTOKENS_CONNECTION_URI",
+            tier,
+            "supertokens",
+            "SUPERTOKENS_CONNECTION_URI",
+            local_values,
         ),
         supertokens_api_key=_resolve_secret(
-            supertokens_api_key, "SUPERTOKENS_API_KEY", tier, "supertokens", "SUPERTOKENS_API_KEY"
+            supertokens_api_key, "SUPERTOKENS_API_KEY", tier, "supertokens", "SUPERTOKENS_API_KEY", local_values
         ),
-        litellm_url=_resolve_optional_secret(litellm_url, "LITELLM_PROXY_URL", tier, "litellm", "LITELLM_PROXY_URL"),
-        litellm_key=_resolve_optional_secret(litellm_key, "LITELLM_MASTER_KEY", tier, "litellm", "LITELLM_MASTER_KEY"),
+        litellm_url=_resolve_optional_secret(
+            litellm_url, "LITELLM_PROXY_URL", tier, "litellm", "LITELLM_PROXY_URL", local_values
+        ),
+        litellm_key=_resolve_optional_secret(
+            litellm_key, "LITELLM_MASTER_KEY", tier, "litellm", "LITELLM_MASTER_KEY", local_values
+        ),
     )
     if credentials.litellm_url is None or credentials.litellm_key is None:
         logger.warning(
@@ -373,6 +556,22 @@ def delete_accounts(
     deleted = 0
     skipped = 0
     failed = 0
+    # The analytics context connects to live backends, so it is only built for
+    # a real execution; a dry run reports the step from a Vault probe alone.
+    analytics_context = _build_analytics_deletion_context(tier, local_values) if is_execute else None
+    if is_execute:
+        is_analytics_provisioned = analytics_context is not None
+    else:
+        is_analytics_provisioned = bool(
+            _resolve_optional_secret(
+                None,
+                "ANALYTICS_TRANSCRIPTS_CATALOG_URL",
+                tier,
+                "analytics",
+                "ANALYTICS_TRANSCRIPTS_CATALOG_URL",
+                local_values,
+            )
+        )
     connection = psycopg2.connect(credentials.database_url)
     try:
         existing_tables = _existing_target_tables(connection)
@@ -381,7 +580,16 @@ def delete_accounts(
             logger.info("Tables absent from this database (skipped): {}", ", ".join(sorted(missing_tables)))
         for email, user_id in accounts:
             try:
-                result = _delete_one_account(connection, credentials, email, user_id, existing_tables, is_execute)
+                result = _delete_one_account(
+                    connection,
+                    credentials,
+                    email,
+                    user_id,
+                    existing_tables,
+                    is_execute,
+                    analytics_context,
+                    is_analytics_provisioned,
+                )
             except (AccountDeletionError, psycopg2.Error) as exc:
                 # Roll back this account's aborted transaction and record it, but keep going: a
                 # single bad account (an unexpected DB error, an unreachable SuperTokens core)
@@ -396,11 +604,12 @@ def delete_accounts(
                     logger.warning("SKIPPED {} ({}): {}", email or "<no-email>", user_id, result["reason"])
                 elif result.get("dry_run"):
                     logger.info(
-                        "WOULD DELETE {} ({}): tables={} litellm_user={} supertokens_user=yes",
+                        "WOULD DELETE {} ({}): tables={} litellm_user={} analytics_transcripts={} supertokens_user=yes",
                         email or "<no-email>",
                         user_id,
                         result["would_delete_tables"] or "<none>",
                         "yes" if result["would_delete_litellm_user"] else "no",
+                        "yes" if result["would_delete_analytics_transcripts"] else "no",
                     )
                 elif is_execute:
                     deleted += 1
@@ -408,6 +617,8 @@ def delete_accounts(
             results.append(result)
     finally:
         connection.close()
+        if analytics_context is not None:
+            analytics_context.close()
 
     if report_file is not None:
         report_file.write_text("\n".join(json.dumps(r) for r in results) + "\n")

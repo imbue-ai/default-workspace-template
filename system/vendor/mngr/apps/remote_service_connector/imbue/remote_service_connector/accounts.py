@@ -22,11 +22,13 @@ from pydantic import Field
 from supertokens_python.syncio import list_users_by_account_info
 from supertokens_python.types.base import AccountInfoInput
 
+import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.litellm_client as litellm_client
 import imbue.remote_service_connector.sync as sync_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import authenticate_request
 from imbue.remote_service_connector.auth import clear_paid_status_cache
@@ -141,23 +143,19 @@ def _normalize_paid_email(value: str) -> str:
 def _list_paid_entries(table: str, value_column: str, paid_only: bool) -> list[tuple[str, bool, str, str]]:
     """Return all rows of a paid-list table as ``(value, is_paid, created_at, updated_at)`` tuples."""
     where_clause = " WHERE is_paid = TRUE" if paid_only else ""
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT {value_column}, is_paid, created_at, updated_at FROM {table}{where_clause} "
                 f"ORDER BY {value_column} ASC"
             )
             rows = cur.fetchall()
-    finally:
-        conn.close()
     return [(row[0], bool(row[1]), str(row[2]), str(row[3])) for row in rows]
 
 
 def _activate_paid_entry(table: str, value_column: str, value: str) -> None:
     """Upsert a paid-list entry to ``is_paid = true`` (reactivating in place, keeping created_at)."""
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -166,23 +164,18 @@ def _activate_paid_entry(table: str, value_column: str, value: str) -> None:
                     f"ON CONFLICT ({value_column}) DO UPDATE SET is_paid = TRUE, updated_at = NOW()",
                     (value,),
                 )
-    finally:
-        conn.close()
     clear_paid_status_cache()
 
 
 def _deactivate_paid_entry(table: str, value_column: str, value: str) -> None:
     """Soft-delete a paid-list entry (``is_paid = false``). A no-op when the row is absent."""
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE {table} SET is_paid = FALSE, updated_at = NOW() WHERE {value_column} = %s",
                     (value,),
                 )
-    finally:
-        conn.close()
     clear_paid_status_cache()
 
 
@@ -269,7 +262,10 @@ def summarize_owner_bucket_usage(ops: CloudflareOps, user_id_prefix: str) -> tup
     total_bucket_bytes = 0
     for bucket_name, result in zip(bucket_names, read_bucket_usage_bytes_concurrently(ops, bucket_names), strict=True):
         if isinstance(result, (CloudflareApiError, httpx.HTTPError)):
-            logger.warning("Failed to read usage for bucket %s: %s", bucket_name, result)
+            # Display-only degradation on a transient upstream read: counted,
+            # not error-reported.
+            emit_metric("cloudflare_api_failed", 1, {"operation": "display_bucket_usage_read"})
+            logger.info("Failed to read usage for bucket %s: %s", bucket_name, result)
         else:
             total_bucket_bytes += result
     return len(bucket_names), total_bucket_bytes
@@ -348,7 +344,7 @@ def get_account(request: Request) -> dict[str, object]:
         token = request.headers.get("authorization", "")[7:]
         user_id = auth_module.get_user_id_from_access_token(token)
         # The backfill's paid-list check may only consume a verified email --
-        # an unverified account gets a plain explorer row.
+        # an unverified account gets a plain free row.
         entitlements = entitlements_module.ensure_account_entitlements(
             user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
         )
@@ -394,8 +390,10 @@ def set_account_plan(request: Request, body: SetPlanRequest) -> dict[str, object
     unverified email may never satisfy it.
     """
     with handle_endpoint_errors():
-        user = authenticate_request(request)
-        user_id = auth_module.get_user_id_from_bearer_header(request)
+        # Resolved via the shared web-identity helper so the POST verifies the
+        # session against the core (revoked sessions are refused immediately)
+        # and the hosted chrome's cookie sessions work here too.
+        user, user_id = accounts_web_module.resolve_web_user_identity(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(user_id, user)
         if body.plan == entitlements.plan_name:
             return {
@@ -438,7 +436,7 @@ def admin_get_account(request: Request, email: str) -> dict[str, object]:
         usage = compute_account_usage(
             cloudflare_module.get_cloudflare_ctx().ops, entitlements.user_id_prefix, entitlements.user_id
         )
-        return _with_deprecated_tunnel_account_fields(
+        payload = _with_deprecated_tunnel_account_fields(
             AccountInfoResponse(
                 user_id=entitlements.user_id,
                 email=email.strip().lower(),
@@ -450,6 +448,11 @@ def admin_get_account(request: Request, email: str) -> dict[str, object]:
                 ],
             ).model_dump()
         )
+        # Suspension state is operator-facing only, so it rides the admin
+        # response rather than the shared AccountInfoResponse model.
+        payload["suspended_at"] = entitlements.suspended_at
+        payload["suspended_reason"] = entitlements.suspended_reason
+        return payload
 
 
 @router.post("/admin/accounts/{email}/plan")

@@ -15,8 +15,12 @@ from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_ORDERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 from imbue.mngr_imbue_cloud.slices.bare_metal import DISK_RESERVE_GB
+from imbue.mngr_imbue_cloud.slices.bare_metal import MAX_SLICE_ENV_NAME_LENGTH
+from imbue.mngr_imbue_cloud.slices.bare_metal import MAX_SLICE_INSTANCE_NAME_LENGTH
 from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_BOOT_DISK_GIB
 from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_CONTAINER_MEMORY_RESERVE_MIB
+from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_HOST_ID_HEX_LENGTH
+from imbue.mngr_imbue_cloud.slices.bare_metal import assert_env_name_fits_slice_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import build_slice_container_memory_start_args
 from imbue.mngr_imbue_cloud.slices.bare_metal import choose_raid_level
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_capacity
@@ -30,6 +34,7 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_vcpus
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slot_count
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_authorized_key_lines
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_slice_resource_names
+from imbue.mngr_imbue_cloud.slices.bare_metal import find_first_ready_server_in_datacenter
 from imbue.mngr_imbue_cloud.slices.bare_metal import find_server_capacity_by_id
 from imbue.mngr_imbue_cloud.slices.bare_metal import foreign_tier_slice_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import is_slice_owned_by_env
@@ -46,12 +51,13 @@ def _server(
     status: str,
     slot_count: int = 8,
     server_id: str = "11111111-1111-1111-1111-111111111111",
+    region: str = "vin",
 ) -> BareMetalServer:
     now = datetime.now(timezone.utc)
     return BareMetalServer(
         id=BareMetalServerDbId(server_id),
         plan_code="24rise02-v1-us",
-        region="vin",
+        region=region,
         slot_count=slot_count,
         status=BareMetalServerStatus(status),
         created_at=now,
@@ -161,18 +167,28 @@ def test_slice_lima_names_are_deterministic_and_distinct() -> None:
     assert slice_lima_instance_name(host_id) == slice_lima_instance_name(host_id)
     assert slice_lima_instance_name(host_id) != slice_lima_instance_name(other_id)
     assert slice_lima_disk_name(host_id) != slice_lima_instance_name(host_id)
-    assert host_id.get_uuid().hex in slice_lima_instance_name(host_id)
+    assert host_id.get_uuid().hex[:SLICE_HOST_ID_HEX_LENGTH] in slice_lima_instance_name(host_id)
 
 
-def test_slice_lima_names_stamp_the_env_and_keep_the_host_hex() -> None:
+def test_slice_lima_names_stamp_the_env_and_keep_the_truncated_host_hex() -> None:
     host_id = HostId.generate()
+    host_hex = host_id.get_uuid().hex[:SLICE_HOST_ID_HEX_LENGTH]
     stamped = slice_lima_instance_name(host_id, "dev-josh-foo")
     legacy = slice_lima_instance_name(host_id)
-    assert stamped == f"mngr-slice-dev-josh-foo-{host_id.get_uuid().hex}"
-    assert legacy == f"mngr-slice-{host_id.get_uuid().hex}"
+    assert stamped == f"mngr-slice-dev-josh-foo-{host_hex}"
+    assert legacy == f"mngr-slice-{host_hex}"
     # The disk name is the instance name plus the data suffix, for both forms.
     assert slice_lima_disk_name(host_id, "dev-josh-foo") == f"{stamped}-data"
     assert slice_lima_disk_name(host_id) == f"{legacy}-data"
+
+
+def test_slice_name_env_owner_parses_pre_truncation_full_hex_names() -> None:
+    # Slices baked before the hex truncation carry the full 32-char host hex;
+    # every parser must keep attributing them correctly.
+    full_hex = HostId.generate().get_uuid().hex
+    assert slice_name_env_owner(f"mngr-slice-dev-josh-foo-{full_hex}") == "dev-josh-foo"
+    assert slice_name_env_owner(f"mngr-slice-dev-josh-foo-{full_hex}-data") == "dev-josh-foo"
+    assert slice_name_env_owner(f"mngr-slice-{full_hex}") is None
 
 
 def test_slice_name_env_owner_distinguishes_stamped_legacy_and_non_slice() -> None:
@@ -270,6 +286,29 @@ def test_find_server_capacity_by_id_raises_when_absent() -> None:
     only = compute_capacity(_server(SERVER_STATUS_READY, slot_count=8), used_slots=0)
     with pytest.raises(SliceCapacityError):
         find_server_capacity_by_id([only], BareMetalServerDbId("99999999-9999-9999-9999-999999999999"))
+
+
+def test_find_first_ready_server_in_datacenter_returns_the_first_ready_row_in_that_datacenter() -> None:
+    not_ready = _server(SERVER_STATUS_ORDERED, server_id="11111111-1111-1111-1111-111111111111")
+    first_ready = _server(SERVER_STATUS_READY, server_id="22222222-2222-2222-2222-222222222222")
+    later_ready = _server(SERVER_STATUS_READY, server_id="33333333-3333-3333-3333-333333333333")
+    chosen = find_first_ready_server_in_datacenter([not_ready, first_ready, later_ready], "vin")
+    assert chosen is not None
+    assert chosen.id == first_ready.id
+
+
+def test_find_first_ready_server_in_datacenter_ignores_other_datacenters() -> None:
+    hil_ready = _server(SERVER_STATUS_READY, server_id="22222222-2222-2222-2222-222222222222", region="hil")
+    vin_ready = _server(SERVER_STATUS_READY, server_id="33333333-3333-3333-3333-333333333333", region="vin")
+    chosen = find_first_ready_server_in_datacenter([hil_ready, vin_ready], "hil")
+    assert chosen is not None
+    assert chosen.id == hil_ready.id
+
+
+def test_find_first_ready_server_in_datacenter_returns_none_when_no_ready_row_matches() -> None:
+    assert find_first_ready_server_in_datacenter([], "vin") is None
+    assert find_first_ready_server_in_datacenter([_server(SERVER_STATUS_INSTALLING)], "vin") is None
+    assert find_first_ready_server_in_datacenter([_server(SERVER_STATUS_READY, region="hil")], "vin") is None
 
 
 def test_compute_orphan_slice_instance_names_returns_this_envs_untracked_slice_vms() -> None:
@@ -443,3 +482,25 @@ def test_parse_raw_swap_devices_ignores_md_backed_swap_and_empty_input() -> None
     md_swap = "Filename\tType\tSize\tUsed\tPriority\n/dev/md1 partition 524284 0 -2\n"
     assert parse_raw_swap_devices(md_swap) == []
     assert parse_raw_swap_devices("") == []
+
+
+def test_env_names_at_the_slice_name_cap_pass_and_longer_ones_fail() -> None:
+    # The binding constraint is limactl's instance-name budget (its ssh socket
+    # path must fit UNIX_PATH_MAX); an env at the cap must land exactly on it.
+    host_id = HostId.generate()
+    at_cap = "c" * MAX_SLICE_ENV_NAME_LENGTH
+    assert_env_name_fits_slice_names(at_cap)
+    assert len(slice_lima_instance_name(host_id, at_cap)) == MAX_SLICE_INSTANCE_NAME_LENGTH
+    # The secondary 76-char identifier cap must also hold for the disk name.
+    assert len(slice_lima_disk_name(host_id, at_cap)) <= 76
+
+    with pytest.raises(SliceCapacityError, match="instance name"):
+        assert_env_name_fits_slice_names("c" * (MAX_SLICE_ENV_NAME_LENGTH + 1))
+
+
+def test_orchestrator_style_ci_env_names_fit_the_slice_name_cap() -> None:
+    # The CI orchestrator mints ``ci-<16-char-timestamp>-<8-hex>`` names (28
+    # chars, see _mint_shared_env_name); both real incidents -- the 77-char disk
+    # identifier and the UNIX_PATH_MAX ssh.sock overflow -- must stay fixed for
+    # that shape.
+    assert_env_name_fits_slice_names("ci-20260820t171706z-b0c869d1")

@@ -13,6 +13,15 @@ from imbue.mngr_vps.config import VpsProviderConfig
 
 CONNECTOR_URL_ENV_VAR = "MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL"
 
+# Base URL of the tier's browser accounts origin (e.g. https://accounts.imbue.com
+# on production) -- the host where the hosted login/signup pages actually work:
+# Google's OAuth redirect URI is registered there, and the browser session
+# cookie's Domain is scoped to its apex. Only `auth login` (which opens a
+# browser) consumes this; API traffic stays on the connector URL. Unset means
+# the tier has no dedicated accounts origin (dev/CI) and the connector host
+# serves the pages itself.
+ACCOUNTS_URL_ENV_VAR = "MNGR__PROVIDERS__IMBUE_CLOUD__ACCOUNTS_URL"
+
 
 class MissingConnectorUrlError(ImbueCloudError):
     """Raised when the provider's connector URL is unset (no field, no env)."""
@@ -63,6 +72,18 @@ class ImbueCloudProviderConfig(VpsProviderConfig):
             "baked-in default; raise when neither source supplies a value."
         ),
     )
+    accounts_url: AnyUrl | None = Field(
+        default=None,
+        description=(
+            "Base URL of the tier's browser accounts origin (e.g. https://accounts.imbue.com). "
+            "Declared so the MNGR__PROVIDERS__IMBUE_CLOUD__ACCOUNTS_URL env override is a valid "
+            "config key (mngr parses every MNGR__PROVIDERS__* env var as a provider-config "
+            "override and rejects unknown fields). `auth login` resolves the value from its "
+            "--accounts-url flag or that env var directly, not from this field: plugin-local "
+            "CLI commands run without a loaded mngr config. None means the tier has no "
+            "dedicated accounts origin and the login page opens on the connector host."
+        ),
+    )
     container_ssh_port: int = Field(
         default=2222,
         description="Port that maps to sshd inside the leased docker container",
@@ -99,7 +120,10 @@ def get_active_profile_dir(default_host_dir: Path) -> Path:
     available, e.g. inside ``ImbueCloudProvider`` methods).
 
     Raises ``ImbueCloudError`` if mngr hasn't been initialized in this
-    host_dir yet -- there's nothing to attach plugin state to.
+    host_dir yet -- there's nothing to attach plugin state to -- and for an
+    unreadable or malformed root config, so callers (including a desktop
+    client's render-path identity cache) only ever have to handle
+    ``ImbueCloudError``.
     """
     expanded = default_host_dir.expanduser()
     config_path = expanded / "config.toml"
@@ -107,11 +131,18 @@ def get_active_profile_dir(default_host_dir: Path) -> Path:
         raise ImbueCloudError(
             f"mngr root config not found at {config_path}; run any `mngr` command once to initialize."
         )
-    root_config = tomllib.loads(config_path.read_text())
+    try:
+        root_config = tomllib.loads(config_path.read_text())
+    except OSError as exc:
+        raise ImbueCloudError(f"Failed to read mngr root config at {config_path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise ImbueCloudError(f"mngr root config at {config_path} is not valid UTF-8: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ImbueCloudError(f"mngr root config at {config_path} is not valid TOML: {exc}") from exc
     profile_id = root_config.get("profile")
-    if not profile_id:
+    if not isinstance(profile_id, str) or not profile_id:
         raise ImbueCloudError(
-            f"mngr root config at {config_path} has no `profile` field; reinitialize with `mngr config init`."
+            f"mngr root config at {config_path} has no valid `profile` entry; reinitialize with `mngr config init`."
         )
     return expanded / "profiles" / profile_id
 

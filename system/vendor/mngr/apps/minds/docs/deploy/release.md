@@ -134,7 +134,7 @@ Also maintain the connector's wire-compat snapshot corpus (`apps/remote_service_
 
 On the DEFAULT_WORKSPACE_TEMPLATE release branch (cut from `origin/main`, clean tree), with the **mngr checkout positioned at `GREEN_MNGR_SHA`** (the mngr release-branch HEAD), run the sync recipe. You can do this the moment the bump commit exists — no need to wait for step 2's CI.
 
-`just sync-vendor-mngr` reads `DEFAULT_WORKSPACE_TEMPLATE_DIR` from your `apps/minds/.env` (Session setup) — no path is baked into the justfile. It does `git archive HEAD` → DEFAULT_WORKSPACE_TEMPLATE `system/vendor/mngr` (tracked files only; keep `apps/minds/`), commits `Sync system/vendor/mngr to <branch> (<short>)`, aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty, and **does not push** — it prints the exact `cd … && git push` line (with the resolved DEFAULT_WORKSPACE_TEMPLATE path) for you to run. For why releases use `git archive` (vs the dev loop's `rsync`), see `apps/minds/docs/vendor-mngr-sync.md`.
+`just sync-vendor-mngr` reads `DEFAULT_WORKSPACE_TEMPLATE_DIR` from your `apps/minds/.env` (Session setup) — no path is baked into the justfile. It does `git archive HEAD` → DEFAULT_WORKSPACE_TEMPLATE `system/vendor/mngr` (tracked files only; keep `apps/minds/`), regenerates DEFAULT_WORKSPACE_TEMPLATE's root `uv.lock`, commits both as `Sync system/vendor/mngr to <branch> (<short>)`, aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty, and **does not push** — it prints the exact `cd … && git push` line (with the resolved DEFAULT_WORKSPACE_TEMPLATE path) for you to run. For why releases use `git archive` (vs the dev loop's `rsync`), see `apps/minds/docs/vendor-mngr-sync.md`.
 
 ```bash
 just sync-vendor-mngr                       # reads DEFAULT_WORKSPACE_TEMPLATE_DIR from .env
@@ -232,7 +232,9 @@ The bake runs *with Lima itself* (the image is built by the same virtualizer tha
 
 #### One-time environment setup (do once per environment, not per release)
 
-Setup is one script, `scripts/lima_image/setup_tier.py`. It is idempotent (re-running reports what exists and changes nothing) and takes a full environment name rather than a tier, so each dev gets their own bucket and cannot overwrite another dev's image or production's: `production`, `staging`, `dev-<name>`.
+Setup is one script, `scripts/r2/setup_tier.py`. It is idempotent (re-running reports what exists and changes nothing) and takes a full environment name rather than a tier, so each dev gets their own bucket and cannot overwrite another dev's image or production's: `production`, `staging`, `dev-<name>`.
+
+The same script provisions the release-channel feed under `--kind update-feed`, in its own bucket with its own hostname and its own bucket-scoped credential — see [One-time feed setup](#one-time-feed-setup-do-once-per-environment). The steps below leave it at its default `--kind lima-images`.
 
 1. **Provision the bucket, the custom domain, and a publish credential**, using the environment's existing Vault `cloudflare` entry:
    ```bash
@@ -240,7 +242,7 @@ Setup is one script, `scripts/lima_image/setup_tier.py`. It is idempotent (re-ru
    for key in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_ZONE_ID CLOUDFLARE_DOMAIN; do
      export $key=$(vault kv get -mount=secrets -field=value minds/<tier>/cloudflare/$key)
    done
-   uv run python scripts/lima_image/setup_tier.py --env production --dry-run   # review, then drop --dry-run
+   uv run python scripts/r2/setup_tier.py --env production --dry-run   # review, then drop --dry-run
    ```
    It creates `minds-lima-images-<env>`, attaches `lima-images-<env>.<domain>`, and mints an R2 token **scoped to that one bucket**, printing the `R2_*` credentials the publish step needs. The account-wide token above is only used to provision; whoever publishes only ever holds the bucket-scoped credential, which is `AccessDenied` against every other bucket.
 
@@ -255,7 +257,7 @@ Setup is one script, `scripts/lima_image/setup_tier.py`. It is idempotent (re-ru
    lima_image_base_url = "https://lima-images-production.minds.example"
    lima_image_minisign_public_key = "RW...."                          # contents of minds-lima-<env>.pub line 2
    ```
-   These are public (a URL + a public key), so they belong in the committed `client.toml` next to the other URLs. A dev env can set the same two keys in `~/.minds-<name>/client.toml` (the `minds env deploy` writer round-trips them when present on the `ClientEnvConfig`).
+   These are public (a URL + a public key), so they belong in the committed `client.toml` next to the other URLs. A dev env can set the same two keys in `~/.minds-<name>/client.toml` (the `minds-admin env deploy` writer round-trips them when present on the `ClientEnvConfig`).
 
 #### Per-release publish
 
@@ -278,7 +280,7 @@ export R2_ACCESS_KEY_ID=...      # bucket-scoped; cannot touch any other environ
 export R2_SECRET_ACCESS_KEY=...
 
 ./scripts/build-lima-image.sh --default-workspace-template-ref "$VERSION"     # emits qcow2 + raw under scripts/lima_image/output-<arch>/
-uv run python scripts/lima_image/publish.py \
+uv run python -m scripts.lima_image.publish \
   --version "$VERSION" --arch "$(uname -m | sed 's/arm64/aarch64/')" \
   --raw-image scripts/lima_image/output-*/mngr-lima-*.raw \
   --bucket minds-lima-images-production \
@@ -312,9 +314,237 @@ It must print a manifest naming `$VERSION` and listing an entry per shipped arch
 
 A tag that has an image published under it is **immutable**: never move it and never republish different bytes under it. Clients cache on `(version, arch)` and only re-fetch when the signed manifest names a different hash, so a moved tag means the image and the code a create clones can silently disagree. Need different content? Cut a new tag.
 
-### 9. Optional: dev verify + ship
+### 9. Optional: dev verify + promote
 
-Drive the build's ToDesktop zip (`https://dl.todesktop.com/26032588hqdzk/builds/<build_id>/mac/zip/arm64`, replaces `/Applications/Minds.app`) or the dev build through create-agent → first message. To publish, click **Release** at `https://app.todesktop.com/apps/26032588hqdzk/builds/<build_id>` (the `todesktop release` CLI is auth-blocked); auto-updater picks it up on next launch.
+Drive the build's ToDesktop zip (`https://dl.todesktop.com/26032588hqdzk/builds/<build_id>/mac/zip/arm64`, replaces `/Applications/Minds.app`) or the dev build through create-agent → first message. To ship it, point a channel at the build in `apps/minds/release-channels.toml` (see Release channels below); clients pick it up on their next check.
+
+**Release the first channel-capable build in ToDesktop.** Nothing shipped so far
+has the channel code -- every install in the field runs `@todesktop/runtime`
+against ToDesktop's feed -- so the *Release* action is the only thing that can
+reach them. Until a build carrying the code is Released there, no user ever
+reads our manifests.
+
+After that one Release the field is on our feed and channels take over, and the
+action governs only ToDesktop's own hosted download page.
+
+## Release channels
+
+Clients only offer a channel beyond stable when the tier's `client.toml` sets
+`update_feed_base_url`; a tier that sets none is stable-only and still auto-updates.
+Production sets it (`https://updates.imbueminds.com`), so builds cut from here offer
+stable and alpha; beta is in the machinery but listed for nobody until an audience
+for it is decided. That URL is compiled in at build time, so installs shipped before it was
+committed stay stable-only for good. See `specs/minds-release-channels/spec.md`.
+
+### Working on the update UI
+
+The updater does not run in dev at all: `app.isPackaged` gates it, so `pnpm start`
+reports itself disabled and never checks, downloads, or installs. That is not a
+limitation to work around -- an unpackaged app has no signed bundle for Squirrel
+to swap, so there is nothing for a dev run to update.
+
+| what you are working on | where |
+|---|---|
+| the card, or its copy | `/_dev/styleguide`, where it is catalogued with a made-up version |
+| the panel, or its copy | Settings > Updates in a dev run, which renders the disabled state |
+| what a channel currently serves | `curl https://updates.imbueminds.com/alpha-mac.yml` |
+| checking, downloading, installing, restarting | a packaged build, and nothing else |
+
+Frontend edits need the app restarted, not reloaded. `pnpm start` builds the SPA
+in its `prestart` step, so an edit made after that is not in the bundle being
+served and `Cmd-R` re-fetches the same one; restarting rebuilds it.
+
+### One-time feed setup (do once per environment)
+
+The channel manifests live in their own R2 bucket, `minds-update-feed-<env>`, separate from the Lima image store so a publish of one can never overwrite the other and the credential minted for one is `AccessDenied` against the other. Provision it with the same script, under the other kind, and the same Vault `cloudflare` entry as §8's one-time setup:
+
+```bash
+uv run python scripts/r2/setup_tier.py --env production --kind update-feed --dry-run   # review, then drop --dry-run
+```
+
+It creates the bucket, attaches `updates.<domain>` (production serves the bare name, every other environment gets `updates-<env>.<domain>`), and prints the `R2_*` credentials scoped to that one bucket.
+
+The hostname is **permanent**. It is compiled into every binary through `client.toml`, so every build ever shipped keeps requesting that exact name — it can never be changed without stranding the installs that already carry it. That is why it needs a custom domain rather than an `r2.dev` URL, which is account- and bucket-derived. The rate-limit argument that forces one on the image store does not apply here: one small file polled every ten minutes, not ~65,000 chunks per extract.
+
+Then:
+
+1. **Store the printed credentials in Vault**, under the names the publish workflow reads: `minds/release/R2_UPDATE_FEED_ACCOUNT_ID`, `minds/release/R2_UPDATE_FEED_ACCESS_KEY_ID`, `minds/release/R2_UPDATE_FEED_SECRET_ACCESS_KEY`. They are reachable only from the `minds-release` environment, which is what keeps them away from PR-authored code.
+2. **Commit the public value** into the tier's `config/envs/<tier>/client.toml`, once the hostname is live:
+   ```toml
+   update_feed_base_url = "https://updates.imbueminds.com"
+   ```
+   Nothing is signed here, so there is no minisign key to go with it: the manifests carry ToDesktop's own sha512 digests and the artifacts stay on ToDesktop's CDN.
+
+Only builds cut **after** that commit can offer a channel beyond stable, because the URL is baked in at build time. Until it lands, and on any tier that sets no value, the app offers stable only and updates from ToDesktop's own feed.
+
+### Cutting an alpha
+
+**An alpha cut is this same procedure.** Steps 1-7 are unchanged: bump `version` +
+`FALLBACK_BRANCH`, refresh dwt `system/vendor/mngr`, prove the pair green, land, tag
+both repos `minds-v<version>`. Alpha differs in exactly two places:
+
+- **Step 9 is replaced.** Instead of clicking *Release* in ToDesktop, edit
+  `apps/minds/release-channels.toml` to name the build, and merge. Every channel
+  is promoted this way now, stable included.
+- **Steps 8b/8c and the pool bake are skipped.** Neither is a correctness gate:
+  a missing Lima image makes the client build in-VM (~45s becomes ~5min), and a
+  pool with no row at the tag falls back to leasing any host and rebuilding its
+  container. Alpha accepts both. Beta and stable bake before promoting.
+
+Three mechanics worth knowing, because they are not obvious:
+
+- `FALLBACK_BRANCH` names a tag that **does not exist yet** (step 1 sets it, step 7
+  creates it). That forward reference is load-bearing: a pointer naming a dwt *SHA*
+  has no fixed point, because `build_info.py` is inside the tree vendored into dwt,
+  so committing the SHA changes the content the SHA is derived from.
+- **The bump commit is what makes concurrent cuts safe.** Two cuts read the same
+  version from `main`, both push a bump, and git rejects the second as
+  non-fast-forward; it re-reads and takes the next number. The collision surfaces
+  at bump time, not twenty minutes later at tag time.
+- **A failed cut burns its version.** Never reuse it -- reuse skips the bump commit,
+  which is the arbiter, so two cuts could reuse the same number and collide at
+  tagging. Gaps are harmless; after a burn, `main`'s `package.json` names the last
+  *attempted* cut, so "what is the current release" means the latest tag.
+
+**Every channel is a pointer we publish**, stable included, and **promotion is a
+pull request**.
+Edit `apps/minds/release-channels.toml` to name the build a channel should serve,
+open a PR, and CI dry-runs every gate against it so review sees whether it would
+actually publish. Merging applies it.
+
+When the channel is **stable**, bump the connector's download fallback in the same
+PR: `_DEFAULT_TARGET_BY_PLATFORM[_MAC_ARM64_PLATFORM]` in
+`apps/remote_service_connector/imbue/remote_service_connector/accounts_web.py`, to
+`https://download.todesktop.com/26032588hqdzk/Minds%20<version>%20-%20Build%20<build_id>-arm64.dmg`.
+That is what `GET /download` serves while the feed cannot be read, so leaving it
+behind means an outage hands people an older build. Leaving it *ahead* of stable
+is the one to avoid: `allowDowngrade` is false, so those installs never come back
+down, while a fallback behind stable self-heals on the next update check.
+
+The bump reaches production at the next connector deploy rather than at merge,
+so the deployed value trails `main` for a while -- behind stable, which is the
+safe direction. Withdrawing stable moves the constant the other way and does not
+get that grace: until the deploy lands, the deployed fallback still names the
+withdrawn build. See Withdrawing a build.
+
+```toml
+[channels.stable]
+build_id = "260801n4rh5zv5d"
+version = "0.3.11"
+fallback_branch = "minds-v0.3.11"
+
+[channels.alpha]
+build_id = "260814ybsmu8m14"
+version = "0.3.12"
+fallback_branch = "minds-v0.3.12"
+```
+
+Installs that predate channels configure no feed host and keep reading
+ToDesktop's feed, so moving `stable` here does not reach them. They roll onto
+this manifest the first time they take a build that names a host -- there is no
+flag day and nothing to migrate by hand.
+
+Nothing is written unless the build has a ToDesktop manifest, the declared
+version matches that build, and the move is not backwards (`--allow-rollback` to
+withdraw a build). Versions must be plain `X.Y.Z`: they are stamped once at cut
+so promotion stays a pointer move over the bytes that actually soaked.
+
+`fallback_branch` must be `minds-v<version>` — the tag a build at that version
+clones, since step 1 moves the version and `FALLBACK_BRANCH` together. Nothing
+here can read the tag baked into the build, so leaving the previous release's tag
+beside a bumped version would point the image gate below at the wrong image.
+
+That image gate runs only on a tier whose `client.toml` sets
+`lima_image_base_url`, where the image must exist for the tag on each arch the run
+names — `--arch`, which defaults to `aarch64` alone, so an x86_64 image is
+checked only when you ask for it (`--arch aarch64 --arch x86_64`).
+Production sets no image store today, so that gate does not run there and the job
+says so in its output — publish a build's image (§8b) before promoting it
+regardless, on every arch you ship, or those users silently lose the fast create
+path.
+
+### Withdrawing a build
+
+Withdrawing **stable** also means lowering the connector's download fallback to
+the build being rolled back to, and deploying the connector. Until that lands,
+the fallback names the withdrawn build -- the one direction the promotion step
+warns about, since `allowDowngrade` is false and anyone who takes it during a
+feed outage stays on it.
+
+A channel moves only by repointing its entry. **Removing an entry withdraws
+nothing** — no manifest is ever deleted, so the channel keeps serving its last
+build; the run names it instead of reporting a promotion.
+
+So `git revert` is the undo only between two builds carrying the *same* version,
+which is the ordinary alpha case (a version is stamped once per cut, and every
+build until the next cut repeats it). Reverting a version *bump* moves the channel
+backwards, which is refused unless `--allow-rollback` is passed — and CI never
+passes it, deliberately: a withdrawal is not something a merge should do by
+accident. Run it by hand against the bucket, with R2 credentials in the
+environment (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), after
+landing the file edit so the file and the bucket agree:
+
+```bash
+uv run python -m scripts.release_channel.publish \
+  --app-id "$(node -e "console.log(require('./apps/minds/todesktop.js').id)")" \
+  --bucket minds-update-feed-production \
+  --feed-base-url https://updates.imbueminds.com --dry-run
+```
+
+Drop `--dry-run` to write, and add `--allow-rollback` for the backwards case.
+Either way this only stops *new* installs: users who already took the withdrawn
+build stay on it, because `allowDowngrade` is false.
+
+## The public download link
+
+`https://minds.imbue.com/download?platform=mac-arm64` is the link to hand
+anyone who wants minds. It records a campaign-tagged download event (the
+`imbue_attribution` cookie, so a download can be tied to the account created
+later) and redirects to what the **stable channel** serves.
+
+Name the architecture when you share it: minds ships Apple Silicon only, and
+`mac-arm64` says so. `mac` resolves to exactly the same place and is what the
+marketing site's buttons use -- see `apps/remote_service_connector/docs/
+attribution-cookie-contract.md`, which is the contract with that site -- so it
+is not ours to remove.
+
+`accounts.imbue.com/download` answers identically, which is confusing rather
+than useful: both are Modal custom domains on the same connector, and the route
+happens to be reachable on either. They are not interchangeable elsewhere --
+`accounts` is the sign-in surface and the origin baked into password-reset
+links, `minds` is the hosted web chrome -- so share the `minds` one.
+
+The connector reads the arm64 `.dmg` out of `stable-mac.yml` and caches it
+briefly, so promoting stable moves the link by itself. The target is read rather
+than written because the connector deploys on its own schedule: a value baked in
+during a release would not reach the running service until somebody redeployed
+it.
+
+If the manifest cannot be read the link falls back to a build pinned in the
+connector. A failed read is cached for the same minute a success is, so an
+outage costs one download two fetch attempts rather than costing all of them.
+
+Promoting stable bumps that pin (see Release channels above), and the bump
+reaches production at the next connector deploy rather than at merge, so the
+deployed fallback lags `main` -- behind stable rather than ahead, which is the
+safe direction.
+
+Because the pin names the build stable serves, the two below agree whether or
+not the feed was read: agreement is not proof the link is tracking stable. In
+the minute after a promotion a disagreement is just the connector's cache, and
+clears itself. After that it means both at once: the pin is served only when a
+read fails, so the feed could not be read *and* the deployed connector pins a
+build other than the one stable serves. The connector logs `Could not resolve
+the stable download link` when a read fails, with the failure attached to the
+event rather than spelled into the line, and that log is what tells a resolved
+redirect from a fallback one.
+
+To check the link serves what stable serves:
+
+```bash
+curl -s https://updates.imbueminds.com/stable-mac.yml | grep -o 'https://[^ ]*arm64\.dmg'
+curl -s -o /dev/null -D - 'https://minds.imbue.com/download?platform=mac-arm64' | grep -i location
+```
 
 ## Failure modes worth knowing
 

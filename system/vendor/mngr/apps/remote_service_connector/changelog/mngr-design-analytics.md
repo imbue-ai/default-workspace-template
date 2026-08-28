@@ -1,0 +1,3 @@
+Access logs are now single-line JSON and carry the authenticated user: the connector's auth paths (bearer, browser session, share-authorize) stash the full SuperTokens user id into ASGI scope state, and the shared request-logging middleware includes it as the `user` field on the per-request JSON record. `UserAuth` gains an optional `user_id` field carrying the full id.
+
+The share-authorize path additionally emits one append-only `share_visit_authorized` JSON log line per authorized visit (visitor user id, host id, owner share label, workspace domain, is_owner) -- the existing `share_tunnel_logins` upsert only keeps last-login state, so these lines are the visit history the analytics aggregation reads from OpenObserve.

@@ -1,0 +1,9 @@
+# Top-level pins for the Bugsink instance venv; compiled to the hash-locked
+# bugsink_requirements.txt next to this file. Regenerate after a bump with:
+#   uv pip compile --generate-hashes --universal --python-version 3.13 \
+#     --exclude-newer <2-weeks-ago, supply-chain cooldown> \
+#     apps/observability/imbue/observability/deploy_assets/bugsink_requirements.in \
+#     -o apps/observability/imbue/observability/deploy_assets/bugsink_requirements.txt
+# then re-diff bugsink_conf.py against the new upstream docker.py.template.
+bugsink==2.5.0
+psycopg2-binary==2.9.12

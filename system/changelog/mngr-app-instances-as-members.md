@@ -1,0 +1,3 @@
+`layout.py open <app> --new` mints a fresh numbered app instance through the workspace's allocator endpoint and prints the minted `service:<name>?instance=...` ref to stdout; every panel-addressing op accepts instance refs, and a bare service ref now matches any of the app's instance panels in inspect, require-open, and wait-stable checks.
+
+The vendored dufs frontend (the file viewer) gains a second minds patch: a location beacon that posts the path being viewed one hop up to the workspace shell on each page load, so a file-viewer instance reopens at the folder it was looking at. The asset cache-bust revision is bumped to `?v=minds-2`.

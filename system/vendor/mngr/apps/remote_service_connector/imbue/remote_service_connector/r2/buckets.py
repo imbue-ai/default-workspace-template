@@ -18,6 +18,7 @@ import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.r2.stores as stores_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.entitlements import AccountEntitlements
@@ -31,7 +32,7 @@ from imbue.remote_service_connector.errors import R2BucketNotFoundError
 from imbue.remote_service_connector.errors import R2ReservedBucketNameError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.naming import DEFAULT_R2_KEY_ALIAS
-from imbue.remote_service_connector.r2.naming import RESERVED_BUCKET_SHORT_NAME_PREFIX
+from imbue.remote_service_connector.r2.naming import RESERVED_BUCKET_SHORT_NAME_PREFIXES
 from imbue.remote_service_connector.r2.naming import WORKSPACE_BACKUP_SHORT_NAME_RE
 from imbue.remote_service_connector.r2.naming import bucket_owner_prefix
 from imbue.remote_service_connector.r2.naming import derive_s3_secret_access_key
@@ -190,7 +191,10 @@ def _check_storage_quota_for_new_bucket(
     try:
         live_bytes = measure_live_owner_usage_bytes(ops, user_id_prefix)
     except (CloudflareApiError, httpx.HTTPError) as exc:
-        logger.warning("Skipped the storage-quota check for bucket creation (usage read failed): %s", exc)
+        # Fail-open on an enforcement decision: worth a low-priority report,
+        # and the metric's rate shows whether failing open is becoming routine.
+        emit_metric("cloudflare_api_failed", 1, {"operation": "bucket_creation_quota_check"})
+        logger.warning("Skipped the storage-quota check for bucket creation (usage read failed)", exc_info=exc)
         return
     if live_bytes > entitlements.max_total_bucket_bytes:
         raise_quota_exceeded(
@@ -202,14 +206,16 @@ def best_effort_revoke_token(ops: CloudflareOps, token_id: str) -> None:
     try:
         ops.delete_bucket_token(token_id)
     except (CloudflareApiError, httpx.HTTPError) as exc:
-        logger.warning("Failed to revoke R2 token %s: %s", token_id, exc)
+        emit_metric("cloudflare_api_failed", 1, {"operation": "best_effort_revoke_token"})
+        logger.warning("Failed to revoke R2 token %s", token_id, exc_info=exc)
 
 
 def _best_effort_delete_bucket(ops: CloudflareOps, bucket_name: str) -> None:
     try:
         ops.delete_bucket(bucket_name)
     except (CloudflareApiError, R2BucketNotEmptyError, R2BucketNotFoundError, httpx.HTTPError) as exc:
-        logger.warning("Failed to roll back bucket %s: %s", bucket_name, exc)
+        emit_metric("cloudflare_api_failed", 1, {"operation": "bucket_rollback_delete"})
+        logger.warning("Failed to roll back bucket %s", bucket_name, exc_info=exc)
 
 
 def key_info_from_row(row: dict[str, Any]) -> R2KeyInfo:
@@ -267,32 +273,27 @@ def _mint_and_record_key(
         raise HTTPException(status_code=502, detail=f"Failed to provision bucket key: {exc}") from exc
 
 
-def _workspace_record_exists(user_id: str, host_id: str) -> bool:
-    """Whether the user has a workspace record (any state) for ``host_id``."""
-    conn = db.get_pool_db_connection()
-    try:
+def _workspace_record_exists(user_id: str, short_name: str) -> bool:
+    """Whether the user has a workspace record (any state) whose workspace or host id is ``short_name``."""
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT 1 FROM workspace_records WHERE user_id = %s AND host_id = %s",
-                (user_id, host_id),
+                "SELECT 1 FROM workspace_records WHERE user_id = %s AND (host_id = %s OR agent_id = %s)",
+                (user_id, short_name, short_name),
             )
             return cur.fetchone() is not None
-    finally:
-        conn.close()
 
 
-def _workspace_record_is_active(user_id: str, host_id: str) -> bool:
-    """Whether the user has an ACTIVE workspace record for ``host_id``."""
-    conn = db.get_pool_db_connection()
-    try:
+def _workspace_record_is_active(user_id: str, short_name: str) -> bool:
+    """Whether the user has an ACTIVE workspace record whose workspace or host id is ``short_name``."""
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT 1 FROM workspace_records WHERE user_id = %s AND host_id = %s AND state = 'active'",
-                (user_id, host_id),
+                "SELECT 1 FROM workspace_records "
+                "WHERE user_id = %s AND (host_id = %s OR agent_id = %s) AND state = 'active'",
+                (user_id, short_name, short_name),
             )
             return cur.fetchone() is not None
-    finally:
-        conn.close()
 
 
 @router.post("/buckets")
@@ -303,15 +304,15 @@ def create_bucket_endpoint(request: Request, body: CreateBucketRequest) -> dict[
         entitlements = entitlements_module.resolve_entitlements_for_user(owner_user_id, user)
         ops = cloudflare_module.get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, body.name)
-        # The `host-` short-name shape is reserved for workspace-backup buckets:
-        # allowed only when the caller has a workspace record (any state) with
-        # that host id, so generic user buckets can never collide with the
-        # names the backup reapers act on. The check runs on the slugified
-        # short name -- the name the bucket is actually created under -- so
-        # case/punctuation variants (e.g. 'HOST-abc') cannot slip into the
-        # reserved namespace.
+        # The `host-` / `agent-` short-name shapes are reserved for
+        # workspace-backup buckets: allowed only when the caller has a
+        # workspace record (any state) with that host or workspace id, so
+        # generic user buckets can never collide with the names the backup
+        # reapers act on. The check runs on the slugified short name -- the
+        # name the bucket is actually created under -- so case/punctuation
+        # variants (e.g. 'HOST-abc') cannot slip into the reserved namespace.
         short_name = slugify_r2_name(body.name)
-        if short_name.startswith(RESERVED_BUCKET_SHORT_NAME_PREFIX) and not _workspace_record_exists(
+        if short_name.startswith(RESERVED_BUCKET_SHORT_NAME_PREFIXES) and not _workspace_record_exists(
             owner_user_id, short_name
         ):
             raise R2ReservedBucketNameError(short_name)

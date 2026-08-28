@@ -129,10 +129,54 @@ def test_model_bar_stdout_confirmations_are_hidden() -> None:
         assert decision.display is DisplayKind.HIDDEN, line
 
 
-def test_look_alike_commands_and_unrelated_stdout_are_untouched() -> None:
+def test_look_alike_commands_are_untouched() -> None:
     assert classify_user_message("/models") is None
     assert classify_user_message("model the data for me") is None
-    assert classify_user_message("<local-command-stdout>Total cost: $1.23</local-command-stdout>") is None
+    # Prose that merely mentions the wrapper is not the wrapper: the match is anchored.
+    assert classify_user_message("the agent printed <local-command-stdout> at me") is None
+
+
+def test_any_local_command_output_is_hidden_not_just_the_model_bars() -> None:
+    # This used to additionally require the text to be one of the model bar's three
+    # confirmations, which left every other allowed command (/cost here, plus /clear,
+    # /compact, /export, /rewind, /plugin, /version, /tui) rendering raw XML in a bubble.
+    for line in (
+        "<local-command-stdout>Total cost: $1.23</local-command-stdout>",
+        "<local-command-stdout>Set model to Fable 5</local-command-stdout>",
+        "<local-command-stderr>something went wrong</local-command-stderr>",
+    ):
+        decision = classify_user_message(line)
+        assert decision is not None, line
+        assert decision.display is DisplayKind.HIDDEN, line
+
+
+def test_bash_blocks_become_chips_rather_than_bubbles() -> None:
+    # Bash mode is NOT flagged isMeta, so without a detector these render as a user
+    # bubble full of raw XML. They stay visible -- the user asked for that output -- but
+    # as a chip, whose body renders in a <pre><code> so it reads as terminal output.
+    command = classify_user_message("<bash-input>ls -la</bash-input>")
+    assert command is not None
+    assert command.display is DisplayKind.CHIP
+    assert command.display_label == "Bash"
+    assert command.display_body == "ls -la"
+
+    # stdout and stderr arrive together in ONE message, the stderr half usually empty.
+    output = classify_user_message("<bash-stdout>test</bash-stdout><bash-stderr></bash-stderr>")
+    assert output is not None
+    assert output.display is DisplayKind.CHIP
+    assert output.display_label == "Output"
+    assert output.display_body == "test"
+
+    # Both streams present: joined in order, not styled apart.
+    both = classify_user_message("<bash-stdout>ok</bash-stdout><bash-stderr>boom</bash-stderr>")
+    assert both is not None
+    assert both.display_body == "ok\nboom"
+
+    # An empty result still chips rather than falling through to a raw-XML bubble.
+    empty = classify_user_message("<bash-stdout></bash-stdout><bash-stderr></bash-stderr>")
+    assert empty is not None
+    assert empty.display is DisplayKind.CHIP
+    assert empty.display_body == ""
 
 
 def test_permission_resolutions_carry_the_verdict() -> None:
@@ -154,6 +198,20 @@ def test_permission_resolutions_carry_the_verdict() -> None:
         assert decision is not None, content
         assert decision.display is DisplayKind.PERMISSION_RESOLUTION
         assert decision.resolution == verdict
+        assert decision.request_id is None
+
+
+def test_permission_resolutions_carry_the_request_id_when_present() -> None:
+    # format_resolution_notice (mngr repo's latchkey/handlers/messaging.py) appends this
+    # exact "(request_id: ...)" suffix after the human-readable message.
+    decision = classify_user_message(
+        "Your permission request for GitHub was granted with the following permissions: "
+        "repo. (request_id: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4)"
+    )
+    assert decision is not None
+    assert decision.display is DisplayKind.PERMISSION_RESOLUTION
+    assert decision.resolution == "granted"
+    assert decision.request_id == "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 
 
 def test_apply_to_stamps_only_present_fields() -> None:
@@ -179,3 +237,12 @@ def test_is_non_turn_tail_matches_model_bar_traffic_and_is_meta() -> None:
     # Awaiting-a-reply injections are NOT non-turn: the agent responds to these.
     assert is_non_turn_tail("/welcome") is False
     assert is_non_turn_tail("<task-notification>x</task-notification>") is False
+
+
+def test_permission_resolution_reads_the_machine_tag_first() -> None:
+    """The tagged form needs no phrasing recognition -- any prose works."""
+    display = classify_user_message("Whatever minds chose to say. (resolution: denied, request_id: evt-9)")
+    assert display is not None
+    assert display.display == DisplayKind.PERMISSION_RESOLUTION
+    assert display.resolution == "denied"
+    assert display.request_id == "evt-9"

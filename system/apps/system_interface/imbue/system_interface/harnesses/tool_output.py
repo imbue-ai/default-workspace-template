@@ -13,6 +13,13 @@ needed the identical behavior):
   ``permission_request`` field), because the object routinely runs past the output cap and
   a mid-object cut would leave the card nothing to read.
 
+  Both readers assume one filing per tool call, with the echo in that call's own
+  result. ``system/scripts/agent_latchkey_request_standalone.sh`` and its checker
+  ``agent_latchkey_request_check.py`` are what hold the agent to it, on every harness;
+  they exist for these two functions and copy ``PERMISSION_REQUEST_HOST`` from here, so
+  changing what counts as a request call -- or how many a result can carry -- means
+  revisiting that gate too.
+
 - **tk step decoration.** tk lifecycle commands print machine-readable decoration on
   stdout (``Updated <id> -> <status>``, ``tk-step <id> title|summary: ...``) that the chat
   progress view reads back from the transcript. Those lines must survive truncation (a tk
@@ -24,9 +31,11 @@ needed the identical behavior):
 import json
 import re
 from typing import Any
+from typing import Final
 
 from loguru import logger
 from pydantic import Field
+from tk_command_parsing.parser import parse_command
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.harnesses.events import DisplayKind
@@ -50,10 +59,33 @@ _TK_OUTPUT_DECORATION_PATTERN = re.compile(
 _TK_COMMAND_PREFIX_RE = re.compile(r"^\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b")
 
 
+# The tk lifecycle verbs, in one place. Previously redefined in all four harnesses.
+_TK_LIFECYCLE_VERBS: Final[frozenset[str]] = frozenset({"create", "start", "close"})
+
+
 def is_pure_tk_lifecycle_command(command: str) -> bool:
     """True when ``command`` is nothing but a tk lifecycle invocation (rendered as a
-    structural marker, not work). See ``_TK_COMMAND_PREFIX_RE`` for the rule."""
+    structural marker, not work). See ``_TK_COMMAND_PREFIX_RE`` for the rule.
+
+    This is the HIDE rule. Contrast :func:`is_tk_lifecycle_anywhere`, which is deliberately
+    broader; the two must not be collapsed.
+    """
     return _TK_COMMAND_PREFIX_RE.match(command) is not None
+
+
+def is_tk_lifecycle_anywhere(command: str) -> bool:
+    """True when a tk lifecycle verb appears ANYWHERE in ``command``.
+
+    This is the TRUNCATION-EXEMPTION rule, and it is deliberately broader than the hide rule:
+    a batched ``cd x && tk create --step ...`` still renders as work, but its input must
+    survive display truncation whole so the step progress view can read the plan out of it.
+    Over-preserving input is harmless; over-hiding work is not.
+
+    Uses the shared shlex parser rather than a regex, so a ``tk close`` merely mentioned inside
+    another command's quoted argument is not mistaken for a real lifecycle call.
+    """
+    parsed = parse_command(command)
+    return parsed is not None and any(s.tk_verb in _TK_LIFECYCLE_VERBS for s in parsed.segments)
 
 
 _PERMISSION_REQUEST_ID_KEY = '"request_id"'

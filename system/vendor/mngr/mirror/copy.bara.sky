@@ -68,7 +68,8 @@ PUBLIC_FILES = glob(
         "libs/skitwright/**",
         # Product apps are public. Deployment/infra apps (modal_litellm,
         # remote_service_connector, observability, share_relay) and internal
-        # tools (slack_exporter) are absent by design.
+        # tools (slack_exporter, minds_admin -- the private operator CLI that
+        # carries the env/pool/server lifecycle) are absent by design.
         "apps/minds/**",
         # scripts/ public subset: each entry is referenced by public code,
         # docs, or the shipped wheel (see the spec's boundary table). The
@@ -96,10 +97,12 @@ PUBLIC_FILES = glob(
     ],
     exclude = [
         # The runnable cloud deployment-test suite and internal agent
-        # instructions. The env/config packages (imbue/minds/envs,
-        # imbue/minds/config/envs) and the imbue/minds/deployment_tests
-        # helper package stay public: the app conftest and collectable
-        # tests import them.
+        # instructions. What remains of imbue/minds/envs (primitives, paths,
+        # vault_reader, docker_cleanup -- the operator-only env machinery
+        # moved to the private apps/minds_admin), the config/envs tier
+        # configs, and the imbue/minds/deployment_tests helper package stay
+        # public: the app runtime, conftest, and collectable tests import
+        # them.
         "apps/minds/CLAUDE.md",
         # Deployment/operations docs: tier runbooks, Vault layout, box/pool
         # operations, release procedure, per-release deploy history. The

@@ -122,6 +122,19 @@ def test_parse_service_log_records_captures_the_origin_label() -> None:
     assert records[0].label == "terminal-x7k9q2w1"
 
 
+def test_parse_service_log_records_captures_the_registered_icon() -> None:
+    text = '{"service": "notes", "url": "http://127.0.0.1:9100", "icon": "<svg viewBox=\\"0 0 24 24\\"></svg>"}\n'
+    records = parse_service_log_records(text)
+
+    assert len(records) == 1
+    assert isinstance(records[0], ServiceLogRecord)
+    assert records[0].icon == '<svg viewBox="0 0 24 24"></svg>'
+    # No ``icon`` in the row -> empty (an app that registered none).
+    bare = parse_service_log_records('{"service": "web", "url": "http://127.0.0.1:9101"}\n')
+    assert isinstance(bare[0], ServiceLogRecord)
+    assert bare[0].icon == ""
+
+
 def test_parse_service_log_records_returns_empty_for_empty_input() -> None:
     assert parse_service_log_records("") == []
     assert parse_service_log_records("\n") == []
@@ -560,6 +573,39 @@ def test_host_state_override_wins_over_discovery_then_drops_on_agreement() -> No
         )
     )
     assert resolver.get_host_state(host) is HostState.RUNNING
+
+
+def test_stopped_override_is_retired_by_a_backend_observed_stopping_reading() -> None:
+    """Discovery observing the stop still in flight (STOPPING) retires a STOPPED override.
+
+    An imbue_cloud host stop returns once the stop is accepted, while the
+    workspace reports STOPPING for as long as its upload runs -- that reading
+    is fresher than the optimistic settle, so the honest "Stopping" badge must
+    show instead of an already-startable "Stopped" one.
+    """
+    host = HostId.generate()
+    agent = AgentId.generate()
+    resolver = _resolver_with_host_state(host, agent, HostState.RUNNING)
+    resolver.set_host_state_override(host, HostState.STOPPED)
+
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(agent,),
+            discovered_agents=(_workspace_agent(host, agent),),
+            host_state_by_host_id={str(host): HostState.STOPPING},
+        )
+    )
+
+    assert resolver.get_host_state(host) is HostState.STOPPING
+    # The override is gone: the eventual settled reading shows unmasked.
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(agent,),
+            discovered_agents=(_workspace_agent(host, agent),),
+            host_state_by_host_id={str(host): HostState.STOPPED},
+        )
+    )
+    assert resolver.get_host_state(host) is HostState.STOPPED
 
 
 def test_clear_host_state_override_reverts_to_discovery() -> None:

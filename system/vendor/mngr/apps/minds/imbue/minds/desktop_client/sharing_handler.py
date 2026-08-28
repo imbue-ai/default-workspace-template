@@ -246,12 +246,6 @@ def require_client_env_config() -> ClientEnvConfig:
     return config
 
 
-def _broker_base_url(client_env_config: ClientEnvConfig) -> str:
-    if client_env_config.accounts_base_url is not None:
-        return str(client_env_config.accounts_base_url).rstrip("/")
-    return str(client_env_config.connector_url).rstrip("/")
-
-
 def _connector_base_url(client_env_config: ClientEnvConfig) -> str:
     return str(client_env_config.connector_url).rstrip("/")
 
@@ -402,7 +396,11 @@ def _enable_sharing_with_cli(
     preferred_region = _pick_preferred_relay_region(cli, account_email) if is_relay_region_measured else None
     try:
         share = cli.create_share(
-            account=account_email, host_id=host_id, entry_label=entry_label, preferred_region=preferred_region
+            account=account_email,
+            host_id=host_id,
+            entry_label=entry_label,
+            preferred_region=preferred_region,
+            workspace_id=str(agent_id),
         )
     except ImbueCloudCliError as exc:
         raise SharingError(f"Could not enable sharing: {describe_connector_failure(exc)}") from exc
@@ -413,9 +411,9 @@ def _enable_sharing_with_cli(
         workspace_domain=share.workspace_domain,
         relay_token=share.relay_token.get_secret_value(),
         connector_url=_connector_base_url(client_env_config),
-        broker_url=_broker_base_url(client_env_config),
+        broker_url=client_env_config.accounts_origin_url(),
         # The hosted chrome is path-served on the connector origin, which is
-        # also what `minds env deploy` pushes as the connector's own
+        # also what `minds-admin env deploy` pushes as the connector's own
         # SHARE_CHROME_ORIGIN -- so desktop-shared workspaces are embeddable
         # and health-probeable from /web exactly like connector-shared ones.
         chrome_origin=_connector_base_url(client_env_config),

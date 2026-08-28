@@ -1,9 +1,10 @@
 const { BrowserWindow, Menu, Notification, clipboard, dialog, ipcMain, net, shell, app, session, screen, nativeImage, powerMonitor } = require('electron');
-const todesktop = require('@todesktop/runtime');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const paths = require('./paths');
 const { initElectronLogging } = require('./logger');
+const { initConsoleCapture, recordConsoleMessage, closeConsoleCapture } = require('./console-capture');
 const { initSentry, captureManualReport } = require('./sentry');
 const { runEnvSetup } = require('./env-setup');
 const { startBackend, shutdown, getBackendProcess } = require('./backend');
@@ -11,15 +12,20 @@ const { decideStartupRoute } = require('./startup-routing');
 const { deeplinkTargetPath, extractDeeplinkUrlFromArgv } = require('./deeplink');
 // Workspace-URL classification lives in ./surface-routing so it can be
 // unit-tested under plain node (main.js can't be required outside Electron).
-const { parseWorkspaceId } = require('./surface-routing');
+const { parseWorkspaceId, parseSpaWorkspaceRouteId } = require('./surface-routing');
 const { shouldWriteSessionState, createDebouncedSaver, isSameSavedWindow } = require('./session-persistence');
+const updater = require('./updater');
 // Window / quit lifecycle decisions live in ./lifecycle-policy so they can be
 // unit-tested under plain node (main.js can't be required outside Electron).
 const {
   shouldQuitOnWindowAllClosed,
   shouldInterceptLastWindowClose,
   shouldOpenWindowOnActivate,
+  decideNewWindowTarget,
 } = require('./lifecycle-policy');
+// Right-click (context) menu logic lives in ./context-menu so it can be
+// unit-tested under plain node (main.js can't be required outside Electron).
+const { registerContextMenuFor } = require('./context-menu');
 
 // After the single-web-context collapse each window is ONE BrowserWindow whose
 // page is the minds SPA (titlebar + hub pages + the sandboxed workspace
@@ -33,6 +39,10 @@ const {
 // main-process failures BEFORE anything else runs.
 initElectronLogging();
 
+// Open the rolling renderer-console tail beside it, so every window created
+// below has somewhere to record what its page printed.
+initConsoleCapture(paths.getLogDir());
+
 // Initialize Sentry as early as possible. The SDK only sends when the user has
 // enabled error reporting (read live per event) -- see electron/sentry.js.
 initSentry({ getRendererName: rendererNameForWebContents });
@@ -43,17 +53,11 @@ if (process.env.MINDS_REMOTE_DEBUGGING_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.MINDS_REMOTE_DEBUGGING_PORT);
 }
 
-// Only init the auto-updater in packaged builds: in dev, electron.autoUpdater
-// is undefined on macOS, so todesktop's constructor throws.
-if (app.isPackaged) {
-  todesktop.init({
-    updateReadyAction: {
-      showInstallAndRestartPrompt: 'always',
-    },
-  });
-} else {
-  console.log('[update] Skipping ToDesktop init (dev build -- not packaged)');
-}
+// Imported for ToDesktop's smoke test, which the import itself arms when
+// TODESKTOP_SMOKE_TEST is set. Never `init()`ed: that builds an updater agent
+// whose constructor sets `allowDowngrade = true` on the shared electron-updater
+// singleton, and electron/updater.js drives updates instead.
+require('@todesktop/runtime');
 
 // Surface the git SHA the build was cut from in the standard macOS About panel.
 if (app.isPackaged) {
@@ -87,7 +91,6 @@ const CHROME_CRASHED_PAGE_FILE = path.join(__dirname, 'chrome-crashed.html');
 const CHROME_LOAD_MAX_RETRIES = 2;
 const CHROME_LOAD_RETRY_DELAY_MS = 500;
 
-// -- Per-window bundle registry --
 const bundles = new Set();
 const mruWindows = []; // most recently focused first
 let appMenuInstalled = false;
@@ -106,6 +109,16 @@ const systemInterfaceStatusByAgent = new Map();
 let isShuttingDown = false;
 let initialBundle = null;
 let hasCompletedInitialStart = false;
+// The app's FIRST-window route (session restore / welcome / consent) has not
+// landed on a window yet: either it is still being computed, or the window it
+// was for was closed mid-startup. Set once per launch and cleared by
+// applyStartupRouting, which IS that landing.
+let isStartupRoutingPending = false;
+// The launch's own computation of that route, while it is still running.
+// startBackendWithRetry lands its result on the most recent window -- including
+// one opened while it runs -- so such a window must not compute a route for
+// itself as well (see openStartupRoutedWindow).
+let isStartupRoutingBeingComputed = false;
 // A minds:// URL that arrived before the app could act on it.
 let pendingDeeplinkUrl = null;
 let canApplyDeeplinks = false;
@@ -200,6 +213,19 @@ function findBundlesForWorkspace(workspaceId) {
   return found;
 }
 
+// The most-recently-focused window currently showing ``workspaceId``, or null.
+// Unlike ``findBundlesForWorkspace``, which scans ``bundles`` (Set insertion /
+// window-creation order), this scans ``mruWindows`` (kept in actual
+// most-recently-focused order) -- the ordering a "focus the window already
+// showing this" gesture needs when more than one window is showing it.
+function mostRecentBundleForWorkspace(workspaceId) {
+  if (!workspaceId) return null;
+  for (const b of mruWindows) {
+    if (!b.window.isDestroyed() && sameWorkspaceId(b.currentWorkspaceId, workspaceId)) return b;
+  }
+  return null;
+}
+
 function getBundleFromEvent(event) {
   if (!event || !event.sender) return null;
   const senderId = event.sender.id;
@@ -260,7 +286,24 @@ function focusBundle(bundle) {
   bundle.window.focus();
 }
 
-// -- Title handling --
+// focusBundle alone only focuses among the app's OWN windows -- on macOS it
+// does not reliably activate the app over whichever other app currently has
+// focus. Stealing focus first (mac only; the concept doesn't exist on other
+// platforms, where a window-level focus is already enough) covers both the
+// renderer-triggered 'bring-app-to-front' IPC and a notification click: both
+// are the reader acting from OUTSIDE the app, so bringing "a" window to
+// front is not enough if the app itself never comes forward.
+function stealFocusAndFocusBundle(bundle) {
+  if (!bundle || bundle.window.isDestroyed()) return;
+  if (isMac) app.focus({ steal: true });
+  focusBundle(bundle);
+}
+
+// A notification click needs the same treatment as bring-app-to-front (see
+// stealFocusAndFocusBundle) -- the reader clicked from outside the app.
+function focusBundleFromNotificationClick(bundle) {
+  stealFocusAndFocusBundle(bundle);
+}
 
 function computeTitleFor(bundle) {
   const agentId = bundle.currentWorkspaceId;
@@ -300,8 +343,6 @@ function detachWindowsForWorkspace(workspaceId) {
   }
 }
 
-// -- Window navigation --
-//
 // The SPA owns in-app navigation; main only drives windows for its own flows
 // (startup routing, session restore, deeplinks, notifications, detaches
 // triggered by relayed shell events). A live SPA page gets a 'shell-navigate'
@@ -332,8 +373,6 @@ function navigateBundle(bundle, url) {
   const loadTarget = workspaceId ? wrapperUrlForWorkspace(workspaceId) : absolute;
   if (loadTarget) bundle.window.webContents.loadURL(loadTarget).catch(() => {});
 }
-
-// -- Bundle lifecycle --
 
 function buildBundleWindowOptions() {
   const windowOptions = {
@@ -387,10 +426,18 @@ function createBundle() {
   wireBundleWindowEvents(bundle);
   wireBundleNavigationEvents(bundle);
   registerShortcutsFor(bundle, win.webContents);
+  registerContextMenuFor(win, win.webContents, Menu);
   wireBundleShowLogic(bundle);
 
   win.webContents.on('did-finish-load', () => {
     updateOsTitle(bundle);
+  });
+
+  // Every level from every frame of this window -- the SPA's own output and the
+  // workspace iframe's, which share this webContents -- into the rolling
+  // console tail, so a bug report can carry what the UI actually printed.
+  win.webContents.on('console-message', (details) => {
+    recordConsoleMessage(details);
   });
 
   if (process.env.MINDS_OPEN_DEVTOOLS === '1') {
@@ -630,7 +677,7 @@ function registerShortcutsFor(bundle, wc) {
     }
     if (modifier && !input.shift && !input.alt && key === 'n') {
       event.preventDefault();
-      openHomeInNewWindow();
+      openOrFocusWindow();
       return;
     }
   });
@@ -705,21 +752,104 @@ function openNewWindow(url, { showInactive = false } = {}) {
   return bundle;
 }
 
-function openHomeInNewWindow() {
-  if (!backendBaseUrl) {
-    const target = getMostRecentWindow();
-    if (target) focusBundle(target);
-    return target;
-  }
-  return openNewWindow(backendBaseUrl + '/');
+// Open a window on the shell.html takeover screen: the recorded error, whose
+// Retry button restarts the backend, when one is current; else the loading
+// screen the startup sequence broadcasts into. This is what makes a windowless
+// app recoverable -- an app whose backend failed or died has no page to load
+// and no window to focus, so without this it could never open a window again.
+function openTakeoverWindow() {
+  const bundle = createBundle();
+  const takeover = lastErrorTakeover;
+  bundle.isErrorState = !!takeover;
+  bundle.isLoadingState = !takeover;
+  const wc = bundle.window.webContents;
+  wc.loadFile(path.join(__dirname, 'shell.html')).catch(() => {});
+  wc.once('did-finish-load', () => {
+    if (wc.isDestroyed()) return;
+    if (takeover) wc.send('error-details', takeover);
+  });
+  return bundle;
 }
 
-// -- Error / retry flow --
+// Open a window and land the app's first-window route on it: the launch that
+// computed it lost its window (closed mid-startup), or the route has not been
+// computed yet. The route is recomputed here rather than replayed from a
+// snapshot taken at startup, so a session restored an hour later reflects the
+// workspaces that exist NOW.
+function openStartupRoutedWindow() {
+  const bundle = openTakeoverWindow(); // the loading screen, while we ask
+  // The launch is already computing that route and lands it on the most recent
+  // window, which is this one. Computing a second here would apply two routes
+  // to it -- duplicating every window of a multi-window session restore -- off
+  // an app-status read before the one-time login code is consumed, which
+  // answers "signed out".
+  if (isStartupRoutingBeingComputed) return bundle;
+  computeStartupRouting()
+    .then((routing) => {
+      // Closed while we were asking: leave the route pending so the next
+      // window the user opens still gets it.
+      if (bundle.window.isDestroyed()) return;
+      // Likewise for the states this request was decided against but that
+      // arrived while we asked. Both have already taken this window over --
+      // the error screen after a crash, the quitting screen after a committed
+      // quit -- and landing the route now would navigate it off that, for a
+      // crash onto the dead port the error screen exists to replace.
+      if (lastErrorTakeover || isShuttingDown || isQuitSequenceRunning) return;
+      applyStartupRouting(bundle, routing);
+      // A deeplink that arrived while this window sat on the loading screen was
+      // held for a window ready to take it, and this is the only loading state
+      // the backend start does not itself flush.
+      flushPendingDeeplink();
+    })
+    .catch((err) => {
+      console.warn('[startup] could not compute the first-window route:', err);
+    });
+  return bundle;
+}
 
+// Every "give me a window" request (dock activate, Cmd+N, File > New Window,
+// the dock menu, a second launch, a deeplink with nothing open) lands here, and
+// always resolves to a window unless a quit has committed. See
+// decideNewWindowTarget for what each state produces.
+function openOrFocusWindow() {
+  const target = decideNewWindowTarget({
+    hasBackendUrl: !!backendBaseUrl,
+    hasErrorTakeover: !!lastErrorTakeover,
+    hasLiveWindow: getMostRecentWindow() != null,
+    isStartupRoutingPending,
+    isShuttingDown,
+    isQuitSequenceRunning,
+  });
+  if (target === 'none') return null;
+  if (target === 'focus-existing') {
+    const existing = getMostRecentWindow();
+    focusBundle(existing);
+    return existing;
+  }
+  if (target === 'home') return openNewWindow(backendBaseUrl + '/');
+  if (target === 'startup-route') return openStartupRoutedWindow();
+  return openTakeoverWindow();
+}
+
+// The error currently taking every window over, replayed into any window
+// opened afterwards. Cleared once a backend start succeeds.
+//
+// It is deliberately load-bearing beyond the error screen. After a crash
+// backendBaseUrl is knowingly left naming the DEAD port -- windows record their
+// content URL relative to it and toPersistedContentUrl needs that URL absolute
+// to recognize a workspace, so nulling it would persist every open window as
+// plain home and lose the workspace it was on -- and this flag is what stops
+// the app routing there anyway. So the pair reads: backendBaseUrl = "the port
+// the backend last served on"; lastErrorTakeover = "and it is not serving".
+// The consumers that must read it are the ones that can fire with no live
+// backend behind them -- a window request (decideNewWindowTarget) and a
+// deeplink (handleDeeplink); every other navigation to backendBaseUrl runs off
+// a live backend's events, or off a start that just succeeded and cleared this.
 let lastErrorTakeover = null;
 
 function showErrorInAllWindows(message, details, actionLabel) {
-  lastErrorTakeover = { message, details };
+  const takeover = { message, details, actionLabel };
+  lastErrorTakeover = takeover;
   for (const bundle of bundles) {
     if (bundle.window.isDestroyed()) continue;
     bundle.isErrorState = true;
@@ -730,11 +860,11 @@ function showErrorInAllWindows(message, details, actionLabel) {
       wc.loadFile(path.join(__dirname, 'shell.html'));
       wc.once('did-finish-load', () => {
         if (!wc.isDestroyed()) {
-          wc.send('error-details', { message, details, actionLabel });
+          wc.send('error-details', takeover);
         }
       });
     } else {
-      wc.send('error-details', { message, details, actionLabel });
+      wc.send('error-details', takeover);
     }
   }
 }
@@ -754,12 +884,14 @@ function reloadAllWindowsAfterRetry() {
     if (bundle.window.isDestroyed()) continue;
     bundle.isErrorState = false;
     bundle.isLoadingState = false;
+    // A window is landing on real content, so the first-window route no longer
+    // describes anything. Inside the loop because with no live window nothing
+    // lands and the route is still owed.
+    isStartupRoutingPending = false;
     const target = bundle.preErrorUrl || (backendBaseUrl ? backendBaseUrl + '/' : null);
     if (target) navigateBundle(bundle, target);
   }
 }
-
-// -- Quitting takeover --
 
 let latestQuittingStatus = 'Quitting…';
 
@@ -809,8 +941,6 @@ function readLastLogLines(lineCount) {
   }
 }
 
-// -- Session state --
-//
 // On-disk shape is ``{ windows: [{ url, x, y, width, height, displayId },
 // ...] }``. A workspace window persists as the port-independent
 // ``/goto/<host-id>/`` path and is restored through the SPA's
@@ -972,7 +1102,6 @@ function restoreWindowBounds(bundle, entry) {
   bundle.window.setBounds(savedBounds);
 }
 
-// ---------- Renderer-relayed shell events ----------
 // Each window's SPA owns its own /ui/ws channel and relays the events main
 // still acts on. Every window relays the same broadcasts, so handlers must be
 // idempotent; genuinely once-only reactions dedupe via recentShellEventKeys.
@@ -1027,6 +1156,12 @@ function handleShellEvent(evt, senderBundle) {
     if (evt.agent_id && systemInterfaceStatusByAgent.get(String(evt.agent_id)) !== 'restarting') {
       detachWindowsForWorkspace(String(evt.agent_id));
     }
+  } else if (evt.type === 'notifications_count') {
+    // Unresolved-notification count for the macOS dock / Linux launcher (a
+    // no-op on Windows; the in-app bell suffices there). Idempotent, so the
+    // every-window relay of the same broadcast needs no dedupe.
+    const count = Math.max(0, Math.floor(Number(evt.count)) || 0);
+    app.setBadgeCount(count);
   } else if (evt.type === 'open_help') {
     // An in-workspace /assist agent asked to open the report-a-bug modal with
     // its diagnosis. Surface it in ONE window: the one showing that workspace,
@@ -1034,7 +1169,7 @@ function handleShellEvent(evt, senderBundle) {
     const description = typeof evt.description === 'string' ? evt.description : '';
     const wsId = evt.workspace_agent_id ? String(evt.workspace_agent_id) : '';
     if (isDuplicateShellEvent('open_help:' + wsId + ':' + description)) return;
-    const target = (wsId && findBundlesForWorkspace(wsId)[0]) || getMostRecentWindow();
+    const target = (wsId && mostRecentBundleForWorkspace(wsId)) || getMostRecentWindow();
     if (target && !target.window.isDestroyed() && !target.window.webContents.isDestroyed()) {
       target.window.webContents.send('open-overlay', { kind: 'help', workspace: wsId, description });
     }
@@ -1051,6 +1186,7 @@ const KNOWN_SHELL_EVENT_TYPES = new Set([
   'health',
   'workspace_stopped',
   'open_help',
+  'notifications_count',
 ]);
 
 // Only the SPA page itself may drive window management: the sender must be a
@@ -1087,8 +1223,6 @@ ipcMain.on('shell-event', (event, evt) => {
     console.warn('[shell-event] handler failed:', err);
   }
 });
-
-// ---------- Mind shutdown on quit ----------
 
 const MIND_HTTP_TIMEOUT_MS = 10000;
 const MIND_COMMAND_TIMEOUT_MS = 150000;
@@ -1349,8 +1483,6 @@ function fetchAppStatus(timeoutMs = 25000) {
   });
 }
 
-// -- Deeplinks (minds://) protocol registration + single instance lock --
-
 if (process.defaultApp) {
   if (process.argv.length >= 2) {
     app.setAsDefaultProtocolClient('minds', process.execPath, [path.resolve(process.argv[1])]);
@@ -1374,8 +1506,14 @@ if (!gotLock) {
       handleDeeplink(url);
       return;
     }
+    // Launching the app again brings the app forward, so focus the window it
+    // has. With none open there is nothing to focus, so open one rather than
+    // dropping the launch. (Not openOrFocusWindow() unconditionally: with the
+    // backend serving that opens a SECOND window, which is right for Cmd+N and
+    // wrong for a re-launch.)
     const mru = getMostRecentWindow();
     if (mru) focusBundle(mru);
+    else openOrFocusWindow();
   });
   const coldStartDeeplinkUrl = extractDeeplinkUrlFromArgv(process.argv);
   if (coldStartDeeplinkUrl) handleDeeplink(coldStartDeeplinkUrl);
@@ -1399,45 +1537,33 @@ async function onReady() {
   if (initialSavedState.windows.length > 0) {
     restoreWindowBounds(initialBundle, initialSavedState.windows[0]);
   }
+  updater.init({ onStatus: broadcastUpdateStatus });
   await runStartupSequence(initialBundle);
 }
 
-async function triggerUpdateCheck() {
-  const autoUpdater = todesktop.autoUpdater;
-  if (!autoUpdater || typeof autoUpdater.checkForUpdates !== 'function') {
-    dialog.showMessageBox({
-      type: 'info',
-      message: 'Update check unavailable.',
-      detail: app.isPackaged
-        ? 'The auto-updater is disabled until this build is released to the latest channel.'
-        : 'Updates are only available in installed builds.',
-    });
-    return;
-  }
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    const updateInfo = result && result.updateInfo;
-    if (updateInfo) {
-      const v = updateInfo.version || updateInfo.releaseName;
-      dialog.showMessageBox({
-        type: 'info',
-        message: v ? `Update ${v} found.` : 'Update found.',
-        detail: 'Downloading in the background. You will be prompted to restart when it is ready.',
-      });
-    } else {
-      dialog.showMessageBox({
-        type: 'info',
-        message: "You're up to date.",
-        detail: 'No newer version is available.',
-      });
+function broadcastUpdateStatus(status) {
+  for (const bundle of bundles) {
+    if (!bundle.window.isDestroyed() && !bundle.window.webContents.isDestroyed()) {
+      bundle.window.webContents.send('update-status', status);
     }
-  } catch (err) {
-    dialog.showMessageBox({
-      type: 'error',
-      message: 'Update check failed.',
-      detail: String(err && err.message ? err.message : err),
-    });
   }
+}
+
+/**
+ * The menu bar's "Check for Updates...".
+ *
+ * Opens the panel and runs a check, rather than answering in dialogs of its
+ * own: the panel already reports the result, the version each channel serves,
+ * and when the check ran. Two surfaces answering the same question is how they
+ * drift apart.
+ */
+async function triggerUpdateCheck() {
+  const target = getMostRecentWindow();
+  if (target) {
+    focusBundle(target);
+    navigateBundle(target, '/settings?section=updates');
+  }
+  await updater.check();
 }
 
 function installApplicationMenu() {
@@ -1470,7 +1596,7 @@ function installApplicationMenu() {
         {
           label: 'New Window',
           accelerator: 'CmdOrCtrl+N',
-          click: () => openHomeInNewWindow(),
+          click: () => openOrFocusWindow(),
         },
         { type: 'separator' },
         {
@@ -1517,7 +1643,7 @@ function installDockMenu() {
   app.dock.setMenu(Menu.buildFromTemplate([
     {
       label: 'New Window',
-      click: () => openHomeInNewWindow(),
+      click: () => openOrFocusWindow(),
     },
   ]));
 }
@@ -1535,11 +1661,7 @@ async function runStartupSequence(bundle) {
   console.log('[startup] shell.html loaded');
 
   try {
-    await runEnvSetup((status) => {
-      if (!bundle.window.isDestroyed() && !bundle.window.webContents.isDestroyed()) {
-        bundle.window.webContents.send('status-update', status);
-      }
-    });
+    await runEnvSetup((status) => broadcastStatusToLoadingWindows(status));
   } catch (err) {
     console.error('[startup] env-setup failed:', err.message);
     showErrorInAllWindows(
@@ -1562,6 +1684,111 @@ function broadcastStatusToLoadingWindows(status) {
   }
 }
 
+// Consume the backend's one-time login code so the default session -- used by
+// every window's SPA page (including its /ui/ws channel) and by main's own
+// net.request calls -- gets the minds_session cookie.
+function consumeOneTimeLoginCode(loginUrl) {
+  return new Promise((resolve) => {
+    const authenticateUrl = loginUrl.replace('/login?', '/authenticate?');
+    console.log('[startup] Consuming one-time code via', authenticateUrl);
+    const req = net.request({ url: authenticateUrl, method: 'GET', useSessionCookies: true });
+    req.on('response', (resp) => {
+      console.log('[startup] /authenticate response status:', resp.statusCode);
+      resp.on('data', () => {});
+      resp.on('end', () => resolve());
+    });
+    req.on('error', (err) => {
+      console.warn('[startup] /authenticate request failed:', err);
+      resolve();
+    });
+    req.end();
+  });
+}
+
+// Where the app's first window should land, from the backend's app-status and
+// the saved session. Deliberately independent of having a window to put it in,
+// and cheap enough to re-run: openStartupRoutedWindow calls it again when the
+// route is claimed later, so a session restored well after launch reflects the
+// workspaces that exist then rather than a snapshot from startup.
+async function computeStartupRouting() {
+  const savedState = loadSessionState();
+  const appStatus = await fetchAppStatus();
+  const authenticated = appStatus && appStatus.authenticated;
+  const hasAccounts = !!(appStatus && appStatus.hasAccounts);
+
+  const restorableWorkspaceIds = (authenticated && appStatus.restorableWorkspaceIds) || [];
+  const knownAgentIdsSet = restorableWorkspaceIds.length > 0
+    ? new Set(restorableWorkspaceIds.map(String))
+    : null;
+  const restorable = authenticated
+    ? filterRestorableUrls(savedState.windows, knownAgentIdsSet)
+    : [];
+
+  const workspaceCount = appStatus ? appStatus.workspaceCount : 0;
+  const needsConsent = !!(appStatus && appStatus.needsErrorReportingConsent);
+  const route = decideStartupRoute({
+    authenticated,
+    hasAccounts,
+    workspaceCount,
+    restorableCount: restorable.length,
+    needsConsent,
+  });
+  console.log(
+    `[startup] route=${route} authenticated=${authenticated} hasAccounts=${hasAccounts} workspaceCount=${workspaceCount} restorableCount=${restorable.length} needsConsent=${needsConsent}`,
+  );
+  return { route, restorable, savedState };
+}
+
+// Land ``bundle`` on a computed startup route, opening the extra windows a
+// multi-window session restore needs. ``boundsAlreadyApplied`` is set for the
+// window onReady already sized from the saved state, so its bounds are only
+// re-applied when the route picked a different entry.
+function applyStartupRouting(bundle, { route, restorable, savedState }, { boundsAlreadyApplied = false } = {}) {
+  // The window is leaving the takeover for real content. Clearing the error
+  // flag matters when this window IS the takeover a Retry restarted the backend
+  // from (a first start that only succeeded on the retry lands here rather than
+  // in reloadAllWindowsAfterRetry): while it is set, navigation bookkeeping,
+  // session persistence, deeplink delivery and load-failure recovery are all
+  // suppressed for the window.
+  bundle.isErrorState = false;
+  bundle.isLoadingState = false;
+  // This IS the first-window route landing, so nothing is owed any more.
+  isStartupRoutingPending = false;
+  const wc = bundle.window.webContents;
+  if (route === 'welcome') {
+    wc.loadURL(backendBaseUrl + '/welcome').catch(() => {});
+    return;
+  }
+  if (route === 'consent') {
+    wc.loadURL(backendBaseUrl + '/consent').catch(() => {});
+    return;
+  }
+  if (route === 'create') {
+    wc.loadURL(backendBaseUrl + '/').catch(() => {});
+    return;
+  }
+  const [first, ...rest] = restorable;
+  if (!boundsAlreadyApplied || !isSameSavedWindow(first, savedState.windows[0])) {
+    restoreWindowBounds(bundle, first);
+  }
+  wc.loadURL(toRestoredContentUrl(first)).catch(() => {});
+  const restoredBundles = [];
+  for (const entry of rest) {
+    const restored = openNewWindow(toRestoredContentUrl(entry), { showInactive: true });
+    restoreWindowBounds(restored, entry);
+    restoredBundles.push(restored);
+  }
+  mruWindows.length = 0;
+  mruWindows.push(bundle, ...restoredBundles);
+  const raiseFirst = () => {
+    if (!bundle.window.isDestroyed()) bundle.window.focus();
+  };
+  for (const restored of restoredBundles) {
+    if (restored.window.isVisible()) raiseFirst();
+    else restored.window.once('show', raiseFirst);
+  }
+}
+
 async function startBackendWithRetry() {
   broadcastStatusToLoadingWindows('Starting Minds...');
 
@@ -1578,84 +1805,43 @@ async function startBackendWithRetry() {
     backendBaseUrl = `http://localhost:${port}`;
 
     console.log('[startup] Backend ready at', backendBaseUrl);
+    // The backend is serving again, so any recorded failure is stale: a window
+    // opened from here on gets the app, not a replay of the old error screen.
+    lastErrorTakeover = null;
 
     const isFirstStart = !hasCompletedInitialStart;
     hasCompletedInitialStart = true;
 
-    if (isFirstStart && initialBundle && !initialBundle.window.isDestroyed()) {
-      const savedState = loadSessionState();
-
-      // Consume the one-time login code via net.request so the default
-      // session (used by every window's SPA page -- including its /ui/ws
-      // channel -- and by main's own net.request calls) gets the
-      // minds_session cookie.
-      await new Promise((resolve) => {
-        const authenticateUrl = loginUrl.replace('/login?', '/authenticate?');
-        console.log('[startup] Consuming one-time code via', authenticateUrl);
-        const req = net.request({ url: authenticateUrl, method: 'GET', useSessionCookies: true });
-        req.on('response', (resp) => {
-          console.log('[startup] /authenticate response status:', resp.statusCode);
-          resp.on('data', () => {});
-          resp.on('end', () => resolve());
-        });
-        req.on('error', (err) => {
-          console.warn('[startup] /authenticate request failed:', err);
-          resolve();
-        });
-        req.end();
-      });
-
-      const appStatus = await fetchAppStatus();
-      const authenticated = appStatus && appStatus.authenticated;
-
-      const restorableWorkspaceIds = (authenticated && appStatus.restorableWorkspaceIds) || [];
-      const knownAgentIdsSet = restorableWorkspaceIds.length > 0
-        ? new Set(restorableWorkspaceIds.map(String))
-        : null;
-      const restorable = authenticated
-        ? filterRestorableUrls(savedState.windows, knownAgentIdsSet)
-        : [];
-
-      initialBundle.isLoadingState = false;
-
-      const workspaceCount = appStatus ? appStatus.workspaceCount : 0;
-      const needsConsent = !!(appStatus && appStatus.needsErrorReportingConsent);
-      const startupRoute = decideStartupRoute({
-        authenticated,
-        hasAccounts: !!(appStatus && appStatus.hasAccounts),
-        workspaceCount,
-        restorableCount: restorable.length,
-        needsConsent,
-      });
-      console.log(
-        `[startup] route=${startupRoute} authenticated=${authenticated} hasAccounts=${!!(appStatus && appStatus.hasAccounts)} workspaceCount=${workspaceCount} restorableCount=${restorable.length} needsConsent=${needsConsent}`,
-      );
-
-      if (startupRoute === 'welcome') {
-        initialBundle.window.webContents.loadURL(backendBaseUrl + '/welcome').catch(() => {});
-      } else if (startupRoute === 'consent') {
-        initialBundle.window.webContents.loadURL(backendBaseUrl + '/consent').catch(() => {});
-      } else if (startupRoute === 'create') {
-        initialBundle.window.webContents.loadURL(backendBaseUrl + '/').catch(() => {});
+    if (isFirstStart) {
+      // The first-window route is now owed. Marked BEFORE the awaits below so a
+      // window requested while they run waits on the loading screen instead of
+      // landing on home and being yanked off it a moment later.
+      isStartupRoutingPending = true;
+      isStartupRoutingBeingComputed = true;
+      let routing;
+      try {
+        // Unconditional, and deliberately NOT inside the window guard below:
+        // this is the only place the one-time code is consumed and a fresh one
+        // is minted per backend run, so skipping it because the startup window
+        // was closed strands the app on /login for the rest of the run.
+        await consumeOneTimeLoginCode(loginUrl);
+        routing = await computeStartupRouting();
+      } finally {
+        isStartupRoutingBeingComputed = false;
+      }
+      // Not necessarily the window startup began in: the user may have closed
+      // that one and re-opened another (which is sitting on the loading
+      // takeover waiting for exactly this).
+      const isInitialAlive = initialBundle && !initialBundle.window.isDestroyed();
+      const target = isInitialAlive ? initialBundle : getMostRecentWindow();
+      if (target) {
+        applyStartupRouting(target, routing, { boundsAlreadyApplied: isInitialAlive });
       } else {
-        const [first, ...rest] = restorable;
-        if (!isSameSavedWindow(first, savedState.windows[0])) restoreWindowBounds(initialBundle, first);
-        initialBundle.window.webContents.loadURL(toRestoredContentUrl(first)).catch(() => {});
-        const restoredBundles = [];
-        for (const entry of rest) {
-          const bundle = openNewWindow(toRestoredContentUrl(entry), { showInactive: true });
-          restoreWindowBounds(bundle, entry);
-          restoredBundles.push(bundle);
-        }
-        mruWindows.length = 0;
-        mruWindows.push(initialBundle, ...restoredBundles);
-        const raiseInitial = () => {
-          if (initialBundle && !initialBundle.window.isDestroyed()) initialBundle.window.focus();
-        };
-        for (const bundle of restoredBundles) {
-          if (bundle.window.isVisible()) raiseInitial();
-          else bundle.window.once('show', raiseInitial);
-        }
+        // Nothing is open at all. macOS keeps the app alive, so leave the route
+        // owed rather than popping windows up unprompted a minute after the
+        // user deliberately closed one: the next window they ask for is routed
+        // (against a freshly computed session, not this stale one).
+        console.log('[startup] no window survived startup; holding the route for the next one');
       }
     } else {
       reloadAllWindowsAfterRetry();
@@ -1666,13 +1852,27 @@ async function startBackendWithRetry() {
     const proc = getBackendProcess();
     if (proc) {
       proc.on('exit', (code) => {
-        if (code !== 0 && code !== null && bundles.size > 0) {
-          const logContent = readLastLogLines(50);
-          showErrorInAllWindows(
-            'Minds stopped unexpectedly',
-            logContent || `Process exited with code ${code}`,
-          );
-        }
+        // The direct child is `uv run`, which traps SIGTERM (forwarding it on)
+        // and reports the backend's death as a plain exit status: a graceful
+        // stop is 0, a backend killed out from under us is uv's nonzero 128+n.
+        // So shutdown()'s SIGTERM on a quit or a retry arrives as 0, and the
+        // one thing that arrives as null -- a real signal death -- is its
+        // SIGKILL escalation, SIGKILL being the signal uv cannot trap. Not
+        // airtight (any SIGKILL of uv reads the same), but treating that as a
+        // crash would pop the error screen over an escalated teardown.
+        if (code === 0 || code === null) return;
+        console.error(
+          `[backend] exited unexpectedly with code ${code} (${bundles.size} window(s) open)`,
+        );
+        // Deliberately NOT gated on there being a window. Recording the
+        // takeover is what makes the crash recoverable: with none open it is
+        // replayed into the next window the user opens, so they get the error
+        // screen and its Retry instead of a fresh window loaded at the dead
+        // port -- whose own Reload button only re-loads that same dead port.
+        showErrorInAllWindows(
+          'Minds stopped unexpectedly',
+          readLastLogLines(50) || `Process exited with code ${code}`,
+        );
       });
     }
   } catch (err) {
@@ -1680,23 +1880,51 @@ async function startBackendWithRetry() {
   }
 }
 
-// -- Deeplinks (minds://) --
-
 function handleDeeplink(rawUrl) {
   console.log(`[deeplink] received: ${String(rawUrl).slice(0, 256)}`);
   const mru = getMostRecentWindow();
-  if (!canApplyDeeplinks || !backendBaseUrl || (mru && (mru.isLoadingState || mru.isErrorState))) {
+  // A current error takeover counts as not-ready even with no window to read it
+  // off: after a crash backendBaseUrl still names the dead port, and navigating
+  // a window there is the failure this app's error screen exists to replace.
+  if (
+    !canApplyDeeplinks
+    || !backendBaseUrl
+    || lastErrorTakeover
+    || (mru && (mru.isLoadingState || mru.isErrorState))
+  ) {
+    // Not ready to act on it yet: hold it for flushPendingDeeplink(). With no
+    // window there is nothing to focus, so open one on whatever takeover
+    // screen the app's state warrants instead of dropping the URL silently.
     pendingDeeplinkUrl = rawUrl;
     if (mru) focusBundle(mru);
+    // A cold-start argv deeplink reaches here during module evaluation, before
+    // app.whenReady() -- no BrowserWindow can be constructed yet, and none is
+    // needed: onReady opens the startup window and flushPendingDeeplink()
+    // applies the URL to it.
+    else if (app.isReady()) openOrFocusWindow();
     return;
   }
-  if (!mru) return;
-  focusBundle(mru);
   // A Template link always navigates to the SPA's Create from
   // Template page: it carries both legacy branches (create a new machine,
   // or add the Template to an existing one), so the old in-machine modal
   // variant is gone.
   const targetPath = deeplinkTargetPath(rawUrl);
+  if (!mru) {
+    // macOS hands a URL to an already-running app via application:openURLs:,
+    // which need not fire 'activate', so nothing else will open a window for
+    // it. A focus-only link (bare minds://, what the browser sign-in success
+    // page's "Open app" uses) opens the home page: opening the app IS the
+    // documented contract for it.
+    //
+    // An explicit deeplink outranks a first-window route still owed (the docs'
+    // rule: a deeplink wins over the welcome screen), and settles it -- this
+    // window is where the launch landed, so a later Cmd+N must not still pop
+    // the restored session open.
+    isStartupRoutingPending = false;
+    openNewWindow(toAbsoluteUrl(targetPath || '/'));
+    return;
+  }
+  focusBundle(mru);
   if (!targetPath) return;
   navigateBundle(mru, targetPath);
 }
@@ -1712,15 +1940,42 @@ function flushPendingDeeplink() {
 function handleNotification(event) {
   const agentName = event.agent_name || 'Agent';
   const title = event.title || `Notification from ${agentName}`;
+  console.log(`[notification] received: title=${JSON.stringify(title)} agent=${agentName}`);
+  if (!Notification.isSupported()) {
+    // No JS-level "ask for permission" exists for Electron's native
+    // Notification module -- macOS owns that decision entirely (System
+    // Settings > Notifications) and never surfaces the verdict back to app
+    // code. isSupported() is the one thing we CAN check: false means this
+    // platform/session cannot show native notifications at all (e.g. no
+    // Notification Center backend available), so show() would silently do
+    // nothing. Log it so "notifications aren't working" is at least
+    // distinguishable from "the OS declined to display it" (unobservable)
+    // versus a real bug upstream of this point.
+    console.warn('[notification] Notification.isSupported() is false -- the OS cannot show native notifications here; skipping .show()');
+    return;
+  }
   const notification = new Notification({
     title,
     body: event.message,
+  });
+  // 'show' fires once the OS has actually presented the banner -- the one
+  // signal that distinguishes "displayed" from "silently declined" (macOS
+  // exposes no permission-check API to app code, so this is the closest
+  // thing to a confirmation we get).
+  notification.on('show', () => {
+    console.log(`[notification] shown by the OS: ${JSON.stringify(title)}`);
+  });
+  // A definitive OS-reported failure -- distinct from getting neither 'show'
+  // nor 'failed' at all, which the generic hint after .show() below already
+  // covers.
+  notification.on('failed', () => {
+    console.warn(`[notification] failed to display (OS-reported): ${JSON.stringify(title)}`);
   });
   notification.on('click', () => {
     const url = event.url;
     if (!url) {
       const mru = getMostRecentWindow();
-      if (mru) focusBundle(mru);
+      if (mru) focusBundleFromNotificationClick(mru);
       return;
     }
     const absolute = toAbsoluteUrl(url);
@@ -1728,22 +1983,97 @@ function handleNotification(event) {
     if (agentId) {
       // The most-recently-focused window already showing this workspace, else
       // navigate the most recent window (never auto-open a new one).
-      const showing = findBundlesForWorkspace(agentId);
-      const target = showing[0] || getMostRecentWindow();
+      const showingBundle = mostRecentBundleForWorkspace(agentId);
+      const target = showingBundle || getMostRecentWindow();
       if (target) {
-        focusBundle(target);
-        if (!showing.includes(target)) navigateBundle(target, absolute);
+        focusBundleFromNotificationClick(target);
+        if (showingBundle === null) navigateBundle(target, absolute);
       }
     } else {
-      const mru = getMostRecentWindow();
-      if (mru) {
-        focusBundle(mru);
-        navigateBundle(mru, absolute);
+      // Notification deep links use the SPA's /workspace/<agent-id>?review=
+      // route -- a chrome-page path, not a workspace origin, so
+      // parseWorkspaceId above cannot see it. Match the path id against each
+      // window's tracked workspace so the window already on that workspace is
+      // the one focused -- and still navigated: it needs the ?review= param
+      // to open the review popup. Anything else falls back to the MRU window.
+      const routeId = parseSpaWorkspaceRouteId(absolute);
+      const target = (routeId && mostRecentBundleForWorkspace(routeId)) || getMostRecentWindow();
+      if (target) {
+        focusBundleFromNotificationClick(target);
+        navigateBundle(target, absolute);
       }
     }
   });
   notification.show();
+  console.log(`[notification] .show() called for ${JSON.stringify(title)} -- if no banner appeared, check System Settings > Notifications for this app`);
 }
+
+
+// Open the OS's own notification-settings pane so the reader can flip the
+// permission back on themselves after declining it -- no app can force a
+// re-prompt once the OS has decided.
+// Deliberately opens the general pane rather than deep-linking to this app's
+// own row: on macOS, every locally-run unpackaged dev build shares one
+// "com.github.Electron" identity in the OS's eyes (Electron.app's own
+// Info.plist, regardless of which project's checkout is running), and a
+// packaged build's real bundle id isn't available to look up here anyway.
+function openExternalBestEffort(url) {
+  return shell.openExternal(url).then(
+    () => true,
+    (err) => {
+      console.warn('[notification] failed to open OS notification settings:', err && err.message);
+      return false;
+    },
+  );
+}
+
+// Linux has no cross-desktop-environment URI for this the way macOS has
+// x-apple.systempreferences: -- ms-settings: (the previous fallback here) is
+// a Windows-only scheme that does nothing on Linux, one of the two platforms
+// this app commits to supporting (see CLAUDE.md). Try each desktop
+// environment's own settings command in turn, GNOME first as the most
+// common target, then KDE Plasma, resolving on the first one that actually
+// launches. Spawned detached/unref'd rather than waited on to exit: these
+// are GUI apps the reader may leave open for a while.
+const LINUX_NOTIFICATION_SETTINGS_COMMANDS = [
+  ['gnome-control-center', ['notifications']],
+  ['systemsettings5', ['kcm_notifications']],
+  // KDE dropped the "5" suffix from KF6-based tool binaries (see KDE's own
+  // T14763), so Plasma 6 ships `systemsettings` rather than `systemsettings5`.
+  // Tried after the Plasma 5 name so neither desktop's fallback regresses.
+  ['systemsettings', ['kcm_notifications']],
+];
+
+function trySpawnDetached(command, args) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' });
+    child.once('error', () => settle(false));
+    child.once('spawn', () => {
+      child.unref();
+      settle(true);
+    });
+  });
+}
+
+async function openLinuxNotificationSettings() {
+  for (const [command, args] of LINUX_NOTIFICATION_SETTINGS_COMMANDS) {
+    if (await trySpawnDetached(command, args)) return true;
+  }
+  console.warn('[notification] no known Linux notification-settings command was found');
+  return false;
+}
+
+ipcMain.handle('open-notification-settings', () => {
+  if (isMac) return openExternalBestEffort('x-apple.systempreferences:com.apple.preference.notifications');
+  if (process.platform === 'linux') return openLinuxNotificationSettings();
+  return openExternalBestEffort('ms-settings:notifications');
+});
 
 // Trust the forward proxy's CA-signed leaf certs for its loopback origins.
 // The CA is local to this machine (under the plugin state dir) and only
@@ -1816,14 +2146,29 @@ function handleAuthEvent(event) {
   }
 }
 
-// -- IPC handlers --
+ipcMain.handle('get-update-state', () => updater.describe());
+
+// Returns what each channel currently serves, for the switch confirmation.
+ipcMain.handle('peek-update-channels', () => updater.peekChannels());
+
+ipcMain.handle('set-update-channel', async (_event, channel) => {
+  await updater.setChannel(channel);
+  return updater.describe();
+});
+
+ipcMain.handle('check-for-updates', async () => {
+  await updater.check();
+  return updater.describe();
+});
+
+// The "Restart" control on the update card. Quits, so it returns nothing.
+ipcMain.handle('install-update', () => updater.installNow());
 
 ipcMain.on('bring-app-to-front', (event) => {
   const bundle = getBundleFromEvent(event);
   if (!bundle || bundle.window.isDestroyed()) return;
   if (bundle.window.isFocused()) return;
-  if (isMac) app.focus({ steal: true });
-  focusBundle(bundle);
+  stealFocusAndFocusBundle(bundle);
 });
 
 ipcMain.handle('report-error', () => {
@@ -1925,8 +2270,6 @@ ipcMain.on('window-close', (event) => {
   if (bundle && !bundle.window.isDestroyed()) bundle.window.close();
 });
 
-// -- App lifecycle --
-
 function initiateFullQuit() {
   app.quit();
 }
@@ -1975,6 +2318,10 @@ async function runQuitSequence() {
   updateQuittingStatus('Closing…');
   await shutdown();
   if (bundles.size > 0) saveSessionState();
+  // The console capture writes through an async stream, so records logged in the
+  // last moments before quitting sit in its buffer. Flushing here is what puts
+  // the run-up to a shutdown in the file a later bug report reads.
+  await closeConsoleCapture();
   app.quit();
 }
 
@@ -1996,8 +2343,9 @@ app.on('window-all-closed', () => {
 });
 
 // macOS: activating the app (clicking the dock icon) with no open windows
-// re-opens a window on the backend home page. With a window already open the
-// OS just brings it forward, so we act only when none remain.
+// re-opens one on whatever the app's state warrants -- the home page, the
+// loading screen, or the error takeover. With a window already open the OS
+// just brings it forward, so we act only when none remain.
 app.on('activate', () => {
   if (!shouldOpenWindowOnActivate({
     isShuttingDown,
@@ -2006,7 +2354,7 @@ app.on('activate', () => {
   })) {
     return;
   }
-  openHomeInNewWindow();
+  openOrFocusWindow();
 });
 
 app.on('before-quit', (event) => {

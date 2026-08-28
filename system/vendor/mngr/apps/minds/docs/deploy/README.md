@@ -27,7 +27,8 @@ Do NOT put actual secret *values* anywhere in the repo, this folder included
 - Tier operations: [staging-bringup.md](./staging-bringup.md),
   [production-release-deployment.md](./production-release-deployment.md),
   [environments.md](./environments.md), [vault-setup.md](./vault-setup.md),
-  [observability-bringup.md](./observability-bringup.md).
+  [observability-bringup.md](./observability-bringup.md),
+  [bugsink-bringup.md](./bugsink-bringup.md).
 - Pool / bare-metal operations: [host-pool-setup.md](./host-pool-setup.md),
   [reboot-resilience-rollout.md](./reboot-resilience-rollout.md),
   [slice-hardening-rollout.md](./slice-hardening-rollout.md),

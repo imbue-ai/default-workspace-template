@@ -8,6 +8,7 @@ import { apiUrl } from "../base-path";
 import { reportMessaged } from "./activityReporter";
 import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
 import { noteBackendArrivals } from "./OutgoingMessages";
+import { describeRequestError } from "./request-error";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -78,6 +79,10 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   display_body?: string;
   // permission_resolution only: the verdict written onto the earlier card.
   resolution?: "granted" | "denied" | "error";
+  // permission_resolution only: the resolved request's own id, when the notice
+  // carries one (absent for a notice recorded before request-id embedding shipped,
+  // which the walk instead correlates by arrival order -- see turn-grouping.ts).
+  request_id?: string;
   // The activity path's signal that no model reply follows this message (model-bar
   // traffic, framework injections). Read by the backend's own activity derivation;
   // carried on the wire for completeness.
@@ -464,6 +469,40 @@ class TranscriptStore {
 const storeByAgent: Record<string, TranscriptStore> = {};
 const notFoundAgentIds = new Set<string>();
 
+/** Where an agent's transcript snapshot stands: in flight, failed, or settled. */
+export interface TranscriptLoadState {
+  readonly phase: "idle" | "loading" | "error";
+  /** Why it failed. Set when `phase` is "error", null otherwise. */
+  readonly error: string | null;
+}
+
+const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
+
+// Where each agent's snapshot load stands. It lives here rather than in the
+// panel because every path that reloads a transcript -- the panel's own load,
+// the tab's Refresh, and the stream's background reconnect -- goes through
+// `fetchEvents`, and only one of those is the panel. A panel holding its own
+// copy could not be cleared by the other two, so a recovered transcript stayed
+// hidden behind a stale error until the page was reloaded. Holding the whole
+// phase rather than just the error keeps the in-flight state visible to those
+// same three paths, so a reload nobody started still reads as loading.
+const loadStateByAgent = new Map<string, TranscriptLoadState>();
+
+// Which snapshot attempt an agent's state belongs to. Those same three paths can
+// have two fetches outstanding at once, and they settle in whatever order the
+// network allows: a request hung on a dead tunnel settles up to
+// EVENTS_REQUEST_TIMEOUT_MS after a later one has already landed. Only the newest
+// attempt speaks for the agent, so an older one's failure cannot put the panel
+// back on an error screen for a transcript that has since loaded. Same staleness
+// fence the paging fetches below apply to their window.
+let loadAttemptCounter = 0;
+const newestLoadAttemptByAgent = new Map<string, number>();
+
+/** Whether this attempt is still the agent's newest, i.e. whether its outcome still counts. */
+function isNewestLoadAttempt(agentId: string, attempt: number): boolean {
+  return newestLoadAttemptByAgent.get(agentId) === attempt;
+}
+
 function storeFor(agentId: string): TranscriptStore {
   let store = storeByAgent[agentId];
   if (store === undefined) {
@@ -497,6 +536,11 @@ export function hasMoreAfter(agentId: string): boolean {
 
 export function isConversationNotFound(agentId: string): boolean {
   return notFoundAgentIds.has(agentId);
+}
+
+/** Where this agent's transcript snapshot load stands; "idle" for one never attempted. */
+export function getConversationLoadState(agentId: string): TranscriptLoadState {
+  return loadStateByAgent.get(agentId) ?? IDLE_LOAD_STATE;
 }
 
 export function getEventsForAgent(agentId: string): TranscriptEvent[] {
@@ -590,6 +634,15 @@ function placeWindow(agentId: string, result: EventsResponse): void {
 
 export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   notFoundAgentIds.delete(agentId);
+  // Moved on the attempt, not on its outcome: whoever is about to learn the
+  // outcome must not be shown the previous one. Only the snapshot tracks this --
+  // a failed page or jump below leaves the loaded window intact and is
+  // deliberately non-fatal, so it must not blank a readable transcript. Starting
+  // an attempt always supersedes any outstanding one, so this write needs no
+  // fence; only the outcomes below do.
+  const attempt = ++loadAttemptCounter;
+  newestLoadAttemptByAgent.set(agentId, attempt);
+  loadStateByAgent.set(agentId, { phase: "loading", error: null });
 
   try {
     const result = await m.request<EventsResponse>({
@@ -598,12 +651,30 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       params: { agentId },
       config: applyEventsRequestTimeout,
     });
+    // Fenced for the same reason the outcome writes below are, and it matters
+    // more here: a superseded attempt can still *succeed*, just late, and
+    // `placeWindow` replaces the window wholesale. Letting an older snapshot land
+    // on top of a newer one reverts the transcript and drops whatever the stream
+    // appended in between, with no way back -- placeWindow also resets
+    // firstOffset and hasMoreAfter, so neither backfill nor forward paging can
+    // reach the lost events again.
+    if (!isNewestLoadAttempt(agentId, attempt)) {
+      return result.events;
+    }
     placeWindow(agentId, result);
+    loadStateByAgent.set(agentId, IDLE_LOAD_STATE);
     return result.events;
   } catch (error) {
-    const requestError = error as { code?: number; message?: string };
-    if (requestError.code === 404) {
-      notFoundAgentIds.add(agentId);
+    // The not-found latch is fenced alongside the state because the panel acts on
+    // it harder: it renders "No conversation data" ahead of (and unlike) the load
+    // state, ungated by whether a transcript is already on screen, and disconnects
+    // the stream. A superseded attempt's 404 would blank a live chat.
+    if (isNewestLoadAttempt(agentId, attempt)) {
+      const requestError = error as { code?: number; message?: string };
+      if (requestError.code === 404) {
+        notFoundAgentIds.add(agentId);
+      }
+      loadStateByAgent.set(agentId, { phase: "error", error: describeRequestError(error) });
     }
     throw error;
   }

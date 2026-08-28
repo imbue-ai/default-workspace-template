@@ -37,8 +37,10 @@ name = "observability layers contract"
 type = "layers"
 layers = [
     "imbue.observability.cli",
+    "imbue.observability.bugsink_api",
+    "imbue.observability.bugsink_remote_install",
     "imbue.observability.remote_install",
-    "imbue.observability.openobserve_api | imbue.observability.dns_records",
+    "imbue.observability.openobserve_api | imbue.observability.dns_records | imbue.observability.bugsink_render",
     "imbue.observability.collector_install",
     "imbue.observability.config_render",
     "imbue.observability.data_types",

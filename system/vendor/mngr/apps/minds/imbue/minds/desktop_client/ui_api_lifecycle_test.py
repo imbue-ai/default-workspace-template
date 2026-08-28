@@ -10,7 +10,8 @@ import pytest
 from flask.testing import FlaskClient
 from pydantic import Field
 
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
@@ -19,15 +20,19 @@ from imbue.minds.desktop_client.conftest import FakeImbueCloudCli
 from imbue.minds.desktop_client.conftest import build_desktop_client_for_test
 from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
 from imbue.minds.desktop_client.conftest import make_session_store_for_test
+from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.testing import build_resolver_with_provider_backend
 from imbue.minds.desktop_client.testing import build_resolver_with_system_services
+from imbue.minds.desktop_client.testing import build_stub_connectivity_detector
 from imbue.minds.desktop_client.testing import record_provider_discovery_error
 from imbue.minds.desktop_client.ui_api_lifecycle import _build_ssh_command
 from imbue.minds.desktop_client.ui_api_lifecycle import _resolve_workspace_coordinate_to_agent_id
 from imbue.minds.desktop_client.workspace_record_store import ReplicaRecord
 from imbue.mngr.primitives import AgentId
+from imbue.mngr_forward.data_types import SystemInterfaceBackendFailureReason
 from imbue.mngr_forward.ssh_tunnel import RemoteSSHInfo
 
 _DESTROYED_AGENT_ID = "agent-" + "9" * 32
@@ -59,6 +64,7 @@ def _build_lifecycle_client(
     is_reaper_wired: bool = False,
     backend_resolver: BackendResolverInterface | None = None,
     tracker: SystemInterfaceHealthTracker | None = None,
+    connectivity_detector: ConnectivityDetector | None = None,
 ) -> tuple[FlaskClient, MultiAccountSessionStore]:
     """A desktop-client test app with the stores the lifecycle routes read.
 
@@ -90,10 +96,11 @@ def _build_lifecycle_client(
         backend_resolver=(
             backend_resolver if backend_resolver is not None else StaticBackendResolver(url_by_agent_and_service={})
         ),
-        paths=WorkspacePaths(data_dir=tmp_path),
+        paths=InstallationPaths(data_dir=tmp_path),
         session_store=session_store,
         sync_scheduler=sync_scheduler,
         system_interface_health_tracker=tracker,
+        connectivity_detector=connectivity_detector,
     )
     return client, session_store
 
@@ -300,6 +307,117 @@ def test_recovery_info_reports_the_backend_a_restart_was_already_rejected_at(tmp
     assert payload["is_backend_unreachable"] is True
     assert payload["provider_label"] == "Docker"
     assert payload["unreachable_reason"] == "Docker Desktop is manually paused."
+
+
+def test_recovery_info_reports_a_dead_network_for_a_machine_it_can_explain(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
+) -> None:
+    """The card falls back to this, so a machine on the far side of a dead network says so."""
+    agent_id = AgentId(_DESTROYED_AGENT_ID)
+    resolver = build_resolver_with_provider_backend(
+        agent_id, provider_name="imbue_cloud_someone", backend="imbue_cloud"
+    )
+    detector, _ = build_stub_connectivity_detector(root_concurrency_group, is_internet_up=False)
+    detector.probe_now()
+    client, _ = _build_lifecycle_client(tmp_path, backend_resolver=resolver, connectivity_detector=detector)
+
+    payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
+
+    assert payload["device_environment"] == "OFFLINE"
+
+
+@pytest.mark.witnesses(
+    "no-blame-past-an-unmeasured-device",
+    partial="witnesses the recovery card's input only; the card's own withholding is witnessed by the SPA's suite",
+)
+def test_recovery_info_reports_an_unmeasured_device_as_unknown_not_fine(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
+) -> None:
+    """Before a probe lands (and after a wake blanks the reading) the card is told nothing was measured.
+
+    The card withholds its backend verdict on this value: after a wake the
+    provider's poll errored because the laptop was asleep, and NONE here would
+    have the card name the provider on no measurement at all.
+    """
+    agent_id = AgentId(_DESTROYED_AGENT_ID)
+    resolver = build_resolver_with_provider_backend(
+        agent_id, provider_name="imbue_cloud_someone", backend="imbue_cloud"
+    )
+    detector, _ = build_stub_connectivity_detector(root_concurrency_group, is_internet_up=False)
+    client, _ = _build_lifecycle_client(tmp_path, backend_resolver=resolver, connectivity_detector=detector)
+
+    payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
+
+    assert payload["device_environment"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("backend", ["local", "docker", "lima"])
+def test_recovery_info_withholds_the_device_condition_from_a_machine_on_this_device(
+    tmp_path: Path,
+    backend: str,
+    root_concurrency_group: ConcurrencyGroup,
+) -> None:
+    """A dead network explains nothing about a container on this laptop, and must not disarm its card.
+
+    The card renders this field with no locality of its own: a non-NONE value
+    replaces the Restart button with a waiting-for-network line. On an on-device
+    machine that restart is exactly what would fix it -- it runs over loopback,
+    which the wifi has no say in -- so reporting the device's condition here
+    would take away a working affordance over a condition that does not apply.
+    """
+    agent_id = AgentId(_DESTROYED_AGENT_ID)
+    resolver = build_resolver_with_provider_backend(agent_id, provider_name=backend, backend=backend)
+    detector, _ = build_stub_connectivity_detector(root_concurrency_group, is_internet_up=False)
+    detector.probe_now()
+    client, _ = _build_lifecycle_client(tmp_path, backend_resolver=resolver, connectivity_detector=detector)
+
+    payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
+
+    assert payload["device_environment"] == "NONE"
+
+
+def test_recovery_info_reports_a_connection_this_device_could_not_make(tmp_path: Path) -> None:
+    """The card's verdict when the failure never left this device, with the error that proves it.
+
+    The machine is very likely running fine, so the card must stop offering to
+    restart it -- and the verbatim error is the only thing that makes a broken
+    local install (a missing known_hosts, say) diagnosable from inside the app.
+    """
+    agent_id = AgentId(_DESTROYED_AGENT_ID)
+    resolver = build_resolver_with_system_services(agent_id, AgentId.generate())
+    tracker = SystemInterfaceHealthTracker()
+    tracker.record_connection_failure(
+        agent_id,
+        SystemInterfaceBackendFailureReason.TUNNEL_SETUP_FAILED,
+        "No known_hosts file at /keys/known_hosts; refusing to connect without a pinned host key",
+    )
+    tracker.mark_stuck(agent_id)
+    client, _ = _build_lifecycle_client(tmp_path, backend_resolver=resolver, tracker=tracker)
+
+    payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
+
+    assert payload["is_device_cannot_connect"] is True
+    assert "No known_hosts file" in payload["device_error_detail"]
+    # The machine's backend is a separate question, and nothing here answers it.
+    assert payload["is_backend_unreachable"] is False
+
+
+def test_recovery_info_stops_blaming_this_device_once_the_machine_answers(tmp_path: Path) -> None:
+    """A probe that reaches the machine ends the episode, and the verdict with it."""
+    agent_id = AgentId(_DESTROYED_AGENT_ID)
+    resolver = build_resolver_with_system_services(agent_id, AgentId.generate())
+    tracker = SystemInterfaceHealthTracker()
+    tracker.record_connection_failure(agent_id, SystemInterfaceBackendFailureReason.POOL_EXHAUSTED, "pool timeout")
+    client, _ = _build_lifecycle_client(tmp_path, backend_resolver=resolver, tracker=tracker)
+    assert json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)[
+        "is_device_cannot_connect"
+    ]
+
+    tracker.record_probe_success(agent_id)
+
+    payload = json.loads(client.get(f"/ui/api/workspaces/{_DESTROYED_AGENT_ID}/recovery-info").data)
+    assert payload["is_device_cannot_connect"] is False
+    assert payload["device_error_detail"] == ""
 
 
 def test_build_ssh_command_renders_the_resolvers_ssh_info() -> None:

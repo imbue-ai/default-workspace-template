@@ -3,6 +3,7 @@ import pytest
 from imbue.mngr.primitives import HostId
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.errors import SliceCapacityError
+from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_HOST_ID_HEX_LENGTH
 from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
 from imbue.mngr_lima.errors import LimaCommandError
 from imbue.mngr_vps.primitives import VpsInstanceId
@@ -106,6 +107,13 @@ def test_destroy_instance_raises_on_genuine_delete_failure() -> None:
         client.destroy_instance(VpsInstanceId("mngr-slice-abc"))
 
 
+def test_destroy_instance_raises_when_limactl_itself_is_missing() -> None:
+    """The shell's "command not found" is not the instance being absent: the VM was never touched."""
+    client = _recording_client({"limactl delete": (127, "", "bash: limactl: command not found")})
+    with pytest.raises(LimaCommandError):
+        client.destroy_instance(VpsInstanceId("mngr-slice-abc"))
+
+
 def test_list_disk_names_parses_jsonl_names() -> None:
     disk_json = '{"name": "mngr-slice-aaa-data"}\n{"name": "mngr-slice-bbb-data"}\n'
     client = _recording_client({"limactl disk list --json": (0, disk_json, "")})
@@ -183,12 +191,16 @@ def test_provision_slice_vm_reserves_under_lock_then_starts_and_returns_box_chos
     # The ports come from the box reservation, and the instance/disk names are env-stamped.
     assert result.vm_ssh_host_port == 22001
     assert result.container_ssh_host_port == 22002
-    assert result.instance_name == f"mngr-slice-dev-josh-{host_id.get_uuid().hex}"
-    assert result.disk_name == f"mngr-slice-dev-josh-{host_id.get_uuid().hex}-data"
+    host_hex = host_id.get_uuid().hex[:SLICE_HOST_ID_HEX_LENGTH]
+    assert result.instance_name == f"mngr-slice-dev-josh-{host_hex}"
+    assert result.disk_name == f"mngr-slice-dev-josh-{host_hex}-data"
     # The reserve happened before the boot, and the boot was a separate command.
     reserve_idx = next(i for i, cmd in enumerate(client.recorded_commands) if "base64 -d | bash" in cmd)
     start_idx = next(i for i, cmd in enumerate(client.recorded_commands) if "limactl --log-level=info start" in cmd)
     assert reserve_idx < start_idx
+    # The boot must override lima's default 10-minute instance-running deadline:
+    # first boots on a loaded box legitimately take longer (mngr-internal#469).
+    assert "--timeout 25m" in client.recorded_commands[start_idx]
 
 
 def test_provision_slice_vm_raises_slice_capacity_error_when_box_is_full() -> None:

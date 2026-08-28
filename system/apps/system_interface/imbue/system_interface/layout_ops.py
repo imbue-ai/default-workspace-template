@@ -49,6 +49,13 @@ _TERMINAL_SERVICE_NAME = "terminal"
 # a ``host-<32hex>`` label appears somewhere PAST the first label.
 _WORKSPACE_HOST_LABEL_PATTERN = re.compile(r"^host-[0-9a-f]{32}$")
 
+# A service's origin label as ``forward_port.py`` mints it: one DNS label. Read
+# back rather than assumed, because the registry is a file on disk that other
+# things write; a row that could not be a hostname could not name an origin
+# either, so ``terminal_origin_label`` reports no terminal instead of handing a
+# caller a value it would have to defend against.
+_ORIGIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
+
 # The app registry the frontend/forwarder key off. Defaults to
 # ``data/.state/apps.toml`` relative to cwd; overridable via ``MINDS_APPS_FILE``
 # (tests point it at a sandboxed fixture). Mirrors ``forward_port.py`` /
@@ -61,6 +68,7 @@ def _apps_file() -> Path:
     """Path to the app registry (``data/.state/apps.toml`` by default)."""
     return Path(os.environ.get(_ENV_APPS_FILE, _DEFAULT_APPS_FILE))
 
+
 # Query parameter that distinguishes individual browsers in the per-workspace
 # browser fleet. The viewer is served at the browser service's origin with a
 # ``?session=<id>`` query; each id is a separately-addressable pane. When a
@@ -69,6 +77,13 @@ def _apps_file() -> Path:
 # so the CLI and frontend can address, dedup, and focus each browser
 # independently.
 _BROWSER_SESSION_QUERY_KEY = "session"
+
+# Query parameter that distinguishes a plain app's instances, riding the same
+# ``service:<name>?<query>`` grammar. Unlike the browser's session, the
+# instance name is carried on the pane's params (``serviceInstanceId``), not
+# in its URL -- the URL is the service origin plus wherever the instance is
+# looking -- so ``_resolve_ref`` reads it from there.
+_SERVICE_INSTANCE_QUERY_KEY = "instance"
 
 # Set of op names the endpoint dispatches on. Anything else is a 400.
 # ``context`` is a pure query over the client-activity event log; ``load``
@@ -329,6 +344,28 @@ def _read_label_to_service_name(path: Path) -> dict[str, str]:
     return mapping
 
 
+def terminal_origin_label() -> str | None:
+    """The terminal service's unguessable origin label, or ``None``.
+
+    The label is minted per workspace (``forward_port.py``), so nothing that
+    needs to address the terminal can hardcode it; this is the read side of
+    that registry for callers outside the layout itself -- notably the
+    "interface not built" placeholder, which offers a terminal as the way out
+    of a state where the app that would normally open one is missing.
+
+    ``None`` means "no terminal to offer", which every caller must treat as an
+    ordinary outcome rather than an error: the terminal may not be registered
+    yet (ttyd starts alongside the other services, not before them), the
+    registry may be missing or unreadable, or the recorded label may not be a
+    usable hostname label. The label only ever adds an affordance, so failing
+    to find one must not cost the caller anything else.
+    """
+    for label, name in _read_label_to_service_name(_apps_file()).items():
+        if name == _TERMINAL_SERVICE_NAME and _ORIGIN_LABEL_PATTERN.match(label):
+            return label
+    return None
+
+
 def _service_name_from_url(url: Any) -> str | None:
     """Service name of an absolute service-origin URL, or None.
 
@@ -464,16 +501,19 @@ def _resolve_ref(
     elif panel_type == "subagent":
         ref = f"subagent:{subagent_session_id or _short_hash(panel_id)}"
     elif panel_type == "iframe" and service_name:
-        # A service iframe is normally addressed as ``service:<name>``. The
-        # browser fleet is the exception: each browser pane points at the
-        # browser service's origin with a ``?session=<id>`` query and must be
-        # separately addressable, so we carry the ``?session=<id>`` query
-        # into the ref (``service:browser?session=2``). Two browser panes
-        # with different session ids thus get distinct refs and never collide
-        # in inspect / dedup / focus. Any other service iframe stays
-        # ``service:<name>``.
-        session_suffix = _service_session_suffix(url)
-        ref = f"service:{service_name}{session_suffix}"
+        # A service iframe is normally addressed as ``service:<name>``. Two
+        # exceptions carry a distinguishing query: an app instance's pane
+        # carries its canonical instance name in its params
+        # (``service:files?instance=files-2``), and a browser pane points at
+        # the browser service's origin with a ``?session=<id>`` query
+        # (``service:browser?session=2``). Either way, distinct panes get
+        # distinct refs and never collide in inspect / dedup / focus.
+        service_instance_id = params.get("serviceInstanceId")
+        if isinstance(service_instance_id, str) and service_instance_id:
+            ref = f"service:{service_name}?{_SERVICE_INSTANCE_QUERY_KEY}={service_instance_id}"
+        else:
+            session_suffix = _service_session_suffix(url)
+            ref = f"service:{service_name}{session_suffix}"
     elif (
         panel_type == "iframe"
         and isinstance(url, str)

@@ -1,7 +1,34 @@
 """Exception types for the remote service connector."""
 
 
-class CloudflareApiError(RuntimeError):
+class ConnectorError(Exception):
+    """Base class for every exception the connector itself defines.
+
+    The top-level error handling relies on this: an exception that reaches
+    the app-level 500 handler is unexpected by definition, and inheriting
+    from this base marks it as one of OURS that escaped unmapped (a missing
+    entry in ``raise_as_http``) rather than a third-party or builtin
+    surprise. Expected errors are the ones ``raise_as_http`` maps to
+    status codes -- membership there, not this base class, is what makes an
+    error "expected".
+    """
+
+
+class ReportingProbeError(ConnectorError, RuntimeError):
+    """Raised on purpose by ``GET /health/reporting-probe`` on dev/ci tiers.
+
+    Deliberately absent from ``raise_as_http``'s mapping so it exercises the
+    real unexpected-exception path end to end: app-level 500 handler, Bugsink
+    capture, and the ``internal_error`` response contract. The deployment-test
+    suite drives it; the route is disabled on production/staging.
+    """
+
+
+class DownloadLinkError(ConnectorError, RuntimeError):
+    """Raised when the download link cannot be resolved from a release channel."""
+
+
+class CloudflareApiError(ConnectorError, RuntimeError):
     """Raised when the Cloudflare API returns an error response."""
 
     def __init__(self, status_code: int, errors: list[dict[str, object]]) -> None:
@@ -11,11 +38,11 @@ class CloudflareApiError(RuntimeError):
         super().__init__(f"Cloudflare API error ({status_code}): {messages}")
 
 
-class InvalidShareCoordinateError(ValueError):
+class InvalidShareCoordinateError(ConnectorError, ValueError):
     """Raised when a host id, user label, or region is not a valid hostname coordinate."""
 
 
-class ShareQuotaExceededError(RuntimeError):
+class ShareQuotaExceededError(ConnectorError, RuntimeError):
     """Raised when enabling a share would exceed the per-user shared-workspace quota."""
 
     def __init__(self, current: int, limit: int) -> None:
@@ -24,7 +51,7 @@ class ShareQuotaExceededError(RuntimeError):
         super().__init__(f"user already has {current} shared workspaces (max {limit})")
 
 
-class ShareNotFoundError(KeyError):
+class ShareNotFoundError(ConnectorError, KeyError):
     """Raised when the caller has no share record for the requested host id."""
 
     def __init__(self, host_id: str) -> None:
@@ -32,7 +59,7 @@ class ShareNotFoundError(KeyError):
         super().__init__(f"No share found for host '{host_id}'")
 
 
-class MissingShareConfigError(RuntimeError):
+class MissingShareConfigError(ConnectorError, RuntimeError):
     """Raised when a required sharing env var (from the sharing-<env> Modal secret) is unset."""
 
     def __init__(self, name: str) -> None:
@@ -43,11 +70,11 @@ class MissingShareConfigError(RuntimeError):
         )
 
 
-class InvalidRelayRecordError(ValueError):
+class InvalidRelayRecordError(ConnectorError, ValueError):
     """Raised when a relay registration carries a malformed id, region, or endpoint."""
 
 
-class RelayNotFoundError(KeyError):
+class RelayNotFoundError(ConnectorError, KeyError):
     """Raised when an admin operation references a relay id with no row."""
 
     def __init__(self, relay_id: str) -> None:
@@ -55,7 +82,7 @@ class RelayNotFoundError(KeyError):
         super().__init__(f"No relay found with id '{relay_id}'")
 
 
-class NoActiveRelaysError(RuntimeError):
+class NoActiveRelaysError(ConnectorError, RuntimeError):
     """Raised when a share operation needs a relay but no active relay serves any (or the required) region."""
 
     def __init__(self, region: str | None) -> None:
@@ -63,19 +90,19 @@ class NoActiveRelaysError(RuntimeError):
         scope = f"region '{region}'" if region else "any region"
         super().__init__(
             f"No active sharing relay is registered for {scope}. "
-            "Provision one with `share-relay provision/deploy` and register it via `mngr imbue_cloud admin relays add`."
+            "Provision one with `share-relay provision/deploy` and register it via `minds-admin relays add`."
         )
 
 
-class InvalidCsrError(ValueError):
+class InvalidCsrError(ConnectorError, ValueError):
     """Raised when a workspace's CSR is malformed or claims the wrong names."""
 
 
-class AcmeIssuanceError(RuntimeError):
+class AcmeIssuanceError(ConnectorError, RuntimeError):
     """Raised when every configured ACME CA failed to issue the certificate."""
 
 
-class InvalidHostNameError(ValueError):
+class InvalidHostNameError(ConnectorError, ValueError):
     """Raised when a host_name fails the SafeName regex on the lease request."""
 
     def __init__(self, value: object) -> None:
@@ -83,7 +110,7 @@ class InvalidHostNameError(ValueError):
         super().__init__(f"host_name must be alphanumeric (with dashes/underscores allowed in the middle): {value!r}")
 
 
-class InvalidPaidListEntryError(ValueError):
+class InvalidPaidListEntryError(ConnectorError, ValueError):
     """Raised when a paid-list domain or email entry is malformed."""
 
     def __init__(self, value: object, reason: str) -> None:
@@ -91,7 +118,7 @@ class InvalidPaidListEntryError(ValueError):
         super().__init__(f"Invalid paid-list entry {value!r}: {reason}")
 
 
-class InvalidR2BucketNameError(ValueError):
+class InvalidR2BucketNameError(ConnectorError, ValueError):
     """Raised when a derived R2 bucket name violates Cloudflare's naming rules."""
 
     def __init__(self, value: object) -> None:
@@ -101,7 +128,7 @@ class InvalidR2BucketNameError(ValueError):
         )
 
 
-class InvalidR2AccessError(ValueError):
+class InvalidR2AccessError(ConnectorError, ValueError):
     """Raised when a key access scope is neither 'read' nor 'readwrite'."""
 
     def __init__(self, value: object) -> None:
@@ -109,7 +136,7 @@ class InvalidR2AccessError(ValueError):
         super().__init__(f"access must be 'read' or 'readwrite', got {value!r}")
 
 
-class R2BucketExistsError(RuntimeError):
+class R2BucketExistsError(ConnectorError, RuntimeError):
     """Raised when creating a bucket whose derived name already exists for the user."""
 
     def __init__(self, bucket_name: str) -> None:
@@ -117,7 +144,7 @@ class R2BucketExistsError(RuntimeError):
         super().__init__(f"Bucket already exists: {bucket_name}")
 
 
-class R2BucketNotFoundError(KeyError):
+class R2BucketNotFoundError(ConnectorError, KeyError):
     """Raised when a bucket the caller referenced does not exist (or is not theirs)."""
 
     def __init__(self, bucket_name: str) -> None:
@@ -125,7 +152,7 @@ class R2BucketNotFoundError(KeyError):
         super().__init__(f"Bucket not found: {bucket_name}")
 
 
-class R2BucketNotEmptyError(RuntimeError):
+class R2BucketNotEmptyError(ConnectorError, RuntimeError):
     """Raised when destroying a bucket that still has objects in it."""
 
     def __init__(self, bucket_name: str) -> None:
@@ -133,7 +160,7 @@ class R2BucketNotEmptyError(RuntimeError):
         super().__init__(f"Bucket is not empty: {bucket_name}. Empty it before destroying.")
 
 
-class R2BucketOwnershipError(PermissionError):
+class R2BucketOwnershipError(ConnectorError, PermissionError):
     """Raised when a bucket name does not carry the caller's ownership prefix."""
 
     def __init__(self, bucket_name: str, user_id_prefix: str) -> None:
@@ -142,7 +169,7 @@ class R2BucketOwnershipError(PermissionError):
         super().__init__(f"User '{user_id_prefix}' does not own bucket '{bucket_name}'")
 
 
-class R2ReservedBucketNameError(RuntimeError):
+class R2ReservedBucketNameError(ConnectorError, RuntimeError):
     """Raised when creating a `host-` prefixed bucket that no workspace record backs.
 
     The `host-<hex>` short-name shape is reserved for workspace-backup buckets
@@ -158,7 +185,7 @@ class R2ReservedBucketNameError(RuntimeError):
         )
 
 
-class R2BucketActiveWorkspaceError(RuntimeError):
+class R2BucketActiveWorkspaceError(ConnectorError, RuntimeError):
     """Raised when destroying a workspace-backup bucket whose workspace record is still ACTIVE.
 
     Tombstone-first is enforced server-side so a live workspace's backups can
@@ -175,7 +202,7 @@ class R2BucketActiveWorkspaceError(RuntimeError):
         )
 
 
-class EmailNotVerifiedError(PermissionError):
+class EmailNotVerifiedError(ConnectorError, PermissionError):
     """Raised when an action that requires a verified email is attempted without one.
 
     Mapped to a structured 403 (``code: email_not_verified``) so clients can
@@ -202,7 +229,17 @@ class EmailNotVerifiedError(PermissionError):
         )
 
 
-class QuotaExceededError(RuntimeError):
+class AccountSuspendedError(ConnectorError, PermissionError):
+    """Raised when a suspended account attempts a gated action (signing in, minting a session).
+
+    Mapped to a structured 403 (``code: account_suspended``) so clients can
+    show the generic suspended message. The operator-recorded suspension
+    reason is deliberately NOT included -- it is internal; users get the
+    generic support-contact message.
+    """
+
+
+class QuotaExceededError(ConnectorError, RuntimeError):
     """Raised when an operation would exceed one of the account's entitlements.
 
     Mapped to a structured 403 (``code: quota_exceeded`` plus the entitlement
@@ -217,7 +254,7 @@ class QuotaExceededError(RuntimeError):
         super().__init__(message)
 
 
-class R2StorageResultTruncatedError(RuntimeError):
+class R2StorageResultTruncatedError(ConnectorError, RuntimeError):
     """Raised when the sweep's GraphQL usage response fills its row budget and may be truncated."""
 
     def __init__(self, row_count: int, row_limit: int) -> None:
@@ -230,7 +267,7 @@ class R2StorageResultTruncatedError(RuntimeError):
         )
 
 
-class CleanupGrantBudgetExhaustedError(RuntimeError):
+class CleanupGrantBudgetExhaustedError(ConnectorError, RuntimeError):
     """Raised when an account has burned its failed-cleanup-grant budget for the rolling window.
 
     Mapped to a structured 403 (``code: cleanup_grant_budget_exhausted``) so
@@ -248,25 +285,36 @@ class CleanupGrantBudgetExhaustedError(RuntimeError):
         )
 
 
-class PlanNotFoundError(KeyError):
+class PlanNotFoundError(ConnectorError, KeyError):
     """Raised when a referenced plan has no row in the plans table."""
 
     def __init__(self, plan_name: str) -> None:
         self.plan_name = plan_name
         super().__init__(
             f"Plan '{plan_name}' is not seeded in the plans table; "
-            "run `minds env deploy` (which writes the [plans] blocks from deploy.toml)."
+            "run `minds-admin env deploy` (which writes the [plans] blocks from deploy.toml)."
         )
 
 
-class UnknownEntitlementColumnError(ValueError):
+class UnknownEntitlementColumnError(ConnectorError, ValueError):
     """Raised when an entitlements update names a column that does not exist."""
 
     def __init__(self, unknown_columns: list[str]) -> None:
         super().__init__(f"Unknown entitlement columns: {unknown_columns}")
 
 
-class PoolHostCleanupError(RuntimeError):
+class WorkspaceRecordLeaseActiveError(ConnectorError, RuntimeError):
+    """A workspace record may not be hard-deleted while its workspace still holds a pool lease."""
+
+    def __init__(self, record_key: str) -> None:
+        self.record_key = record_key
+        super().__init__(
+            f"workspace record {record_key} still holds a cloud lease; destroy the workspace instead of "
+            "removing its record"
+        )
+
+
+class PoolHostCleanupError(ConnectorError, RuntimeError):
     """Raised when a pool-host release/teardown cannot destroy the slice's lima VM.
 
     Surfaced (rather than swallowed to a warning) so a release that fails to
@@ -274,11 +322,11 @@ class PoolHostCleanupError(RuntimeError):
     """
 
 
-class MissingAuthWebsiteDomainError(RuntimeError):
+class MissingAuthWebsiteDomainError(ConnectorError, RuntimeError):
     """Raised when the required AUTH_WEBSITE_DOMAIN secret is not set."""
 
 
-class MissingStorageConfigError(RuntimeError):
+class MissingStorageConfigError(ConnectorError, RuntimeError):
     """Raised when a workspace stop/start needs storage config the deployment lacks."""
 
     def __init__(self, name: str) -> None:
@@ -289,7 +337,7 @@ class MissingStorageConfigError(RuntimeError):
         )
 
 
-class WorkspaceTransitionError(RuntimeError):
+class WorkspaceTransitionError(ConnectorError, RuntimeError):
     """Raised when a workspace stop/start transition fails on the box side."""
 
 

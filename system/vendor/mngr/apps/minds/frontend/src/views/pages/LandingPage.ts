@@ -9,7 +9,7 @@ import m from "mithril";
 import { getAppContext } from "../../app-context";
 import { electronBridge } from "../../electron-bridge";
 import type { LandingExtras, MindLiveness } from "../../models/create";
-import { MindLivenessTracker, fetchLandingExtras, recoveryRoute } from "../../models/create";
+import { MIND_LIVENESS_LABELS, MindLivenessTracker, fetchLandingExtras, recoveryRoute } from "../../models/create";
 import type { UiWorkspaceEntry } from "../../channel/messages";
 import type { UiProviderEntry } from "../../generated/ui";
 import { Button, ButtonLink } from "../components/Button";
@@ -18,7 +18,15 @@ import { Icon16 } from "../components/Icon";
 import { PageContainer } from "../components/Layout";
 import { Notice } from "../components/Notice";
 import { routeLinkAttrs } from "../components/route-link";
-import { isMachineStateKnown, mindControlsFor, rowClickActionFor } from "./landing-controls";
+import {
+  backupsControlFor,
+  healthBadgeLabelFor,
+  isMachineStateKnown,
+  mindControlsFor,
+  remoteLocationBadgeFor,
+  remoteStateChipFor,
+  rowClickActionFor,
+} from "./landing-controls";
 import { Spinner } from "../components/Spinner";
 import { StatusBadge } from "../components/StatusBadge";
 
@@ -167,7 +175,7 @@ export const LandingPage: m.ClosureComponent = () => {
   function rowClick(entry: UiWorkspaceEntry): void {
     const { stores, shell } = getAppContext();
     const health = stores.health.statusFor(entry.id);
-    const returnTo = `/goto/${stores.workspaces.toHostScopedId(entry.id)}/`;
+    const returnTo = `/goto/${entry.id}/`;
     const liveness = state.tracker.displayedLiveness(entry.id, entry.liveness ?? "");
     const action = rowClickActionFor(entry, liveness, health === "healthy");
     if (action === "recover") {
@@ -195,19 +203,36 @@ export const LandingPage: m.ClosureComponent = () => {
 
   function livenessBadge(liveness: MindLiveness): m.Children {
     if (liveness === "RUNNING") return null;
-    const label =
-      liveness === "STOPPED"
-        ? "Stopped"
-        : liveness === "STOPPING"
-          ? "Stopping…"
-          : liveness === "STARTING"
-            ? "Starting…"
-            : "Status unknown";
+    const label = MIND_LIVENESS_LABELS[liveness] ?? "Status unknown";
     const tone =
       liveness === "STOPPING" || liveness === "STARTING"
         ? "bg-warning/15 text-warning"
         : "bg-fill-subtle text-primary";
     return m("span", { class: `${BADGE_CLASS} ${tone} landing-mind-state-badge` }, label);
+  }
+
+  // The backups page runs restic from this device, so it is reachable for a
+  // stopped or remote machine whose own settings pane is not. Kept subtle
+  // (muted ghost icon): it is a fallback route in, not the primary action.
+  function backupsButton(entry: UiWorkspaceEntry, liveness: string): m.Children {
+    const control = backupsControlFor(entry, liveness);
+    if (!control.isShown) return null;
+    return m(
+      Button,
+      {
+        variant: "ghost",
+        size: "icon",
+        extra: "opacity-60",
+        "aria-label": "Backups",
+        "data-tooltip": control.tooltip,
+        disabled: !control.isEnabled,
+        onclick: (event: MouseEvent) => {
+          event.stopPropagation();
+          m.route.set(`/workspace/${entry.id}/backups`);
+        },
+      },
+      m(Icon16, { name: "box" }),
+    );
   }
 
   function healthBadge(entry: UiWorkspaceEntry, liveness: MindLiveness): m.Children {
@@ -218,10 +243,14 @@ export const LandingPage: m.ClosureComponent = () => {
     // is the app's, not theirs. The page's notice names it once instead of
     // every row repeating a symptom.
     if (!isMachineStateKnown(getAppContext().stores.health.discoveryHealth)) return null;
-    const health = getAppContext().stores.health.statusFor(entry.id);
-    if (health === "healthy") return null;
-    const label =
-      health === "stuck" ? "Server not responding" : health === "restarting" ? "Restarting..." : "Restart failed";
+    const healthStore = getAppContext().stores.health;
+    const label = healthBadgeLabelFor(
+      healthStore.statusFor(entry.id),
+      healthStore.isRestartANoOpFor(entry.id),
+      healthStore.isRestartStartOnlyFor(entry.id),
+      entry.is_device_cannot_connect ?? false,
+    );
+    if (label === null) return null;
     return m("span", { class: `${BADGE_CLASS} bg-warning/15 text-warning landing-health-badge` }, label);
   }
 
@@ -273,6 +302,7 @@ export const LandingPage: m.ClosureComponent = () => {
         m("span", { class: "landing-backup-badge hidden" }),
         (entry.supports_shutdown ?? false) ? livenessBadge(liveness) : null,
         healthBadge(entry, liveness),
+        backupsButton(entry, liveness),
         controls.isStartShown
           ? m(
               Button,
@@ -319,7 +349,7 @@ export const LandingPage: m.ClosureComponent = () => {
                 "data-tooltip": "Restart machine",
                 onclick: (event: MouseEvent) => {
                   event.stopPropagation();
-                  const returnTo = `/goto/${stores.workspaces.toHostScopedId(entry.id)}/`;
+                  const returnTo = `/goto/${entry.id}/`;
                   m.route.set(recoveryRoute(entry.id, returnTo, "restart"));
                 },
               },
@@ -339,11 +369,7 @@ export const LandingPage: m.ClosureComponent = () => {
                 electronBridge.openWorkspaceInNewWindow(entry.id);
               } else {
                 const forwardOrigin = getAppContext().shell.mngrForwardOrigin;
-                window.open(
-                  `${forwardOrigin}/goto/${stores.workspaces.toHostScopedId(entry.id)}/`,
-                  "_blank",
-                  "noopener",
-                );
+                window.open(`${forwardOrigin}/goto/${entry.id}/`, "_blank", "noopener");
               }
             },
           },
@@ -391,6 +417,7 @@ export const LandingPage: m.ClosureComponent = () => {
   function remoteRow(entry: UiWorkspaceEntry): m.Children {
     if (state.removedHostIds.has(entry.host_id ?? "")) return null;
     const remoteState = getAppContext().stores.workspaces.remoteWorkspaceStates[entry.id] ?? "";
+    const chip = remoteStateChipFor(remoteState);
     return m(
       Card,
       {
@@ -401,14 +428,26 @@ export const LandingPage: m.ClosureComponent = () => {
       },
       [
         m("span", { class: "flex-1 min-w-0 truncate font-semibold text-secondary pl-1" }, entry.name),
-        m("span", { class: `${BADGE_CLASS} bg-fill-subtle text-secondary` }, `on ${entry.location}`),
-        remoteState === "connecting"
-          ? m("span", { class: `${BADGE_CLASS} bg-fill-subtle text-secondary` }, "connecting…")
-          : remoteState === "unreachable"
-            ? m("span", { class: `${BADGE_CLASS} bg-fill-subtle text-important` }, "unreachable")
-            : remoteState === "error"
-              ? m("span", { class: `${BADGE_CLASS} bg-fill-subtle text-important` }, "sync error")
-              : null,
+        m("span", { class: `${BADGE_CLASS} bg-fill-subtle text-secondary` }, remoteLocationBadgeFor(entry)),
+        chip === null
+          ? null
+          : chip.isAccountsLink
+            ? m(
+                "button",
+                {
+                  type: "button",
+                  class: `${BADGE_CLASS} bg-fill-subtle text-important cursor-pointer border-0`,
+                  "data-tooltip": "Sign in again from the Accounts page to see this machine here",
+                  onclick: () => m.route.set("/accounts"),
+                },
+                chip.label,
+              )
+            : m(
+                "span",
+                { class: `${BADGE_CLASS} bg-fill-subtle ${chip.isImportant ? "text-important" : "text-secondary"}` },
+                chip.label,
+              ),
+        backupsButton(entry, ""),
         m(
           Button,
           {

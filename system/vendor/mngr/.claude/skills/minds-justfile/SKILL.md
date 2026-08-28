@@ -1,6 +1,6 @@
 ---
 name: minds-justfile
-description: Use the root justfile as the canonical entry point for ANY minds task -- minds app (desktop client), pool hosts, minds environments (activate/deploy/destroy), minds deployments, and minds tests. Before running ad-hoc `uv run minds ...` / `mngr imbue_cloud ...` commands, check the justfile for a named recipe; if none exists for the task, ADD one. Use whenever the request involves the minds app, pool/leased hosts, a minds env/tier (dev/staging/production), or a minds deploy.
+description: Use the root justfile as the canonical entry point for ANY minds task -- minds app (desktop client), pool hosts, minds environments (activate/deploy/destroy), minds deployments, and minds tests. Before running ad-hoc `uv run minds ...` / `uv run minds-admin ...` / `mngr imbue_cloud ...` commands, check the justfile for a named recipe; if none exists for the task, ADD one. Use whenever the request involves the minds app, pool/leased hosts, a minds env/tier (dev/staging/production), or a minds deploy.
 ---
 
 # Minds tasks go through the justfile
@@ -8,12 +8,12 @@ description: Use the root justfile as the canonical entry point for ANY minds ta
 The root `justfile` is the canonical, auditable, named home for every
 operational minds task. Recipes encode the right flags, the right env-var /
 Vault wiring, and the activation guards -- so they "just work" and stay
-reviewable. Hand-rolled `uv run minds ...` / `uv run mngr imbue_cloud ...`
+reviewable. Hand-rolled `uv run minds ...` / `uv run minds-admin ...` / `uv run mngr imbue_cloud ...`
 invocations drift, leak secrets, and miss steps (e.g. deriving the pool
 management key from Vault, passing the host_pool DSN for staging/production).
-This is the same class of mistake as reaching for the low-level
-`mngr imbue_cloud admin pool create` recipe in the docs instead of the
-env-aware `minds pool create` wrapper.
+This is the same class of mistake as hand-exporting the pool DSN and
+SSH key instead of letting the env-aware `minds-admin pool create`
+resolve them from the activated tier's Vault entries.
 
 ## The rule
 
@@ -44,26 +44,30 @@ a **minds deployment**, or **minds tests** --
 Most minds recipes refuse to run without an activated env, by design:
 
 ```bash
-eval "$(uv run minds env activate <name>)"      # use-only (mngr/minds run, pool, tests)
-eval "$(uv run minds env activate --deploy <name>)"   # deploy mode (env deploy/destroy/recover)
+eval "$(uv run minds-admin env activate <name>)"      # use-only (mngr/minds run, pool, tests)
+eval "$(uv run minds-admin env activate --deploy <name>)"   # deploy mode (env deploy/destroy/recover)
 ```
 
 `<name>` is `dev-<your-user>` for a personal dev env, or `staging` /
 `production`. Deploy-mode (`--deploy`) additionally pins `MODAL_PROFILE`; it's
-required only for `minds env deploy/destroy/recover`.
+required only for `minds-admin env deploy/destroy/recover`.
 
 ## Current minds-relevant recipes (run `just --list` for the live set)
 
 Environments / deploy:
-- `just deploy [args]` -- `minds env deploy` for the activated env (tier
+- `just deploy [args]` -- `minds-admin env deploy` for the activated env (tier
   deploys need `--yes-i-mean-<tier>`).
 
 Pool hosts (leased mode):
 Pool hosts are baked as bare-metal **slices** (lima/QEMU VMs carved on a
 pre-registered + prepped bare-metal box). Baking new OVH classic VPS pool hosts
 is DEPRECATED and no longer supported; existing OVH VPS rows stay listable and
-destroyable. First register + prep a box with `mngr imbue_cloud admin server
-{order,register,prep,list}` (the box must be `ready` with a free slot).
+destroyable. First order + set up a box with `just order-server` (pass
+`--dry-run` first for the no-charge price preview), `just await-delivery
+<server-id>`, and `just setup-server <server-id>` (or `minds-admin server
+register` for an already-provisioned box); the box must be `ready` with a
+free slot. These are env-aware: OVH creds, pool DSN, and pool SSH key resolve
+from the activated tier.
 - `just bake-slice-dev <region> [workspace_dir] [count] [extra flags]` -- DEV
   bake from a working tree; the stamped identity (`repo_url` + `repo_branch_or_tag`)
   is DERIVED from the folder's `origin` remote + current branch (best-effort label,
@@ -75,7 +79,7 @@ destroyable. First register + prep a box with `mngr imbue_cloud admin server
     e.g. resources). For a DEV fast-path match, the create form's repository must be
     the ACTUAL git remote + the baked branch -- a local clone path resolves to the
     same canonical remote, but the form value the client sends must match. Extra
-    flags forward to `minds pool create` (e.g. `--mngr-source`).
+    flags forward to `minds-admin pool create` (e.g. `--mngr-source`).
 - `just list-pool-hosts` -- list `pool_hosts` rows for the activated env.
 - `just list-servers` -- list bare-metal servers with slot accounting for the
   activated env (no manual DSN export needed). The slot columns come from THIS
@@ -86,14 +90,20 @@ destroyable. First register + prep a box with `mngr imbue_cloud admin server
   stamped for another tier, or an extra key in the lima user's `authorized_keys`.
   A bake onto such a box refuses; this finds one without a failed bake. Read-only.
 - `just prep-server <server-id>` -- (re-)prep a bare-metal box for slice baking;
-  pool SSH key + DSN resolved from the activated tier automatically. Idempotent;
+  pool SSH key + DSN resolved from the activated tier automatically. Installs +
+  verifies the observability collector when the tier has a boxes ingest
+  credential in Vault (fail-closed; clean skip otherwise). Idempotent;
   also how pre-2026-06-27 boxes get the DEFAULT_WORKSPACE_TEMPLATE image cache dir that production
   `--from-tag` bakes require.
+- `just setup-server <server-id>` -- provision a delivered box to `ready`:
+  destructive OS reinstall (injects our host key), then the same composed prep
+  as `prep-server`. `just order-server [flags]` / `just await-delivery
+  <server-id>` cover the ordering steps before it.
 - `just destroy-pool-hosts <pool-host-id> [<pool-host-id> ...]` -- tear down the
   named hosts in parallel: atomically claim each row (a user cannot lease it
   mid-destroy), destroy its slice lima VM, and drop the row (manual teardown, e.g.
   retiring old rows after baking a new pool generation; steady-state release is
-  automatic via the connector, and `minds env destroy` tears down a whole tier).
+  automatic via the connector, and `minds-admin env destroy` tears down a whole tier).
 
 Desktop client / dev loop:
 - `just minds-start` / `just minds-stop` / `just minds-build`

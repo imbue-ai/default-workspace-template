@@ -15,7 +15,7 @@ Then staging, let it soak, then production.
 
 - PR mngr-internal#465 merged (or run from its branch).
 - `vault login` (see [vault-setup.md](./vault-setup.md)) and an activated
-  env for the target tier (`eval "$(uv run minds env activate <env>)"`).
+  env for the target tier (`eval "$(uv run minds-admin env activate <env>)"`).
   Any `dev-*`/`ci-*` env maps to the single shared **dev** instance.
 - Access to the tier's Cloudflare account (R2 + origin certs), Neon org, and
   Modal workspace settings (the OpenTelemetry integration is configured in
@@ -29,7 +29,7 @@ Run this once per tier (dev, then staging, then production).
 
 - **Neon**: create an `openobserve` database. For staging/production, inside
   the tier's existing Neon project; for dev, inside a small dedicated project
-  in the dev org (mirroring `bugsink-dev`). Note the DIRECT (non `-pooler`)
+  in the dev org (mirroring the shared dev Bugsink instance). Note the DIRECT (non `-pooler`)
   DSN.
 - **R2**: in the tier's Cloudflare account, create the
   `minds-observability-<tier>` bucket and an account-owned R2 token scoped to
@@ -60,7 +60,7 @@ leaves stay empty: provisioning mints them and writes them back.
 ### 3. Provision the instance
 
 ```bash
-eval "$(uv run minds env activate <env>)"   # tier is derived from this
+eval "$(uv run minds-admin env activate <env>)"   # tier is derived from this
 just provision-observability                # OVH region defaults to US-EAST-VA-1
 ```
 
@@ -102,10 +102,11 @@ configure the OpenTelemetry integration by hand:
 
 ### 5. Roll the fleet collectors
 
-- Boxes: one `just prep-server <server-id>` pass per box (prep installs the
-  pinned otelcol-contrib whenever the tier's boxes credential exists in
-  Vault; it prints a clean skip otherwise). New boxes get it at prep
-  automatically.
+- Boxes: one `just prep-server <server-id>` pass per box (`minds-admin server
+  prep` resolves the tier's boxes credential from Vault in-process, installs
+  the pinned otelcol-contrib, and verifies the unit is active -- fail-closed;
+  it logs a clean skip while the credential is absent). New boxes get it at
+  `just setup-server` / prep automatically.
 - Relays (existing ones; new dev relays get this during
   `just provision-dev-relay`):
 
@@ -181,6 +182,46 @@ credentials, Modal workspace) -- every resource in step 1 is created fresh
 per tier. Record completion (and any lessons) in
 [next_deploy.md](./next_deploy.md) / [history/](./history/).
 
+## Querying Modal app logs by severity
+
+Modal's OTEL exporter stamps every function-log line `level: INFO` (it does
+not parse the line content), so OpenObserve's own `level` column and the UI's
+severity filter are meaningless for `modal_logs`. Our Modal apps therefore
+emit every line as one JSON object carrying its real level
+(`imbue.modal_app_kit.log_format`; LiteLLM's lines use its native JSON
+logging with the same `level` field). Query the embedded field instead with
+`spath`, OpenObserve's JSON-string extraction function (the path is dot
+notation; this is DataFusion SQL, not DuckDB's `json_extract_string` /
+`$.path` that the analytics log views use over the parquet export):
+
+```sql
+SELECT spath(body, 'level') AS real_level, count(*)
+FROM modal_logs GROUP BY real_level
+
+SELECT _timestamp, spath(body, 'logger') AS logger, body
+FROM modal_logs
+WHERE spath(body, 'level') IN ('WARNING', 'ERROR')
+ORDER BY _timestamp DESC
+```
+
+Other useful body fields: `type` (`http_request`, `metric`,
+`share_visit_authorized`, or `log` for plain text), `minds_env` (the env
+that emitted the line on the shared dev instance), `exception` (a folded
+traceback). Lines without a `level` are not ours: Modal's own per-request
+lines (`GET /account -> 401 Unauthorized (duration: ...)`, `file_descriptor`
+3) and the raw traceback Modal's runtime prints, one record per line, when a
+function re-raises -- the same failure also arrives as one of our
+`level: ERROR` lines with the traceback folded into `exception` (the
+connector's 500 handler and `capture_and_reraise` both log it). Our
+`imbue.*` loggers emit at INFO and third-party libraries at WARNING; to see
+a dev env's DEBUG lines, export the level at deploy time
+(`MINDS_LOG_LEVEL=DEBUG uv run minds-admin env deploy`), which the deploy
+metadata secret carries into the containers. Lines ingested before the JSON
+envelope shipped are plain text and have no `level`. Promoting these fields
+to real stream columns would take a real-time pipeline with a VRL
+`parse_json` function on `modal_logs`; deliberately not set up until the
+dashboards work needs it (mngr-internal#656).
+
 ## Ongoing operations
 
 - **Upgrades are replace-not-update**: bump the pinned versions in
@@ -199,4 +240,5 @@ per tier. Record completion (and any lessons) in
 - A `minds_services` deployment test pushing one log through the public
   ingest path.
 - Dashboards + alert-on-no-data rules (separate PR).
-- Migrate Bugsink onto this hosting pattern: mngr-internal#464.
+- Migrate Bugsink onto this hosting pattern: mngr-internal#464 -- DONE; see
+  [bugsink-bringup.md](./bugsink-bringup.md).

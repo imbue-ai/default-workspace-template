@@ -1,7 +1,8 @@
 """The Cloudflare-proxied DNS record for one tier's ingest hostname.
 
-Exactly one orange-cloud A record: ``telemetry.<tier domain>`` -> the instance
-IP. Proxied (unlike the relays' gray-cloud records, which do SNI passthrough
+Exactly one orange-cloud A record per instance: ``telemetry.<tier domain>``
+(OpenObserve) or ``errors.<tier domain>`` (Bugsink) -> the instance IP.
+Proxied (unlike the relays' gray-cloud records, which do SNI passthrough
 and must not have Cloudflare in front): the proxy is what lets the origin
 firewall admit only Cloudflare's ranges, hides the origin IP, and provides the
 edge TLS the senders see.
@@ -13,7 +14,7 @@ from typing import Final
 import httpx
 
 from imbue.observability.errors import ObservabilityError
-from imbue.observability.primitives import TelemetryHostname
+from imbue.observability.primitives import PublicIngestHostname
 
 _CF_BASE_URL: Final[str] = "https://api.cloudflare.com/client/v4"
 _DNS_REQUEST_TIMEOUT_SECONDS: Final[float] = 30.0
@@ -41,7 +42,7 @@ def _check_cf(response: httpx.Response) -> dict[str, Any]:
     return body
 
 
-def upsert_proxied_ingest_record(client: httpx.Client, zone_id: str, hostname: TelemetryHostname, ip: str) -> bool:
+def upsert_proxied_ingest_record(client: httpx.Client, zone_id: str, hostname: PublicIngestHostname, ip: str) -> bool:
     """Point the proxied A record for ``hostname`` at exactly ``ip``; returns whether anything changed.
 
     Instance replacement is sequential (single-writer), so the record always
@@ -74,7 +75,7 @@ def upsert_proxied_ingest_record(client: httpx.Client, zone_id: str, hostname: T
     return is_changed
 
 
-def reconcile_ingest_dns_record(api_token: str, zone_id: str, hostname: TelemetryHostname, ip: str) -> bool:
+def reconcile_ingest_dns_record(api_token: str, zone_id: str, hostname: PublicIngestHostname, ip: str) -> bool:
     """Reconcile the tier's proxied ingest record with its own short-lived client."""
     with httpx.Client(
         headers={"Authorization": f"Bearer {api_token}"},

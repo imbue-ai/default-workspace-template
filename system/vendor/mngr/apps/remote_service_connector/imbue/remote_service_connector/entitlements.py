@@ -22,6 +22,7 @@ from supertokens_python.exceptions import GeneralError as SuperTokensGeneralErro
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from supertokens_python.syncio import get_user
 
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import is_email_paid
@@ -52,27 +53,48 @@ INTEGER_ENTITLEMENT_NAMES: frozenset[str] = frozenset(QUOTA_ENTITLEMENT_NAMES) -
 class PlanEntitlements(BaseModel):
     """The quota values a plan grants (also the per-user entitlement values)."""
 
-    max_remote_workspaces: int = Field(description="Max running remote workspaces (leased/stopping/starting rows)")
-    max_total_workspaces: int = Field(description="Max total remote workspaces, running + stopped")
+    max_remote_workspaces: int = Field(
+        description="Max running remote machines (leased/stopping/starting pool rows; wire name kept for compat)"
+    )
+    max_total_workspaces: int = Field(
+        description="Max total remote machines, running + stopped (wire name kept for compat)"
+    )
     max_buckets: int = Field(description="Max R2 buckets")
     max_total_bucket_bytes: int = Field(description="Max total bytes across all the account's buckets")
     monthly_llm_spend_usd: float = Field(description="Monthly LLM spend cap in USD (rolling; 0 disables key minting)")
     max_active_synced_workspaces: int = Field(description="Max ACTIVE synced workspace records")
 
 
+PLAN_FREE = "free"
 PLAN_EXPLORER = "explorer"
 PLAN_ALLY = "ally"
 
+# The plans the signup page's selector offers. Explorer is the recommended
+# default there; picking it is the analytics consent (see
+# specs/minds-analytics/spec.md), which is why the lazy backfill below never
+# assigns it -- only an explicit choice may.
+SIGNUP_SELECTABLE_PLAN_NAMES: frozenset[str] = frozenset({PLAN_FREE, PLAN_EXPLORER})
+
 # Ship-time cutoff for the lazy-backfill rule: accounts whose SuperTokens
 # ``time_joined`` predates this instant get the paid-list-based initial plan
-# (ally when paid-listed); accounts created after it always start as explorer
-# and must select ally explicitly. 2026-07-21T00:00:00Z, in the epoch
-# milliseconds SuperTokens uses for ``time_joined``.
+# (ally when paid-listed); every other lazily-backfilled account gets the
+# free plan -- explorer-plan membership is the analytics-collection consent,
+# so it is only ever assigned by an explicit user choice (the signup
+# selector or a later plan switch), never by a fallback.
+# 2026-07-21T00:00:00Z, in the epoch milliseconds SuperTokens uses for
+# ``time_joined``.
 _PREEXISTING_ACCOUNT_CUTOFF_EPOCH_MS = 1784592000000
+
+# Columns the suspension flag lives in. Orthogonal to plans and quotas on
+# purpose: suspend/unsuspend never touches the entitlement values, so
+# unsuspending restores the account exactly (operator bumps included).
+SUSPENSION_COLUMN_NAMES: tuple[str, ...] = ("suspended_at", "suspended_reason")
 
 _QUOTA_COLUMNS_SQL = ", ".join(QUOTA_ENTITLEMENT_NAMES)
 _PLAN_COLUMNS_SQL = f"plan_name, {_QUOTA_COLUMNS_SQL}"
-_ENTITLEMENT_COLUMNS_SQL = f"user_id, user_id_prefix, plan_name, {_QUOTA_COLUMNS_SQL}"
+_ENTITLEMENT_COLUMNS_SQL = (
+    f"user_id, user_id_prefix, plan_name, {_QUOTA_COLUMNS_SQL}, {', '.join(SUSPENSION_COLUMN_NAMES)}"
+)
 
 
 class AccountEntitlements(PlanEntitlements):
@@ -81,6 +103,10 @@ class AccountEntitlements(PlanEntitlements):
     user_id: str = Field(description="Full SuperTokens user id (row key)")
     user_id_prefix: str = Field(description="16-hex user-id prefix used to namespace leases/buckets")
     plan_name: str = Field(description="The plan this row was last assigned from")
+    suspended_at: str | None = Field(default=None, description="When the account was suspended (None = not suspended)")
+    suspended_reason: str | None = Field(
+        default=None, description="Operator-recorded suspension reason (internal; never shown to the user)"
+    )
 
     def quota_values(self) -> PlanEntitlements:
         return PlanEntitlements(
@@ -120,64 +146,55 @@ class PostgresEntitlementsStore:
         return {"plan_name": row[0], **_quota_values_from_row(row, 1)}
 
     def _entitlements_row_to_dict(self, row: tuple[Any, ...]) -> dict[str, Any]:
+        suspension_offset = 3 + len(QUOTA_ENTITLEMENT_NAMES)
+        suspended_at = row[suspension_offset]
         return {
             "user_id": row[0],
             "user_id_prefix": row[1],
             "plan_name": row[2],
             **_quota_values_from_row(row, 3),
+            "suspended_at": str(suspended_at) if suspended_at is not None else None,
+            "suspended_reason": row[suspension_offset + 1],
         }
 
     def get_plan(self, plan_name: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT {_PLAN_COLUMNS_SQL} FROM plans WHERE plan_name = %s", (plan_name,))
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return self._plan_row_to_dict(row) if row is not None else None
 
     def list_plans(self) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT {_PLAN_COLUMNS_SQL} FROM plans ORDER BY plan_name")
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [self._plan_row_to_dict(row) for row in rows]
 
     def get_entitlements(self, user_id: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_ENTITLEMENT_COLUMNS_SQL} FROM account_entitlements WHERE user_id = %s",
                     (user_id,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return self._entitlements_row_to_dict(row) if row is not None else None
 
     def get_entitlements_by_prefix(self, user_id_prefix: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_ENTITLEMENT_COLUMNS_SQL} FROM account_entitlements WHERE user_id_prefix = %s",
                     (user_id_prefix,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return self._entitlements_row_to_dict(row) if row is not None else None
 
     def insert_entitlements_if_absent(self, row: dict[str, Any]) -> None:
         column_names = ["user_id", "user_id_prefix", "plan_name", *QUOTA_ENTITLEMENT_NAMES]
         placeholders = ", ".join(["%s"] * len(column_names))
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -185,25 +202,20 @@ class PostgresEntitlementsStore:
                         f"VALUES ({placeholders}) ON CONFLICT (user_id) DO NOTHING",
                         tuple(row[name] for name in column_names),
                     )
-        finally:
-            conn.close()
 
     def update_entitlements(self, user_id: str, values: dict[str, Any]) -> None:
-        allowed = {"plan_name", *QUOTA_ENTITLEMENT_NAMES}
+        allowed = {"plan_name", *QUOTA_ENTITLEMENT_NAMES, *SUSPENSION_COLUMN_NAMES}
         unknown = set(values) - allowed
         if unknown:
             raise UnknownEntitlementColumnError(sorted(unknown))
         assignments = ", ".join(f"{name} = %s" for name in values)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"UPDATE account_entitlements SET {assignments}, updated_at = NOW() WHERE user_id = %s",
                         (*values.values(), user_id),
                     )
-        finally:
-            conn.close()
 
 
 @functools.cache
@@ -221,7 +233,8 @@ def _get_user_time_joined_ms(user_id: str, user_getter: Callable[[str], Any] = g
     try:
         user = user_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Failed to fetch SuperTokens user %s for time_joined: %s", user_id[:8], exc)
+        emit_metric("supertokens_user_fetch_failed", 1, {"caller": "entitlements_time_joined"})
+        logger.warning("Failed to fetch SuperTokens user %s for time_joined", user_id[:8], exc_info=exc)
         return 0
     if user is None:
         return 0
@@ -239,12 +252,14 @@ def _initial_plan_name_for_user(
     """Pick the plan for a lazily-created entitlements row.
 
     Accounts predating the feature-ship cutoff get ally when their email is
-    paid-listed (the backfill rule); everyone else starts as explorer.
+    paid-listed (the backfill rule); everyone else starts as free. Explorer
+    is never assigned here -- it carries the analytics-collection consent, so
+    only an explicit user choice may select it.
     """
     resolved_getter = time_joined_getter if time_joined_getter is not None else _get_user_time_joined_ms
     if resolved_getter(user_id) < _PREEXISTING_ACCOUNT_CUTOFF_EPOCH_MS and email and paid_checker(email):
         return PLAN_ALLY
-    return PLAN_EXPLORER
+    return PLAN_FREE
 
 
 def ensure_account_entitlements(
@@ -282,6 +297,33 @@ def ensure_account_entitlements(
     return AccountEntitlements(**stored)
 
 
+def create_entitlements_row_from_plan(
+    store: EntitlementsStore,
+    user_id: str,
+    user_id_prefix: str,
+    plan_name: str,
+) -> None:
+    """Create the account's entitlements row from an explicitly chosen plan.
+
+    The signup flow's counterpart to the lazy backfill: the chosen plan is
+    written at account creation so a later quota-relevant touch never has to
+    reconstruct the user's choice from a default. Insert-if-absent, so a
+    pre-existing row (a re-run, a race with a lazy creation) is never
+    overwritten. Raises PlanNotFoundError when the plan is not seeded.
+    """
+    plan = store.get_plan(plan_name)
+    if plan is None:
+        raise PlanNotFoundError(plan_name)
+    store.insert_entitlements_if_absent(
+        {
+            "user_id": user_id,
+            "user_id_prefix": user_id_prefix,
+            "plan_name": plan_name,
+            **{name: plan[name] for name in QUOTA_ENTITLEMENT_NAMES},
+        }
+    )
+
+
 def resolve_entitlements_for_user(user_id: str, user: UserAuth) -> AccountEntitlements:
     """Resolve (lazily creating) the entitlements row for a user-authenticated request.
 
@@ -291,7 +333,7 @@ def resolve_entitlements_for_user(user_id: str, user: UserAuth) -> AccountEntitl
     doing so made every quota-checked endpoint 401 for the hosted chrome's
     cookie sessions. The lazy creation's paid-list check may only consume a
     verified email (ally is authorized by domain ownership), so an unverified
-    account is backfilled as a plain explorer row.
+    account is backfilled as a plain free row.
     """
     return ensure_account_entitlements(
         user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""

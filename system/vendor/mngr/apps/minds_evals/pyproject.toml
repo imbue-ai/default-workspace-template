@@ -5,33 +5,85 @@ description = "Harbor-based Minds persona evals: generate task datasets from eva
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    # The design pins harbor 0.21.0 with its modal extra. Two workspace-level
-    # conflicts force the shape of this dependency:
-    #   - PyPI harbor 0.21.0 was published inside the supply-chain cooldown
-    #     window (root exclude-newer), so harbor comes from the upstream git
-    #     tag instead (same code, pinned in [tool.uv.sources] below).
-    #   - The [modal] extra is exactly {modal, dockerfile-parse}, but its modal
-    #     floor (>=1.5.1) conflicts with the workspace-wide modal==1.4.3 pin
-    #     (imbue-mngr-modal), so we depend on bare harbor and supply the
-    #     extra's packages ourselves: modal from the workspace pin,
-    #     dockerfile-parse explicitly.
-    "harbor==0.21.0",
-    "modal",
-    "dockerfile-parse>=2.0.1",
+    "harbor[modal]==0.21.0",
     "anthropic>=0.40",
     "click>=8.0.0",
     "loguru>=0.7",
     "pydantic>=2.11",
     "imbue-common",
+    # Token -> USD pricing for the workspace agent's transcript usage. Reusing
+    # this table rather than copying it keeps the eval's cost numbers on the same
+    # per-token rates the in-box proxy is configured with, since proxy_config
+    # builds that config from this table too. The rates themselves are pinned to
+    # litellm's map by litellm_pricing_test -- the four flat buckets only, not
+    # the fast-mode or 1-hour-cache dimensions that map also carries.
+    "imbue-mngr-usage",
 ]
 
 [project.scripts]
 minds-evals-harbor = "imbue.minds_evals.generate:main"
 
+# This project is deliberately NOT a member of the monorepo's uv workspace (the
+# root pyproject.toml excludes it) and resolves against its own uv.lock. harbor
+# declares rich>=14.1.0 and modal>=1.5.1; the workspace is held at rich<14 by
+# litellm[proxy] and at modal==1.4.3 by imbue-mngr-modal, and uv allows only one
+# version of a package per workspace, so inside the workspace harbor could only
+# ever run below its declared floors. Resolving here instead means harbor gets
+# the dependencies it asks for. The cost is that this lock drifts from the root
+# one; keep the shared surface (the cooldown policy, .python-version) identical so
+# the drift stays confined to what isolation is actually for.
+[tool.uv]
+# uv only understands a relative exclude-newer from 0.10. An older uv does not
+# error on it -- it drops the cooldown silently and discards the lockfile -- so
+# the floor is what makes the window below load-bearing rather than advisory. CI
+# pins uv via setup-uv, but the pre-push hook runs whatever the developer has.
+required-version = ">=0.10"
+# Supply-chain cooldown: the resolver only adopts registry releases that have been
+# public this long. Same two-week policy as the root, expressed as a rolling window
+# rather than a pinned timestamp because nothing advances a pinned one here --
+# scripts/release.py moves the root's and the mirror overlay's, and this project is
+# neither. A copy would start rotting the day it was written; a window cannot.
+# Keep it equal to DEPENDENCY_COOLDOWN in scripts/release.py, which
+# scripts/release_test.py enforces.
+exclude-newer = "14 days"
+
 [tool.uv.sources]
-# PyPI harbor 0.21.0 postdates the workspace's supply-chain cooldown cutoff;
-# the upstream git tag is the same release without the registry timestamp.
+# The upstream git tag for the same release the PyPI wheel carries. Pinned to the
+# tag rather than the registry so the source is exact and independent of the
+# cooldown window above, which the PyPI upload was inside of when this was written.
 harbor = { git = "https://github.com/harbor-framework/harbor", tag = "v0.21.0" }
+# Monorepo packages this project shares with the workspace. They are path
+# sources rather than workspace members because this project has no workspace.
+# Only the direct dependencies need an entry: a path source that points into the
+# root workspace carries that workspace's own sources with it, so
+# imbue-mngr-usage's transitive imbue-mngr and overlay resolve to this checkout
+# rather than to PyPI without being named here.
+imbue-common = { path = "../../libs/imbue_common", editable = true }
+imbue-mngr-usage = { path = "../../libs/mngr_usage", editable = true }
+resource-guards = { path = "../../libs/resource_guards", editable = true }
+
+[dependency-groups]
+# Standalone project, so it carries its own test toolchain instead of inheriting
+# the root dev group. resource-guards is here because imbue_common's
+# conftest_hooks (which conftest.py registers) imports it, and import-linter
+# because the shared standard_ratchet_checks module imports it at module level.
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=7.0.0",
+    "pytest-timeout>=2.3.0",
+    "pytest-xdist>=3.8.0",
+    "import-linter>=2.0",
+    "resource-guards",
+    "imbue-common[dev]",
+    "ty>=0.0.39",
+    # Not imported by anything this project runs: it is here so the type checker
+    # can resolve templates/, whose criteria (under tests/ and outcome/ alike)
+    # import `rewardkit`. The verifier container installs it separately via uvx,
+    # so this pin must match the one in templates/tests/test.sh, which runs the
+    # whole verifier -- rewardkit_pin_test.py asserts that.
+    # Its only base dependency is litellm, already present via harbor.
+    "harbor-rewardkit==0.1.*",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -59,11 +111,31 @@ addopts = [
 [tool.coverage.run]
 parallel = true
 concurrency = ["multiprocessing", "thread"]
-# templates/ files run inside eval containers, not the dev process.
-omit = ["*_test.py", "test_*.py", "*/tests/*", "*/conftest.py", "*/templates/*"]
+# templates/ and resources/ files run inside eval containers and boxes, not the
+# dev process.
+omit = ["*_test.py", "test_*.py", "*/tests/*", "*/conftest.py", "*/templates/*", "*/resources/*"]
+
+[tool.ty.src]
+# resources/ is shipped as source into the eval box and runs against the monorepo
+# venv, importing mngr_forward and litellm, which this project does not depend on.
+# It is type-checked by the root workspace instead -- the box runs that venv, so it
+# is the accurate environment for it; the root [tool.ty.src] exclude deliberately
+# does not cover it. Anything listed here must stay checked there:
+# test_meta_ratchets.py reads this list and probes the root's ty for each path, so
+# excluding a path here without un-excluding it at the root fails that check. Every
+# entry must name a directory or a file, since the probe hands it straight to ty.
+#
+# templates/ is NOT excluded. Those files also run elsewhere (the verifier
+# container), but their only foreign import is rewardkit, which the dev group
+# installs, so the type checker can see all of them here.
+exclude = ["imbue/minds_evals/resources/"]
 
 [tool.inline-snapshot]
 default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
-format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+# ruff lives in the monorepo's root project, not this one, and the whole repo is
+# formatted with the root ruff config -- so reach up to it rather than
+# formatting these files differently from every other file in the repo. The
+# paths are relative to this directory, which is where the test recipe runs.
+format-command="uv run --project ../.. ruff format --force-exclude --config ../../pyproject.toml --stdin-filename {filename}"

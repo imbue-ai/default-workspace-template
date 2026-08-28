@@ -29,6 +29,10 @@ from imbue.minds.desktop_client.forward_cli import EnvelopeStreamConsumer
 from imbue.minds.desktop_client.forward_cli import ForwardSubprocessConfig
 from imbue.minds.desktop_client.forward_cli import _build_forward_command
 from imbue.minds.desktop_client.forward_cli import _redact_secrets
+from imbue.minds.desktop_client.system_interface_health import BackendFailureRecorder
+from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.testing import make_sleep_tracker
+from imbue.minds.desktop_client.testing import record_sleep_of
 from imbue.minds.primitives import ServiceName
 from imbue.mngr.api.discovery_events import AgentDestroyedEvent
 from imbue.mngr.api.discovery_events import DiscoveryError
@@ -47,6 +51,7 @@ from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.utils.testing import capture_loguru
+from imbue.mngr_forward.data_types import SystemInterfaceBackendFailureReason
 from imbue.mngr_forward.ssh_tunnel import RemoteSSHInfo
 
 _TIMESTAMP = IsoTimestamp("2026-05-03T00:00:00.000000000+00:00")
@@ -566,6 +571,104 @@ def test_alternating_pre_start_errors_are_tallied_separately() -> None:
     assert all("Dropped pre-start provider errors for local" in line for line in lines)
 
 
+def _consumer_that_slept(seconds: float) -> tuple[EnvelopeStreamConsumer, datetime]:
+    """A live consumer whose process just slept for ``seconds``; returns it and the wake's wall-clock moment."""
+    sleep_tracker, clock = make_sleep_tracker()
+    record_sleep_of(sleep_tracker, clock, seconds)
+    wake_at = sleep_tracker.get_last_wake_at()
+    assert wake_at is not None
+    consumer = EnvelopeStreamConsumer(
+        resolver=MngrCliBackendResolver(),
+        started_at=wake_at - timedelta(hours=1),
+        sleep_tracker=sleep_tracker,
+    )
+    return consumer, wake_at
+
+
+def _dispatch_snapshot_spanning(
+    consumer: EnvelopeStreamConsumer,
+    started_at: datetime,
+    finished_at: datetime,
+    error: DiscoveryError | None,
+) -> None:
+    _dispatch(
+        consumer,
+        _observe_envelope(
+            make_provider_discovery_snapshot_event(
+                provider_name=ProviderInstanceName("local"),
+                agents=(_make_agent(_AGENT_ID_1),),
+                hosts=(),
+                discovery_started_at=started_at,
+                discovery_finished_at=finished_at,
+                error=error,
+            )
+        ),
+    )
+
+
+@pytest.mark.witnesses(
+    "no-verdict-on-unobserved-time",
+    partial="witnesses the provider-unreachable verdict at its ingress only",
+)
+def test_an_errored_poll_that_straddled_a_sleep_is_not_the_providers_last_word() -> None:
+    """The error is dropped and the snapshot advances no freshness, like the pre-start replay.
+
+    The poll opened its socket before the lid closed and read the timeout after
+    it opened: what it reports is that this laptop went away, not that the
+    provider did. Recording it would let the recovery verdict name the provider
+    -- "Can't connect to Imbue Cloud" -- on the strength of a poll that never
+    reached it. Its topology still merges, exactly as the pre-start drop's does.
+    """
+    consumer, wake_at = _consumer_that_slept(900.0)
+    provider_name = ProviderInstanceName("local")
+    with capture_loguru(level="INFO") as log_output:
+        _dispatch_snapshot_spanning(
+            consumer,
+            started_at=wake_at - timedelta(seconds=901),
+            finished_at=wake_at + timedelta(seconds=1),
+            error=_stale_error("The read operation timed out"),
+        )
+    assert consumer.resolver.get_provider_errors() == {}
+    assert consumer.resolver.get_last_snapshot_at_for_provider(provider_name) is None
+    assert set(consumer.resolver.list_known_agent_ids()) == {_AGENT_ID_1}
+    assert "straddled a sleep" in log_output.getvalue()
+
+
+def test_a_clean_poll_that_straddled_a_sleep_is_kept() -> None:
+    """A poll that succeeded completed after the wake, so its answer is real and its freshness counts."""
+    consumer, wake_at = _consumer_that_slept(900.0)
+    finished_at = wake_at + timedelta(seconds=1)
+    _dispatch_snapshot_spanning(
+        consumer, started_at=wake_at - timedelta(seconds=901), finished_at=finished_at, error=None
+    )
+    assert consumer.resolver.get_last_snapshot_at_for_provider(ProviderInstanceName("local")) == finished_at
+
+
+def test_an_errored_poll_that_finished_before_the_sleep_still_registers() -> None:
+    """Only a poll whose own window slept is fenced; one consumed late is evidence all the same."""
+    consumer, wake_at = _consumer_that_slept(900.0)
+    finished_at = wake_at - timedelta(seconds=905)
+    _dispatch_snapshot_spanning(
+        consumer,
+        started_at=finished_at - timedelta(seconds=2),
+        finished_at=finished_at,
+        error=_stale_error("provider really was down"),
+    )
+    assert ProviderInstanceName("local") in consumer.resolver.get_provider_errors()
+    assert consumer.resolver.get_last_snapshot_at_for_provider(ProviderInstanceName("local")) == finished_at
+
+
+def test_a_consumer_with_no_sleep_tracker_fences_nothing() -> None:
+    consumer = EnvelopeStreamConsumer(resolver=MngrCliBackendResolver(), started_at=_CONSUMER_STARTED_AT)
+    _dispatch_snapshot_spanning(
+        consumer,
+        started_at=_DISCOVERY_STARTED_AT,
+        finished_at=_DISCOVERY_FINISHED_AT,
+        error=_stale_error("provider really was down"),
+    )
+    assert ProviderInstanceName("local") in consumer.resolver.get_provider_errors()
+
+
 def test_live_errored_snapshot_ends_the_replay_and_registers_its_error() -> None:
     """A still-wedged provider's first fresh cycle ends the replay, and its error counts.
 
@@ -849,24 +952,6 @@ def test_event_services_envelope_carries_the_origin_label_to_the_resolver(
     assert consumer.resolver.list_service_labels_for_agent(_AGENT_ID_1) == {}
 
 
-def test_event_requests_envelope_dispatches_to_request_callback(consumer: EnvelopeStreamConsumer) -> None:
-    fired: list[tuple[str, str]] = []
-    consumer.resolver.add_on_request_callback(lambda aid_str, raw: fired.append((aid_str, raw)))
-    request_payload = {
-        "timestamp": _TIMESTAMP,
-        "event_id": "evt-" + "0" * 32,
-        "type": "request",
-        "source": "requests",
-        "request_id": "req-1",
-    }
-    _dispatch(consumer, _event_envelope(_AGENT_ID_1, request_payload))
-    assert len(fired) == 1
-    assert fired[0][0] == str(_AGENT_ID_1)
-
-
-# --- forward stream: reverse_tunnel_established ---------------------------
-
-
 def test_reverse_tunnel_established_is_silently_ignored(
     consumer: EnvelopeStreamConsumer,
 ) -> None:
@@ -891,83 +976,88 @@ def test_reverse_tunnel_established_is_silently_ignored(
     _dispatch(consumer, _forward_envelope(payload, agent_id=_AGENT_ID_1))
 
 
-# --- forward stream: resolver_snapshot ------------------------------------
+# --- forward stream: system_interface_backend_failure ---------------------
 
 
-def test_resolver_snapshot_envelope_updates_accessor(consumer: EnvelopeStreamConsumer) -> None:
-    """``resolver_snapshot`` envelopes feed the consumer's per-agent service mirror."""
-    payload = {
-        "type": "resolver_snapshot",
-        "services_by_agent": {
-            str(_AGENT_ID_1): {"system_interface": "http://127.0.0.1:9100"},
-            str(_AGENT_ID_2): {"webdav": "http://127.0.0.1:9200"},
-        },
-    }
-    _dispatch(consumer, _forward_envelope(payload))
-    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {
-        "system_interface": "http://127.0.0.1:9100",
-    }
-    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_2) == {
-        "webdav": "http://127.0.0.1:9200",
-    }
+def _record_backend_failures(
+    consumer: EnvelopeStreamConsumer,
+) -> list[tuple[AgentId, SystemInterfaceBackendFailureReason, int | None, str | None]]:
+    """Attach a recording callback and return the list it appends to."""
+    observed: list[tuple[AgentId, SystemInterfaceBackendFailureReason, int | None, str | None]] = []
+    consumer.add_on_system_interface_backend_failure_callback(
+        lambda agent_id, reason, status_code, detail: observed.append((agent_id, reason, status_code, detail))
+    )
+    return observed
 
 
-def test_resolver_snapshot_returns_empty_dict_for_unknown_agent(consumer: EnvelopeStreamConsumer) -> None:
-    """Without any envelope yet, the accessor returns an empty dict (treated as ``no entry yet``)."""
-    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {}
-
-
-def test_malformed_resolver_snapshot_envelope_is_dropped(consumer: EnvelopeStreamConsumer) -> None:
-    """A malformed ``resolver_snapshot`` payload doesn't crash dispatch and leaves the mirror empty."""
-    _dispatch(consumer, _forward_envelope({"type": "resolver_snapshot", "services_by_agent": "not-a-dict"}))
-    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {}
-
-
-def test_resolver_snapshot_normalizes_instance_keyed_entries_to_bare_ids(
+def test_backend_failure_envelope_carries_the_reason_and_the_verbatim_detail(
     consumer: EnvelopeStreamConsumer,
 ) -> None:
-    """Instance-keyed payload keys (``<agent_id>@<host_id>``) resolve by the bare agent id.
+    """The detail is what the recovery card shows; a category name alone is undiagnosable."""
+    observed = _record_backend_failures(consumer)
 
-    The plugin keys the map by agent instance (agent ids are unique per host, not
-    globally); minds' mirror stays bare-id keyed, tolerating both key forms in one
-    payload.
+    _dispatch(
+        consumer,
+        _forward_envelope(
+            {
+                "type": "system_interface_backend_failure",
+                "agent_id": str(_AGENT_ID_1),
+                "reason": "TUNNEL_SETUP_FAILED",
+                "detail": "No known_hosts file at /keys/known_hosts",
+            }
+        ),
+    )
+
+    assert observed == [
+        (
+            _AGENT_ID_1,
+            SystemInterfaceBackendFailureReason.TUNNEL_SETUP_FAILED,
+            None,
+            "No known_hosts file at /keys/known_hosts",
+        )
+    ]
+
+
+def test_an_unknown_reason_still_reports_a_connection_failure(consumer: EnvelopeStreamConsumer) -> None:
+    """A reason this build does not know must not drop the envelope.
+
+    Producer and consumer ship pinned together, so this should be unreachable --
+    it exists so that if the pinning ever slips, the cost is a coarser verdict
+    rather than an outage minds never hears about, which would leave the machine
+    unenrolled and never probed.
     """
-    payload = {
-        "type": "resolver_snapshot",
-        "services_by_agent": {
-            f"{_AGENT_ID_1}@{_HOST_ID_1}": {"system_interface": "http://127.0.0.1:9100"},
-            str(_AGENT_ID_2): {"webdav": "http://127.0.0.1:9200"},
-        },
-    }
-    _dispatch(consumer, _forward_envelope(payload))
-    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {
-        "system_interface": "http://127.0.0.1:9100",
-    }
-    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_2) == {
-        "webdav": "http://127.0.0.1:9200",
-    }
+    observed = _record_backend_failures(consumer)
 
-
-def test_resolver_snapshot_warns_and_keeps_last_when_id_spans_hosts(
-    consumer: EnvelopeStreamConsumer,
-) -> None:
-    """Two instances of one agent id (the migration-overlap case) collide loudly, last one wins."""
-    other_host_id = HostId("host-" + "0" * 31 + "2")
-    payload = {
-        "type": "resolver_snapshot",
-        "services_by_agent": {
-            f"{_AGENT_ID_1}@{_HOST_ID_1}": {"system_interface": "http://127.0.0.1:9100"},
-            f"{_AGENT_ID_1}@{other_host_id}": {"system_interface": "http://127.0.0.1:9300"},
-        },
-    }
     with capture_loguru(level="WARNING") as log_output:
-        _dispatch(consumer, _forward_envelope(payload))
-    assert "multiple hosts" in log_output.getvalue()
-    assert str(_AGENT_ID_1) in log_output.getvalue()
-    # JSON object order is preserved through json.loads, so "last" is deterministic.
-    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {
-        "system_interface": "http://127.0.0.1:9300",
-    }
+        _dispatch(
+            consumer,
+            _forward_envelope(
+                {
+                    "type": "system_interface_backend_failure",
+                    "agent_id": str(_AGENT_ID_1),
+                    "reason": "SOMETHING_NEWER",
+                }
+            ),
+        )
+
+    assert "SOMETHING_NEWER" in log_output.getvalue()
+    assert observed == [(_AGENT_ID_1, SystemInterfaceBackendFailureReason.CONNECT_ERROR, None, None)]
+    # And the generic reason is one minds acts on, so the machine is still
+    # enrolled for probing rather than silently left alone.
+    tracker = SystemInterfaceHealthTracker()
+    BackendFailureRecorder(tracker=tracker)(*observed[0])
+    assert _AGENT_ID_1 in tracker.snapshot_probe_targets()
+
+
+def test_a_backend_failure_without_an_agent_id_is_dropped(consumer: EnvelopeStreamConsumer) -> None:
+    """An observation with nothing to attribute it to cannot drive anything."""
+    observed = _record_backend_failures(consumer)
+
+    with capture_loguru(level="WARNING") as log_output:
+        _dispatch(consumer, _forward_envelope({"type": "system_interface_backend_failure", "reason": "CONNECT_ERROR"}))
+
+    assert "Could not parse" in log_output.getvalue()
+    assert observed == []
 
 
 # --- forward stream: listening --------------------------------------------

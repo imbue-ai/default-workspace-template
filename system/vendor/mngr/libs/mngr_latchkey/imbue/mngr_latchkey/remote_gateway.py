@@ -28,6 +28,7 @@ stays down until the next provisioning pass re-writes the secrets.
 import shlex
 import tempfile
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Final
 
@@ -62,7 +63,7 @@ from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import plugin_data_dir
 
 # Version of the upstream ``latchkey`` CLI to install on the VPS.
-LATCHKEY_VERSION: Final[str] = "3.5.0"
+LATCHKEY_VERSION: Final[str] = "3.8.0"
 
 # datalib release the VPS fetches the "dispatch curl" + Chrome-impersonating
 # curl from (``curl-<triple>.tar.gz``). The gateway runs the dispatch curl as
@@ -141,8 +142,10 @@ _CREDENTIALS_FILENAME: Final[str] = CREDENTIALS_STORE_FILENAME
 
 # Name of the latchkey directory on the VPS, under the remote user's home. The
 # remote latchkey CLI runs as that user, so ``$HOME/.latchkey`` is the
-# LATCHKEY_DIRECTORY it reads its credentials and permissions from.
-_REMOTE_LATCHKEY_DIR_NAME: Final[str] = ".latchkey"
+# LATCHKEY_DIRECTORY it reads its credentials and permissions from. Public
+# because consumers outside this plugin read the gateway's logs at this
+# location.
+REMOTE_LATCHKEY_DIR_NAME: Final[str] = ".latchkey"
 
 # Filename the remote latchkey gateway reads its permissions config from. The
 # local per-host file is named ``latchkey_permissions.json``; on the VPS it
@@ -162,8 +165,9 @@ _REMOTE_FILE_MODE: Final[str] = "0600"
 
 # Filenames (under the remote ``$HOME/.latchkey`` directory) for the
 # supervisord-managed gateway and reverse-tunnel programs' stdout/stderr logs.
-_REMOTE_GATEWAY_LOG_FILENAME: Final[str] = "gateway.log"
-_REMOTE_TUNNEL_LOG_FILENAME: Final[str] = "tunnel.log"
+# Public for the same reason as :data:`REMOTE_LATCHKEY_DIR_NAME`.
+REMOTE_GATEWAY_LOG_FILENAME: Final[str] = "gateway.log"
+REMOTE_TUNNEL_LOG_FILENAME: Final[str] = "tunnel.log"
 
 # PID files a *pre-supervisord* build wrote under ``$HOME/.latchkey`` when it
 # launched the gateway and reverse tunnel detached via ``nohup``. A VPS
@@ -453,7 +457,7 @@ def _resolve_remote_latchkey_directory(host: OuterHostInterface) -> Path:
                 host.get_name(), result.stderr.strip() or result.stdout.strip() or "empty $HOME"
             )
         )
-    return Path(home) / _REMOTE_LATCHKEY_DIR_NAME
+    return Path(home) / REMOTE_LATCHKEY_DIR_NAME
 
 
 def _default_permissions_json() -> str:
@@ -493,6 +497,30 @@ def _services_allowed_for_host(latchkey_directory: Path, host_id: HostId) -> fro
         return ServicesCatalog().services_for_permissions(config)
     except (LatchkeyStoreError, ServiceCatalogError) as e:
         raise RemoteGatewayError(f"Failed to resolve allowed services for host {host_id}: {e}") from e
+
+
+def services_granted_to_any_host(latchkey_directory: Path, host_ids: Iterable[HostId]) -> frozenset[str]:
+    """Union the canonical service names granted by any of ``host_ids``.
+
+    A service reaches a VPS only because some host's permissions grant it, so
+    this is the set whose credentials remote hosts actually depend on.
+    Resolved per host through the same permissions-to-services mapping
+    :func:`sync_credentials` uses, so the two cannot disagree about what a host
+    is entitled to. A host with no permissions file contributes nothing.
+
+    A host whose permissions cannot be resolved at all is logged and skipped
+    rather than failing the union, so one corrupt permissions file costs only
+    its own host instead of every other host's answer (the same per-host
+    degradation ``LatchkeyDiscoveryHandler._sync_state_to_host`` gives the sync
+    path).
+    """
+    granted: set[str] = set()
+    for host_id in host_ids:
+        try:
+            granted |= _services_allowed_for_host(latchkey_directory, host_id)
+        except RemoteGatewayError as e:
+            logger.opt(exception=e).error("Skipping host {} while resolving granted services: {}", host_id, e)
+    return frozenset(granted)
 
 
 def _services_with_stored_credentials(latchkey: Latchkey, service_names: frozenset[str]) -> frozenset[str]:
@@ -1049,7 +1077,7 @@ def _ensure_latchkey_gateway_running(
     password_file_path = _TMPFS_SECRETS_DIR / _GATEWAY_PASSWORD_FILENAME
     desktop_permissions_override_file_path = _TMPFS_SECRETS_DIR / _DESKTOP_PERMISSIONS_OVERRIDE_FILENAME
     run_script_path = remote_dir / _GATEWAY_RUN_SCRIPT_FILENAME
-    log_path = remote_dir / _REMOTE_GATEWAY_LOG_FILENAME
+    log_path = remote_dir / REMOTE_GATEWAY_LOG_FILENAME
     conf_path = _SUPERVISOR_CONFD_DIR / _GATEWAY_CONF_FILENAME
     host_name = host.get_name()
 
@@ -1181,7 +1209,7 @@ def _ensure_latchkey_gateway_reachable_from_container(
         inner_port=AGENT_SIDE_LATCHKEY_PORT,
         outer_port=OUTER_PORT,
     )
-    log_path = _resolve_remote_latchkey_directory(host) / _REMOTE_TUNNEL_LOG_FILENAME
+    log_path = _resolve_remote_latchkey_directory(host) / REMOTE_TUNNEL_LOG_FILENAME
     conf_path = _SUPERVISOR_CONFD_DIR / _TUNNEL_CONF_FILENAME
     conf = _build_supervisor_program_config(
         _TUNNEL_PROGRAM_NAME, command, str(log_path), _SUPERVISOR_TUNNEL_START_RETRIES

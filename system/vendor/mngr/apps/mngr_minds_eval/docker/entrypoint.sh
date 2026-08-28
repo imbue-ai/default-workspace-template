@@ -12,7 +12,7 @@ export MINDS_LATCHKEY_BINARY=/work/mngr/apps/minds/node_modules/.bin/latchkey
 # (MNGR__PROVIDERS__MODAL__USER_ID is passed at `docker run`, scoping this box to one Modal env.)
 
 echo ">> activating minds env: ${MINDS_ENV:-staging}"
-eval "$(uv run minds env activate "${MINDS_ENV:-staging}")"
+eval "$(uv run minds-admin env activate "${MINDS_ENV:-staging}")"
 
 # Pin the shared mngr profile (its Modal SSH keypair dir is a mounted, persistent modal.Volume --
 # the first box seeds the keypairs, every later box reuses them).

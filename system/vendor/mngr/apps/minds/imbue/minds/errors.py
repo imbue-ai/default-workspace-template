@@ -33,12 +33,18 @@ class GitOperationError(MindError):
 class MngrCommandError(MindError):
     """Raised when an mngr CLI command fails (timed out, exited nonzero, or could not be launched)."""
 
-    def __init__(self, message: str, *, error_class: str | None = None) -> None:
+    def __init__(self, message: str, *, error_class: str | None = None, output_tail: str | None = None) -> None:
         super().__init__(message)
         # mngr's exception class name, parsed from a structured JSONL ``error``
         # event when available (e.g. ``FastPathUnavailableError``). Lets callers
         # branch on the failure *type* without matching human-formatted text.
         self.error_class = error_class
+        # Bounded tails of whatever the subprocess wrote to stdout/stderr, kept
+        # off the message so user-facing surfaces stay short and the text-matching
+        # consumers of ``str(exc)`` see only mngr's verdict. The message names the
+        # failure; this is the step-by-step record a failure nobody anticipated is
+        # diagnosed from, and it is what the error log record carries.
+        self.output_tail = output_tail
 
 
 class MngrCommandTimeoutError(MngrCommandError):
@@ -46,9 +52,13 @@ class MngrCommandTimeoutError(MngrCommandError):
 
     A distinct subclass so callers can tell "the command ran and failed" (still
     a ``MngrCommandError``, with a body to inspect) apart from "the command
-    never completed". The recovery host-health probe keys on this: a listing
-    that times out is evidence the provider/network is unreachable, not that the
-    host is reachable-but-wedged, so it must not offer a destructive restart.
+    never completed". The difference matters wherever a failure is read as
+    evidence about the host: a command that ran and failed says something about
+    the host it reached, while one that never returned says only that the
+    provider or the network did not answer in time.
+
+    A killed command has no verdict of its own, so ``output_tail`` is the only
+    record of which step it died in.
     """
 
     ...
@@ -81,6 +91,12 @@ class MindsConfigError(MindError):
     ...
 
 
+class NaiveTimestampError(MindError, ValueError):
+    """Raised when a timezone-aware datetime is required but a naive one was passed."""
+
+    ...
+
+
 class WorkspaceNameInUseError(MindError, ValueError):
     """Raised when a create targets a workspace name an in-flight create attempt already holds.
 
@@ -94,6 +110,12 @@ class WorkspaceNameInUseError(MindError, ValueError):
 
 class PendingCreateAttemptStoreError(MindError):
     """Raised when a pending-create-attempt record cannot be written or deleted."""
+
+    ...
+
+
+class PendingRequestsUnavailableError(MindError):
+    """Raised when a verdict must be recorded but no pending-requests view is configured."""
 
     ...
 
@@ -146,6 +168,17 @@ class DeviceIdError(MindError):
 
 class WorkspaceSyncError(MindError):
     """Raised when a workspace-record sync (push/pull/reconcile) operation fails."""
+
+    ...
+
+
+class WorkspaceRecordLeaseActiveError(WorkspaceSyncError):
+    """Raised when a record cannot be removed because its cloud workspace still holds a pool lease.
+
+    The connector is tombstone-first: destroying the workspace is what releases
+    the lease and retires the record, so remove-from-list is refused while the
+    machine is live.
+    """
 
     ...
 

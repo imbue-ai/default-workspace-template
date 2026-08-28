@@ -44,6 +44,7 @@ from imbue.remote_service_connector.compat import wire_models_minds_0_3_16
 from imbue.remote_service_connector.compat import wire_models_minds_0_4_0
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID
+from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
 from imbue.remote_service_connector.testing import _make_bucket_test_client
 from imbue.remote_service_connector.testing import _make_pool_quota_test_client
@@ -276,6 +277,16 @@ def test_sync_responses_parse_for_all_snapshots(monkeypatch: pytest.MonkeyPatch)
     assert put.status_code == 200, put.text
     _validate_for_snapshots("PUT /sync/records/{host_id}", put.json())
 
+    # The workspace-keyed route serves the same record shape (including one
+    # carrying the new backup_bucket column, which must stay off the wire
+    # while any strict snapshot is in-window).
+    workspace_put_body = dict(record_body, revision=2, backup_bucket=f"{_USER_STUB_USER_ID_PREFIX}--agent-compat01")
+    workspace_put = client.put(
+        "/sync/records/by-workspace/agent-compat01", json=workspace_put_body, headers=_user_headers()
+    )
+    assert workspace_put.status_code == 200, workspace_put.text
+    _validate_for_snapshots("PUT /sync/records/{host_id}", workspace_put.json())
+
     listed = client.get("/sync/records", headers=_user_headers())
     assert listed.status_code == 200
     _validate_entries_for_snapshots("GET /sync/records [entry]", listed.json()["records"])
@@ -325,6 +336,10 @@ _STRICTLY_PARSED_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/account/storage-recheck"): "POST /account/storage-recheck",
     ("GET", "/sync/records"): "GET /sync/records [entry]",
     ("PUT", "/sync/records/{host_id}"): "PUT /sync/records/{host_id}",
+    # The workspace-keyed PUT serves the identical record shape as the
+    # host-keyed one, so it shares that endpoint key: any snapshot that parses
+    # the record shape covers both routes.
+    ("PUT", "/sync/records/by-workspace/{workspace_id}"): "PUT /sync/records/{host_id}",
     ("GET", "/sync/bundle"): "GET /sync/bundle",
 }
 
@@ -342,6 +357,9 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/generation"): _TOLERANT_CLIENT,
     ("GET", "/version"): _TOLERANT_CLIENT,
     ("GET", "/health/liveness"): _STATUS_ONLY,
+    # Dev/ci-only reporting probe; consumed by the deployment-test suite,
+    # which ships from this repo, not with the desktop fleet.
+    ("GET", "/health/reporting-probe"): _OPERATOR,
     ("GET", "/policies/destroyed-workspace-backups"): _TOLERANT_CLIENT,
     # Auth surface beyond the three strictly-parsed responses.
     ("POST", "/auth/session/refresh"): _TOLERANT_CLIENT,
@@ -368,6 +386,7 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/account/plan"): _TOLERANT_CLIENT,
     # Sync operations without strictly-parsed bodies.
     ("DELETE", "/sync/records/{host_id}"): _STATUS_ONLY,
+    ("DELETE", "/sync/records/by-workspace/{workspace_id}"): _STATUS_ONLY,
     ("POST", "/sync/scrub-secrets"): _TOLERANT_CLIENT,
     ("PUT", "/sync/bundle"): _STATUS_ONLY,
     ("DELETE", "/sync/bundle"): _STATUS_ONLY,
@@ -379,6 +398,9 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("DELETE", "/shares/{host_id}"): _STATUS_ONLY,
     ("GET", "/shares/assignment"): _WORKSPACE_SIDE,
     ("POST", "/shares/cert"): _WORKSPACE_SIDE,
+    ("POST", "/frps/auth/{relay_id}"): _WORKSPACE_SIDE,
+    # CLEANUP: remove with the legacy path-secret route in shares.py once the
+    # whole relay fleet is on the header form and the secret is rotated.
     ("POST", "/frps/auth/{plugin_secret}/{relay_id}"): _WORKSPACE_SIDE,
     # The hosted accounts pages + web chrome (path-served bundles).
     ("GET", "/accounts/api/config"): _WEB_BUNDLE,
@@ -401,6 +423,9 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/signup"): _BROWSER_ONLY,
     ("GET", "/manage"): _BROWSER_ONLY,
     ("GET", "/check-inbox"): _BROWSER_ONLY,
+    ("GET", "/terms-of-service"): _BROWSER_ONLY,
+    ("GET", "/code-of-conduct"): _BROWSER_ONLY,
+    ("GET", "/privacy-policy"): _BROWSER_ONLY,
     ("GET", "/web"): _WEB_BUNDLE,
     ("GET", "/web/assets/{asset_path:path}"): _WEB_BUNDLE,
     ("GET", "/web/{page_path:path}"): _WEB_BUNDLE,
@@ -415,13 +440,19 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/admin/accounts/{email}"): _OPERATOR,
     ("POST", "/admin/accounts/{email}/plan"): _OPERATOR,
     ("POST", "/admin/accounts/{email}/quota"): _OPERATOR,
+    ("POST", "/admin/accounts/{email}/revoke-sessions"): _OPERATOR,
+    ("POST", "/admin/accounts/{email}/suspend"): _OPERATOR,
+    ("POST", "/admin/accounts/{email}/unsuspend"): _OPERATOR,
     ("GET", "/admin/relays"): _OPERATOR,
     ("POST", "/admin/relays"): _OPERATOR,
     ("DELETE", "/admin/relays/{relay_id}"): _OPERATOR,
     ("POST", "/admin/sweep/backup-retention"): _OPERATOR,
+    ("POST", "/admin/sweep/lease-records"): _OPERATOR,
     ("POST", "/admin/sweep/r2"): _OPERATOR,
     ("POST", "/admin/test-signup"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/abandon"): _OPERATOR,
+    ("POST", "/admin/workspaces/{host_db_id}/release"): _OPERATOR,
+    ("POST", "/admin/workspaces/{host_db_id}/stop"): _OPERATOR,
 }
 
 

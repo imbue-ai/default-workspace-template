@@ -7,6 +7,10 @@ requires-python = ">=3.11"
 dependencies = [
     "imbue-common",
     "modal>=1.4.3",
+    # 2.63.0+ required: earlier FastAPI integrations re-wrap dependant.call on
+    # every request under FastAPI's lazy router inclusion, dying with
+    # RecursionError after ~990 requests to a sync endpoint (mngr-internal#493).
+    "sentry-sdk>=2.63.0",
 ]
 license = {text = "FCL-1.0-MIT"}
 license-files = [

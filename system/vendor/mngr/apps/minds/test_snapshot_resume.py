@@ -24,6 +24,8 @@ import os
 import pwd
 import shutil
 import subprocess
+import zipfile
+from collections.abc import Iterable
 from collections.abc import Iterator
 from datetime import datetime
 from datetime import timezone
@@ -38,9 +40,11 @@ from loguru import logger
 from playwright.sync_api import Frame
 from playwright.sync_api import Page
 
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds.bootstrap import mngr_prefix_for
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
+from imbue.minds.config.data_types import MNGR_BINARY
 from imbue.minds.desktop_client import backup_status
 from imbue.minds.desktop_client import restic_cli
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
@@ -70,9 +74,11 @@ from imbue.minds.desktop_client.e2e_workspace_runner import destroy_agent_best_e
 from imbue.minds.desktop_client.e2e_workspace_runner import ensure_minds_env_defaults
 from imbue.minds.desktop_client.e2e_workspace_runner import find_free_port
 from imbue.minds.desktop_client.e2e_workspace_runner import resolve_default_workspace_template_path
-from imbue.minds.desktop_client.recovery_probe import PROBE_SENTINEL
-from imbue.minds.desktop_client.recovery_probe import build_probe_shell_command
 from imbue.minds.desktop_client.restic_cli import ResticNotInstalledError
+from imbue.minds.desktop_client.workspace_diagnostics import STAGED_ZIP_FILENAME
+from imbue.minds.desktop_client.workspace_diagnostics import WORKSPACE_COLLECTOR_PATH
+from imbue.minds.desktop_client.workspace_diagnostics import WorkspaceCollectionResult
+from imbue.minds.desktop_client.workspace_diagnostics import collect_workspace_diagnostics
 from imbue.minds.desktop_client.workspace_operations import InMemoryWorkspaceOperationRegistry
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKind
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationStatus
@@ -81,20 +87,31 @@ from imbue.mngr.config.pre_readers import find_profile_dir_lightweight
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.testing import get_short_random_string
 
-# The minds workspace container name prefix (mngr names docker hosts
-# ``{mngr_prefix}-{host_name}`` and minds defaults to the ``minds-ci-snapshot``
-# prefix at snapshot time). The docker provider also keeps a singleton
-# ``*docker-state*`` sidecar container per workspace; the workspace agent
-# container is the one that is NOT the docker-state sidecar.
-_WORKSPACE_CONTAINER_PREFIX: Final[str] = "minds-"
+# The docker provider keeps a singleton ``*docker-state*`` sidecar container per
+# workspace; the workspace agent container is the one that is NOT the
+# docker-state sidecar.
 _DOCKER_STATE_MARKER: Final[str] = "docker-state"
+
+
+def _workspace_container_prefix() -> str:
+    """The container-name prefix of the minds env under test.
+
+    mngr names docker hosts ``{mngr_prefix}-{host_name}`` and the sandbox's
+    conftest pins ``MINDS_ROOT_NAME`` to the snapshot's root, so in CI this is
+    the ``minds-ci-snapshot-`` prefix every baked container carries. Scoping by
+    the env (rather than a bare ``minds-``) is what makes these tests runnable
+    on a dev machine, where containers from many envs coexist: only the named
+    env's containers are started or selected, never a colleague env's.
+    """
+    return f"{os.environ.get('MINDS_ROOT_NAME', _DEFAULT_MINDS_ROOT_NAME)}-"
+
+
 # system_interface's in-container port. It is a core bootstrap-managed
 # app with a fixed port (registered in the data/.state app registry);
 # kept as a constant so a drift shows up as a clear assertion failure.
 _SYSTEM_INTERFACE_PORT: Final[int] = 8000
 _MNGR_START_TIMEOUT_SECONDS: Final[int] = 300
 _SYSTEM_INTERFACE_READY_TIMEOUT_SECONDS: Final[int] = 120
-_PROBE_TIMEOUT_SECONDS: Final[int] = 120
 _SERVICES_REGISTERED_TIMEOUT_SECONDS: Final[int] = 120
 
 # The always-on core services that must re-register in the data/.state app registry
@@ -151,16 +168,15 @@ def _exec_in_container(container_name: str, command: str, *, timeout: int) -> su
 
 
 def _all_minds_container_ids() -> list[str]:
-    return _run_docker(["ps", "-aq", "--filter", f"name={_WORKSPACE_CONTAINER_PREFIX}"]).split()
+    return _run_docker(["ps", "-aq", "--filter", f"name={_workspace_container_prefix()}"]).split()
 
 
 def _running_workspace_container_name() -> str:
     """Return the running workspace agent container (not the docker-state sidecar)."""
+    prefix = _workspace_container_prefix()
     names = _run_docker(["ps", "--format", "{{.Names}}"]).splitlines()
-    workspace_names = [
-        name for name in names if name.startswith(_WORKSPACE_CONTAINER_PREFIX) and _DOCKER_STATE_MARKER not in name
-    ]
-    assert workspace_names, f"No running minds workspace container; running containers: {names!r}"
+    workspace_names = [name for name in names if name.startswith(prefix) and _DOCKER_STATE_MARKER not in name]
+    assert workspace_names, f"No running {prefix}* workspace container; running containers: {names!r}"
     return workspace_names[0]
 
 
@@ -292,29 +308,6 @@ def _wait_for_system_interface_down(container_name: str) -> bool:
         "sleep 3; done; exit 1"
     )
     return _exec_in_container(container_name, poll, timeout=90).returncode == 0
-
-
-def _run_minds_in_container_probe(container_name: str) -> dict[str, Any]:
-    """Run minds' real in-container recovery probe and return its parsed payload.
-
-    Ships the exact probe shell command minds' recovery flow runs (normally
-    via ``mngr exec``) straight into the container via ``docker exec``, then
-    parses the documented sentinel + single-JSON-line contract. The payload
-    carries ``curl_status`` (system_interface health), ``inner_port``,
-    ``system_interface_status``, etc.
-    """
-    result = _exec_in_container(
-        container_name, f"cd /home/user/workspace && {build_probe_shell_command()}", timeout=_PROBE_TIMEOUT_SECONDS
-    )
-    assert PROBE_SENTINEL in result.stdout, (
-        f"minds recovery probe sentinel missing; stdout={result.stdout!r} stderr={result.stderr!r}"
-    )
-    after_sentinel = result.stdout.split(PROBE_SENTINEL, 1)[1]
-    for line in after_sentinel.splitlines():
-        candidate = line.strip()
-        if candidate:
-            return json.loads(candidate)
-    raise AssertionError(f"minds recovery probe emitted no JSON payload; stdout={result.stdout!r}")
 
 
 @pytest.fixture(scope="session")
@@ -495,16 +488,15 @@ def test_resumed_workspace_registered_expected_apps(running_workspace: _ResumedW
 @pytest.mark.docker
 @pytest.mark.timeout(360)
 def test_minds_recovery_restores_dead_system_interface() -> None:
-    """A dead system_interface is diagnosed by minds' recovery probe and revived by an agent bounce.
+    """A dead system_interface is revived by an agent bounce.
 
     Drives the actual minds recovery building blocks against a deterministic
     break: stop the system-services agent (which takes system_interface down),
-    confirm minds' real in-container recovery probe diagnoses it as unhealthy,
-    then bounce the system-services agent (``mngr stop`` + ``mngr start``
-    inside the container -- the in-container analogue of the desktop client's
-    host restart, which cannot ``--stop-host`` from within the container it
-    would stop) and confirm both the live HTTP check and minds' probe see
-    system_interface healthy again.
+    confirm the interface really goes down, then bounce the system-services
+    agent (``mngr stop`` + ``mngr start`` inside the container -- the
+    in-container analogue of the desktop client's host restart, which cannot
+    ``--stop-host`` from within the container it would stop) and confirm the
+    live HTTP check sees system_interface serving again.
 
     Self-contained (it establishes its own broken state) so it is robust to
     running in the same sandbox as the ``running_workspace`` fixture tests.
@@ -524,16 +516,9 @@ def test_minds_recovery_restores_dead_system_interface() -> None:
         f"Failed to stop system-services to set up the broken state: {stop_result.stderr}"
     )
 
-    # Wait for the interface to actually go down before diagnosing, so the
-    # broken-state assertion isn't a timing race against a lingering listener.
     assert _wait_for_system_interface_down(container_name), (
         "system_interface stayed up after stopping the system-services agent; "
         "the agent may not own the bootstrap/system_interface process tree."
-    )
-    # minds' real recovery probe should now see system_interface unhealthy.
-    broken_probe = _run_minds_in_container_probe(container_name)
-    assert broken_probe.get("curl_status") not in _SERVED_HTTP_STATUS_CODES, (
-        f"Expected system_interface unhealthy after stopping system-services; probe={broken_probe!r}"
     )
 
     # Recover by bouncing the system-services agent (stop is idempotent here;
@@ -547,10 +532,6 @@ def test_minds_recovery_restores_dead_system_interface() -> None:
 
     assert _wait_for_system_interface_up(container_name), (
         "system_interface did not recover after restarting the system-services agent."
-    )
-    recovered_probe = _run_minds_in_container_probe(container_name)
-    assert recovered_probe.get("curl_status") in _SERVED_HTTP_STATUS_CODES, (
-        f"minds recovery probe still reports system_interface unhealthy after restart; probe={recovered_probe!r}"
     )
 
 
@@ -602,6 +583,39 @@ def _isolated_host_config_root(scratch_dir: Path) -> Path:
     settings_path.write_text((_REPO_ROOT / ".mngr" / "settings.toml").read_text())
     _opt_into_pytest_config_guard(settings_path)
     return root
+
+
+def _point_desktop_mngr_at_the_baked_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Wire this process's ``mngr`` at the snapshot's desktop-side state; return its host dir.
+
+    Anything that shells out to ``mngr exec <agent>`` from the sandbox host needs
+    the snapshot's real container prefix AND its real desktop-side host dir: the
+    docker provider reaches its host records through a state container named
+    after the profile's user id under MNGR_HOST_DIR, so the autouse fixture's
+    throwaway host dir (fresh profile, different user id) would make the baked
+    workspace invisible ("Agent not found"). The baked host dir lives under the
+    *real* home -- the autouse fixture monkeypatches HOME to a temp dir, so it is
+    resolved via /etc/passwd (same trick as deployment_tests/conftest.py) using
+    the mngr_host_dir_for layout. Its baked profile settings get the pytest
+    config-guard opt-in (throwaway sandbox state, per that helper's contract),
+    and the project config is an isolated pytest-opted-in copy (the repo's own
+    .mngr would fail the config guard). The cwd is left neutral and the providers
+    that would need cloud credentials during discovery are silenced.
+    """
+    root_name = os.environ.get("MINDS_ROOT_NAME", _DEFAULT_MINDS_ROOT_NAME)
+    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    baked_mngr_host_dir = real_home / f".{root_name}" / "mngr"
+    assert baked_mngr_host_dir.is_dir(), f"No baked desktop-side mngr host dir at {baked_mngr_host_dir}"
+    baked_profile_dir = find_profile_dir_lightweight(baked_mngr_host_dir)
+    assert baked_profile_dir is not None, f"No mngr profile under {baked_mngr_host_dir} in the snapshot"
+    _opt_into_pytest_config_guard(baked_profile_dir / "settings.toml")
+    monkeypatch.setenv("MNGR_HOST_DIR", str(baked_mngr_host_dir))
+    monkeypatch.setenv("MNGR_PREFIX", mngr_prefix_for(root_name))
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(_isolated_host_config_root(tmp_path) / ".mngr"))
+    monkeypatch.setenv("MNGR__PROVIDERS__MODAL__IS_ENABLED", "false")
+    monkeypatch.setenv("MNGR__PROVIDERS__AWS__IS_ENABLED", "false")
+    monkeypatch.chdir(tmp_path)
+    return baked_mngr_host_dir
 
 
 def _prepare_electron_workspace_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
@@ -720,51 +734,23 @@ def test_create_workspace_and_sign_in_via_modal_then_chat_via_electron(
         destroy_agent_best_effort(workspace_name, config_project_dir=host_config_root / ".mngr")
 
 
-# -- Backup-update chat gate against a live, LLM-authenticated chat agent -----
+# -- Backup-update chat gate against a deterministically RUNNING agent --------
 #
-# The backup update's chat gate must (a) classify a claude agent that is
-# actively generating as a running chat, (b) block the mutating update on it,
-# and (c) stop it for real when the "Stop all chats and retry" flow passes
-# --stop-chats. The unit tests in backup_workspace_scripts_test.py drive these
-# paths with a stubbed `mngr list`; this test drives them against the resumed
-# snapshot workspace's real chat agent, which has working LLM credentials
-# baked in -- asking it for a long story keeps it RUNNING long enough for the
-# gate to observe it.
+# The backup update's chat gate must (a) classify a non-main agent that is
+# RUNNING as a running chat, (b) block the mutating update on it, and (c) stop
+# it for real when the "Stop all chats and retry" flow passes --stop-chats. The
+# unit tests in backup_workspace_scripts_test.py drive these paths with a
+# stubbed `mngr list`; this test drives them against the resumed snapshot
+# workspace with a controllable `command` agent held RUNNING via the `active`
+# marker, so the gate has a deterministic RUNNING window to observe.
 
 
-def _find_chat_agent(container_name: str) -> dict[str, Any]:
-    """Return the workspace's chat agent record from mngr list.
-
-    The template repo's chat create-template types the agent ``chat`` (a
-    ``claude``-parented type carrying the chat output style); older baked
-    snapshots predate that type and report plain ``claude``.
-    """
+def _find_agent_by_name(container_name: str, name: str) -> dict[str, Any]:
+    """Return the agent record whose name matches ``name`` from mngr list."""
     agents = _list_agents_in_container(container_name)
-    chats = [agent for agent in agents if agent.get("type") in ("chat", "claude")]
-    assert chats, f"No chat agent among {[(a.get('name'), a.get('type')) for a in agents]!r}"
-    return chats[0]
-
-
-def _dump_chat_agent_diagnostics(container_name: str, chat_id: str) -> str:
-    """Best-effort in-container evidence for why a chat agent is not running.
-
-    Captures the agent list, the agent's state-dir logs/events, its tmux
-    window (if any survives), and supervisor status, so a CI failure log
-    explains a dead chat instead of only reporting its state.
-    """
-    diagnostic_script = (
-        "cd /home/user/workspace; "
-        "echo '--- mngr list ---'; mngr list --format json --on-error continue 2>&1 | tail -c 4000; "
-        f"echo '--- agent dir ---'; AGENT_DIR=$(ls -d $HOME/.mngr/agents/{chat_id} 2>/dev/null); "
-        'echo "$AGENT_DIR"; find "$AGENT_DIR" -maxdepth 2 -type f 2>/dev/null | head -40; '
-        "echo '--- agent logs (tails) ---'; "
-        'for f in $(find "$AGENT_DIR" -maxdepth 3 -type f \\( -name "*.log" -o -name "*.jsonl" \\) 2>/dev/null | head -8); do '
-        'echo "== $f"; tail -c 2000 "$f" 2>/dev/null; echo; done; '
-        "echo '--- tmux ---'; tmux ls 2>&1; "
-        "echo '--- supervisor ---'; supervisorctl status 2>&1 | head -20"
-    )
-    result = _exec_in_container(container_name, diagnostic_script, timeout=60)
-    return f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    matching = [agent for agent in agents if agent.get("name") == name]
+    assert matching, f"No agent named {name!r} among {[agent.get('name') for agent in agents]!r}"
+    return matching[0]
 
 
 def _wait_for_agent_state(container_name: str, agent_id: str, expected_state: str, *, attempts: int = 40) -> bool:
@@ -796,76 +782,91 @@ def _run_backup_script_in_container(
 def test_backup_update_gate_blocks_on_live_chat_and_stop_chats_clears_it(
     running_workspace: _ResumedWorkspace,
 ) -> None:
-    """The chat gate blocks on a genuinely generating claude agent and --stop-chats stops it."""
+    """The backup-update gate blocks while an agent is RUNNING and --stop-chats clears it.
+
+    The gate keys on ``state == "RUNNING"`` for any non-``main`` agent, so a
+    controllable ``command`` agent that blocks in ``sleep`` and is marked active
+    through ``mngr exec`` (the same ``active`` marker real agent integrations
+    write) stands in for a live chat. A real claude chat's RUNNING window lasts
+    only as long as its current turn, so the gate probe and apply-update scripts
+    could miss it between their slow ``mngr list`` round-trips; the sleep-backed
+    marker holds RUNNING until the ``--stop-chats`` gate itself clears it.
+    """
     container_name = running_workspace.container_name
-    chat = _find_chat_agent(container_name)
-    chat_id = str(chat["id"])
-    chat_name = str(chat["name"])
+    services_agent_id = running_workspace.services_agent_id
+    blocker_name = "gate-blocker"
+    try:
+        # We want an agent that holds RUNNING for the whole test and leaves it
+        # only when the gate stops it, so the gate catches it between its slow
+        # `mngr list` round-trips. A command agent running a long `sleep` is the
+        # live process; the `active` marker (which real agents get from their
+        # hooks) is what mngr reads as RUNNING rather than WAITING. `--transfer
+        # none` keeps it in the repo root, the only work_dir the gate looks at.
+        created = _exec_in_container(
+            container_name,
+            f"cd /home/user/workspace && mngr create {blocker_name} --type command "
+            "--transfer none --no-ensure-clean --no-connect -- sleep 100196",
+            timeout=180,
+        )
+        assert created.returncode == 0, f"`mngr create` failed for the blocker agent: {created.stderr}"
+        marked = _exec_in_container(
+            container_name,
+            f"cd /home/user/workspace && mngr exec {blocker_name} 'touch \"$MNGR_AGENT_STATE_DIR/active\"'",
+            timeout=120,
+        )
+        assert marked.returncode == 0, f"marking the blocker agent active failed: {marked.stderr}"
+        blocker_id = str(_find_agent_by_name(container_name, blocker_name)["id"])
+        assert _wait_for_agent_state(container_name, blocker_id, "RUNNING"), (
+            "The blocker agent never reached RUNNING after its active marker was written."
+        )
 
-    # Wake the chat and give it work that takes a while: a real LLM generation
-    # (the baked workspace carries working credentials). `mngr message`
-    # delivers the keystrokes and returns; claude then reads as RUNNING while
-    # it generates.
-    started = _exec_in_container(
-        container_name, f"cd /home/user/workspace && mngr start {chat_id} --quiet", timeout=180
-    )
-    assert started.returncode == 0, f"`mngr start` failed for the chat agent: {started.stderr}"
-    story_marker = get_short_random_string()
-    messaged = _exec_in_container(
-        container_name,
-        f'cd /home/user/workspace && mngr message {chat_id} -m "Please tell me a really long story about {story_marker}. '
-        'Make it as long and detailed as you possibly can."',
-        timeout=120,
-    )
-    assert messaged.returncode == 0, (
-        f"`mngr message` failed for the chat agent: {messaged.stderr}\n"
-        f"Diagnostics:\n{_dump_chat_agent_diagnostics(container_name, chat_id)}"
-    )
-    assert _wait_for_agent_state(container_name, chat_id, "RUNNING"), (
-        "The chat agent never reached RUNNING after being asked for a long story."
-    )
+        # The gate probe classifies the running blocker as a running chat.
+        probe = _run_backup_script_in_container(
+            container_name,
+            BACKUP_GATE_PROBE_SCRIPT,
+            ("--agent-id", services_agent_id),
+            timeout=300,
+        )
+        probe_payload = extract_marker_json(probe.stdout, GATE_RESULT_MARKER)
+        assert probe_payload is not None, (probe.stdout, probe.stderr)
+        probe_chats = probe_payload["running_chats"]
+        assert isinstance(probe_chats, list) and blocker_name in probe_chats, probe_payload
 
-    # The gate probe classifies the generating chat as a running chat.
-    probe = _run_backup_script_in_container(
-        container_name,
-        BACKUP_GATE_PROBE_SCRIPT,
-        ("--agent-id", running_workspace.services_agent_id),
-        timeout=300,
-    )
-    probe_payload = extract_marker_json(probe.stdout, GATE_RESULT_MARKER)
-    assert probe_payload is not None, (probe.stdout, probe.stderr)
-    probe_chats = probe_payload["running_chats"]
-    assert isinstance(probe_chats, list) and chat_name in probe_chats, probe_payload
+        # The mutating update refuses to run while the blocker is RUNNING.
+        blocked = _run_backup_script_in_container(
+            container_name,
+            BACKUP_APPLY_UPDATE_SCRIPT,
+            ("--minds-version", "0.0.0-snapshot-test", "--agent-id", services_agent_id),
+            timeout=600,
+        )
+        blocked_payload = extract_marker_json(blocked.stdout, UPDATE_RESULT_MARKER)
+        assert blocked_payload is not None, (blocked.stdout, blocked.stderr)
+        assert blocked_payload["status"] == "blocked", blocked_payload
+        blocked_chats = blocked_payload["running_chats"]
+        assert isinstance(blocked_chats, list) and blocker_name in blocked_chats, blocked_payload
 
-    # The mutating update refuses to run while the chat is generating.
-    blocked = _run_backup_script_in_container(
-        container_name,
-        BACKUP_APPLY_UPDATE_SCRIPT,
-        ("--minds-version", "0.0.0-snapshot-test", "--agent-id", running_workspace.services_agent_id),
-        timeout=600,
-    )
-    blocked_payload = extract_marker_json(blocked.stdout, UPDATE_RESULT_MARKER)
-    assert blocked_payload is not None, (blocked.stdout, blocked.stderr)
-    assert blocked_payload["status"] == "blocked", blocked_payload
-    blocked_chats = blocked_payload["running_chats"]
-    assert isinstance(blocked_chats, list) and chat_name in blocked_chats, blocked_payload
-
-    # "Stop all chats and retry": the script stops the live chat itself and
-    # proceeds past the gate. Whether the rest of the update succeeds depends
-    # on the baked repo's tags; the contract under test is that the outcome is
-    # anything but blocked and the chat agent is genuinely stopped.
-    retried = _run_backup_script_in_container(
-        container_name,
-        BACKUP_APPLY_UPDATE_SCRIPT,
-        ("--minds-version", "0.0.0-snapshot-test", "--agent-id", running_workspace.services_agent_id, "--stop-chats"),
-        timeout=600,
-    )
-    retried_payload = extract_marker_json(retried.stdout, UPDATE_RESULT_MARKER)
-    assert retried_payload is not None, (retried.stdout, retried.stderr)
-    assert retried_payload["status"] != "blocked", retried_payload
-    assert _wait_for_agent_state(container_name, chat_id, "STOPPED"), (
-        "The chat agent was not stopped by the --stop-chats gate."
-    )
+        # "Stop all chats and retry": the script stops the running agent itself
+        # and proceeds past the gate. Whether the rest of the update succeeds
+        # depends on the baked repo's tags; the contract under test is that the
+        # outcome is anything but blocked and the agent is genuinely stopped.
+        retried = _run_backup_script_in_container(
+            container_name,
+            BACKUP_APPLY_UPDATE_SCRIPT,
+            ("--minds-version", "0.0.0-snapshot-test", "--agent-id", services_agent_id, "--stop-chats"),
+            timeout=600,
+        )
+        retried_payload = extract_marker_json(retried.stdout, UPDATE_RESULT_MARKER)
+        assert retried_payload is not None, (retried.stdout, retried.stderr)
+        assert retried_payload["status"] != "blocked", retried_payload
+        assert _wait_for_agent_state(container_name, blocker_id, "STOPPED"), (
+            "The blocker agent was not stopped by the --stop-chats gate."
+        )
+    finally:
+        # The workspace is a session-scoped shared container; never leak a
+        # RUNNING agent that would block a sibling test's own gate.
+        _exec_in_container(
+            container_name, f"cd /home/user/workspace && mngr destroy {blocker_name} --force", timeout=180
+        )
 
 
 # -- Backup service: check / update / converge against the resumed workspace --
@@ -1005,40 +1006,15 @@ def test_backup_enable_repair_and_destination_change_on_resumed_workspace(
     resumed workspace container.
     """
     _ensure_restic_on_sandbox_host(tmp_path, monkeypatch)
-    # The provisioning path shells out to `mngr exec <agent>` from this
-    # process. Give that mngr the snapshot's real container prefix AND the
-    # snapshot's real desktop-side host dir: the docker provider reaches its
-    # host records through a state container named after the profile's user id
-    # under MNGR_HOST_DIR, so the autouse fixture's throwaway host dir (fresh
-    # profile, different user id) would make the baked workspace invisible
-    # ("Agent not found"). The baked host dir lives under the *real* home --
-    # the autouse fixture monkeypatches HOME to a temp dir, so resolve it via
-    # /etc/passwd (same trick as deployment_tests/conftest.py) using the
-    # mngr_host_dir_for layout. Its baked profile settings get the pytest
-    # config-guard opt-in (throwaway sandbox state, per the helper's contract),
-    # and the project config is an isolated pytest-opted-in copy (the repo's
-    # own .mngr would fail the config guard). Use a neutral cwd and silence
-    # providers that would need cloud credentials during discovery.
-    root_name = os.environ.get("MINDS_ROOT_NAME", _DEFAULT_MINDS_ROOT_NAME)
-    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    baked_mngr_host_dir = real_home / f".{root_name}" / "mngr"
-    assert baked_mngr_host_dir.is_dir(), f"No baked desktop-side mngr host dir at {baked_mngr_host_dir}"
-    baked_profile_dir = find_profile_dir_lightweight(baked_mngr_host_dir)
-    assert baked_profile_dir is not None, f"No mngr profile under {baked_mngr_host_dir} in the snapshot"
-    _opt_into_pytest_config_guard(baked_profile_dir / "settings.toml")
-    monkeypatch.setenv("MNGR_HOST_DIR", str(baked_mngr_host_dir))
-    monkeypatch.setenv("MNGR_PREFIX", mngr_prefix_for(root_name))
-    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(_isolated_host_config_root(tmp_path) / ".mngr"))
-    monkeypatch.setenv("MNGR__PROVIDERS__MODAL__IS_ENABLED", "false")
-    monkeypatch.setenv("MNGR__PROVIDERS__AWS__IS_ENABLED", "false")
-    monkeypatch.chdir(tmp_path)
+    # The provisioning path shells out to `mngr exec <agent>` from this process.
+    _point_desktop_mngr_at_the_baked_workspace(tmp_path, monkeypatch)
 
     container_name = running_workspace.container_name
     agent_id = AgentId(running_workspace.services_agent_id)
 
     data_dir = tmp_path / "minds-data"
     data_dir.mkdir()
-    paths = WorkspacePaths(data_dir=data_dir)
+    paths = InstallationPaths(data_dir=data_dir)
     repo_one = tmp_path / "restic-repo-1"
     repo_two = tmp_path / "restic-repo-2"
 
@@ -1051,7 +1027,6 @@ def test_backup_enable_repair_and_destination_change_on_resumed_workspace(
     # random per-workspace password + injection into the real container.
     configure_backups_for_host(
         agent_id=agent_id,
-        host_id="host-snapshot-test",
         request=BackupSetupRequest(
             backup_provider=BackupProvider.API_KEY, api_key_env_text=f"RESTIC_REPOSITORY={repo_one}"
         ),
@@ -1084,7 +1059,6 @@ def test_backup_enable_repair_and_destination_change_on_resumed_workspace(
     # canonical env is archived minds-side and the workspace copy replaced.
     change_backup_destination_for_host(
         agent_id=agent_id,
-        host_id="host-snapshot-test",
         request=BackupSetupRequest(
             backup_provider=BackupProvider.API_KEY, api_key_env_text=f"RESTIC_REPOSITORY={repo_two}"
         ),
@@ -1119,7 +1093,6 @@ def test_backup_enable_repair_and_destination_change_on_resumed_workspace(
     repo_three = tmp_path / "restic-repo-3"
     configure_backups_for_host(
         agent_id=agent_id,
-        host_id="host-snapshot-test",
         request=BackupSetupRequest(
             backup_provider=BackupProvider.API_KEY, api_key_env_text=f"RESTIC_REPOSITORY={repo_three}"
         ),
@@ -1183,25 +1156,13 @@ def test_backup_restore_rewinds_the_resumed_workspace_in_place(
     _ensure_restic_on_sandbox_host(tmp_path, monkeypatch)
     # Same desktop-side mngr wiring as the enable/repair test above: the baked
     # host dir + prefix so `mngr exec` can reach the resumed container.
-    root_name = os.environ.get("MINDS_ROOT_NAME", _DEFAULT_MINDS_ROOT_NAME)
-    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    baked_mngr_host_dir = real_home / f".{root_name}" / "mngr"
-    assert baked_mngr_host_dir.is_dir(), f"No baked desktop-side mngr host dir at {baked_mngr_host_dir}"
-    baked_profile_dir = find_profile_dir_lightweight(baked_mngr_host_dir)
-    assert baked_profile_dir is not None, f"No mngr profile under {baked_mngr_host_dir} in the snapshot"
-    _opt_into_pytest_config_guard(baked_profile_dir / "settings.toml")
-    monkeypatch.setenv("MNGR_HOST_DIR", str(baked_mngr_host_dir))
-    monkeypatch.setenv("MNGR_PREFIX", mngr_prefix_for(root_name))
-    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(_isolated_host_config_root(tmp_path) / ".mngr"))
-    monkeypatch.setenv("MNGR__PROVIDERS__MODAL__IS_ENABLED", "false")
-    monkeypatch.setenv("MNGR__PROVIDERS__AWS__IS_ENABLED", "false")
-    monkeypatch.chdir(tmp_path)
+    _point_desktop_mngr_at_the_baked_workspace(tmp_path, monkeypatch)
 
     container_name = running_workspace.container_name
     agent_id = AgentId(running_workspace.services_agent_id)
     data_dir = tmp_path / "minds-data"
     data_dir.mkdir()
-    paths = WorkspacePaths(data_dir=data_dir)
+    paths = InstallationPaths(data_dir=data_dir)
     # The repository path must be identical on the sandbox host and inside the
     # container (the same RESTIC_REPOSITORY string is read by both), so it
     # lives at a fixed absolute path rather than the per-test tmp_path. It must
@@ -1213,7 +1174,6 @@ def test_backup_restore_rewinds_the_resumed_workspace_in_place(
     # the container), then hand the initialized repository to the container.
     configure_backups_for_host(
         agent_id=agent_id,
-        host_id="host-restore-e2e",
         request=BackupSetupRequest(
             backup_provider=BackupProvider.API_KEY, api_key_env_text=f"RESTIC_REPOSITORY={repository}"
         ),
@@ -1323,3 +1283,567 @@ def test_backup_restore_rewinds_the_resumed_workspace_in_place(
     # verified host-backup itself, and the system interface serving again
     # proves the broader workspace is alive.
     assert _wait_for_system_interface_up(container_name)
+
+
+# -- Bug-report diagnostics against the resumed workspace ---------------------
+#
+# A bug report can carry the workspace's own logs and its recent chat
+# transcripts, gathered by the RESIDENT collector the workspace template ships
+# (`system/scripts/collect_bug_report_diagnostics.py`): one small `mngr exec`
+# probes for it and runs it, the collector secret-scans everything as plaintext
+# with the template's own scan gate, and everything that survives comes back as
+# ONE base64 zip the desktop app stages as the report's workspace archive. Both
+# halves of that exchange are unit-tested against fixture trees and a fake
+# mngr; what only a real workspace can show is that the collector's assumptions
+# about the workspace still hold -- that it is installed at the contract path,
+# where supervisord writes its logs, that the baked scan gate runs to
+# completion in there against the real collected text, and that the whole
+# round trip fits the collection budget. The
+# tests below therefore drive the real `collect_workspace_diagnostics` from the
+# sandbox host, exactly as the desktop client does.
+
+_SUPERVISOR_LOG_DIR: Final[str] = "/var/log/supervisor"
+_SUPERVISORCTL_STATUS_HEADING: Final[str] = "=== supervisorctl status ==="
+_SYSTEM_INTERFACE_PROGRAM_NAME: Final[str] = "system_interface"
+# Every common-transcript event names the event source it was converted from, as
+# ``<source>/common_transcript``. ``logs`` is the converter's own stdout stream,
+# which sits alongside the real harness transcripts and is written *after* each
+# conversion -- so it is newer than the transcript it just wrote and would win
+# the collector's newest-wins race if it were eligible. Attaching it would send
+# a record that a conversion happened instead of a record of what was said.
+_CONVERTER_LOG_EVENT_SOURCE: Final[str] = "logs"
+# The collector stages each payload as plaintext into its own ``mktemp -d``
+# (``bug-report-scan-*``) inside the workspace so the scan gate can read it, and
+# removes that dir on every exit path -- a report must never leave the user's
+# own collected logs or chats sitting in their workspace. These staged payload
+# files are the ones carrying that content.
+_IN_CONTAINER_SCRATCH_GLOB: Final[str] = "/tmp/bug-report-scan-*/bug-report-*.staged"
+# Where every agent's transcripts live inside the workspace (the collector's own
+# first MNGR_HOME_CANDIDATES entry).
+_IN_CONTAINER_MNGR_AGENTS_DIR: Final[str] = "/home/user/.mngr/agents"
+# Stands in for a collection's slug while a staged filename's fixed halves are
+# read back off the production builder; no real slug (a uuid4 hex) contains it.
+# The members of the staged workspace archive, as the collection contract names
+# them: the logs member, and one ``chats/<agent-id>-<harness>.jsonl`` per chat.
+_METADATA_MEMBER_NAME: Final[str] = "metadata.json"
+_LOG_MEMBER_DIR_PREFIX: Final[str] = "logs/"
+_CHAT_MEMBER_DIR_PREFIX: Final[str] = "chats/"
+# Where the collector-missing test parks the real collector while it runs.
+_COLLECTOR_MOVED_ASIDE_SUFFIX: Final[str] = ".moved-aside-by-test"
+# The collection budget these tests run under. Production's budget is policy
+# about user machines; this shared 4-core sandbox (dockerd plus the workspace's
+# nested docker-state daemon on cold page cache) exceeded the original 10s
+# production budget on 8 of 8 attempts in the first CI runs, warm-up included.
+# What these tests exist to prove is the collection pipeline -- what is
+# gathered, excluded, scanned, and staged -- so they run it under a budget the
+# sandbox can meet, while the production default stays pinned by
+# workspace_diagnostics_test.
+#
+# Raised from 60s once the collector began asking the workspace's own mngr for
+# its agents and their transcripts: measured in a running workspace, `mngr list`
+# alone costs ~66s and each `mngr event` ~85s, so a single-chat collection needs
+# ~160s. At 60s every attachment came back `scanner_unavailable` -- the scan's
+# share of the budget was gone before the scan started -- which is what failed
+# this tier rather than anything the tests assert.
+_SANDBOX_COLLECTION_TIMEOUT_SECONDS: Final[float] = 300.0
+
+
+def _fake_anthropic_api_key() -> str:
+    """A rule-matching fake key, assembled at runtime so no literal key sits in this file.
+
+    Matches the scan gate's betterleaks anthropic rule (sk-ant-[A-Za-z0-9_-]{24,}).
+    Mixed-case rather than a single repeated character: the real scanners apply
+    entropy filtering on top of the regex, and an all-"x" candidate passes them
+    -- this exact shape is the one proven to trip them in a live report.
+    """
+    return "sk-ant-" + "api03-" + "FAKEFAKEFAKEfakefakefake" + "0" * 46 + "FAKE"
+
+
+def _chat_agents_in_container(container_name: str) -> list[tuple[str, str]]:
+    """``(agent id, agent name)`` for each chat the workspace's own mngr reports.
+
+    Both halves are needed: an agent's state directory is keyed by its ID, while
+    the archive member the collector writes is named for the agent's NAME, so a
+    fixture plants by one and asserts on the other.
+
+    The collector asks mngr what agents exist, so a fixture has to plant into an
+    agent mngr already knows about: a hand-made agent directory is invisible to
+    ``mngr list``, and its transcript is therefore never fetched however
+    convincing the files look. Narrowing to chats (not the services agent, not a
+    spawned worker) is this fixture's own choice of plant target -- the
+    collector itself considers every agent.
+    """
+    listed = _exec_in_container(
+        container_name,
+        "export PATH=/root/.local/bin:$PATH; "
+        'mngr list --format "{id}|{name}|{labels.is_primary}|{labels.agent_created}" 2>/dev/null',
+        timeout=180,
+    )
+    agents = []
+    for line in listed.stdout.splitlines():
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) != 4 or not parts[0].startswith("agent-") or not parts[1]:
+            continue
+        if parts[2].lower() == "true" or parts[3].lower() == "true":
+            continue
+        agents.append((parts[0], parts[1]))
+    return agents
+
+
+def _plant_transcript_pair_in_container(container_name: str, agent_dir: str, chat_line: str) -> None:
+    """Write a harness transcript plus a NEWER converter log into an agent mngr lists.
+
+    The baked workspace is created without a chat ever being opened, so without
+    this the transcript half of a collection legitimately answers
+    ``no_chat_transcript`` and its assertions never run. The planted pair also
+    plants the trap collection must not fall into: the converter's own log
+    (``events/logs/...``) sits beside every real transcript, newer than what it
+    just converted and holding a record that a conversion happened rather than
+    what was said.
+
+    ``agent_dir`` must belong to an agent ``mngr list`` reports (see
+    ``_chat_agents_in_container``). An invented agent directory used to work,
+    when the collector globbed the agent tree itself; it cannot now, because the
+    collector asks mngr which agents exist and mngr has no record of a
+    directory someone made behind its back.
+    """
+    converter_line = json.dumps(
+        {
+            "type": "common_transcript",
+            "source": f"{_CONVERTER_LOG_EVENT_SOURCE}/common_transcript",
+            "message": "Converted 1 new event(s)",
+        }
+    )
+    plant = (
+        f"mkdir -p {agent_dir}/events/claude/common_transcript {agent_dir}/events/logs/common_transcript"
+        f" && printf '%s\\n' '{chat_line}' > {agent_dir}/events/claude/common_transcript/events.jsonl"
+        f" && printf '%s\\n' '{converter_line}' > {agent_dir}/events/logs/common_transcript/events.jsonl"
+        f" && touch -d '+1 hour' {agent_dir}/events/claude/common_transcript/events.jsonl"
+        f" && touch -d '+2 hours' {agent_dir}/events/logs/common_transcript/events.jsonl"
+    )
+    result = _exec_in_container(container_name, plant, timeout=30)
+    assert result.returncode == 0, f"could not plant the transcript fixtures: {result.stderr}"
+
+
+def _collected_log_program_names(member_names: Iterable[str]) -> frozenset[str]:
+    """The supervisord programs the archive carries a log member for.
+
+    Read off the member names rather than parsed out of section headings: each
+    service log is its own ``logs/<program>.log`` member now, so the names ARE
+    the answer.
+    """
+    return frozenset(
+        name[len(_LOG_MEMBER_DIR_PREFIX) : -len(".log")]
+        for name in member_names
+        if name.startswith(_LOG_MEMBER_DIR_PREFIX) and name.endswith(".log")
+    )
+
+
+def _staged_archive_in(staging_dir: Path) -> Path | None:
+    """The staged workspace archive in a report's private staging dir, if it exists."""
+    path = staging_dir / STAGED_ZIP_FILENAME
+    return path if path.exists() else None
+
+
+def _read_zip_members(staged_zip: Path) -> dict[str, str]:
+    """Every member of a staged workspace archive, DECODED, keyed by member name.
+
+    Content assertions must read decompressed member text: an assertion against
+    the staged file's raw bytes would leave the absence checks passing
+    vacuously, because compressed bytes contain no readable substring.
+    """
+    with zipfile.ZipFile(staged_zip) as archive:
+        assert archive.testzip() is None, f"the staged workspace archive is not a readable zip: {staged_zip}"
+        return {info.filename: archive.read(info).decode("utf-8") for info in archive.infolist()}
+
+
+def _leftover_collection_scratch_in_container(container_name: str) -> list[str]:
+    """Payload files the collector staged for scanning inside the workspace and should have removed."""
+    result = _exec_in_container(container_name, f"ls -1 {_IN_CONTAINER_SCRATCH_GLOB} 2>/dev/null || true", timeout=30)
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _warm_host_side_mngr() -> None:
+    """Run one throwaway ``mngr`` command so collection is not the cold start.
+
+    Collection spends the production budget end to end, and in production it
+    is never the host's first mngr invocation -- the desktop client has run
+    discovery and lifecycle commands long before anyone files a report. In the
+    sandbox it *would* be the first, and the cold start (interpreter boot plus
+    the docker provider's first state-container round trip) repeatedly eats the
+    whole budget. Warming here makes the test start from production's
+    preconditions instead of relaxing the budget it exists to respect. Failure
+    is ignored: a broken mngr surfaces through the collection assertions, with
+    better diagnostics than this warm-up could give.
+    """
+    subprocess.run([MNGR_BINARY, "list", "--quiet"], capture_output=True, text=True, timeout=120, check=False)
+
+
+def _collect_diagnostics_from_workspace(
+    running_workspace: _ResumedWorkspace,
+    *,
+    include_transcript: bool,
+    staging_dir: Path,
+    concurrency_group: ConcurrencyGroup,
+) -> WorkspaceCollectionResult:
+    """Run the desktop client's real collection against the resumed workspace.
+
+    Collection resolves ``mngr`` via PATH and reads ``MNGR_HOST_DIR`` from the
+    environment, exactly like the production exec paths -- which is why every
+    caller runs ``_point_desktop_mngr_at_the_baked_workspace`` first.
+    """
+    _warm_host_side_mngr()
+    return collect_workspace_diagnostics(
+        AgentId(running_workspace.services_agent_id),
+        include_logs=True,
+        include_transcript=include_transcript,
+        staging_dir=staging_dir,
+        host_state=None,
+        concurrency_group=concurrency_group,
+        timeout_seconds=_SANDBOX_COLLECTION_TIMEOUT_SECONDS,
+    )
+
+
+@pytest.mark.release
+@pytest.mark.minds_snapshot_resume
+@pytest.mark.docker
+@pytest.mark.timeout(600)
+# Collection runs under the sandbox budget (see
+# _SANDBOX_COLLECTION_TIMEOUT_SECONDS): the original 10s production budget proved
+# unmeetable on this shared sandbox on every attempt, warm-up included. The
+# flaky mark stays for residual load variance on the shared 4-core box.
+@pytest.mark.flaky
+def test_bug_report_diagnostics_collect_the_workspace_logs_and_transcript(
+    running_workspace: _ResumedWorkspace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cg: ConcurrencyGroup,
+) -> None:
+    """A report filed against the resumed workspace stages its real logs and transcript.
+
+    Everything the workspace returns arrives as ONE staged archive. Its logs
+    members must carry what the bug report is for -- the workspace's current
+    service status and the tail of every program's log, deliberately
+    unfiltered by owner or stream: any app or service's log can carry the
+    bug, and the user consented via the logs checkbox.
+
+    The transcript half runs against a planted pair of transcript files (see
+    ``_plant_transcript_pair_in_container``): the archive must hold the chat as
+    a ``chats/*.jsonl`` member named for its agent, and never the converter's
+    own newer log. Every content assertion reads DECODED member text -- the
+    absence assertions are worthless against the archive's raw bytes, which
+    match no substring.
+
+    The console does not appear here at all: it is the shell's own output,
+    staged app-side by ``report_collector`` without any workspace involvement
+    (its coverage lives in ``test_desktop_client``). Neither does the latchkey
+    gateway tail: collection mirrors it into the latchkey plugin data dir for
+    the ordinary attachment-group sweep, outside this result entirely.
+    """
+    _point_desktop_mngr_at_the_baked_workspace(tmp_path, monkeypatch)
+    staging_dir = tmp_path / "bug-report-staging"
+    staging_dir.mkdir()
+    # Dated far ahead so the planted chat outranks any real chat the workspace
+    # holds: selection prefers the transcript whose USER last spoke (the file
+    # mtimes only break ties and cover transcripts with no user message).
+    chat_line = json.dumps(
+        {
+            "type": "user_message",
+            "timestamp": "2030-01-01T00:00:00.000000000Z",
+            "source": "claude/common_transcript",
+            "message": f"planted-chat-{get_short_random_string()}",
+        }
+    )
+    # mngr is the collector's source of truth for what agents exist, so the
+    # plant goes into an agent it already reports rather than an invented
+    # directory.
+    chat_agents = _chat_agents_in_container(running_workspace.container_name)
+    assert chat_agents, "the workspace reports no chat agents to plant a transcript into"
+    planted_agent_id, planted_agent_name = chat_agents[0]
+    planted_agent_dir = f"{_IN_CONTAINER_MNGR_AGENTS_DIR}/{planted_agent_id}"
+    _plant_transcript_pair_in_container(running_workspace.container_name, planted_agent_dir, chat_line)
+
+    try:
+        result = _collect_diagnostics_from_workspace(
+            running_workspace,
+            include_transcript=True,
+            staging_dir=staging_dir,
+            concurrency_group=cg,
+        )
+    finally:
+        # Only the planted event streams: the directory belongs to a real agent
+        # now, so removing it would take the workspace's own state with it.
+        _exec_in_container(
+            running_workspace.container_name,
+            f"rm -rf {planted_agent_dir}/events/claude/common_transcript"
+            f" {planted_agent_dir}/events/logs/common_transcript",
+            timeout=30,
+        )
+
+    assert result.note is None, result.note
+    staged_zip = result.staged_zip_path
+    assert staged_zip is not None
+    assert staged_zip == staging_dir / STAGED_ZIP_FILENAME
+    # The suffix is the whole contract with the upload path, which reads it to
+    # know this attachment is already compressed and must not be gzipped again.
+    assert staged_zip.suffix == ".zip", staged_zip.name
+    member_text_by_name = _read_zip_members(staged_zip)
+
+    metadata_text = member_text_by_name.get(_METADATA_MEMBER_NAME)
+    assert metadata_text is not None, sorted(member_text_by_name)
+    metadata = json.loads(metadata_text)
+    # The structured context: what this workspace is and how it was doing.
+    assert metadata["services"]["status"].strip(), metadata["services"]
+    assert metadata["workspace"]["commit"].strip(), metadata["workspace"]
+    assert metadata["host_health"]["disk"].strip(), metadata["host_health"]
+
+    collected_programs = _collected_log_program_names(member_text_by_name)
+    assert _SYSTEM_INTERFACE_PROGRAM_NAME in collected_programs, sorted(collected_programs)
+    logger.info("Collected log sections for {}", sorted(collected_programs))
+
+    # The planted pair makes the transcript assertions unconditional: a chat
+    # exists, so the archive owes that chat's content under a member named for
+    # its agent (other chats recently written to may legitimately ride along as
+    # further members), and must never carry the converter's log -- the
+    # regression the pair is for.
+    chat_member_names = [name for name in member_text_by_name if name.startswith(_CHAT_MEMBER_DIR_PREFIX)]
+    assert chat_member_names, sorted(member_text_by_name)
+    assert all(name.endswith(".jsonl") for name in chat_member_names), chat_member_names
+    assert any(chat_line in member_text_by_name[name] for name in chat_member_names), (
+        f"the planted chat is missing from the attached archive: {chat_member_names}"
+    )
+    # Conversations have to stay tellable apart, and the member name is the only
+    # thing saying which is which: nothing is injected into the transcript text.
+    # Members are named for the agent's NAME, which is what mngr reports and what
+    # the collector builds the member from -- not the id its directory is keyed by.
+    assert any(planted_agent_name in name for name in chat_member_names), (
+        f"no member names the agent whose chat was planted ({planted_agent_name}): {chat_member_names}"
+    )
+    assert not any("Converted 1 new event(s)" in text for text in member_text_by_name.values()), (
+        "the converter's own log rode along in the workspace archive"
+    )
+
+
+@pytest.mark.release
+@pytest.mark.minds_snapshot_resume
+@pytest.mark.docker
+@pytest.mark.timeout(600)
+# Runs the real in-container scan under the sandbox budget; the flaky mark
+# covers residual load variance on the shared 4-core box (same rationale as the
+# full-collection test above).
+@pytest.mark.flaky
+def test_bug_report_diagnostics_withhold_every_chat_when_one_carries_a_secret(
+    running_workspace: _ResumedWorkspace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cg: ConcurrencyGroup,
+) -> None:
+    """One secret in one chat withholds ALL chats, while the clean logs still attach.
+
+    The ``secrets_found`` is the collector's own verdict, produced by the
+    template's real scan gate against a planted rule-matching key -- the live
+    proof that a leaked key in a conversation never reaches Sentry. A partial
+    set of conversations would be indistinguishable from a complete one, so the
+    clean chat is withheld along with the poisoned one, and neither may appear
+    in the staged archive -- whose members are read DECODED for exactly that
+    assertion. The finding names a chat, not the logs, so the logs member still
+    attaches: one secret costs the chats, not the whole report.
+    """
+    _point_desktop_mngr_at_the_baked_workspace(tmp_path, monkeypatch)
+    staging_dir = tmp_path / "bug-report-staging"
+    staging_dir.mkdir()
+    fake_api_key = _fake_anthropic_api_key()
+    clean_marker = f"planted-clean-chat-{get_short_random_string()}"
+    clean_chat_line = json.dumps(
+        {
+            "type": "user_message",
+            "timestamp": "2030-01-01T00:00:00.000000000Z",
+            "source": "claude/common_transcript",
+            "message": clean_marker,
+        }
+    )
+    poisoned_chat_line = json.dumps(
+        {
+            "type": "user_message",
+            "timestamp": "2030-01-01T00:00:01.000000000Z",
+            "source": "claude/common_transcript",
+            "message": f"here is my key: {fake_api_key}",
+        }
+    )
+    # Two distinct chats are the whole point here -- the clean one is the proof
+    # that a finding in the other withholds it too -- and each has to belong to
+    # an agent mngr lists, since that is what the collector asks.
+    chat_agents = _chat_agents_in_container(running_workspace.container_name)
+    assert len(chat_agents) >= 2, f"this test needs two chat agents to plant into; the workspace reports {chat_agents}"
+    clean_agent_dir = f"{_IN_CONTAINER_MNGR_AGENTS_DIR}/{chat_agents[0][0]}"
+    poisoned_agent_dir = f"{_IN_CONTAINER_MNGR_AGENTS_DIR}/{chat_agents[1][0]}"
+    _plant_transcript_pair_in_container(running_workspace.container_name, clean_agent_dir, clean_chat_line)
+    _plant_transcript_pair_in_container(running_workspace.container_name, poisoned_agent_dir, poisoned_chat_line)
+
+    try:
+        result = _collect_diagnostics_from_workspace(
+            running_workspace,
+            include_transcript=True,
+            staging_dir=staging_dir,
+            concurrency_group=cg,
+        )
+    finally:
+        _exec_in_container(
+            running_workspace.container_name,
+            # Only the planted event streams -- these are real agents' directories.
+            f"rm -rf {clean_agent_dir}/events/claude/common_transcript"
+            f" {clean_agent_dir}/events/logs/common_transcript"
+            f" {poisoned_agent_dir}/events/claude/common_transcript"
+            f" {poisoned_agent_dir}/events/logs/common_transcript",
+            timeout=30,
+        )
+
+    assert result.note is None, result.note
+    assert result.staged_zip_path is not None
+    member_text_by_name = _read_zip_members(result.staged_zip_path)
+    assert _METADATA_MEMBER_NAME in member_text_by_name, sorted(member_text_by_name)
+    # The withheld chats announce themselves inside the archive itself.
+    notes_text = member_text_by_name.get("collection-notes.txt", "")
+    assert "recent chats" in notes_text and "secret scan" in notes_text, sorted(member_text_by_name)
+    assert not any(name.startswith(_CHAT_MEMBER_DIR_PREFIX) for name in member_text_by_name), (
+        f"a chat member survived a secret finding in another chat: {sorted(member_text_by_name)}"
+    )
+    # Decoded members: neither the poisoned chat's key nor the clean chat's
+    # content may be anywhere in what was staged.
+    assert not any(fake_api_key in text for text in member_text_by_name.values()), (
+        "the planted key reached the staged archive"
+    )
+    assert not any(clean_marker in text for text in member_text_by_name.values()), (
+        "the clean chat shipped despite the withheld set"
+    )
+
+
+@pytest.mark.release
+@pytest.mark.minds_snapshot_resume
+@pytest.mark.docker
+@pytest.mark.timeout(600)
+def test_bug_report_diagnostics_report_collector_unavailable_when_the_workspace_predates_it(
+    running_workspace: _ResumedWorkspace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cg: ConcurrencyGroup,
+) -> None:
+    """A workspace without the resident collector resolves to a plain failure note.
+
+    Workspaces built from templates that predate the collection contract have
+    no script at the contract path, so the exec's remote command fails and the
+    note quotes what python3 said -- readable enough to tell an old template
+    from broken plumbing. Moving the real collector aside turns this live
+    workspace into exactly one of them.
+    """
+    _point_desktop_mngr_at_the_baked_workspace(tmp_path, monkeypatch)
+    staging_dir = tmp_path / "bug-report-staging"
+    staging_dir.mkdir()
+    moved_aside_path = WORKSPACE_COLLECTOR_PATH + _COLLECTOR_MOVED_ASIDE_SUFFIX
+    moved = _exec_in_container(
+        running_workspace.container_name, f"mv {WORKSPACE_COLLECTOR_PATH} {moved_aside_path}", timeout=30
+    )
+    assert moved.returncode == 0, f"could not move the collector aside: {moved.stderr}"
+    try:
+        result = _collect_diagnostics_from_workspace(
+            running_workspace,
+            include_transcript=True,
+            staging_dir=staging_dir,
+            concurrency_group=cg,
+        )
+    finally:
+        restored = _exec_in_container(
+            running_workspace.container_name, f"mv {moved_aside_path} {WORKSPACE_COLLECTOR_PATH}", timeout=30
+        )
+        assert restored.returncode == 0, (
+            f"could not restore the collector; later collections against this workspace "
+            f"would wrongly read collector-less: {restored.stderr}"
+        )
+
+    assert result.staged_zip_path is None
+    assert result.note is not None and result.note.startswith("workspace collection failed"), result.note
+
+
+@pytest.mark.release
+@pytest.mark.minds_snapshot_resume
+@pytest.mark.docker
+@pytest.mark.timeout(300)
+def test_bug_report_diagnostics_stage_beside_an_earlier_reports_files(
+    running_workspace: _ResumedWorkspace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cg: ConcurrencyGroup,
+) -> None:
+    """A collection touches only its own private staging dir and leaves nothing in the workspace.
+
+    Each report stages into its own fresh directory, so an earlier report's
+    files -- possibly still being read by its background upload -- are simply
+    out of reach: nothing is deleted or clobbered up front, and attachments are
+    named one by one, by exact path. The other half of the property is
+    inside the workspace: the collector stages each payload as plaintext into a
+    temp dir there so its scan gate can read it, and a report must not leave the
+    user's own logs sitting in their workspace.
+
+    The tolerated ways for the real round trip to go wrong here are the load
+    outcomes -- the sandbox collection budget expiring (``exec_timeout``) or the
+    in-container scan not finishing its share of it (``scanner_unavailable``) --
+    and both were observed on the shared sandbox. Anything else (``exec_failed``)
+    means the exec plumbing is broken and must FAIL rather than silently
+    exercising only half the property. The success path itself is covered by
+    ``test_bug_report_diagnostics_collect_the_workspace_logs_and_transcript``.
+    """
+    _point_desktop_mngr_at_the_baked_workspace(tmp_path, monkeypatch)
+    staging_dir = tmp_path / "bug-report-staging"
+    staging_dir.mkdir()
+    # An earlier report's staging dir, still being read by its background
+    # upload: a later collection must not touch it.
+    earlier_marker = f"from-an-earlier-report-{get_short_random_string()}"
+    earlier_staging_dir = tmp_path / "earlier-staging"
+    earlier_staging_dir.mkdir()
+    earlier_zip = earlier_staging_dir / STAGED_ZIP_FILENAME
+    earlier_zip.write_text(earlier_marker, encoding="utf-8")
+
+    result = _collect_diagnostics_from_workspace(
+        running_workspace,
+        include_transcript=False,
+        staging_dir=staging_dir,
+        concurrency_group=cg,
+    )
+
+    # The earlier report's staging is untouched.
+    assert earlier_zip.read_text(encoding="utf-8") == earlier_marker
+
+    # Read unconditionally, so this test exercises docker (and honors its mark)
+    # on either outcome. Only a collection that finished owes the workspace-side
+    # half of the property: one killed by the budget never reaches its own
+    # cleanup, and leftovers are then the timeout's doing rather than a defect.
+    leftover_scratch = _leftover_collection_scratch_in_container(running_workspace.container_name)
+
+    staged_zip = result.staged_zip_path
+    if staged_zip is not None:
+        assert staged_zip != earlier_zip
+        member_text_by_name = _read_zip_members(staged_zip)
+        # The unticked transcript contributed nothing to the archive either:
+        # metadata plus service logs, and no chats/ member at all.
+        assert _METADATA_MEMBER_NAME in member_text_by_name, sorted(member_text_by_name)
+        assert not any(name.startswith(_CHAT_MEMBER_DIR_PREFIX) for name in member_text_by_name), (
+            f"an unticked transcript reached the archive: {sorted(member_text_by_name)}"
+        )
+        # Decoded member text, not the archive's raw bytes, for the same
+        # vacuous-absence reason as everywhere else in this section.
+        assert not any(earlier_marker in text for text in member_text_by_name.values())
+        assert json.loads(member_text_by_name[_METADATA_MEMBER_NAME])["services"]["status"].strip()
+        assert not leftover_scratch, (
+            f"collection left the workspace holding its own scratch copies: {leftover_scratch}"
+        )
+    else:
+        # The only tolerated no-archive outcome here is the sandbox budget
+        # expiring; anything else means the exec plumbing is broken, not slow.
+        # (A slow scan no longer costs the archive: the collector ships what it
+        # has plus a notes member instead.)
+        assert result.note is not None and "timed out" in result.note, (
+            f"collection degraded for a reason other than sandbox load: {result.note}"
+        )
+        assert _staged_archive_in(staging_dir) is None, (
+            f"collection staged no archive ({result.note}) but wrote a file for it anyway"
+        )

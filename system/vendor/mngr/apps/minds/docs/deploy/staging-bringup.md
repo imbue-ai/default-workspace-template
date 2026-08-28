@@ -59,13 +59,13 @@ become Vault entries in step 4.
   modal token set --profile minds-staging
   ```
   Verify a `[minds-staging]` block landed in `~/.modal.toml`. The
-  `MODAL_PROFILE` export in `minds env activate --deploy staging` (see
+  `MODAL_PROFILE` export in `minds-admin env activate --deploy staging` (see
   step 6) pins every subsequent `modal` shellout to this profile -- the
   account you're logged into via `active = true` is irrelevant. The
   presence of the `[minds-staging]` block is only checked when you pass
   `--deploy` (which pre-validates `~/.modal.toml` and fails fast with a
   `modal token set --profile minds-staging` hint if the block is
-  missing). Plain `minds env activate staging` -- use-only activation --
+  missing). Plain `minds-admin env activate staging` -- use-only activation --
   does not need the block and never reads `~/.modal.toml`.
 
 - [ ] **Neon project for staging.** Create a single project under your
@@ -76,7 +76,7 @@ become Vault entries in step 4.
   - Pooled `DATABASE_URL` for `litellm_cost` (becomes
     `litellm/DATABASE_URL`)
   - Direct (non-pooled) DSN for `host_pool` (for the optional manual
-    sanity check; `minds env deploy` also runs migrations through
+    sanity check; `minds-admin env deploy` also runs migrations through
     the pooled URL, but the direct one is handy for `psql`)
   - `NEON_PROJECT_ID` (visible in the project URL or settings)
   - A `NEON_API_TOKEN` with branch-create + restore scope on the
@@ -117,7 +117,7 @@ become Vault entries in step 4.
   <https://api.us.ovhcloud.com/createApp> for the `ovh-us` endpoint with
   the scopes the box-ordering flows need (see `host-pool-setup.md`). The
   operator sources these into their shell when ordering bare-metal boxes
-  via `mngr imbue_cloud admin server`; no deployed service or deploy step
+  via `minds-admin server`; no deployed service or deploy step
   reads them, so they are not required for the first deploy.
 
 - [ ] **Anthropic API key** for the staging LiteLLM proxy backend. Either
@@ -172,7 +172,7 @@ expected with these short names).
 
 ## 3. Apply pool-hosts schema migrations to the staging `host_pool` DB
 
-`minds env deploy` runs the schema migrations automatically as part
+`minds-admin env deploy` runs the schema migrations automatically as part
 of the deploy (against the pooled `DATABASE_URL` from the `neon`
 Vault entry once step 4 is done). No manual `psql` pass is required
 on first bring-up.
@@ -243,7 +243,17 @@ Modal-pushed entries (consumed by the deployed apps at runtime):
   to disable them),
   `MINDS_PAID_LIST_CACHE_TTL_SECONDS` (optional; default 60).
 
-Operator-only entries (read by `minds env deploy` on the laptop;
+- [ ] **`secrets/minds/staging/sentry`** -- the error-reporting DSNs
+  the connector and LiteLLM proxy consume. Push the template with all
+  values empty (empty simply disables reporting); the tier's Bugsink
+  bring-up (`just provision-bugsink`, see
+  [bugsink-bringup.md](./bugsink-bringup.md)) fills the DSNs in, and
+  the next deploy picks them up. The Bugsink instance itself is an
+  operator-lifecycle OVH VPS outside the tier deploy; its own
+  `secrets/minds/staging/bugsink` entry is populated during that
+  bring-up, not here.
+
+Operator-only entries (read by `minds-admin env deploy` on the laptop;
 never pushed to Modal):
 
 - [ ] **`secrets/minds/staging/neon-admin`** -- `NEON_API_TOKEN`,
@@ -254,7 +264,7 @@ never pushed to Modal):
   `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY` (the bare-metal box
   supplier credentials, currently OVH). Not read by any deploy step;
   the operator sources them into their shell to order bare-metal boxes
-  via `mngr imbue_cloud admin server`.
+  via `minds-admin server`.
 
 After every push:
 
@@ -265,7 +275,7 @@ After every push:
 ## 5. Verify Modal CLI talks to `minds-staging`
 
 ```bash
-eval "$(uv run minds env activate --deploy staging)"
+eval "$(uv run minds-admin env activate --deploy staging)"
 echo "$MODAL_PROFILE"   # expect: minds-staging
 modal environment list  # should NOT error; no envs needed yet for SHARED tier
 ```
@@ -282,8 +292,8 @@ deployed tier, not deploying it.
 ## 6. First-time tier deploy
 
 ```bash
-eval "$(uv run minds env activate --deploy staging)"
-uv run minds env deploy --yes-i-mean-staging
+eval "$(uv run minds-admin env activate --deploy staging)"
+uv run minds-admin env deploy --yes-i-mean-staging
 ```
 
 This is the safety-gated command from `environments.md`. What it does:
@@ -301,7 +311,7 @@ This is the safety-gated command from `environments.md`. What it does:
    `litellm_cost` DB.
 6. `modal deploy` both apps into the `main` Modal env of the
    `minds-staging` workspace.
-7. Polls both apps' `/health` endpoints for 200.
+7. Polls both apps' `/health/liveness` endpoints for 200.
 8. GCs old timestamped Secrets (keeps the latest 10 per service).
 
 Watch the deploy logs. On the first run, expect:
@@ -314,12 +324,17 @@ Watch the deploy logs. On the first run, expect:
   before retrying.
 
 On failure, the CLI prints a 5-second countdown and then auto-runs
-`minds env recover`. Hit Ctrl-C during the countdown if you'd rather
+`minds-admin env recover`. Hit Ctrl-C during the countdown if you'd rather
 fix in place; otherwise let recover roll back to the pre-deploy
 state.
 
 - [ ] Deploy finished cleanly; both URLs printed match the committed
   `staging/client.toml`.
+- [ ] Error tracking: bring up the tier's Bugsink instance per
+  [bugsink-bringup.md](./bugsink-bringup.md) (operator-lifecycle OVH
+  VPS, outside this deploy), then re-run the tier deploy so the
+  reporting services pick up the freshly stamped
+  `sentry-staging-<deploy-id>` Secret.
 
 ---
 
@@ -347,13 +362,15 @@ what runs on it.
   # wait for cloud-init: ssh debian@<ip> cloud-init status --wait
   just register-share-relay https://<connector> <region> <ip>:7000 <ip> share-relay-staging-<region>-<ordinal>
   # note the relay_id the registration prints
-  just deploy-share-relay <ip> <relay_id> <region> <SHARE_CONTENT_DOMAIN> \
-      "https://<connector>/frps/auth/<FRPS_AUTH_SECRET>"
+  FRPS_AUTH_SECRET=<secret> just deploy-share-relay <ip> <relay_id> <region> <SHARE_CONTENT_DOMAIN> \
+      "https://<connector>/frps/auth"
   ```
   (`FRPS_AUTH_SECRET` and `SHARE_CONTENT_DOMAIN` come from the tier's
-  `sharing` Vault entry pushed in step 4; the connector must already be
-  deployed -- step 6 -- because the relay's plugin-auth URL points at it and
-  registration writes its `relays` table.)
+  `sharing` Vault entry pushed in step 4 -- the secret travels via the
+  environment and is rendered into the plugin `addr`'s userinfo, never the
+  URL; the connector must already be deployed -- step 6 -- because the
+  relay's plugin-auth URL points at it and registration writes its `relays`
+  table.)
 - [ ] Seed the region DNS record sets once per region (the connector's
   per-minute health sweep maintains them from then on):
   ```bash
@@ -363,7 +380,7 @@ what runs on it.
 - [ ] Verify: `relay.<region>.<domain>` + a wildcard name resolve to BOTH
   instances; `curl http://<each-ip>:8080/healthz` returns `ok`;
   `curl -sI http://relay.<region>.<domain>/` is a 301 to https;
-  `mngr imbue_cloud admin relays list` shows every relay healthy.
+  `minds-admin relays list` shows every relay healthy.
 
 ---
 
@@ -375,7 +392,7 @@ without any pool hosts.
 
 Pool hosts are baked as bare-metal **slices**. You first need a
 bare-metal box that is registered + prepped (`status=ready`) via the
-`mngr imbue_cloud admin server` commands -- see
+`minds-admin server` commands -- see
 [host-pool-setup.md](./host-pool-setup.md) step 5. With staging activated,
 bake onto a `ready` box via the canonical justfile recipe:
 
@@ -384,7 +401,7 @@ just bake-slice-prod US-WEST-OR v0.3.0 1 --server-id <bare-metal-server-id>
 ```
 
 `just bake-slice-prod <region> <tag> [count] [extra flags]` wraps
-`minds pool create`, which derives the pool SSH key from
+`minds-admin pool create`, which derives the pool SSH key from
 the tier's Vault entry and -- for staging/production -- reads the host_pool
 DSN from `secrets/minds/staging/neon`. You do NOT export any of those by
 hand. See [host-pool-setup.md](./host-pool-setup.md) step 5 for the full
@@ -395,8 +412,8 @@ connector region-matches at lease time, e.g. `US-WEST-OR` / `US-EAST-VA`) --
 not the box's raw datacenter code. The baked version comes from the bake
 source (`<tag>` here, e.g. `v0.3.0`), NOT from `--attributes`.
 
-The bare-metal box itself is ordered ahead of time via `mngr imbue_cloud
-admin server order` (using the supplier credentials). A common box-order
+The bare-metal box itself is ordered ahead of time via
+`minds-admin server order` (using the supplier credentials). A common box-order
 failure with the current OVH supplier is ``OVH API POST
 /order/cart/.../checkout returned error: You do not have preferred payment
 method`` -- the supplier account needs a default payment method (OVH manager
@@ -439,7 +456,7 @@ the SuperTokens users + the Neon DB schema, NOT the underlying
 resources):
 
 ```bash
-uv run minds env destroy --yes-i-mean-staging
+uv run minds-admin env destroy --yes-i-mean-staging
 ```
 
 ---

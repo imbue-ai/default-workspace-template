@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Minds Code of Conduct</title>
+  </head>
+  <body>
+    <h1>Code of Conduct</h1>
+    <p><em>Last updated: 2026-08-23</em></p>
+
+    <h2>Why this exists</h2>
+
+    <p>We provide computers to people for free. Not trial credits, not a sandbox that disappears in twelve hours — a real machine with a real IP address, running around the clock, for free.</p>
+
+    <p>That's only possible because of trust. Every machine we hand out is a machine that could be used to attack someone, and every abusive user costs us IP reputation, harms our relationships with vendors, and burns time we'd rather spend making the product better for legitimate users. When someone violates that trust, the cost is borne by everyone else in the community.</p>
+
+    <p>This document has two parts. The first is about what we hope you'll do with the resources we provide you. The second is about what will get your workspace(s) terminated. We've tried to keep both in plain language.</p>
+
+    <h2>What we're hoping for</h2>
+
+    <p>We want to empower people who have ideas about how to make things better for themselves, their community, and the world at large. Some things we'd love to see running on our hardware:</p>
+
+    <ul>
+      <li><strong>Your own weird thing.</strong> A website nobody visits. A daily email to yourself. A cron job that checks whether a specific mountain has snow on it. A recommendation system for the next best science fiction short story that you should read. We are wholeheartedly in favor of the useless personal project.</li>
+      <li><strong>Learning.</strong> Make mistakes. Build things that don't work. Install a completely new operating system that you're too nervous to install on your laptop. There is no penalty for wiping your machine and starting over, and no such thing as a project too small to deserve a server.</li>
+      <li><strong>Research and open source.</strong> Continuous integration for a project nobody's sponsoring, a long-running experiment, a scraper for a journalism project, a demo instance so people can try your software without installing it.</li>
+      <li><strong>Community infrastructure.</strong> Run a scheduling app for your neighborhood pickleball league, a donation tracker for a non-profit, a bot that posts a reminder to Discord when a food bank opens.</li>
+      <li><strong>Public goods.</strong> Package repositories, open data sets, mirrors, RSS bridges, archival tools, accessibility services, community wikis, IRC and Matrix bridges — the unglamorous plumbing that a lot of people rely on and almost nobody funds.</li>
+    </ul>
+
+    <p>You don't have to justify your project to us or prove it's socially valuable. We just want you to know what kind of neighborhood this is.</p>
+
+    <h2>What we ask of you</h2>
+
+    <p>These aren't hard lines, but they are guidelines for how to be a good community member:</p>
+
+    <ul>
+      <li><strong>Make the world a better place.</strong> It's fine if you're making the world better for just yourself, but don't do stuff that makes everyone worse off on-net. And if you do make something cool for yourself, consider sharing it so that others can benefit from it!</li>
+      <li><strong>Be a good neighbor.</strong> Don't open excessive connections or use excessive bandwidth or CPU. Your VM shares an IP range and other resources with everyone else. If your traffic gets our range flagged, other people's requests start hitting CAPTCHAs and their legit use gets harder. Rate-limit your network requests, follow <code>robots.txt</code>, respect API limits, and back off when a service tells you to.</li>
+      <li><strong>Keep your machine updated (especially if public).</strong> If we detect your machine has been compromised, we'll probably have to suspend it. Repeated failure to keep your machines safe could result in account suspension. If you're worried about this, it's easy to avoid—just don't make your workspaces public!</li>
+      <li><strong>Take only what you need.</strong> Our free capacity is finite and we currently rely on the honor system. Machines that are idle will periodically be shut down. If you're not using something, shut it down or delete it. And if you need more resources, just ask us—don't open a second account. Over time, we may get more strict about this—don't be the person that made us do it sooner.</li>
+      <li><strong>Tell us if something goes wrong.</strong> If you accidentally DDoSed someone, had a workspace taken over, or found a security flaw, email <a href="mailto:security@imbue.com">security@imbue.com</a>.</li>
+    </ul>
+
+    <h2>What will get you shut off</h2>
+
+    <p>These will result in immediate machine termination, and may lead to account suspension:</p>
+
+    <ul>
+      <li><strong>Attacking or degrading other systems.</strong> Denial-of-service attacks, brute-forcing logins, exploiting vulnerabilities in systems you don't own, unauthorized port and vulnerability scanning, etc. Even doing these activities against infrastructure you own is not allowed—this is not a platform for security research (we simply cannot differentiate between authorized and unauthorized variants of such activity).</li>
+      <li><strong>Malware and attack infrastructure.</strong> Hosting, distributing, or operating malware, ransomware, botnet command-and-control, exploit kits, stalkerware, phishing pages, etc.</li>
+      <li><strong>Fraud and deception.</strong> Scams, phishing, fake stores, financial fraud, impersonating a person or organization, generating fake reviews or engagement, ad fraud, or laundering traffic and payments for any of the above.</li>
+      <li><strong>Spam and bulk unsolicited messaging.</strong> Email, SMS, comments, DMs, forum posts, registrations. Outbound port 25 is blocked by default and we don't unblock it. If you need to send legitimate transactional mail, use a relay provider.</li>
+      <li><strong>Content that harms children.</strong> Any sexual content involving minors, and any material or service that facilitates the abuse or exploitation of children.</li>
+      <li><strong>Harassment and targeted harm.</strong> Doxxing, stalking, non-consensual intimate imagery, coordinated harassment campaigns, or infrastructure built to enable any of it.</li>
+      <li><strong>Hate and violent extremism.</strong> Content promoting violence against people based on race, ethnicity, religion, nationality, disability, gender, gender identity, sexual orientation, or immigration status; recruiting or fundraising for violent extremist organizations; glorifying mass violence, etc.</li>
+      <li><strong>Circumventing access controls at scale.</strong> Automated account creation, ticket scalping bots, sneaker bots, etc. Do not aggressively scrape third-party resources—if we get a notice, we'll shut down the workspace.</li>
+      <li><strong>Open relays and amplifiers.</strong> Open mail relays, open DNS resolvers, open proxies, and anything else that can be turned into a reflection or amplification vector — whether you set it up that way on purpose or by accident. No Tor relays.</li>
+      <li><strong>Cryptocurrency mining and equivalent resource farming.</strong> Mining, bandwidth-selling programs, "passive income" residential-proxy clients, and paid-to-idle schemes.</li>
+      <li><strong>Reselling or sublicensing.</strong> Don't rent out, resell, or hand off your VM's capacity as a commercial product. Hosting a business or commercial endeavor is fine (though we'll likely encourage you to upgrade to a paid plan in the future), but reselling raw compute capacity is not. No selling proxy or VPN services with these resources.</li>
+      <li><strong>Multiple accounts to get around limits.</strong> One account per person. If you need more resources, just ask! We're quite happy to increase limits.</li>
+      <li><strong>Illegal content and activity.</strong> Pirated media and software, controlled substance marketplaces, trafficking, and anything else that's a crime where you are, where we are, or where our infrastructure sits. We also have to comply with sanctions and export control law, which limits who we can provide service to.</li>
+    </ul>
+
+    <h2>How we enforce this</h2>
+
+    <p>We'd rather fix a problem than terminate an account. Roughly, we want to escalate in the following way:</p>
+
+    <ol>
+      <li><strong>Machine shutdown.</strong> If we notice a particular machine being problematic, we may stop just that machine.</li>
+      <li><strong>Account suspension.</strong> If we notice seemingly malicious activity, we may suspend your account. Your data will likely remain and your VM should come back when the issue is resolved.</li>
+      <li><strong>Termination.</strong> If you cause enough problems for us, we reserve the right to terminate your account.</li>
+    </ol>
+
+    <p><strong>Appeals:</strong> write to <a href="mailto:support@imbue.com">support@imbue.com</a>. We'll do our best to restore a suspended account.</p>
+
+    <p><strong>Reporting abuse:</strong> email <a href="mailto:abuse@imbue.com">abuse@imbue.com</a> to notify us of any abuse from our machines. Please include IPs, timestamps with timezone, and logs if you have them.</p>
+
+    <p><strong>Beta period:</strong> this product is currently in beta, so there are no guarantees or warranties or promises from our side. We'll be doing our best, but there are certainly places where we will make mistakes, there will be problems and bugs, etc. You are using these services entirely at your own risk.</p>
+
+    <h2>Changes</h2>
+
+    <p>We'll strive to post updates here and email active users about material changes, but no guarantees right now.</p>
+
+    <hr>
+
+    <p><em>This Code of Conduct describes the spirit of the service and the behavior we expect. It is not a legal document, and is not intended to form any contract or obligations on our side.</em></p>
+
+  </body>
+</html>

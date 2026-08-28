@@ -35,10 +35,12 @@ class WorkspaceStatus(WireEnum):
     """Wire lifecycle status of a remote workspace (GET /workspaces).
 
     ``running`` maps from the connector-internal ``leased``. ``stopping``
-    means the VM is halted and its upload is in flight (still restartable in
-    place); ``stopped`` means the artifact is in object storage and the
-    bare-metal slot is freed; ``starting`` means a supervisor is restoring
-    it; ``crashed`` means an operator abandoned it (recover from backup).
+    means the VM is halted and its upload is in flight (the connector
+    refuses starts until it lands on ``stopped``); ``stopped`` means the
+    artifact is in object storage, with the halted local VM kept through the
+    retention window for a restart in place before the slot is freed;
+    ``starting`` means a supervisor is restoring it; ``crashed`` means an
+    operator abandoned it (recover from backup).
     ``unknown`` is never sent by the server: it is the client-side coercion
     of a status value this client version does not recognize (a newer
     server), rendered as "shown but not actionable".
@@ -130,9 +132,11 @@ class LeaseResult(WireModel):
 class WorkspaceInfo(WireModel):
     """One entry from GET /workspaces: a workspace in any lifecycle state.
 
-    Placement fields (``vps_address`` and the two ports) are None while the
-    workspace is stopped -- its VM then exists only as encrypted objects in
-    the tier's storage bucket. ``status`` uses the wire lifecycle vocabulary
+    Placement fields (``vps_address`` and the two ports) stay set on a
+    just-stopped workspace through the retention window (its halted local VM
+    is kept for a restart in place) and are None once the retention finalize
+    frees the slot -- the VM then exists only as encrypted objects in the
+    tier's storage bucket. ``status`` uses the wire lifecycle vocabulary
     (:class:`WorkspaceStatus`).
     """
 
@@ -143,10 +147,16 @@ class WorkspaceInfo(WireModel):
             "unrecognized value (a newer server) coerces to UNKNOWN client-side"
         )
     )
-    vps_address: str | None = Field(default=None, description="Box address (None while stopped)")
-    ssh_port: int | None = Field(default=None, description="VM-root forwarded port (None while stopped)")
+    vps_address: str | None = Field(
+        default=None, description="Box address (None once fully stopped; see class docstring)"
+    )
+    ssh_port: int | None = Field(
+        default=None, description="VM-root forwarded port (None once fully stopped; see class docstring)"
+    )
     ssh_user: str = Field(default="root", description="SSH user on the VM")
-    container_ssh_port: int | None = Field(default=None, description="Container forwarded port (None while stopped)")
+    container_ssh_port: int | None = Field(
+        default=None, description="Container forwarded port (None once fully stopped; see class docstring)"
+    )
     agent_id: str = Field(description="Pre-baked mngr agent id")
     host_id: str = Field(description="mngr host id")
     host_name: str = Field(description="User-chosen friendly name")
@@ -353,6 +363,19 @@ class AccountInfo(WireModel):
     )
 
 
+class AdminAccountInfo(AccountInfo):
+    """The operator view of an account, from GET /admin/accounts/{email}.
+
+    Extends the user-facing shape with the suspension state, which is
+    operator-facing only (the connector never sends it on ``GET /account``).
+    """
+
+    suspended_at: str | None = Field(default=None, description="When the account was suspended (None = not suspended)")
+    suspended_reason: str | None = Field(
+        default=None, description="Operator-recorded suspension reason (internal; never shown to the user)"
+    )
+
+
 class SyncWorkspaceRecord(WireModel):
     """Wire form of one synced workspace record (transport-only; the plugin never decrypts).
 
@@ -366,13 +389,27 @@ class SyncWorkspaceRecord(WireModel):
     agent_id: str = Field(description="Logical workspace id (one ACTIVE record per agent_id)")
     display_name: str = Field(default="", description="Workspace display name")
     color: str | None = Field(default=None, description="Workspace accent color (#rrggbb)")
-    provider_kind: str = Field(description="mngr provider backend kind (e.g. 'lima', 'imbue_cloud')")
+    provider_kind: str = Field(
+        description=(
+            "The mngr provider *instance* name the workspace is discovered under on its hosting device "
+            "(e.g. 'docker', 'lima', or 'imbue_cloud_<account-slug>' for cloud rows -- the server's "
+            "lease-time stub derives the same name from the account email)"
+        )
+    )
     hosting_device_id: str | None = Field(
         default=None, description="Install that hosts a local workspace (None for cloud rows)"
     )
     device_label: str = Field(default="", description="Human-readable device name")
     state: str = Field(description="Lifecycle state: 'active' or 'destroyed' (tombstone)")
     restored_from_host_id: str | None = Field(default=None, description="Lineage link for restored workspaces")
+    backup_bucket: str | None = Field(
+        default=None,
+        description=(
+            "Full R2 bucket name holding this workspace's backups. Sent on pushes by backup "
+            "provisioning; servers begin serving it back once the pre-tolerant strict client "
+            "fleet is out of the support window (absent until then)."
+        ),
+    )
     encrypted_secrets: str | None = Field(
         default=None, description="Base64 of the client-encrypted secrets blob (opaque here)"
     )

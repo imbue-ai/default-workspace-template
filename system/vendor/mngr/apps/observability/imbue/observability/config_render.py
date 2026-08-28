@@ -68,7 +68,7 @@ _MAX_FILE_RETENTION_TIME_SECONDS: Final[int] = 60
 
 
 @pure
-def _env_file_quoted(value: str) -> str:
+def env_file_quoted(value: str) -> str:
     """Double-quote one value for a systemd EnvironmentFile.
 
     systemd treats ``"`` as a quote terminator and ``\\`` as an escape inside
@@ -90,19 +90,19 @@ def render_openobserve_env(config: ObservabilityInstanceConfig) -> str:
     """
     return f"""\
 # Rendered by imbue.observability -- do not edit on the host; re-render and redeploy.
-ZO_ROOT_USER_EMAIL={_env_file_quoted(config.root_user_email)}
-ZO_ROOT_USER_PASSWORD={_env_file_quoted(config.root_user_password.get_secret_value())}
+ZO_ROOT_USER_EMAIL={env_file_quoted(config.root_user_email)}
+ZO_ROOT_USER_PASSWORD={env_file_quoted(config.root_user_password.get_secret_value())}
 ZO_DATA_DIR="{OPENOBSERVE_DATA_DIR}"
 ZO_LOCAL_MODE="true"
 ZO_LOCAL_MODE_STORAGE="s3"
 ZO_META_STORE="postgres"
-ZO_META_POSTGRES_DSN={_env_file_quoted(config.meta_postgres_dsn.get_secret_value())}
-ZO_S3_SERVER_URL={_env_file_quoted(str(config.r2_endpoint_url).rstrip("/"))}
+ZO_META_POSTGRES_DSN={env_file_quoted(config.meta_postgres_dsn.get_secret_value())}
+ZO_S3_SERVER_URL={env_file_quoted(str(config.r2_endpoint_url).rstrip("/"))}
 ZO_S3_REGION_NAME="auto"
 ZO_S3_PROVIDER="s3"
-ZO_S3_ACCESS_KEY={_env_file_quoted(config.r2_access_key_id)}
-ZO_S3_SECRET_KEY={_env_file_quoted(config.r2_secret_access_key.get_secret_value())}
-ZO_S3_BUCKET_NAME={_env_file_quoted(config.r2_bucket_name)}
+ZO_S3_ACCESS_KEY={env_file_quoted(config.r2_access_key_id)}
+ZO_S3_SECRET_KEY={env_file_quoted(config.r2_secret_access_key.get_secret_value())}
+ZO_S3_BUCKET_NAME={env_file_quoted(config.r2_bucket_name)}
 ZO_HTTP_ADDR="127.0.0.1"
 ZO_HTTP_PORT="{OPENOBSERVE_HTTP_PORT}"
 ZO_TELEMETRY="false"
@@ -165,20 +165,21 @@ https://{config.telemetry_hostname}:443 {{
 
 
 @pure
-def render_nftables_conf(config: ObservabilityInstanceConfig) -> str:
+def render_origin_firewall_conf(hostname: str, tier: str) -> str:
     """Render the origin firewall: SSH from anywhere, 443 from Cloudflare only, drop the rest.
 
-    The ingest hostname is Cloudflare-proxied, so no legitimate client ever
-    dials the origin's 443 directly; restricting it to Cloudflare's published
-    ranges means the origin cannot be reached around the proxy (and the UI
-    surface behind caddy's 404 is doubly unreachable).
+    Shared by the OpenObserve and Bugsink instance hosts -- both are
+    Cloudflare-proxied ingest gates, so no legitimate client ever dials the
+    origin's 443 directly; restricting it to Cloudflare's published ranges
+    means the origin cannot be reached around the proxy (and the UI surface
+    behind caddy's 404 is doubly unreachable).
     """
     ipv4_set = ", ".join(CLOUDFLARE_IPV4_RANGES)
     ipv6_set = ", ".join(CLOUDFLARE_IPV6_RANGES)
     return f"""\
 #!/usr/sbin/nft -f
 # Rendered by imbue.observability -- do not edit on the host; re-render and redeploy.
-# Origin firewall for {config.telemetry_hostname} (tier {config.tier}): default-deny
+# Origin firewall for {hostname} (tier {tier}): default-deny
 # inbound; SSH for operators, 443 from Cloudflare's edge ranges only.
 
 flush ruleset
@@ -213,6 +214,11 @@ table inet observability {{
     }}
 }}
 """
+
+
+@pure
+def render_nftables_conf(config: ObservabilityInstanceConfig) -> str:
+    return render_origin_firewall_conf(str(config.telemetry_hostname), str(config.tier))
 
 
 @pure

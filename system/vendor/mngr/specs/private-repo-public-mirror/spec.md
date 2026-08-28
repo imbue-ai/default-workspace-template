@@ -144,7 +144,7 @@ default. Adding something to the public subset is a reviewed change to the confi
 
 | Path | Notes |
 |---|---|
-| `apps/modal_litellm`, `apps/remote_service_connector`, `apps/observability` | Deployment/infra apps (LiteLLM proxy, cloud connectors, per-tier OpenObserve telemetry instances) — CTO call 2026-07-22; observability added 2026-08-18 (its Vault schema, ingest-hostname layout, and fleet-credential machinery are operational knowledge, same category as the connector). |
+| `apps/modal_litellm`, `apps/remote_service_connector`, `apps/observability` | Deployment/infra apps (LiteLLM proxy, cloud connectors, per-tier OpenObserve telemetry + Bugsink error-tracker instances) — CTO call 2026-07-22; observability added 2026-08-18 (its Vault schema, ingest-hostname layout, and fleet-credential machinery are operational knowledge, same category as the connector; the Bugsink instance tooling lives inside it for the same reason). |
 | `apps/slack_exporter` | Internal latchkey-authenticated tool; defaulted private pending explicit CTO word. |
 | `apps/minds` deployment subtrees | The runnable cloud suite `apps/minds/deployment_tests/`, `test_aws_workspace_release.py`, and `CLAUDE.md` — excluded from the otherwise-public minds tree. The env/config packages (`imbue/minds/envs`, `imbue/minds/config/envs`) and the `imbue/minds/deployment_tests` helper package stay public: the app conftest and core runtime code import them (verified by the buildability gate), and their contents are already public today. |
 | `libs/mngr_tmr`, `libs/mngr_mapreduce`, `libs/mngr_claude_subagent_proxy` | Internal CI machinery / experiments. `validate_package_graph` guarantees no published wheel depends on them. |

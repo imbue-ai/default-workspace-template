@@ -419,11 +419,15 @@ describe("RecoveryModel", () => {
     workspace_name: "my-machine",
     health: "stuck",
     health_error: "",
+    is_restart_start_only: null,
     ssh_command: "ssh -p 22 user@host",
     is_host_offline: false,
+    device_environment: "NONE",
     is_backend_unreachable: false,
     provider_label: "",
     unreachable_reason: "",
+    is_device_cannot_connect: false,
+    device_error_detail: "",
   };
 
   it("loads recovery info and dispatches a manual host restart to success", async () => {

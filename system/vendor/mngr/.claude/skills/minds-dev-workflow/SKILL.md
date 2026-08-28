@@ -50,7 +50,7 @@ cd apps/minds && pnpm install && cd ../..
 #    edits stay parallel-named). Required by `just minds-start`.
 just default-workspace-template-worktree   # clones default_workspace_template on the current mngr branch; set DEFAULT_WORKSPACE_TEMPLATE_DIR to speed it up
 
-# 3. (Once) Bootstrap your personal dev env. `minds env deploy` reads
+# 3. (Once) Bootstrap your personal dev env. `minds-admin env deploy` reads
 #    dev-tier provisioning credentials (Neon, SuperTokens, ...) from HCP
 #    Vault at command time, so set up two prerequisites first (each fails
 #    with a clear error if missing):
@@ -59,28 +59,28 @@ just default-workspace-template-worktree   # clones default_workspace_template o
 #        HCP VAULT_ADDR / VAULT_NAMESPACE defaults itself (vault_reader.py),
 #        so login is all you need.
 #      - Modal: ~/.modal.toml needs a profile for the dev tier's Modal
-#        workspace. `minds env activate --deploy` validates it and, if
+#        workspace. `minds-admin env activate --deploy` validates it and, if
 #        missing, prints the exact `modal token set --profile <workspace>`.
 #    Then pick an env name like "dev-<your-user>" (convention; the DevEnvName
 #    validator requires the tier prefix FIRST -- "dev-" or "ci-" -- so
 #    "dev-josh" is valid but "josh-dev" is not). --create idempotently
 #    mkdirs the env root ~/.minds-dev-<your-user>/ if it doesn't exist;
 #    --deploy pins MODAL_PROFILE to the tier's Modal workspace, which the
-#    following `minds env deploy` refuses to run without.
+#    following `minds-admin env deploy` refuses to run without.
 vault login -method=oidc   # once per session; token lands at ~/.vault-token
-eval "$(uv run minds env activate --create --deploy dev-<your-user>)"
-uv run minds env deploy
+eval "$(uv run minds-admin env activate --create --deploy dev-<your-user>)"
+uv run minds-admin env deploy
 
 # 4. (Every time you start the app, in a fresh shell) Activate the env
 #    and run `just minds-start`. The recipe re-syncs live mngr ->
 #    system/vendor/mngr/ and launches Electron.
-eval "$(uv run minds env activate dev-<your-user>)"
+eval "$(uv run minds-admin env activate dev-<your-user>)"
 just minds-start
 ```
 
 That's it. After the create-form is filled in and you've created an agent, see [Iterating on a running agent](#iterating-on-a-running-agent) for the inner loop.
 
-If you want to run against prod / staging instead of a personal dev env, use `eval "$(uv run minds env activate production)"` (or `... activate staging`) and then `just minds-start`. **Do not** run `minds env deploy` against production / staging without coordinating with the rest of the team -- that pushes Vault secrets to Modal and re-deploys the live tier; the unified deploy CLI requires `--yes-i-mean-production` / `--yes-i-mean-staging` as a safety bar.
+If you want to run against prod / staging instead of a personal dev env, use `eval "$(uv run minds-admin env activate production)"` (or `... activate staging`) and then `just minds-start`. **Do not** run `minds-admin env deploy` against production / staging without coordinating with the rest of the team -- that pushes Vault secrets to Modal and re-deploys the live tier; the unified deploy CLI requires `--yes-i-mean-production` / `--yes-i-mean-staging` as a safety bar.
 
 ### What `just minds-start` does
 
@@ -94,7 +94,7 @@ If you want to run against prod / staging instead of a personal dev env, use `ev
 After making changes to any component (mngr, the template's system_interface, the template, etc.), sync them into a running agent's container:
 
 ```bash
-eval "$(uv run minds env activate dev-<your-user>)"
+eval "$(uv run minds-admin env activate dev-<your-user>)"
 apps/minds/scripts/propagate_changes \
   --user root --host 127.0.0.1 --port <SSH_PORT> \
   --key <SSH_KEY_PATH>
@@ -115,7 +115,7 @@ The whole cycle takes about 5-10 seconds.
 For local (non-container) agents:
 
 ```bash
-eval "$(uv run minds env activate dev-<your-user>)"
+eval "$(uv run minds-admin env activate dev-<your-user>)"
 apps/minds/scripts/propagate_changes --target /path/to/agent/workdir
 ```
 
@@ -124,7 +124,7 @@ apps/minds/scripts/propagate_changes --target /path/to/agent/workdir
 The port is randomly assigned by Docker per agent. The container name is `<MNGR_PREFIX><agent-name>-host` (set by your activated env's `MNGR_PREFIX`):
 
 ```bash
-eval "$(uv run minds env activate dev-<your-user>)"   # so we know MNGR_PREFIX
+eval "$(uv run minds-admin env activate dev-<your-user>)"   # so we know MNGR_PREFIX
 docker ps --format '{{.Names}} {{.Ports}}' | grep "${MNGR_PREFIX}mind-"
 # e.g.  minds-dev-<your-user>-mind-1-host 0.0.0.0:32772->22/tcp
 ```
@@ -132,7 +132,7 @@ docker ps --format '{{.Names}} {{.Ports}}' | grep "${MNGR_PREFIX}mind-"
 The SSH key for a minds Docker agent lives under the activated env's `MNGR_HOST_DIR`:
 
 ```bash
-eval "$(uv run minds env activate dev-<your-user>)"   # exports MNGR_HOST_DIR
+eval "$(uv run minds-admin env activate dev-<your-user>)"   # exports MNGR_HOST_DIR
 find "${MNGR_HOST_DIR}/profiles" -path "*/docker/*/keys/docker_ssh_key"
 ```
 
@@ -148,17 +148,17 @@ Do NOT use a key from `~/.mngr/profiles/...` -- that belongs to non-minds mngr a
 | `just minds-stop` | Kill the desktop client started in this worktree by `just minds-start`. |
 | `just minds-build` | Build the desktop client distributable via `todesktop` (slow, only for releases). |
 | `apps/minds/scripts/propagate_changes ...` | Sync changes into a running container without restarting the Electron app from scratch. See "Iterating on a running agent". Requires an activated env. |
-| `mngr imbue_cloud admin pool create --mngr-source <monorepo-root> ...` | Bake an OVH pool host (the imbue_cloud pool's VPS provider). `--mngr-source` rsyncs the monorepo into the DEFAULT_WORKSPACE_TEMPLATE system/vendor/mngr/ for the duration of the bake. (For pool hosts only -- has no effect on Docker mode.) Requires an activated env. Typically driven via the `minds pool create` wrapper, which injects OVH + pool-ssh credentials from Vault. |
-| `just deploy [--yes-i-mean-<tier>]` | Run `minds env deploy` on the activated env. For dev envs: provisions Modal env / Neon / SuperTokens + deploys both Modal apps + writes `~/.minds-<env>/{client.toml,secrets.toml}`. For tier deploys: pushes Vault secrets to Modal + deploys both Modal apps, no local state written. |
+| `minds-admin pool create --mngr-source <monorepo-root> ...` | Bake an OVH pool host (the imbue_cloud pool's VPS provider). `--mngr-source` rsyncs the monorepo into the DEFAULT_WORKSPACE_TEMPLATE system/vendor/mngr/ for the duration of the bake. (For pool hosts only -- has no effect on Docker mode.) Requires an activated env, from which it resolves the pool-ssh credentials via Vault (typically driven via the `just bake-slice-*` recipes). |
+| `just deploy [--yes-i-mean-<tier>]` | Run `minds-admin env deploy` on the activated env. For dev envs: provisions Modal env / Neon / SuperTokens + deploys both Modal apps + writes `~/.minds-<env>/{client.toml,secrets.toml}`. For tier deploys: pushes Vault secrets to Modal + deploys both Modal apps, no local state written. |
 | `just sync-vendor-mngr-live [default-workspace-template-path]` | Rsync the live mngr working tree (uncommitted changes included) into DEFAULT_WORKSPACE_TEMPLATE's system/vendor/mngr/, no commit. This is the sync `just minds-start` runs at launch; run it directly to re-sync mid-session without relaunching. |
 | `just sync-vendor-mngr <default-workspace-template-path>` | One-shot: snapshot mngr HEAD into DEFAULT_WORKSPACE_TEMPLATE's system/vendor/mngr/ via `git archive` and commit in DEFAULT_WORKSPACE_TEMPLATE. Use for "release" syncs, not dev iteration (it commits and only carries committed mngr content). |
 
-### Vault (for `minds env deploy` and pool / slice bakes)
+### Vault (for `minds-admin env deploy` and pool / slice bakes)
 
-Both `minds env deploy` (which reads dev-tier provisioning credentials -- Neon, SuperTokens, etc. -- at command time) and slice bakes (`minds pool create`, `just bake-slice-{dev,prod}` -- the tier's `POOL_SSH_PRIVATE_KEY`, the host-pool DSN, etc.) read secrets from HCP Vault. (Baking new OVH classic VPS pool hosts is deprecated and no longer supported.) Two things to know:
+Both `minds-admin env deploy` (which reads dev-tier provisioning credentials -- Neon, SuperTokens, etc. -- at command time) and slice bakes (`minds-admin pool create`, `just bake-slice-{dev,prod}` -- the tier's `POOL_SSH_PRIVATE_KEY`, the host-pool DSN, etc.) read secrets from HCP Vault. (Baking new OVH classic VPS pool hosts is deprecated and no longer supported.) Two things to know:
 
 - **Login is interactive.** Run `vault login -method=oidc` once per session (browser OIDC); the token lands at `~/.vault-token`.
-- **`VAULT_ADDR` / `VAULT_NAMESPACE` are usually NOT set in a non-interactive shell.** The minds wrappers (`minds pool ...` and the `bake-*` recipes) apply the imbue HCP defaults automatically via `apps/minds/imbue/minds/envs/vault_reader.py`, so they "just work" with only the token -- **prefer them**. If you run a **raw** `vault` or `mngr imbue_cloud admin ...` command, a bare `vault` defaults to `https://127.0.0.1:8200` and fails with "connection refused" -- that is a missing address, **NOT** "logged out" (don't ask the operator to re-login, and don't ask them for `VAULT_ADDR`). Export the defaults first:
+- **`VAULT_ADDR` / `VAULT_NAMESPACE` are usually NOT set in a non-interactive shell.** The `minds-admin` commands (and the `bake-*` recipes that wrap them) apply the imbue HCP defaults automatically via `apps/minds/imbue/minds/envs/vault_reader.py`, so they "just work" with only the token -- **prefer them**. If you run a **raw** `vault` command, a bare `vault` defaults to `https://127.0.0.1:8200` and fails with "connection refused" -- that is a missing address, **NOT** "logged out" (don't ask the operator to re-login, and don't ask them for `VAULT_ADDR`). Export the defaults first:
 
   ```bash
   export VAULT_ADDR=https://vault-cluster-public-vault-df29b16f.9b573ab7.z1.hashicorp.cloud:8200
@@ -169,7 +169,7 @@ Both `minds env deploy` (which reads dev-tier provisioning credentials -- Neon, 
 
 ### Env vars `just minds-start` sets
 
-`MINDS_ROOT_NAME` / `MNGR_HOST_DIR` / `MNGR_PREFIX` / `MINDS_CLIENT_CONFIG_PATH` come from `minds env activate <name>` in your shell -- `minds-start` requires them to be set and refuses otherwise. Beyond those:
+`MINDS_ROOT_NAME` / `MNGR_HOST_DIR` / `MNGR_PREFIX` / `MINDS_CLIENT_CONFIG_PATH` come from `minds-admin env activate <name>` in your shell -- `minds-start` requires them to be set and refuses otherwise. Beyond those:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
@@ -207,7 +207,7 @@ investigate, do not just kill the orphans.
 
 ### Rsync exclusions
 
-`just sync-vendor-mngr-live` (which `just minds-start` calls), `mngr imbue_cloud admin pool create --mngr-source ...`, and `propagate_changes` all rsync into `system/vendor/mngr/` using one shared form (`rsync -a --delete --filter=':- .gitignore' --exclude=.git --exclude=uv.lock`). The form, the rationale for each exclude, and the source-of-truth constants live in `apps/minds/docs/vendor-mngr-sync.md`.
+`just sync-vendor-mngr-live` (which `just minds-start` calls), `minds-admin pool create --mngr-source ...`, and `propagate_changes` all rsync into `system/vendor/mngr/` using one shared form (`rsync -a --delete --filter=':- .gitignore' --exclude=.git --exclude=uv.lock`). The form, the rationale for each exclude, and the source-of-truth constants live in `apps/minds/docs/vendor-mngr-sync.md`.
 
 `propagate_changes` additionally protects `data/`, `.mngr/`, and `.claude/settings.local.json` from deletion when rsyncing into `/home/user/workspace/`.
 
@@ -233,7 +233,7 @@ The template's `.mngr/settings.toml` controls agent types, create templates, env
 
 ### Cleaning up the legacy `~/.devminds/`
 
-If you used the pre-refactor layout (`~/.devminds/` for all dev iteration plus `~/.devminds/envs/<dev-name>.toml` per-env overrides), that root is now obsolete. No migration script -- just `rm -rf ~/.devminds/` when convenient. A stale `MINDS_ROOT_NAME=devminds` in a parent shell is silently treated as unset (with a warning); the in-shell `minds env activate <name>` always wins.
+If you used the pre-refactor layout (`~/.devminds/` for all dev iteration plus `~/.devminds/envs/<dev-name>.toml` per-env overrides), that root is now obsolete. No migration script -- just `rm -rf ~/.devminds/` when convenient. A stale `MINDS_ROOT_NAME=devminds` in a parent shell is silently treated as unset (with a warning); the in-shell `minds-admin env activate <name>` always wins.
 
 ## Manual setup (fallback)
 
@@ -256,7 +256,7 @@ git worktree add /path/to/mngr/worktree/.external_worktrees/default-workspace-te
 just sync-vendor-mngr-live
 ```
 
-This is the sync `just minds-start` runs at launch, so use it to re-sync mid-session without relaunching the app (the desktop client picks the new copy up on the next Create). `mngr imbue_cloud admin pool create --mngr-source ...` does the same for the duration of the bake, and `propagate_changes` does it as step 1 on each iteration. The underlying form is:
+This is the sync `just minds-start` runs at launch, so use it to re-sync mid-session without relaunching the app (the desktop client picks the new copy up on the next Create). `minds-admin pool create --mngr-source ...` does the same for the duration of the bake, and `propagate_changes` does it as step 1 on each iteration. The underlying form is:
 
 ```bash
 rsync -a --delete \
@@ -268,7 +268,7 @@ rsync -a --delete \
 ### Start electron by hand without the just recipe
 
 ```bash
-eval "$(uv run minds env activate dev-<your-user>)"
+eval "$(uv run minds-admin env activate dev-<your-user>)"
 TEMPLATE_BRANCH=$(cd .external_worktrees/default-workspace-template && git branch --show-current)
 (
   set -a

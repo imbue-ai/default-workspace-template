@@ -1,5 +1,7 @@
 """Tests for the web-create claim endpoint (lease + adopt + share bring-up)."""
 
+import hashlib
+import re
 from uuid import UUID
 
 import pytest
@@ -74,8 +76,11 @@ def test_claim_leases_adopts_and_enables_sharing(monkeypatch: pytest.MonkeyPatch
     assert body["display_name"] == "My Workspace"
     # The test host has no datacenter record, so the region is the
     # deterministic hash-of-host-id spread: host-ccc... lands on us2.
-    expected_domain = f"{_HOST_ID_STR}.{_OWNER_LABEL}.us2.{_CONTENT_DOMAIN}"
-    assert body["workspace_domain"] == expected_domain
+    domain_labels = str(body["workspace_domain"]).split(".")
+    assert re.fullmatch(r"[a-f0-9]{32}", domain_labels[0])
+    assert domain_labels[1] == hashlib.sha256(_USER_STUB_USER_ID.encode()).hexdigest()[:32]
+    assert body["workspace_domain"].endswith(f".us2.{_CONTENT_DOMAIN}")
+    expected_domain = str(body["workspace_domain"])
     assert body["region"] == "us2"
     # The chrome's routable entry origin is recorded later, by the frps
     # NewProxy callback once the workspace's tunnel claims its service labels
@@ -228,6 +233,9 @@ def test_claim_releases_the_lease_when_the_agent_start_fails(monkeypatch: pytest
     assert len(backend.adopted_containers) == 1
     assert len(backend.slice_teardowns) == 1
     assert backend.pool_rows == []
+    # The lease-time record stub went with it: the user never received this
+    # workspace, so no tombstone shows up in their "recently destroyed" list.
+    assert backend.sync_record_rows == []
     # Sharing was never attempted, so no share row is left dangling for a
     # released host.
     assert backend.written_container_files == []
@@ -254,6 +262,9 @@ def test_claim_releases_the_lease_when_the_adopt_fails(monkeypatch: pytest.Monke
     # retry starts from a clean pool.
     assert len(backend.slice_teardowns) == 1
     assert backend.pool_rows == []
+    # The lease-time record stub went with it: the user never received this
+    # workspace, so no tombstone shows up in their "recently destroyed" list.
+    assert backend.sync_record_rows == []
     # Neither the agent start nor sharing was attempted.
     assert backend.started_agent_containers == []
     assert backend.written_container_files == []
@@ -341,3 +352,26 @@ def test_claim_retry_succeeds_while_the_failed_attempts_teardown_is_stuck(
     assert statuses == ["leased", "removing"]
     leased_row = next(row for row in backend.pool_rows if row.status == "leased")
     assert str(retry.json()["host_db_id"]) == str(leased_row.host_id)
+
+
+def test_claim_writes_a_record_stub_carrying_the_display_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The web claim's lease stub starts with the user's display name, not the slug."""
+    _install_claim_env(monkeypatch)
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        agent_id=_AGENT_ID,
+        host_id_str=_HOST_ID_STR,
+        attributes=_pinned_attributes(),
+    )
+
+    resp = client.post("/hosts/claim", json=_claim_body(), headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert len(backend.sync_record_rows) == 1
+    stub = backend.sync_record_rows[0]
+    assert stub["user_id"] == _USER_STUB_USER_ID
+    assert stub["agent_id"] == _AGENT_ID
+    assert stub["display_name"] == "My Workspace"
+    assert stub["state"] == "active"

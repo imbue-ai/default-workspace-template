@@ -10,8 +10,10 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthFailedCliEr
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudEmailNotVerifiedCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudLeaseActiveCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudQuotaExceededCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
+from imbue.minds.desktop_client.imbue_cloud_cli import _ACCOUNTS_URL_SUBPROCESS_ENV
 from imbue.minds.desktop_client.imbue_cloud_cli import _CONNECTOR_URL_SUBPROCESS_ENV
 from imbue.minds.desktop_client.imbue_cloud_cli import _parse_conflict_stored
 from imbue.minds.desktop_client.imbue_cloud_cli import _parse_stderr_error_message
@@ -120,6 +122,28 @@ def test_parse_stderr_error_message_survives_surrounding_log_lines() -> None:
     assert _parse_stderr_error_message("no json here\n") is None
 
 
+def test_sync_record_delete_raises_the_typed_lease_active_error_on_the_connectors_refusal() -> None:
+    """The connector's tombstone-first 409 (``code: lease_active``) surfaces as its own error type."""
+    body = json.dumps(
+        {
+            "error": (
+                'Connector error 409: {"detail":{"code":"lease_active","message":"workspace record agent-1 '
+                'still holds a cloud lease; destroy the workspace instead of removing its record"}}'
+            ),
+            "error_class": "ImbueCloudConnectorError",
+        },
+        indent=2,
+    )
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=1, stdout="", stderr="a log line\n" + body + "\n"))
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    with pytest.raises(ImbueCloudLeaseActiveCliError) as exc_info:
+        cli.sync_record_delete("owner@example.com", "agent-1")
+
+    assert "destroy it instead" in str(exc_info.value)
+    assert "lease_active" in exc_info.value.stderr
+
+
 def test_run_routes_through_mngr_caller_with_home_cwd_and_connector_env() -> None:
     """``ImbueCloudCli`` hands each subcommand to its ``MngrCaller`` prefixed with
     ``imbue_cloud``, runs it from ``$HOME``, and layers the connector URL onto the
@@ -135,6 +159,26 @@ def test_run_routes_through_mngr_caller_with_home_cwd_and_connector_env() -> Non
     assert recorded.cwd == Path.home()
     # The trailing slash is stripped so the plugin builds clean URLs.
     assert recorded.env_overrides == {_CONNECTOR_URL_SUBPROCESS_ENV: "https://connector.example"}
+
+
+def test_run_passes_the_accounts_origin_env_when_configured() -> None:
+    """The accounts origin rides into the subprocess env so ``auth login`` opens
+    the hosted page on the origin where Google OAuth and session cookies work
+    (a flow started on the connector host strands the nonce cookie and fails)."""
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps({"state": "none"})))
+    cli = ImbueCloudCli(
+        mngr_caller=caller,
+        connector_url=AnyUrl("https://connector.example/"),
+        accounts_base_url=AnyUrl("https://accounts.example.com/"),
+    )
+
+    cli.get_share_status(account="owner@example.com", host_id="host-abc")
+
+    recorded = caller.recorded_calls[0]
+    assert recorded.env_overrides == {
+        _CONNECTOR_URL_SUBPROCESS_ENV: "https://connector.example",
+        _ACCOUNTS_URL_SUBPROCESS_ENV: "https://accounts.example.com",
+    }
 
 
 def test_parse_conflict_stored_survives_surrounding_log_lines() -> None:

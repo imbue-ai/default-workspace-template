@@ -1,0 +1,1 @@
+The owner-exec installer's curl downloads now pass --retry-all-errors, so protocol-level failures (e.g. the intermittent HTTP/2 PROTOCOL_ERROR from GitHub's release CDN) are retried instead of failing the image build outright. Integrity is still guarded by the sha256 check. The mngr monorepo's VM-install mirror of this logic gets the same fix on its paired branch.

@@ -70,7 +70,9 @@ import sys
 import tempfile
 import textwrap
 import time
+import tomllib
 from collections.abc import Iterator
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Final
 
@@ -97,7 +99,7 @@ _RUNC_VERSION: Final[str] = "v1.3.0"
 # Keep these in sync with apps/minds/.nvmrc and apps/minds/package.json engines.
 _NODE_VERSION: Final[str] = "24.15.0"
 _PNPM_VERSION: Final[str] = "10.33.4"
-_CLAUDE_CODE_VERSION: Final[str] = "2.1.207"
+_CLAUDE_CODE_VERSION: Final[str] = "2.1.227"
 
 # In-sandbox entrypoint that invokes the shared e2e workspace runner the
 # pytest test also uses, but without the test's mngr-destroy cleanup. The
@@ -262,7 +264,8 @@ _STAGING_RSYNC_EXCLUDES: Final[tuple[str, ...]] = (
 # install third-party deps in layers that change only when the manifests do
 # (see _build_snapshot_image). The python tree is the root pyproject/lockfile
 # plus every uv workspace member's pyproject.toml (uv needs the member
-# manifests to construct the workspace even with --no-install-workspace).
+# manifests to construct the workspace even with --no-install-workspace);
+# _python_manifest_relative_paths drops the excluded standalone projects.
 # The pnpm tree is what `pnpm install --frozen-lockfile` reads (apps/minds is
 # a single-package pnpm workspace with no install-time scripts that need
 # source files -- its package.json has no preinstall/postinstall/prepare).
@@ -285,12 +288,20 @@ _PNPM_MANIFEST_RELATIVE_PATHS: Final[tuple[str, ...]] = (
 
 def _python_manifest_relative_paths(repo_root: Path) -> tuple[str, ...]:
     """Return the repo-relative paths uv needs for a manifests-only sync."""
-    member_manifests = sorted(
-        path.relative_to(repo_root).as_posix()
-        for pattern in _PY_WORKSPACE_MEMBER_MANIFEST_GLOBS
-        for path in repo_root.glob(pattern)
-    )
-    return ("pyproject.toml", "uv.lock", *member_manifests)
+    # Directories the root pyproject excludes from the workspace are standalone
+    # uv projects: uv does not read their manifests when constructing this
+    # workspace, so staging them would only make their dependency churn
+    # invalidate this image layer for nothing.
+    root_pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text())
+    excluded_globs = tuple(root_pyproject["tool"]["uv"]["workspace"].get("exclude", ()))
+    member_manifests: list[str] = []
+    for pattern in _PY_WORKSPACE_MEMBER_MANIFEST_GLOBS:
+        for path in repo_root.glob(pattern):
+            relative = path.relative_to(repo_root).as_posix()
+            if any(fnmatch(relative, f"{glob}/*") for glob in excluded_globs):
+                continue
+            member_manifests.append(relative)
+    return ("pyproject.toml", "uv.lock", *sorted(member_manifests))
 
 
 def _copy_relative_paths(source_root: Path, relative_paths: tuple[str, ...], target_root: Path) -> None:

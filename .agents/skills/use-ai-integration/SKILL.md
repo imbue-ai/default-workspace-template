@@ -1,6 +1,8 @@
 ---
 name: use-ai-integration
 description: Use when writing or reasoning about code that calls Claude -- an AI-driven app or service, an AI integration, or a skill's scripted model step. Covers the three scenarios (one-shot completion, one-shot agentic task, full agent) and the cost / credentialing model.
+metadata:
+  author: imbue
 ---
 
 # Calling Claude from code

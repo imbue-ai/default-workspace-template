@@ -9,8 +9,8 @@ from imbue.minds.config.loader import EnvConfigError
 from imbue.minds.config.loader import bundled_client_config_path_or_none
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.config.loader import load_deploy_config
+from imbue.minds.config.loader import per_env_secret_services
 from imbue.minds.config.loader import repo_tier_client_config_path
-from imbue.minds.envs.per_env_deploy import per_env_secret_services
 
 _VALID_CLIENT_TOML = (
     'connector_url = "https://connector.example.com/"\nlitellm_proxy_url = "https://litellm.example.com/"\n'
@@ -120,3 +120,10 @@ def test_bundled_client_config_path_or_none_default_is_none() -> None:
     nothing there.
     """
     assert bundled_client_config_path_or_none() is None
+
+
+@pytest.mark.parametrize("tier", ["dev", "staging", "production", "ci"])
+def test_every_committed_deploy_toml_ships_analytics_disabled(tier: str) -> None:
+    """Analytics stays off until a tier's bringup runbook has run; flipping it on is a deliberate edit."""
+    config = load_deploy_config(tier)
+    assert config.analytics.is_deployed is False

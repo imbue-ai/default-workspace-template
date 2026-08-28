@@ -15,6 +15,8 @@ account = "alice@imbue.com"
 
 There is no baked-in default connector URL: it comes from the per-instance `connector_url` field, or, when that is unset, the `MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL` environment variable. If neither is set, the provider raises.
 
+On tiers with a dedicated browser accounts origin (e.g. production's accounts.imbue.com), `auth login` opens the hosted login page there instead of on the connector host: pass `--accounts-url` or set the `MNGR__PROVIDERS__IMBUE_CLOUD__ACCOUNTS_URL` environment variable (the minds desktop client sets it automatically from its `client.toml`). When neither is set, the login page opens on the connector host itself, which is correct on dev/CI tiers.
+
 ## Sign in
 
 ```bash
@@ -27,7 +29,7 @@ mngr imbue_cloud auth login
 mngr imbue_cloud auth signin --account alice@imbue.com
 ```
 
-`auth login` requires a connector that serves the hosted accounts pages. Against an older connector (e.g. a stale dev/CI env) it fails immediately with an actionable error -- redeploy the env with `minds env deploy`, or fall back to `auth signin`.
+`auth login` requires a connector that serves the hosted accounts pages. Against an older connector (e.g. a stale dev/CI env) it fails immediately with an actionable error -- redeploy the env (Imbue-internal: `minds-admin env deploy`), or fall back to `auth signin`.
 
 Account **creation** from the CLI (`mngr imbue_cloud auth signup`) works only on dev/CI tiers: production and staging refuse it (status `SIGNUP_DISABLED`) so every new account goes through the browser flow (`auth login`), which carries the bot-mitigation gate. Signing in headlessly to an existing account works on every tier.
 
@@ -37,7 +39,7 @@ Email verification is non-blocking: a fresh signup counts as signed in immediate
 
 ## Account plans and quotas
 
-Every account has a plan ("explorer" by default; "ally" grants higher limits and requires a paid-listed email) whose quotas cap resource use: remote workspaces, buckets, total bucket storage, monthly LLM spend, and synced workspaces. The connector enforces quotas at grant time and returns a structured 403 (`quota_exceeded`, with the entitlement name, limit, and current usage) when a cap is hit. Workspace sharing (`mngr imbue_cloud shares`, self-hosted relays with workspace-terminated TLS) is capped separately at 50 shared workspaces per account rather than through a plan entitlement.
+Every account has a plan whose quotas cap resource use: remote workspaces, buckets, total bucket storage, monthly LLM spend, and synced workspaces. New accounts pick "free" (one remote workspace) or "explorer" (two remote workspaces, in exchange for sharing product data from those workspaces with Imbue) at signup; an account with no recorded choice defaults to "free". "Ally" grants higher limits and requires a paid-listed email. The connector enforces quotas at grant time and returns a structured 403 (`quota_exceeded`, with the entitlement name, limit, and current usage) when a cap is hit. Workspace sharing (`mngr imbue_cloud shares`, self-hosted relays with workspace-terminated TLS) is capped separately at 50 shared workspaces per account rather than through a plan entitlement.
 
 ```bash
 # Show the plan, entitlement values, and live usage.
@@ -48,7 +50,7 @@ mngr imbue_cloud account show
 mngr imbue_cloud account set-plan ally
 ```
 
-Operators manage individual accounts by email with `mngr imbue_cloud admin account show|set-plan|set-quota` (authenticated by `$MINDS_ADMIN_KEY`, like `admin paid`). `set-plan` resets the account to the plan's defaults; `set-quota` bumps one entitlement value. `mngr imbue_cloud admin sweep r2 [--email <email>]` runs one R2 storage-quota sweep pass on demand (enforcement, grant settlement, key invariants) instead of waiting for the hourly cron.
+Operator-side account management (plan resets, quota bumps, on-demand storage sweeps) lives in Imbue's internal operator CLI, not in this plugin.
 
 ## Create an agent on a leased host
 
@@ -79,7 +81,7 @@ minds drives this automatically: it tries `fast_mode=require` first and, on `Fas
 
 - `mngr destroy <agent>` is **terminal**: it wipes the workspace and its data, then releases the lease back to the pool. The user's data is gone before the lease is released.
 - `mngr delete <agent>` (or `mngr imbue_cloud hosts release <host-db-id>`) runs the same flow; it's the path mngr's GC takes after the destroyed-host grace period. Safe to re-run on an already-released lease.
-- `mngr stop <agent>` is the "resume later" path: it gracefully stops the container, halts the slice VM, and uploads the VM's disks (encrypted) to the tier's storage bucket -- freeing the bare-metal slot once the upload verifies. `mngr start <agent>` brings the same workspace back: near-instantly on its origin box within the local-retention window, or restored onto any same-region box with a free slot after it (the client re-resolves the new coordinates automatically). Against a connector without the workspace-lifecycle endpoints, stop falls back to the old container-only behavior.
+- `mngr stop <agent>` is the "resume later" path: it gracefully stops the container, halts the slice VM, and uploads the VM's disks (encrypted) to the tier's storage bucket -- the workspace shows as stopping while the upload runs and reports stopped once it verifies; the halted local VM (and its bare-metal slot) is kept through the local-retention window for a fast restart in place, then reaped. `mngr start <agent>` brings the same workspace back: near-instantly on its origin box within the window, or restored onto any same-region box with a free slot after it (the client re-resolves the new coordinates automatically). Against a connector without the workspace-lifecycle endpoints, stop falls back to the old container-only behavior.
 
 ## Adoption and key rotation (slices)
 
@@ -117,14 +119,10 @@ mngr imbue_cloud hosts rotate <host-id|host-db-id|name>
 ```
 
 Operators repair slices hit by the historical cidata `authorized_keys` wipe
-(see `apps/minds/docs/deploy/slice-restart-wipes-owner-ssh-key.md`) with the fleet
-sweep, which patches each slice's stored `lima.yaml` and restores wiped VM
-roots from the workspace container's own `authorized_keys` (copies only --
-it never injects new material):
-
-```bash
-mngr imbue_cloud admin repair-keys [--dry-run] [--server-id <id>] [--vm-name <name>]
-```
+(see `apps/minds/docs/deploy/slice-restart-wipes-owner-ssh-key.md`) with a fleet
+sweep in Imbue's internal operator CLI, which patches each slice's stored
+`lima.yaml` and restores wiped VM roots from the workspace container's own
+`authorized_keys` (copies only -- it never injects new material).
 
 ## Buckets
 

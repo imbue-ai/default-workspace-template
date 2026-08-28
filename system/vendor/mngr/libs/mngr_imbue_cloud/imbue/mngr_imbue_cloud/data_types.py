@@ -71,7 +71,7 @@ class SliceBakeOutcome(FrozenModel):
 
 
 class SliceBakeReport(FrozenModel):
-    """The summary ``admin pool create`` emits: per-slice outcomes plus counts."""
+    """The summary the operator pool bake (``pool create``) emits: per-slice outcomes plus counts."""
 
     requested: int = Field(description="Number of slices the invocation tried to bake")
     succeeded: int = Field(description="Slices baked and inserted into the pool")
@@ -79,10 +79,25 @@ class SliceBakeReport(FrozenModel):
     slices: tuple[SliceBakeOutcome, ...] = Field(description="Per-slice outcomes, in completion order")
 
 
+class WarmCacheReport(FrozenModel):
+    """The summary the cache pre-warm (``pool warm-cache``) emits."""
+
+    cache_tag: str = Field(description="The content-addressed image-cache tag the warm targeted")
+    server_id: str = Field(description="The bare_metal_servers row id of the warmed box")
+    was_tar_already_present: bool = Field(description="Whether the box already held the tar (cheap no-op)")
+    is_warmed: bool = Field(description="Whether the box holds the tar now")
+    slices: tuple[SliceBakeOutcome, ...] = Field(
+        description=(
+            "The throwaway seed slice's final outcome -- the first success or the last retried "
+            "failure (empty on a no-op)"
+        )
+    )
+
+
 class BoxTierAudit(FrozenModel):
     """What one bare-metal box actually carries, read over SSH rather than from the DB.
 
-    The slot accounting in ``admin server list`` counts only the querying env's own
+    The slot accounting in the operator ``server list`` counts only the querying env's own
     ``pool_hosts`` rows, so another env's slices -- and in particular another
     *tier's* -- are invisible to it. This is the on-box truth: every env's slices,
     plus the two ways a box drifts across tiers.
@@ -130,7 +145,7 @@ class UnauditedBox(FrozenModel):
 
 
 class BoxTierAuditReport(FrozenModel):
-    """The summary ``admin server list --verify-occupancy`` emits: per-box audits plus counts."""
+    """The summary ``server list --verify-occupancy`` emits: per-box audits plus counts."""
 
     env_name: str | None = Field(description="Env whose tier the boxes were audited against (None when not given)")
     is_foreign_tier_checked: bool = Field(

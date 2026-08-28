@@ -28,6 +28,7 @@ from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Agent as TrajectoryAgent
+from harbor.models.trajectories import FinalMetrics
 from harbor.models.trajectories import Step
 from harbor.models.trajectories import Trajectory
 from loguru import logger
@@ -38,11 +39,18 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
+from imbue.minds_evals import evidence_collection
+from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
+from imbue.minds_evals import proxy_config
+from imbue.minds_evals import ui_flows
+from imbue.minds_evals import usage as usage_accounting
 from imbue.minds_evals.data_types import CaseConfig
+from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DeciderResult
 from imbue.minds_evals.data_types import Transcript
+from imbue.minds_evals.errors import AgentKwargError
 from imbue.minds_evals.errors import InstructionParseError
 
 TRANSCRIPT_FILENAME: Final[str] = "full_transcript.jsonl"
@@ -52,11 +60,30 @@ TRANSCRIPT_FILENAME: Final[str] = "full_transcript.jsonl"
 # conversation so far.
 CONVERSATION_FILENAME: Final[str] = "conversation.jsonl"
 STATE_FILENAME: Final[str] = "state.json"
+# Token and cost accounting, written host-side beside the trajectory (the verifier does not grade
+# it, so unlike the transcript files it is not mirrored into the box).
+USAGE_FILENAME: Final[str] = "usage.json"
 MINDS_ENV: Final[str] = "staging"
 
 # Electron plus the backend need several minutes on first boot; the agent-level
 # override_setup_timeout_sec in the run recipe must cover this.
 BACKEND_BOOT_TIMEOUT_SECONDS: Final[float] = 600.0
+
+# The box-local port an in-box LLM proxy would listen on, reverse-forwarded to the same port inside
+# the workspace so Claude Code can reach it as a loopback address.
+PROXY_PORT: Final[int] = 4000
+# Long enough to cover the probe's own fetch without leaving a tunnel open for the whole trial; the
+# probe tears itself down when it elapses, so a failure cannot leak a long-lived process.
+PROXY_PROBE_HOLD_SECONDS: Final[float] = 180.0
+PROXY_PROBE_READY_TIMEOUT_SECONDS: Final[float] = 120.0
+PROXY_PROBE_TOKEN: Final[str] = "minds-evals-reverse-tunnel-ok"
+# litellm imports its callbacks and starts a uvicorn worker; a cold box takes appreciably longer
+# than the ~3s it takes locally.
+PROXY_BOOT_TIMEOUT_SECONDS: Final[float] = 180.0
+PROXY_TUNNEL_READY_TIMEOUT_SECONDS: Final[float] = 120.0
+PROXY_TUNNEL_GRACE_SECONDS: Final[float] = 600.0
+# The proxy's per-request metering record, written host-side beside usage.json.
+PROXY_USAGE_FILENAME: Final[str] = "usage_proxy.jsonl"
 
 # Each bridge poll is a Modal exec round trip; a run of consecutive failures
 # means the bridge is broken, not just a transient blip. Log every few and give
@@ -85,6 +112,25 @@ _VENDOR_EXCLUDES: Final[tuple[str, ...]] = (
 )
 
 
+@pure
+def build_eval_base_clone_command(dwt_repo: str, dwt_branch: str, dwt_sha: str, eval_base_dir: str) -> str:
+    """The in-box command that materializes the workspace template at the SHA the dataset pinned."""
+    # `git clone` can only be pointed at a ref name, so the pin is applied by a
+    # second step, and that step must land on a real local branch rather than a
+    # detached HEAD: the per-case clone of this directory -- and mngr's clone of
+    # that one -- takes its checkout from this HEAD, and the workspace is created
+    # with an empty branch field, meaning "whatever HEAD is". Naming the branch
+    # after the configured dwt branch keeps the workspace on the branch name it
+    # would have had without the pin. --no-checkout avoids populating the large
+    # template worktree twice.
+    return "rm -rf {base} && git clone --no-checkout {repo} {base} && git -C {base} checkout -B {branch} {sha}".format(
+        base=shlex.quote(eval_base_dir),
+        repo=shlex.quote(dwt_repo),
+        branch=shlex.quote(dwt_branch),
+        sha=shlex.quote(dwt_sha),
+    )
+
+
 class SnapshotMode(UpperCaseStrEnum):
     """When the driver snapshots the workspace home tree into the trial artifacts."""
 
@@ -93,9 +139,118 @@ class SnapshotMode(UpperCaseStrEnum):
     OFF = auto()
 
 
+# Where the pinned workspace-template clone lives in the box: one per trial, shared by every
+# per-case clone taken from it.
+_EVAL_BASE_DIR: Final[str] = "/work/eval-base"
+# Where the per-case clones taken from it live; the workspace is created from its case's clone.
+_CLONES_DIR: Final[str] = "/work/clones"
+
+
 @pure
-def parse_snapshot_mode(raw_value: str) -> SnapshotMode:
-    return SnapshotMode(raw_value.replace("-", "_").upper())
+def _case_clone_dir(case_id: str) -> str:
+    """The unquoted box path of one case's workspace-template clone: what clone prep populates and
+    what the workspace is then created from, so both must derive it the same way."""
+    return "{}/{}".format(_CLONES_DIR, case_id)
+
+
+@pure
+def build_case_clone_command(clone_dir: str) -> str:
+    """Take one case's own clone from the shared eval-base clone, replacing any earlier attempt."""
+    return "mkdir -p {clones} && rm -rf {clone} && git clone {base} {clone}".format(
+        clones=shlex.quote(_CLONES_DIR),
+        clone=shlex.quote(clone_dir),
+        base=shlex.quote(_EVAL_BASE_DIR),
+    )
+
+
+@pure
+def build_vendor_mngr_command(clone_dir: str) -> str:
+    """Overwrite the case clone's vendored mngr with the box's own tree, so the workspace runs the
+    mngr under test rather than whatever the template pinned."""
+    return (
+        "mkdir -p {clone}/system/vendor/mngr && rsync -a --delete {excludes} {mngr} {clone}/system/vendor/mngr/"
+    ).format(
+        clone=shlex.quote(clone_dir),
+        excludes=" ".join("--exclude='{}'".format(pattern) for pattern in _VENDOR_EXCLUDES),
+        # The trailing slash is rsync's "contents of", not "the directory itself", and is load-bearing.
+        mngr=shlex.quote("{}/".format(minds_bridge.BOX_MNGR_DIR)),
+    )
+
+
+@pure
+def build_clone_probe_command(clone_dir: str, eval_base_dir: str) -> str:
+    """Where the agent's own history starts and what the base was built from, in one box exec.
+
+    Both shas ride one round trip because both are needed to keep the captured deliverable
+    replayable: the bundle is based on the clone's HEAD, and regenerating that base from the dwt tip
+    is what proves it reproduces.
+    """
+    return (
+        "printf '{base_marker}\\n'; git -C {clone} rev-parse HEAD; "
+        "printf '{dwt_marker}\\n'; git -C {base} rev-parse HEAD"
+    ).format(
+        clone=shlex.quote(clone_dir),
+        base=shlex.quote(eval_base_dir),
+        base_marker=evidence_collection.section_marker("base_sha"),
+        dwt_marker=evidence_collection.section_marker("dwt_tip_sha"),
+    )
+
+
+@pure
+def _agent_kwarg_text(raw_value: object) -> str:
+    """What the operator typed after `--ak key=`, whatever Python type it arrived as.
+
+    Harbor JSON-parses every `--ak key=value` before the driver sees it, so the type depends on the
+    spelling: `key=true` arrives as a bool, `key=1` as an int, `key=null` as None, and only
+    `key=yes` stays a string. Every parser below goes through here rather than assuming the str the
+    CLI syntax suggests -- `--ak proxy=1` is a spelling they advertise, and it does not arrive as one.
+
+    Whitespace is stripped but case is preserved, so a parser that cares about case can still see it.
+    """
+    return "" if raw_value is None else str(raw_value).strip()
+
+
+# The spellings every boolean `--ak` flag on this driver reads the same way, so `--ak proxy=on`
+# cannot come to mean the opposite of `--ak proxy_probe=on`. Shared rather than repeated because a
+# docstring is not enough to hold two parsers in step.
+_TRUE_FLAG_SPELLINGS: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
+_FALSE_FLAG_SPELLINGS: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
+
+
+@pure
+def parse_agent_flag(raw_value: object, name: str) -> bool:
+    """A boolean agent kwarg, however harbor delivered it.
+
+    Every unrecognised spelling is rejected rather than read as False. A flag that silently means
+    "off" whenever it cannot be understood turns a typo into a trial that ran the other arm and
+    reported the one that was asked for, which is worse than a run that refuses to start.
+    """
+    text = _agent_kwarg_text(raw_value).lower()
+    if text in _TRUE_FLAG_SPELLINGS:
+        return True
+    if text in _FALSE_FLAG_SPELLINGS:
+        return False
+    raise AgentKwargError(
+        "{} {!r} is not a boolean; expected one of true/false/yes/no/on/off/1/0".format(name, raw_value)
+    )
+
+
+@pure
+def parse_snapshot_mode(raw_value: object) -> SnapshotMode:
+    """The snapshot cadence, rejecting a spelling this driver cannot honour.
+
+    `SnapshotMode(...)` raises a bare ValueError naming the enum, which reads as an internal fault
+    rather than a bad kwarg; this names the option and what it accepts.
+    """
+    text = _agent_kwarg_text(raw_value)
+    try:
+        return SnapshotMode(text.replace("-", "_").upper())
+    except ValueError:
+        raise AgentKwargError(
+            "snapshot_mode {!r} is not a snapshot cadence; expected one of {}".format(
+                raw_value, ", ".join(mode.value.lower().replace("_", "-") for mode in SnapshotMode)
+            )
+        ) from None
 
 
 @pure
@@ -222,6 +377,33 @@ def _conversation_events(conversation: list[dict[str, str]]) -> list[dict[str, s
     return events
 
 
+# The fixed identity and timestamp the eval-case commit is made with. A commit hash is a function of
+# its tree, parent, author, committer, AND dates, so a wall-clock date would give every trial a
+# different base sha for an identical tree -- and the captured deliverable.bundle, which is based on
+# that commit, could then never be unbundled onto a regenerated clone. Pinning the dates makes the
+# base a pure function of the dwt SHA, the mngr SHA, and the vendor exclude list, which is exactly
+# what makes the retroactive fresh-environment replay the bundle exists for possible.
+EVAL_CASE_COMMIT_DATE: Final[str] = "1970-01-01T00:00:00 +0000"
+EVAL_CASE_COMMIT_EMAIL: Final[str] = "eval@minds"
+EVAL_CASE_COMMIT_NAME: Final[str] = "minds-eval"
+
+
+@pure
+def build_eval_case_commit_command(clone_dir: str, commit_message: str) -> str:
+    """The eval-case commit, made reproducibly: fixed identity and fixed author/committer dates."""
+    return (
+        "cd {clone} && git add -A && "
+        "GIT_AUTHOR_DATE={date} GIT_COMMITTER_DATE={date} "
+        "git -c user.email={email} -c user.name={name} commit -q -m {message}"
+    ).format(
+        clone=shlex.quote(clone_dir),
+        date=shlex.quote(EVAL_CASE_COMMIT_DATE),
+        email=shlex.quote(EVAL_CASE_COMMIT_EMAIL),
+        name=shlex.quote(EVAL_CASE_COMMIT_NAME),
+        message=shlex.quote(commit_message),
+    )
+
+
 @pure
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -235,12 +417,26 @@ class MindsPersonaDriver(BaseAgent):
     def __init__(
         self,
         *args: Any,
-        snapshot_mode: str = "per-turn",
+        snapshot_mode: object = "per-turn",
         modal_config_path: str = "",
         poll_seconds: float = 5.0,
+        proxy_probe: object = False,
+        proxy: object = False,
+        verifier_model: str = "",
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        # Flow driving is mechanical, so a cheaper tier may well do; until that is measured the
+        # verification agent runs on the decider's model, with this override to measure it.
+        self._verifier_model_override = verifier_model.strip()
+        # Opt-in check that a box-local port is reachable from inside the workspace, which is what
+        # an in-box LLM proxy would depend on. Off by default: it costs an extra bridge round trip.
+        self._is_proxy_probe_enabled = parse_agent_flag(proxy_probe, "proxy_probe")
+        # Route the workspace's model traffic through a proxy in the box, so every call -- including
+        # any the agent delegates -- is metered where the agent cannot reach it.
+        self._is_proxy_enabled = parse_agent_flag(proxy, "proxy")
+        self._proxy_key: str = ""
+        self._proxy_usage_records: tuple[dict[str, Any], ...] = ()
         self._snapshot_mode = parse_snapshot_mode(snapshot_mode)
         self._modal_config_path = modal_config_path
         self._poll_seconds = float(poll_seconds)
@@ -269,6 +465,18 @@ class MindsPersonaDriver(BaseAgent):
         self._started_at: float = 0.0
         self._waits_done: int = 0
         self._test_state: str = "ongoing"
+        # HEAD of the per-case dwt clone the workspace was created from: the base of the
+        # incremental git bundle the evidence phase captures, so the recorded deliverable is only
+        # the agent's own commits.
+        self._clone_base_sha: str = ""
+        # The dwt tip the base clone was made from, recorded so a replay can regenerate that base
+        # and check it reproduces _clone_base_sha before unbundling the agent's commits onto it.
+        self._dwt_tip_sha: str = ""
+        # What the workspace already served before the agent ran, so the evidence phase can tell the
+        # delivered apps from the ones that booted with the workspace.
+        self._preexisting_registrations: frozenset[str] | None = None
+        self._verification_metadata: dict[str, Any] = {}
+        self._verifier_usage: ui_flows.VerifierUsage | None = None
 
     @staticmethod
     def name() -> str:
@@ -281,7 +489,16 @@ class MindsPersonaDriver(BaseAgent):
     def _decider_model(self) -> str:
         return self._parsed_model_name or decider.DEFAULT_DECIDER_MODEL
 
+    @property
+    def _verifier_model(self) -> str:
+        return self._verifier_model_override or self._decider_model
+
     async def setup(self, environment: BaseEnvironment) -> None:
+        # Create the evidence directory before anything else can fail. harbor records a missing
+        # declared artifact path as a failed entry, and `harbor trial regrade` refuses any trial
+        # that has one -- an EMPTY directory is tolerated, an absent one is not. Without this, a
+        # trial that dies before the collection phase would be permanently non-regradable.
+        await evidence_collection.ensure_evidence_dir(environment)
         # The staged mngr clone's HEAD is the exact SHA the dataset was generated
         # at, so the box env can be built without seeing the instruction.
         self._mngr_sha = await minds_bridge.read_box_mngr_sha(environment)
@@ -293,7 +510,6 @@ class MindsPersonaDriver(BaseAgent):
         self._box_env = minds_bridge.build_box_env(
             activation_env=await minds_bridge.fetch_minds_activation_env(environment, MINDS_ENV),
             modal_token_env=minds_bridge.load_modal_token_env(modal_config_path),
-            anthropic_api_key=self._get_env("ANTHROPIC_API_KEY") or "",
             user_id=self._user_id,
             mngr_sha=self._mngr_sha,
             minds_env=MINDS_ENV,
@@ -311,12 +527,83 @@ class MindsPersonaDriver(BaseAgent):
         try:
             await self._run_conversation(case, environment, deadline)
         finally:
+            # Before anything is torn down: the workspace (and the app inside it) is only alive
+            # here, and the verifier runs long after it is gone.
+            await self._collect_verification_evidence(environment)
+            if self._is_proxy_enabled:
+                await self._collect_proxy_usage(environment)
             self._populate_context_metadata(context)
             # Written here rather than in populate_context_post_run: harbor only
             # calls that hook when the agent context is still empty, and this
             # driver always populates the context above.
             self._write_trajectory()
             await self._teardown(environment)
+
+    def _build_verification_agent(self) -> ui_flows.VerificationAgent | None:
+        """The UI-flow agent, or None when there is no key to run it with. The upstream key is used
+        rather than the trial's proxy key: this is the harness reasoning about the workspace, not
+        the workspace's own traffic, so it must not be metered as the agent under test's spend."""
+        api_key = self._get_env("ANTHROPIC_API_KEY") or ""
+        if not api_key:
+            logger.warning("No ANTHROPIC_API_KEY for the UI-flow verification agent; flows cannot be measured")
+            return None
+        return ui_flows.AnthropicVerificationAgent(
+            model=self._verifier_model,
+            api_key=SecretStr(api_key),
+            timeout_seconds=ui_flows.DEFAULT_CALL_TIMEOUT_SECONDS,
+        )
+
+    async def _collect_verification_evidence(self, environment: BaseEnvironment) -> None:
+        """Capture what the delivered workspace actually is, while it still exists.
+
+        The cheap registry/service/inventory capture runs for every trial that got as far as a
+        workspace; the expectations-driven probes only run when the conversation finished, since an
+        unfinished trial's structural gates already zero its reward. Any failure here is swallowed:
+        evidence is best-effort and must never discard an already-completed trial or block the
+        teardown that stops the nested sandboxes from leaking.
+        """
+        if self._box_env is None or self._case is None or not self._workspace_agent_id:
+            return
+        collector = evidence_collection.EvidenceCollector(
+            environment=environment,
+            box_env=self._box_env,
+            workspace_agent_id=self._workspace_agent_id,
+            case=self._case,
+            clone_base_sha=self._clone_base_sha,
+            dwt_tip_sha=self._dwt_tip_sha,
+            preexisting_registrations=self._preexisting_registrations,
+            host_logs_dir=self.logs_dir,
+            # Monotonic, unlike the conversation's own deadline: a clock step during a ten-minute
+            # collection phase would otherwise truncate or extend it.
+            deadline=time.monotonic() + self._case.verification_timeout_seconds,
+            verifier_model=self._verifier_model,
+            verification_agent=self._build_verification_agent(),
+            preauth_cookie=SecretStr(forward_instance.mint_forward_secret()),
+            browser_bridge_token=SecretStr(forward_instance.mint_forward_secret()),
+        )
+        logger.info("Collecting outcome-verification evidence from the workspace")
+        try:
+            manifest = await collector.collect(
+                is_expectations_collection_wanted=self._test_state == "finished",
+            )
+        except Exception as exc:
+            logger.opt(exception=exc).warning("Evidence collection failed; grading on what it managed to write")
+            # Whatever the flow agent spent before the failure is still spent, so keep the account.
+            self._verifier_usage = collector.verifier_usage()
+            return
+        self._verifier_usage = collector.verifier_usage()
+        self._verification_metadata = {
+            "is_evidence_complete": manifest.is_evidence_complete,
+            "entry_count": len(manifest.entries),
+            "failed_entry_count": sum(1 for entry in manifest.entries if entry.status == CheckStatus.FAILED),
+            "error_entry_count": sum(1 for entry in manifest.entries if entry.status == CheckStatus.ERROR),
+        }
+        logger.info(
+            "Recorded {} verification entr(ies) ({} failed, {} errored)",
+            len(manifest.entries),
+            self._verification_metadata["failed_entry_count"],
+            self._verification_metadata["error_entry_count"],
+        )
 
     async def _teardown(self, environment: BaseEnvironment) -> None:
         """Destroy the trial's workspace sandboxes, swallowing any teardown error so a transport
@@ -338,7 +625,7 @@ class MindsPersonaDriver(BaseAgent):
         await self._prepare_workspace_clone(case, environment)
         workspace_host_name = "EVAL-{}".format(self._user_id[:34])
         payload = minds_bridge.build_create_payload(
-            dwt_repo="/work/clones/{}".format(case.case_id),
+            dwt_repo=_case_clone_dir(case.case_id),
             dwt_branch="",
             host_name=workspace_host_name,
         )
@@ -355,6 +642,21 @@ class MindsPersonaDriver(BaseAgent):
             await self._mark_timed_out(environment, "could not resolve the workspace chat agent id")
             return
         self._chat_agent_id = chat_agent_id
+
+        if self._is_proxy_probe_enabled:
+            await self._probe_reverse_tunnel(environment)
+        if self._is_proxy_enabled:
+            is_proxy_up = await self._start_proxy(environment, case)
+            if not is_proxy_up:
+                await self._mark_timed_out(environment, "the in-box LLM proxy did not come up")
+                return
+
+        is_authenticated = await self._authenticate_workspace(environment, deadline)
+        if not is_authenticated:
+            await self._mark_timed_out(environment, "could not authenticate the workspace")
+            return
+
+        await self._capture_preexisting_registrations(environment)
 
         sources = resolve_turn_sources(case, self._decider_model, self._get_env("ANTHROPIC_API_KEY") or "")
         self._persona_source = next((source for source in sources if isinstance(source, PersonaLLMTurnSource)), None)
@@ -425,8 +727,186 @@ class MindsPersonaDriver(BaseAgent):
                 )
 
         self._test_state = "finished"
+        # The agent can keep working after it reports WAITING -- the workspace's own turn-end flow
+        # runs then -- so pull once more before the transcript is written for the last time. Without
+        # this the transcript ends at the final reply while the proxy keeps metering, which shows up
+        # as the proxy accounting for requests the transcript has no messages for.
+        await self._refresh_events(environment)
         await self._sync_trial_files(environment)
         logger.info("Finished after {} turns", len(sources))
+
+    async def _probe_reverse_tunnel(self, environment: BaseEnvironment) -> None:
+        """Check that a box-local port is reachable from inside the workspace.
+
+        An in-box LLM proxy depends on this and on nothing else: the workspace would reach it at a
+        loopback address, so LLM traffic never leaves the sandbox. Reported rather than enforced --
+        this is a measurement, not a gate.
+        """
+        assert self._box_env is not None
+        ssh_info = await minds_bridge.fetch_agent_ssh_info(environment, self._box_env, self._workspace_agent_id)
+        if ssh_info is None:
+            logger.error("Reverse-tunnel probe: no SSH endpoint for the workspace in `mngr list`")
+            return
+        logger.info("Reverse-tunnel probe: workspace ssh {}@{}", ssh_info["user"], ssh_info["host"])
+        await minds_bridge.start_reverse_tunnel(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            ssh_info,
+            PROXY_PORT,
+            PROXY_PROBE_HOLD_SECONDS,
+            is_probe_token_served=True,
+        )
+        tunnel_log = "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.TUNNEL_LOG_FILENAME)
+        deadline = time.time() + PROXY_PROBE_READY_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            if "TUNNEL_READY" in await minds_bridge.read_box_file(environment, self._box_env, tunnel_log):
+                break
+            await asyncio.sleep(self._poll_seconds)
+        else:
+            logger.error(
+                "Reverse-tunnel probe: the tunnel never came up:\n{}",
+                await minds_bridge.read_box_file(environment, self._box_env, tunnel_log),
+            )
+            return
+        observed = await minds_bridge.fetch_from_workspace(
+            environment, self._box_env, self._workspace_agent_id, "http://127.0.0.1:{}/".format(PROXY_PORT)
+        )
+        is_reachable = PROXY_PROBE_TOKEN in observed
+        logger.info(
+            "Reverse-tunnel probe: workspace fetched {!r} -- box-local port {} is {}",
+            observed[:120],
+            PROXY_PORT,
+            "reachable" if is_reachable else "NOT reachable",
+        )
+
+    @property
+    def _proxy_base_url(self) -> str:
+        """The loopback address the workspace reaches the box's proxy at, once one is running."""
+        return "http://127.0.0.1:{}".format(PROXY_PORT) if self._is_proxy_enabled else ""
+
+    async def _start_proxy(self, environment: BaseEnvironment, case: CaseConfig) -> bool:
+        """Bring up the in-box proxy and the tunnel that exposes it inside the workspace.
+
+        Ordered before sign-in because the workspace is handed the proxy's address as its base URL:
+        a workspace signed in against a proxy that is not listening cannot take a turn.
+        """
+        assert self._box_env is not None
+        upstream_key = self._get_env("ANTHROPIC_API_KEY") or ""
+        if not upstream_key:
+            logger.error("No ANTHROPIC_API_KEY for the proxy to call the model with")
+            return False
+        self._proxy_key = "sk-eval-{}".format(uuid.uuid4().hex)
+        await minds_bridge.start_proxy(
+            environment,
+            self._box_env,
+            proxy_config.render_proxy_config(),
+            upstream_key,
+            self._proxy_key,
+            PROXY_PORT,
+        )
+        is_up = await minds_bridge.wait_for_proxy(
+            environment,
+            self._box_env,
+            PROXY_PORT,
+            time.time() + PROXY_BOOT_TIMEOUT_SECONDS,
+            self._poll_seconds,
+        )
+        if not is_up:
+            logger.error(
+                "The proxy never answered:\n{}",
+                await minds_bridge.read_box_file(
+                    environment,
+                    self._box_env,
+                    "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.PROXY_LOG_FILENAME),
+                ),
+            )
+            return False
+        ssh_info = await minds_bridge.fetch_agent_ssh_info(environment, self._box_env, self._workspace_agent_id)
+        if ssh_info is None:
+            logger.error("No SSH endpoint for the workspace, so the proxy cannot be exposed to it")
+            return False
+        await minds_bridge.start_reverse_tunnel(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            ssh_info,
+            PROXY_PORT,
+            # Outlive the case, so the tunnel never closes under a running conversation, but stay
+            # bounded so a driver that dies without tearing it down cannot leave it up.
+            case.timeout_seconds + PROXY_TUNNEL_GRACE_SECONDS,
+            is_probe_token_served=False,
+        )
+        tunnel_deadline = time.time() + PROXY_TUNNEL_READY_TIMEOUT_SECONDS
+        tunnel_log = "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.TUNNEL_LOG_FILENAME)
+        while time.time() < tunnel_deadline:
+            if "TUNNEL_READY" in await minds_bridge.read_box_file(environment, self._box_env, tunnel_log):
+                logger.info("The proxy is up and reachable inside the workspace on port {}", PROXY_PORT)
+                return True
+            await asyncio.sleep(self._poll_seconds)
+        logger.error(
+            "The tunnel to the workspace never came up:\n{}",
+            await minds_bridge.read_box_file(environment, self._box_env, tunnel_log),
+        )
+        return False
+
+    async def _collect_proxy_usage(self, environment: BaseEnvironment) -> None:
+        """Pull the proxy's per-request log into the trial artifacts.
+
+        This is the metering record: every model call the workspace made, including any the agent
+        delegated to a subagent or a worker, since all of them share the workspace's credential.
+        """
+        assert self._box_env is not None
+        contents = await minds_bridge.read_box_file(environment, self._box_env, minds_bridge.BOX_PROXY_USAGE_LOG_PATH)
+        if not contents:
+            logger.warning("The proxy recorded no requests")
+            return
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        (self.logs_dir / PROXY_USAGE_FILENAME).write_text(contents + "\n")
+        self._proxy_usage_records = usage_accounting.parse_proxy_usage_log(contents)
+
+    async def _authenticate_workspace(self, environment: BaseEnvironment, deadline: float) -> bool:
+        """Sign the workspace in after create, the way a user does.
+
+        A workspace boots unauthenticated -- the product's create path supplies no AI credentials --
+        so without this the chat agent can never take a turn. Doing it through the sign-in endpoint
+        rather than the create-time host env is what keeps the graded agent in production's shared
+        config-dir regime.
+        """
+        assert self._box_env is not None
+        # Behind the proxy the workspace gets the trial's own key, never the upstream one: it is
+        # scoped to this trial, and the credential the agent can see buys nothing anywhere else.
+        api_key = self._proxy_key or self._get_env("ANTHROPIC_API_KEY") or ""
+        if not api_key:
+            logger.error("No ANTHROPIC_API_KEY to sign the workspace in with")
+            return False
+        is_endpoint_ready = await minds_bridge.wait_for_auth_endpoint(
+            environment, self._box_env, self._workspace_agent_id, deadline, self._poll_seconds
+        )
+        if not is_endpoint_ready:
+            logger.error("The workspace's claude-auth endpoint never came up")
+            return False
+        logger.info("Signing the workspace in through the claude-auth endpoint")
+        is_submitted = await minds_bridge.authenticate_workspace(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            api_key,
+            self._proxy_base_url or self._get_env("ANTHROPIC_BASE_URL") or "",
+        )
+        if not is_submitted:
+            return False
+        # Submitting restarts the claude agents, so the chat agent is briefly gone; the turn loop's
+        # own WAITING gate covers the rest.
+        return await minds_bridge.wait_for_chat_state(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            self._chat_agent_id,
+            is_waiting_desired=True,
+            deadline=deadline,
+            poll_seconds=self._poll_seconds,
+        )
 
     async def _wait_for_reply(self, environment: BaseEnvironment, deadline: float, baseline_event_count: int) -> bool:
         """Wait until the agent has produced a reply to the just-sent message AND is WAITING again.
@@ -454,6 +934,11 @@ class MindsPersonaDriver(BaseAgent):
                     environment, self._box_env, self._workspace_agent_id, self._chat_agent_id
                 )
                 if state == "WAITING":
+                    # One more pull before handing back. The state check races the refresh above, so
+                    # messages the agent emitted between the two would otherwise never be fetched --
+                    # and once the workspace is destroyed they are gone. Cheap: a no-op when the
+                    # event total has not moved.
+                    await self._refresh_events(environment)
                     return True
             await asyncio.sleep(self._poll_seconds)
         return False
@@ -484,47 +969,106 @@ class MindsPersonaDriver(BaseAgent):
         return True
 
     async def _prepare_workspace_clone(self, case: CaseConfig, environment: BaseEnvironment) -> None:
-        """Clone the workspace template in the box and overwrite its vendored mngr with the box's
-        /work/mngr (ported from the old harness's launch clone prep, minus the retired eval worker's
-        metadata file)."""
+        """Clone the workspace template at its pinned SHA in the box and overwrite its vendored mngr
+        with the box's /work/mngr (ported from the old harness's launch clone prep, minus the retired
+        eval worker's metadata file)."""
         assert self._box_env is not None
-        exclude_flags = " ".join("--exclude='{}'".format(pattern) for pattern in _VENDOR_EXCLUDES)
-        # Config-derived values (case id, dwt repo/branch) are shell-quoted:
-        # they come from an author-controlled eval config, but a quote or space
-        # in one must not break out of the command.
-        clone_dir = shlex.quote("/work/clones/{}".format(case.case_id))
-        commit_message = shlex.quote("eval case {}".format(case.case_id))
-        logger.info("Preparing the workspace template clone ({}@{})", case.dwt_repo, case.dwt_branch)
+        # Paths and config-derived values travel unquoted and are shell-quoted where each command
+        # builder interpolates them. The case id and the dwt repo/branch/sha come from an
+        # author-controlled eval config, and a quote or space in one must not break out of a command.
+        clone_dir = _case_clone_dir(case.case_id)
+        commit_message = "eval case {}".format(case.case_id)
+        logger.info(
+            "Preparing the workspace template clone ({}@{}, pinned from {})",
+            case.dwt_repo,
+            case.dwt_sha[:12],
+            case.dwt_branch,
+        )
         await minds_bridge.check_run_in_box(
             environment,
-            "rm -rf /work/eval-base && git clone --branch {} {} /work/eval-base".format(
-                shlex.quote(case.dwt_branch), shlex.quote(case.dwt_repo)
+            build_eval_base_clone_command(
+                dwt_repo=case.dwt_repo,
+                dwt_branch=case.dwt_branch,
+                dwt_sha=case.dwt_sha,
+                eval_base_dir=_EVAL_BASE_DIR,
             ),
             self._box_env,
             600,
         )
         await minds_bridge.check_run_in_box(
             environment,
-            "mkdir -p /work/clones && rm -rf {clone} && git clone /work/eval-base {clone}".format(clone=clone_dir),
+            build_case_clone_command(clone_dir),
             self._box_env,
             300,
         )
         await minds_bridge.check_run_in_box(
             environment,
-            "mkdir -p {clone}/system/vendor/mngr && rsync -a --delete {excludes} /work/mngr/ {clone}/system/vendor/mngr/".format(
-                clone=clone_dir, excludes=exclude_flags
-            ),
+            build_vendor_mngr_command(clone_dir),
             self._box_env,
             600,
         )
         await minds_bridge.check_run_in_box(
             environment,
-            "cd {clone} && git add -A && git -c user.email=eval@minds -c user.name=minds-eval commit -q -m {message}".format(
-                clone=clone_dir, message=commit_message
-            ),
+            build_eval_case_commit_command(clone_dir, commit_message),
             self._box_env,
             300,
         )
+        # Record where the agent's own history starts, and what the base was built from. The
+        # evidence phase bundles only <base>..HEAD, so the captured deliverable is the agent's
+        # commits rather than the whole template. The base commit is deterministic (fixed identity
+        # and dates over a tree that is a function of the dwt tip and the mngr SHA), so recording
+        # both shas is what keeps that bundle reproducible: preparing the clone again from the same
+        # inputs yields this exact base sha, and the bundle unbundles only onto it.
+        base_result = await minds_bridge.check_run_in_box(
+            environment,
+            build_clone_probe_command(clone_dir, _EVAL_BASE_DIR),
+            self._box_env,
+            120,
+        )
+        sections = evidence_collection.split_sections(base_result.stdout or "")
+        self._dwt_tip_sha = sections.get("dwt_tip_sha", "").strip()
+        base_output = sections.get("base_sha", "").strip()
+        self._clone_base_sha = base_output.splitlines()[-1].strip() if base_output else ""
+
+    async def _capture_preexisting_registrations(self, environment: BaseEnvironment) -> None:
+        """Snapshot what the workspace already serves, before the first turn can change it.
+
+        This is the last moment the workspace is purely the template's doing: it has booted and been
+        signed in, and the agent has not been asked for anything yet. Recording it here is what lets
+        the evidence phase attribute a registry row to the agent rather than guessing from names.
+
+        A probe that comes back failed, or a registry that is not there yet, leaves the set unknown,
+        which the collector records as unmeasured -- never as "the workspace served nothing", which
+        would credit the agent with every app the template booted. A transport-level failure
+        propagates like every other pre-turn step's does.
+        """
+        assert self._box_env is not None
+        is_success, output = await minds_bridge.run_in_workspace(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            evidence_collection.workspace_state_command(),
+            evidence_collection.PROBE_TIMEOUT_SECONDS,
+        )
+        self._preexisting_registrations = evidence_collection.parse_registry_snapshot(output) if is_success else None
+        if self._preexisting_registrations is None:
+            cause = (
+                "the probe ran but found no readable app registry"
+                if is_success
+                else "the bridged exec failed: {}".format(output.strip()[:300] or "no output")
+            )
+            logger.warning(
+                "Could not snapshot the workspace app registry before turn 1 ({}); the delivered apps "
+                "cannot be told from the ones the workspace booted with, so those checks will be "
+                "unmeasured",
+                cause,
+            )
+        else:
+            logger.info(
+                "The workspace already serves {} app(s) before turn 1: {}",
+                len(self._preexisting_registrations),
+                ", ".join(sorted(self._preexisting_registrations)) or "none",
+            )
 
     async def _mark_timed_out(self, environment: BaseEnvironment, reason: str) -> None:
         logger.warning("Marking the trial timed_out: {}", reason)
@@ -536,6 +1080,8 @@ class MindsPersonaDriver(BaseAgent):
         return {
             "eval_name": self.logs_dir.parent.name,
             "case_name": self._case.case_id if self._case is not None else "",
+            "mngr_sha": self._mngr_sha,
+            "dwt_sha": self._case.dwt_sha if self._case is not None else "",
             "waits_done": self._waits_done,
             # "num_turns" is the ported state.json schema key (the old harness's
             # readers and the verifier gates both consume it).
@@ -573,12 +1119,53 @@ class MindsPersonaDriver(BaseAgent):
             local_path.write_text(content)
             await environment.upload_file(local_path, "{}/{}".format(minds_bridge.BOX_LOGS_DIR, filename))
 
+    def _resolve_workspace_usage(self) -> usage_accounting.ResolvedWorkspaceUsage:
+        """The one resolution of the workspace agent's spend that every usage writer in this driver
+        reads from; the choice between the two accounts is ``resolve_workspace_usage``'s."""
+        return usage_accounting.resolve_workspace_usage(self._latest_events, self._proxy_usage_records)
+
     def _populate_context_metadata(self, context: AgentContext) -> None:
         turn_word_counts = _words_per_agent_turn(self._conversation)
         message_word_counts = self._agent_message_word_counts
         decider_results = self._persona_source.results if self._persona_source is not None else []
-        context.n_input_tokens = sum(result.input_token_count for result in decider_results) or None
-        context.n_output_tokens = sum(result.output_token_count for result in decider_results) or None
+        # Harbor's token/cost fields describe the agent under test, so they carry the workspace
+        # agent's consumption. The decider is the harness's own spend and goes to metadata; putting
+        # it here would report the simulated user's tokens as the agent's.
+        resolved_usage = self._resolve_workspace_usage()
+        workspace_usage = resolved_usage.reported
+        decider_usage = usage_accounting.summarize_decider_usage(decider_results, self._decider_model)
+        if workspace_usage.message_count:
+            context.n_input_tokens = workspace_usage.n_input_tokens
+            context.n_cache_tokens = workspace_usage.n_cache_tokens
+            context.n_output_tokens = workspace_usage.tokens.output
+            context.cost_usd = workspace_usage.cost_usd
+        if workspace_usage.unpriced_models:
+            logger.warning(
+                "No pricing for {}; the trial's cost is reported as unknown rather than partial",
+                ", ".join(workspace_usage.unpriced_models),
+            )
+        if not workspace_usage.is_cost_complete:
+            logger.warning(
+                "This trial delegated ({} subagent call(s), {} worker launch(es)), so its reported cost is a "
+                "lower bound: delegated work is served on streams this driver does not read",
+                workspace_usage.delegated_call_count,
+                workspace_usage.worker_launch_count,
+            )
+        if workspace_usage.message_count:
+            if not workspace_usage.is_speed_observed:
+                logger.warning(
+                    "Speed tier unobserved, so every request is priced at the standard rate. Minds runs fast mode "
+                    "by default and fast mode bills at twice that, so treat this cost as a floor; run with "
+                    "--ak proxy=true to price it exactly"
+                )
+            elif workspace_usage.fast_message_count:
+                logger.info(
+                    "{} of {} request(s) were served in fast mode and are priced at the fast-mode rate",
+                    workspace_usage.fast_message_count,
+                    workspace_usage.message_count,
+                )
+            else:
+                logger.debug("Every request was served at standard speed")
         context.metadata = {
             "case_id": self._case.case_id if self._case is not None else "",
             "turns_completed": self._waits_done,
@@ -597,7 +1184,37 @@ class MindsPersonaDriver(BaseAgent):
             "decider_model": self._decider_model,
             "modal_user_id": self._user_id,
             "mngr_sha": self._mngr_sha,
+            # Both pinned inputs travel with the trial record, so a captured
+            # trial says which mngr and which workspace template produced it.
+            "dwt_sha": self._case.dwt_sha if self._case is not None else "",
+            "workspace_usage": usage_accounting.workspace_usage_metadata(workspace_usage),
+            # Both sources, so the two can be reconciled after the fact: they agree exactly when the
+            # agent delegates nothing, and differ by the delegated spend when it does.
+            "usage_source": "proxy" if resolved_usage.is_from_proxy else "transcript",
+            "transcript_usage": usage_accounting.workspace_usage_metadata(resolved_usage.transcript),
+            "decider_usage": usage_accounting.decider_usage_metadata(decider_usage),
+            # The UI-flow verification agent is harness spend just like the decider: it measures
+            # what the eval costs to run, never what the agent under test consumed.
+            "verifier_agent_usage": usage_accounting.verifier_usage_metadata(self._verifier_usage)
+            if self._verifier_usage is not None
+            else {},
+            # Empty when no evidence phase ran (no workspace, or collection failed outright);
+            # the grade reads the bundle itself, this is for scanning runs at a glance.
+            "verification": self._verification_metadata,
         }
+        self._write_usage(workspace_usage, decider_usage)
+
+    def _write_usage(
+        self, workspace_usage: usage_accounting.TrialUsage, decider_usage: usage_accounting.DeciderUsage
+    ) -> None:
+        """Write the usage breakdown as its own trial artifact, so cost and cache behaviour can be
+        read (and diffed across runs) without parsing the whole transcript."""
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "workspace_agent": usage_accounting.workspace_usage_metadata(workspace_usage),
+            "decider": usage_accounting.decider_usage_metadata(decider_usage),
+        }
+        (self.logs_dir / USAGE_FILENAME).write_text(json.dumps(payload, indent=2))
 
     def _write_trajectory(self) -> None:
         """Write the ATIF trajectory (for `harbor view`) from the clean per-turn conversation."""
@@ -616,6 +1233,7 @@ class MindsPersonaDriver(BaseAgent):
             # ATIF requires at least one step; a trial that died before any
             # exchange has no conversation to render.
             return
+        workspace_usage = self._resolve_workspace_usage().reported
         trajectory = Trajectory(
             schema_version="ATIF-v1.7",
             session_id=self.session_id,
@@ -623,6 +1241,17 @@ class MindsPersonaDriver(BaseAgent):
                 name=self.name(), version=self.version() or "unknown", model_name=self._decider_model
             ),
             steps=steps,
+            # The workspace agent's totals, not the decider's: the trajectory describes the
+            # conversation being graded. total_steps counts conversation turns, not LLM calls.
+            final_metrics=FinalMetrics(
+                total_prompt_tokens=workspace_usage.n_input_tokens,
+                total_completion_tokens=workspace_usage.tokens.output,
+                total_cached_tokens=workspace_usage.n_cache_tokens,
+                total_cost_usd=workspace_usage.cost_usd,
+                total_steps=len(steps),
+            )
+            if workspace_usage.message_count
+            else None,
         )
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         (self.logs_dir / "trajectory.json").write_text(json.dumps(trajectory.to_json_dict(), indent=2))

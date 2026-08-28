@@ -20,13 +20,23 @@ def test_schema_version_tracks_breaking_wire_changes() -> None:
     lists with server-grouped rows, to 3 when every offered connection started
     carrying how it is connected, and to 4 when the requests frame and the
     inbox list response dropped ``auto_open`` (and the predefined detail gained
-    ``service_name``), and to 5 when workspace entries replaced ``is_stale``
-    with ``is_backend_unreachable``: a window held open across any of these
-    upgrades would otherwise reconnect and act on a payload it does not know --
-    for 3, by offering a browser sign-in to a service that has none; for 4, by
-    expecting a field the server no longer sends; for 5, by reading a field that
-    is gone and so never naming the backend its band is about."""
-    assert UI_SCHEMA_VERSION == 5
+    ``service_name``), to 5 when workspace entries replaced ``is_stale``
+    with ``is_backend_unreachable``, and to 6 when the snapshot gained a
+    required ``environment`` frame carrying this device's own connectivity
+    condition: a window held open across any of these upgrades would otherwise
+    reconnect and act on a payload it does not know -- for 3, by offering a
+    browser sign-in to a service that has none; for 4, by expecting a field the
+    server no longer sends; for 5, by reading a field that is gone and so never
+    naming the backend its band is about; for 6, by reading the state off a
+    snapshot field the older server does not send at all; and to 7 when the
+    environment frame's state gained ``UNKNOWN`` (an unmeasured device is no
+    longer reported as a fine one), which an older client would fail to parse
+    and read as no condition at all -- the same bump also carried the workspace
+    entries' new ``remote_kind`` and ``backup_access``, which the machines list
+    reads to badge a cloud record by its provider and to offer (or explain) its
+    Backups button, so a window from before would keep rendering every remote
+    record as "on <device>" with no way in."""
+    assert UI_SCHEMA_VERSION == 7
 
 
 def test_hello_message_serializes_with_type_discriminator() -> None:
@@ -35,7 +45,7 @@ def test_hello_message_serializes_with_type_discriminator() -> None:
     # fail, whatever the constant becomes.
     frame = UiHelloMessage(schema_version=UI_SCHEMA_VERSION).model_dump_json()
     parsed = json.loads(frame)
-    assert parsed == {"type": "hello", "schema_version": 5}
+    assert parsed == {"type": "hello", "schema_version": 7}
 
 
 def test_workspaces_message_round_trips_through_json() -> None:
@@ -88,6 +98,8 @@ def test_wire_schema_defs_inventory_is_stable() -> None:
         [
             "AgentHealth",
             "DiscoveryHealth",
+            "EnvironmentCondition",
+            "NotificationOutcome",
             "ProviderPanelStatus",
             "UiAccountsMessage",
             "UiAvailableConnection",
@@ -100,8 +112,11 @@ def test_wire_schema_defs_inventory_is_stable() -> None:
             "UiConnectorToggleRequest",
             "UiCredentialParameter",
             "UiDiscoveryHealthMessage",
+            "UiEnvironmentMessage",
             "UiHealthMessage",
             "UiHelloMessage",
+            "UiNotificationEntry",
+            "UiNotificationsMessage",
             "UiOpenHelpMessage",
             "UiPermissionConnection",
             "UiPermissionGrantGroup",

@@ -9,7 +9,7 @@
 // the loss of every machine, so it names itself rather than the stuck machine
 // it produces -- restarting that machine would not help.
 
-import type { DiscoveryHealth, WorkspaceHealth } from "../../models/health";
+import type { DiscoveryHealth, EnvironmentCondition, WorkspaceHealth } from "../../models/health";
 
 /** What an action asks the shell to do. The views bind these; the decision
  * itself stays free of routing and IPC. */
@@ -23,7 +23,7 @@ export interface NoticeAction {
 export interface NoticePayload {
   /** Identity for replacement. States that share a key never rewrite the
    * strip as the tracker steps between them. */
-  key: "discovery-blocked" | "workspace-recovering" | "workspace-restart-failed";
+  key: "discovery-blocked" | "environment-blocked" | "workspace-recovering" | "workspace-restart-failed";
   variant: "warn" | "error";
   message: string;
   action: NoticeAction | null;
@@ -31,6 +31,32 @@ export interface NoticePayload {
 
 const DISCOVERY_BLOCKED_MESSAGE =
   "Minds lost contact with your machines and can't reconnect on its own. Your work is safe.";
+
+/** The conditions with a line to say: a measured, confirmed block. */
+type EnvironmentBlock = Exclude<EnvironmentCondition, "NONE" | "UNKNOWN">;
+
+function isEnvironmentBlock(condition: EnvironmentCondition): condition is EnvironmentBlock {
+  return condition !== "NONE" && condition !== "UNKNOWN";
+}
+
+/**
+ * What this device's own condition means, in one line.
+ *
+ * The two states are never collapsed into one "connection problem". On a
+ * network that blocks SSH the user's browser works, so telling them they are
+ * offline is a claim they can see is false -- and they would reasonably
+ * discount whatever the app says next.
+ *
+ * Each line reports only this device, because this device is all that was
+ * measured. Reassuring the user that their machines are still running would be
+ * a claim about the far side of a connection nothing here can make: minds
+ * stopped being able to look at exactly the moment it went offline, so a
+ * machine that died a second earlier would be described as fine.
+ */
+const ENVIRONMENT_BLOCKED_MESSAGE: Record<EnvironmentBlock, string> = {
+  OFFLINE: "No network connection.",
+  SSH_BLOCKED: "This network blocks the connection to your machines.",
+};
 
 /** Restarting the app is a desktop affordance. In a browser there is no app to
  * restart, so the notice states the condition and offers nothing -- a button
@@ -45,35 +71,118 @@ function discoveryBlockedNotice(isRestartAppAvailable: boolean): NoticePayload {
 }
 
 /**
+ * Everything beyond the machine's own health that can change what the band says.
+ */
+export interface NoticeBandContext {
+  /** False in a browser, where there is no app to offer a restart of. */
+  isRestartAppAvailable?: boolean;
+  /** The provider hosting this machine, when discovery cannot reach it. */
+  unreachableProviderLabel?: string | null;
+  /** True of this device as a whole, before any machine has been convicted.
+   * "UNKNOWN" while nothing has been measured, which withholds every blame
+   * below it rather than clearing the device. */
+  deviceEnvironment?: EnvironmentCondition;
+  /** The shape of the restart in flight, from the health frame: false is the
+   * user's own stop+start bounce, true the app's start-only dispatch, null no
+   * restart to describe. */
+  isRestartStartOnly?: boolean | null;
+  /** False for a machine on this device, which the network cannot explain. */
+  isWorkspaceNetworkDependent?: boolean;
+  /** This one connection failed on this device, on a network that works. */
+  isDeviceCannotConnect?: boolean;
+}
+
+/**
  * The band over a displayed machine, or null for no band.
  *
  * Discovery death outranks the machine's own health because it explains it:
  * while the consumer is dead every machine reads stuck, and only one of the
- * two conditions has an action that helps. An unreachable backend is the same
- * shape one scale down: this machine reads stuck because minds cannot reach the
- * provider that hosts it, so the band names the provider rather than the
- * machine. It keeps the recovering notice's key -- the condition is still "we
- * have lost contact and are still trying", only better explained -- so the
- * strip is not rewritten as a provider error lands and clears.
+ * two conditions has an action that helps. The explanations below it are the
+ * same shape at narrowing scales, and are ranked by how much they explain.
+ * This device having no usable network is the widest: it takes down the
+ * provider poll as well, so naming the provider under it would blame a backend
+ * that is fine. An unreachable backend is next -- this machine reads stuck
+ * because minds cannot reach the provider that hosts it, so the band names the
+ * provider rather than the machine. A connection that failed on this device,
+ * on a network that otherwise works, is the narrowest: this one machine reads
+ * stuck because the app could not build a connection to it, not because
+ * anything is wrong with it. All three keep the recovering notice's key -- the
+ * condition is still "we have lost contact and are still trying", only better
+ * explained -- so the strip is not rewritten as an explanation lands and
+ * clears. Discovery death does not: it is not this machine's condition at all,
+ * and its notice carries its own key and its own action.
  */
 export function noticeBandFor(
   workspaceHealth: WorkspaceHealth,
   discoveryHealth: DiscoveryHealth,
   isWorkspaceDisplayed: boolean,
-  isRestartAppAvailable = true,
-  unreachableProviderLabel: string | null = null,
+  context: NoticeBandContext = {},
 ): NoticePayload | null {
+  const {
+    isRestartAppAvailable = true,
+    unreachableProviderLabel = null,
+    deviceEnvironment = "NONE",
+    isRestartStartOnly = null,
+    isWorkspaceNetworkDependent = true,
+    isDeviceCannotConnect = false,
+  } = context;
   if (!isWorkspaceDisplayed) return null;
   if (discoveryHealth === "blocked") return discoveryBlockedNotice(isRestartAppAvailable);
-  if (workspaceHealth !== "healthy" && unreachableProviderLabel !== null) {
+  // This device's own condition outranks the backend's for the same reason
+  // discovery death outranks both: it explains them. A laptop with no network
+  // cannot reach the provider either, so its poll errors too -- naming the
+  // provider there would blame a backend that is fine for a condition the user
+  // can fix. It keeps the recovering key, since the condition is still "we have
+  // lost contact", only correctly attributed. It speaks over a healthy machine
+  // too, offering nothing: there is no recovery card to open. The one exception
+  // is a restart the user asked for -- their own stop+start bounce narrates
+  // itself, since there is a restart to report and the waiting state would be
+  // false. The app's own start-only dispatch is not that: it is entered
+  // unasked, within seconds of any network flap, and lasts as long as the
+  // network is down, which is precisely when the device's condition is the
+  // explanation the user needs.
+  //
+  // And it is silent over a machine that runs on this device: a docker
+  // container answers over loopback with the wifi off, so a dead network
+  // explains nothing about its outage. Displacing its recovery notice would
+  // blame the network for a machine the network cannot touch, and send the
+  // user to a card for a restart that would have worked.
+  const isUserBounceRunning = workspaceHealth === "restarting" && isRestartStartOnly === false;
+  const condition: EnvironmentCondition =
+    isUserBounceRunning || !isWorkspaceNetworkDependent ? "NONE" : deviceEnvironment;
+  // The three explanations in rank order, each one line. They differ only in
+  // what they say, so the ranking is the whole of the logic and is kept where
+  // it can be read as a list -- the payload they share is built once below.
+  //
+  // The provider's name is the cause alone: one line over the machine's own
+  // screen has room for the condition, not for what it means for this machine
+  // or what minds is doing about it. The device-side line likewise says whose
+  // fault it is and nothing else -- its remedy is an app restart, a real
+  // interruption, offered from the card next to the error that justifies it.
+  //
+  // An unmeasured device names nobody. Both lines below it blame something on
+  // the far side of this device's network, and until a probe has looked at
+  // that network there is no ground to say the provider is what failed --
+  // after a wake, the provider's own poll errored because the laptop was
+  // asleep, and naming it would be the wrong headline. The generic recovering
+  // line below still speaks, so the user is not left with nothing.
+  const explanation = isEnvironmentBlock(condition)
+    ? ENVIRONMENT_BLOCKED_MESSAGE[condition]
+    : workspaceHealth === "healthy" || condition === "UNKNOWN"
+      ? null
+      : unreachableProviderLabel !== null
+        ? `Can't connect to ${unreachableProviderLabel}`
+        : isDeviceCannotConnect
+          ? "Can't connect to this machine from this device"
+          : null;
+  if (explanation !== null) {
     return {
       key: "workspace-recovering",
       variant: "warn",
-      // The cause alone. One line over the machine's own screen has room for
-      // the condition, not for what it means for this machine or what minds is
-      // doing about it -- the card behind "Open recovery" says both.
-      message: `Can't connect to ${unreachableProviderLabel}`,
-      action: { label: "Open recovery", kind: "open-recovery" },
+      message: explanation,
+      // The device's own condition is the one explanation that also speaks over
+      // a healthy machine, and there is no recovery card to open for one.
+      action: workspaceHealth !== "healthy" ? { label: "Open recovery", kind: "open-recovery" } : null,
     };
   }
   if (workspaceHealth === "restart_failed") {
@@ -104,12 +213,24 @@ export function noticeBandFor(
 /**
  * The notice a hub page renders in its own flow, or null for none.
  *
- * Only discovery death qualifies: a single machine's health is not a hub
- * page's concern, and the machines list already badges that per row.
+ * Only app-wide conditions qualify: a single machine's health is not a hub
+ * page's concern, and the machines list already badges that per row. Discovery
+ * death is one such condition, and so is this device having no usable network
+ * -- it is one fact about the laptop however many machines it takes down, and a
+ * user looking at a hub page has no band to read it from. It carries no action,
+ * because there is nothing in the app that fixes it.
  */
 export function localPageNoticeFor(
   discoveryHealth: DiscoveryHealth,
   isRestartAppAvailable = true,
+  environment: EnvironmentCondition = "NONE",
 ): NoticePayload | null {
-  return discoveryHealth === "blocked" ? discoveryBlockedNotice(isRestartAppAvailable) : null;
+  if (discoveryHealth === "blocked") return discoveryBlockedNotice(isRestartAppAvailable);
+  if (!isEnvironmentBlock(environment)) return null;
+  return {
+    key: "environment-blocked",
+    variant: "warn",
+    message: ENVIRONMENT_BLOCKED_MESSAGE[environment],
+    action: null,
+  };
 }

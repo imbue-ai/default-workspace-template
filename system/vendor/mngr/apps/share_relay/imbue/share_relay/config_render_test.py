@@ -1,5 +1,6 @@
 import pytest
 from pydantic import AnyHttpUrl
+from pydantic import SecretStr
 
 from imbue.imbue_common.model_update import to_update
 from imbue.share_relay.config_render import render_frps_toml
@@ -10,6 +11,8 @@ from imbue.share_relay.primitives import ContentDomain
 from imbue.share_relay.primitives import RegionCode
 from imbue.share_relay.primitives import RelayId
 
+_PLUGIN_SECRET = "f0e1d2c3b4a5968788796a5b4c3d2e1f"
+
 
 def _config() -> RelayConfiguration:
     return RelayConfiguration(
@@ -17,6 +20,7 @@ def _config() -> RelayConfiguration:
         region=RegionCode("us1"),
         content_domain=ContentDomain("imbueminds.com"),
         plugin_auth_url=AnyHttpUrl("https://connector.example.com/frps/auth"),
+        plugin_auth_secret=SecretStr(_PLUGIN_SECRET),
     )
 
 
@@ -29,9 +33,9 @@ def test_frps_toml_is_sni_passthrough_and_has_no_tls_termination() -> None:
     assert "tls_cert" not in rendered
 
 
-def test_frps_toml_authorizes_only_login_and_newproxy() -> None:
+def test_frps_toml_authorizes_only_the_tunnel_gating_ops() -> None:
     rendered = render_frps_toml(_config())
-    assert 'ops = ["Login", "NewProxy"]' in rendered
+    assert 'ops = ["Login", "NewProxy", "Ping"]' in rendered
     # Visitor connections must NOT be authorized per-connection (that would put
     # the connector in every visitor's request path).
     assert "NewUserConn" not in rendered
@@ -40,9 +44,13 @@ def test_frps_toml_authorizes_only_login_and_newproxy() -> None:
 def test_frps_toml_points_the_plugin_at_the_connector() -> None:
     """The auth URL is split into origin + path: frps builds the callback URL as addr + path."""
     rendered = render_frps_toml(_config())
-    assert 'addr = "https://connector.example.com"' in rendered
-    # The relay's own id is appended so the connector can attribute callbacks.
+    # The secret rides as the addr's userinfo, so frps delivers it as an
+    # Authorization: Basic header instead of an access-logged path segment.
+    assert f'addr = "https://{_PLUGIN_SECRET}@connector.example.com"' in rendered
+    # The relay's own id is appended so the connector can attribute callbacks;
+    # the path itself must stay secret-free.
     assert 'path = "/frps/auth/relay-' + "e" * 16 + '"' in rendered
+    assert _PLUGIN_SECRET not in rendered.split("path = ", 1)[1]
     # Without tlsVerify frp skips certificate verification on https plugin
     # addrs, exposing the shared auth secret to an on-path attacker.
     assert "tlsVerify = true" in rendered
@@ -50,17 +58,32 @@ def test_frps_toml_points_the_plugin_at_the_connector() -> None:
 
 @pytest.mark.parametrize(
     "bad_url",
-    ["https://connector.example.com/frps/auth?secret=abc", "https://connector.example.com/frps/auth#frag"],
+    [
+        "https://connector.example.com/frps/auth?secret=abc",
+        "https://connector.example.com/frps/auth#frag",
+        f"https://{_PLUGIN_SECRET}@connector.example.com/frps/auth",
+    ],
 )
-def test_plugin_auth_url_rejects_query_and_fragment(bad_url: str) -> None:
-    # The renderer keeps only origin + path, so a query/fragment (e.g. a secret
-    # passed as ?secret=...) would be silently dropped from the frps config.
-    with pytest.raises(ValueError, match="query string or fragment"):
+def test_plugin_auth_url_rejects_query_fragment_and_userinfo(bad_url: str) -> None:
+    with pytest.raises(ValueError, match="plugin_auth_url must not carry"):
         RelayConfiguration(
             relay_id=RelayId("relay-" + "e" * 16),
             region=RegionCode("us1"),
             content_domain=ContentDomain("imbueminds.com"),
             plugin_auth_url=AnyHttpUrl(bad_url),
+            plugin_auth_secret=SecretStr(_PLUGIN_SECRET),
+        )
+
+
+@pytest.mark.parametrize("bad_secret", ["", "too-short", "has@userinfo-breaking-chars", "with:colon" + "a" * 16])
+def test_plugin_auth_secret_rejects_userinfo_unsafe_shapes(bad_secret: str) -> None:
+    with pytest.raises(ValueError, match="plugin_auth_secret"):
+        RelayConfiguration(
+            relay_id=RelayId("relay-" + "e" * 16),
+            region=RegionCode("us1"),
+            content_domain=ContentDomain("imbueminds.com"),
+            plugin_auth_url=AnyHttpUrl("https://connector.example.com/frps/auth"),
+            plugin_auth_secret=SecretStr(bad_secret),
         )
 
 
