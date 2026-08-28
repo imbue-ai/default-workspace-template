@@ -223,28 +223,26 @@ def test_aborting_a_flow_leaves_no_account_behind(tmp_path: Path) -> None:
         assert client.get("/api/accounts").get_json()["accounts"] == []
 
 
-def test_a_non_string_key_provider_is_refused_not_a_500() -> None:
+def test_a_non_string_key_provider_is_refused_not_a_500(tmp_path: Path) -> None:
     """It becomes a KEY in pi's auth.json, so an unhashable value crashes rather than 400s."""
-    with _client() as client:
-        started = client.post(
-            "/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"}
-        ).get_json()
+    with _client(_signed_in_service(tmp_path)) as client:
+        started = client.post("/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"})
+        flow_id = started.get_json()["flow_id"]
         response = client.post(
-            f"/api/accounts/flows/{started['flow_id']}/submit",
+            f"/api/accounts/flow/{flow_id}",
             json={"api_key": "sk-test", "key_provider": ["not", "a", "string"]},
         )
     assert response.status_code == 400
     assert "key_provider" in response.get_json()["detail"]
 
 
-def test_a_key_provider_the_lane_does_not_have_is_refused() -> None:
-    """Unrecognised ids were written straight into auth.json as a provider the lane lacks."""
-    with _client() as client:
-        started = client.post(
-            "/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"}
-        ).get_json()
+def test_a_key_provider_the_lane_does_not_have_is_refused(tmp_path: Path) -> None:
+    """An unrecognised id was written into auth.json as a provider the lane does not have."""
+    with _client(_signed_in_service(tmp_path)) as client:
+        started = client.post("/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"})
+        flow_id = started.get_json()["flow_id"]
         response = client.post(
-            f"/api/accounts/flows/{started['flow_id']}/submit",
+            f"/api/accounts/flow/{flow_id}",
             json={"api_key": "sk-test", "key_provider": "not-a-real-provider"},
         )
     assert response.status_code == 400
