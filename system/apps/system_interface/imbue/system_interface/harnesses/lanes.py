@@ -339,7 +339,7 @@ _AGY_PTY_COLUMNS: Final = 1000
 LANE_GOOGLE = Lane(
     id="google",
     provider_name="Google",
-    subtitle="Free usage of Google's latest models, with any Google account.",
+    subtitle="Limited free usage of Google's latest models, with any Google account.",
     harness=HarnessType.ANTIGRAVITY,
     methods=(
         PtyMethod(

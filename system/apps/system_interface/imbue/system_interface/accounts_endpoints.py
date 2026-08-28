@@ -56,6 +56,9 @@ def list_lanes() -> Response:
             "provider_name": lane.provider_name,
             "subtitle": lane.subtitle,
             "harness": lane.harness.value,
+            # Its display form too: the sign-in header states which harness the connection will
+            # run on, and "claude" is the id, not something to show a user.
+            "harness_label": HARNESS_LABEL[lane.harness],
             "methods": [
                 {
                     "id": method.id,
