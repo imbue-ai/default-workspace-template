@@ -533,3 +533,66 @@ def test_delete_bucket_interlock_applies_to_slugified_name(monkeypatch: pytest.M
 
     assert resp.status_code == 409
     assert "still active" in resp.json()["detail"]
+
+
+def test_create_bucket_while_enforcement_pending_mints_read_only_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An in-flight 'pending' marker counts as enforced: a fresh mint stays conservative."""
+    client, fake, store, _entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
+    first = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
+    store.set_enforced_access(first["key"]["access_key_id"], "pending")
+    resp = client.post("/buckets", json={"name": "b"}, headers=_user_headers())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["key"]["access"] == "read"
+    assert fake.account_tokens[body["key"]["access_key_id"]]["access"] == "read"
+
+
+def test_roll_key_reports_read_while_enforcement_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rolling a key whose enforcement transition is unconfirmed reports the conservative read scope."""
+    client, _fake, store, _entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
+    created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
+    store.set_enforced_access(created["key"]["access_key_id"], "pending")
+    rolled = client.post("/buckets/a/roll-key", headers=_user_headers())
+    assert rolled.status_code == 200
+    assert rolled.json()["access"] == "read"
+
+
+def test_storage_recheck_settles_a_pending_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crash-orphaned 'pending' key is re-asserted and settled by the on-demand recheck."""
+    client, fake, store, entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
+    created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
+    key_id = created["key"]["access_key_id"]
+    # Model a crashed downgrade: the Cloudflare write landed but the settling
+    # DB write never did.
+    fake.account_tokens[key_id]["access"] = "read"
+    store.set_enforced_access(key_id, "pending")
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 40
+
+    resp = client.post("/account/storage-recheck", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["is_over_quota"] is False
+    assert fake.account_tokens[key_id]["access"] == "readwrite"
+    settled_row = store.get_key(key_id)
+    assert settled_row is not None
+    assert settled_row["enforced_access"] is None
+
+
+def test_cleanup_grant_treats_a_pending_marker_as_downgraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A grant request covering only a 'pending' key still grants (and restores the key)."""
+    client, fake, store, entitlements_store, grant_store = _make_bucket_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, max_total_bucket_bytes=100)
+    created = client.post("/buckets", json={"name": "a"}, headers=_user_headers()).json()
+    key_id = created["key"]["access_key_id"]
+    fake.account_tokens[key_id]["access"] = "read"
+    store.set_enforced_access(key_id, "pending")
+    fake.usage_bytes_by_bucket[f"{_USER_STUB_USER_ID_PREFIX}--a"] = 1000
+
+    resp = client.post("/account/storage-cleanup-grant", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "granted"
+    assert fake.account_tokens[key_id]["access"] == "readwrite"
+    restored_row = store.get_key(key_id)
+    assert restored_row is not None
+    assert restored_row["enforced_access"] is None
+    assert len(grant_store.grants_by_id) == 1

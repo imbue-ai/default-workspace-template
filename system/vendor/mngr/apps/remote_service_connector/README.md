@@ -254,6 +254,7 @@ Cloudflare's R2 token model has no delete-without-write permission, and restic's
 - `POST /account/storage-recheck` re-measures live usage and applies enforcement immediately (restoring or downgrading), settling any outstanding grant. It also works standalone -- a user who freed space some other way does not wait for the hourly sweep.
 - A grant settles as *successful* when usage decreased at all versus its baseline. Only unsuccessful grants count against a rolling budget (5 settled-without-decrease grants per 24 hours; a 403 with `code: cleanup_grant_budget_exhausted` past that), so genuine cleanup is unlimited while write-under-cover-of-cleanup abuse is bounded to roughly one sweep interval of writes per burned grant.
 - Grants expire after 60 minutes; the sweep settles expired grants as the fallback when the client never rechecked, and skips enforcement for accounts whose grant is still active (a prune transiently *increases* usage while it repacks).
+- Enforcement flips are serialized per account by a DB lease; while another enforcement pass (sweep, grant, recheck, or suspension) holds the account's lease past a bounded wait, these two endpoints answer a retryable 503 with `code: enforcement_busy` (or `enforcement_interrupted` when a pass was taken over mid-run) -- the client simply retries shortly.
 
 ### Destroyed-workspace backup retention reaper
 
