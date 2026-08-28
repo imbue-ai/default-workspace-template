@@ -289,10 +289,15 @@ def discard_account_dir(account_id: str, home: Path | None = None) -> None:
 def delete_account(account_id: str, home: Path | None = None) -> None:
     """Drop the row, remove the folder, and clear the mru if it pointed here.
 
-    Agents bound to this account keep their transcripts -- see `KEPT_ON_DISCARD` -- and fail
-    on their next turn with their harness's own error. Nothing rebinds them: their `account` label becomes a
-    dangling reference, which is the cost of delete-and-re-add over re-authenticating in
-    place.
+    This takes the credential off DISK. It does not reach into a process that already read it:
+    a running agent holds what it loaded at startup, so a chat bound to this account can keep
+    answering until it next restarts -- observed, not assumed. What stops immediately is
+    anything that reads the folder afresh, which includes starting a new chat on it.
+
+    Agents bound here keep their transcripts (see `KEPT_ON_DISCARD`) and nothing rebinds them:
+    their `account` label becomes a dangling reference, which is the cost of delete-and-re-add
+    over re-authenticating in place. Killing them instead would be worse -- it destroys a chat
+    the user may still be reading, to enforce a rule they can simply be told.
     """
     with _index_lock(home):
         index = read_index(home)

@@ -3,10 +3,12 @@
  *
  * The chat and the terminal are two renderings of one conversation, so this reads as a view
  * setting rather than a place to navigate to -- which is why it is a switch and not a button,
- * and why it sits in the composer's under-bar next to the model rather than in a tab strip.
+ * and why it sits in the composer's under-bar next to the model.
  *
- * Ported from the mockup's `TerminalViewToggle` (`ClaudeCodeView.tsx`). The track and knob are
- * the same shape the combo card's fast-mode switch uses, at the under-bar's smaller size.
+ * It is the SAME switch as the combo card's fast-mode row, classes and all. An earlier version
+ * scaled it down here with its own CSS, which set `transform: translateX(...)` on a knob whose
+ * offset already comes from a Tailwind `translate-x-[22px]` utility -- the utility won, and a
+ * 22px throw in a 32px track put the knob outside it. One switch, one size, no overrides.
  */
 import m from "mithril";
 
@@ -27,17 +29,15 @@ export const TerminalViewToggle: m.Component<TerminalViewToggleAttrs> = {
         role: "switch",
         class: "terminal-view-toggle",
         "aria-checked": on ? "true" : "false",
-        "aria-label": "Terminal view",
+        "aria-label": "Terminal View",
         onclick: onToggle,
       },
       [
-        m("span", { class: "terminal-view-toggle-label" }, "Terminal"),
+        m("span", { class: "terminal-view-toggle-label" }, "Terminal View"),
         m(
           "span",
-          { class: `${css.SWITCH} terminal-view-toggle-track ${on ? css.SWITCH_ON : css.SWITCH_OFF}` },
-          m("span", {
-            class: `${css.SWITCH_KNOB} terminal-view-toggle-knob ${on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}`,
-          }),
+          { class: `${css.SWITCH} ${on ? css.SWITCH_ON : css.SWITCH_OFF}` },
+          m("span", { class: `${css.SWITCH_KNOB} ${on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` }),
         ),
       ],
     );

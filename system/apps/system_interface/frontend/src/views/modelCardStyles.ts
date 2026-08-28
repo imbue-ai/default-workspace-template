@@ -111,9 +111,10 @@ export const FLYOUT =
 /** `model-flyout-scroll` gives it a visible slim scrollbar; without one nothing says the
  *  list continues past the edge. */
 export const FLYOUT_SCROLL = "model-flyout-scroll min-h-0 flex-1 overflow-y-auto";
-/** `pr-7` reserves the slot the trash occupies on hover, so the row's text never reflows. */
+/** `pr-14` reserves the right edge for the tick and the removal control beside it, so the row's
+ *  text never reflows when the bin appears. */
 const FLYOUT_ROW_BASE =
-  "flex w-full items-center gap-1.5 rounded-md px-1.5 pr-7 text-left text-[13px] leading-[29px] " +
+  "flex w-full items-center gap-1.5 rounded-md px-1.5 pr-14 text-left text-[13px] leading-[29px] " +
   "transition-colors";
 export const FLYOUT_ROW = `${FLYOUT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const FLYOUT_ROW_SELECTED = `${FLYOUT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
@@ -124,24 +125,40 @@ export const FLYOUT_ROW_LOCKED =
   `${FLYOUT_ROW_BASE} text-tertiary hover:bg-fill-hover cursor-default`;
 export const FLYOUT_ROW_NAME = "truncate";
 export const FLYOUT_ROW_SUB = "type-helper text-tertiary";
-/** Sits at the right edge, translated over the reserved slot; on hover it slides back so the
- *  trash takes the edge -- it only moves when actually displaced, never just fading out. */
-export const FLYOUT_CHECK =
-  "ml-auto shrink-0 translate-x-[18px] text-accent transition-transform group-hover/conn:translate-x-0";
+/** Pinned to the row's right edge and never moved. A SIBLING of the row button rather than a
+ *  child, so the removal control can sit to its LEFT without either one having to give way.
+ *
+ *  The mockup slides this aside on hover to let the trash take the edge. It does not here: the
+ *  tick says which provider this chat is running on, and that fact does not change because the
+ *  pointer passed over the row. */
+export const FLYOUT_CHECK = "ml-auto shrink-0 text-accent";
+/** The same tick on a row that also carries a removal control: pinned to the row's right edge
+ *  as a SIBLING of the button, so the bin can sit to its LEFT without either giving way.
+ *
+ *  The mockup slides the tick aside on hover to let the bin take the edge. It does not here: the
+ *  tick says which provider this chat runs on, and that does not change because the pointer
+ *  passed over the row. */
+export const FLYOUT_CHECK_PINNED =
+  "pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-accent";
 export const FLYOUT_EMPTY = "type-helper text-tertiary px-1.5 py-2";
 export const FLYOUT_ADD =
   "flex w-full items-center gap-1.5 rounded-md px-1.5 text-left text-[13px] leading-[29px] " +
   "text-secondary transition-colors hover:bg-fill-hover cursor-pointer";
 
-/** The sign-out trash: a SIBLING of the row button (buttons cannot nest), floated over the
- *  row's reserved right padding, appearing on row hover. */
+/** The sign-out control: a SIBLING of the row button (buttons cannot nest), floated over the
+ *  row's reserved right padding. `right-7` puts it LEFT of the tick rather than on top of it,
+ *  so the tick never has to move out of its way. */
 export const ROW_TRASH =
-  "absolute right-1.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
+  "absolute right-8 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
   "justify-center rounded text-tertiary transition-colors hover:text-important group-hover/conn:inline-flex";
-/** Armed: stays visible whether or not the row is hovered, and says what it will do. */
+/** Armed: stays visible whether or not the row is hovered, and says what it will do. Same right
+ *  edge as the bin it replaces, so arming it does not shift anything. */
+/** Armed, it is wider than the bin it replaces, so it carries the row's own background: it may
+ *  overhang the provider name rather than forcing every row to reserve space for a word that is
+ *  almost never shown. */
 export const ROW_TRASH_ARMED =
-  "absolute right-1 top-1/2 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded px-1 type-helper text-important hover:bg-fill-hover";
+  "absolute right-8 top-1/2 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center " +
+  "justify-center rounded bg-surface-primary px-1 type-helper text-important hover:bg-fill-hover";
 
 /* No tooltip classes live here on purpose.
  *
