@@ -1502,6 +1502,13 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           target = { kind: "virtual-index", index: resolveTrackFractionToIndex(mapping, lastScrollbarFraction) };
         }
       }
+      // A pointer in the outermost 1% of the track means "the very end/very
+      // beginning", whatever it resolves to. Releasing with the thumb a few px
+      // shy of the track end otherwise resolves to an event tens short of the
+      // tail -- thousands of px above the bottom on a long transcript -- so
+      // "scroll all the way down" only worked on a pixel-perfect release.
+      const isTrackEndIntent = lastScrollbarFraction >= 0.99;
+      const isTrackStartIntent = lastScrollbarFraction <= 0.01;
       trace?.record("scrollbar-move", { fraction: lastScrollbarFraction, target });
       if (target.kind === "physical-fraction") {
         // Scale over the region's scrollable span. With a bottom spacer the
@@ -1534,8 +1541,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
               (totalEvents === null || extent().endIndex >= totalEvents);
             // Same deferred-landing semantics as onScrollEvent: a drag ending
             // at an edge while the fill lags lands exactly there once loaded.
-            pendingTailIntent = bottomGapPx < BOTTOM_THRESHOLD_PX;
-            pendingTopIntent = targetTopPx < BOTTOM_THRESHOLD_PX;
+            pendingTailIntent = isTrackEndIntent || bottomGapPx < BOTTOM_THRESHOLD_PX;
+            pendingTopIntent = isTrackStartIntent || targetTopPx < BOTTOM_THRESHOLD_PX;
             dispatchPosition({ kind: "USER_SCROLLED", source: "scrollbar", anchor, atTail });
           }
         }
@@ -1566,8 +1573,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
               bottomGapPx < BOTTOM_THRESHOLD_PX &&
               spacerBottomPx <= 0 &&
               (totalEvents === null || endIndex >= totalEvents);
-            pendingTailIntent = bottomGapPx < BOTTOM_THRESHOLD_PX;
-            pendingTopIntent = targetTopPx < BOTTOM_THRESHOLD_PX;
+            pendingTailIntent = isTrackEndIntent || bottomGapPx < BOTTOM_THRESHOLD_PX;
+            pendingTopIntent = isTrackStartIntent || targetTopPx < BOTTOM_THRESHOLD_PX;
             dispatchPosition({ kind: "USER_SCROLLED", source: "scrollbar", anchor, atTail });
           }
         } else {
@@ -1595,8 +1602,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           // A target at either extreme records edge intent, so the landing
           // (which anchors the target row at the viewport TOP) gets corrected
           // to the exact edge by runAfterRender once that edge is loaded.
-          pendingTailIntent = totalEvents > 0 && target.index >= totalEvents - 1;
-          pendingTopIntent = target.index <= 0;
+          pendingTailIntent = isTrackEndIntent || (totalEvents > 0 && target.index >= totalEvents - 1);
+          pendingTopIntent = isTrackStartIntent || target.index <= 0;
           if (positionState.kind === "FOLLOW" && geometry !== null) {
             const anchor = anchorForUser();
             if (anchor !== null) {
