@@ -82,7 +82,7 @@ class PathWatcher:
 
     def _run(self) -> None:
         self._ensure_observers()
-        self._on_change()
+        self._invoke_on_change()
         while not self._stop_event.is_set():
             self._wake_event.wait(timeout=POLL_INTERVAL_SECONDS)
             self._wake_event.clear()
@@ -90,7 +90,19 @@ class PathWatcher:
                 break
             # Retry scheduling any dir that has since appeared, then re-derive.
             self._ensure_observers()
+            self._invoke_on_change()
+
+    def _invoke_on_change(self) -> None:
+        """Run the callback, logging (not propagating) whatever it raises.
+
+        The callback reads paths that other processes create and delete, so a
+        transient failure is expected. Letting it escape would end the thread and
+        silently stop every future update, so the loop survives to the next wake.
+        """
+        try:
             self._on_change()
+        except Exception as e:
+            logger.warning("PathWatcher on_change callback failed: {}", e)
 
     def _ensure_observers(self) -> None:
         """Schedule a watchdog handler for every watchable dir not already watched.
