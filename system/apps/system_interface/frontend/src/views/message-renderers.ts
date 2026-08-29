@@ -7,7 +7,9 @@ import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
-import { openSubagentTab } from "./DockviewWorkspace";
+import { getAgentById } from "../models/AgentManager";
+import { openProviderChooser } from "../models/Providers";
+import { openSubagentTab, startChatOnAccount } from "./DockviewWorkspace";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
@@ -341,6 +343,45 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
 /** The grey note shown under a provider-fault API error: the failure is the model
  *  provider's, not ours. Wording nudged by kind; every harness's provider faults
  *  land here since they stamp the same is_provider_fault flag. */
+/** The "sign in again" affordance under an auth failure.
+ *
+ * Resolves the chat's own account from its `account` label, so the chooser opens ON that
+ * account and re-authenticates it in place -- every chat bound to it recovers. Without the
+ * label (a chat from before accounts, say) it opens the chooser plainly, which is still the
+ * right destination.
+ */
+function renderReauthAction(agentId: string): m.Children {
+  const accountId = getAgentById(agentId)?.labels?.account ?? "";
+  return m("div.message-api-error-note", [
+    "This provider is no longer working. ",
+    m(
+      "button",
+      {
+        type: "button",
+        class: "message-api-error-action",
+        onclick: () => openProviderChooser(accountId ? { accountId } : {}),
+      },
+      "Sign in again",
+    ),
+    // Two ways out, because only the first one revives THIS conversation: a chat binds to its
+    // account when it is created and nothing rebinds it, so "switch provider" cannot mean
+    // moving this chat -- it means starting a fresh one somewhere that works. Both are offered
+    // because the right choice depends on whether the credential is fixable, which the user
+    // knows and we do not: an expired login is, a spent quota mostly is not.
+    " or ",
+    m(
+      "button",
+      {
+        type: "button",
+        class: "message-api-error-action",
+        onclick: () => openProviderChooser({ onSignedIn: (chosen) => startChatOnAccount(chosen) }),
+      },
+      "switch to another provider",
+    ),
+    ".",
+  ]);
+}
+
 function providerFaultNote(kind: string | null): string {
   const cause =
     kind === "api_error" ? "the model provider's servers hit an error" : "the model provider's servers are overloaded";
@@ -358,9 +399,14 @@ export function renderAssistantMessageChildren(
 
   const children: m.Children[] = [];
   if (textContent) {
-    if (event.is_api_error) {
+    if (event.is_api_error || event.is_auth_error) {
       // A model API error: render the failure text in light red, and for a
       // provider-side fault (5xx / overloaded) add a grey "not Minds' fault" note.
+      //
+      // An auth error gets a button as well. It is the one failure the user can actually
+      // fix, and the fix is not obvious from the provider's wording -- which is usually a
+      // raw 401 body. Inline rather than a modal, so it waits to be clicked instead of
+      // throwing a sign-in screen over whatever the user was doing.
       children.push(
         m("div.message-api-error", [
           m(MarkdownContent, {
@@ -369,6 +415,7 @@ export function renderAssistantMessageChildren(
             expansionKeyPrefix: event.event_id,
           }),
           event.is_provider_fault ? m("div.message-api-error-note", providerFaultNote(event.api_error_kind)) : null,
+          event.is_auth_error ? renderReauthAction(agentId) : null,
         ]),
       );
     } else {

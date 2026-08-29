@@ -15,12 +15,12 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.registry import build_watcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
-from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Key under which the single SystemInterfaceState is stored on ``app.config`` so
@@ -58,7 +58,7 @@ class SystemInterfaceState(MutableModel):
     event_queues: AgentEventQueues
     layout_mutex: LayoutMutex
     claude_auth_service: ClaudeAuthService
-    welcome_resender: WelcomeResender
+    auth_flows: AuthFlowService
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
     watchers: dict[str, AgentSessionWatcher] = {}

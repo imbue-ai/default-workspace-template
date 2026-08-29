@@ -1,7 +1,7 @@
 """Unit tests for the Claude API-error classifier."""
 
-from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
-from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 
 
 def test_overloaded_is_a_provider_fault() -> None:
@@ -52,3 +52,21 @@ def test_ordinary_assistant_text_is_not_an_error() -> None:
 
 def test_none_kind_is_not_a_provider_fault() -> None:
     assert is_provider_fault(None) is False
+
+
+def test_pi_bare_status_form_is_classified() -> None:
+    """pi writes no `API Error:` prefix -- just the status and the body."""
+    assert classify_api_error('529 {"type":"error","error":{"type":"overloaded_error"}}') == "overloaded"
+
+
+def test_a_status_quoted_mid_message_is_not_a_failure() -> None:
+    """The bare form is anchored to the start of the string. Unanchored, any message
+    mentioning a status code would render as a failed turn."""
+    assert classify_api_error("Retry with 500 tokens and see if 429 shows up again") is None
+
+
+def test_auth_wins_so_the_two_subtexts_cannot_stack() -> None:
+    """Anthropic reports exhausted third-party usage as a 400 `invalid_request_error`, which
+    is in BOTH this module's type table and the auth vocabulary. Classifying it here as well
+    would put two contradictory next steps under one message."""
+    assert classify_api_error('400 {"type":"invalid_request_error","message":"credit balance is too low"}') is None

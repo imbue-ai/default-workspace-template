@@ -1,0 +1,572 @@
+"""The account store: one folder per signed-in provider account, plus an index.
+
+An account IS a folder. Nothing about which provider it belongs to, who signed in, or what
+it is called lives on disk -- the folder name is random and carries no meaning, so a folder
+can never drift out of sync with, or be mistaken for, the identity the UI shows. All of that
+lives in one index file, which is the sole source of truth.
+
+Signing in twice to the same real account is fine and expected: two folders that look
+identical from outside. When a login expires the user makes a new one and deletes the old,
+so there is deliberately no dedupe, no identity scraping, and no liveness probing anywhere
+in this module.
+
+The commit point is the INDEX WRITE, not the folder. A flow mints a folder, drives the CLI
+into it, and only then commits a row. That ordering means an interrupted sign-in leaves a
+folder with no row -- which `reconcile` removes at boot -- rather than a row
+pointing at a half-authenticated folder the UI would offer as usable.
+
+Concurrency: three operations mutate the index (commit, delete, set-mru) and they are served
+concurrently by Flask. An atomic rename prevents a *torn* file, not a *lost update*, so every
+mutation takes `_index_lock` across the whole read-modify-write -- an flock, because the
+server is not the only process that writes here.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import json
+import os
+import shutil
+import threading
+import uuid
+from collections.abc import Iterator
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Final
+
+from loguru import logger as _loguru_logger
+
+from pydantic import ValidationError
+
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
+
+logger = _loguru_logger
+
+# Bumped when the on-disk shape changes. Code that finds a higher version than it knows
+# should refuse rather than guess -- without this there is no way for an older build (a
+# revert, a rolled-back workspace) to tell "no accounts yet" from "accounts it cannot read".
+INDEX_VERSION: Final = 1
+
+_INDEX_FILENAME: Final = "index.json"
+_ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
+
+_ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
+
+# Marks that this workspace has had its first chat. Beside the accounts root rather than in
+# bootstrap's state dir: "has anyone chatted here yet" is workspace state, and the chat that
+# answers it is created on demand rather than at boot.
+_FIRST_CHAT_FILENAME: Final = "first_chat_started"
+
+_INDEX_THREAD_LOCK = threading.Lock()
+_LOCK_FILENAME: Final = "index.lock"
+
+
+@contextlib.contextmanager
+def _index_lock(home: Path | None = None) -> Iterator[None]:
+    """Hold the index across the whole read-modify-write, against every writer.
+
+    A thread lock alone is not enough: the server is not the only process that mints
+    accounts -- `migrate_claude_auth.py` runs standalone and commits one, and boot's
+    `reconcile` removes every folder the index does not name. Two processes interleaving a
+    read-modify-write lose an account; one racing the sweep has its brand-new folder deleted
+    out from under it.
+    """
+    with _INDEX_THREAD_LOCK:
+        root = accounts_root(home)
+        root.mkdir(parents=True, exist_ok=True)
+        lock_path = root / _LOCK_FILENAME
+        with lock_path.open("w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+class AccountError(RuntimeError):
+    """An account could not be created, resolved, or removed."""
+
+
+class Account(FrozenModel):
+    """One signed-in provider account.
+
+    `id` IS the folder name. Deriving it from the lane and a sequence number would put
+    identity back on disk -- and would force a choice, on delete, between renumbering every
+    stored reference and leaving gaps. A random id makes delete "drop the row and remove the
+    folder" and nothing else.
+    """
+
+    id: str
+    # Which (AI provider + harness) pairing this account signs into. Immutable: re-signing
+    # into a folder may change *which* account it holds, never which harness runs it.
+    lane: str
+    # 1-based, per lane, for display only. Never reused -- see `_next_seq`.
+    seq: int
+    # The provider noun shown to the user. Equal to the lane's provider name except on the
+    # bring-your-own-key lane, where it is the key provider the user picked, so two keys
+    # read "OpenRouter (Pi)" and "Groq (Pi)" rather than "API key (Pi)" and "API key (Pi) 2".
+    display: str
+    # What the user renamed this account to, or "" for the provider's own name. Kept separate
+    # from `display` rather than overwriting it: the harness still has to be able to say which
+    # provider a folder actually holds, and a row called "work" no longer could.
+    name: str = ""
+
+
+class AccountIndex(FrozenModel):
+    version: int = INDEX_VERSION
+    accounts: tuple[Account, ...] = ()
+    # The account a new chat uses when none is named. Updated on every chat create.
+    mru: str | None = None
+
+
+def accounts_root(home: Path | None = None) -> Path:
+    """Where account folders live. Never under /tmp -- codex refuses a home there.
+
+    `MINDS_ACCOUNTS_ROOT` overrides the location outright. That exists for tests: the
+    resolvers that reach this are several calls below anything a test constructs (a chat
+    create resolves an account; the Imbue endpoint mints one), so without it a test run
+    writes into the developer's own store -- which is not a hypothetical, it happened.
+    """
+    if home is not None:
+        return home.joinpath(*_ACCOUNTS_RELATIVE_PATH)
+    override = os.environ.get(_ACCOUNTS_ROOT_ENV_VAR, "").strip()
+    if override:
+        return Path(override)
+    return Path.home().joinpath(*_ACCOUNTS_RELATIVE_PATH)
+
+
+def account_dir(account_id: str, home: Path | None = None) -> Path:
+    return accounts_root(home) / account_id
+
+
+def claim_first_chat(home: Path | None = None) -> bool:
+    """True exactly once per workspace, for the first chat anyone starts.
+
+    The caller stacks the `first` create template on that chat -- which is what delivers
+    `/welcome`. It is claimed here rather than by bootstrap because a chat needs a provider
+    account, and a fresh workspace has none until someone signs in.
+
+    Claim-and-mark in one call so two creates racing cannot both be first.
+    """
+    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
+    with _index_lock(home):
+        if marker.exists():
+            return False
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return True
+
+
+def release_first_chat(home: Path | None = None) -> None:
+    """Give the claim back, for a create that claimed it and then failed.
+
+    There is exactly one `/welcome` per workspace and no way to ask for another, so a claim
+    spent on a create that died -- a rejected credential, an OOM, a container restart -- would
+    cost the user their first-run experience permanently. Only the claimant calls this, and
+    only on a failure path, so it cannot race a second create into being first as well.
+    """
+    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
+    with _index_lock(home):
+        marker.unlink(missing_ok=True)
+
+
+def index_path(home: Path | None = None) -> Path:
+    return accounts_root(home) / _INDEX_FILENAME
+
+
+def read_index(home: Path | None = None) -> AccountIndex:
+    """Read the index, treating absence as empty and refusing a future version."""
+    path = index_path(home)
+    if not path.exists():
+        return AccountIndex()
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise AccountError(f"account index at {path} is unreadable: {e}") from e
+    if not isinstance(payload, dict):
+        raise AccountError(f"account index at {path} is not an object: {type(payload).__name__}")
+    version = payload.get("version", 0)
+    # `.get`'s default only covers an ABSENT key, so `{"version": null}` yields None and
+    # `None > int` raises TypeError -- which boot does not catch (it catches AccountError), so
+    # supervisord restarts forever. A string version does the same. Validated before comparing.
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise AccountError(f"account index at {path} has a non-numeric version: {version!r}")
+    if version > INDEX_VERSION:
+        raise AccountError(
+            f"account index at {path} is version {version}, but this build understands "
+            f"{INDEX_VERSION}. Refusing to read it rather than silently dropping accounts."
+        )
+    try:
+        return AccountIndex.model_validate(payload)
+    except ValidationError as e:
+        # `FrozenModel` forbids extra keys, so an index written by a build that added a field
+        # without bumping INDEX_VERSION lands here -- the exact case the version field exists
+        # to catch. Raised as AccountError because that is what boot degrades on; a bare
+        # ValidationError escapes the guard and supervisord restarts forever with no UI, and
+        # therefore no way to delete the offending account.
+        raise AccountError(f"account index at {path} is not readable: {e}") from e
+
+
+def _write_index(index: AccountIndex, home: Path | None = None) -> None:
+    """Serialize the index through a temp file and rename it into place.
+
+    Callers must already hold `_index_lock`; the rename only buys atomicity of the file's
+    contents, not of the read-modify-write around it.
+    """
+    path = index_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(index.model_dump(), indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def _next_seq(index: AccountIndex, lane: str) -> int:
+    """One past the highest seq this lane has ever shown.
+
+    Deliberately not `count + 1`: deleting "Anthropic 1" while "Anthropic 2" is live would
+    make the next account a second "Anthropic 2".
+    """
+    return max((a.seq for a in index.accounts if a.lane == lane), default=0) + 1
+
+
+def mint_account_dir(home: Path | None = None) -> tuple[str, Path]:
+    """Create an empty folder for a sign-in that has not happened yet.
+
+    Returns its id and path. No index row is written -- until the flow succeeds this folder
+    is invisible to everything, and `reconcile` will remove it if the flow never
+    finishes.
+    """
+    account_id = uuid.uuid4().hex
+    path = account_dir(account_id, home)
+    # Under the index lock, which is what `_index_lock`'s own docstring says protects this: a
+    # mint that lands while `reconcile` is walking the root has its brand-new, not-yet-committed
+    # folder swept as debris. Only the mkdir is inside -- the flow that fills the folder runs
+    # for minutes afterwards and holding a cross-process lock across it would wedge everything
+    # else that touches the index.
+    with _index_lock(home):
+        # 0700: the CLIs drop `.credentials.json` / `auth.json` straight in here, and mngr uses
+        # the same mode for the per-agent directories one level over.
+        path.mkdir(parents=True, exist_ok=False, mode=0o700)
+    return account_id, path
+
+
+def commit_account(account_id: str, lane: str, display: str, home: Path | None = None) -> Account:
+    """Write the index row that makes a minted folder into a real account.
+
+    This is the commit point of a sign-in. Everything before it is provisional.
+    Idempotent: committing an id that is already indexed returns the existing row.
+    """
+    path = account_dir(account_id, home)
+    if not path.is_dir():
+        raise AccountError(f"cannot commit account {account_id}: {path} does not exist")
+    with _index_lock(home):
+        index = read_index(home)
+        # Re-authenticating writes the same folder a second time. The row already exists and
+        # agents hold its id by label, so the id and the seq are kept rather than renumbered;
+        # only the credential on disk changed. The DISPLAY can change, though: re-keying the
+        # bring-your-own-key lane may name a different provider, and leaving the old noun
+        # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
+        existing = next((a for a in index.accounts if a.id == account_id), None)
+        if existing is not None:
+            # `Account.lane` is immutable, and this is where that is enforced. Keeping the
+            # stored value and ignoring the argument would let a re-auth on the WRONG lane
+            # commit: the row still says anthropic while codex's config sits in its folder, and
+            # every chat bound there resolves a claude harness against codex credentials.
+            if existing.lane != lane:
+                raise AccountError(
+                    f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; "
+                    "an account's lane never changes"
+                )
+            if existing.display != display:
+                existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
+            rows = tuple(existing if a.id == account_id else a for a in index.accounts)
+            _write_index(
+                index.model_copy_update(
+                    to_update(index.field_ref().accounts, rows),
+                    to_update(index.field_ref().mru, account_id),
+                ),
+                home,
+            )
+            return existing
+        account = Account(id=account_id, lane=lane, seq=_next_seq(index, lane), display=display)
+        _write_index(
+            index.model_copy_update(
+                to_update(index.field_ref().accounts, (*index.accounts, account)),
+                to_update(index.field_ref().mru, account_id),
+            ),
+            home,
+        )
+    logger.info("Committed account {} on lane {} (seq {})", account_id, lane, account.seq)
+    return account
+
+
+# The one subdirectory of an account folder that is the user's, not the credential's.
+# claude is bound by pointing CLAUDE_CONFIG_DIR at the account, and it writes its session
+# JSONLs to `<config dir>/projects/` -- so the folder holds chat history as well as a
+# credential, and removing the account wholesale would take every bound chat's transcript
+# with it. Deleting a credential is reversible by signing in again; deleting a transcript
+# is not.
+KEPT_ON_DISCARD: Final = ("projects",)
+
+# Where a re-auth parks the credential it is about to replace.
+#
+# A re-auth has to delete the working credential before driving the CLI -- three of the four
+# promote probes are presence checks, so a flow judged against the file already there reports
+# success without anything having changed. That leaves a window in which the only copy of a
+# working credential is in process memory, and a stop, a snapshot, an OOM kill or a supervisord
+# restart in that window destroys it with no trace on disk: the row still points at a folder
+# that exists, so nothing notices, and every chat bound there fails on its next turn looking
+# signed in. Parking it here instead makes the window survivable -- `reconcile` puts it back at
+# boot -- and it is inside the account folder so deleting the account takes the backup with it.
+REAUTH_BACKUP_DIRNAME: Final = ".minds-reauth-backup"
+# Marks a backed-up file that did not exist before the flow, so restoring it means deleting it.
+_ABSENT_SUFFIX: Final = ".absent"
+
+
+def discard_account_dir(account_id: str, home: Path | None = None) -> None:
+    """Remove an account folder's credentials, keeping anything the user cannot re-create.
+
+    Used both for a minted-but-uncommitted folder after an abandoned sign-in, and for a
+    committed account the user deleted. What survives is `KEPT_ON_DISCARD`; when nothing
+    survives the folder itself goes.
+    """
+    root = account_dir(account_id, home)
+    if not root.is_dir():
+        return
+    for child in sorted(root.iterdir()):
+        if child.name in KEPT_ON_DISCARD:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+    # Empty unless something was kept, in which case the husk stays and `reconcile` leaves
+    # it alone.
+    with contextlib.suppress(OSError):
+        root.rmdir()
+
+
+def delete_account(account_id: str, home: Path | None = None) -> None:
+    """Drop the row, remove the folder, and clear the mru if it pointed here.
+
+    This takes the credential off DISK. It does not reach into a process that already read it:
+    a running agent holds what it loaded at startup, so a chat bound to this account can keep
+    answering until it next restarts -- observed, not assumed. What stops immediately is
+    anything that reads the folder afresh, which includes starting a new chat on it.
+
+    Agents bound here keep their transcripts (see `KEPT_ON_DISCARD`) and nothing rebinds them:
+    their `account` label becomes a dangling reference, which is the cost of delete-and-re-add
+    over re-authenticating in place. Killing them instead would be worse -- it destroys a chat
+    the user may still be reading, to enforce a rule they can simply be told.
+    """
+    with _index_lock(home):
+        index = read_index(home)
+        remaining = tuple(a for a in index.accounts if a.id != account_id)
+        if len(remaining) == len(index.accounts):
+            raise AccountError(f"no such account: {account_id}")
+        mru = None if index.mru == account_id else index.mru
+        _write_index(
+            index.model_copy_update(
+                to_update(index.field_ref().accounts, remaining),
+                to_update(index.field_ref().mru, mru),
+            ),
+            home,
+        )
+    discard_account_dir(account_id, home)
+    logger.info("Deleted account {}", account_id)
+
+
+def rename_account(account_id: str, name: str, home: Path | None = None) -> Account:
+    """Give an account a user-chosen name, or "" to go back to the provider's own.
+
+    A rename is display only. Nothing keys off it -- not the folder, not the binding, not the
+    harness -- so it cannot break a chat, and two accounts may share a name.
+    """
+    with _index_lock(home):
+        index = read_index(home)
+        renamed = None
+        rows = []
+        for account in index.accounts:
+            if account.id != account_id:
+                rows.append(account)
+                continue
+            renamed = account.model_copy_update(to_update(account.field_ref().name, name.strip()))
+            rows.append(renamed)
+        if renamed is None:
+            raise AccountError(f"no such account: {account_id}")
+        _write_index(index.model_copy_update(to_update(index.field_ref().accounts, tuple(rows))), home)
+    return renamed
+
+
+def set_mru(account_id: str, home: Path | None = None) -> None:
+    with _index_lock(home):
+        index = read_index(home)
+        if not any(a.id == account_id for a in index.accounts):
+            raise AccountError(f"no such account: {account_id}")
+        _write_index(index.model_copy_update(to_update(index.field_ref().mru, account_id)), home)
+
+
+def account_exists(account_id: str, home: Path | None = None) -> bool:
+    """Whether the index still names this account. No folder check, deliberately.
+
+    Used by a re-auth about to commit, to tell "the user deleted this while I was working" from
+    "the folder is momentarily odd". Deletion drops the ROW; the folder may outlive it when
+    something in `KEPT_ON_DISCARD` survives, so the row is the honest question.
+    """
+    return any(a.id == account_id for a in read_index(home).accounts)
+
+
+def resolve_account(account_id: str, home: Path | None = None) -> Account:
+    """Resolve an explicit id to its row, checking that its folder is still there.
+
+    Deliberately does NOT answer "which account should a new agent use". That question needs
+    to know which lanes this build actually has, which lives in `binding.resolve_binding` --
+    and two functions answering it differently is how the launcher and a new project's
+    starter chat ended up on different accounts.
+    """
+    index = read_index(home)
+    if not index.accounts:
+        raise AccountError("no provider accounts exist yet")
+    for account in index.accounts:
+        if account.id == account_id:
+            # A row whose folder is gone would bind an agent to a directory that is not
+            # there, and the harness fails every call rather than reporting signed-out.
+            # Refusing here is what turns that into something the user can act on.
+            if not account_dir(account.id, home).is_dir():
+                raise AccountError(f"account {account_id} has no folder on disk; sign in to it again")
+            return account
+    raise AccountError(f"no such account: {account_id}")
+
+
+def _reauth_backup_dir(account_id: str, home: Path | None = None) -> Path:
+    return account_dir(account_id, home) / REAUTH_BACKUP_DIRNAME
+
+
+def save_reauth_backup(account_id: str, files: Mapping[Path, bytes | None], home: Path | None = None) -> None:
+    """Park the credential a re-auth is about to delete, so it outlives this process.
+
+    Keyed by file NAME rather than by path: every credential a harness reads sits directly in
+    the account folder, and a name is what survives being written to disk and read back by a
+    later process that has no memory of the flow. A file that did not exist is recorded as an
+    empty marker, so the restore knows to remove rather than to write.
+    """
+    backup = _reauth_backup_dir(account_id, home)
+    shutil.rmtree(backup, ignore_errors=True)
+    backup.mkdir(parents=True, exist_ok=True)
+    backup.chmod(0o700)
+    for path, content in files.items():
+        target = backup / path.name
+        if content is None:
+            target.write_bytes(b"")
+            (backup / f"{path.name}{_ABSENT_SUFFIX}").write_bytes(b"")
+        else:
+            target.write_bytes(content)
+        target.chmod(0o600)
+
+
+def clear_reauth_backup(account_id: str, home: Path | None = None) -> None:
+    """Drop the parked copy. Called once the new credential is committed."""
+    shutil.rmtree(_reauth_backup_dir(account_id, home), ignore_errors=True)
+
+
+def restore_reauth_backup(account_id: str, home: Path | None = None) -> int:
+    """Put a parked credential back, returning how many files it covered.
+
+    Zero when there is nothing parked, which is the ordinary case. Only ever called with the
+    index lock held, so it cannot race a flow that is mid-commit.
+    """
+    backup = _reauth_backup_dir(account_id, home)
+    if not backup.is_dir():
+        return 0
+    folder = account_dir(account_id, home)
+    if not folder.is_dir():
+        shutil.rmtree(backup, ignore_errors=True)
+        return 0
+    restored = 0
+    for child in sorted(backup.iterdir()):
+        if child.name.endswith(_ABSENT_SUFFIX):
+            continue
+        target = folder / child.name
+        if (backup / f"{child.name}{_ABSENT_SUFFIX}").exists():
+            # It did not exist before the flow, so putting it "back" means removing it.
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(child.read_bytes())
+            target.chmod(0o600)
+        restored += 1
+    shutil.rmtree(backup, ignore_errors=True)
+    return restored
+
+
+def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Make the index and the folders agree, in BOTH directions. Called at boot.
+
+    An account is a row plus a folder, and either one alone is broken:
+
+    * a folder with no row is unreachable debris -- a sign-in that died between minting and
+      committing. It may hold a real credential, but no row means no id anything can name it
+      by, so it is removed;
+    * a row with no folder is WORSE, because it looks like it works. The picker offers it,
+      a chat binds to it, and the harness is pointed at a directory that is not there --
+      codex reports `CODEX_HOME points to "..." but that path does not exist` and every model
+      call fails, which surfaces to the user as an empty model bar rather than as a
+      signed-out account. Observed in a real workspace, so the row is dropped and the user
+      is asked to sign in again rather than left with a broken one that looks fine.
+
+    Returns (folders removed, rows dropped).
+    """
+    root = accounts_root(home)
+    if not root.is_dir():
+        return ((), ())
+    with _index_lock(home):
+        index = read_index(home)
+        known = {a.id for a in index.accounts}
+        # Before anything else: a re-auth that died mid-flight left the only copy of a working
+        # credential parked in the account folder. Put it back, so the account this boot
+        # inherits is the one the user had rather than a signed-out husk that still looks fine.
+        for account in index.accounts:
+            restored = restore_reauth_backup(account.id, home)
+            if restored:
+                logger.warning(
+                    "Restored {} credential file(s) for account {} from an interrupted re-auth",
+                    restored,
+                    account.id,
+                )
+        removed = []
+        for child in sorted(root.iterdir()):
+            if child.name == _LOCK_FILENAME:
+                continue
+            if not child.is_dir() or child.name in known:
+                continue
+            # A folder holding only what `discard_account_dir` keeps is not debris from a
+            # half-finished sign-in -- it is a deleted account's chat history, deliberately
+            # left behind. Removing it here would undo that one boot later. An EMPTY folder
+            # is debris and must still go, which is why this asks for a non-empty subset.
+            contents = {c.name for c in child.iterdir()}
+            if contents and contents <= set(KEPT_ON_DISCARD):
+                continue
+            shutil.rmtree(child, ignore_errors=True)
+            removed.append(child.name)
+
+        kept = tuple(a for a in index.accounts if account_dir(a.id, home).is_dir())
+        dropped = tuple(a.id for a in index.accounts if a not in kept)
+        if dropped:
+            mru = index.mru if index.mru in {a.id for a in kept} else None
+            _write_index(
+                index.model_copy_update(
+                    to_update(index.field_ref().accounts, kept),
+                    to_update(index.field_ref().mru, mru),
+                ),
+                home,
+            )
+    if removed:
+        logger.info("Removed {} unreachable account folder(s): {}", len(removed), ", ".join(removed))
+    if dropped:
+        logger.warning(
+            "Dropped {} account row(s) whose folder is gone; they must be signed in again: {}",
+            len(dropped),
+            ", ".join(dropped),
+        )
+    return tuple(removed), dropped

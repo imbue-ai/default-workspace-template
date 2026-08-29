@@ -238,8 +238,8 @@ def test_prevent_monkeypatch_setattr() -> None:
     # `create_application` takes an already-built `SystemInterfaceState` and
     # tests assemble one with fakes via `testing.build_test_state` (e.g. a
     # `RecordingMngrMessenger` for the message-send path). `ClaudeAuthService`
-    # and `WelcomeResender` likewise take their outside-world dependencies as
-    # constructor arguments, so tests construct isolated instances with fakes.
+    # likewise takes its outside-world dependencies as constructor arguments,
+    # so tests construct isolated instances with fakes.
     rc.check_monkeypatch_setattr(_DIR, snapshot(0))
 
 

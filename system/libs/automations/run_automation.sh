@@ -113,11 +113,15 @@ automation_agent_ids() {
 # agent starts from an empty chat, so a self-detecting skill delivers its
 # first-run behavior (e.g. the caretaker's welcome) on this first run.
 create_automation_agent() {
-  local workspace label_args=()
+  local workspace label_args=() account_args=()
   workspace="$(resolve_workspace)"
   if [ -n "$workspace" ]; then
     label_args=(--label "workspace=${workspace}")
   fi
+  # Bind the default provider account. Cron has no agent to inherit a credential from, so
+  # without this the automation launches against a config dir holding no credential and
+  # cannot take a turn. Empty when nothing is signed in, which launches exactly as before.
+  mapfile -t account_args < <(uv run python system/scripts/default_account_args.py "$HARNESS" || true)
   log "creating the persistent automation agent (template: ${TEMPLATE}, first message: ${RUN_MESSAGE})"
   uv run mngr create "$AGENT_NAME" \
     --template "$HARNESS" \
@@ -126,6 +130,7 @@ create_automation_agent() {
     --format json \
     --label "automation=${SKILL}" \
     "${label_args[@]}" \
+    "${account_args[@]}" \
     --message "$RUN_MESSAGE"
 }
 

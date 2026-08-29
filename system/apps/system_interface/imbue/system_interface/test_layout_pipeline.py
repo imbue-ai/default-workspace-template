@@ -22,6 +22,7 @@ import queue as queue_module
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -312,17 +313,15 @@ def test_open_close_chat_ref_broadcasts_layout_ops(
         broadcaster.unregister(client_queue)
 
 
-def test_open_chat_terminal_ref_broadcasts_through_pipeline(
+def test_open_chat_terminal_ref_is_refused_before_it_broadcasts(
     layout_server: tuple[str, WebSocketBroadcaster],
     tmp_path: Path,
 ) -> None:
-    """``open chat-terminal:<name>`` reaches the broadcaster with the ref intact.
+    """``open chat-terminal:<name>`` fails at the script, and never reaches a client.
 
-    Covers the new agent-attached terminal ref end-to-end: the script's
-    ref-prefix table must include ``chat-terminal:``, the broadcast
-    endpoint must accept it (no service registration check, no
-    ``service:terminal`` panel_id allocation), and the args must arrive
-    unchanged so the frontend can resolve to the per-agent terminal URL.
+    An agent's terminal is the back face of its chat now, so there is no panel for the ref to
+    address. The end-to-end part that matters is that it is refused HERE, by name, rather than
+    broadcast to every client as an op none of them can carry out.
     """
     base_url, broadcaster = layout_server
     sandbox = tmp_path / "cwd"
@@ -334,22 +333,33 @@ def test_open_chat_terminal_ref_broadcasts_through_pipeline(
         result = _run_layout_script(
             ["open", f"chat-terminal:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
         )
-        assert result.returncode == 0, f"stderr={result.stderr!r}"
-        msg = _await_layout_op(client_queue, timeout=2.0)
-        assert msg["op"] == "open"
-        assert msg["args"] == {"ref": f"chat-terminal:{_AGENT_NAME}", "new_group": False}
+        assert result.returncode != 0
+        # Names the retired ref and what replaced it, rather than the five-second
+        # "no such service" the bare-name fallback would have produced.
+        assert f"chat-terminal:{_AGENT_NAME}" in result.stderr
+        assert f"chat:{_AGENT_NAME}" in result.stderr
+        assert "Terminal toggle" in result.stderr
+        # Nothing reached the clients. Drained rather than asserted empty, because unrelated
+        # pushes (``agents_updated``) can race with setup; only a layout_op would be the bug.
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            try:
+                raw = client_queue.get(timeout=0.05)
+            except queue_module.Empty:
+                continue
+            assert raw is None or json.loads(raw).get("type") != "layout_op"
     finally:
         broadcaster.unregister(client_queue)
 
 
-def test_list_includes_chat_terminal_entry_for_seeded_agent(
+def test_list_offers_no_terminal_entry_for_an_agent(
     layout_server: tuple[str, WebSocketBroadcaster],
     tmp_path: Path,
 ) -> None:
-    """``list`` surfaces the per-agent terminal alongside the chat entry.
+    """An agent lists once, as its chat.
 
-    Discoverability: an agent listing without the terminal would force
-    callers to know about the ``chat-terminal:`` form out of band.
+    It used to list twice, the second being its terminal panel. Listing that now would
+    advertise a ref the script refuses -- discoverability pointing at a dead end.
     """
     base_url, _ = layout_server
     sandbox = tmp_path / "cwd"
@@ -359,5 +369,6 @@ def test_list_includes_chat_terminal_entry_for_seeded_agent(
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     entries = json.loads(result.stdout)
     by_ref = {e["ref"]: e for e in entries}
-    assert f"chat-terminal:{_AGENT_NAME}" in by_ref
-    assert by_ref[f"chat-terminal:{_AGENT_NAME}"]["kind"] == "agent-terminal"
+    assert f"chat:{_AGENT_NAME}" in by_ref
+    assert not any(ref.startswith("chat-terminal:") for ref in by_ref)
+    assert not any(entry["kind"] == "agent-terminal" for entry in entries)
