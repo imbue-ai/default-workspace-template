@@ -25,7 +25,7 @@ def test_an_empty_r2_credential_counts_as_missing() -> None:
 def test_the_reachability_check_answers_for_exactly_the_environments_that_can_be_read() -> None:
     """`release_channel/publish.py` picks its reader with this predicate.
 
-    True sends a promotion's rollback gate to the bucket, False to the CDN copy,
+    True reads what a channel serves from the bucket, False from the CDN copy,
     which is served with a max-age and can answer with the previous promotion.
     So the two functions must agree on what counts as present -- including that
     empty counts as missing, since a publish workflow exports all three names
