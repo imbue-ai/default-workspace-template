@@ -1,5 +1,6 @@
 import argparse
 import atexit
+import os
 import signal
 from collections.abc import Sequence
 from types import FrameType
@@ -7,9 +8,13 @@ from types import FrameType
 import httpx
 from flask import Flask
 
+from imbue.system_interface import projects
+from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.auto_open import AutoOpenLedger
+from imbue.system_interface.auto_open import ledger_path_for_layout_dir
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
@@ -54,7 +59,15 @@ def build_production_state(
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
-    agent_manager = AgentManager.build(broadcaster)
+    # The ledger lives beside the workspace's saved layouts; without a primary
+    # agent to name that dir (dev/test setups) it is memory-only.
+    own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
+    ledger_path = (
+        ledger_path_for_layout_dir(projects.primary_agent_layout_dir(get_host_dir(), own_agent_id))
+        if own_agent_id
+        else None
+    )
+    agent_manager = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
     # The codex ledger owns live user-turns (Fix 1); route each committed user-turn it emits onto
     # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.

@@ -1,10 +1,12 @@
 import threading
+from pathlib import Path
 from typing import Any
 
 import httpx
 from flask import Flask
 from flask import current_app
 from loguru import logger
+from pydantic import Field
 from pydantic import PrivateAttr
 
 from imbue.imbue_common.mutable_model import MutableModel
@@ -17,6 +19,7 @@ from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.registry import build_watcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.update_staleness import UpdateStalenessTracker
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -28,6 +31,11 @@ _STATE_CONFIG_KEY = "SYSTEM_INTERFACE_STATE"
 
 class SystemInterfaceStateError(RuntimeError):
     """Raised when the SystemInterfaceState is not attached to a Flask app."""
+
+
+# The frontend build's output, inside the package: what the shell routes serve
+# in production.
+DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 
 class SystemInterfaceState(MutableModel):
@@ -55,6 +63,16 @@ class SystemInterfaceState(MutableModel):
     latchkey_http_client: httpx.Client
     watchers: dict[str, AgentSessionWatcher] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
+    # Captures the tree HEAD this process started from, so the app shell can
+    # say when the served tree has moved under it (see update_staleness.py).
+    # A factory (not a shared default): the HEAD read happens per state build,
+    # not at import.
+    update_staleness: UpdateStalenessTracker = Field(default_factory=UpdateStalenessTracker.capture)
+    static_directory: Path = Field(
+        default=DEFAULT_STATIC_DIRECTORY,
+        description="The bundle directory the shell routes serve from: the package's own static/ unless the "
+        "state is built with another (a test serving a shell it wrote)",
+    )
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)

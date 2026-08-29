@@ -12,12 +12,12 @@ otherwise drift silently:
    ``CLAUDE_CONFIG_DIR`` to its per-agent dir in its env, and everything it
    spawns (supervisord services, the bootstrap's / system_interface's
    ``mngr create`` calls) would inherit that pin.
-3. The Claude Code version is pinned in three places (the Dockerfile ARG, the
-   ``setup_system.sh`` default, and ``agent_types.claude.version``) that must
-   agree. Since the services agent is no longer a claude agent, mngr's runtime
-   pin check only fires when the first chat agent is created on first boot --
+3. The Claude Code version is pinned in two places (the ``setup_system.sh``
+   default and ``agent_types.claude.version``) that must agree. Since the
+   services agent is no longer a claude agent, mngr's runtime pin check only
+   fires when the first chat agent is created on first boot --
    ``setup_system.sh`` fails the build on an installer mismatch, and this test
-   catches a desync between the three pinned values at merge time.
+   catches a desync between the two pinned values at merge time.
 """
 
 from __future__ import annotations
@@ -95,16 +95,8 @@ def test_main_agent_type_resolves_to_plain_command_agent() -> None:
     assert str(resolved.agent_config.command) == "sleep infinity"
 
 
-def test_claude_version_pin_is_consistent_across_settings_dockerfile_and_setup_script() -> (
-    None
-):
+def test_claude_version_pin_is_consistent_across_settings_and_setup_script() -> None:
     settings_version = _load_raw_settings()["agent_types"]["claude"]["version"]
-
-    dockerfile_match = re.search(
-        r"^ARG CLAUDE_CODE_VERSION=(\S+)$", _DOCKERFILE_PATH.read_text(), re.MULTILINE
-    )
-    assert dockerfile_match is not None
-    dockerfile_version = dockerfile_match.group(1)
 
     setup_match = re.search(
         r"\$\{CLAUDE_CODE_VERSION:=(\S+)\}", _SETUP_SYSTEM_PATH.read_text()
@@ -112,5 +104,19 @@ def test_claude_version_pin_is_consistent_across_settings_dockerfile_and_setup_s
     assert setup_match is not None
     setup_version = setup_match.group(1)
 
-    assert settings_version == dockerfile_version
     assert settings_version == setup_version
+
+
+def test_dockerfile_carries_no_toolchain_version_pin() -> None:
+    """No ``ARG``/``ENV`` version pin may live in the Dockerfile.
+
+    An ``ENV`` pin persists into every process in the image, and a live re-run
+    of ``setup_system.sh`` (the update apply) reads its ``:=`` defaults only
+    when the variable is unset -- so an image-level pin silently reinstalls the
+    image's version over the merged tree's. ``setup_system.sh`` is the single
+    source of truth for every pin.
+    """
+    pins = re.findall(
+        r"^(?:ARG|ENV)\s+(\w*_VERSION)\b", _DOCKERFILE_PATH.read_text(), re.MULTILINE
+    )
+    assert pins == []
