@@ -62,7 +62,7 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.harnesses.claude.session_parser import INTERRUPT_SENTINEL_TEXT
 from imbue.system_interface.harnesses.claude.session_parser import extract_text_content
-from imbue.system_interface.harnesses.claude.session_parser import is_interrupt_sentinel_text
+from imbue.system_interface.harnesses.claude.session_parser import is_interrupt_sentinel_record
 from imbue.system_interface.harnesses.interrupt import InterruptToComposer
 from imbue.system_interface.harnesses.interrupt import PressChord
 from imbue.system_interface.harnesses.interrupt import RestartProcess
@@ -238,13 +238,15 @@ def _load_json_object(line: str) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _is_interrupt_sentinel_record(raw: dict[str, Any]) -> bool:
+def _is_plain_interrupt_sentinel_record(raw: dict[str, Any]) -> bool:
     """True iff ``raw`` is the user record claude writes when a turn is interrupted.
 
     Matches the plain streaming-abort sentinel (``[Request interrupted by user]``). The
     mid-tool ``for tool use`` variant is a different string and is deliberately NOT matched
-    here (it is the sibling interrupt plan's concern). Mirrors the parser's own suppression
-    (``_parse_user_message``), which is why the raw tail -- not parsed events -- is scanned.
+    here (it is the sibling interrupt plan's concern) -- unlike the both-shapes
+    ``is_interrupt_sentinel_record`` the abort scan uses. Mirrors the parser's own
+    suppression (``_parse_user_message``), which is why the raw tail -- not parsed events --
+    is scanned.
     """
     if raw.get("type") != _USER_RECORD_TYPE:
         return False
@@ -285,7 +287,7 @@ def compute_tail_facts(tail_lines: list[str]) -> _TailFacts:
             continue
         # A record is at most one of these (a sentinel is a ``user`` record), so two
         # independent checks are equivalent to -- and clearer than -- an if/elif chain.
-        if _is_interrupt_sentinel_record(raw):
+        if _is_plain_interrupt_sentinel_record(raw):
             last_sentinel_index = index
         if raw.get("type") == _ASSISTANT_RECORD_TYPE:
             last_assistant_index = index
@@ -531,27 +533,17 @@ class _AbortVerdict(StrEnum):
     UNCONFIRMED = "unconfirmed"
 
 
-def _is_interrupt_abort_record(raw: dict[str, Any]) -> bool:
-    """True iff ``raw`` is a user record whose text is an interrupt sentinel (either shape).
-
-    Pinned to the PARSED user-record shape, never a raw substring: ``extract_text_content``
-    reads only ``text`` blocks, so a ``tool_result`` quoting the sentinel (routine when an agent
-    greps its own session JSONL) yields empty text and cannot false-confirm the abort -- the
-    exact inversion the confirm-before-clear ordering exists to prevent.
-    """
-    if raw.get("type") != _USER_RECORD_TYPE:
-        return False
-    message = raw.get("message")
-    if not isinstance(message, dict):
-        return False
-    return is_interrupt_sentinel_text(extract_text_content(message.get("content")))
-
-
 def _tail_has_interrupt_abort(tail_lines: list[str]) -> bool:
-    """True iff any complete raw line in the post-baseline tail is an interrupt-abort record."""
+    """True iff any complete raw line in the post-baseline tail is an interrupt-abort record.
+
+    Pinned to the PARSED user-record shape via ``is_interrupt_sentinel_record``, never a raw
+    substring: a ``tool_result`` quoting the sentinel (routine when an agent greps its own
+    session JSONL) cannot false-confirm the abort -- the exact inversion the
+    confirm-before-clear ordering exists to prevent.
+    """
     for line in tail_lines:
         raw = _load_json_object(line)
-        if raw is not None and _is_interrupt_abort_record(raw):
+        if raw is not None and is_interrupt_sentinel_record(raw):
             return True
     return False
 
