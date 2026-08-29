@@ -109,13 +109,14 @@ from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
+from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 logger = _loguru_logger
 
-STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 # Stamped on every app-shell response so a caller can tell the real app from
 # the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
@@ -392,8 +393,7 @@ _SERVICE_REF_PREFIX = "service:"
 # the workspace root, exactly as ``.agents/shared/scripts/serve_isolated_instance.py``
 # invokes it. The root is this package's own location walked back out of
 # ``system/apps/system_interface/imbue/system_interface``.
-_WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
-_FORWARD_PORT_SCRIPT = _WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
+_FORWARD_PORT_SCRIPT = WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
 
 # Generous: the registration script runs under ``uv run``, which may have to
 # resolve the workspace environment before the (near-instant) TOML rewrite.
@@ -560,9 +560,37 @@ def _inject_feature_flag_meta_tags(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tags}\n</head>")
 
 
+def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) -> str:
+    """Inject the update-staleness variant so the frontend can render its banner.
+
+    Injected only when stale: the banner keys off the tag's presence, and a
+    consistent workspace's shell carries no tag at all.
+    """
+    if staleness is None:
+        return html_content
+    meta_tag = f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{html.escape(staleness, quote=True)}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
+def _shell_update_staleness() -> str | None:
+    """The staleness variant to inject into this app shell, if any.
+
+    Asked per built-shell request, so a tree that moved -- or an apply marker
+    that appeared -- after this process started is still seen. Skipped for
+    ``HEAD``: that is the not-built placeholder's own poll, once every ten
+    seconds per open tab for the length of an outage, and the placeholder
+    itself never asks (it carries no banner). Reading staleness forks git, and
+    an outage is precisely when the tree has moved and both of its reads run.
+    """
+    if request.method == "HEAD":
+        return None
+    return get_state().update_staleness.staleness()
+
+
 def _index() -> Response:
-    index_path = STATIC_DIRECTORY / "index.html"
+    index_path = get_state().static_directory / "index.html"
     if index_path.exists():
+        staleness = _shell_update_staleness()
         config: Config = get_state().config
         root_path = (request.script_root or "").rstrip("/")
         html_content = index_path.read_text()
@@ -570,6 +598,7 @@ def _index() -> Response:
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
         html_content = _inject_feature_flag_meta_tags(html_content)
+        html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _shell_response(html_content, is_frontend_built=True)
@@ -621,7 +650,7 @@ def _frontend_not_built_response() -> Response:
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
     _loguru_logger.warning(
-        "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
+        "Served the not-built placeholder: no frontend bundle at {}", get_state().static_directory / "index.html"
     )
     return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
@@ -638,14 +667,14 @@ def _index_catch_all(path: str) -> Response:
 
 
 def _favicon() -> Response:
-    favicon_path = STATIC_DIRECTORY / "favicon.ico"
+    favicon_path = get_state().static_directory / "favicon.ico"
     if favicon_path.exists():
         return send_file(favicon_path, mimetype="image/x-icon")
     return Response(status=404)
 
 
 def _serve_asset(filename: str) -> Response:
-    assets_directory = STATIC_DIRECTORY / "assets"
+    assets_directory = get_state().static_directory / "assets"
     # A missing asset is a plain 404, as for the favicon above, rather than the
     # HTML error page ``send_from_directory`` would raise. Existence and safety
     # are both left to ``send_from_directory``: ``filename`` arrives with any
@@ -2404,7 +2433,7 @@ def _run_forward_port_removal(name: str) -> str | None:
     """
     result = run_local_command_modern_version(
         command=["uv", "run", "python3", str(_FORWARD_PORT_SCRIPT), "--remove", "--name", name],
-        cwd=_WORKSPACE_ROOT_DIRECTORY,
+        cwd=WORKSPACE_ROOT_DIRECTORY,
         is_checked=False,
         timeout=_FORWARD_PORT_TIMEOUT_SECONDS,
     )
@@ -2772,6 +2801,10 @@ def _run_ws_broadcast_loop(
                     layout_dir=layout_dir,
                     is_first_report=not is_client_registered,
                 ):
+                    if not is_client_registered:
+                        # Now that a client can apply layout ops, hand it the
+                        # chats that appeared while nobody could.
+                        agent_manager.flush_pending_auto_opens()
                     is_client_registered = True
                 incoming = websocket.receive(timeout=0)
             try:

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "postbuild": "git rev-parse HEAD:./ > ../imbue/system_interface/static/.source-tree-hash 2>/dev/null || rm -f ../imbue/system_interface/static/.source-tree-hash",
     "preview": "vite preview",
     "lint": "tsc --noEmit && eslint src/",
     "format": "prettier --write 'src/**/*.{ts,css,html}' '*.{ts,html}'",
