@@ -6,6 +6,9 @@ import shlex
 import threading
 import tomllib
 from collections.abc import Callable
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -52,6 +55,7 @@ from imbue.system_interface.agent_discovery import delivered_or_raise
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface.auto_open import AutoOpenLedger
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.auth_check import find_unauthenticated_harness_reason
@@ -118,10 +122,26 @@ _LIVENESS_POLL_INTERVAL_SECONDS: Final[float] = 3.0
 # user is waiting on, so they are bounded rather than left to hang.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 
-# A chat spawned by the minds "get help -> have an agent help" flow carries this
-# label (set on its ``mngr create``). When such an agent is first discovered, we
-# auto-open its tab so the user lands on it without hunting.
+# Labels that ask for a chat's tab to be surfaced when the chat appears, so the
+# user lands on it without hunting. ``assist`` is the original, set by the minds
+# "get help -> have an agent help" flow; ``auto_open`` is the purpose-neutral
+# form any spawner can set (the minds update flow sets both, for interfaces
+# that predate the second).
 _ASSIST_AUTO_OPEN_LABEL = "assist"
+_AUTO_OPEN_LABEL = "auto_open"
+_AUTO_OPEN_LABELS: Final[tuple[str, ...]] = (_AUTO_OPEN_LABEL, _ASSIST_AUTO_OPEN_LABEL)
+
+# How recently a chat found at startup must have been created for its
+# undelivered open to still be owed. Older than this and a restart restores
+# the saved layout as it always has -- the chat was either surfaced by an
+# interface that kept no ledger, or has been sitting there long enough that
+# popping it now would be a surprise rather than a hand-off.
+_AUTO_OPEN_STARTUP_FRESHNESS: Final[timedelta] = timedelta(hours=12)
+
+
+def _is_auto_open_labeled(labels: dict[str, str]) -> bool:
+    return any(labels.get(label) == "true" for label in _AUTO_OPEN_LABELS)
+
 
 # An app's icon is SVG markup carried verbatim on its registry row and handed to
 # the browser, which inlines it. ``system/scripts/forward_port.py`` is the real
@@ -538,11 +558,13 @@ class AgentManager:
     # None = the harness has recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
     _model_watcher_by_agent: dict[str, PathWatcher]
-    # Assist chats whose tab we have already auto-opened (or that existed at
-    # startup, seeded by ``_initial_discover`` so we never auto-open them). Lets
-    # both discovery paths -- the per-agent delta and the full snapshot -- open
-    # each new assist chat exactly once without reopening it on later snapshots.
-    _auto_opened_assist_ids: set[str]
+    # Auto-open chats whose open has reached a client (persisted, so a restart
+    # never reopens them) and those still owed one because no registered client
+    # was there to take it, keyed by id -> chat name. Between them, both
+    # discovery paths -- the per-agent delta and the full snapshot -- open each
+    # chat exactly once.
+    _auto_open_ledger: AutoOpenLedger
+    _pending_auto_open_name_by_id: dict[str, str]
     # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: UI presence and
     # messages (via ``record_activity``, from the ``/api/activity`` endpoint),
     # lifecycle changes (via ``record_running_agents``, from the observe stream),
@@ -565,8 +587,13 @@ class AgentManager:
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         auth_gate: Callable[[HarnessAuthCheck | None], str | None] = find_unauthenticated_harness_reason,
         liveness_prober: Callable[[str, str], bool] = probe_app_liveness,
+        auto_open_ledger: AutoOpenLedger | None = None,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
+
+        ``auto_open_ledger`` remembers which chats' tabs have been surfaced; the
+        default keeps that in memory only, so a real server passes one backed
+        by the workspace's layout dir.
 
         ``messenger`` is the agent-messaging collaborator; it defaults to the
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
@@ -609,7 +636,8 @@ class AgentManager:
         manager._auth_gate = auth_gate
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
-        manager._auto_opened_assist_ids = set()
+        manager._auto_open_ledger = auto_open_ledger if auto_open_ledger is not None else AutoOpenLedger(path=None)
+        manager._pending_auto_open_name_by_id = {}
         manager._transcript_broadcaster = None
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
         # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
@@ -1312,10 +1340,7 @@ class AgentManager:
                         harness=agent_info.harness,
                     )
                     self._agents[agent_info.id] = agent_state
-                    # Treat assist chats that already exist at startup as already-handled
-                    # so a restart restores the saved layout instead of reopening their tabs.
-                    if agent_info.labels.get(_ASSIST_AUTO_OPEN_LABEL) == "true":
-                        self._auto_opened_assist_ids.add(agent_info.id)
+            self._seed_auto_opens_at_startup(agents)
 
             for agent_info in agents:
                 if agent_info.id == self._own_agent_id and agent_info.work_dir:
@@ -1324,6 +1349,47 @@ class AgentManager:
                 self._ensure_model_tracking(agent_info.id)
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Initial agent discovery failed")
+
+    def _seed_auto_opens_at_startup(self, agents: list[AgentInfo]) -> None:
+        """Queue or record the auto-open of every labeled chat found at startup.
+
+        The decisions are taken under the manager lock (they write the pending
+        map); the ledger writes they imply are file I/O and happen after it is
+        released.
+        """
+        with self._lock:
+            ids_to_record_as_delivered = [
+                agent_info.id
+                for agent_info in agents
+                if _is_auto_open_labeled(agent_info.labels) and self._seed_auto_open_at_startup(agent_info)
+            ]
+        for agent_id in ids_to_record_as_delivered:
+            self._auto_open_ledger.mark_delivered(agent_id)
+
+    def _seed_auto_open_at_startup(self, agent_info: AgentInfo) -> bool:
+        """Decide what a labeled chat found at startup is owed: its open, or nothing.
+
+        Returns whether the chat must now be recorded as delivered; the caller
+        writes that outside the lock this runs under.
+
+        A restart normally restores the saved layout rather than reopening
+        tabs, so a chat already delivered stays as the user left it. The one
+        chat still owed its open is a recent one that was never delivered
+        anywhere -- an update run started while no client was connected, whose
+        apply then restarted this interface before anyone looked. Everything
+        else is recorded as delivered, which is also how a chat surfaced by an
+        interface that kept no ledger is kept from popping again.
+        """
+        if self._auto_open_ledger.is_delivered(agent_info.id):
+            return False
+        is_fresh = (
+            agent_info.create_time is not None
+            and datetime.now(timezone.utc) - agent_info.create_time < _AUTO_OPEN_STARTUP_FRESHNESS
+        )
+        if is_fresh and agent_info.state in RUNNING_LIFECYCLE_STATES:
+            self._pending_auto_open_name_by_id[agent_info.id] = agent_info.name
+            return False
+        return True
 
     def _refresh_agents(self) -> None:
         """Re-discover all agents and broadcast updates."""
@@ -1555,6 +1621,9 @@ class AgentManager:
             self._stop_app_watcher(agent_id)
             self._stop_activity_tracking(agent_id)
             self._stop_model_tracking(agent_id)
+            with self._lock:
+                self._pending_auto_open_name_by_id.pop(agent_id, None)
+            self._auto_open_ledger.forget(agent_id)
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
@@ -1584,31 +1653,49 @@ class AgentManager:
         )
 
         # A newly-created chat usually surfaces as a freshly-added agent here, so
-        # auto-open assist chats that have appeared. ``_maybe_auto_open_assist``
-        # dedupes, so an assist chat already present (including at startup) is not
-        # reopened.
+        # surface the labeled chats that have appeared. ``_maybe_auto_open``
+        # dedupes, so a chat already delivered or already owed is not reopened.
         for agent_id in added_agent_ids:
             appeared_agent_state = new_agents.get(agent_id)
             if appeared_agent_state is not None:
-                self._maybe_auto_open_assist(appeared_agent_state)
+                self._maybe_auto_open(appeared_agent_state)
 
-    def _maybe_auto_open_assist(self, agent_state: AgentStateItem) -> None:
-        """Auto-open ``agent_state``'s tab if it is an assist chat we have not opened yet.
+    def _maybe_auto_open(self, agent_state: AgentStateItem) -> None:
+        """Surface ``agent_state``'s tab if it is a labeled chat not yet delivered.
 
-        Idempotent via ``_auto_opened_assist_ids``: assist chats present at startup are
-        seeded into that set by ``_initial_discover`` (so a restart never reopens them),
-        and each later-appearing assist chat is opened exactly once -- regardless of
-        whether it arrives via the per-agent delta or a full snapshot.
+        Delivered means a registered client was there to take the open: one
+        that has reported its ``client_state``, which the frontend sends once
+        its dock is mounted and able to apply ops. With no such client the open
+        is held until one registers (``flush_pending_auto_opens``), rather than
+        broadcast to nobody and lost -- which is what happens to a chat created
+        from outside the workspace, before the user's frame has connected.
         """
-        if agent_state.labels.get(_ASSIST_AUTO_OPEN_LABEL) != "true":
+        if not _is_auto_open_labeled(agent_state.labels):
+            return
+        if self._auto_open_ledger.is_delivered(agent_state.id):
             return
         with self._lock:
-            if agent_state.id in self._auto_opened_assist_ids:
+            if agent_state.id in self._pending_auto_open_name_by_id:
                 return
-            self._auto_opened_assist_ids.add(agent_state.id)
+            is_client_registered = len(self._broadcaster.get_connected_client_infos()) > 0
+            if not is_client_registered:
+                self._pending_auto_open_name_by_id[agent_state.id] = agent_state.name
+                return
+        self._deliver_auto_open(agent_state.id, agent_state.name)
+
+    def flush_pending_auto_opens(self) -> None:
+        """Surface every chat still owed its tab; called when a client registers."""
+        with self._lock:
+            pending = list(self._pending_auto_open_name_by_id.items())
+            self._pending_auto_open_name_by_id.clear()
+        for agent_id, name in pending:
+            self._deliver_auto_open(agent_id, name)
+
+    def _deliver_auto_open(self, agent_id: str, name: str) -> None:
+        self._auto_open_ledger.mark_delivered(agent_id)
         self._broadcaster.broadcast_layout_op(
             op="open",
-            args={"ref": f"chat:{agent_state.name}"},
+            args={"ref": f"chat:{name}"},
             requester_agent_id=self._own_agent_id,
         )
 
