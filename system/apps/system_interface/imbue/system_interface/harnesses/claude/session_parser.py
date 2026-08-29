@@ -17,9 +17,9 @@ from pydantic import Field
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
-from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
-from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.claude.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.claude.tool_labels import shell_command
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
@@ -363,9 +363,13 @@ def _parse_assistant_message(
     # provider-side failure (5xx / overloaded), add a "not Minds' fault" note. Gated on
     # the synthetic model: only Claude Code's own framework-generated notices carry these
     # forms, so a REAL assistant message that merely quotes "API Error: 500" or an error
-    # JSON (routine in a coding chat) is not mistaken for an outage. Auth failures are
-    # flagged separately (is_auth_error) and are not reclassified here.
-    api_error_kind = classify_api_error(joined_text) if model == _SYNTHETIC_MODEL else None
+    # JSON (routine in a coding chat) is not mistaken for an outage.
+    #
+    # The auth check carries the same gate for the same reason, and needs it more: an agent
+    # helping with a credential says "invalid API key" in ordinary prose, and ungated that
+    # painted its own reply as a failure with a "Sign in again" button under it.
+    is_framework_notice = model == _SYNTHETIC_MODEL
+    api_error_kind = classify_api_error(joined_text) if is_framework_notice else None
     event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "assistant_message",
@@ -378,7 +382,7 @@ def _parse_assistant_message(
         "stop_reason": stop_reason,
         "usage": usage,
         "message_uuid": uuid,
-        "is_auth_error": is_auth_error_text(joined_text),
+        "is_auth_error": is_framework_notice and is_auth_error_text(joined_text),
         "is_api_error": api_error_kind is not None,
         "api_error_kind": api_error_kind,
         "is_provider_fault": is_provider_fault(api_error_kind),
