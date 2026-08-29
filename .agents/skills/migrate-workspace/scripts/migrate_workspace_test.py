@@ -10,6 +10,7 @@ the recreate argv and its labels, port reconciliation, and the audit patterns.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 _MODULE_PATH = Path(__file__).with_name("migrate_workspace.py")
@@ -66,6 +67,112 @@ def test_detect_layout_refuses_to_guess_on_mixed_or_absent_evidence() -> None:
     absent = migrate_workspace.detect_layout([])
     assert absent.layout == migrate_workspace.LAYOUT_UNKNOWN
     assert absent.reason
+
+
+# --- root resolution -------------------------------------------------------
+
+
+def _run_shell(command: str) -> str:
+    """Run one shell snippet the way the source would and return its stdout."""
+    result = subprocess.run(
+        ["sh", "-c", command], capture_output=True, text=True, check=False
+    )
+    return result.stdout.strip()
+
+
+def test_resolve_path_command_follows_a_symlinked_root(tmp_path: Path) -> None:
+    # The pre-declutter shape that broke discovery: the host dir is a symlink, so
+    # a `find` rooted at it silently matches nothing.
+    real = tmp_path / "mngr-vol" / "host_dir"
+    real.mkdir(parents=True)
+    link = tmp_path / "mngr"
+    link.symlink_to(real)
+
+    resolved = _run_shell(migrate_workspace._resolve_path_command(str(link)))
+
+    assert resolved == str(real.resolve())
+    assert resolved != str(link)
+
+    # The named-variable form is what `list-agents` uses, so that the ls/find it
+    # appends run against the canonical path in the same round trip. It must both
+    # print the result and leave it in that variable.
+    named = migrate_workspace._resolve_path_command(str(link), "hd")
+    assert _run_shell(f'{named}; echo "$hd"').splitlines() == [str(real.resolve())] * 2
+
+
+def test_resolve_path_command_falls_back_to_the_original_when_unresolvable(
+    tmp_path: Path,
+) -> None:
+    # A path whose parent does not exist cannot be canonicalized. Degrading to the
+    # original keeps an unresolvable root behaving as it did before, rather than
+    # collapsing to an empty string and rooting later scans at the filesystem root.
+    missing = tmp_path / "no-such-parent" / "no-such-child"
+
+    assert _run_shell(migrate_workspace._resolve_path_command(str(missing))) == str(
+        missing
+    )
+
+
+def test_resolve_roots_swaps_each_root_for_its_canonical_form() -> None:
+    roots = migrate_workspace.detect_layout(
+        ["/mngr/code/runtime", "/mngr/code/supervisord.conf"]
+    )
+    resolved = migrate_workspace._resolve_roots(
+        roots,
+        {
+            "/mngr": "/mngr-vol/host_dir",
+            "/mngr/code": "/mngr-vol/host_dir/code",
+            # worktrees deliberately absent: an unmapped root keeps its own value.
+        },
+    )
+    assert resolved.host_dir == "/mngr-vol/host_dir"
+    assert resolved.repo_root == "/mngr-vol/host_dir/code"
+    assert resolved.worktrees_dir == roots.worktrees_dir
+    # Classification is unaffected by where the roots actually live.
+    assert resolved.layout == migrate_workspace.LAYOUT_PRE_DECLUTTER
+    assert resolved.reason == roots.reason
+
+
+def test_candidate_root_paths_covers_both_layouts_without_duplicates() -> None:
+    candidates = migrate_workspace._candidate_root_paths()
+    assert len(candidates) == len(set(candidates))
+    for roots in (
+        migrate_workspace._PRE_DECLUTTER_ROOTS,
+        migrate_workspace._CURRENT_ROOTS,
+    ):
+        assert {roots.repo_root, roots.host_dir, roots.worktrees_dir} <= set(candidates)
+
+
+def test_empty_scan_warning_fires_only_when_nothing_was_found() -> None:
+    agent = migrate_workspace.SourceAgent(
+        name="chat",
+        agent_id="agent-1",
+        labels={},
+        is_preserved=False,
+        session_files=(),
+        unresolved_session_ids=(),
+        excluded_because=None,
+    )
+    # A source with agents is a real result, however sparse.
+    assert migrate_workspace._empty_scan_warning("/mngr", [agent], [], []) is None
+
+    # No agents at all is the signature of a scan that matched nothing.
+    both_empty = migrate_workspace._empty_scan_warning("/mngr", [], [], [])
+    assert both_empty is not None and "symlink" in both_empty
+
+    # Sessions but no agents narrows the blame to the agents/ listings.
+    sessions_only = migrate_workspace._empty_scan_warning(
+        "/mngr", [], ["/mngr/agents/a/projects/x.jsonl"], []
+    )
+    assert sessions_only is not None and "session transcripts exist" in sessions_only
+
+    # Entries that were listed but could not be read are not an empty source, and
+    # must not send the reader after the host dir -- the reads are the cause.
+    unreadable_only = migrate_workspace._empty_scan_warning(
+        "/mngr", [], [], ["/mngr/agents/a/data.json"]
+    )
+    assert unreadable_only is not None and "the reads failed" in unreadable_only
+    assert "symlink" not in unreadable_only
 
 
 # --- map_legacy_path -------------------------------------------------------

@@ -122,8 +122,32 @@ anything.
 ```bash
 uv run host-backup-now --timeout 600
 ssh -i /tmp/mind_key -p <port> <user>@<host> \
-    'cd <source-repo-root> && uv run host-backup-now --timeout 600'
+    'for w in /home/user/workspace/system/scripts/with_agent_env.sh \
+              /home/user/workspace/system/libs/automations/with_agent_env.sh; do
+       [ -x "$w" ] && exec "$w" uv run host-backup-now --timeout 600
+     done
+     echo "no with_agent_env.sh in this source generation" >&2; exit 66'
 ```
+
+**Send it through `with_agent_env.sh`.** sshd builds a fresh environment per
+session, so a bare `ssh <host> 'uv run host-backup-now'` has no
+`MNGR_AGENT_STATE_DIR` or `MNGR_HOST_DIR` and cannot locate the events log to
+wait on -- it exits 2 at once, saying on stderr that it cannot locate the events
+log and leaving stdout empty. The wrapper rebuilds the agent environment from the
+files mngr maintains and execs from the repo root (so it replaces the `cd` too).
+
+**Probe for it; do not hardcode one path.** The wrapper shipped at
+`system/scripts/` (2026-07-27), moved to `system/libs/automations/` two days
+later, and moved back on 2026-08-17 -- so `minds-v0.3.10` through `minds-v0.4.0`
+carry the second candidate and anything newer the first. The same candidate-list
+shape is used for `minds_start_services_agent.sh` in `.mngr/settings.toml`.
+
+**A pre-declutter source has no wrapper at all**, under any name or path -- it
+postdates the declutter by a release -- so there is no third candidate, and the
+agent environment cannot be rebuilt this way there. The loop's `exit 66` says
+exactly that (deliberately not 127, which the wrapped command can return on its
+own): fall back to the explicit events-log paths in
+[references/pre-declutter-layout.md](references/pre-declutter-layout.md).
 
 **Bound both waits explicitly.** An older `host-backup-now` ends its wait only on
 a restic outcome, so a tick that never reaches restic -- most likely one skipped
@@ -133,11 +157,23 @@ runs; see [references/pre-declutter-layout.md](references/pre-declutter-layout.m
 ("The 30-minute `host-backup-now` hang") for the events-log fallback that reads
 the tick's real outcome.
 
-Confirm each prints `restic_backup_succeeded`. If the *source* reports
-`tick_skipped_due_to_missing_secrets` -- or times out having printed nothing,
-which on an old source means the same thing until you check the events log -- it
-has no restore point: tell the user plainly and get their explicit go-ahead. This
-is a warning, not a gate -- the migration only ever reads the source.
+**Read the exit code, not the printed text.** `host-backup-now` reports the
+tick's outcome as its exit status: 0 is `restic_backup_succeeded`, 3 is
+`tick_skipped_due_to_missing_secrets` (no `data/.secrets/restic.env`, so backups
+are not configured at all), 1 is a failed attempt, and 2 means no outcome was
+observed. Only 0 confirms a restore point; treat 1, 2, and 3 alike as "there
+isn't one." Matching on stdout instead misses the case above, where an old
+source's wait times out with nothing on stdout to match.
+
+Handle the two sides differently, because only one of them is written to:
+
+- **Destination (this workspace) cannot back up.** This is the side the migration
+  writes to, so a missing restore point here is the one that matters. Stop, tell
+  the user that this workspace has no restore point and why, and get their
+  explicit go-ahead before dispatching anything that writes.
+- **Source cannot back up.** Tell the user plainly and get their go-ahead, but
+  this is a warning rather than a gate -- the migration only ever reads the
+  source.
 
 **Is this workspace actually fresh?** Compare its own tree against its own
 template base. If nothing but the template base is there, proceed silently. If it
@@ -157,8 +193,14 @@ auto-push to the old workspace's own sync repo is expected and harmless.
 
 **Recommend quiescence.** Ask the user to let you stop the source's *agents* (not
 its host -- SSH needs that up) so the tree cannot shift mid-copy:
-`ssh ... 'mngr stop <agent>'` for each non-primary agent. A decline is fine;
-anything that shifts is re-synced during verification (Step 8).
+`ssh ... '<with_agent_env.sh> mngr stop <agent>'` for each non-primary agent,
+through the same candidate probe as the backup above. `mngr` is on the agent's
+PATH (`/root/.local/bin`) and resolves which host dir to act on from
+`MNGR_HOST_DIR`; an ssh session has neither, and on a pre-declutter source that
+host dir is `/mngr` rather than the default. Exit 66 means this source predates
+the wrapper and cannot be quiesced that way -- say so rather than improvising.
+A decline is fine either way; anything that shifts is re-synced during
+verification (Step 8).
 
 ## 4. Detect the layout, then resolve the baseline
 
@@ -328,6 +370,16 @@ identity rather than user content: `restic.env` (an R2 bucket keyed by *that*
 workspace's own random password) and `cloudflare_tunnel.env` (a tunnel minted per
 `agent_id`). Copying either would point this workspace at the old one's
 resources. Use `rsync` over the SSH session with an `--exclude` for each.
+
+The data lands in the **live** tree, while you are working from a worktree whose
+`data/` is empty -- so a suite run here can pass without touching a single
+migrated record, and report green for a migration that does not work. Mirror the
+migrated data into the worktree as well (it is gitignored, so the merge still
+carries code only and the live copy is still what persists), excluding
+regenerable bulk such as repo caches. Then exercise each migrated app against
+that data and confirm the user's own records render, rather than inferring it
+from where the files were copied. See
+`.agents/shared/references/data-isolation.md` for the general contract.
 
 **Creations.** Each app lands under `system/apps/<package>/`, is added to the root
 `pyproject.toml`, gets a `[program:<name>]` block in `system/supervisord.conf`

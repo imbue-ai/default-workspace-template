@@ -74,7 +74,7 @@ from the env files mngr maintains on the host dir and runs the command from
 the repo root:
 
 ```
-/home/user/workspace/system/libs/automations/with_agent_env.sh <command...>
+/home/user/workspace/system/scripts/with_agent_env.sh <command...>
 ```
 
 Also redirect output to a log file (cron would otherwise try to mail it):
@@ -103,7 +103,7 @@ Write the entry (durable copy, then install live, per the section above) with
 a line that ticks every minute through the wrapper and the runner:
 
 ```
-* * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh <job-id> --every <N[mhd]> [--at <hour>] [--retry-after <N[mhd]>] <command...> >> /var/log/supervisor/<job>.log 2>&1
+* * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh <job-id> --every <N[mhd]> [--at <hour>] [--retry-after <N[mhd]>] <command...> >> /var/log/supervisor/<job>.log 2>&1
 ```
 
 - `--every` -- the cadence: `15m`, `3h`, `1d`, `7d`, ...
@@ -140,7 +140,7 @@ Write the entry (same two-copy dance) with a standard 5-field schedule, then
 the **user** (always `root` here), then the command:
 
 ```
-30 9 * * 1   root   /home/user/workspace/system/libs/automations/with_agent_env.sh bash scripts/weekly_report.sh >> /var/log/supervisor/weekly-report.log 2>&1
+30 9 * * 1   root   /home/user/workspace/system/scripts/with_agent_env.sh bash scripts/weekly_report.sh >> /var/log/supervisor/weekly-report.log 2>&1
 ```
 
 The 5 schedule fields are minute (0-59), hour (0-23), day of month (1-31),
@@ -162,8 +162,8 @@ lives in `system/libs/automations/`. To add one -- say a news digest:
    at 9 AM, or every 15 minutes -- same pattern, different `--every`:
 
    ```
-   * * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh news --every 1d --at 9 bash /home/user/workspace/system/libs/automations/run_automation.sh news >> /var/log/supervisor/news-job.log 2>&1
-   * * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh news --every 15m bash /home/user/workspace/system/libs/automations/run_automation.sh news >> /var/log/supervisor/news-job.log 2>&1
+   * * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh news --every 1d --at 9 bash /home/user/workspace/system/libs/automations/run_automation.sh news >> /var/log/supervisor/news-job.log 2>&1
+   * * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh news --every 15m bash /home/user/workspace/system/libs/automations/run_automation.sh news >> /var/log/supervisor/news-job.log 2>&1
    ```
 
 That is all -- no new agent template is required. `system/libs/automations/run_automation.sh
@@ -183,7 +183,7 @@ enable-caretaker skill) writes the single line in
 `data/.state/cron.d/minds-caretaker` (installed live to `/etc/cron.d/`):
 
 ```
-* * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh caretaker --every 7d --at 3 bash /home/user/workspace/system/services/caretaker/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1
+* * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh caretaker --every 7d --at 3 bash /home/user/workspace/system/services/caretaker/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1
 ```
 
 - **Timing** is the standard runner: `--every 7d --at 3`, catch-up after
@@ -242,7 +242,7 @@ The complete map of the scheduling machinery, for edits and debugging:
 - `/var/log/supervisor/<job>.log` -- each job's own output (per the redirect
   on its entry); `/var/log/supervisor/cron-*.log` -- the cron daemon's logs.
 - `/home/user/.mngr/env` and `/home/user/.mngr/agents/<id>/env` -- the host and per-agent env
-  files mngr maintains; `system/libs/automations/with_agent_env.sh` sources them (host first,
+  files mngr maintains; `system/scripts/with_agent_env.sh` sources them (host first,
   then the services agent's) to rebuild the job environment.
 - `/etc/localtime` + `/etc/timezone` -- the container clock, set from the
   user's timezone at each boot by the bootstrap (see the timezone section

@@ -31,3 +31,7 @@ solely to support one app lives in that app's folder under
 Point the service at scratch state (env-var overrides, a copied data dir) --
 never at the live workspace's `data/` -- and keep every run bounded so a
 long-lived daemon loop cannot outlive the test.
+`.agents/shared/references/data-isolation.md` owns the full contract: the
+`serve_isolated_instance.py` helper that implements it, and the `DATA_DIR`
+override a service's tests must resolve through so they do not depend on
+particular user data being present.

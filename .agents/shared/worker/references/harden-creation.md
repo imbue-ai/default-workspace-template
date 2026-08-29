@@ -20,6 +20,18 @@ live, user-facing state until the branch is merged. If the worktree has
 no `.venv`, sync once before any `uv run`. If a fix needs a new dependency, add
 it the normal way and commit the manifest changes so they appear in the merge.
 
+**The worktree isolates code, not data.** `data/` is gitignored, so a fresh
+worktree starts with an *empty* one while the user's real records stay in the
+live tree, and that cuts both ways: a check that writes can still reach the live
+store, and a check that *reads* it passes vacuously against an empty one. So
+check whether anything under test reads `data/`. Anything that does needs data
+given to it deliberately -- a copy of the store with the regenerable bulk
+excluded (caches, vendored repos), or the live store when the check only reads --
+and you confirm the user's own records actually come back rather than inferring
+it from where the files sit. For an app that means driving it (Playwright is
+available -- see `web-frontend-testing.md`). The full contract and the tooling
+are in `.agents/shared/references/data-isolation.md`.
+
 ## Reporting back to the lead
 
 Follow `.agents/shared/references/worker-reporting.md` for the report-file

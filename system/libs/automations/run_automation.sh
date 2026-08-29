@@ -24,7 +24,7 @@
 # Invoked by the weekly caretaker job (the entry the enable-caretaker skill
 # creates, via system/libs/automations/run_job.sh and system/services/caretaker/caretaker_check.sh) or any
 # other cron entry, through
-# system/libs/automations/with_agent_env.sh so it runs from the repo root (/home/user/workspace) with the
+# system/scripts/with_agent_env.sh so it runs from the repo root (/home/user/workspace) with the
 # services agent's environment (MNGR_HOST_DIR, MNGR_AGENT_ID, ... -- cron
 # scrubs the env otherwise).
 #

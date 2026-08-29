@@ -51,9 +51,10 @@ the request is -- it changes what you do *before* touching code:
 
   When a hand mock won't convince -- a redesign, or a data-touching change --
   boot the *actually changed* service as a labeled preview tab beside the
-  live one via the shared `serve_isolated_instance.py` script (invocation
-  under "Protect the user's data while you verify"; it's the same preview
-  mechanism the system-interface flow uses). Keep the lighter hand mock for
+  live one via the shared `serve_isolated_instance.py` script (invocation in
+  `.agents/shared/references/data-isolation.md`, preview flags under "Protect
+  the user's data while you verify"; it's the same preview mechanism the
+  system-interface flow uses). Keep the lighter hand mock for
   quick look-and-feel loops. Either way, *reading* the live store to render a
   preview is fine; never let a preview or verification *write* to it.
 
@@ -211,81 +212,30 @@ would (not just "the process is up"):
 ### Protect the user's data while you verify
 
 The service's persistent store -- `data/.apps/<name>/` (whatever `DATA_DIR`
-resolves to) -- **is the user's real data**. The recurring, expensive
-failure mode is not the code edit: it is *verifying* a change by writing
-test data into the live store and then "cleaning up" with a delete/reset
-whose predicate is too broad and takes real records with it. The delete is
-where the data dies. Encode these, cheapest first:
+resolves to) -- **is the user's real data**, and the expensive failure mode is
+not the code edit but the *verification*: writing test data into the live store
+and then "cleaning up" with a predicate that is too broad. The contract is in
+[`.agents/shared/references/data-isolation.md`](../../shared/references/data-isolation.md)
+-- read it before verifying anything that writes. In short: read-only
+verification needs no ceremony; anything that writes, mutates, or deletes goes to
+a copy outside `data/`, booted on a spare port via
+[`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py),
+and the copy is what gets deleted. That reference also owns the `DATA_DIR` /
+`<PACKAGE_UPPER>_PORT` overrides the throwaway instance depends on, and the rule
+for retrofitting a service that predates them.
 
-- **Read-only verification needs no ceremony.** Most changes (UI, copy, a
-  backend read path) can be exercised by curl/Playwright against the live
-  service without writing anything. Reading the live store -- including to
-  *render* a preview -- is fine; the danger is only writes.
+**Showing the user the throwaway instance.** If you want them to *see* it -- a
+redesign, or a risky change where a hand mock won't convince -- add
+`--service-name <name>-preview-app --preview-service-name <name>-preview
+--preview-title "<change>"` to the `up` call to surface it as a labeled
+"preview" tab, and open it with:
 
-- **If exercising the change must write, mutate, or delete data, never
-  point it at the live store.** Copy the store to a scratch path *outside*
-  `data/` (so it is neither served by the live service nor backed up), boot a
-  throwaway instance against the copy on a *spare* port, exercise it there,
-  then delete the *copy*. The shared
-  [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
-  script owns the boot + teardown -- it picks a free port, injects it (via the
-  `<PACKAGE_UPPER>_PORT` override) plus your data-dir override, waits for the
-  instance to answer, and prints its URL:
+```bash
+python3 system/scripts/layout.py open <name>-preview
+```
 
-  ```bash
-  cp -r data/.apps/<name> /tmp/<name>-scratch
-  URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
-      --name <name>-test --cwd . \
-      --port-env <PACKAGE_UPPER>_PORT \
-      --env <PACKAGE_UPPER>_DATA_DIR=/tmp/<name>-scratch \
-      --health-path /health \
-      -- uv run <name>)
-  # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
-  python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
-  rm -rf /tmp/<name>-scratch      # deleting a copy can't harm real data
-  ```
-
-  This is the point of the `DATA_DIR` + `<PACKAGE_UPPER>_PORT` overrides: the
-  isolation you need is **data isolation, not code isolation**, and it's a
-  copy-plus-one-command setup, not a worktree. The live store is only ever
-  *read* (once, to make the copy); the only delete lands on a disposable path
-  where real data never lived. If you want the user to *see* the throwaway
-  instance -- a redesign, or a risky change where a hand mock won't convince --
-  add `--service-name <name>-preview-app --preview-service-name <name>-preview
-  --preview-title "<change>"` to the `up` call to surface it as a labeled
-  "preview" tab (open it with
-  `python3 system/scripts/layout.py open <name>-preview`);
-  that is the same machinery the system-interface flow uses. Use judgment on
-  when that is worth it.
-
-- **Never "clean up" test data by deleting from the live store.** If you
-  did leave a stray test record in it, leave it -- an additive junk record
-  is a far cheaper mistake than a broad delete. Better: don't write to the
-  live store in the first place (use the copy above).
-
-- **Snapshot before any genuinely in-place change to the real store.** If a
-  change truly must rewrite the live store (a data migration you can't run
-  on a copy), `cp -r data/.apps/<name> /tmp/<name>-pre-<change>` first, run the
-  change, confirm the real data survived, and only then remove the snapshot.
-  The snapshot is a *recovery net* -- do **not** turn it into a routine
-  "wipe live and restore backup" step: overwriting a running service's store
-  tears its state, and any real writes that landed during your test window
-  are silently lost on restore.
-
-- **Retrofit older services when you touch them.** A service that predates
-  this convention hardcodes `data/.apps/<name>/` and its listen port at its call
-  sites. Add both overrides the scaffold now emits, as part of your change, so
-  the throwaway instance above works: the data-dir override
-  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "data/.apps/<name>"))`
-  (route reads/writes through it), and the port override
-  `PORT = int(os.environ.get("<PACKAGE_UPPER>_PORT", "<assigned-port>"))`
-  (bind `PORT` in `run_simple`, never a hardcoded literal). If you genuinely
-  can't, fall back to read-only verification plus the snapshot net.
-
-- **The copy isolates local state, not external effects.** Pointing at a
-  data copy does not stop a test run from really posting to Slack, calling a
-  remote API, or sending a message. Guard those separately (a dry-run flag,
-  test credentials) -- the data copy only protects the local store.
+That is the same machinery the system-interface flow uses. Use judgment on when
+it is worth it.
 
 ## Removing a service
 

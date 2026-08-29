@@ -15,7 +15,12 @@ Provisioning and utility scripts:
   `.claude/settings.json`.
 - Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
   layout ops), `refresh_workspace_view.py` (rebuild the user's view after the
-  interface changes), `migrate_claude_auth.py` (one-time auth migration).
+  interface changes), `migrate_claude_auth.py` (one-time auth migration),
+  `with_agent_env.sh` (runs a command with the agent environment rebuilt from
+  the env files mngr maintains -- both cron and sshd scrub it, so this is
+  shared rather than an automations detail; the copy under
+  `system/libs/automations/` is a shim for cron entries scheduled before the
+  move).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
 - The changelog gate: `check_changelog_entries.py`.
 
