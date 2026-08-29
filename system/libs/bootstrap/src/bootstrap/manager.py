@@ -50,6 +50,32 @@ RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# The in-flight update-apply marker and the script that rolls a stale one
+# back (see the update-self skill's apply/recover). The marker persists with
+# the container volume, so an apply the previous container run left mid-motion
+# is visible here at the next boot.
+UPDATE_APPLY_MARKER = STATE_DIR / "update-apply" / "marker.json"
+UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
+# The fixed workspace root every supervised service assumes. Needed in absolute
+# form only for the recovery cron line below, which runs with cron's cwd rather
+# than this process's.
+WORKSPACE_ROOT_DIR = Path("/home/user/workspace")
+UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
+# `recover`'s exit code for "the tree is rolled back, but the pre-apply state
+# could not be put back" (the script's own emergency code; it has recorded an
+# emergency.json beside the marker). Distinct from the exit 1 of a rollback
+# that could not even restore the tree, which keeps the marker for a retry.
+UPDATE_RECOVER_EXIT_EMERGENCY = 3
+# Bound on the boot-time rollback: git restores, plain file copies of the
+# pre-apply snapshots (the venv copy is the big one), and -- when the apply had
+# reached its provisioner step -- a re-run of setup_system.sh, which does reach
+# the network for the pinned toolchain.
+_UPDATE_RECOVER_TIMEOUT_SECONDS = 900.0
+# Bound on each of the two `mngr` calls that re-engage the DRI agent after a
+# boot-time rollback. Nothing downstream depends on the wake, so a wake that
+# takes longer than this is one that is already failing.
+_DRI_WAKE_TIMEOUT_SECONDS = 120.0
+
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under data/.state/, which persists with the container volume.
 INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
@@ -553,6 +579,66 @@ def _apply_container_timezone(
     return True
 
 
+def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
+    """Install the permanent update-apply recovery guard into /etc/cron.d.
+
+    Written here, at every boot, rather than once by ``setup_system.sh``:
+    /etc/cron.d lives on the container rootfs, so an entry laid down at
+    provision time is gone the moment the container is recreated -- and this
+    guard is the only thing that recovers an apply killed hard WITHOUT a
+    restart, whose driving agent is also gone. Writing it from the one place
+    that already knows where the script lives also keeps the path from being
+    spelled out a second time.
+
+    Code-owned, so it goes straight to ``target_dir`` rather than into the
+    user-editable ``RUNTIME_CRON_DIR``. It is written before those entries are
+    installed, so a deliberate same-named entry there still wins.
+
+    Two details are load-bearing rather than boilerplate. cron does NOT inherit
+    the image's PATH; a drop-in gets cron's compiled-in ``/usr/bin:/bin``, and
+    when this guard acts it takes ``recover``'s live path, which shells out to
+    ``mngr`` and ``uv`` (/root/.local/bin) and ``npm`` (/usr/local/bin) -- a
+    FileNotFoundError there is swallowed, so without the PATH line the tree
+    would be rolled back and the live workspace silently left broken. And
+    ``flock -n`` keeps two ticks off one git index: an acting tick rebuilds
+    environments, re-runs the provisioner and waits out health probes,
+    routinely longer than the five minutes until the next one, and ``--if-stale``
+    reads the dead apply's pid from a marker ``recover`` never restamps, so
+    nothing else would stop them overlapping.
+
+    This is also the one cron entry that deliberately does NOT go through
+    ``system/libs/automations/with_agent_env.sh`` (which every other job,
+    built-in or user-added, is required to use, and which would supply that
+    PATH and cwd for free). The wrapper reconstructs the agent environment by
+    sourcing ``/home/user/.mngr/env`` and parsing the host dir with ``jq``, and
+    exits non-zero when either is missing -- and a workspace left mid-apply is
+    exactly where that assumption is least safe. The guard needs no agent
+    environment beyond PATH: everything it shells out to resolves from ``$HOME``
+    (which is ``/home/user`` for root here, so mngr finds its host dir), so it
+    carries its own two lines instead and keeps working when the wrapper would
+    not.
+    """
+    command = (
+        f"cd {WORKSPACE_ROOT_DIR} && python3 {UPDATE_APPLY_SCRIPT} recover --if-stale"
+    )
+    entry = (
+        "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        f"*/5 * * * * root flock -n /var/lock/{UPDATE_RECOVER_CRON_NAME}.lock "
+        f"-c '{command}' "
+        f">> {SUPERVISOR_LOG_DIR}/{UPDATE_RECOVER_CRON_NAME}.log 2>&1\n"
+    )
+    target = target_dir / UPDATE_RECOVER_CRON_NAME
+    try:
+        target.write_text(entry)
+        target.chmod(0o644)
+    except OSError as e:
+        # Never fatal: this runs on the path to supervisord, and a boot that
+        # reaches the services is worth more than the recovery guard.
+        logger.warning("Failed to install the update-recovery cron entry: {}", e)
+        return
+    logger.info("Installed the update-recovery cron entry at {}", target)
+
+
 def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> None:
     """Install data/.state/cron.d/* into /etc/cron.d (mode 0644).
 
@@ -658,57 +744,6 @@ def _exec_supervisord() -> None:
     os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
 
 
-# Bound on the boot-time venv converge. A venv that already matches the
-# lockfile no-ops in well under a second; a genuinely drifted one (image bake
-# older than the landed branch tip) reinstalls from uv's baked warm cache,
-# which stays comfortably inside this bound.
-_UV_SYNC_TIMEOUT_SECONDS = 600.0
-
-
-def _sync_workspace_venv() -> None:
-    """Converge the workspace .venv to the landed lockfile before any agent runs.
-
-    The venv is a bake-time artifact (build_workspace.sh at image build / host
-    provisioning) while the working tree is a landing-time artifact (the
-    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
-    re-runs the sync at create, so the two can disagree whenever the baked
-    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
-    sync reconciles them lazily: mid-boot, concurrent with the services and
-    the initial chat agent, and with root-closure scope rather than
-    --all-packages. Whatever imports from the venv during that rewrite window
-    fails intermittently (ModuleNotFoundError for imbue_common and friends).
-
-    Converging here -- once, up front, before the chat agent exists and before
-    supervisord starts anything -- removes both the race window and the scope
-    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
-    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
-    a failure is logged loudly but never blocks boot (the per-``uv run``
-    implicit syncs remain the fallback).
-    """
-    try:
-        result = subprocess.run(
-            ["uv", "sync", "--all-packages", "--frozen"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_UV_SYNC_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        logger.error(
-            "uv sync --all-packages timed out after {}s; continuing boot",
-            _UV_SYNC_TIMEOUT_SECONDS,
-        )
-        return
-    if result.returncode != 0:
-        logger.error(
-            "uv sync --all-packages failed (rc={}): {}",
-            result.returncode,
-            (result.stderr or result.stdout).strip()[-500:],
-        )
-        return
-    logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
-
-
 def _run_env_converge_fast_phase() -> None:
     """Apply the overlay symlinks BEFORE any service starts.
 
@@ -730,6 +765,182 @@ def _run_env_converge_fast_phase() -> None:
             result.returncode,
             result.stderr.strip()[-500:],
         )
+
+
+def _read_update_marker_dri_agent() -> str:
+    """The DRI agent recorded in the update-apply marker, or "" when unreadable.
+
+    ``ValueError`` rather than ``json.JSONDecodeError`` alone: a torn write is
+    the failure mode being defended against here (an interrupted apply is why
+    the marker is read at all), and a file flushed mid-multibyte makes
+    ``read_text`` raise ``UnicodeDecodeError``, which is a ``ValueError``.
+    """
+    try:
+        raw = json.loads(UPDATE_APPLY_MARKER.read_text())
+    except (OSError, ValueError) as e:
+        logger.warning(
+            "The update-apply marker at {} could not be read ({}); the rollback still "
+            "runs, but nobody will be re-engaged afterwards",
+            UPDATE_APPLY_MARKER,
+            e,
+        )
+        return ""
+    dri_agent = raw.get("dri_agent") if isinstance(raw, dict) else None
+    if isinstance(dri_agent, str):
+        # "" is ordinary, not corruption: an apply driven outside an agent
+        # records no name. _recover_interrupted_update reports that case.
+        return dri_agent
+    logger.warning(
+        "The update-apply marker at {} carries no usable dri_agent ({!r}); the "
+        "rollback still runs, but nobody will be re-engaged afterwards",
+        UPDATE_APPLY_MARKER,
+        dri_agent,
+    )
+    return ""
+
+
+def _wake_update_dri_agent(agent_name: str) -> None:
+    """Re-engage the agent that was driving the rolled-back update. Best-effort.
+
+    The recovered workspace is back on its pre-update revision, but only an
+    agent can verify state and talk to the user about retrying -- so start the
+    DRI agent the marker named and hand it the finding. Failures are logged and
+    swallowed: the rollback already restored the workspace, so the cost of a
+    failed wake is that nobody tells the user about it. There is no other
+    channel on this path -- the system interface's interrupted-update banner
+    keys off the marker, which a successful rollback has already cleared -- so
+    the warning below is what a human has to find in the boot log.
+    """
+    message = (
+        "A workspace update you were applying was interrupted (the container "
+        "restarted mid-apply), and the boot-time recovery rolled it back to the "
+        "pre-update state. Verify the workspace is healthy, then follow the "
+        "update-self skill's post-rollback guidance to tell the user and offer "
+        "the retry (the worker branch and report are kept)."
+    )
+    for argv in (
+        ["mngr", "start", agent_name],
+        ["mngr", "message", agent_name, "-m", message],
+    ):
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_DRI_WAKE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            # `mngr` missing is a live possibility here -- an apply interrupted
+            # mid `uv tool install` of the vendored mngr is exactly why this
+            # runs -- and boot must survive it.
+            logger.warning("{} could not run ({})", " ".join(argv[:2]), e)
+            return
+        if result.returncode != 0:
+            logger.warning(
+                "{} failed (rc={}): {}",
+                " ".join(argv[:2]),
+                result.returncode,
+                (result.stderr or result.stdout).strip()[-300:],
+            )
+            return
+    logger.info("Re-engaged update DRI agent {}", agent_name)
+
+
+def _recover_interrupted_update() -> str:
+    """Roll back an update apply the previous container run left mid-motion.
+
+    Returns the DRI agent to re-engage afterwards, or ``""`` when there is
+    nobody to wake (no marker, the guard declined, the rollback failed, or the
+    marker named no agent). A rollback that restored the tree but not the
+    pre-apply state (exit ``UPDATE_RECOVER_EXIT_EMERGENCY``) still names the
+    agent: the marker is gone and the workspace is booting over that mismatch,
+    which is precisely the state that wants a person. Waking is the caller's
+    job and deliberately not done here: it starts a live agent, which must not
+    happen until the workspace venv has been converged.
+
+    The apply's marker persisting across a boot means the container stopped (or
+    died) between the merge landing and the apply finishing -- the half-applied
+    state the update flow exists to prevent. The rollback itself needs no
+    network, no package manager and no working ``mngr`` (git restores plus
+    plain copies of the pre-apply snapshots) -- with one exception: an apply
+    that had reached its provisioner step is rolled back by re-running
+    ``setup_system.sh``, which does reach the network. The script forces that
+    re-run past the content-addressed provision guard (``PROVISION_FORCE=1``):
+    the restored tree is the very tree the guard's marker was written for, so
+    an unforced run would skip and leave the global toolchain at the
+    rolled-back-away versions. It runs right here,
+    before the venv converge (which must converge against the *restored* tree,
+    not the half-applied one) and before any service or agent starts.
+    ``--no-restart`` because nothing is running yet -- services boot fresh from
+    the restored state -- and ``--if-stale --grace-seconds 0`` so the script's
+    own dead-process guard still applies. Best-effort: a failure is logged
+    loudly but never blocks boot.
+    """
+    if not UPDATE_APPLY_MARKER.exists():
+        return ""
+    dri_agent = _read_update_marker_dri_agent()
+    logger.warning(
+        "An interrupted update apply left a marker at {}; asking the recovery "
+        "guard to roll it back",
+        UPDATE_APPLY_MARKER,
+    )
+    try:
+        result = subprocess.run(
+            [
+                "python3",
+                str(UPDATE_APPLY_SCRIPT),
+                "recover",
+                "--if-stale",
+                "--grace-seconds",
+                "0",
+                "--no-restart",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_UPDATE_RECOVER_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.error("update-apply recovery could not run ({}); continuing boot", e)
+        return ""
+    recovery_output = result.stderr.strip()[-1000:]
+    if result.returncode == UPDATE_RECOVER_EXIT_EMERGENCY:
+        logger.error(
+            "update-apply recovery rolled the tree back but could not put the "
+            "pre-apply state back; the services are booting over that mismatch and "
+            "the emergency record beside {} names what is left to repair: {}",
+            UPDATE_APPLY_MARKER,
+            recovery_output,
+        )
+        return dri_agent
+    if result.returncode != 0:
+        logger.error(
+            "update-apply recovery failed (rc={}); continuing boot with the "
+            "workspace as the rollback left it: {}",
+            result.returncode,
+            recovery_output,
+        )
+        return ""
+    # A cleared marker is what distinguishes "rolled back" from the guard's
+    # silent no-op; only a real rollback warrants re-engaging the DRI agent.
+    if UPDATE_APPLY_MARKER.exists():
+        logger.warning(
+            "The recovery guard declined to roll the apply back (the marker at {} is "
+            "still there); continuing boot with the workspace as it was left",
+            UPDATE_APPLY_MARKER,
+        )
+        return ""
+    # A rollback really happened, so the whole of what it did belongs in the boot
+    # log at a level someone scanning for trouble will see: a partial restore is
+    # reported in that output and nowhere else.
+    logger.warning("Rolled back an interrupted update apply: {}", recovery_output)
+    if not dri_agent:
+        logger.warning(
+            "That apply's marker named no agent to re-engage, so nothing will tell "
+            "the user the update was undone"
+        )
+    return dri_agent
 
 
 def _migrate_legacy_claude_state_best_effort() -> None:
@@ -760,6 +971,12 @@ def main() -> None:
     # agent runs git.
     _configure_git_global()
 
+    # Roll back any update apply the previous container run left mid-motion,
+    # BEFORE the venv converge (which must run against the restored tree) and
+    # before any service or agent starts from half-applied state. The agent to
+    # re-engage afterwards is woken further down, once the venv is converged.
+    update_dri_agent = _recover_interrupted_update()
+
     # Converge the workspace venv BEFORE the initial chat agent is created
     # (below) and before supervisord's `uv run` services start, so nothing
     # races the reconcile or runs against a bake-stale venv.
@@ -777,9 +994,18 @@ def main() -> None:
     # Overlay symlinks must exist before services start writing.
     _run_env_converge_fast_phase()
 
-    # Reinstall any cron entries persisted under data/.state/cron.d (e.g.
-    # the Caretaker's schedule) so they survive container recreation. Must
-    # precede _exec_supervisord so entries exist before cron starts.
+    # Re-engage the agent whose update the boot-time rollback undid. Held until
+    # here on purpose: waking it starts a live agent running `uv run`, which
+    # must not race _sync_workspace_venv's rewrite of the venv above.
+    if update_dri_agent:
+        _wake_update_dri_agent(update_dri_agent)
+
+    # Lay down the update-recovery guard, then reinstall any cron entries
+    # persisted under data/.state/cron.d (e.g. the Caretaker's schedule) so
+    # they survive container recreation. Both must precede _exec_supervisord so
+    # the entries exist before cron starts; the guard goes first so a
+    # deliberate same-named runtime entry still overrides it.
+    _write_update_recovery_cron_entry()
     _install_runtime_cron_entries()
 
     # Make sure supervisord's log directory exists, then hand off: replace this

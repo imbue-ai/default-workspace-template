@@ -289,7 +289,8 @@ a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
 (The same marker walk seeds the version ledger's `## Workspace` origin line in
-§8 step 4 below (and in `update-self` §5b) -- with one deliberate difference: the
+§8 step 4 below (and in the update apply's `_origin_line`, in `update-self`'s
+`scripts/update_self.py`) -- with one deliberate difference: the
 origin-line walk takes the OLDEST marker (where the mind started) where this
 section takes the NEWEST (the base the mind is on now). This `BASE_REF` bash is
 the primary; keep the two in step if either ever changes.)
@@ -1166,8 +1167,8 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   the shipped starter first -- the `# Version history` heading, its explanatory
   paragraph, and the empty sections `## Workspace`, `## Migrations`,
   `## Templates`, `## Adopted templates` in that order (byte-identical to
-  the shipped root file; `update-self` §5b carries the exact heredoc) -- then
-  append.
+  the shipped root file; the exact block is `_VERSION_HISTORY_STARTER` in
+  `update-self`'s `scripts/update_self.py`) -- then append.
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
   workspace, as the FIRST line under `## Workspace`. Resolve the template base
@@ -1376,7 +1377,8 @@ What it does, in order (see the script for the exact commands):
     WORKSPACE-only -- the SOURCE mind's own record of what it came from and
     everything it has published -- and never belongs in a published template.
     A mind created from this template grows its own ledger on demand (this
-    skill's §8 step 4 and `update-self` §5b write the starter the first time it
+    skill's §8 step 4 and the update apply -- `update-self`'s
+    `scripts/update_self.py` -- write the starter the first time it
     is needed), so nothing is lost by omitting it. Runs after the no-diff guard, so it can
     never make an empty include set look publishable.
 11. Validates `system/supervisord.conf` WITHOUT starting the daemon (never
