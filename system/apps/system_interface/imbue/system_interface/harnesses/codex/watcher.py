@@ -35,7 +35,10 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.ledger import write_codex_model_state
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.session_parser import SOURCE as _SOURCE
+from imbue.system_interface.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
+from imbue.system_interface.harnesses.codex.session_parser import parse_line_detail
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
+from imbue.system_interface.harnesses.codex.session_parser import parse_reasoning_detail
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.model import model_state_path
@@ -121,6 +124,10 @@ class CodexSessionWatcher(StoreBackedWatcher):
     _tool_name_by_call_id: dict[str, str]
     _turn_state: dict[str, Any]
     _model_state_path: Path
+    # The byte span of the most recent reasoning line with readable summaries, waiting to
+    # attach to the NEXT assistant event (a reasoning item precedes its output in the
+    # rollout). Cleared once attached, and on rotation.
+    _pending_thinking_source: tuple[Path, int, int] | None
 
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "CodexSessionWatcher":
@@ -147,6 +154,7 @@ class CodexSessionWatcher(StoreBackedWatcher):
         # so a framework fallback shows in the bar rather than the selected model lying.
         self._turn_state: dict[str, Any] = {}
         self._model_state_path = model_state_path(agent_state_dir, CODEX_STATE_RELATIVE_PATH)
+        self._pending_thinking_source = None
         return self
 
     # -- base hooks -----------------------------------------------------------------------
@@ -171,6 +179,7 @@ class CodexSessionWatcher(StoreBackedWatcher):
             # already hold -- with each event's source range refreshed to the live file.
             self._current_path = target
             self._byte_offset = 0
+            self._pending_thinking_source = None
 
         try:
             size = target.stat().st_size
@@ -204,12 +213,26 @@ class CodexSessionWatcher(StoreBackedWatcher):
             if not stripped:
                 continue
             for event in self._adapt_line(stripped, idx):
+                # A reasoning line is not a transcript event: remember its span so the next
+                # assistant event carries has_thinking and a thinking source for the
+                # detail endpoint. Only readable summaries count.
+                if event.get("type") == THINKING_SOURCE_MARKER_TYPE:
+                    self._pending_thinking_source = (target, byte_offset, byte_len) if event.get("readable") else None
+                    continue
+                if event.get("type") == "assistant_message" and self._pending_thinking_source is not None:
+                    event["has_thinking"] = True
                 self._store.ingest(_LANE, event, (target, byte_offset, byte_len))
+                if event.get("type") == "assistant_message" and self._pending_thinking_source is not None:
+                    self._store.set_thinking_source(event["event_id"], self._pending_thinking_source)
+                    self._pending_thinking_source = None
                 # A user interrupt (turn_aborted) leaves any in-flight tool call with no
                 # result -- codex never persists one -- so its card would spin forever.
                 # Synthesise a terminal "Interrupted." result for every open call, keyed on
                 # the id a real result would use so a real one supersedes it.
-                if event.get("type") == SPECIAL_EVENT_TYPE and event.get("kind") == SpecialEventKind.TURN_ABORTED.value:
+                if (
+                    event.get("type") == SPECIAL_EVENT_TYPE
+                    and event.get("kind") == SpecialEventKind.TURN_ABORTED.value
+                ):
                     for synthetic in self._interrupt_results(event.get("timestamp", "")):
                         self._store.ingest(_LANE, synthetic)
         self._byte_offset += len(complete)
@@ -271,7 +294,10 @@ class CodexSessionWatcher(StoreBackedWatcher):
                         "source": _SOURCE,
                         "tool_call_id": call_id,
                         "tool_name": self._tool_name_by_call_id.get(call_id, ""),
-                        "output": "Interrupted.",
+                        # Payload-free like every wire event; the snippet carries the whole
+                        # story, and there is no on-disk source to fetch more from.
+                        "output_chars": 0,
+                        "error_snippet": "Interrupted.",
                         "is_error": True,
                         "message_uuid": f"codex-result-{call_id}",
                     }
@@ -290,3 +316,66 @@ class CodexSessionWatcher(StoreBackedWatcher):
         if not isinstance(record, dict):
             return []
         return parse_lines(record, line_index, self._tool_name_by_call_id, self._turn_state)
+
+    # -- on-demand payload detail ---------------------------------------------------------
+
+    def _parse_detail(
+        self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
+    ) -> dict[str, Any] | None:
+        if source_line is None:
+            return None
+        try:
+            record = json.loads(source_line.strip())
+        except json.JSONDecodeError as e:
+            # A recorded byte range no longer decodes: a stale range or real corruption,
+            # rare either way and worth surfacing (the fallback scan runs next).
+            logger.warning("codex watcher: undecodable rollout line during a payload read: {}", e)
+            return None
+        if not isinstance(record, dict):
+            return None
+        # The line index only matters for id-less fallback events, whose byte ranges the
+        # store already resolved -- pass a stand-in that cannot collide.
+        detail = parse_line_detail(record, -1).get(event["event_id"])
+        thinking = None
+        if thinking_line is not None:
+            try:
+                thinking_record = json.loads(thinking_line.strip())
+            except json.JSONDecodeError as e:
+                logger.warning("codex watcher: undecodable reasoning line during a payload read: {}", e)
+                thinking_record = None
+            if isinstance(thinking_record, dict):
+                thinking = parse_reasoning_detail(thinking_record)
+        if detail is None and thinking is None:
+            # An assistant text event with attached thinking has no input/output payloads
+            # of its own; hand back thinking alone when that is all there is.
+            return None
+        if detail is None:
+            detail = {"inputs_by_tool_call_id": {}, "output": None, "thinking": None}
+        if thinking is not None:
+            detail = {**detail, "thinking": thinking}
+        return detail
+
+    def _find_detail_source_fallback(self, event: dict[str, Any]) -> str | None:
+        """Scan the active rollout for the line that carries this event's payloads."""
+        target = self._resolve_active_rollout()
+        if target is None:
+            return None
+        event_id = event["event_id"]
+        try:
+            with target.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        record = json.loads(stripped)
+                    except json.JSONDecodeError as e:
+                        # A complete line failing to decode mid-scan is corruption; the
+                        # trailing partial line (mid-write) is the routine near-miss.
+                        logger.warning("codex watcher: undecodable line in a payload fallback scan: {}", e)
+                        continue
+                    if isinstance(record, dict) and event_id in parse_line_detail(record, -1):
+                        return line
+        except OSError:
+            return None
+        return None

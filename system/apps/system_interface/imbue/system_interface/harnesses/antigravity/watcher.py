@@ -38,6 +38,7 @@ from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FI
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
+from imbue.system_interface.harnesses.antigravity.session_parser import parse_step_detail
 from imbue.system_interface.harnesses.antigravity.turn_state import TurnState
 from imbue.system_interface.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
@@ -356,6 +357,34 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     def get_total_event_count(self, session_id: str | None = None) -> int:
         with self._lock:
             return len(self._events)
+
+    def get_event_detail(self, event_id: str) -> dict[str, Any] | None:
+        """Full deferred payloads for one event, re-queried from agy's conversation store.
+
+        agy's transcript is a SQLite store rather than a byte-addressable file, so the
+        detail read is a single row re-query: the event id embeds its own coordinates
+        (``<conv_id>:<idx>:<suffix>``). Stateless -- nothing read here is cached.
+        """
+        parts = event_id.rsplit(":", 2)
+        if len(parts) != 3:
+            return None
+        conv_id, idx_text, _suffix = parts
+        try:
+            idx = int(idx_text)
+        except ValueError:
+            return None
+        db_path = self._conversations_dir() / f"{conv_id}.db"
+        if not db_path.is_file():
+            return None
+        rows = [row for row in self._read_rows(db_path, idx) if row[0] == idx]
+        if not rows:
+            return None
+        row_idx, step_type, status, payload = rows[0]
+        try:
+            decoded = decode_step(conv_id, row_idx, step_type, status, bytes(payload))
+        except TruncatedError:
+            return None
+        return parse_step_detail(decoded).get(event_id)
 
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         return None

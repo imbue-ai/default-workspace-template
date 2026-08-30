@@ -48,6 +48,7 @@ from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTrack
 from imbue.system_interface.harnesses.claude.queue_tracker import ClaudeQueueTracker
 from imbue.system_interface.harnesses.claude.session_parser import QueueSignal
 from imbue.system_interface.harnesses.claude.session_parser import QueueSignalKind
+from imbue.system_interface.harnesses.claude.session_parser import parse_line_detail
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.claude.session_parser import parse_queue_signals
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
@@ -532,6 +533,35 @@ class ClaudeSessionWatcher(StoreBackedWatcher):
                 return
             self._last_broadcast_queue_snapshot = snapshot
         callback(snapshot)
+
+    # -- on-demand payload detail ---------------------------------------------------------
+
+    def _parse_detail(
+        self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
+    ) -> dict[str, Any] | None:
+        if source_line is None:
+            return None
+        return parse_line_detail(source_line).get(event["event_id"])
+
+    def _find_detail_source_fallback(self, event: dict[str, Any]) -> str | None:
+        """Scan the event's own session file for the line carrying its payloads (the
+        recorded byte range went stale: the file was rewritten under us)."""
+        session_id = event.get("session_id")
+        if not isinstance(session_id, str):
+            return None
+        with self._lock:
+            cursor = self._cursor_by_session.get(session_id)
+        if cursor is None:
+            return None
+        event_id = event["event_id"]
+        try:
+            with cursor.file_path.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if line.strip() and event_id in parse_line_detail(line):
+                        return line
+        except OSError:
+            return None
+        return None
 
 
 def _is_fully_enriched(event: dict[str, Any]) -> bool:

@@ -97,7 +97,7 @@ def test_scans_a_settled_conversation(tmp_path: Path) -> None:
     assert kinds == ["user_message", "assistant_message", "tool_result", "assistant_message"]
     assert events[0]["content"] == "hi"
     assert events[1]["tool_calls"][0]["caption_label"] == "Running ls"
-    assert events[2]["output"] == "hello output"
+    assert events[2]["output_chars"] == len("hello output")
     assert events[3]["text"] == "all done"
 
 
@@ -124,7 +124,7 @@ def test_running_tool_emits_call_then_result_on_settle(tmp_path: Path) -> None:
     second = watcher._collect_new_events()
     # The call is not re-emitted; only the result is added.
     assert [e["type"] for e in second] == ["tool_result"]
-    assert second[0]["output"] == "final output"
+    assert second[0]["output_chars"] == len("final output")
     # call and result share the id
     assert second[0]["tool_call_id"] == first[0]["tool_calls"][0]["tool_call_id"]
 

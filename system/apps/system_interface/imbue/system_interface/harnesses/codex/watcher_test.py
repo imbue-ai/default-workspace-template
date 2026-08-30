@@ -365,7 +365,7 @@ def test_interrupt_synthesizes_results_for_open_calls(tmp_path: Path) -> None:
     results = [e for e in watcher.get_all_events() if e["type"] == "tool_result"]
     assert len(results) == 1
     assert results[0]["tool_call_id"] == "c1"
-    assert results[0]["output"] == "Interrupted."
+    assert results[0]["error_snippet"] == "Interrupted."
     assert results[0]["is_error"] is True
     assert results[0]["event_id"] == "codex-result-c1"
 
@@ -386,7 +386,7 @@ def test_interrupt_leaves_already_completed_calls_alone(tmp_path: Path) -> None:
         ],
     )
     results = [e for e in watcher.get_all_events() if e["type"] == "tool_result"]
-    assert [r["output"] for r in results] == ["ok"]
+    assert [r["output_chars"] for r in results] == [len("ok")]
 
 
 def test_identical_reserialisation_is_dropped(tmp_path: Path) -> None:
