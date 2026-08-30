@@ -6,6 +6,7 @@ import shlex
 import threading
 import tomllib
 from collections.abc import Callable
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -76,7 +77,7 @@ from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SessionDeps
-from imbue.system_interface.liveness import probe_app_liveness
+from imbue.system_interface.liveness import probe_all_app_liveness
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
@@ -113,8 +114,11 @@ _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 # How often the liveness sweep re-derives each app's ``is_running``. Stop and
 # start land through our own endpoints (which nudge the sweep), so the poll
 # only has to catch out-of-band transitions -- supervisorctl from a terminal,
-# a crashed program -- for which a few seconds of lag is fine.
-_LIVENESS_POLL_INTERVAL_SECONDS: Final[float] = 3.0
+# a crashed program -- for which several seconds of lag is fine. Each sweep
+# costs one supervisord RPC plus a TCP connect per unsupervised row, so the
+# interval also bounds the service's idle wake-up rate (which costs ~3x under
+# gVisor).
+_LIVENESS_POLL_INTERVAL_SECONDS: Final[float] = 10.0
 
 # How long one ``mngr rename`` / ``mngr label`` may take. Both edit the
 # provider's persisted agent data (rename also moves the tmux session on a live
@@ -502,9 +506,11 @@ class AgentManager:
     # before/after key diff drives the per-agent membership side-effects.
     _agent_details_by_id: dict[str, AgentDetails]
     _agents: dict[str, AgentStateItem]
-    # Derives each app's ``is_running`` (see ``liveness.probe_app_liveness``);
-    # injectable so tests control liveness without a supervisord or open ports.
-    _liveness_prober: Callable[[str, str], bool]
+    # Derives ``is_running`` for the whole registry in one sweep from
+    # ``(name, program, url)`` rows (see ``liveness.probe_all_app_liveness``,
+    # which batches all supervised rows into one supervisord RPC); injectable
+    # so tests control liveness without a supervisord or open ports.
+    _liveness_prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]]
     # The liveness sweep's own lifecycle: ``_liveness_stop`` ends the loop,
     # ``_liveness_wake`` cuts the current poll interval short (a registry
     # change, a stop/start endpoint) so the next probe lands promptly.
@@ -586,7 +592,7 @@ class AgentManager:
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         auth_gate: Callable[[HarnessAuthCheck | None], str | None] = find_unauthenticated_harness_reason,
-        liveness_prober: Callable[[str, str], bool] = probe_app_liveness,
+        liveness_prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] = probe_all_app_liveness,
         auto_open_ledger: AutoOpenLedger | None = None,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
@@ -599,9 +605,10 @@ class AgentManager:
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
         fakes to avoid touching mngr. ``mngr_binary`` is the path or name of the
         mngr executable used for the stream-events observe subprocess and for
-        agent-creation commands. ``liveness_prober`` derives one app's
-        ``is_running`` from its (program, url); tests inject a fake so liveness
-        needs neither a supervisord nor an open port.
+        agent-creation commands. ``liveness_prober`` derives every app's
+        ``is_running`` from the registry's (name, program, url) rows in one
+        sweep; tests inject a fake so liveness needs neither a supervisord nor
+        an open port.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -988,7 +995,7 @@ class AgentManager:
         """
         with self._lock:
             probe_targets = [(app.name, app.program, app.url) for app in self._apps]
-        is_running_by_name = {name: self._liveness_prober(program, url) for name, program, url in probe_targets}
+        is_running_by_name = self._liveness_prober(probe_targets)
         is_changed = False
         with self._lock:
             updated_apps: list[AppEntry] = []
