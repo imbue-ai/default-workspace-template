@@ -78,8 +78,8 @@ def build_production_state(
     # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
-    agent_manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
-    return SystemInterfaceState(
+    agent_manager.set_transcript_broadcaster(event_queues.broadcast_batch)
+    state = SystemInterfaceState(
         config=config,
         provider_names=provider_names,
         include_filters=include_filters,
@@ -104,6 +104,11 @@ def build_production_state(
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=httpx.Client(timeout=30.0),
     )
+    # Eviction wiring: when the manager sees an agent destroyed or its lifecycle
+    # transition into a dead state, the state drops that agent's watcher -- the
+    # resident transcript, watch thread, and inotify watches go with it.
+    agent_manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
+    return state
 
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:

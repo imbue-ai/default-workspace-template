@@ -107,30 +107,19 @@ class SystemInterfaceState(MutableModel):
             if existing is not None:
                 return existing
 
-            # Single-element holder so the ``on_events`` closure can reach the
-            # watcher we are about to construct. Capturing the watcher directly
-            # (rather than looking it up by id on every event) keeps the
-            # callback self-contained: it cannot KeyError if the dict entry has
-            # since been removed, and does not depend on the entry already
-            # existing before the first event fires.
-            watcher_holder: list[AgentSessionWatcher] = []
-
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
-                # IGNORE: session events are persisted in JSONL and recoverable
-                # via the REST /events endpoint; storing them in the in-memory
-                # replay buffer would grow unboundedly for the agent's lifetime.
-                self.event_queues.broadcast_all_ignored(agent_id, events)
-                # Recompute per-agent activity state from the full transcript.
-                # The watcher's incremental ``events`` argument only contains the
-                # newest lines, but the activity tracker needs the full
-                # transcript to detect unmatched tool_uses across turns and to
-                # read the last event's type.
-                self.agent_manager.update_session_events(agent_id, watcher_holder[0].get_all_events())
+                # Deliver-live-only: session events are persisted in JSONL and recoverable
+                # via the REST /events endpoint, so nothing is buffered for replay.
+                self.event_queues.broadcast_batch(agent_id, events)
+                # Fold the delta into the per-agent activity signals. The tracker is
+                # incremental (seeded with the full backlog below), so handing it just the
+                # newly parsed events replaces the old full-transcript rematerialisation
+                # that cost O(N) per event on long chats.
+                self.agent_manager.update_session_events(agent_id, events)
 
             # The harness was resolved once at discovery; the registry turns it into a
             # watcher, so nothing here knows which harness is running.
             watcher = build_watcher(agent_info, on_events)
-            watcher_holder.append(watcher)
             # Bridge the watcher's live queued-message snapshot onto the agents WS
             # state, and register its working->IDLE queue backstop with the manager.
             # Both are no-ops for a harness without a queue populator. The manager
@@ -165,6 +154,26 @@ class SystemInterfaceState(MutableModel):
         self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
         watcher.start()
         return watcher
+
+    def stop_and_remove_watcher(self, agent_id: str) -> None:
+        """Evict one agent's watcher, releasing its resident transcript, thread, and
+        filesystem watches.
+
+        The memory half of the chat lifecycle: called when an agent is destroyed or its
+        lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an OOM
+        shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
+        Cheap no-op when no watcher exists. Rebuild-on-demand is `get_or_create_watcher`:
+        viewing a stopped chat re-reads its transcript from disk transparently.
+
+        The watcher is popped under the lock but stopped outside it -- `stop` joins the
+        watch thread, and holding the lock across that join would stall every other
+        watcher creation for the duration.
+        """
+        with self._watchers_lock:
+            watcher = self.watchers.pop(agent_id, None)
+        if watcher is not None:
+            logger.debug("Evicting the session watcher for agent {}", agent_id)
+            watcher.stop()
 
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:
