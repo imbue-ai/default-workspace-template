@@ -18,6 +18,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { ReconnectBackoff } from "./backoff";
 
 export type FlowShape = "url_then_code" | "code_then_wait" | "paste";
 export type FlowState = "pending" | "ok" | "failed";
@@ -136,6 +137,25 @@ export async function loadAccounts(): Promise<void> {
  *  first" has to ask this too, or it diverts the user on a workspace that has providers. */
 export function areAccountsLoaded(): boolean {
   return accountsLoaded;
+}
+
+/** Load the account list, retrying a failed fetch with backoff until it succeeds.
+ *
+ * The boot-time caller races the backend coming up: the page can be served before the API
+ * answers, and a decision made off one silently failed fetch (the first-run greeting
+ * foremost) would be wrong for the whole page load. Never rejects.
+ */
+export async function loadAccountsWithRetry(): Promise<void> {
+  const backoff = new ReconnectBackoff();
+  let isLoaded = false;
+  while (!isLoaded) {
+    try {
+      await loadAccounts();
+      isLoaded = true;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, backoff.nextDelay()));
+    }
+  }
 }
 
 /** Name an account, or pass "" to go back to the provider's own name.

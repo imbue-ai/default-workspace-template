@@ -7,3 +7,5 @@ Events on the wire are payload-free: tool inputs (the 200-char `input_preview`),
 Chat memory now has a lifecycle: when an agent is destroyed or its lifecycle transitions into a dead state (UI stop, `mngr stop`, an OOM shed, idle shutdown), its watcher is evicted -- resident transcript, watch thread, and inotify watches released -- and rebuilt from disk on demand when the chat is next viewed. The activity tracker folds event deltas incrementally instead of re-reading the whole transcript per event (the old O(N)-per-event rematerialisation), and per-connection SSE queues are bounded with evict-and-close on overflow (the frontend's reconnect-with-snapshot resyncs); the vestigial STORE replay buffer is deleted.
 
 Also deflakes the antigravity tap storm test (a sub-millisecond turn-release margin decided by ISO timestamp rounding).
+
+Also hardens the first-run provider greeting: the boot-time account load now retries with backoff until the backend answers, so a page served before the API is up no longer silently skips the provider chooser on a workspace with nothing signed in.
