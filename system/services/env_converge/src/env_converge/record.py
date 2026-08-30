@@ -25,6 +25,7 @@ from env_converge.data_types import (
     BaseIdentity,
     CargoState,
     NpmGlobalState,
+    RecordSnapshot,
     UvToolState,
 )
 
@@ -118,6 +119,16 @@ def read_cargo_state(record_dir: Path) -> CargoState | None:
     model = _read_model(record_dir / _CARGO_FILE, CargoState)
     assert model is None or isinstance(model, CargoState)
     return model
+
+
+def read_record_snapshot(record_dir: Path) -> RecordSnapshot:
+    """Read every replayable source's recorded state at one moment."""
+    return RecordSnapshot(
+        apt_state=read_apt_state(record_dir),
+        npm_state=read_npm_state(record_dir),
+        uv_tool_state=read_uv_tool_state(record_dir),
+        cargo_state=read_cargo_state(record_dir),
+    )
 
 
 def is_rootfs_stamped(stamp_path: Path = ROOTFS_STAMP_PATH) -> bool:
