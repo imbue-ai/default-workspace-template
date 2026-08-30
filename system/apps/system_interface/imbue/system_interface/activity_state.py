@@ -2,8 +2,9 @@
 
 Holds the common building blocks the harness trackers use: the ``ActivityState``
 enum, the ``is_non_turn_tail_event`` reader (the fold's tail-type gate), the
-timestamp parser, and the ``is_transcript_tail_stale`` restart guard. The actual IDLE / THINKING / TOOL_RUNNING *derivation* lives in the
-two harness peers -- :mod:`claude_activity_state` (lifecycle + transcript tail) and
+timestamp parser, and the ``is_transcript_tail_stale`` restart guard. The actual
+IDLE / THINKING / TOOL_RUNNING *derivation* lives in the two harness peers --
+:mod:`claude_activity_state` (lifecycle + transcript tail) and
 :mod:`codex_activity_state` (the ``task_started`` / ``task_complete`` turn latch) --
 and the harness dispatch is in ``agent_manager._recompute_activity_state``.
 
@@ -13,7 +14,6 @@ current process is left over from a turn this process never ran and must not sho
 "Thinking..." indefinitely after a mid-turn restart.
 """
 
-from collections.abc import Sequence
 from datetime import datetime
 from enum import auto
 from typing import Any
