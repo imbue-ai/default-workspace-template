@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolCall, ToolResultEvent, TranscriptEvent } from "../models/Response";
 import type { AssistantMessageEvent } from "../models/Response";
 import {
@@ -8,11 +8,25 @@ import {
   renderToolCallBlock,
 } from "./message-renderers";
 import { isSkillExpansionUserMessage } from "./message-classification";
+import { setBlockExpanded } from "./expansion-state";
 
 // Avoid importing the heavy/DOM-dependent module graph (dockview, dompurify) at test time;
 // renderSubagentCard only needs openSubagentTab, and the card path never calls MarkdownContent.
 vi.mock("./DockviewWorkspace", () => ({ openSubagentTab: vi.fn() }));
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
+
+// The render paths ask the detail cache for on-demand payloads (and kick off fetches);
+// stub those three so tests control the state machine without mithril's XHR.
+const { mockDetailState, mockRequestDetail } = vi.hoisted(() => ({
+  mockDetailState: vi.fn(),
+  mockRequestDetail: vi.fn(),
+}));
+vi.mock("../models/Response", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Response")>()),
+  getEventDetailState: mockDetailState,
+  getEventDetailVersion: () => 0,
+  requestEventDetail: mockRequestDetail,
+}));
 
 function skillToolCall(ts: string, callId: string): TranscriptEvent {
   return {
@@ -381,3 +395,109 @@ function collectClasses(node: unknown): string[] {
   }
   return [];
 }
+
+describe("thinking disclosure", () => {
+  function assistantWithThinking(eventId: string, hasThinking: boolean): AssistantMessageEvent {
+    return {
+      timestamp: "2026-08-06T00:00:00.000Z",
+      type: "assistant_message",
+      event_id: eventId,
+      source: "test",
+      model: "m",
+      text: "the answer",
+      tool_calls: [],
+      stop_reason: null,
+      usage: null,
+      is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
+      ...(hasThinking ? { has_thinking: true } : {}),
+    };
+  }
+
+  beforeEach(() => {
+    mockDetailState.mockReset();
+    mockRequestDetail.mockReset();
+  });
+
+  it("renders the toggle only when the harness recorded readable thinking", () => {
+    const withToggle = renderAssistantMessageChildren(assistantWithThinking("th-1", true), new Map(), "agent-1");
+    expect(collectClasses(withToggle)).toContain("thinking-toggle");
+
+    const without = renderAssistantMessageChildren(assistantWithThinking("th-2", false), new Map(), "agent-1");
+    expect(collectClasses(without)).not.toContain("thinking-toggle");
+  });
+
+  it("shows a loading note, then the fetched thinking, then unavailable, when expanded", () => {
+    setBlockExpanded("think:th-3", true);
+    const event = assistantWithThinking("th-3", true);
+
+    mockDetailState.mockReturnValue(undefined);
+    let children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("Loading");
+    // Expanding kicks off (or heals) the on-demand fetch.
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-1", "th-3");
+
+    mockDetailState.mockReturnValue({
+      state: "loaded",
+      detail: { inputs_by_tool_call_id: {}, output: null, thinking: "pondering deeply" },
+    });
+    children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("pondering deeply");
+
+    mockDetailState.mockReturnValue({ state: "unavailable" });
+    children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("No longer available");
+  });
+
+  it("does not fetch while collapsed", () => {
+    renderAssistantMessageChildren(assistantWithThinking("th-4", true), new Map(), "agent-1");
+    expect(mockRequestDetail).not.toHaveBeenCalled();
+  });
+});
+
+describe("expanded tool row payload states", () => {
+  const call: ToolCall = { tool_call_id: "pc-1", tool_name: "Bash", input_chars: 20 };
+  const result: ToolResultEvent = {
+    timestamp: "t",
+    type: "tool_result",
+    event_id: "r-pc-1",
+    source: "test",
+    tool_call_id: "pc-1",
+    tool_name: "Bash",
+    output_chars: 5000,
+    is_error: false,
+  };
+
+  beforeEach(() => {
+    mockDetailState.mockReset();
+    mockRequestDetail.mockReset();
+    setBlockExpanded("tc:pc-1", true);
+  });
+
+  it("shows loading notes and requests the payloads while nothing is cached", () => {
+    mockDetailState.mockReturnValue(undefined);
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("Loading");
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "a-pc-1");
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "r-pc-1");
+  });
+
+  it("renders the full fetched input and output once loaded", () => {
+    mockDetailState.mockImplementation((_agentId: string, eventId: string) =>
+      eventId === "a-pc-1"
+        ? { state: "loaded", detail: { inputs_by_tool_call_id: { "pc-1": "the whole input" }, output: null, thinking: null } }
+        : { state: "loaded", detail: { inputs_by_tool_call_id: {}, output: "the whole output", thinking: null } },
+    );
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("the whole input");
+    expect(text).toContain("the whole output");
+  });
+
+  it("shows the quiet placeholder when the payload is gone", () => {
+    mockDetailState.mockReturnValue({ state: "unavailable" });
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("No longer available");
+  });
+});
