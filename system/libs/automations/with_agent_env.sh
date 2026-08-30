@@ -23,6 +23,11 @@
 # -- should be prefixed with it:
 #
 #   17 3 * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh bash my_job.sh >> /var/log/supervisor/my-job.log 2>&1
+#
+# One deliberate exception: the built-in update-apply recovery guard the
+# bootstrap writes (/etc/cron.d/update-apply-recover). It exists to repair a
+# workspace left mid-update, which is exactly where the env file and jq below
+# cannot be assumed, so it carries its own PATH line and cd instead.
 set -euo pipefail
 
 if [ ! -f /home/user/.mngr/env ]; then
@@ -48,6 +53,9 @@ for data_file in "$host_dir"/agents/*/data.json; do
 done
 set +a
 
-export PATH="/root/.local/bin:$PATH"
+# cron hands its jobs a bare PATH (typically /usr/bin:/bin), so anything installed
+# under /usr/local/bin -- latchkey included -- is invisible to a scheduled job
+# unless the wrapper names it. The same list bootstrap gives the recovery cron entry.
+export PATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
 cd /home/user/workspace
 exec "$@"

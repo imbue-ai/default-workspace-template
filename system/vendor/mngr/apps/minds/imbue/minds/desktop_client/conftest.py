@@ -32,6 +32,7 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthAccount
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthSession
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudLeaseActiveCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import LiteLLMKeyMaterial
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
@@ -232,6 +233,10 @@ class FakeImbueCloudCli(ImbueCloudCli):
         default_factory=dict, description="email -> key bundle (the fake server state)"
     )
     is_sync_offline: bool = Field(default=False, description="When True, every sync call raises (connector down)")
+    lease_holding_workspace_ids: set[str] = Field(
+        default_factory=set,
+        description="Workspace ids whose record delete the fake connector refuses with lease_active (a live lease)",
+    )
 
     def _check_sync_online(self, command_repr: str) -> None:
         if self.is_sync_offline:
@@ -259,6 +264,8 @@ class FakeImbueCloudCli(ImbueCloudCli):
 
     def sync_record_delete(self, account: str, record_id: str) -> None:
         self._check_sync_online("sync records delete")
+        if record_id in self.lease_holding_workspace_ids:
+            raise ImbueCloudLeaseActiveCliError("sync records delete: the workspace still holds its cloud lease")
         by_workspace = self.sync_records_by_email.get(account, {})
         if record_id in by_workspace:
             del by_workspace[record_id]
@@ -445,6 +452,12 @@ def build_desktop_client_for_test(
     if is_authenticated:
         client.set_cookie(SESSION_COOKIE_NAME, create_session_cookie(signing_key=auth_store.get_signing_key()))
     return client, app, auth_store
+
+
+@pytest.fixture
+def agent_id() -> AgentId:
+    """A fresh workspace agent id, for tests that need exactly one."""
+    return AgentId.generate()
 
 
 @pytest.fixture

@@ -7,6 +7,7 @@ import queue
 import re
 import subprocess
 import threading
+import uuid
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -21,6 +22,7 @@ from typing import Any
 from typing import Final
 
 import pytest
+from flask import Flask
 from loguru import logger as loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -28,7 +30,9 @@ from pydantic import PrivateAttr
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.event_utils import ReadOnlyEvent
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.config.data_types import MNGR_BINARY
+from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backend_resolver import ParsedAgentsResult
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealth
@@ -38,8 +42,23 @@ from imbue.minds.desktop_client.environment_signals import EnvironmentCondition
 from imbue.minds.desktop_client.environment_signals import NetworkProber
 from imbue.minds.desktop_client.environment_signals import SleepTracker
 from imbue.minds.desktop_client.environment_signals import SshEndpoint
+from imbue.minds.desktop_client.latchkey.gateway_client import AccountsRequestPayload
+from imbue.minds.desktop_client.latchkey.gateway_client import FileSharingAccess
+from imbue.minds.desktop_client.latchkey.gateway_client import FileSharingRequestPayload
+from imbue.minds.desktop_client.latchkey.gateway_client import PermissionEffect
+from imbue.minds.desktop_client.latchkey.gateway_client import PredefinedRequestPayload
+from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_ACCOUNTS
+from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_FILE_SHARING
+from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_PREDEFINED
+from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_WORKSPACE
+from imbue.minds.desktop_client.latchkey.gateway_client import StreamedPermissionRequest
+from imbue.minds.desktop_client.latchkey.gateway_client import WorkspaceRequestPayload
+from imbue.minds.desktop_client.latchkey.pending_requests import PendingRequestsInterface
+from imbue.minds.desktop_client.latchkey.response_events import RequestResponseEvent
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.restic_cli import _get_restic_binary
+from imbue.minds.desktop_client.state import DesktopClientState
+from imbue.minds.desktop_client.state import set_state
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.ui_channel import UiChannelBroadcaster
 from imbue.minds.desktop_client.ui_models import UiAccountsMessage
@@ -49,8 +68,18 @@ from imbue.minds.desktop_client.ui_models import UiHealthMessage
 from imbue.minds.desktop_client.ui_models import UiNotificationsMessage
 from imbue.minds.desktop_client.ui_models import UiProvidersMessage
 from imbue.minds.desktop_client.ui_models import UiRequestsMessage
+from imbue.minds.desktop_client.ui_models import UiWorkspaceUpdatesMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspacesMessage
 from imbue.minds.desktop_client.ui_publisher import UiStatePublisher
+from imbue.minds.desktop_client.update_apply_window import AGENTS_BEGIN_SENTINEL
+from imbue.minds.desktop_client.update_apply_window import AGENTS_END_SENTINEL
+from imbue.minds.desktop_client.update_apply_window import AGENTS_FAILED_SENTINEL
+from imbue.minds.desktop_client.update_apply_window import RUN_BEGIN_SENTINEL
+from imbue.minds.desktop_client.update_apply_window import RUN_END_SENTINEL
+from imbue.minds.desktop_client.update_schedule_store import UpdateScheduleStore
+from imbue.minds.desktop_client.update_status import UpdateRunStatus
+from imbue.minds.desktop_client.update_status import UpdateVerdict
+from imbue.minds.desktop_client.workspace_update_state import WorkspaceUpdateStateStore
 from imbue.minds.primitives import DeviceId
 from imbue.mngr.api.discovery_events import DiscoveredProvider
 from imbue.mngr.api.discovery_events import DiscoveryError
@@ -337,8 +366,8 @@ def tamper_session_cookie_signed_content(cookie_value: str) -> str:
 def capture_error_logs() -> Iterator[list[str]]:
     """Capture loguru ERROR-level records (a loguru sink; caplog can't hook loguru).
 
-    Every RESTART_FAILED transition must reach error reporting (Principle 3:
-    the recovery surface is quiet), so the restart-failure tests assert exactly
+    Every RECOVERY_FAILED transition must reach error reporting (Principle 3:
+    the recovery surface is quiet), so the recovery-failure tests assert exactly
     one error record per attempt through this capture.
     """
     records: list[str] = []
@@ -404,6 +433,7 @@ def build_ui_state_publisher_for_test(
         derive_discovery_health=lambda: UiDiscoveryHealthMessage(state=DiscoveryHealth.HEALTHY),
         derive_environment=lambda: UiEnvironmentMessage(state=EnvironmentCondition.NONE),
         derive_health_states=derive_health_states,
+        derive_workspace_updates=lambda: UiWorkspaceUpdatesMessage(updates={}, update_window="2:00 AM-5:00 AM"),
     )
     return publisher, broadcaster.register()
 
@@ -738,7 +768,7 @@ def scripted_workspace_probe_server(
     Answers 503 for the first ``not_ready_count`` probes and 200 thereafter, so a
     readiness wait sees a workspace that becomes reachable partway through
     (``10**6`` stands in for "never ready"). Shared by every test that drives a
-    readiness poll -- the create attempt's wait and the restart worker's -- so
+    readiness poll -- the create attempt's wait and the recovery worker's -- so
     both exercise the same stand-in.
 
     Speaks TLS with the proxy's own CA-backed cert helpers: minds always runs
@@ -778,6 +808,43 @@ def exec_json_envelope(
     ``"outer_results"`` for ``--outer`` ones, mirroring mngr's own output.
     """
     return json.dumps({results_key: [{"stdout": remote_stdout, "stderr": stderr, "success": success}]})
+
+
+def make_update_state_store(tmp_path: Path) -> WorkspaceUpdateStateStore:
+    """An update state store over a fresh schedule store under ``tmp_path``."""
+    return WorkspaceUpdateStateStore(schedule_store=UpdateScheduleStore(records_dir=tmp_path / "update_schedules"))
+
+
+def landed_verdict(
+    verdict: UpdateVerdict,
+    *,
+    chat_agent_name: str = "",
+    detail: str = "",
+    resulting_ref: str = "",
+    in_place_compatible_ref: str = "",
+) -> UpdateRunStatus:
+    """A run record as the skill leaves it once ``verdict`` has landed, timed now."""
+    return UpdateRunStatus(
+        chat_agent_name=chat_agent_name,
+        verdict=verdict,
+        detail=detail,
+        resulting_ref=resulting_ref,
+        in_place_compatible_ref=in_place_compatible_ref,
+        verdict_at=datetime.now(timezone.utc),
+    )
+
+
+def update_run_probe_stdout(*, run: str = "", agents: str | None = "") -> str:
+    """One workspace's answer to the update run probe, in the wire format.
+
+    Section bodies pass through verbatim (no newline added); ``agents=None``
+    renders the listing-failed sentinel.
+    """
+    agent_section = f"{AGENTS_FAILED_SENTINEL}\n" if agents is None else agents
+    return (
+        f"{RUN_BEGIN_SENTINEL}\n{run}{RUN_END_SENTINEL}\n"
+        f"{AGENTS_BEGIN_SENTINEL}\n{agent_section}{AGENTS_END_SENTINEL}\n"
+    )
 
 
 # -- Discovery-health watchdog, for its state machine and its loop --
@@ -853,3 +920,149 @@ def record_sleep_of(sleep_tracker: SleepTracker, clock: CatchUpClock, seconds: f
     sleep_tracker.record_heartbeat()
     clock.lag_seconds = 0.0
     sleep_tracker.record_heartbeat()
+
+
+def _streamed_request(
+    agent_id: str,
+    rationale: str,
+    request_type: str,
+    payload: PredefinedRequestPayload | FileSharingRequestPayload | WorkspaceRequestPayload | AccountsRequestPayload,
+    target: str,
+) -> StreamedPermissionRequest:
+    """Assemble one gateway permission request with a fresh request id."""
+    return StreamedPermissionRequest(
+        request_id=f"req-{uuid.uuid4().hex}",
+        agent_id=agent_id,
+        rationale=rationale,
+        request_type=request_type,
+        payload=payload,
+        target=target,
+        effect=PermissionEffect(),
+    )
+
+
+def create_predefined_permission_request(
+    agent_id: str,
+    scope: str,
+    rationale: str,
+    permissions: tuple[str, ...] = (),
+    account: str | None = None,
+    target: str = "/tmp/permissions.json",
+) -> StreamedPermissionRequest:
+    """Build a predefined permission request as the gateway would stream it."""
+    return _streamed_request(
+        agent_id=agent_id,
+        rationale=rationale,
+        request_type=REQUEST_TYPE_PREDEFINED,
+        payload=PredefinedRequestPayload(scope=scope, permissions=permissions, account=account),
+        target=target,
+    )
+
+
+def create_file_sharing_permission_request(
+    agent_id: str,
+    path: str,
+    access: str,
+    rationale: str,
+    target: str = "/tmp/permissions.json",
+) -> StreamedPermissionRequest:
+    """Build a file-sharing permission request as the gateway would stream it."""
+    return _streamed_request(
+        agent_id=agent_id,
+        rationale=rationale,
+        request_type=REQUEST_TYPE_FILE_SHARING,
+        payload=FileSharingRequestPayload(path=path, access=FileSharingAccess(access)),
+        target=target,
+    )
+
+
+def create_workspace_permission_request(
+    agent_id: str,
+    rationale: str,
+    permissions: tuple[str, ...] = (),
+    target_workspace_id: str | None = None,
+) -> StreamedPermissionRequest:
+    """Build a workspace permission request as the gateway would stream it."""
+    return _streamed_request(
+        agent_id=agent_id,
+        rationale=rationale,
+        request_type=REQUEST_TYPE_WORKSPACE,
+        payload=WorkspaceRequestPayload(permissions=permissions, target_workspace_id=target_workspace_id),
+        target="/tmp/permissions.json",
+    )
+
+
+def create_accounts_permission_request(
+    agent_id: str,
+    rationale: str,
+) -> StreamedPermissionRequest:
+    """Build an accounts permission request as the gateway would stream it."""
+    return _streamed_request(
+        agent_id=agent_id,
+        rationale=rationale,
+        request_type=REQUEST_TYPE_ACCOUNTS,
+        payload=AccountsRequestPayload(),
+        target="/tmp/permissions.json",
+    )
+
+
+class StaticPendingRequests(MutableModel, PendingRequestsInterface):
+    """In-memory :class:`PendingRequestsInterface` for tests: fixed pending set, recorded verdicts."""
+
+    pending: tuple[StreamedPermissionRequest, ...] = Field(default=(), description="The fixed pending set")
+    answered: tuple[RequestResponseEvent, ...] = Field(
+        default=(), description="Verdicts already recorded when the view is built"
+    )
+    recorded: list[RequestResponseEvent] = Field(
+        default_factory=list, description="Verdicts recorded through the view, for assertions"
+    )
+
+    _responses_by_request_id: dict[str, RequestResponseEvent] = PrivateAttr(default_factory=dict)
+
+    model_config = {"arbitrary_types_allowed": True, "frozen": False, "extra": "forbid"}
+
+    def model_post_init(self, context: object) -> None:
+        for event in self.answered:
+            self._responses_by_request_id[event.request_event_id] = event
+
+    def list_pending(self) -> tuple[StreamedPermissionRequest, ...]:
+        return tuple(req for req in self.pending if req.request_id not in self._responses_by_request_id)
+
+    def get_pending(self, request_id: str) -> StreamedPermissionRequest | None:
+        return next((req for req in self.list_pending() if req.request_id == request_id), None)
+
+    def is_resolved(self, request_id: str) -> bool:
+        return request_id in self._responses_by_request_id
+
+    def record_response(self, event: RequestResponseEvent) -> None:
+        self._responses_by_request_id[event.request_event_id] = event
+        self.recorded.append(event)
+
+    def responses(self) -> tuple[RequestResponseEvent, ...]:
+        return tuple(self._responses_by_request_id.values())
+
+
+@contextmanager
+def desktop_state_app_context(
+    tmp_path: Path,
+    pending_requests: StaticPendingRequests | None = None,
+) -> Iterator[StaticPendingRequests]:
+    """A minimal Flask app context carrying a DesktopClientState, for direct handler calls.
+
+    Handler unit tests invoke grant/deny methods without the full desktop
+    client; the shared resolve epilogue still reads ``get_state()`` for the
+    pending-requests view and the backend resolver. Yields the view so tests
+    can assert on what was recorded.
+    """
+    view = pending_requests if pending_requests is not None else StaticPendingRequests()
+    app = Flask("minds-test-state")
+    set_state(
+        app,
+        DesktopClientState(
+            auth_store=FileAuthStore(data_directory=tmp_path / "auth-state"),
+            backend_resolver=MngrCliBackendResolver(),
+            pending_requests=view,
+        ),
+    )
+    with app.app_context():
+        yield view

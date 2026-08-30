@@ -43,6 +43,7 @@ from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
 from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
@@ -52,6 +53,7 @@ from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.agent_manager import _rename_failure_detail
+from imbue.system_interface.auto_open import AutoOpenLedger
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
@@ -594,11 +596,18 @@ def _layout_ops(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [message for message in messages if message.get("type") == "layout_op"]
 
 
+def _register_client(broadcaster: WebSocketBroadcaster) -> queue.Queue[str | None]:
+    """A connected client that has reported its ``client_state``, so it can take layout ops."""
+    q = broadcaster.register()
+    broadcaster.set_client_info(q, "client-1", "everything", "desktop")
+    return q
+
+
 def test_assist_labeled_agent_auto_opens_its_tab(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A chat spawned by the get-help flow (carrying the ``assist`` label) auto-opens its tab."""
-    q = broadcaster.register()
+    q = _register_client(broadcaster)
     agent = _agent_details("assist-abc123", labels={"assist": "true"})
     agent_manager._handle_observe_event(make_agent_state_event(agent))
 
@@ -615,7 +624,7 @@ def test_assist_labeled_agent_auto_opens_its_tab(
 
 def test_non_assist_agent_does_not_auto_open(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:
     """An ordinary discovered agent (no ``assist`` label) does not trigger an auto-open."""
-    q = broadcaster.register()
+    q = _register_client(broadcaster)
     agent = _agent_details("plain-agent", labels={"user_created": "true"})
     agent_manager._handle_observe_event(make_agent_state_event(agent))
 
@@ -626,10 +635,12 @@ def test_assist_agent_rediscovery_does_not_reopen(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A re-emitted AGENT_STATE event for an already-seen assist chat does not reopen its tab."""
+    first_client = _register_client(broadcaster)
     agent = _agent_details("assist-xyz", labels={"assist": "true"})
     agent_manager._handle_observe_event(make_agent_state_event(agent))
-    # Register only after the first event so the queue captures just the re-delivery.
-    q = broadcaster.register()
+    assert len(_layout_ops(_drain(first_client))) == 1
+    # A second client captures just the re-delivery.
+    q = _register_client(broadcaster)
     agent_manager._handle_observe_event(make_agent_state_event(agent))
 
     assert _layout_ops(_drain(q)) == []
@@ -644,7 +655,7 @@ def test_snapshot_auto_opens_a_newly_appeared_assist_chat(
 ) -> None:
     """A freshly-created chat usually surfaces in a full snapshot (not a per-agent delta),
     so the snapshot path must auto-open assist chats too."""
-    q = broadcaster.register()
+    q = _register_client(broadcaster)
     agent = _assist_agent_details("assist-snap")
     agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
 
@@ -662,27 +673,109 @@ def test_snapshot_auto_opens_a_newly_appeared_assist_chat(
 def test_snapshot_does_not_reopen_assist_chat_on_later_snapshots(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
+    first_client = _register_client(broadcaster)
     agent = _assist_agent_details("assist-snap2")
     agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
-    # Register after the first snapshot so the queue captures only the second.
-    q = broadcaster.register()
+    assert len(_layout_ops(_drain(first_client))) == 1
+    # A second client captures only the second snapshot.
+    q = _register_client(broadcaster)
     agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
 
     assert _layout_ops(_drain(q)) == []
 
 
-def test_assist_chat_present_at_startup_is_not_auto_opened(
+def _startup_agent_info(agent: AgentDetails, tmp_path: Path, created_ago: timedelta) -> AgentInfo:
+    """What ``_initial_discover`` learns about a chat that already exists when the server starts."""
+    return AgentInfo(
+        id=str(agent.id),
+        name=str(agent.name),
+        state=agent.state.value,
+        agent_state_dir=tmp_path / "agents" / str(agent.id),
+        claude_config_dir=tmp_path / "claude",
+        labels=dict(agent.labels),
+        work_dir=str(agent.work_dir),
+        create_time=datetime.now(timezone.utc) - created_ago,
+    )
+
+
+def test_stale_assist_chat_present_at_startup_is_not_auto_opened(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A chat that has been around for a while when the server starts is left as the saved
+    layout has it, so a restart never pops old tabs."""
+    agent = _assist_agent_details("assist-existing")
+    agent_manager._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(days=2))])
+    q = _register_client(broadcaster)
+    agent_manager.flush_pending_auto_opens()
+    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+
+    assert _layout_ops(_drain(q)) == []
+
+
+def test_fresh_undelivered_chat_present_at_startup_is_owed_its_open(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A recent labeled chat nobody has been shown yet -- an unattended run whose apply
+    restarted this interface -- gets its tab the first time a client registers."""
+    agent = _assist_agent_details("update-3am")
+    agent_manager._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(hours=6))])
+    q = _register_client(broadcaster)
+    agent_manager.flush_pending_auto_opens()
+
+    opens = _layout_ops(_drain(q))
+    assert [op["args"] for op in opens] == [{"ref": "chat:update-3am"}]
+    # Owed once: the next registration finds nothing pending.
+    agent_manager.flush_pending_auto_opens()
+    assert _layout_ops(_drain(q)) == []
+
+
+def test_auto_open_is_held_until_a_client_registers(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """Assist chats seeded as already-handled (what ``_initial_discover`` does for chats that
-    exist at startup) are not auto-opened, so a restart restores the saved layout."""
-    agent = _assist_agent_details("assist-existing")
-    with agent_manager._lock:
-        agent_manager._auto_opened_assist_ids.add(str(agent.id))
-    q = broadcaster.register()
-    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+    """A labeled chat appearing while no client has registered is not broadcast into the
+    void: its open waits for the first registration, then goes out exactly once."""
+    unregistered = broadcaster.register()
+    agent = _agent_details("update-a1b2c3", labels={"auto_open": "true", "update": "true"})
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    assert _layout_ops(_drain(unregistered)) == []
 
+    q = _register_client(broadcaster)
+    agent_manager.flush_pending_auto_opens()
+    opens = _layout_ops(_drain(q))
+    assert [op["args"] for op in opens] == [{"ref": "chat:update-a1b2c3"}]
+
+    # Neither a later snapshot nor a later registration repeats it.
+    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+    agent_manager.flush_pending_auto_opens()
     assert _layout_ops(_drain(q)) == []
+
+
+def test_delivered_auto_open_survives_a_restart(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """The delivered set is on disk, so the interface that comes up after an update's
+    restart does not re-pop a tab the previous one already surfaced."""
+    ledger_path = tmp_path / "workspace_layout" / "auto_opened_chats.json"
+    before = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
+    q = _register_client(broadcaster)
+    agent = _assist_agent_details("assist-once")
+    before._handle_observe_event(make_agent_state_event(agent))
+    assert len(_layout_ops(_drain(q))) == 1
+
+    after = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
+    after._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(minutes=5))])
+    after.flush_pending_auto_opens()
+    after._handle_observe_event(make_full_agent_state_event([agent]))
+    assert _layout_ops(_drain(q)) == []
+
+
+def test_a_ledger_of_the_wrong_shape_is_logged_and_starts_empty(tmp_path: Path, loguru_records: list[str]) -> None:
+    # Valid JSON that is not the ledger's shape (a hand edit, a file from some
+    # other tool) must not read as "nothing delivered" in silence: that is the
+    # one path that re-pops every tab, and it should be findable in the log.
+    ledger_path = tmp_path / "auto_opened_chats.json"
+    ledger_path.write_text('["assist-once"]')
+    ledger = AutoOpenLedger(path=ledger_path)
+    assert ledger.is_delivered("assist-once") is False
+    assert any("wrong shape" in record for record in loguru_records)
 
 
 def test_agent_removed_event_removes_agent(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:

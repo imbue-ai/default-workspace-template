@@ -1,0 +1,3 @@
+The update-apply orchestrator now bands itself through this package, taking the system interface's own band (`SERVICE_BANDS["system_interface"]`) read off the tree it is being applied to. It needs no band of its own: reading the target tree's map is what lets an apply staged onto an older release band itself exactly as it does on a current one.
+
+The scanner that checks every script's `sys.path` insert points at a real directory now pins that script's target explicitly, because the apply computes its insert from the repo root it is applied to rather than writing it as a literal the scanner could read.

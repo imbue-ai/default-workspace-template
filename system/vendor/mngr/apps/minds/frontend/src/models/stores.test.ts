@@ -95,23 +95,23 @@ describe("HealthStore", () => {
     const noOpFailure = {
       type: "health",
       agent_id: "agent-x",
-      status: "restart_failed",
+      status: "recovery_failed",
       error: "no answer",
-      is_restart_a_no_op: true,
+      is_recovery_a_no_op: true,
     } as const;
 
     store.applyHealthMessage(noOpFailure);
-    expect(store.isRestartANoOpFor("agent-x")).toBe(true);
+    expect(store.isRecoveryANoOpFor("agent-x")).toBe(true);
 
-    // A later non-healthy frame that does not carry it: a fresh restart attempt
+    // A later non-healthy frame that does not carry it: a fresh recovery attempt
     // resets the tracker's record, so the frame's silence is the answer.
     store.applyHealthMessage({
       type: "health",
       agent_id: "agent-x",
-      status: "restarting",
+      status: "recovering",
       error: null,
     });
-    expect(store.isRestartANoOpFor("agent-x")).toBe(false);
+    expect(store.isRecoveryANoOpFor("agent-x")).toBe(false);
 
     store.applyHealthMessage(noOpFailure);
     store.applyHealthMessage({
@@ -120,46 +120,46 @@ describe("HealthStore", () => {
       status: "healthy",
       error: null,
     });
-    expect(store.isRestartANoOpFor("agent-x")).toBe(false);
+    expect(store.isRecoveryANoOpFor("agent-x")).toBe(false);
 
     // Reconnect resync: the snapshot only carries non-HEALTHY agents, so
     // anything reset() leaves behind is never overwritten.
     store.applyHealthMessage(noOpFailure);
     store.reset();
-    expect(store.isRestartANoOpFor("agent-x")).toBe(false);
+    expect(store.isRecoveryANoOpFor("agent-x")).toBe(false);
   });
 
-  it("keeps a restart's shape distinct from having no restart to describe", () => {
-    // The badge says "Restarting" only on a false, so collapsing null into
-    // false would call every unattended dispatch a restart -- and collapsing a
-    // finished episode into its last shape would keep saying so afterwards.
+  it("keeps which recovery is running distinct from having none to describe", () => {
+    // The badge says "Restarting" only on a "restart", so collapsing null into
+    // one would call every unattended start a restart -- and collapsing a
+    // finished episode into its last kind would keep saying so afterwards.
     const store = new HealthStore();
     const bounce = {
       type: "health",
       agent_id: "agent-x",
-      status: "restarting",
+      status: "recovering",
       error: null,
-      is_restart_start_only: false,
+      recovery_kind: "restart",
     } as const;
 
-    expect(store.isRestartStartOnlyFor("agent-x")).toBeNull();
+    expect(store.recoveryKindFor("agent-x")).toBeNull();
 
     store.applyHealthMessage(bounce);
-    expect(store.isRestartStartOnlyFor("agent-x")).toBe(false);
+    expect(store.recoveryKindFor("agent-x")).toBe("restart");
 
-    store.applyHealthMessage({ ...bounce, is_restart_start_only: true });
-    expect(store.isRestartStartOnlyFor("agent-x")).toBe(true);
+    store.applyHealthMessage({ ...bounce, recovery_kind: "start" });
+    expect(store.recoveryKindFor("agent-x")).toBe("start");
 
-    // The episode ends: the frame stops describing a restart, and so must the
-    // store -- a held `false` would go on claiming one over a machine that has
-    // stopped restarting.
+    // The episode ends: the frame stops describing a recovery, and so must the
+    // store -- a held "restart" would go on claiming one over a machine that
+    // has stopped recovering.
     store.applyHealthMessage({
       type: "health",
       agent_id: "agent-x",
-      status: "restart_failed",
+      status: "recovery_failed",
       error: "no answer",
     });
-    expect(store.isRestartStartOnlyFor("agent-x")).toBeNull();
+    expect(store.recoveryKindFor("agent-x")).toBeNull();
 
     store.applyHealthMessage(bounce);
     store.applyHealthMessage({
@@ -168,11 +168,11 @@ describe("HealthStore", () => {
       status: "healthy",
       error: null,
     });
-    expect(store.isRestartStartOnlyFor("agent-x")).toBeNull();
+    expect(store.recoveryKindFor("agent-x")).toBeNull();
 
     store.applyHealthMessage(bounce);
     store.reset();
-    expect(store.isRestartStartOnlyFor("agent-x")).toBeNull();
+    expect(store.recoveryKindFor("agent-x")).toBeNull();
   });
 });
 
@@ -288,11 +288,24 @@ describe("boot seeding", () => {
           {
             type: "health",
             agent_id: "agent-aa11",
-            status: "restarting",
+            status: "recovering",
             error: null,
           },
         ],
         discovery_health: { type: "discovery_health", state: "healthy" },
+        workspace_updates: {
+          type: "workspace_updates",
+          updates: {
+            "agent-a": {
+              availability: "OUT_OF_DATE",
+              current_version: "minds-v0.3.9",
+              supported_version: "minds-v0.4.1",
+              is_version_from_label: false,
+              activity: "IDLE",
+            },
+          },
+          update_window: "2:00 AM-5:00 AM",
+        },
         // Not NONE: an app cold-started on a dead network is the case this
         // frame exists for, and NONE is the value that would read the same
         // whether the seeding happened or not.
@@ -306,7 +319,7 @@ describe("boot seeding", () => {
     expect(boot.stores.notifications.entries.map((entry) => entry.id)).toEqual([
       "evt-9",
     ]);
-    expect(boot.stores.health.statusFor("agent-aa11")).toBe("restarting");
+    expect(boot.stores.health.statusFor("agent-aa11")).toBe("recovering");
     expect(boot.stores.health.appEnvironmentCondition()).toBe("OFFLINE");
   });
 
@@ -331,6 +344,19 @@ describe("boot seeding", () => {
         notifications: notificationsMessage(["evt-1"]),
         health: [],
         discovery_health: { type: "discovery_health", state: "healthy" },
+        workspace_updates: {
+          type: "workspace_updates",
+          updates: {
+            "agent-a": {
+              availability: "OUT_OF_DATE",
+              current_version: "minds-v0.3.9",
+              supported_version: "minds-v0.4.1",
+              is_version_from_label: false,
+              activity: "IDLE",
+            },
+          },
+          update_window: "2:00 AM-5:00 AM",
+        },
         environment: { type: "environment", state: "OFFLINE" },
       },
     });
@@ -339,5 +365,9 @@ describe("boot seeding", () => {
     expect(stores.accounts.hasAccounts).toBe(true);
     expect(stores.accounts.accountEmail).toBe("a@b.c");
     expect(stores.health.appEnvironmentCondition()).toBe("OFFLINE");
+    // A store the bootstrap snapshot skipped would badge every machine
+    // "version unknown" until the first pushed frame.
+    expect(stores.updates.forAgent("agent-a").availability).toBe("OUT_OF_DATE");
+    expect(stores.updates.updateWindow).toBe("2:00 AM-5:00 AM");
   });
 });

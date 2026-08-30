@@ -71,6 +71,7 @@ from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAtte
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptRequest
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptState
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptStore
+from imbue.minds.desktop_client.system_interface_health import ProbeGracePurpose
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.errors import BackupProvisioningError
 from imbue.minds.errors import GitCloneError
@@ -890,7 +891,7 @@ _PREBAKED_IMAGE_POLL_INTERVAL_SECONDS: Final[float] = 1.0
 #
 # Every wait for a cold-booted workspace's interface is sized from this one
 # number -- the create attempt's readiness wait (``workspace_ready_timeout_seconds``
-# below) and the restart worker's post-``mngr start`` wait in
+# below) and the recovery worker's post-``mngr start`` wait in
 # :mod:`workspace_recovery` -- so the two can never drift into disagreeing about
 # how long a cold boot takes.
 WORKSPACE_READY_TIMEOUT_SECONDS: Final[float] = 300.0
@@ -2719,13 +2720,15 @@ class AgentCreator(MutableModel):
                     if is_build_in_vm_lima
                     else self.workspace_ready_timeout_seconds
                 )
-                self.system_interface_health_tracker.begin_create_attempt_grace(
-                    canonical_id, time.monotonic() + ready_timeout_seconds
+                self.system_interface_health_tracker.begin_probe_grace(
+                    canonical_id, ProbeGracePurpose.CREATE_ATTEMPT, time.monotonic() + ready_timeout_seconds
                 )
                 try:
                     self._wait_for_workspace_ready(canonical_id, log_sink, ready_timeout_seconds)
                 finally:
-                    self.system_interface_health_tracker.end_create_attempt_grace(canonical_id)
+                    self.system_interface_health_tracker.end_probe_grace(
+                        canonical_id, ProbeGracePurpose.CREATE_ATTEMPT
+                    )
 
                 # The redirect URL is *absolute* and points at the plugin's
                 # bare origin. The SPA creating page does

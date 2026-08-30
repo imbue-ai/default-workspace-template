@@ -114,6 +114,18 @@ class PendingCreateAttemptStoreError(MindError):
     ...
 
 
+class UpdateScheduleStoreError(MindError):
+    """Raised when a scheduled-update intent cannot be written."""
+
+    ...
+
+
+class PendingRequestsUnavailableError(MindError):
+    """Raised when a verdict must be recorded but no pending-requests view is configured."""
+
+    ...
+
+
 class DeployLifecycleConfigError(MindError, ValueError):
     """Raised when a deploy lifecycle config combination is invalid."""
 
@@ -162,6 +174,17 @@ class DeviceIdError(MindError):
 
 class WorkspaceSyncError(MindError):
     """Raised when a workspace-record sync (push/pull/reconcile) operation fails."""
+
+    ...
+
+
+class WorkspaceRecordLeaseActiveError(WorkspaceSyncError):
+    """Raised when a record cannot be removed because its cloud workspace still holds a pool lease.
+
+    The connector is tombstone-first: destroying the workspace is what releases
+    the lease and retires the record, so remove-from-list is refused while the
+    machine is live.
+    """
 
     ...
 

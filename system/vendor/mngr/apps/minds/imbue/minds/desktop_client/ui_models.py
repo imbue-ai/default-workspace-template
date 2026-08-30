@@ -21,6 +21,7 @@ channel frames. They live here because the generated TypeScript comes from
 the payload builders import it, never the other way round.
 """
 
+from datetime import datetime
 from enum import auto
 from typing import Annotated
 from typing import Literal
@@ -34,6 +35,12 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealth
 from imbue.minds.desktop_client.environment_signals import EnvironmentCondition
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
+from imbue.minds.desktop_client.system_interface_health import HostRecoveryKind
+from imbue.minds.desktop_client.update_status import IN_FLIGHT_ACTIVITIES
+from imbue.minds.desktop_client.update_status import UpdateActivity
+from imbue.minds.desktop_client.update_status import UpdateAvailability
+from imbue.minds.desktop_client.update_status import UpdateUnknownReason
+from imbue.minds.desktop_client.update_status import UpdateVerdict
 
 # Bumped on ANY breaking change to the models in this module. The server
 # inlines it into the page bootstrap and sends it again in every connection's
@@ -42,7 +49,7 @@ from imbue.minds.desktop_client.system_interface_health import AgentHealth
 # while a window stayed open across a reconnect -- it cannot catch assets
 # built for another version being served with a matching bootstrap, since
 # both values come from the same live server.
-UI_SCHEMA_VERSION: int = 7
+UI_SCHEMA_VERSION: int = 9
 
 
 class UiWorkspaceEntry(FrozenModel):
@@ -94,8 +101,26 @@ class UiWorkspaceEntry(FrozenModel):
     create_attempt_state: str = Field(
         default="", description="creating / interrupted / failed for create-attempt rows; empty for real workspaces"
     )
-    is_remote: bool = Field(default=False, description="Known only from synced records (hosted on another device)")
-    location: str = Field(default="", description="Human label for where a remote workspace lives")
+    is_remote: bool = Field(default=False, description="Known only from synced records (not in local discovery)")
+    remote_kind: str = Field(
+        default="",
+        description=(
+            "For remote rows: 'other_device' (hosted by another install) or 'cloud' (a cloud workspace this "
+            "device cannot currently see); empty for live rows"
+        ),
+    )
+    location: str = Field(
+        default="",
+        description="Human label for where a remote workspace lives: the device label, or the cloud provider name",
+    )
+    backup_access: str = Field(
+        default="",
+        description=(
+            "For remote rows: 'available' when this device can read the workspace's backups now, 'locked' when "
+            "the synced credentials need the master password here, 'unavailable' when no credentials reach this "
+            "device; empty for live rows"
+        ),
+    )
 
 
 class UiHelloMessage(FrozenModel):
@@ -233,21 +258,21 @@ class UiHealthMessage(FrozenModel):
     type: Literal["health"] = "health"
     agent_id: str = Field(description="Workspace agent id")
     status: AgentHealth = Field(description="Current health classification")
-    error: str | None = Field(default=None, description="Last restart error, present for RESTART_FAILED")
-    is_restart_a_no_op: bool = Field(
+    error: str | None = Field(default=None, description="Last recovery error, present for RECOVERY_FAILED")
+    is_recovery_a_no_op: bool = Field(
         default=False,
         description=(
             "Whether this episode's dispatched start reported it booted nothing. A row that reads "
-            "RESTART_FAILED with this set has no failed restart behind it -- the machine simply never "
+            "RECOVERY_FAILED with this set has no failed restart behind it -- the machine simply never "
             "answered -- so the badge says so rather than blaming a restart that never ran."
         ),
     )
-    is_restart_start_only: bool | None = Field(
+    recovery_kind: HostRecoveryKind | None = Field(
         default=None,
         description=(
-            "Whether an in-flight restart skips the stop step, or None outside one. A full stop+start "
-            "bounce only ever comes from the user's own click, so False is what makes 'Restarting' an "
-            "honest claim; anything else may no-op against a machine that is already up. Carried here "
+            "Which recovery is in flight, or None outside one. Only RESTART stops the machine, and it "
+            "only ever comes from the user's own click, so it is the one that makes 'Restarting' an "
+            "honest claim; a START may no-op against a machine that is already up. Carried here "
             "because the machines list has to make the same call the recovery card does, off the same "
             "evidence -- the recovery-info route already reports it, and two surfaces reading one "
             "episode must not describe it differently."
@@ -259,6 +284,100 @@ class UiHealthMessage(FrozenModel):
     is_snapshot: bool = Field(
         default=False,
         description="Whether this frame is the connect-time replay of current state rather than a live edge",
+    )
+
+
+class UiWorkspaceUpdate(FrozenModel):
+    """One workspace's update situation: what the store composes and what the SPA reads, one model.
+
+    A separate frame from :class:`UiWorkspaceEntry` because it changes on its
+    own cadence (sweeps, run events).
+    """
+
+    availability: UpdateAvailability = Field(
+        description="Up to date / out of date / unknown / app behind / needs recreation"
+    )
+    unknown_reason: UpdateUnknownReason | None = Field(
+        default=None,
+        description="On UNKNOWN, whether the machine or this build of minds is the side with no version",
+    )
+    current_version: str = Field(description="The workspace's version, empty when unknown")
+    supported_version: str = Field(
+        description="The ref this app is pinned to; a branch rather than a minds-v* tag when it imposes no ceiling"
+    )
+    is_version_from_label: bool = Field(
+        description="Whether the version came from the create-time label because the machine's own git "
+        "could not be read"
+    )
+    activity: UpdateActivity = Field(description="What an update run is doing right now")
+    run_started_at: datetime | None = Field(
+        default=None,
+        description="When the run began (UTC): the dispatch's claim, or the run's own record; kept after the run "
+        "ends because it is what tells one run's record apart from the next's. None when unknown",
+    )
+    is_hold_recorded: bool = Field(
+        default=False,
+        description="Whether a WAITING run's own record says it is holding for the user; False for a run that "
+        "merely reads idle",
+    )
+    hold_detail: str = Field(default="", description="The run's one line naming what it is waiting on")
+    target_override: str = Field(
+        default="",
+        description="The exact ref the user asked the current run to target; '' for the skill's default",
+    )
+    verdict: UpdateVerdict | None = Field(default=None, description="The last run's terminal verdict, if any")
+    verdict_detail: str = Field(default="", description="The verdict's one-line summary")
+    in_place_compatible_ref: str = Field(
+        default="", description="Newest version still applicable in place, offered alongside a refusal"
+    )
+    is_scheduled: bool = Field(default=False, description="Whether a scheduled update is armed")
+    scheduled_target_ref: str = Field(
+        default="", description="The exact ref the armed schedule targets; '' for the skill's default"
+    )
+    last_skip_reason: str = Field(default="", description="Why the last scheduled attempt did not run")
+    success_note_version: str = Field(
+        default="", description="Version the last successful run landed, for the dismissible row note"
+    )
+    chat_agent_name: str = Field(
+        default="",
+        description="Name of the run's chat agent; empty when no run has claimed this machine",
+    )
+    is_backup_configured: bool = Field(
+        default=False,
+        description="Whether backups exist for this machine (keys the go-ahead-without-backups confirmation)",
+    )
+
+    @property
+    def is_update_offered(self) -> bool:
+        """Whether the app has positively read that this workspace is behind: the badge, the band, and bulk actions."""
+        return self.availability is UpdateAvailability.OUT_OF_DATE
+
+    @property
+    def is_update_dispatchable(self) -> bool:
+        """Whether an update run may be started in this workspace at all.
+
+        Wider than :attr:`is_update_offered` by the UNKNOWN leg: ``/update-self``
+        resolves its own target against the workspace's upstream, so an unreadable
+        workspace is asked rather than guessed about. UP_TO_DATE and APP_BEHIND
+        are positive readings that there is nothing to run.
+        """
+        return self.availability in (UpdateAvailability.OUT_OF_DATE, UpdateAvailability.UNKNOWN)
+
+    @property
+    def is_run_in_flight(self) -> bool:
+        """Whether a run is live: a second dispatch is refused and the row reports the run."""
+        return self.activity in IN_FLIGHT_ACTIVITIES
+
+
+class UiWorkspaceUpdatesMessage(FrozenModel):
+    """Every workspace's update situation, keyed by agent id (always the full map)."""
+
+    type: Literal["workspace_updates"] = "workspace_updates"
+    updates: dict[str, UiWorkspaceUpdate] = Field(
+        description="agent_id -> update state; a workspace absent from the map has nothing to say"
+    )
+    update_window: str = Field(
+        description="Human-readable local window scheduled updates run in, e.g. '2:00 AM-5:00 AM'"
     )
 
 
@@ -349,6 +468,7 @@ UiServerMessage = Annotated[
     | UiNotificationsMessage
     | UiHealthMessage
     | UiDiscoveryHealthMessage
+    | UiWorkspaceUpdatesMessage
     | UiEnvironmentMessage
     | UiWorkspaceStoppedMessage
     | UiOpenHelpMessage
@@ -374,6 +494,7 @@ class UiSnapshot(FrozenModel):
     notifications: UiNotificationsMessage = Field(description="Current notification feed")
     health: tuple[UiHealthMessage, ...] = Field(description="Per-workspace health states (only tracked workspaces)")
     discovery_health: UiDiscoveryHealthMessage = Field(description="Current discovery pipeline health")
+    workspace_updates: UiWorkspaceUpdatesMessage = Field(description="Current per-workspace update state")
     environment: UiEnvironmentMessage = Field(description="Current device-level connectivity condition")
 
 
@@ -612,6 +733,7 @@ class UiWireSchema(FrozenModel):
     notifications: UiNotificationsMessage = Field(description="notifications frame")
     health: UiHealthMessage = Field(description="health frame")
     discovery_health: UiDiscoveryHealthMessage = Field(description="discovery_health frame")
+    workspace_updates: UiWorkspaceUpdatesMessage = Field(description="workspace_updates frame")
     environment: UiEnvironmentMessage = Field(description="environment frame")
     workspace_stopped: UiWorkspaceStoppedMessage = Field(description="workspace_stopped frame")
     open_help: UiOpenHelpMessage = Field(description="open_help frame")

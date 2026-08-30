@@ -81,7 +81,13 @@ def test_destroy_single_agent(
         )
 
 
+# Same real tmux create/destroy workload as test_destroy_single_agent above
+# (whose in-test wait_for budgets alone exceed the global 10s pytest-timeout),
+# and observed tripping the ceiling on a slow offload sandbox. Same remedy:
+# room when slow, offload retry via @pytest.mark.flaky beyond it.
 @pytest.mark.tmux
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_destroy_single_agent_via_session(
     cli_runner: CliRunner,
     temp_work_dir: Path,
@@ -136,7 +142,14 @@ def test_destroy_single_agent_via_session(
         )
 
 
+# Same real-tmux create/destroy shape as test_destroy_single_agent above (its
+# in-test wait_for budgets alone exceed the global 10s pytest-timeout), plus
+# the post-destroy GC's 32-worker executor teardown -- where this test has
+# been observed tripping the ceiling on a slow sandbox. Same remedy as the
+# tests above: room when slow, offload retry via @pytest.mark.flaky beyond it.
 @pytest.mark.tmux
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_destroy_with_confirmation(
     cli_runner: CliRunner,
     temp_work_dir: Path,

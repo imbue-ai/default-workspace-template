@@ -73,7 +73,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          # 22+, not 20: the frontend tests exercise code that reads the global
+          # `navigator` (added to Node in 21), and Node 20 is past end-of-life.
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: system/apps/system_interface/frontend/package-lock.json
 
@@ -91,11 +93,13 @@ jobs:
       - name: Install Playwright browsers
         run: uv run playwright install --with-deps chromium
 
-      - name: Build system/apps/system_interface frontend
+      - name: Build and test system/apps/system_interface frontend
         working-directory: system/apps/system_interface/frontend
         run: |
           npm ci
+          npm run test
           npm run build
+          npm test
 
       - name: Run root tests
         run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest

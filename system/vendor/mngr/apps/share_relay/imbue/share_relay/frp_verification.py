@@ -16,12 +16,18 @@ blueprint/multi-relay depends on:
 3. The same customDomains claimed on two frps servers route independently,
    each stamping the true visitor address into the PROXY v2 header (k=2
    multi-homing works).
+4. An ``httpPlugins`` ``addr`` carrying URL userinfo reaches the plugin
+   endpoint as an ``Authorization: Basic`` header with a secret-free path --
+   what keeps the connector-auth secret out of access logs (issue #616).
 
 NOT a pytest test: it needs the network (a GitHub release download) and free
 loopback ports; it exists to be run by an operator or agent when bumping frp.
 """
 
+import base64
 import hashlib
+import http.server
+import json
 import platform
 import queue
 import socket
@@ -53,6 +59,9 @@ _FRPS2_VHOST_PORT: Final[int] = 47243
 _FRPC1_ADMIN_PORT: Final[int] = 47301
 _FRPC2_ADMIN_PORT: Final[int] = 47302
 _BACKEND_PORT: Final[int] = 47443
+_FRPS3_BIND_PORT: Final[int] = 47500
+_FRPS3_VHOST_PORT: Final[int] = 47543
+_PLUGIN_SERVER_PORT: Final[int] = 47501
 
 _TUNNEL_UP_ATTEMPTS: Final[int] = 40
 _SPLICE_WAIT_SECONDS: Final[float] = 0.5
@@ -65,6 +74,14 @@ _PROXY_V2_SIGNATURE: Final[bytes] = b"\r\n\r\n\x00\r\nQUIT\n"
 _UNRECOGNIZED_NAME_ALERT: Final[bytes] = bytes.fromhex("15030300020270")
 
 _TEST_DOMAIN: Final[str] = "web.host-verify.user.us1.frp-verify.invalid"
+
+# Fixtures for the plugin-userinfo check: the shape render_frps_toml produces
+# (secret as the addr's userinfo username, relay id as the final path segment).
+_PLUGIN_TEST_DOMAIN: Final[str] = "web.host-plugin.user.us1.frp-verify.invalid"
+_PLUGIN_AUTH_SECRET: Final[str] = "a3f1c9d7e5b24680deadbeef00112233"
+_PLUGIN_RELAY_ID: Final[str] = "relay-abcdef0123456789"
+_PLUGIN_AUTH_PATH: Final[str] = f"/frps/auth/{_PLUGIN_RELAY_ID}"
+_PLUGIN_CALLBACK_WAIT_SECONDS: Final[float] = 30.0
 
 
 class FrpVerificationError(ShareRelayError):
@@ -195,6 +212,66 @@ def _frps_toml(bind_port: int, vhost_port: int) -> str:
     return f"bindPort = {bind_port}\nvhostHTTPSPort = {vhost_port}\n"
 
 
+# Each plugin callback the capture server received: (op, path, authorization
+# header). Pushed by the handler, consumed by the plugin-userinfo check.
+_PLUGIN_CALLBACKS: Final["queue.Queue[tuple[str, str, str]]"] = queue.Queue()
+
+
+class _PluginCaptureHandler(http.server.BaseHTTPRequestHandler):
+    """Stand-in connector: records each plugin callback's path + Authorization header and allows the op."""
+
+    def do_POST(self) -> None:
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        # A non-JSON body means frp changed its plugin payload -- let the
+        # handler raise (http.server prints the traceback) and the check time
+        # out rather than recording a half-parsed callback.
+        op = str(json.loads(body).get("op", ""))
+        _PLUGIN_CALLBACKS.put((op, self.path, self.headers.get("Authorization", "")))
+        answer = json.dumps({"reject": False, "unchange": True}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(answer)))
+        self.end_headers()
+        self.wfile.write(answer)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def _frps_plugin_toml(bind_port: int, vhost_port: int) -> str:
+    # The plugin server is plain http on loopback: Go's HTTP client applies URL
+    # userinfo as the Authorization header after parsing the URL, independent
+    # of scheme, so http here pins the same behavior the https production addr
+    # relies on without cert plumbing.
+    return f"""\
+bindPort = {bind_port}
+vhostHTTPSPort = {vhost_port}
+
+[[httpPlugins]]
+name = "connector-auth"
+addr = "http://{_PLUGIN_AUTH_SECRET}@127.0.0.1:{_PLUGIN_SERVER_PORT}"
+path = "{_PLUGIN_AUTH_PATH}"
+ops = ["Login", "NewProxy", "Ping"]
+"""
+
+
+def _frpc_plugin_toml(server_port: int) -> str:
+    return f"""\
+serverAddr = "127.0.0.1"
+serverPort = {server_port}
+loginFailExit = false
+transport.tls.enable = true
+metadatas.relay_token = "frp-verify-relay-token"
+
+[[proxies]]
+name = "share"
+type = "https"
+localIP = "127.0.0.1"
+localPort = {_BACKEND_PORT}
+customDomains = ["{_PLUGIN_TEST_DOMAIN}"]
+"""
+
+
 def _frpc_toml(server_port: int, admin_port: int) -> str:
     return f"""\
 serverAddr = "127.0.0.1"
@@ -278,6 +355,62 @@ def _check_visitor_identity(label: str, vhost_port: int) -> None:
     )
 
 
+def _check_plugin_userinfo_auth(concurrency_group: ConcurrencyGroup, binaries_dir: Path, work_dir: Path) -> None:
+    """Behavior 4: plugin ``addr`` userinfo arrives as ``Authorization: Basic`` with a secret-free path.
+
+    Runs a third frps whose ``httpPlugins`` addr embeds the secret as URL
+    userinfo (the exact shape ``render_frps_toml`` produces) against a local
+    stand-in connector, drives one frpc through ``Login`` + ``NewProxy``, and
+    asserts every callback carried the expected Basic header while the URL
+    path stayed secret-free. frp appends its own ``?op=...&version=...`` query
+    to the plugin URL, so the path is compared without its query string.
+    """
+    plugin_server = http.server.ThreadingHTTPServer(("127.0.0.1", _PLUGIN_SERVER_PORT), _PluginCaptureHandler)
+    plugin_thread = threading.Thread(target=plugin_server.serve_forever, name="frp-verify-plugin", daemon=True)
+    plugin_thread.start()
+    frp_processes = [
+        _start_frp_process(concurrency_group, binaries_dir, work_dir, config_name, content)
+        for config_name, content in (
+            ("frps3.toml", _frps_plugin_toml(_FRPS3_BIND_PORT, _FRPS3_VHOST_PORT)),
+            ("frpc3.toml", _frpc_plugin_toml(_FRPS3_BIND_PORT)),
+        )
+    ]
+    try:
+        # Collect callbacks until Login and NewProxy have both been observed
+        # (frpc sends Login immediately and NewProxy right after it succeeds).
+        callbacks: list[tuple[str, str, str]] = []
+        deadline = time.monotonic() + _PLUGIN_CALLBACK_WAIT_SECONDS
+        while {"Login", "NewProxy"} - {op for op, _path, _auth in callbacks}:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise FrpVerificationError(
+                    f"FAIL plugin-userinfo auth: expected Login+NewProxy callbacks, "
+                    f"saw {sorted({op for op, _path, _auth in callbacks})}"
+                )
+            try:
+                callbacks.append(_PLUGIN_CALLBACKS.get(timeout=min(remaining, _SPLICE_WAIT_SECONDS)))
+            except queue.Empty:
+                continue
+    finally:
+        for frp_process in frp_processes:
+            frp_process.terminate()
+        plugin_server.shutdown()
+        plugin_server.server_close()
+
+    expected_authorization = "Basic " + base64.b64encode(f"{_PLUGIN_AUTH_SECRET}:".encode()).decode()
+    for op, path, authorization in callbacks:
+        _check(
+            f"plugin-userinfo Authorization header on {op}",
+            authorization == expected_authorization,
+            f"Authorization={authorization!r}",
+        )
+        _check(
+            f"plugin-userinfo secret-free path on {op}",
+            path.split("?", 1)[0] == _PLUGIN_AUTH_PATH and _PLUGIN_AUTH_SECRET not in path,
+            f"path={path!r}",
+        )
+
+
 def run_frp_verification(work_dir: Path) -> None:
     """Download the pinned frp and assert the multi-relay-critical behaviors on loopback."""
     binaries_dir = _download_pinned_frp(work_dir)
@@ -305,6 +438,7 @@ def run_frp_verification(work_dir: Path) -> None:
                 _check_inbound_proxy_rejected(_FRPS1_VHOST_PORT)
                 _check_visitor_identity("server-1", _FRPS1_VHOST_PORT)
                 _check_visitor_identity("server-2", _FRPS2_VHOST_PORT)
+                _check_plugin_userinfo_auth(concurrency_group, binaries_dir, work_dir)
             finally:
                 for frp_process in frp_processes:
                     frp_process.terminate()

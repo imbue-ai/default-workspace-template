@@ -44,6 +44,7 @@ def test_log_views_parse_http_request_lines_and_ignore_foreign_and_malformed_bod
                     "path": "/account",
                     "status": 200,
                     "duration_ms": 12.5,
+                    "imbue_client": "minds/0.4.2 imbue-cloud-plugin/0.1.6",
                 }
             ),
         ),
@@ -66,12 +67,12 @@ def test_log_views_parse_http_request_lines_and_ignore_foreign_and_malformed_bod
         env_filter="",
     )
     parsed_rows = connection.execute(
-        "SELECT user_id, method, path, status, duration_ms FROM logs.http_requests ORDER BY user_id"
+        "SELECT user_id, method, path, status, duration_ms, imbue_client FROM logs.http_requests ORDER BY user_id"
     ).fetchall()
 
     assert parsed_rows == [
-        ("", "GET", "/version", 200, None),
-        ("st-user-83920", "GET", "/account", 200, 12.5),
+        ("", "GET", "/version", 200, None, None),
+        ("st-user-83920", "GET", "/account", 200, 12.5, "minds/0.4.2 imbue-cloud-plugin/0.1.6"),
     ]
 
 
@@ -117,9 +118,8 @@ def test_share_visit_view_extracts_visitor_and_workspace_fields(tmp_path: Path) 
 
 
 def test_log_views_parse_bodies_carrying_a_logging_formatter_prefix(tmp_path: Path) -> None:
-    # In production the JSON record is emitted through a logging handler whose
-    # formatter prefixes an asctime ("%(asctime)s %(message)s"), so the stored
-    # body is "<timestamp> {json}" -- the views must still parse it.
+    # Bodies of the form "<asctime> {json}" predate the JSON envelope and are
+    # still inside the retention window (see the CLEANUP note in log_views).
     connection = _utc_connection()
     line_moment = datetime(2026, 8, 18, 12, 30, tzinfo=timezone.utc)
     prefixed_body = "2026-08-18 12:30:00,123 " + json.dumps(
@@ -137,6 +137,49 @@ def test_log_views_parse_bodies_carrying_a_logging_formatter_prefix(tmp_path: Pa
     parsed_rows = connection.execute("SELECT user_id, method, path, status FROM logs.http_requests").fetchall()
 
     assert parsed_rows == [("st-user-83920", "GET", "/account", 200)]
+
+
+def test_log_views_parse_records_flattened_into_the_json_log_envelope(tmp_path: Path) -> None:
+    # The structured-record JSON log formatter merges a record into its envelope
+    # (timestamp / level / logger first, then the record's own fields), so
+    # the views read the record fields from the top level of the body.
+    connection = _utc_connection()
+    line_moment = datetime(2026, 8, 26, 8, 0, tzinfo=timezone.utc)
+    enveloped_body = json.dumps(
+        {
+            "timestamp": "2026-08-26T08:00:00.123456Z",
+            "level": "INFO",
+            "logger": "imbue.modal_app_kit.request_logging",
+            "type": "http_request",
+            "user": "st-user-55512",
+            "method": "POST",
+            "path": "/hosts/lease",
+            "status": 403,
+            "duration_ms": 8.25,
+            "minds_env": "dev-someone-3",
+        }
+    )
+    plain_text_body = json.dumps(
+        {"timestamp": "2026-08-26T08:00:01.000000Z", "level": "WARNING", "type": "log", "message": "text"}
+    )
+    _write_fixture_parquet(
+        connection,
+        tmp_path / "lines.parquet",
+        [(_micros(line_moment), enveloped_body), (_micros(line_moment), plain_text_body)],
+    )
+
+    create_log_views(
+        connection,
+        parquet_glob=str(tmp_path / "*.parquet"),
+        body_column=DEFAULT_BODY_COLUMN,
+        timestamp_column=DEFAULT_TIMESTAMP_COLUMN,
+        env_filter="dev-someone-3",
+    )
+    parsed_rows = connection.execute(
+        "SELECT user_id, method, path, status, duration_ms FROM logs.http_requests"
+    ).fetchall()
+
+    assert parsed_rows == [("st-user-55512", "POST", "/hosts/lease", 403, 8.25)]
 
 
 def test_log_views_tolerate_an_empty_parquet_source(tmp_path: Path) -> None:
