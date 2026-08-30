@@ -112,9 +112,8 @@ class SystemInterfaceState(MutableModel):
                 # via the REST /events endpoint, so nothing is buffered for replay.
                 self.event_queues.broadcast_batch(agent_id, events)
                 # Fold the delta into the per-agent activity signals. The tracker is
-                # incremental (seeded with the full backlog below), so handing it just the
-                # newly parsed events replaces the old full-transcript rematerialisation
-                # that cost O(N) per event on long chats.
+                # incremental (seeded with the full backlog below), so it only ever
+                # needs the newly parsed events.
                 self.agent_manager.update_session_events(agent_id, events)
 
             # The harness was resolved once at discovery; the registry turns it into a

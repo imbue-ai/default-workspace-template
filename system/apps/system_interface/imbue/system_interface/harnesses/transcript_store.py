@@ -9,12 +9,8 @@ source byte ranges this store tracks (see :meth:`TranscriptStore.source_of`). Th
 therefore carries identity, prose, labels, and small derived stamps -- never raw payloads
 -- and the resident cost per event is correspondingly small.
 
-This replaces the claude watcher's two-tier locator/body-LRU cache: at real transcript
-sizes the bounded design saved little memory while costing a re-parse-from-disk path and
-its correctness invariants, and the O(N)-per-event ``get_all_events`` rematerialisation it
-forced was itself the dominant memory/CPU pathology. Residency is bounded instead by the
-payload-free event shape, and lifetime by watcher eviction on agent stop/destroy
-(``SystemInterfaceState.stop_and_remove_watcher``).
+Residency is bounded by the payload-free event shape, and lifetime by watcher eviction on
+agent stop/destroy (``SystemInterfaceState.stop_and_remove_watcher``).
 
 Locking: the store takes no lock of its own. The owning watcher guards every call with
 its single lock (held across file reads and parsing -- cheap and incremental -- but never

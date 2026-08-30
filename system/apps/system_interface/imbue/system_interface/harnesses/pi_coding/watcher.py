@@ -1,10 +1,8 @@
 """Tail a pi agent's native session JSONL and emit UI events.
 
 Built on the shared :class:`~imbue.system_interface.harnesses.transcript_store` scaffolding
-with a single lane: pi is one logical session to the UI. Unlike the earlier watcher --
-which followed only the marker's live file, so everything before the last ``/new`` rotation
-existed only in watcher memory and was forgotten on a backend restart -- this one registers
-EVERY session file in the sessions dir: static (pre-rotation) files are consumed once in
+with a single lane: pi is one logical session to the UI. The watcher registers EVERY
+session file in the sessions dir: static (pre-rotation) files are consumed once in
 chronological order, then the live file (followed across ``/new`` via the
 ``pi_session_file`` marker) is tailed incrementally. A rebuilt watcher therefore recovers
 the full cross-rotation history from disk, which is what makes eviction-on-stop safe.
