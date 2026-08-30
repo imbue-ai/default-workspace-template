@@ -35,7 +35,7 @@ import {
   closeProviderChooser,
   getAccounts,
   isProviderChooserOpen,
-  loadAccounts,
+  loadAccountsWithRetry,
   openProviderChooser,
 } from "../models/Providers";
 import { getFastModePromptAgentId } from "../models/FastModePrompt";
@@ -77,10 +77,11 @@ export function App(): m.Component {
     oninit() {
       // The new-tab picker and the rail's Chat shortcut both read the account list,
       // and both can be the first thing a user clicks, so load it once at boot
-      // rather than on the chooser's own oninit.
-      void loadAccounts()
-        .then(greetFirstRun)
-        .catch(() => undefined);
+      // rather than on the chooser's own oninit. Retried until it succeeds: the boot
+      // render can race the backend coming up, and the first-run greeting decides off
+      // this one load -- a swallowed failure would leave a provider-less workspace
+      // with the chooser closed for the whole page load.
+      void loadAccountsWithRetry().then(greetFirstRun);
     },
     view() {
       return m(
