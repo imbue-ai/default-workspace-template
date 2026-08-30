@@ -2408,13 +2408,15 @@ class AgentManager:
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
-        """Recompute transcript-derived activity signals from the full event list.
+        """Fold a batch of transcript events into the agent's activity signals.
 
-        Called by ``server._get_or_create_watcher`` whenever the
-        :class:`AgentSessionWatcher` learns of new events. Cheap to call: the
-        tracker short circuits when none of its derived signals changed, so a
-        streamed line that moves nothing skips both the recompute and its
-        per-event marker stat.
+        Called with exactly the events the :class:`AgentSessionWatcher` just
+        parsed -- the ``on_events`` fan-out in ``app_context`` -- plus once at
+        watcher build with the whole primed backlog (the seed). The tracker is
+        incremental, so it never needs the full transcript again. Cheap to
+        call: the tracker short circuits when none of its derived signals
+        changed, so a streamed line that moves nothing skips both the recompute
+        and its per-event marker stat.
 
         No-op for agents not being tracked for activity (e.g. remote agents, or
         stale callbacks for an agent that was just destroyed).
