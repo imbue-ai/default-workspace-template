@@ -15,6 +15,7 @@ without ever starting the agent manager.
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import socket
 import socketserver
@@ -35,6 +36,7 @@ import httpx
 import pexpect
 import simple_websocket
 from flask import Flask
+from flask import Response
 
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
@@ -406,6 +408,30 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
     finally:
         server.shutdown()
         thread.join(timeout=5.0)
+
+
+def build_stub_versioning_backend(served_app_names: Sequence[str]) -> Flask:
+    """A stand-in for the Versioning app's own ``GET /api/apps``, to hand to ``serve_app``."""
+    stub = Flask(__name__, static_folder=None)
+
+    def list_apps() -> Response:
+        body = json.dumps(
+            {
+                "apps": [
+                    {
+                        "name": name,
+                        "package_dir": f"system/apps/{name.replace('-', '_')}",
+                        "title": name.title(),
+                        "program": name,
+                    }
+                    for name in served_app_names
+                ]
+            }
+        )
+        return Response(body, mimetype="application/json")
+
+    stub.add_url_rule("/api/apps", view_func=list_apps, methods=["GET"])
+    return stub
 
 
 def open_ws(served: ServedApp, path: str, subprotocols: list[str] | None = None) -> simple_websocket.Client:

@@ -65,6 +65,15 @@ import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
 import type { LaunchTarget, LauncherRow } from "./NewTabLauncher";
 import { OBJECT_MENU_DIVIDER, isRenameableKind, objectMenuEntries } from "./objectMenu";
 import type { ObjectMenuActions, ObjectMenuEntry, ObjectMenuKind } from "./objectMenu";
+import {
+  HISTORY_PANE_TITLE,
+  SYSTEM_HISTORY_APP_NAME,
+  VERSIONING_SERVICE_NAME,
+  appHistoryPath,
+  historyPaneMenuActions,
+  isAppHistoryOffered,
+  isHistoryService,
+} from "./appHistory";
 import { placeMenu } from "./Sidebar";
 import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
@@ -174,6 +183,7 @@ import {
   getAppInstances,
   refreshAppInstances,
 } from "../models/AppInstances";
+import { ensureVersionedAppsFresh, getVersionedAppNames } from "../models/VersionedApps";
 import { applyMemberLocationChange, getMemberLocation, loadMemberLocations } from "../models/MemberLocations";
 import { initializeLocationBeaconListener } from "../locationBeacon";
 import { appStoppedDetail, isAppRunning, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
@@ -741,6 +751,16 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
       },
     ];
   }
+  if (isHistoryService(params.serviceName)) {
+    return objectMenuEntries(
+      kind,
+      historyPaneMenuActions({
+        refresh: () => refreshPanelContent(panelId),
+        hideTab: () => dockview?.panels.find((candidate) => candidate.id === panelId)?.api.close(),
+        removeFromProject: null,
+      }),
+    );
+  }
   // An app pane's menu splits by what the pane IS: an instance pane carries
   // the instance verbs plus the service's own Share and Stop/Start (via
   // serviceGroup), while a pane whose instance has not landed yet keeps the
@@ -765,6 +785,7 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
     // refreshPanelContent) -- the session survives independently of the tab,
     // so a reattach never loses scrollback or respawns the shell.
     refresh: () => refreshPanelContent(panelId),
+    history: historyActionForService(kind === "app" ? params.serviceName : undefined),
     share: isInstancePane ? null : shareAction,
     serviceGroup:
       isInstancePane && params.serviceName !== undefined
@@ -951,6 +972,15 @@ function appLifecycleQuitAction(
   };
 }
 
+export function historyActionForService(serviceName: string | undefined): (() => void) | null {
+  if (serviceName === undefined || !isAppHistoryOffered(getApps(), getVersionedAppNames(), serviceName)) return null;
+  return () => openAppHistory(serviceName);
+}
+
+export function systemHistoryAction(): (() => void) | null {
+  return historyActionForService(SYSTEM_HISTORY_APP_NAME);
+}
+
 /** Fire one stop/start at the backend, surfacing a refusal with the alert
  *  pattern the other lifecycle actions use. The ``apps_updated`` broadcast the
  *  endpoint triggers is what repaints every surface -- nothing optimistic. */
@@ -964,6 +994,12 @@ function requestAppLifecycleAction(serviceName: string, action: "stop" | "start"
     .catch((e: Error) => {
       alert(`Failed to ${action} ${serviceName}: ${e.message}`);
     });
+}
+
+function startAppIfStopped(app: AppEntry): void {
+  if (!isAppRunning(app) && isAppStoppable(app)) {
+    requestAppLifecycleAction(app.name, "start");
+  }
 }
 
 /** Stop one chat agent's process (``mngr stop`` server-side), the reversible
@@ -1976,6 +2012,7 @@ function refreshMachineInventory(): void {
   refreshBrowserFleet(() => m.redraw());
   refreshTerminalFleet(() => m.redraw());
   void refreshAppInstances().then(() => m.redraw());
+  void ensureVersionedAppsFresh().then(() => m.redraw());
 }
 
 /**
@@ -2076,8 +2113,9 @@ function derivedLabelForMemberRef(ref: string): string {
       // for a renamed app): the app's own chosen name rides into every one of
       // its instances' names. A bare ref (the app's pin) is the service name.
       const instanceName = instanceNameFromRef(ref);
-      if (instanceName === null) return body;
       const serviceName = serviceNameFromRef(ref) ?? parseServiceRefBody(body).name;
+      if (isHistoryService(serviceName)) return HISTORY_PANE_TITLE;
+      if (instanceName === null) return body;
       return appInstanceDisplayName(appDisplayLabel(serviceName), instanceName);
     }
     case "url":
@@ -2594,6 +2632,7 @@ type AddPanelPlacementOptions = {
    *  return the resulting ``terminal:<hash>`` ref synchronously. Ignored
    *  for every other ref kind. */
   panelIdHint?: string;
+  initialUrl?: string;
 };
 
 /** Deterministic dockview panel id for an agent's chat tab, so reopening the
@@ -2915,9 +2954,7 @@ async function openNewBrowser(targetGroup: DockviewGroupPanel | null, launcherPa
  *  named chat agent is unknown. */
 function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPanelPlacementOptions): string | null {
   if (!dockview) return null;
-  // Strip ``panelIdHint`` from the addPanel spread: it's an
-  // addPanelForRef-internal hint, not a dockview placement field.
-  const { panelIdHint, ...placement } = addOptions;
+  const { panelIdHint, initialUrl, ...placement } = addOptions;
 
   if (ref === "service:terminal") {
     const ownerId = requesterAgentId || getPrimaryAgentId();
@@ -2994,7 +3031,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
       const params: PanelParams = {
         panelType: "iframe",
         agentId: requesterAgentId || getPrimaryAgentId(),
-        url: appInstanceUrl(serviceName, ref),
+        url: initialUrl ?? appInstanceUrl(serviceName, ref),
         title,
         serviceName,
         serviceInstanceId: instanceName,
@@ -3570,12 +3607,17 @@ const appsAwaitingInstanceMint = new Set<string>();
  *  ``addOptions``. The allocation is the backend's (lowest free ``<app>-<N>``
  *  under its reservation set); the open that follows is what files the
  *  instance into the active view and thereby makes it exist. */
-function mintAppInstance(app: AppEntry, addOptions: AddPanelPlacementOptions): void {
+function mintAppInstance(
+  app: AppEntry,
+  addOptions: AddPanelPlacementOptions,
+  onOpened?: (panelId: string) => void,
+): void {
   if (appsAwaitingInstanceMint.has(app.name)) return;
   appsAwaitingInstanceMint.add(app.name);
   void allocateAppInstance(app.name)
     .then((instanceName) => {
-      addPanelForRef(appInstanceRef(app.name, instanceName), getPrimaryAgentId(), addOptions);
+      const panelId = addPanelForRef(appInstanceRef(app.name, instanceName), getPrimaryAgentId(), addOptions);
+      if (panelId !== null) onOpened?.(panelId);
     })
     .catch((e: Error) => {
       alert(`Failed to open ${appDisplayLabel(app.name)}: ${e.message}`);
@@ -3623,13 +3665,7 @@ function mruInstanceRefForApp(serviceName: string): string | null {
  *  all-apps picker, and used by the launcher's tiles and rows. */
 export function openAppTab(app: AppEntry, options: { isNew?: boolean } = {}): void {
   if (!dockview) return;
-  // Opening a stopped app means wanting it: start it first (idempotent), and
-  // open the pane right away -- it shows the stopped placeholder until the
-  // ``apps_updated`` push flips it to the live iframe, so the click has an
-  // immediate, honest answer while supervisord brings the program up.
-  if (!isAppRunning(app) && isAppStoppable(app)) {
-    requestAppLifecycleAction(app.name, "start");
-  }
+  startAppIfStopped(app);
   if (options.isNew !== true) {
     const mruRef = mruInstanceRefForApp(app.name);
     if (mruRef !== null) {
@@ -3639,6 +3675,44 @@ export function openAppTab(app: AppEntry, options: { isNew?: boolean } = {}): vo
     }
   }
   mintAppInstance(app, {});
+}
+
+function openAppHistory(serviceName: string): void {
+  if (!dockview) return;
+  const versioningApp = getApps().find((candidate) => candidate.name === VERSIONING_SERVICE_NAME);
+  if (versioningApp === undefined) return;
+  startAppIfStopped(versioningApp);
+  const openPanelId = findIframePanelIdForService(VERSIONING_SERVICE_NAME);
+  if (openPanelId !== null) {
+    showAppHistoryInPanel(openPanelId, serviceName);
+    return;
+  }
+  const openAt = { initialUrl: appHistoryUrl(serviceName) };
+  const backgroundedRef = mruInstanceRefForApp(VERSIONING_SERVICE_NAME);
+  if (backgroundedRef !== null) {
+    const panelId = addPanelForRef(backgroundedRef, getPrimaryAgentId(), openAt);
+    if (panelId !== null) showAppHistoryInPanel(panelId, serviceName);
+    m.redraw();
+    return;
+  }
+  mintAppInstance(versioningApp, openAt, (panelId) => showAppHistoryInPanel(panelId, serviceName));
+}
+
+function appHistoryUrl(serviceName: string): string {
+  const origin = deriveServiceOrigin(labelForService(VERSIONING_SERVICE_NAME)).replace(/\/$/, "");
+  return `${origin}${appHistoryPath(serviceName)}`;
+}
+
+function showAppHistoryInPanel(panelId: string, serviceName: string): void {
+  const url = appHistoryUrl(serviceName);
+  mutatePanelParams(panelId, (params) => {
+    params.url = url;
+  });
+  const panel = dockview?.panels.find((candidate) => candidate.id === panelId);
+  if (panel !== undefined) dockview?.setActivePanel(panel);
+  flashPanelTab(panelId);
+  m.redraw();
+  scheduleSave();
 }
 
 function buildLayoutPayload(): SavedLayout | null {

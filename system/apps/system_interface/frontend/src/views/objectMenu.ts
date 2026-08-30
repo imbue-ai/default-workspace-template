@@ -121,7 +121,8 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
 export interface ObjectMenuActions {
   refresh: () => void;
   share: { label: string; run: () => void } | null;
-  rename: () => void;
+  history: (() => void) | null;
+  rename: (() => void) | null;
   hideTab: (() => void) | null;
   addToProjects: (() => void) | null;
   removeFromProject: (() => void) | null;
@@ -173,6 +174,9 @@ export interface ObjectMenuActions {
  */
 export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActions): ObjectMenuEntry[] {
   const opening: ObjectMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
+  if (kind === "app" && actions.history !== null) {
+    opening.push({ label: "History", iconName: "history", run: actions.history });
+  }
   const share = kind === "app" ? (actions.share ?? actions.serviceGroup?.share ?? null) : null;
   if (share != null) {
     opening.push({ label: share.label, iconName: "user-plus", run: share.run });
@@ -181,7 +185,7 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
     opening.push({ label: "Add to project...", iconName: "folder-plus", run: actions.addToProjects });
   }
   const closing: ObjectMenuEntry[] = [];
-  if (isRenameableKind(kind)) {
+  if (isRenameableKind(kind) && actions.rename !== null) {
     closing.push({ label: "Rename", iconName: "edit", run: actions.rename });
   }
   if (actions.hideTab !== null) {

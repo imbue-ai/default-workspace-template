@@ -13,6 +13,8 @@
  * english name -- and fall back to rendering that identity directly.
  */
 
+import { HISTORY_PANE_TITLE, isHistoryService } from "./appHistory";
+
 /** What a chat agent's row and tab read: the `display_name` label mngr holds
  *  for it (what the user typed / the minted "Chat N"), else its true name. */
 export function chatDisplayName(agent: { name: string; display_name?: string | null }): string {
@@ -36,11 +38,8 @@ export function browserDisplayName(browserName: string): string {
   return match === null ? `Browser ${browserName}` : `Browser ${match[1]}`;
 }
 
-/** What a registered app is called before anyone renamed it. The one special
- *  case is the built-in file viewer, whose rail row has always read "File
- *  Viewer" (see Sidebar's SHORTCUT_ROWS) while its registered service name is
- *  `files` -- its instances ("File Viewer 2") and its menu verbs should say
- *  the same thing the row does. Every other app reads as its registered name. */
 export function appServiceDisplayName(serviceName: string): string {
-  return serviceName === "files" ? "File Viewer" : serviceName;
+  if (serviceName === "files") return "File Viewer";
+  if (isHistoryService(serviceName)) return HISTORY_PANE_TITLE;
+  return serviceName;
 }

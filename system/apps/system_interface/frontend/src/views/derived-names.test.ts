@@ -48,6 +48,10 @@ describe("appServiceDisplayName", () => {
     expect(appServiceDisplayName("files")).toBe("File Viewer");
   });
 
+  it("calls the versioning service History, which is what its panes are", () => {
+    expect(appServiceDisplayName("versioning")).toBe("History");
+  });
+
   it("shows every other app as its registered name", () => {
     expect(appServiceDisplayName("docs")).toBe("docs");
     expect(appServiceDisplayName("my-files")).toBe("my-files");

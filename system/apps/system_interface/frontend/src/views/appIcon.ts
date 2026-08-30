@@ -43,6 +43,8 @@
 
 import DOMPurify from "dompurify";
 import { getApps } from "../models/AgentManager";
+import { isHistoryService } from "./appHistory";
+import { icon } from "./icons";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
@@ -348,6 +350,7 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
  */
 export function serviceIconMarkup(serviceName: string | null, sizePx: number, fallbackMarkup: string): string {
   if (serviceName === null) return fallbackMarkup;
+  if (isHistoryService(serviceName)) return icon("history", { size: sizePx });
   const app = getApps().find((candidate) => candidate.name === serviceName);
   // A name the machine no longer registers keeps the caller's generic glyph:
   // there is no app to monogram, and inventing one would dress up a dead ref as

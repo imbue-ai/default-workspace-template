@@ -371,6 +371,8 @@ _DEFAULT_TAIL_COUNT = 50
 # local backend URL from this registry entry.
 _BROWSER_SERVICE_NAME = "browser"
 
+_VERSIONING_SERVICE_NAME = "versioning"
+
 # The name this shell registers itself under. It is an app like any other in
 # the registry, so the deregister endpoint has to refuse it explicitly -- pulling
 # its own row would leave the workspace with no origin to serve the UI from.
@@ -2345,6 +2347,15 @@ def _terminal_notify_endpoint() -> Response:
     return _json_response(error.model_dump(), status_code=400)
 
 
+def _relay_backend_response(backend_response: httpx.Response) -> Response:
+    """Relay a passthrough's backend answer verbatim: body, status and content type."""
+    return Response(
+        backend_response.content,
+        status=backend_response.status_code,
+        content_type=backend_response.headers.get("content-type", "application/json"),
+    )
+
+
 def _browser_backend_url(path: str) -> str | None:
     """The registered browser daemon's URL for ``path``, or None when unregistered.
 
@@ -2388,11 +2399,7 @@ def _browsers_passthrough() -> Response:
         _loguru_logger.warning("Browser service request to {} failed: {}", backend_url, e)
         error = ErrorResponse(detail="Browser service is unreachable")
         return _json_response(error.model_dump(), status_code=503)
-    return Response(
-        backend_response.content,
-        status=backend_response.status_code,
-        content_type=backend_response.headers.get("content-type", "application/json"),
-    )
+    return _relay_backend_response(backend_response)
 
 
 def _destroy_browser_passthrough(name: str) -> Response:
@@ -2417,11 +2424,24 @@ def _destroy_browser_passthrough(name: str) -> Response:
         _loguru_logger.warning("Browser service DELETE to {} failed: {}", backend_url, e)
         error = ErrorResponse(detail="Browser service is unreachable")
         return _json_response(error.model_dump(), status_code=503)
-    return Response(
-        backend_response.content,
-        status=backend_response.status_code,
-        content_type=backend_response.headers.get("content-type", "application/json"),
-    )
+    return _relay_backend_response(backend_response)
+
+
+def _versioned_apps_passthrough() -> Response:
+    """Same-origin passthrough for the Versioning app's ``GET /api/apps``."""
+    state = get_state()
+    base_url = state.agent_manager.get_service_url(_VERSIONING_SERVICE_NAME)
+    if base_url is None:
+        error = ErrorResponse(detail="Versioning service is not registered")
+        return _json_response(error.model_dump(), status_code=503)
+    backend_url = f"{base_url.rstrip('/')}/api/apps"
+    try:
+        backend_response = state.http_client.get(backend_url)
+    except httpx.HTTPError as e:
+        _loguru_logger.warning("Versioning service request to {} failed: {}", backend_url, e)
+        error = ErrorResponse(detail="Versioning service is unreachable")
+        return _json_response(error.model_dump(), status_code=503)
+    return _relay_backend_response(backend_response)
 
 
 def _run_forward_port_removal(name: str) -> str | None:
@@ -3536,6 +3556,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/apps/<string:name>/stop", view_func=_stop_app_endpoint, methods=["POST"])
     application.add_url_rule("/api/apps/<string:name>/start", view_func=_start_app_endpoint, methods=["POST"])
     application.add_url_rule("/api/apps/instances", view_func=_list_app_instances_endpoint, methods=["GET"])
+    application.add_url_rule("/api/versioned-apps", view_func=_versioned_apps_passthrough, methods=["GET"])
     application.add_url_rule(
         "/api/apps/<string:name>/instances/allocate",
         view_func=_allocate_app_instance_endpoint,

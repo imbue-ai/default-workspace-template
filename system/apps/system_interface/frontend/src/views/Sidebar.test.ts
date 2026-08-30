@@ -199,6 +199,8 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onRenameRow: vi.fn(),
     onRemoveFromView: vi.fn(),
     onShareApp: vi.fn(),
+    historyActionForService: vi.fn(() => null),
+    systemHistoryAction: vi.fn(() => null),
     onAddRowToProjects: vi.fn(),
     onStopRow: vi.fn(),
     onServiceLifecycle: vi.fn(),
@@ -297,6 +299,27 @@ describe("Sidebar switcher dropdown", () => {
     expect(attrs.onSelectView).not.toHaveBeenCalled();
     const nameField = root.querySelector("input.custom-url-dialog-input") as HTMLInputElement | null;
     expect(nameField?.value).toBe("Beta");
+  });
+
+  it("offers System history below the views, and runs it", () => {
+    const ran: string[] = [];
+    const attrs = makeAttrs({ systemHistoryAction: vi.fn(() => () => ran.push("system")) });
+    const { root, redraw } = mountSidebar(attrs);
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+
+    click(switcherRow(root, "System history"));
+    expect(ran).toEqual(["system"]);
+    expect(attrs.onSelectView).not.toHaveBeenCalled();
+  });
+
+  it("draws no System history row where there is no timeline to open", () => {
+    const { root, redraw } = mountSidebar(makeAttrs({ systemHistoryAction: vi.fn(() => null) }));
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+
+    const labels = Array.from(root.querySelectorAll(".project-rail-menu-item")).map((element) => element.textContent);
+    expect(labels).not.toContain("System history");
   });
 
   it("sizes the dropdown to its own fixed width rather than the header's -- a touch wider than the rail", () => {
@@ -713,6 +736,64 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     } finally {
       vi.mocked(getPrimaryAgentId).mockReturnValue("");
     }
+  });
+
+  it("offers History on an app row, keyed by the service rather than the instance", () => {
+    const attrs = makeAttrs({
+      rows: [{ ref: "service:curio?instance=curio-2", kind: "app", label: "Curio 2", isOpen: true }],
+      historyActionForService: vi.fn((serviceName: string) => (serviceName === "curio" ? () => undefined : null)),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Curio 2"))).toContain("History");
+    expect(attrs.historyActionForService).toHaveBeenCalledWith("curio");
+  });
+
+  it("offers no History on a row whose app has no timeline, nor on any other kind", () => {
+    const attrs = makeAttrs({
+      rows: [
+        { ref: "service:curio?instance=curio-2", kind: "app", label: "Curio 2", isOpen: true },
+        { ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true },
+      ],
+      historyActionForService: vi.fn(() => null),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Curio 2"))).not.toContain("History");
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 1"))).not.toContain("History");
+    expect(attrs.historyActionForService).not.toHaveBeenCalledWith("agent-1");
+  });
+
+  it("leaves a History row exactly Refresh and Remove from project", () => {
+    const attrs = makeAttrs({
+      rows: [{ ref: "service:versioning?instance=versioning-1", kind: "app", label: "History", isOpen: true }],
+      historyActionForService: vi.fn(() => () => undefined),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "History"))).toEqual([
+      "Refresh",
+      "Remove from project",
+    ]);
+  });
+
+  it("leaves a History row in Everything just Refresh", () => {
+    const attrs = makeAttrs({
+      activeViewId: EVERYTHING_VIEW_ID,
+      rows: [{ ref: "service:versioning?instance=versioning-1", kind: "app", label: "History", isOpen: true }],
+      historyActionForService: vi.fn(() => () => undefined),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "History"))).toEqual(["Refresh"]);
   });
 
   it("shows no one-click remove on a row whose menu carries the verb", () => {
@@ -1291,6 +1372,64 @@ describe("Sidebar shortcut menus (modes)", () => {
 
     const menu = openShortcutMenu(root, redraw, "Terminal");
     expect(menuLabels(menu)).toEqual(["New Terminal"]);
+  });
+
+  it("offers History on the Browser and Terminal rows, keyed by their own services", () => {
+    const ran: string[] = [];
+    const attrs = makeAttrs({
+      historyActionForService: vi.fn((serviceName: string) => () => ran.push(serviceName)),
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const browserMenu = openShortcutMenu(root, redraw, "Browser");
+    expect(menuLabels(browserMenu)).toEqual(["History", "New Browser", 'Change shortcut to "New Browser"', "Unpin"]);
+    Array.from(browserMenu?.querySelectorAll('[role="menuitem"]') ?? [])
+      .find((element) => element.textContent === "History")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(ran).toEqual(["browser"]);
+    expect(attrs.historyActionForService).toHaveBeenCalledWith("browser");
+
+    redraw();
+    expect(menuLabels(openShortcutMenu(root, redraw, "Terminal"))[0]).toBe("History");
+    expect(attrs.historyActionForService).toHaveBeenCalledWith("terminal");
+  });
+
+  it("offers History on the File Viewer row, even unbacked", () => {
+    const attrs = makeAttrs({ historyActionForService: vi.fn(() => () => undefined) });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuLabels(openShortcutMenu(root, redraw, "File Viewer"))).toEqual([
+      "History",
+      'Change shortcut to "New File Viewer"',
+      "Unpin",
+    ]);
+    expect(attrs.historyActionForService).toHaveBeenCalledWith("files");
+  });
+
+  it("asks for no History on the Chat row, which is not versioned code", () => {
+    const attrs = makeAttrs({ historyActionForService: vi.fn(() => () => undefined) });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuLabels(openShortcutMenu(root, redraw, "Chat"))).not.toContain("History");
+    expect(attrs.historyActionForService).not.toHaveBeenCalledWith("chat");
+  });
+
+  it("leaves a shortcut menu unchanged where the app has no timeline", () => {
+    const { root, redraw } = mountSidebar(makeAttrs({ historyActionForService: vi.fn(() => null) }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(menuLabels(openShortcutMenu(root, redraw, "Browser"))).toEqual([
+      "New Browser",
+      'Change shortcut to "New Browser"',
+      "Unpin",
+    ]);
   });
 
   it("stands a shortcut row down while its create is in flight", () => {

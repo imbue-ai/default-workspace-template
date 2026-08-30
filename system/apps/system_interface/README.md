@@ -352,15 +352,21 @@ full sparse `shortcut_overrides` map),
 (drop one panel from every project that holds it),
 `GET|POST /api/member-titles`, `GET|POST /api/member-last-used`,
 `GET|POST /api/member-locations` (the location-beacon store),
-`GET /api/apps/instances` (the derived instance inventory), and
+`GET /api/apps/instances` (the derived instance inventory),
 `POST /api/apps/<name>/instances/allocate` (mint the next free
-instance name).
+instance name), and `GET /api/versioned-apps` (a same-origin
+passthrough to the Versioning app's own `GET /api/apps`, the list that
+gates every History row; 503 when that service is unregistered or
+unreachable, which the frontend reads as "keep the list you had").
 
 Down the left edge is a 37px project rail that expands on hover to
 float over the dock. Top to bottom: the active view's squiggle -- one
 of the ten glyphs in `frontend/src/views/squiggles.ts` -- and name (the
-row opens the view switcher, with "New project" and Everything;
-right-clicking it opens project settings: name, color, glyph, and
+row opens the view switcher, with "New project", Everything, and
+"System history", which opens the workspace shell's own timeline at
+`/app/system-interface` -- the shell is versioned but not an app anyone
+can open a pane of, so the rail's one chrome-level menu is where its
+History lives; right-clicking it opens project settings: name, color, glyph, and
 delete -- deleting a project removes the view and nothing else: every
 object it showed keeps running and stays in Everything, and a machine
 may sit at zero projects. Settings is display metadata and the delete,
@@ -374,12 +380,15 @@ machine-wide recency store) and creates only when the view shows none,
 while new mode ("New Chat") always creates. Defaults are code-side --
 chat defaults to new, everything else to focus -- and every project is
 still created with one chat of its own so the user lands in a working
-chat. Each shortcut row also carries its own kebab/right-click menu: the
-complementary action ("New X" in focus mode, "Focus last X" in new mode,
-disabled when the view shows no X), the mode flip, and Unpin (built-ins
-only); a pinned app's row combines its object verbs, a divider, and that
-shortcut group. Shortcut-initiated creates take the same in-flight guard
-the launcher tiles have, so a second click cannot start a second object.
+chat. Each shortcut row also carries its own kebab/right-click menu:
+History where the row's own app has a timeline (leading, and mattering
+most on Browser and Terminal, whose session-creating rows never produce
+a pane whose menu could carry it), then the complementary action ("New
+X" in focus mode, "Focus last X" in new mode, disabled when the view
+shows no X), the mode flip, and Unpin (built-ins only); a pinned app's
+row combines its object verbs, a divider, and that shortcut group.
+Shortcut-initiated creates take the same in-flight guard the launcher
+tiles have, so a second click cannot start a second object.
 Each built-in row carries the same pin a pinned app does, and unpinning
 one moves it into the "All apps" popover for that project alone -- the
 overrides are stored sparsely (`shortcut_overrides` on the project's
@@ -426,8 +435,35 @@ outboard of a menu built from the same per-kind definition the rail
 row's is. Refresh reloads what
 the object is showing -- service-wide for a service-backed iframe, the
 transcript and stream for a chat, a reattach for a terminal, whose tmux
-session outlives the panel and keeps its scrollback across one. Share is
-an app affordance, since the share surface is per registered service.
+session outlives the panel and keeps its scrollback across one. History
+is an app affordance too, directly under Refresh: it opens the
+Versioning app at that app's own timeline page (`/app/<service-name>`).
+The row survives the versioning service being registered `internal`
+(that flag hides an app from the surfaces that LIST apps, never from
+routing, so this row is the only way in), and there is one timeline pane
+rather than one per app looked at -- asking from a second app's tab
+re-points the open pane and brings it forward, its URL set outright
+rather than through the stored location beacon (which the timeline page
+itself writes, and would answer with the previous app's history).
+
+Which names get the row is the Versioning app's own answer, not a guess
+from the port registry: the shell reads its `GET /api/apps` (via the
+`/api/versioned-apps` passthrough, cached with a short TTL) and offers
+the row only for a name on that list. The two diverge in both
+directions -- a registered port with no package under `system/apps`
+(`si-preview`, mngr's `owner-exec`) has no timeline, while the workspace
+shell has one under a name nothing registers. The row is also withheld
+on the versioning app's own pane: a timeline of the timeline is noise.
+
+That pane is a shell PRIMITIVE rather than an installed app: titled
+"History" and wearing the built-in clock glyph wherever it is drawn
+(derived, never filed in the title store, never numbered), and its
+menus offer only Refresh plus Hide tab or Remove from project -- no
+share, no filing, no stop, and above all no delete
+(`historyPaneMenuActions` in `frontend/src/views/appHistory.ts`).
+
+Share is an app affordance as well, since the share surface is per
+registered service.
 Rename is offered for a chat and nothing else. A chat is an mngr agent:
 its ref is a stable agent id and `mngr rename` moves the name everywhere
 the agent is known, so the name the user gives it is the name anything

@@ -50,6 +50,7 @@ import type { MatchRange, MemberKind, ProjectInfo, ShortcutMode } from "../model
 import { AllAppsPicker, appDisplayName, pickableApps } from "./AllAppsPicker";
 import type { UnpinnedShortcutRow } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./appIcon";
+import { historyPaneMenuActions, isHistoryService } from "./appHistory";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
@@ -145,6 +146,8 @@ export interface SidebarAttrs {
   onRenameRow: (row: SidebarTabRow, title: string) => void;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
+  historyActionForService: (serviceName: string) => (() => void) | null;
+  systemHistoryAction: () => (() => void) | null;
   // Open the membership dialog over this row's object (also show it in the
   // chosen projects). The workspace owns the dialog, as it owns the other
   // modals.
@@ -780,17 +783,22 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * against any open panel.
    */
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
-    // An instance row's menu carries the instance's own verbs plus the
-    // SERVICE's Share and Stop/Start (via serviceGroup) -- so the service
-    // stays reachable from any of its instances, Everything's rows included.
-    // A bare app row IS the service, and uses the ordinary slots.
+    if (row.kind === "app" && isHistoryService(serviceNameFromRef(row.ref))) {
+      return historyPaneMenuActions({
+        refresh: () => attrs.onRefreshRow(row),
+        hideTab: null,
+        removeFromProject: isEverythingView(attrs.activeViewId) ? null : () => attrs.onRemoveFromView(row),
+      });
+    }
     const instanceServiceName =
       row.kind === "app" && instanceNameFromRef(row.ref) !== null ? serviceNameFromRef(row.ref) : null;
     const serviceApp =
       instanceServiceName === null ? undefined : getApps().find((candidate) => candidate.name === instanceServiceName);
     const serviceLabel = serviceApp !== undefined ? appDisplayName(serviceApp) : (instanceServiceName ?? "");
+    const rowServiceName = row.kind === "app" ? serviceNameFromRef(row.ref) : null;
     return {
       refresh: () => attrs.onRefreshRow(row),
+      history: rowServiceName === null ? null : attrs.historyActionForService(rowServiceName),
       share:
         row.kind === "app" && instanceServiceName === null
           ? // The row already carries the chosen name; the share label follows it
@@ -882,6 +890,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     isDisabled?: boolean;
   }
 
+  function serviceNameForShortcutId(shortcutId: string): string | null {
+    if (shortcutId === "browser" || shortcutId === "terminal" || shortcutId === "files") return shortcutId;
+    if (shortcutId.startsWith("app:")) return shortcutId.slice("app:".length);
+    return null;
+  }
+
   /** Whether the active view currently shows an object of this shortcut's
    *  kind -- what "Focus last X" needs to be able to act. The built-in
    *  create-backed kinds match by row kind; the file viewer and apps match by
@@ -890,8 +904,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     if (shortcutId === "chat" || shortcutId === "browser" || shortcutId === "terminal") {
       return rows.some((row) => row.kind === shortcutId);
     }
-    const serviceName =
-      shortcutId === "files" ? "files" : shortcutId.startsWith("app:") ? shortcutId.slice("app:".length) : null;
+    const serviceName = serviceNameForShortcutId(shortcutId);
     return serviceName !== null && rows.some((row) => serviceNameFromRef(row.ref) === serviceName);
   }
 
@@ -933,21 +946,31 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     return entries;
   }
 
-  /** The floating menu of one built-in shortcut row: the shortcut group, then
-   *  Unpin (the same act as the row's pin icon; absent under Everything). */
   function shortcutMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "shortcut" }>): m.Children {
     const rowDefinition = SHORTCUT_ROWS.find((candidate) => candidate.tabType === menu.shortcutId);
     if (rowDefinition === undefined) return null;
     const entries = shortcutMenuEntries(menu.shortcutId, rowDefinition.label, attrs);
     const isEverything = isEverythingView(attrs.activeViewId);
     const canUnpin = !isEverything && projectForViewId(attrs.projects, attrs.activeViewId) !== null;
-    if (entries.length === 0 && !canUnpin) return null;
+    const shortcutServiceName = serviceNameForShortcutId(menu.shortcutId);
+    const historyAction = shortcutServiceName === null ? null : attrs.historyActionForService(shortcutServiceName);
+    if (entries.length === 0 && !canUnpin && historyAction === null) return null;
     return floatingCard({
       anchor: menu.anchor,
       placement: "right",
       role: "menu",
       width: null,
       children: [
+        historyAction === null
+          ? null
+          : menuRow({
+              iconMarkup: icon("history", { size: ACTION_ICON_SIZE }),
+              label: "History",
+              onclick: () => pick(historyAction),
+            }),
+        historyAction !== null && (entries.length > 0 || canUnpin)
+          ? m("div", { class: "my-1 border-t border-border" })
+          : null,
         ...entries.map((entry) =>
           menuRow({
             iconMarkup: null,
@@ -1827,6 +1850,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
 
   function switcherMenu(attrs: SidebarAttrs, anchor: MenuAnchor): m.Vnode {
     const isEverythingActive = isEverythingView(attrs.activeViewId);
+    const systemHistory = attrs.systemHistoryAction();
     return floatingCard({
       anchor,
       placement: "below",
@@ -1884,6 +1908,17 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           trailing: switcherRowTrailing(isEverythingActive, null, null),
           onclick: () => pick(() => attrs.onSelectView(EVERYTHING_VIEW_ID)),
         }),
+        systemHistory === null ? null : m("div", { class: "my-1 border-t border-border" }),
+        systemHistory === null
+          ? null
+          : menuRow({
+              iconMarkup: icon("history", { size: ROW_ICON_SIZE }),
+              label: "System history",
+              isQuiet: true,
+              rowClass: SWITCHER_ROW_CLASS,
+              iconBoxClass: ICON_BOX_CLASS,
+              onclick: () => pick(systemHistory),
+            }),
       ],
     });
   }

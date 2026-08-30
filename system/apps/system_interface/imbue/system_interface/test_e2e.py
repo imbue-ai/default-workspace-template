@@ -34,8 +34,10 @@ from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.testing import build_stub_versioning_backend
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import is_e2e_browser_installed
+from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -160,6 +162,9 @@ def _make_agent_fixture(
     return agent_info, session_file
 
 
+_VERSIONING_NAME = "versioning"
+
+
 @contextlib.contextmanager
 def _running_e2e_server(
     tmp_path: Path,
@@ -168,6 +173,8 @@ def _running_e2e_server(
     primary_agent_id: str = "",
     additional_agents: tuple[tuple[str, str], ...] = (),
     apps: tuple[str, ...] = (),
+    internal_apps: tuple[str, ...] = (),
+    versioning_serves: tuple[str, ...] | None = None,
 ) -> Generator[tuple[str, AgentInfo, Path], None, None]:
     """Run the web server with a mock primary agent (plus any ``additional_agents``), ready for Playwright + layout ops.
 
@@ -187,6 +194,15 @@ def _running_e2e_server(
     that file. The service label is derived from the name, as
     ``forward_port.py`` mints it, because every panel origin is built from the
     label rather than the name.
+
+    ``internal_apps`` names services registered with ``internal = true`` --
+    hidden from the surfaces that LIST apps, but otherwise ordinary.
+
+    ``versioning_serves``, when given, runs a stub Versioning backend answering
+    ``GET /api/apps`` with those names and points the registered ``versioning``
+    service's URL at it -- the list every History row is gated on. Deliberately
+    independent of ``apps``/``internal_apps``, since the two diverge on a live
+    machine.
 
     ``additional_agents`` is a tuple of ``(agent_id, agent_name)`` for extra
     agents that EXIST but whose chats are not auto-opened. They carry no
@@ -268,31 +284,45 @@ def _running_e2e_server(
                 )
         for info in agents:
             manager._ensure_activity_tracking(info.id)
-        manager._apps = [
-            AppEntry(name=name, url=f"http://127.0.0.1:9{index:03d}", label=f"{name}-e2elabel")
-            for index, name in enumerate(apps)
-        ]
+        with (
+            contextlib.nullcontext()
+            if versioning_serves is None
+            else serve_app(build_stub_versioning_backend(versioning_serves))
+        ) as versioning_stub:
+            versioning_url = None if versioning_stub is None else versioning_stub.http_url
+            manager._apps = [
+                AppEntry(
+                    name=name,
+                    url=(
+                        versioning_url
+                        if name == _VERSIONING_NAME and versioning_url is not None
+                        else f"http://127.0.0.1:9{index:03d}"
+                    ),
+                    label=f"{name}-e2elabel",
+                    internal=name in set(internal_apps),
+                )
+                for index, name in enumerate((*apps, *internal_apps))
+            ]
 
-        config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
-        app = create_application(build_test_state(config=config, agent_manager=manager))
+            config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
+            app = create_application(build_test_state(config=config, agent_manager=manager))
 
-        server = make_threaded_server("127.0.0.1", port, app)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+            server = make_threaded_server("127.0.0.1", port, app)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
 
-        # Wait for server to start
-        for _ in range(50):
+            for _ in range(50):
+                try:
+                    urllib.request.urlopen(f"{base_url}/api/agents", timeout=0.5)
+                    break
+                except Exception:
+                    time.sleep(0.1)
+
             try:
-                urllib.request.urlopen(f"{base_url}/api/agents", timeout=0.5)
-                break
-            except Exception:
-                time.sleep(0.1)
-
-        try:
-            yield base_url, agent_info, session_file
-        finally:
-            server.shutdown()
-            thread.join(timeout=5.0)
+                yield base_url, agent_info, session_file
+            finally:
+                server.shutdown()
+                thread.join(timeout=5.0)
 
 
 @pytest.fixture
@@ -2121,6 +2151,209 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
         assert after_unpin["frameCount"] == 1, f"unpinning stopped the app or forked its page: {after_unpin}"
         assert after_unpin["stamped"] == "the-original-element", f"unpinning re-created the app's page: {after_unpin}"
         assert after_unpin["removals"] == 0, f"a live surface left the DOM when the app was unpinned: {after_unpin}"
+
+
+_APP_HISTORY_PORT = 18886
+
+# Pane origins are ``<label>.<host>``, and a numeric last label makes Chromium refuse
+# the navigation outright, so the host cannot be a bare ``127.0.0.1``.
+_APP_HISTORY_HOST = f"host-e2e{_APP_HISTORY_PORT}.localhost:{_APP_HISTORY_PORT}"
+
+_VERSIONING_LABEL = f"{_VERSIONING_NAME}-e2elabel"
+
+_HISTORY_TITLE = "History"
+
+_HISTORY_APP_NAMES = ("curio", "docs-viewer")
+
+_SYSTEM_HISTORY_NAME = "system-interface"
+
+_VERSIONING_SERVES = (*_HISTORY_APP_NAMES, "browser", "terminal", _SYSTEM_HISTORY_NAME, _VERSIONING_NAME)
+
+_PACKAGELESS_SERVICE_NAME = "si-preview"
+
+_TIMELINE_PAGE_HTML = (
+    "<!doctype html><html><body>"
+    "<h1 id='timeline-app'></h1>"
+    "<script>document.getElementById('timeline-app').textContent = "
+    "'timeline of ' + location.pathname.replace('/app/', '');</script>"
+    "</body></html>"
+)
+
+
+def _open_app_from_all_apps(page: Page, app_name: str) -> None:
+    """Open one app's pane the way a user does: the rail's "All apps" row."""
+    _open_all_apps(page)
+    page.locator(_APP_ROW_SELECTOR.format(name=app_name)).click()
+    page.keyboard.press("Escape")
+    expect(page.locator(".project-rail-app")).to_have_count(0, timeout=5000)
+
+
+def _open_tab_menu(page: Page, tab_title: str) -> None:
+    """Right-click one tab, which is one of the two ways its menu opens."""
+    tab = page.locator(".dv-custom-tab", has_text=tab_title)
+    expect(tab).to_have_count(1)
+    tab.click(button="right")
+    expect(page.locator("[role='menuitem']").first).to_be_visible(timeout=5000)
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_history_on_an_app_tab_opens_that_apps_timeline(tmp_path: Path, page: Page) -> None:
+    """"History" on an app's tab opens the versioning app at THAT app's timeline."""
+    first_app, second_app = _HISTORY_APP_NAMES
+    with _running_e2e_server(
+        tmp_path,
+        _APP_HISTORY_PORT,
+        primary_agent_id="primary-services-agent",
+        apps=_HISTORY_APP_NAMES,
+        internal_apps=(_VERSIONING_NAME,),
+        versioning_serves=_VERSIONING_SERVES,
+    ) as (_base_url, _agent_info, _session_file):
+        page.on("dialog", lambda dialog: dialog.accept())
+        versioning_paths: list[str] = []
+
+        def serve_timeline(route: Any) -> None:
+            versioning_paths.append(route.request.url.split("/", 3)[3])
+            route.fulfill(status=200, content_type="text/html", body=_TIMELINE_PAGE_HTML)
+
+        page.route(f"**{_VERSIONING_LABEL}**", serve_timeline)
+        for app_name in _HISTORY_APP_NAMES:
+            page.route(
+                f"**{app_name}-e2elabel**",
+                lambda route: route.fulfill(status=200, content_type="text/html", body=_FRAMED_PAGE_HTML),
+            )
+        page.goto(f"http://{_APP_HISTORY_HOST}/")
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+
+        _open_all_apps(page)
+        expect(page.locator(_APP_ROW_SELECTOR.format(name=_VERSIONING_NAME))).to_have_count(0)
+        expect(page.locator(_APP_ROW_SELECTOR.format(name=first_app))).to_have_count(1)
+        page.keyboard.press("Escape")
+        expect(page.locator(".project-rail-app")).to_have_count(0, timeout=5000)
+        expect(page.locator(".project-rail-shortcut", has_text=_VERSIONING_NAME)).to_have_count(0)
+
+        _open_app_from_all_apps(page, first_app)
+        expect(page.locator(f'iframe[src*="{first_app}-e2elabel"]')).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        _open_tab_menu(page, f"{first_app} 1")
+        page.locator("[role='menuitem']", has_text="History").click()
+
+        timeline_frame_selector = f'iframe[src*="{_VERSIONING_LABEL}"]'
+        expect(page.locator(timeline_frame_selector)).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        expect(page.locator(timeline_frame_selector)).to_have_attribute(
+            "src", re.compile(rf"^https?://{re.escape(_VERSIONING_LABEL)}\..*/app/{re.escape(first_app)}$")
+        )
+        expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
+            f"timeline of {first_app}", timeout=_TRIGGER_TIMEOUT_MS
+        )
+        assert versioning_paths == [f"app/{first_app}"], (
+            f"the timeline pane asked for more than the page it was opened to show: {versioning_paths}"
+        )
+
+        _open_app_from_all_apps(page, second_app)
+        expect(page.locator(f'iframe[src*="{second_app}-e2elabel"]')).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        _open_tab_menu(page, f"{second_app} 1")
+        page.locator("[role='menuitem']", has_text="History").click()
+
+        expect(page.locator(timeline_frame_selector)).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
+            f"timeline of {second_app}", timeout=_TRIGGER_TIMEOUT_MS
+        )
+        expect(page.locator(".dv-tab.dv-active-tab .dv-default-tab-content")).to_have_text(
+            _HISTORY_TITLE, timeout=_TRIGGER_TIMEOUT_MS
+        )
+        expect(page.locator(".dv-custom-tab", has_text=_VERSIONING_NAME)).to_have_count(0)
+
+        _open_tab_menu(page, _HISTORY_TITLE)
+        menu_labels = page.locator("[role='menuitem']").all_text_contents()
+        assert menu_labels == ["Refresh", "Close tab"], f"the History pane's menu is not locked down: {menu_labels}"
+        page.keyboard.press("Escape")
+
+        _open_tab_menu(page, _HISTORY_TITLE)
+        page.locator("[role='menuitem']", has_text="Close tab").click()
+        expect(page.locator(".dv-custom-tab", has_text=_HISTORY_TITLE)).to_have_count(0, timeout=_TRIGGER_TIMEOUT_MS)
+
+        _open_tab_menu(page, f"{first_app} 1")
+        page.locator("[role='menuitem']", has_text="History").click()
+        expect(page.locator(timeline_frame_selector)).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
+            f"timeline of {first_app}", timeout=_TRIGGER_TIMEOUT_MS
+        )
+        expect(page.locator(".dv-custom-tab", has_text=_HISTORY_TITLE)).to_have_count(1)
+
+
+_RAIL_HISTORY_PORT = 18887
+_RAIL_HISTORY_HOST = f"host-e2e{_RAIL_HISTORY_PORT}.localhost:{_RAIL_HISTORY_PORT}"
+
+
+def _open_shortcut_menu(page: Page, base_label: str) -> None:
+    """Hover the rail open and click one built-in shortcut row's kebab."""
+    page.locator(".machine-sidebar").hover()
+    page.locator(f'button[aria-label="Shortcut options for {base_label}"]').click()
+    expect(page.locator('.project-rail-menu [role="menuitem"]').first).to_be_visible(timeout=5000)
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_history_is_reachable_from_the_rail_and_the_workspace_menu(tmp_path: Path, page: Page) -> None:
+    """The rail's own menus reach every timeline the versioning app serves."""
+    with _running_e2e_server(
+        tmp_path,
+        _RAIL_HISTORY_PORT,
+        primary_agent_id="primary-services-agent",
+        apps=(*_HISTORY_APP_NAMES, _PACKAGELESS_SERVICE_NAME),
+        internal_apps=(_VERSIONING_NAME,),
+        versioning_serves=_VERSIONING_SERVES,
+    ) as (_base_url, _agent_info, _session_file):
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.route(
+            f"**{_VERSIONING_LABEL}**",
+            lambda route: route.fulfill(status=200, content_type="text/html", body=_TIMELINE_PAGE_HTML),
+        )
+        for app_name in (*_HISTORY_APP_NAMES, _PACKAGELESS_SERVICE_NAME):
+            page.route(
+                f"**{app_name}-e2elabel**",
+                lambda route: route.fulfill(status=200, content_type="text/html", body=_FRAMED_PAGE_HTML),
+            )
+        page.goto(f"http://{_RAIL_HISTORY_HOST}/")
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+
+        _open_shortcut_menu(page, "Browser")
+        shortcut_labels = page.locator('.project-rail-menu [role="menuitem"]').all_text_contents()
+        leading_label = shortcut_labels[0] if len(shortcut_labels) > 0 else None
+        assert leading_label == "History", f"the Browser menu does not lead with History: {shortcut_labels}"
+        page.locator('.project-rail-menu [role="menuitem"]', has_text="History").click()
+
+        timeline_frame_selector = f'iframe[src*="{_VERSIONING_LABEL}"]'
+        expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
+            "timeline of browser", timeout=_TRIGGER_TIMEOUT_MS
+        )
+        expect(page.locator(".dv-custom-tab", has_text=_HISTORY_TITLE)).to_have_count(1)
+
+        _open_shortcut_menu(page, "Terminal")
+        page.locator('.project-rail-menu [role="menuitem"]', has_text="History").click()
+        expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
+            "timeline of terminal", timeout=_TRIGGER_TIMEOUT_MS
+        )
+
+        _open_app_from_all_apps(page, _PACKAGELESS_SERVICE_NAME)
+        _open_tab_menu(page, f"{_PACKAGELESS_SERVICE_NAME} 1")
+        preview_labels = page.locator("[role='menuitem']").all_text_contents()
+        assert "History" not in preview_labels, f"a package-less service was offered a history: {preview_labels}"
+        assert "Refresh" in preview_labels, f"the package-less service's tab lost its verbs: {preview_labels}"
+        page.keyboard.press("Escape")
+
+        page.locator(".machine-sidebar").hover()
+        _open_rail_switcher(page)
+        switcher_labels = page.locator(".project-rail-menu-item").all_text_contents()
+        assert "System history" in switcher_labels, f"the workspace menu offered no System history: {switcher_labels}"
+        page.locator(".project-rail-menu [role='menuitem']", has_text="System history").click()
+        expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
+            f"timeline of {_SYSTEM_HISTORY_NAME}", timeout=_TRIGGER_TIMEOUT_MS
+        )
 
 
 _LAUNCHER_RECENCY_PORT = 18876

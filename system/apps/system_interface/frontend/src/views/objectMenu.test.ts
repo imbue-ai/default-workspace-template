@@ -8,6 +8,7 @@ function fullActions(overrides: Partial<ObjectMenuActions> = {}): ObjectMenuActi
   return {
     refresh: vi.fn(),
     share: { label: "Share web", run: vi.fn() },
+    history: vi.fn(),
     rename: vi.fn(),
     hideTab: vi.fn(),
     addToProjects: vi.fn(),
@@ -47,6 +48,10 @@ describe("objectMenuEntries", () => {
     expect(renameable("app")).toBe(false);
     expect(renameable("terminal")).toBe(false);
     expect(renameable("browser")).toBe(false);
+  });
+
+  it("withholds Rename from an object that supplies none, renameable kind or not", () => {
+    expect(labels(objectMenuEntries("chat", fullActions({ rename: null })))).not.toContain("Rename");
   });
 
   it("drops the divider when nothing would follow it", () => {
@@ -105,6 +110,26 @@ describe("objectMenuEntries", () => {
     expect(entries.some((entry) => entry !== OBJECT_MENU_DIVIDER && entry.iconName === "user-plus")).toBe(false);
   });
 
+  it("offers History only to an app -- the one kind that is versioned code", () => {
+    for (const kind of ["chat", "terminal", "browser"] as const) {
+      expect(labels(objectMenuEntries(kind, fullActions()))).not.toContain("History");
+    }
+    expect(labels(objectMenuEntries("app", fullActions()))).toContain("History");
+  });
+
+  it("omits History for an app whose row would not earn its place", () => {
+    const entries = objectMenuEntries("app", fullActions({ history: null }));
+    expect(labels(entries)).not.toContain("History");
+    expect(entries.some((entry) => entry !== OBJECT_MENU_DIVIDER && entry.iconName === "history")).toBe(false);
+  });
+
+  it("puts History directly under Refresh, ahead of Share, with or without Share beside it", () => {
+    const withShare = labels(objectMenuEntries("app", fullActions()));
+    expect(withShare.slice(0, 3)).toEqual(["Refresh", "History", "Share web"]);
+    const withoutShare = labels(objectMenuEntries("app", fullActions({ share: null })));
+    expect(withoutShare.slice(0, 2)).toEqual(["Refresh", "History"]);
+  });
+
   it("omits Close tab for a backgrounded object with no open tab", () => {
     const entries = objectMenuEntries("chat", fullActions({ hideTab: null }));
     expect(labels(entries)).not.toContain("Close tab");
@@ -140,14 +165,8 @@ describe("objectMenuEntries", () => {
     const entries = objectMenuEntries("app", fullActions());
     expect(entries.filter((entry) => entry === OBJECT_MENU_DIVIDER)).toHaveLength(1);
     const dividerIndex = entries.indexOf(OBJECT_MENU_DIVIDER);
-    // Refresh, Share and the filing verb come before it; removal follows.
-    expect(labels(entries.slice(0, dividerIndex))).toEqual(["Refresh", "Share web", "Add to project..."]);
+    expect(labels(entries.slice(0, dividerIndex))).toEqual(["Refresh", "History", "Share web", "Add to project..."]);
     expect(entries[dividerIndex + 1]).not.toBe(OBJECT_MENU_DIVIDER);
-  });
-
-  it("puts Share directly under Refresh", () => {
-    const shown = labels(objectMenuEntries("app", fullActions()));
-    expect(shown.indexOf("Share web")).toBe(shown.indexOf("Refresh") + 1);
   });
 
   it("puts the reversible stop ahead of the delete, never as the destructive row", () => {
@@ -195,6 +214,7 @@ describe("objectMenuEntries", () => {
     ]);
     expect(labels(objectMenuEntries("app", fullActions({ stop: null })))).toEqual([
       "Refresh",
+      "History",
       "Share web",
       "Add to project...",
       OBJECT_MENU_DIVIDER,
@@ -222,6 +242,7 @@ describe("objectMenuEntries", () => {
     );
     expect(labels(entries)).toEqual([
       "Refresh",
+      "History",
       "Share web",
       "Add to project...",
       OBJECT_MENU_DIVIDER,

@@ -265,6 +265,26 @@ When GitHub sync is not enabled, there is no auto-push and no GitHub remote to p
 
 - Don't include auto-generated lockfile churn (`uv.lock`, `package-lock.json`, etc.) in commits unless the change intentionally bumps a dependency.
 
+## Committing app changes (required)
+
+The Versioning app shows users each app's history straight from git and lets them restore any version, so **the commit is the unit the user sees**. Follow this whenever a commit touches `system/apps/<package>/`:
+
+**One commit per app.** If a request changed two apps, make two commits, one per app -- never batch them. Shared files an app depends on (the root `pyproject.toml`, `uv.lock`, its `system/supervisord.conf` entry) ride along in that app's commit, so every version is one the app can actually run from. Multiple commits for one app in one request is fine; the user just sees two versions.
+
+**Trailer block.** End the message with:
+
+```
+Versioning-App: <app name, e.g. science-explorer>
+Versioning-Kind: build | change | fix | harden | restore | port
+Versioning-Request: <one line: what the user asked for, in your words>
+```
+
+- `Versioning-App` -- the app's service name (hyphens, matching `data/.state/apps.toml`).
+- `Versioning-Kind` -- `build` the first time the app appears, `change` for a new feature or edit, `fix` for a repair, `harden` for turn-end hardening the user did not ask for (tests, refactors, crystallization). `restore` and `port` are written by the Versioning app itself, never by hand.
+- `Versioning-Request` -- becomes the version's name on the user's timeline: a plain-language description of what changed, under ~80 characters. **Describe the change; do not quote the user verbatim** -- commit messages can be pushed to GitHub, and their prompts are theirs.
+
+Missing trailers degrade gracefully (the timeline falls back to the subject line), so never contort a commit to satisfy this -- but do write them.
+
 # Silly error workarounds
 
 If you get a failure in `test_no_type_errors` that seems spurious, try running `uv sync --all-packages` and then re-running the tests. If that doesn't work, the error is probably real, and should be fixed.
