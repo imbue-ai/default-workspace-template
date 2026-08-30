@@ -221,6 +221,20 @@ def _run_install_command(command: list[str]) -> tuple[bool, str]:
     return True, ""
 
 
+def _report_entry_unavailable(kind: str, entry: str, detail: str) -> None:
+    """Warn about and emit one recorded entry that could not be installed."""
+    logger.warning(
+        "Installing recorded {} package {} failed: {}",
+        kind,
+        entry,
+        detail[-1000:],
+    )
+    emit_event(
+        EnvConvergeEventType.PACKAGE_UNAVAILABLE,
+        {"kind": kind, "packages": [entry], "stderr_tail": detail},
+    )
+
+
 def _install_missing(
     kind: str,
     missing: list[str],
@@ -241,16 +255,7 @@ def _install_missing(
         )
         return missing, []
     if len(missing) == 1:
-        logger.warning(
-            "Installing recorded {} package {} failed: {}",
-            kind,
-            missing[0],
-            batch_detail[-1000:],
-        )
-        emit_event(
-            EnvConvergeEventType.PACKAGE_UNAVAILABLE,
-            {"kind": kind, "packages": missing, "stderr_tail": batch_detail},
-        )
+        _report_entry_unavailable(kind, missing[0], batch_detail)
         return [], missing
 
     # Batch failure with several entries: retry each alone so the rest survive.
@@ -266,16 +271,7 @@ def _install_missing(
         if is_entry_ok:
             installed.append(entry)
         else:
-            logger.warning(
-                "Installing recorded {} package {} failed: {}",
-                kind,
-                entry,
-                entry_detail[-1000:],
-            )
-            emit_event(
-                EnvConvergeEventType.PACKAGE_UNAVAILABLE,
-                {"kind": kind, "packages": [entry], "stderr_tail": entry_detail},
-            )
+            _report_entry_unavailable(kind, entry, entry_detail)
             unavailable.append(entry)
     if installed:
         emit_event(
