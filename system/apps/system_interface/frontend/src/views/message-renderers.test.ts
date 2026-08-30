@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ToolCall, TranscriptEvent } from "../models/Response";
+import type { ToolCall, ToolResultEvent, TranscriptEvent } from "../models/Response";
 import type { AssistantMessageEvent } from "../models/Response";
 import {
   buildToolResultsWithSkillExpansions,
@@ -22,7 +22,7 @@ function skillToolCall(ts: string, callId: string): TranscriptEvent {
     source: "test",
     model: "test-model",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: "Skill", input_preview: "{}" }],
+    tool_calls: [{ tool_call_id: callId, tool_name: "Skill", input_chars: 2 }],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
@@ -33,6 +33,8 @@ function skillToolCall(ts: string, callId: string): TranscriptEvent {
 }
 
 function toolResult(ts: string, callId: string, output: string): TranscriptEvent {
+  // `output` models the inline body only a frontend-synthesized result carries; real wire
+  // events are payload-free (output_chars only). The merge tests exercise both.
   return {
     timestamp: ts,
     type: "tool_result",
@@ -40,6 +42,7 @@ function toolResult(ts: string, callId: string, output: string): TranscriptEvent
     source: "test",
     tool_call_id: callId,
     tool_name: "test-tool",
+    output_chars: output.length,
     output,
     is_error: false,
   };
@@ -173,8 +176,8 @@ describe("buildToolResultsWithSkillExpansions", () => {
         model: "test-model",
         text: "",
         tool_calls: [
-          { tool_call_id: "tc-a", tool_name: "Skill", input_preview: "{}" },
-          { tool_call_id: "tc-b", tool_name: "Skill", input_preview: "{}" },
+          { tool_call_id: "tc-a", tool_name: "Skill", input_chars: 2 },
+          { tool_call_id: "tc-b", tool_name: "Skill", input_chars: 2 },
         ],
         stop_reason: null,
         usage: null,
@@ -217,7 +220,7 @@ describe("buildToolResultsWithSkillExpansions", () => {
         source: "test",
         model: "test-model",
         text: "",
-        tool_calls: [{ tool_call_id: "tc-read", tool_name: "Read", input_preview: "" }],
+        tool_calls: [{ tool_call_id: "tc-read", tool_name: "Read", input_chars: 0 }],
         stop_reason: null,
         usage: null,
         is_auth_error: false,
@@ -249,7 +252,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       description: "explore foo",
       subagent_type: "Explore",
     };
@@ -268,7 +271,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       description: "explore foo",
       subagent_type: "Explore",
       subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
@@ -283,7 +286,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       description: "explore foo",
       subagent_type: "Explore",
       subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
@@ -298,7 +301,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       description: "explore foo",
       subagent_type: "Explore",
       subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
@@ -316,7 +319,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       subagent_metadata: { agent_type: "Explore", description: "from metadata", session_id: "agent-sub1" },
     };
     const text = allText(renderSubagentCard(toolCall, "agent-1", false));
@@ -325,28 +328,43 @@ describe("renderSubagentCard", () => {
   });
 });
 
-describe("renderToolCallBlock header", () => {
+describe("renderToolCallBlock", () => {
   // A real codex code-mode call: tool_name is always "exec"; the operation is buried
   // in the JS input as tools.<fn>(...). The header should surface what it ran.
   const execCall: ToolCall = {
     tool_call_id: "c1",
     tool_name: "exec",
-    input_preview: 'const r = await tools.exec_command({"cmd":"ls -la ."}); text(r.output);',
+    input_chars: 72,
     header_label: "Tool: Bash",
   };
 
-  it("renders the parser's header label, keeping the raw input in the body", () => {
-    const text = allText(renderToolCallBlock(execCall, null));
+  it("renders the parser's header label", () => {
+    const text = allText(renderToolCallBlock(execCall, null, "agent-x", "a-1"));
     // A codex exec is headed by what it actually did, never the bare "Tool: exec".
     expect(text).toContain("Tool: Bash");
     expect(text).not.toContain("Tool: exec");
-    // preserve-raw: the JS program is still shown in the block body.
-    expect(text).toContain("tools.exec_command");
   });
 
   it("falls back to 'Tool: <name>' for a call parsed before labels existed", () => {
-    const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_preview: "ls -la" };
-    expect(allText(renderToolCallBlock(bash, null))).toContain("Tool: Bash");
+    const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_chars: 6 };
+    expect(allText(renderToolCallBlock(bash, null, "agent-x", "a-1"))).toContain("Tool: Bash");
+  });
+
+  it("keeps a failed call glanceable via the resident error snippet", () => {
+    const call: ToolCall = { tool_call_id: "c3", tool_name: "Bash", input_chars: 6 };
+    const failed: ToolResultEvent = {
+      timestamp: "t",
+      type: "tool_result",
+      event_id: "r-c3",
+      source: "test",
+      tool_call_id: "c3",
+      tool_name: "Bash",
+      output_chars: 5000,
+      is_error: true,
+      error_snippet: "FileNotFoundError: no such file",
+    };
+    const text = allText(renderToolCallBlock(call, failed, "agent-x", "a-1"));
+    expect(text).toContain("FileNotFoundError: no such file");
   });
 });
 

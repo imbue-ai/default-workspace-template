@@ -67,7 +67,7 @@ function assistantWithAgentToolCall(
       {
         tool_call_id: toolCallId,
         tool_name: "Agent",
-        input_preview: "{}",
+        input_chars: 2,
         ...(metadata ? { subagent_metadata: metadata } : {}),
       },
     ],

@@ -1549,6 +1549,63 @@ body {
   padding: 8px 12px;
 }
 
+/* A failed call's stamped first line: visible on the collapsed row, no fetch needed. */
+.tool-call-error-snippet {
+  padding: 2px 10px 4px 26px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--color-error, #b91c1c);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The quiet interim state of an on-demand payload section (loading / gone). */
+.tool-call-payload-note {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* The tiny muted thinking disclosure atop an assistant message. */
+.thinking-disclosure {
+  margin-bottom: 2px;
+}
+
+.thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.thinking-toggle:hover {
+  opacity: 1;
+}
+
+.thinking-toggle--expanded .tool-call-chevron {
+  transform: rotate(90deg);
+}
+
+.thinking-body {
+  margin: 2px 0 6px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.thinking-body--note {
+  font-style: italic;
+}
+
 .tool-call-input + .tool-call-output {
   border-top: 1px solid var(--color-border-faint);
 }
