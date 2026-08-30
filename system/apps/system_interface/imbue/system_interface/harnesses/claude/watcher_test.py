@@ -459,9 +459,10 @@ def test_concurrent_reads_and_discovery_do_not_raise(tmp_path: Path) -> None:
                 errors.append(e)
             # Yield between reads: Python locks are not fair, and a reader that
             # re-acquires the store lock back-to-back can starve the discoverer on a
-            # loaded machine, stretching the test past its timeout. A 1ms sleep still
-            # leaves hundreds of reads overlapping the 60 discovery rounds.
-            time.sleep(0.001)
+            # loaded machine, stretching the test past its timeout. Waiting on the
+            # stop event for 1ms still leaves hundreds of reads overlapping the 60
+            # discovery rounds, and wakes immediately when the discoverer finishes.
+            stop.wait(0.001)
 
     def discoverer() -> None:
         try:
