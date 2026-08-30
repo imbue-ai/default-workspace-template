@@ -42,12 +42,15 @@ from imbue.system_interface.models import TerminalSessionInfo
 # as ``terminal:<hash>``.
 _TERMINAL_SERVICE_NAME = "terminal"
 
-# The workspace coordinate label of every workspace hostname: ``host-<32hex>``.
-# The shell runs at the bare workspace origin (``host-<hex>.localhost:8421``
-# locally, ``host-<hex>.<user>.<region>.<domain>`` on shares) and a service
-# prefixes its name as one more label, so a URL is a service URL exactly when
-# a ``host-<32hex>`` label appears somewhere PAST the first label.
-_WORKSPACE_HOST_LABEL_PATTERN = re.compile(r"^host-[0-9a-f]{32}$")
+# The label that starts a workspace coordinate: ``host-<32hex>``, or the bare
+# 32-hex share label leading a workspace-keyed share domain
+# (``<share-label>.<user-hash>.<region>.<domain>``). A service prefixes its
+# origin label as one more hostname label onto the coordinate, so a URL is a
+# service URL exactly when a coordinate label appears somewhere PAST the first
+# label -- and NOT when the first label is itself the coordinate (the bare
+# workspace origin; the workspace-keyed shape would otherwise misread, since
+# its ``<user-hash>`` is also bare 32-hex).
+_WORKSPACE_HOST_LABEL_PATTERN = re.compile(r"^(?:host-)?[0-9a-f]{32}$")
 
 # A service's origin label as ``forward_port.py`` mints it: one DNS label. Read
 # back rather than assumed, because the registry is a file on disk that other
@@ -392,6 +395,12 @@ def _service_name_from_url(url: Any) -> str | None:
         return None
     host = urllib.parse.urlsplit(url).hostname or ""
     labels = host.split(".")
+    # A first label that is itself a coordinate label means the bare workspace
+    # origin, never a service (on a workspace-keyed share the user-hash label
+    # past it is also bare 32-hex, so without this guard the bare origin would
+    # masquerade as a service named by its own share label).
+    if _WORKSPACE_HOST_LABEL_PATTERN.match(labels[0]):
+        return None
     if any(_WORKSPACE_HOST_LABEL_PATTERN.match(label) for label in labels[1:]):
         label = labels[0]
         if not label:

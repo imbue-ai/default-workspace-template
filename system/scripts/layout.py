@@ -297,11 +297,14 @@ def _service_ref_parts(ref: str) -> tuple[str, str]:
     return name, rest
 
 
-# The workspace coordinate label of every workspace hostname: ``host-<32hex>``.
-# The shell runs at the bare workspace origin and a service prefixes its name
-# as one more hostname label, so a URL is a service URL exactly when a
-# ``host-<32hex>`` label appears somewhere past the first label.
-_WORKSPACE_HOST_LABEL_RE = re.compile(r"^host-[0-9a-f]{32}$")
+# The label that starts a workspace coordinate: ``host-<32hex>``, or the bare
+# 32-hex share label leading a workspace-keyed share domain. A service
+# prefixes its origin label as one more hostname label onto the coordinate, so
+# a URL is a service URL exactly when a coordinate label appears somewhere
+# past the first label -- and NOT when the first label is itself the
+# coordinate (the bare workspace origin; the workspace-keyed shape would
+# otherwise misread, since its ``<user-hash>`` is also bare 32-hex).
+_WORKSPACE_HOST_LABEL_RE = re.compile(r"^(?:host-)?[0-9a-f]{32}$")
 
 
 def _read_label_to_name_map(path: Path) -> dict[str, str]:
@@ -350,6 +353,11 @@ def _service_coordinates_from_url(url: str) -> tuple[str, str] | None:
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname or ""
     labels = host.split(".")
+    # A first label that is itself a coordinate label means the bare workspace
+    # origin, never a service (see the mirror in layout_ops.py for why the
+    # workspace-keyed share shape needs this guard).
+    if _WORKSPACE_HOST_LABEL_RE.match(labels[0]):
+        return None
     if not any(_WORKSPACE_HOST_LABEL_RE.match(label) for label in labels[1:]):
         return None
     label = labels[0]
