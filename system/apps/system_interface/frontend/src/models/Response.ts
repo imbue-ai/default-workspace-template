@@ -815,6 +815,9 @@ const detailByAgent = new Map<string, Map<string, EventDetailState>>();
 // Bumped on every detail-state change, per agent, so memoized message wrappers know to
 // repaint an expanded block whose payload just arrived.
 const detailVersionByAgent = new Map<string, number>();
+// How long a transiently-failed detail fetch blocks its retry (the failed entry stays in
+// "loading" until then), pacing the expanded row's heal-on-render re-request.
+const DETAIL_RETRY_DELAY_MS = 3000;
 
 export function getEventDetailState(agentId: string, eventId: string): EventDetailState | undefined {
   return detailByAgent.get(agentId)?.get(eventId);
@@ -854,12 +857,21 @@ export function requestEventDetail(agentId: string, eventId: string): void {
     .catch((error: { code?: number }) => {
       if (error.code === 404) {
         byEvent.set(eventId, { state: "unavailable" });
-      } else {
-        // Transient failure: drop the entry so the next expand retries.
-        byEvent.delete(eventId);
+        bumpDetailVersion(agentId);
+        m.redraw();
+        return;
       }
-      bumpDetailVersion(agentId);
-      m.redraw();
+      // Transient failure: drop the entry so a still-expanded row retries -- but only
+      // after a delay. Dropping immediately would let the expanded render's healing
+      // re-request turn a persistent failure (backend restarting) into a tight
+      // fetch loop; holding the "loading" entry blocks re-requests until the timer.
+      setTimeout(() => {
+        if (byEvent.get(eventId)?.state === "loading") {
+          byEvent.delete(eventId);
+          bumpDetailVersion(agentId);
+          m.redraw();
+        }
+      }, DETAIL_RETRY_DELAY_MS);
     });
 }
 
