@@ -19,7 +19,13 @@ export interface SubagentMetadata {
 export interface ToolCall {
   tool_call_id: string;
   tool_name: string;
-  input_preview: string;
+  // Size of the tool's raw input. The input itself never rides the event (the backend's
+  // payload-free wire contract): expanding the row fetches it whole via the detail
+  // endpoint; this only says whether there is anything to fetch.
+  input_chars: number;
+  // A tk lifecycle command, stamped whole so the step progress view reads titles and
+  // close summaries without fetching the input. Absent for every other call.
+  tk_command?: string;
   // Human labels, computed by the harness's own parser: the tool's identity for
   // the transcript block header, and verb + target for the live activity strip.
   // They differ for claude ("Tool: Read" / "Reading foo.py") and are usually equal
@@ -119,6 +125,10 @@ export interface AssistantMessageEvent extends BaseTranscriptEvent {
   // True when the API error is the model provider's fault (a 5xx / overloaded)
   // rather than our request -- these get the "not Minds' fault" note.
   is_provider_fault: boolean;
+  // True when the harness recorded READABLE reasoning for this turn (codex summaries,
+  // pi thinking blocks, agy step reasoning; never claude, whose thinking is encrypted).
+  // The text itself loads on demand through the detail endpoint.
+  has_thinking?: boolean;
 }
 
 /**
@@ -130,15 +140,23 @@ export interface ToolResultEvent extends BaseTranscriptEvent {
   type: "tool_result";
   tool_call_id: string;
   tool_name: string;
-  output: string;
+  // Size of the raw output. The output itself never rides the event (the backend's
+  // payload-free wire contract): expanding the row fetches it whole via the detail
+  // endpoint; this only says whether there is anything to fetch.
+  output_chars: number;
   is_error: boolean;
-  // The permission request a latchkey creation POST echoed on stdout, parsed by
-  // the backend BEFORE it truncated `output` (see session_parser's
-  // `_find_permission_request`). The response routinely runs past the per-result
-  // output limit, so scanning the truncated `output` for it can come up empty or
-  // partial; the permission card reads this field in preference to that scan.
-  // Present only for a tool result that carried such a response.
+  // A failed call's first output line, stamped resident so failures stay glanceable
+  // without a fetch. Present only when is_error and the output had a line.
+  error_snippet?: string;
+  // The tk decoration lines the step progress view reads (Created/Updated/tk-step, plus
+  // step-id echoes), stamped resident so the view never needs the raw output.
+  tk_stamp?: string;
+  // The permission request a latchkey creation POST echoed on stdout, parsed whole by
+  // the backend off the full output; the permission card renders from this field.
   permission_request?: Record<string, unknown>;
+  // NEVER on the wire: only the frontend-synthesized skill-expansion results (see
+  // buildToolResultsWithSkillExpansions) carry inline output.
+  output?: string;
 }
 
 /**
@@ -776,6 +794,75 @@ export async function fetchForwardEvents(agentId: string, limit: number): Promis
  *  'Sending' record on it so an interrupt can reconcile the message per id and
  *  return it to the composer if it never committed. Returned to the caller so a
  *  later optimistic "Sending..." paint can carry the same id. */
+/** The full deferred payloads of one event, fetched on demand from the detail endpoint. */
+export interface EventDetail {
+  inputs_by_tool_call_id: Record<string, string>;
+  output: string | null;
+  thinking: string | null;
+}
+
+export type EventDetailState =
+  | { state: "loading" }
+  | { state: "loaded"; detail: EventDetail }
+  // The source line is gone (the transcript was rewritten/cleaned up); render a quiet
+  // "payload no longer available" placeholder.
+  | { state: "unavailable" };
+
+// Frontend-only payload cache, per agent, for the page session: the backend serves detail
+// reads statelessly and never caches them, so whatever the user expanded is remembered
+// here (alongside expansion-state) and survives virtualization remounts without refetching.
+const detailByAgent = new Map<string, Map<string, EventDetailState>>();
+// Bumped on every detail-state change, per agent, so memoized message wrappers know to
+// repaint an expanded block whose payload just arrived.
+const detailVersionByAgent = new Map<string, number>();
+
+export function getEventDetailState(agentId: string, eventId: string): EventDetailState | undefined {
+  return detailByAgent.get(agentId)?.get(eventId);
+}
+
+export function getEventDetailVersion(agentId: string): number {
+  return detailVersionByAgent.get(agentId) ?? 0;
+}
+
+function bumpDetailVersion(agentId: string): void {
+  detailVersionByAgent.set(agentId, getEventDetailVersion(agentId) + 1);
+}
+
+/** Kick off a detail fetch if none is cached or in flight. Idempotent; redraws on arrival. */
+export function requestEventDetail(agentId: string, eventId: string): void {
+  let byEvent = detailByAgent.get(agentId);
+  if (byEvent === undefined) {
+    byEvent = new Map<string, EventDetailState>();
+    detailByAgent.set(agentId, byEvent);
+  }
+  if (byEvent.has(eventId)) {
+    return;
+  }
+  byEvent.set(eventId, { state: "loading" });
+  void m
+    .request<EventDetail>({
+      method: "GET",
+      url: apiUrl("/api/agents/:agentId/events/:eventId/detail"),
+      params: { agentId, eventId },
+      config: applyEventsRequestTimeout,
+    })
+    .then((detail) => {
+      byEvent.set(eventId, { state: "loaded", detail });
+      bumpDetailVersion(agentId);
+      m.redraw();
+    })
+    .catch((error: { code?: number }) => {
+      if (error.code === 404) {
+        byEvent.set(eventId, { state: "unavailable" });
+      } else {
+        // Transient failure: drop the entry so the next expand retries.
+        byEvent.delete(eventId);
+      }
+      bumpDetailVersion(agentId);
+      m.redraw();
+    });
+}
+
 export function mintMessageId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()

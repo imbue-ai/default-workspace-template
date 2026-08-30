@@ -7,6 +7,7 @@ import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
+import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getAgentById } from "../models/AgentManager";
 import { openProviderChooser } from "../models/Providers";
 import { openSubagentTab, startChatOnAccount } from "./DockviewWorkspace";
@@ -77,6 +78,7 @@ export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): 
           source: e.source,
           tool_call_id: targetCallId,
           tool_name: "Skill",
+          output_chars: mergedOutput.length,
           output: mergedOutput,
           is_error: false,
         });
@@ -165,7 +167,9 @@ function resolvedResultSignature(
     .map((tc) => {
       const result = toolResults.get(tc.tool_call_id);
       return result
-        ? `${tc.tool_call_id}:${result.is_error}:${result.output.length}:${result.output.slice(0, 64)}`
+        ? `${tc.tool_call_id}:${result.is_error}:${result.output_chars}:${result.error_snippet ?? ""}:${
+            result.tk_stamp?.length ?? 0
+          }`
         : "-";
     })
     .join("|");
@@ -180,9 +184,10 @@ export function StableAssistantMessage(): m.Component<{
   let renderedToolResultCount = 0;
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
+  let renderedDetailVersion = -1;
   return {
     onbeforeupdate(vnode) {
-      const { event, toolResults } = vnode.attrs;
+      const { event, toolResults, agentId } = vnode.attrs;
       const currentToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       // A subagent card can appear after the message was first rendered: the
       // backend re-broadcasts the parent with subagent_metadata once a running
@@ -194,11 +199,13 @@ export function StableAssistantMessage(): m.Component<{
         // A supersession replaces the event object in the store (new reference), so a
         // reference change catches an assistant-message text/tool_calls rewrite; the
         // result signature catches a tool_result rewrite. Both are needed since the
-        // presence counts alone do not move when content is replaced in place.
+        // presence counts alone do not move when content is replaced in place. The
+        // detail version catches an on-demand payload arriving for an expanded block.
         event !== renderedEvent ||
         currentToolResultCount !== renderedToolResultCount ||
         currentSubagentCardCount !== renderedSubagentCardCount ||
-        currentResultSignature !== renderedResultSignature
+        currentResultSignature !== renderedResultSignature ||
+        getEventDetailVersion(agentId) !== renderedDetailVersion
       );
     },
     view(vnode) {
@@ -209,6 +216,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
+      renderedDetailVersion = getEventDetailVersion(agentId);
 
       return m("div", renderAssistantMessageChildren(event, toolResults, agentId));
     },
@@ -295,21 +303,94 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
   ]);
 }
 
-export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEvent | null): m.Vnode {
+/** One deferred payload's contribution to an expanded block: its text, or a quiet note. */
+function renderPayloadSection(
+  cssClass: string,
+  text: string | null,
+  state: "loaded" | "loading" | "unavailable",
+): m.Vnode | null {
+  if (state === "loading") {
+    return m("div", { class: `${cssClass} tool-call-payload-note` }, "Loading\u2026");
+  }
+  if (state === "unavailable") {
+    return m("div", { class: `${cssClass} tool-call-payload-note` }, "No longer available");
+  }
+  return text ? m("div", { class: cssClass }, [m("pre", m("code", text))]) : null;
+}
+
+export function renderToolCallBlock(
+  toolCall: ToolCall,
+  toolResult: ToolResultEvent | null,
+  agentId: string,
+  assistantEventId: string,
+): m.Vnode {
   // The harness's parser already worked out what this call should read as -- for
   // codex that means unwrapping an `exec` whose real operation is buried in a JS
-  // argument, which is not something this view should have to know. The raw input
-  // stays in the block body below (preserve-raw). Falls back to the tool name for
-  // events parsed before the labels existed.
+  // argument, which is not something this view should have to know. Falls back to
+  // the tool name for events parsed before the labels existed.
   const headerText = toolCall.header_label || `Tool: ${toolCall.tool_name}`;
-  const inputText = toolCall.input_preview || "";
-  const outputText = toolResult?.output || "";
   const isError = toolResult?.is_error === true;
   // Keyed by the tool call's stable id so the expansion survives the row
   // unmounting and remounting (virtualization) or re-rendering (streaming).
   const expansionKey = `tc:${toolCall.tool_call_id}`;
+  const isExpanded = isBlockExpanded(expansionKey);
 
-  return m("div", { class: `tool-call-block${isBlockExpanded(expansionKey) ? " tool-call-block--expanded" : ""}` }, [
+  // Events are payload-free on the wire: the full input/output are fetched on demand
+  // (cached frontend-side for the page session) the first time the row is expanded.
+  const hasInput = toolCall.input_chars > 0 || Boolean(toolCall.tk_command);
+  const hasOutput = Boolean(toolResult && (toolResult.output_chars > 0 || toolResult.output));
+  const requestPayloads = () => {
+    if (toolCall.input_chars > 0) {
+      requestEventDetail(agentId, assistantEventId);
+    }
+    if (toolResult && toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")) {
+      requestEventDetail(agentId, toolResult.event_id);
+    }
+  };
+  if (isExpanded) {
+    // Re-request on every expanded render: a no-op when cached or in flight, and it
+    // heals an entry dropped by a transient fetch failure.
+    requestPayloads();
+  }
+
+  let inputSection: m.Vnode | null = null;
+  if (hasInput) {
+    const inputDetail = getEventDetailState(agentId, assistantEventId);
+    if (inputDetail?.state === "loaded") {
+      const inputText = inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? toolCall.tk_command ?? "";
+      inputSection = renderPayloadSection("tool-call-input", inputText, "loaded");
+    } else if (toolCall.input_chars === 0) {
+      // Only the stamped tk command exists (nothing to fetch).
+      inputSection = renderPayloadSection("tool-call-input", toolCall.tk_command ?? "", "loaded");
+    } else {
+      inputSection = renderPayloadSection("tool-call-input", null, inputDetail?.state ?? "loading");
+    }
+  }
+
+  let outputSection: m.Vnode | null = null;
+  const outputClass = isError ? "tool-call-output tool-call-output--error" : "tool-call-output";
+  if (toolResult) {
+    // A frontend-synthesized skill expansion carries its body inline; a real result's
+    // output is fetched. When both exist (a Skill call with real output plus its
+    // expansion), the fetched output leads and the expansion follows.
+    const fetched =
+      toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")
+        ? getEventDetailState(agentId, toolResult.event_id)
+        : undefined;
+    const inline = toolResult.output ?? "";
+    if (fetched?.state === "loaded") {
+      const combined = [fetched.detail.output ?? "", inline].filter((part) => part).join("\n\n");
+      outputSection = renderPayloadSection(outputClass, combined, "loaded");
+    } else if (toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")) {
+      outputSection = renderPayloadSection(outputClass, null, fetched?.state ?? "loading");
+    } else if (inline) {
+      outputSection = renderPayloadSection(outputClass, inline, "loaded");
+    } else {
+      outputSection = null;
+    }
+  }
+
+  return m("div", { class: `tool-call-block${isExpanded ? " tool-call-block--expanded" : ""}` }, [
     m(
       "div",
       {
@@ -319,20 +400,27 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
           if (block) {
             // Toggle the DOM directly (memoized wrappers skip re-patching)
             // AND record it so a fresh mount renders in the same state.
-            setBlockExpanded(expansionKey, block.classList.toggle("tool-call-block--expanded"));
+            const nowExpanded = block.classList.toggle("tool-call-block--expanded");
+            setBlockExpanded(expansionKey, nowExpanded);
+            if (nowExpanded) {
+              // Kick off the payload fetches; the redraw renders the loading note (or
+              // the cached payload) into the just-revealed details section.
+              requestPayloads();
+              m.redraw();
+            }
           }
         },
       },
       [m("span", { class: "tool-call-chevron" }, "\u25B8"), m("span", headerText)],
     ),
-    m("div", { class: "tool-call-details" }, [
-      inputText ? m("div", { class: "tool-call-input" }, [m("pre", m("code", inputText))]) : null,
-      outputText
-        ? m("div", { class: isError ? "tool-call-output tool-call-output--error" : "tool-call-output" }, [
-            m("pre", m("code", outputText)),
-          ])
-        : null,
-    ]),
+    // A failed call stays glanceable without a fetch: its stamped first line rides the
+    // event and shows under the collapsed header.
+    isError && toolResult?.error_snippet
+      ? m("div", { class: "tool-call-error-snippet" }, toolResult.error_snippet)
+      : null,
+    hasInput || hasOutput || outputSection || inputSection
+      ? m("div", { class: "tool-call-details" }, [inputSection, outputSection])
+      : null,
   ]);
 }
 
@@ -388,6 +476,51 @@ function providerFaultNote(kind: string | null): string {
   return `This isn't Minds' fault -- ${cause}. Try again in a moment.`;
 }
 
+/** The tiny muted "thinking" toggle atop an assistant message whose harness recorded
+ *  readable reasoning. The text itself loads on demand (payload-free wire) and expands
+ *  inline; the toggle is deliberately minimal -- most readers never open it. */
+function renderThinkingDisclosure(event: AssistantMessageEvent, agentId: string): m.Vnode {
+  const expansionKey = `think:${event.event_id}`;
+  const isExpanded = isBlockExpanded(expansionKey);
+  if (isExpanded) {
+    requestEventDetail(agentId, event.event_id);
+  }
+  const detail = isExpanded ? getEventDetailState(agentId, event.event_id) : undefined;
+  let body: m.Vnode | null = null;
+  if (isExpanded) {
+    if (detail?.state === "loaded") {
+      body = m("div", { class: "thinking-body" }, detail.detail.thinking ?? "");
+    } else if (detail?.state === "unavailable") {
+      body = m("div", { class: "thinking-body thinking-body--note" }, "No longer available");
+    } else {
+      body = m("div", { class: "thinking-body thinking-body--note" }, "Loading\u2026");
+    }
+  }
+  return m("div", { class: "thinking-disclosure" }, [
+    m(
+      "button",
+      {
+        type: "button",
+        class: `thinking-toggle${isExpanded ? " thinking-toggle--expanded" : ""}`,
+        onclick() {
+          if (setAndReturnToggled(expansionKey)) {
+            requestEventDetail(agentId, event.event_id);
+          }
+          m.redraw();
+        },
+      },
+      [m("span", { class: "tool-call-chevron" }, "\u25B8"), "thinking"],
+    ),
+    body,
+  ]);
+}
+
+function setAndReturnToggled(expansionKey: string): boolean {
+  const next = !isBlockExpanded(expansionKey);
+  setBlockExpanded(expansionKey, next);
+  return next;
+}
+
 export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
@@ -398,6 +531,9 @@ export function renderAssistantMessageChildren(
   const toolCalls = event.tool_calls || [];
 
   const children: m.Children[] = [];
+  if (event.has_thinking) {
+    children.push(renderThinkingDisclosure(event, agentId));
+  }
   if (textContent) {
     if (event.is_api_error || event.is_auth_error) {
       // A model API error: render the failure text in light red, and for a
@@ -445,10 +581,12 @@ export function renderAssistantMessageChildren(
     // one permission request resolves each of its cards independently.
     if (isFiledPermissionRequest(toolCall, result)) {
       const resolution = resolutionForCall(toolCall, result, resolutionsByRequestId);
-      children.push(m(PermissionCard, { toolCall, toolResult: result, resolution }));
+      children.push(
+        m(PermissionCard, { toolCall, toolResult: result, resolution, agentId, assistantEventId: event.event_id }),
+      );
       continue;
     }
-    children.push(renderToolCallBlock(toolCall, result));
+    children.push(renderToolCallBlock(toolCall, result, agentId, event.event_id));
   }
   return children;
 }
