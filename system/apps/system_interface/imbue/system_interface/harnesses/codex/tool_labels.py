@@ -233,10 +233,6 @@ def _code_mode_labels(js: str) -> tuple[str, str]:
     return f"Tool: {noun}", caption
 
 
-# tk lifecycle verbs whose command must survive input truncation (mirrors the claude
-# parser's set): a batched `tk create --step` plan and a long `tk close` summary feed the
-# chat progress view, so clipping them mid-body would truncate the plan.
-
 
 @pure
 def is_single_delegated_call(raw_input: str) -> bool:
