@@ -20,6 +20,7 @@ import re
 from typing import Any
 from typing import Final
 
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
 from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedStep
 from imbue.system_interface.harnesses.antigravity.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.antigravity.tool_labels import shell_command
@@ -195,5 +196,10 @@ def parse_step(step: DecodedStep) -> list[dict[str, Any]]:
             return []
         event = _assistant_message(step, text=step.error_text, tool_calls=[], suffix="error")
         event["is_api_error"] = True
+        # Which error it is decides what the user can do about it. An auth failure is the one
+        # they can fix, and it is what the dead-account notice keys on; everything else is
+        # just a failed turn. agy passes the provider's own words through, so the shared
+        # vocabulary reads them.
+        event["is_auth_error"] = is_auth_error_text(step.error_text)
         return [event]
     return []

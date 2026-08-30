@@ -7,6 +7,7 @@ from types import FrameType
 
 import httpx
 from flask import Flask
+from loguru import logger as _loguru_logger
 
 from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import get_host_dir
@@ -18,12 +19,17 @@ from imbue.system_interface.auto_open import ledger_path_for_layout_dir
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.accounts import AccountError
+from imbue.system_interface.accounts import reconcile
+from imbue.system_interface.harnesses.auth_flows import AuthFlowService
+from imbue.system_interface.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.server import create_application
-from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
+
+logger = _loguru_logger
 
 
 def _exit_on_signal(signum: int, frame: FrameType | None) -> None:
@@ -73,10 +79,6 @@ def build_production_state(
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
-    welcome_resender = WelcomeResender(
-        resolve_agent=agent_manager.get_agent_info_by_id,
-        send_message_fn=agent_manager.send_message_to_agent,
-    )
     return SystemInterfaceState(
         config=config,
         provider_names=provider_names,
@@ -89,14 +91,13 @@ def build_production_state(
         # agent along with the in-flight holder's metadata.
         layout_mutex=LayoutMutex(),
         # One long-lived ClaudeAuthService per app so the in-flight OAuth
-        # subprocess survives between the /start and /submit-code requests.
-        # The service consults the resender before an auth-apply restart so a
-        # never-welcomed chat agent restarts idle (the welcome resend is its
-        # resumption) instead of receiving the "please continue" message.
-        claude_auth_service=ClaudeAuthService(
-            resolve_never_welcomed_agent_name=welcome_resender.never_welcomed_agent_name,
-        ),
-        welcome_resender=welcome_resender,
+        # One long-lived service per app: it holds the in-flight sign-in PTY between the
+        # start call and the polls that advance it. A successful re-auth restarts the agents
+        # bound to that account -- they do not pick up a swapped credential on their own.
+        auth_flows=AuthFlowService.create(restart_bound_agents=agent_manager.restart_agents_on_account_in_background),
+        # Read-only: it reports claude's auth state and writes and restarts nothing, so it
+        # needs no collaborators.
+        claude_auth_service=ClaudeAuthService(),
         # Single shared synchronous httpx client for server-side API calls to
         # local services (e.g. the /api/browsers passthrough to the browser
         # daemon); a separate one for the latchkey catalog proxy.
@@ -126,6 +127,30 @@ def main() -> None:
     args = _parse_args(None)
 
     config = load_config()
+    # An account is a row plus a folder, and boot is where the two are made to agree. A
+    # folder with no row is an abandoned sign-in nothing can reach; a row with no folder is
+    # an account that LOOKS usable and silently is not, which is worse. `reconcile` logs
+    # both, so a dropped row is visible rather than a mystery.
+    #
+    # Never fatal. supervisord restarts this program a million times, so an unreadable index
+    # -- a truncated write from a hard host kill, a file from a newer build -- would be an
+    # unbounded crash loop with no UI and therefore no way to delete the offending account.
+    # Every other JSON reader in this app degrades with a warning; so does this one.
+    try:
+        # Before the sweep, not after: an orphan from a previous process is still holding an
+        # account folder open and can still write a credential into it, so reaping first is
+        # what stops it writing into a folder the sweep is about to delete -- or over one
+        # whose parked backup the sweep is about to restore.
+        reaped = reap_orphaned_auth_processes()
+        if reaped:
+            logger.warning("Reaped {} sign-in process(es) left by a previous run", reaped)
+        reconcile()
+    except (AccountError, OSError) as e:
+        # OSError as well as AccountError: the sweep walks the accounts root, reads and writes
+        # credential files and rewrites the index, and a full disk or a bad mount raises from
+        # any of them. Every one of those is a reason to start WITHOUT the account store, not
+        # a reason to not start.
+        logger.opt(exception=e).error("Could not reconcile the account store; continuing without it")
     application = build_application(config, args)
     with application.app_context():
         state = get_state()

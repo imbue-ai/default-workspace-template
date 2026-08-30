@@ -54,6 +54,7 @@ from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface import accounts_endpoints
 from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.model import ModelIdentity
@@ -525,41 +526,6 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
-def _is_feature_flag_enabled(env_var: str) -> bool:
-    """Whether ``env_var`` is set to a truthy value (``1``/``true``/``yes``/``on``).
-
-    Every feature flag is off by default and read from the environment, so a host can
-    dark-launch a surface and turn it on (see system/supervisord.conf's single
-    ``environment=`` line, or system/scripts/flip_feature_flags.sh) without a rebuild.
-    """
-    return os.environ.get(env_var, "").strip().lower() in ("1", "true", "yes", "on")
-
-
-# The frontend-visible feature flags: env var -> the meta-tag name the frontend reads
-# (see frontend/src/base-path.ts). Each gates only its own new-tab menu items; support
-# for what they create is never gated, so an agent made while a flag was on keeps
-# working with it off.
-_FEATURE_FLAG_META_TAGS: Final[dict[str, str]] = {
-    # The "Codex chat" / "Pi chat" launchers. Claude is the workspace default
-    # and is never gated.
-    "FEATURE_FLAG_ENABLE_OTHER_HARNESSES": "system-interface-enable-other-harnesses",
-    # The "New introductory <harness> chat" launchers, which stack the `first` create
-    # template (fast launch where supported, /welcome, the first=true label). Separate
-    # from the flag above: the workspace's real introductory chat is made once at boot
-    # by the bootstrap, so these exist to exercise that flow on demand.
-    "FEATURE_FLAG_ENABLE_INTRODUCTORY_AGENTS_IN_OTHER_HARNESSES": "system-interface-enable-introductory-agents",
-}
-
-
-def _inject_feature_flag_meta_tags(html_content: str) -> str:
-    """Inject every frontend-visible feature flag so the frontend can gate its launchers."""
-    meta_tags = "\n".join(
-        f'<meta name="{tag_name}" content="{str(_is_feature_flag_enabled(env_var)).lower()}">'
-        for env_var, tag_name in _FEATURE_FLAG_META_TAGS.items()
-    )
-    return html_content.replace("</head>", f"{meta_tags}\n</head>")
-
-
 def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) -> str:
     """Inject the update-staleness variant so the frontend can render its banner.
 
@@ -597,7 +563,6 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
-        html_content = _inject_feature_flag_meta_tags(html_content)
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
@@ -906,11 +871,11 @@ def _get_harnesses_endpoint() -> Response:
     switch mode, picker mode, powered-by label, shoulder-tap capability); the
     frontend keys in by an agent's harness.
 
-    Every harness is always included, deliberately: ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``
-    gates only the "New <harness> agent" launchers in the new-tab menu, not harness support
-    itself. A codex or pi agent that exists some other way (``mngr create``, one made before
-    the flag was turned off) still needs its catalog for the model bar to resolve, so
-    filtering here would strand that agent's chip on an unrecognized model.
+    Every harness is always included, deliberately: what the user has signed in to
+    decides what they can LAUNCH, not what the app can render. A codex or pi agent that
+    exists some other way (``mngr create``, or one left behind after its account was
+    removed) still needs its catalog for the model bar to resolve, so narrowing this to
+    the signed-in harnesses would strand that agent's chip on an unrecognized model.
     """
     catalogs: dict[str, Any] = {}
     for harness in HARNESS_SPECS:
@@ -921,13 +886,11 @@ def _get_harnesses_endpoint() -> Response:
         except (OSError, ValueError) as e:
             logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
             continue
-        # The catalog model is the wire shape for the model bar; the popup and
-        # agent-auth declarations live on the HarnessSpec and are merged in here
-        # so one response carries everything the frontend keys by harness.
+        # The catalog model is the wire shape for the model bar; the popup declarations
+        # live on the HarnessSpec and are merged in here so one response carries
+        # everything the frontend keys by harness.
         spec = get_harness_spec(harness)
         catalog["popups"] = [popup.model_dump() for popup in spec.popups]
-        catalog["auth_modal"] = spec.auth_modal
-        catalog["auth_instructions"] = spec.auth_instructions
         catalogs[harness.value] = catalog
     return _json_response(catalogs)
 
@@ -2636,10 +2599,12 @@ def _create_chat_agent() -> Response:
         create_request = CreateChatRequest.model_validate(request_fields)
         created = agent_manager.create_chat_agent(
             create_request.name,
-            create_request.harness,
-            extra_role_templates=("first",) if create_request.first else (),
+            # The `first` create template belongs to the workspace's own first run, not to
+            # anything a client asks for -- bootstrap stacks it on its own `mngr create`.
+            extra_role_templates=(),
             project_id=project_id,
             extra_taken_names=titled_names,
+            account_id=create_request.account_id,
         )
         response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
         return _json_response(response.model_dump(), status_code=201)
@@ -3549,6 +3514,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
         endpoint="_set_member_location_endpoint",
     )
     auth_endpoints.register_routes(application)
+    accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(

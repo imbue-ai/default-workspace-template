@@ -175,68 +175,13 @@ def test_inspect_resolves_iframe_with_service_name(tmp_path: Path) -> None:
     assert "service:web" in refs
 
 
-def test_inspect_emits_chat_terminal_ref_for_agent_attached_terminal(tmp_path: Path) -> None:
-    """An iframe pointed at the per-agent terminal URL projects to ``chat-terminal:<name>``.
+def test_inspect_gives_every_terminal_panel_the_hash_ref(tmp_path: Path) -> None:
+    """Every panel on the terminal service's origin projects to ``terminal:<hash>``.
 
-    The chat panel's "Open agent terminal" button mints iframes pointed at
-    the terminal service's own origin with dispatch args
-    (``http://terminal.host-<hex>.localhost:8421/?arg=_&arg=agent&arg=<name>``);
-    ``_resolve_ref`` must recognize that URL shape and emit the stable
-    ``chat-terminal:<name>`` ref so the panel is addressable by name
-    rather than via an opaque ``terminal:<hash>``.
-    """
-    layout_path = tmp_path / "layout.json"
-    _write_layout(
-        layout_path,
-        dockview={
-            "panels": {"p1": {"id": "p1", "title": "alice terminal"}},
-            "grid": {"root": {"type": "leaf", "data": {"views": ["p1"], "activeView": "p1", "size": 1.0}}},
-        },
-        panel_params={
-            "p1": {
-                "panelType": "iframe",
-                "url": f"http://terminal.{_LOCAL_WORKSPACE_HOST}/?arg=_&arg=agent&arg=alice",
-            }
-        },
-    )
-    summary = layout_inspect(layout_path, {})
-    refs = [p["ref"] for p in summary["panels"]]
-    assert "chat-terminal:alice" in refs
-
-
-def test_inspect_emits_chat_terminal_ref_on_shared_origin(tmp_path: Path) -> None:
-    """The shared host shape (``terminal.host-<hex>.<user>.<region>.<domain>``) is recognized too.
-
-    Share hostnames follow the SAME nesting rule as local ones -- the service
-    name is prefixed as the first label; only the base after the
-    ``host-<hex>`` coordinate is longer -- so the origin-based service
-    detection needs no share-specific branch, just this pin.
-    """
-    layout_path = tmp_path / "layout.json"
-    _write_layout(
-        layout_path,
-        dockview={
-            "panels": {"p1": {"id": "p1", "title": "alice terminal"}},
-            "grid": {"root": {"type": "leaf", "data": {"views": ["p1"], "activeView": "p1", "size": 1.0}}},
-        },
-        panel_params={
-            "p1": {
-                "panelType": "iframe",
-                "url": f"https://terminal.{_SHARED_WORKSPACE_HOST}/?arg=_&arg=agent&arg=alice",
-            }
-        },
-    )
-    summary = layout_inspect(layout_path, {})
-    refs = [p["ref"] for p in summary["panels"]]
-    assert "chat-terminal:alice" in refs
-
-
-def test_inspect_keeps_anonymous_terminal_as_terminal_hash_ref(tmp_path: Path) -> None:
-    """Terminals minted by the "New terminal" button use ``arg=workdir`` and stay ``terminal:<hash>``.
-
-    Only the agent-attached terminal pattern (``arg=agent&arg=<name>``)
-    projects to ``chat-terminal:<name>``; everything else on the terminal
-    service's origin falls back to the opaque hash form.
+    The agent-attached pattern (``arg=agent&arg=<name>``) used to be special-cased into
+    ``chat-terminal:<name>``. It is not, because an agent's terminal is no longer a panel at
+    all -- it is the back face of that agent's chat -- so there is nothing left to address and
+    the opaque hash form is the only one.
     """
     layout_path = tmp_path / "layout.json"
     _write_layout(
@@ -476,66 +421,6 @@ def test_list_marks_running_agents(tmp_path: Path) -> None:
     by_ref = {e["ref"]: e for e in entries}
     assert by_ref["chat:alice"]["is_running"] is True
     assert by_ref["chat:bob"]["is_running"] is False
-
-
-def test_list_emits_chat_terminal_entry_per_agent(tmp_path: Path) -> None:
-    """``layout_list`` exposes the per-agent terminal as a discoverable ref.
-
-    Surfacing ``chat-terminal:<name>`` in ``list`` lets callers see the
-    terminal exists before opening it, mirroring how ``chat:<name>``
-    advertises the chat tab. ``is_running`` tracks the owning agent so
-    a stopped agent's terminal is flagged accordingly.
-    """
-    entries = layout_list(
-        service_names=(),
-        agents=[
-            {"id": "a1", "name": "alice", "state": "running", "labels": {}, "work_dir": None},
-            {"id": "a2", "name": "bob", "state": "stopped", "labels": {}, "work_dir": None},
-        ],
-        layout_json_path=tmp_path / "missing.json",
-        agent_name_by_id={"a1": "alice", "a2": "bob"},
-    )
-    by_ref = {e["ref"]: e for e in entries}
-    assert "chat-terminal:alice" in by_ref
-    assert by_ref["chat-terminal:alice"]["kind"] == "agent-terminal"
-    assert by_ref["chat-terminal:alice"]["is_running"] is True
-    assert by_ref["chat-terminal:alice"]["is_open"] is False
-    assert by_ref["chat-terminal:bob"]["is_running"] is False
-
-
-def test_list_chat_terminal_marks_open_when_url_is_mounted(tmp_path: Path) -> None:
-    """``is_open`` on the ``chat-terminal:`` entry tracks the agent-attached URL.
-
-    The ``_collect_open_refs`` helper builds the mount set from the same
-    ``_resolve_ref`` projection that ``inspect`` uses, so the listing
-    stays in sync with what would appear there.
-    """
-    layout_path = tmp_path / "layout.json"
-    _write_layout(
-        layout_path,
-        dockview={
-            "panels": {"p1": {"id": "p1", "title": "alice terminal"}},
-            "grid": {"root": {"type": "leaf", "data": {"views": ["p1"], "activeView": "p1", "size": 1.0}}},
-        },
-        panel_params={
-            "p1": {
-                "panelType": "iframe",
-                "url": f"http://terminal.{_LOCAL_WORKSPACE_HOST}/?arg=_&arg=agent&arg=alice",
-            }
-        },
-    )
-    entries = layout_list(
-        service_names=(),
-        agents=[
-            {"id": "a1", "name": "alice", "state": "running", "labels": {}, "work_dir": None},
-            {"id": "a2", "name": "bob", "state": "running", "labels": {}, "work_dir": None},
-        ],
-        layout_json_path=layout_path,
-        agent_name_by_id={"a1": "alice", "a2": "bob"},
-    )
-    by_ref = {e["ref"]: e for e in entries}
-    assert by_ref["chat-terminal:alice"]["is_open"] is True
-    assert by_ref["chat-terminal:bob"]["is_open"] is False
 
 
 def test_parse_tmux_sessions_output_parses_name_id_and_path() -> None:

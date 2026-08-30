@@ -41,7 +41,7 @@ RUN chmod +x /usr/local/bin/default-workspace-template-write-apt-sources \
 COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-system
 COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
-COPY system/scripts/agy_install-1.1.16.sh /usr/local/bin/default-workspace-template-install-agy
+COPY system/scripts/agy_install-1.1.22.sh /usr/local/bin/default-workspace-template-install-agy
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
 COPY system/scripts/install_dufs.sh /usr/local/bin/default-workspace-template-install-dufs
 RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-dufs && default-workspace-template-setup-system

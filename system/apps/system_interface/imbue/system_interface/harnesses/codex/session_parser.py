@@ -52,9 +52,13 @@ import hashlib
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from typing import Final
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.codex.tool_labels import is_single_delegated_call
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import shell_command
@@ -80,6 +84,19 @@ SOURCE = "codex/common_transcript"
 # placeholder ``claude_session_parser`` uses when the model is absent, keeping the
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
+
+# codex's own `codex_error_info.type` tags, mapped to the shared kind vocabulary. Preferred over
+# reading the prose: the tag is the part that survives codex rewording its messages. Quota
+# exhaustion is deliberately absent -- `usage_limit_exceeded` belongs to the auth family, whose
+# recovery is different credentials, and `auth_errors` claims it before this table is consulted.
+_CODEX_ERROR_KINDS: Final[dict[str, str]] = {
+    "server_error": "api_error",
+    "internal_server_error": "api_error",
+    "rate_limit_exceeded": "rate_limit",
+    "rate_limit": "rate_limit",
+    "overloaded": "overloaded",
+    "context_window_exceeded": "request_too_large",
+}
 
 
 def _join_output_text(content: Any) -> str:
@@ -196,13 +213,53 @@ def _assistant_event(
         # deferred (token_count -> Phase 2)
         "usage": None,
         "message_uuid": event_id,
-        # deferred (codex auth errors live in logs_2.sqlite)
+        # A codex failure never arrives as an assistant message -- it arrives on the turn's
+        # `task_complete`, which `_turn_error_event` turns into its own message. So an ordinary
+        # assistant message is never an error, and these are facts rather than deferrals.
         "is_auth_error": False,
-        # Required by the shared contract (Response.ts). Detection deferred: codex's
-        # provider-error record shape is undocumented; False/None is the honest fill.
         "is_api_error": False,
         "api_error_kind": None,
         "is_provider_fault": False,
+    }
+
+
+def _turn_error_event(
+    marker_event_id: str,
+    timestamp: str,
+    detail: str,
+    payload: dict[str, Any],
+    turn_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The failure that ended a turn, as a message the transcript can show.
+
+    Classified off ``codex_error_info`` where codex tells us the kind outright, and off the
+    prose otherwise -- the structured tag is the part that survives codex rewording its
+    messages. Auth wins either way: `classify_api_error` yields to the auth vocabulary, so a
+    message never carries both subtexts.
+    """
+    error = payload.get("error")
+    info = error.get("codex_error_info") if isinstance(error, dict) else None
+    tag = info.get("type", "") if isinstance(info, dict) else ""
+    is_auth = is_auth_error_text(detail) or is_auth_error_text(str(tag))
+    api_error_kind = None if is_auth else (_CODEX_ERROR_KINDS.get(str(tag)) or classify_api_error(detail))
+    return {
+        "timestamp": timestamp,
+        "type": "assistant_message",
+        # Distinct from the marker's id, which the marker still uses: two events from one
+        # record need two ids or the frontend dedupes one of them away.
+        "event_id": f"{marker_event_id}:error",
+        "source": SOURCE,
+        "role": "assistant",
+        "model": (turn_state or {}).get("model") or _UNKNOWN_MODEL,
+        "text": detail,
+        "tool_calls": [],
+        "stop_reason": "error",
+        "usage": None,
+        "message_uuid": f"{marker_event_id}:error",
+        "is_auth_error": is_auth,
+        "is_api_error": api_error_kind is not None,
+        "api_error_kind": api_error_kind,
+        "is_provider_fault": is_provider_fault(api_error_kind),
     }
 
 
@@ -427,17 +484,31 @@ def parse_lines(
         if payload_type in ("task_started", "task_complete"):
             kind = SpecialEventKind.TURN_STARTED if payload_type == "task_started" else SpecialEventKind.TURN_COMPLETED
             event_id = _marker_event_id(payload, payload_type, line_index)
-            return [
-                {
-                    "timestamp": timestamp,
-                    "type": SPECIAL_EVENT_TYPE,
-                    "kind": kind.value,
-                    "event_id": event_id,
-                    "turn_id": _marker_turn_id(payload),
-                    "source": SOURCE,
-                    "message_uuid": event_id,
-                }
-            ]
+            marker: dict[str, Any] = {
+                "timestamp": timestamp,
+                "type": SPECIAL_EVENT_TYPE,
+                "kind": kind.value,
+                "event_id": event_id,
+                "turn_id": _marker_turn_id(payload),
+                "source": SOURCE,
+                "message_uuid": event_id,
+            }
+            # A turn that ended on a failure carries the reason here, and this is the ONLY
+            # durable copy of it: codex classes its live ``EventMsg::Error`` non-persistent, so
+            # it never reaches the rollout. Keeping it on the marker alone meant the reason
+            # existed but was never shown, and once the turn ended it was unrecoverable.
+            #
+            # Measured: a bogus key ends the turn with `error.message = "unexpected status 401
+            # Unauthorized: Incorrect API key provided: ... auth error code: invalid_api_key"`.
+            error = payload.get("error")
+            detail = error.get("message", "") if isinstance(error, dict) else ""
+            if not detail:
+                return [marker]
+            marker["error_text"] = detail
+            marker["is_auth_error"] = is_auth_error_text(detail)
+            # Surfaced as an assistant message ordered BEFORE the marker, so the transcript
+            # reads in the order things happened: the failure, then the turn ending.
+            return [_turn_error_event(event_id, timestamp, detail, payload, turn_state), marker]
         return []
 
     if outer != "response_item":
