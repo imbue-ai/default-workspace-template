@@ -33,13 +33,14 @@ class AgentEventQueues:
 
     def __init__(self) -> None:
         self._queues: dict[str, list[queue.Queue[dict[str, Any] | None]]] = defaultdict(list)
-        # Reentrant because a CPython GC cycle during a put_nowait call inside
-        # the locked register() section can finalize an abandoned SSE
-        # event_generator (from an unrelated prior stream), whose `finally`
-        # block calls unregister() on the same thread. The class never calls
-        # its own API directly -- the runtime effectively inserts the
-        # unregister() call mid-register() via a GC finalizer. With a
-        # non-reentrant Lock that indirect re-entrance self-deadlocks.
+        # Reentrant for two same-thread re-entries into unregister() while the
+        # lock is held. Deliberate: broadcast_batch evicts an overflowing
+        # consumer from inside its locked delivery loop (_evict_locked ->
+        # unregister). Indirect: a CPython GC cycle during an allocation inside
+        # a locked section can finalize an abandoned SSE event_generator (from
+        # an unrelated prior stream), whose `finally` block calls unregister()
+        # on the same thread. With a non-reentrant Lock either re-entrance
+        # self-deadlocks.
         self._lock: threading.RLock = threading.RLock()
         self._shutdown: bool = False
 
