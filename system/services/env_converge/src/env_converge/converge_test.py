@@ -366,7 +366,10 @@ def _logging_install_command_builder(
     return build
 
 
-def test_install_missing_batch_success_is_one_invocation(tmp_path: Path) -> None:
+def test_install_missing_batch_success_is_one_invocation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
     log_path = tmp_path / "invocations.log"
     build = _logging_install_command_builder(log_path, "never-fails-3b9d")
 
@@ -416,7 +419,10 @@ def test_install_missing_failed_batch_falls_back_to_per_entry_installs(
     ]
 
 
-def test_install_missing_single_entry_failure_is_not_retried(tmp_path: Path) -> None:
+def test_install_missing_single_entry_failure_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
     log_path = tmp_path / "invocations.log"
     build = _logging_install_command_builder(log_path, "bad-entry-8a35")
 
@@ -427,7 +433,10 @@ def test_install_missing_single_entry_failure_is_not_retried(tmp_path: Path) -> 
     assert log_path.read_text().splitlines() == ["bad-entry-8a35"]
 
 
-def test_install_missing_with_nothing_missing_runs_nothing(tmp_path: Path) -> None:
+def test_install_missing_with_nothing_missing_runs_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
     log_path = tmp_path / "invocations.log"
     build = _logging_install_command_builder(log_path, "unused-bc71")
 
