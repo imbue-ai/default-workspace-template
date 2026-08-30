@@ -487,7 +487,10 @@ describe("expanded tool row payload states", () => {
   it("renders the full fetched input and output once loaded", () => {
     mockDetailState.mockImplementation((_agentId: string, eventId: string) =>
       eventId === "a-pc-1"
-        ? { state: "loaded", detail: { inputs_by_tool_call_id: { "pc-1": "the whole input" }, output: null, thinking: null } }
+        ? {
+            state: "loaded",
+            detail: { inputs_by_tool_call_id: { "pc-1": "the whole input" }, output: null, thinking: null },
+          }
         : { state: "loaded", detail: { inputs_by_tool_call_id: {}, output: "the whole output", thinking: null } },
     );
     const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
