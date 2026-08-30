@@ -2988,3 +2988,44 @@ def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentMa
     agent_manager._stop_activity_tracking("agent-1")
     assert agent_manager._session_by_agent["agent-1"] is session
     assert session.in_flight_block() == "caught mid-send"
+
+
+# --- Watcher eviction (the chat-memory lifecycle) ---
+
+
+def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
+    """A destroyed agent's watcher is evicted along with its tracking state."""
+    evicted: list[str] = []
+    agent_manager.set_watcher_eviction_callback(evicted.append)
+    agent = _agent_details("doomed-agent")
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+
+    agent_manager.remove_agent(str(agent.id))
+    assert evicted == [str(agent.id)]
+
+
+def test_lifecycle_transition_into_dead_evicts_the_watcher_once(agent_manager: AgentManager) -> None:
+    """Eviction is edge-triggered on the transition into a positively-dead lifecycle: a
+    stop (from the UI, mngr, an OOM shed, idle shutdown) drops the resident transcript,
+    while further observe ticks of the already-stopped agent do NOT re-evict -- a user
+    viewing a stopped chat's history rebuilds the watcher on read, and a level-triggered
+    evict would tear that rebuild down again every tick."""
+    evicted: list[str] = []
+    agent_manager.set_watcher_eviction_callback(evicted.append)
+    agent = _agent_details("stoppable-agent")
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    assert evicted == []
+
+    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id)]
+
+    # Another tick of the same dead state: no edge, no eviction.
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id)]
+
+    # A restart followed by another stop evicts again.
+    running = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.RUNNING))
+    agent_manager._handle_observe_event(make_agent_state_event(running))
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id), str(agent.id)]

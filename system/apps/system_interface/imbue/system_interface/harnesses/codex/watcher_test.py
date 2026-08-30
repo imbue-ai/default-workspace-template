@@ -403,3 +403,73 @@ def test_identical_reserialisation_is_dropped(tmp_path: Path) -> None:
 
     assert len(broadcast) == before
     assert len([e for e in watcher.get_all_events() if e["type"] == "assistant_message"]) == 1
+
+
+# --- Readable thinking + on-demand payload detail ---
+
+
+def test_reasoning_summary_marks_the_next_assistant_event_and_serves_its_text(tmp_path: Path) -> None:
+    """A reasoning line with readable summaries stamps ``has_thinking`` on the assistant
+    event that follows it, and the detail read serves the summary text; a reasoning line
+    with only encrypted content stamps nothing."""
+    _write_rollout(
+        tmp_path,
+        [
+            {
+                "timestamp": "2026-08-03T00:00:01Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "planning the fix"}],
+                    "content": [],
+                },
+            },
+            _assistant_line("m1", "here is the fix", "2026-08-03T00:00:02Z"),
+            {
+                "timestamp": "2026-08-03T00:00:03Z",
+                "type": "response_item",
+                "payload": {"type": "reasoning", "summary": [], "content": [{"type": "encrypted", "data": "x"}]},
+            },
+            _assistant_line("m2", "and another thing", "2026-08-03T00:00:04Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    events = [e for e in watcher.get_all_events() if e["type"] == "assistant_message"]
+    assert events[0].get("has_thinking") is True
+    assert "has_thinking" not in events[1]
+
+    detail = watcher.get_event_detail(events[0]["event_id"])
+    assert detail is not None
+    assert detail["thinking"] == "planning the fix"
+
+
+def test_get_event_detail_serves_the_full_tool_payloads(tmp_path: Path) -> None:
+    big_args = '{"cmd":"echo ' + "x" * 4000 + '"}'
+    _write_rollout(
+        tmp_path,
+        [
+            {
+                "timestamp": "2026-08-03T00:00:01Z",
+                "type": "response_item",
+                "payload": {"type": "function_call", "call_id": "c1", "name": "exec", "arguments": big_args},
+            },
+            {
+                "timestamp": "2026-08-03T00:00:02Z",
+                "type": "response_item",
+                "payload": {"type": "function_call_output", "call_id": "c1", "output": "y" * 6000},
+            },
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    events = watcher.get_all_events()
+    call = next(e for e in events if e["type"] == "assistant_message")
+    result = next(e for e in events if e["type"] == "tool_result")
+    assert call["tool_calls"][0]["input_chars"] == len(big_args)
+    assert result["output_chars"] == 6000
+
+    call_detail = watcher.get_event_detail(call["event_id"])
+    assert call_detail is not None
+    assert call_detail["inputs_by_tool_call_id"]["c1"] == big_args
+    result_detail = watcher.get_event_detail(result["event_id"])
+    assert result_detail is not None
+    assert result_detail["output"] == "y" * 6000

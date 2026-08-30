@@ -296,3 +296,79 @@ def test_queue_snapshot_transient_shows_then_clears(tmp_path: Path) -> None:
     _append_session(session, [_message_record("u", _user("quick"))])
     watcher._emit_cycle()
     assert pushes == [["quick"], []]
+
+
+def _assistant(text: str) -> dict:
+    return {"role": "assistant", "model": "m", "content": [{"type": "text", "text": text}]}
+
+
+def test_pre_rotation_session_files_are_recovered_from_disk(tmp_path: Path) -> None:
+    """Cross-rotation history: files a ``/new`` left behind are registered chronologically
+    ahead of the live file, so a rebuilt watcher (backend restart, eviction) recovers the
+    whole timeline instead of only the post-rotation slice."""
+    sessions = tmp_path / "plugin" / "pi_coding" / "sessions" / "cwd"
+    old_a = sessions / "20260101_aaa.jsonl"
+    old_b = sessions / "20260102_bbb.jsonl"
+    live = sessions / "20260103_ccc.jsonl"
+    _write_session(old_a, [_message_record("a1", _user("first era"))])
+    _write_session(old_b, [_message_record("b1", _user("second era"))])
+    _write_session(live, [_message_record("c1", _user("current era"))])
+    # Distinct mtimes, oldest first, so the chronological order is unambiguous.
+    for index, path in enumerate((old_a, old_b, live)):
+        os.utime(path, (1_700_000_000 + index * 1000, 1_700_000_000 + index * 1000))
+    _point_marker(tmp_path, live)
+
+    watcher = _build(tmp_path)
+    contents = [e["content"] for e in watcher.get_all_events()]
+    assert contents == ["first era", "second era", "current era"]
+
+    # The live file keeps tailing after the static backfill.
+    _append_session(live, [_message_record("c2", _user("still going"))])
+    contents = [e["content"] for e in watcher.get_all_events()]
+    assert contents == ["first era", "second era", "current era", "still going"]
+
+
+def test_get_event_detail_serves_full_input_output_and_thinking(tmp_path: Path) -> None:
+    session = tmp_path / "plugin" / "pi_coding" / "sessions" / "cwd" / "s.jsonl"
+    big_command = "echo " + "x" * 4000
+    _write_session(
+        session,
+        [
+            _message_record(
+                "a1",
+                {
+                    "role": "assistant",
+                    "model": "m",
+                    "content": [
+                        {"type": "thinking", "thinking": "let me think"},
+                        {"type": "toolCall", "id": "t1", "name": "bash", "arguments": {"command": big_command}},
+                    ],
+                },
+            ),
+            _message_record(
+                "r1",
+                {
+                    "role": "toolResult",
+                    "toolCallId": "t1",
+                    "toolName": "bash",
+                    "content": [{"type": "text", "text": "y" * 6000}],
+                    "isError": False,
+                },
+            ),
+        ],
+    )
+    _point_marker(tmp_path, session)
+    watcher = _build(tmp_path)
+    events = watcher.get_all_events()
+    assistant = next(e for e in events if e["type"] == "assistant_message")
+    result = next(e for e in events if e["type"] == "tool_result")
+    assert assistant["has_thinking"] is True
+    assert result["output_chars"] == 6000
+
+    detail = watcher.get_event_detail(assistant["event_id"])
+    assert detail is not None
+    assert big_command in detail["inputs_by_tool_call_id"]["t1"]
+    assert detail["thinking"] == "let me think"
+    detail = watcher.get_event_detail(result["event_id"])
+    assert detail is not None
+    assert detail["output"] == "y" * 6000

@@ -166,7 +166,7 @@ def test_prevent_num_prefix() -> None:
 
 
 def test_prevent_trailing_comments() -> None:
-    rc.check_trailing_comments(_DIR, snapshot(4))
+    rc.check_trailing_comments(_DIR, snapshot(3))
 
 
 def test_prevent_init_docstrings() -> None:
@@ -175,7 +175,7 @@ def test_prevent_init_docstrings() -> None:
 
 @pytest.mark.timeout(10)
 def test_prevent_args_in_docstrings() -> None:
-    rc.check_args_in_docstrings(_DIR, snapshot(2))
+    rc.check_args_in_docstrings(_DIR, snapshot(1))
 
 
 @pytest.mark.timeout(10)
@@ -268,7 +268,7 @@ def test_prevent_direct_subprocess() -> None:
 
 
 def test_prevent_if_elif_without_else() -> None:
-    rc.check_if_elif_without_else(_DIR, snapshot(6))
+    rc.check_if_elif_without_else(_DIR, snapshot(5))
 
 
 def test_prevent_inline_functions() -> None:
