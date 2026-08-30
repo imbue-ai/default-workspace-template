@@ -1484,3 +1484,24 @@ def test_a_different_agent_taking_the_browser_does_kill_the_old_token(monkeypatc
         assert await browser._token_may_drive(a_token) is False
 
     asyncio.run(go())
+
+
+def test_launch_args_declare_english_explicitly() -> None:
+    # The container has no LANG/LC_ALL, so without these Chrome's language is whatever the
+    # base image happens to imply. `--accept-lang` sets the header outright, which is what
+    # makes it independent of the container locale.
+    args = chrome_args.launch_args(user_data_dir="/tmp/lang-check")
+    assert "--lang=en-US" in args
+    assert "--accept-lang=en-US,en" in args
+
+
+def test_a_new_browser_lands_on_a_blank_page() -> None:
+    # It used to land on google.com, so the first thing anyone saw on a new browser was
+    # Google's consent interstitial -- in French, because Google decides both the language
+    # and the "this looks like the EU" question from IP geolocation, and our egress is an
+    # OVH range registered in Roubaix. `?hl=en` would only have translated that wall; the
+    # interstitial appears because of WHERE Google thinks we are, which a language
+    # parameter does not change. A blank page has nothing to geolocate.
+    assert bsession._HOME_URL == "about:blank"
+    # ...and it must not be persisted as a restorable tab, or every restart would reopen it.
+    assert bsession._is_restorable_url(bsession._HOME_URL) is False
