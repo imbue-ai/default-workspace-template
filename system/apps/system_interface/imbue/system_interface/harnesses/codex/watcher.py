@@ -1,43 +1,32 @@
 """Tail a codex agent's live rollout and emit UI events.
 
-The codex analogue of :class:`claude_session_watcher.ClaudeSessionWatcher`. It tails
-codex's OWN on-disk rollout in real time -- the same file codex writes as it works --
-parses each line to the UI event schema via
-:func:`codex_session_parser.parse_lines`, dedups by ``event_id``, and
-fans new events out through ``on_events`` (the same callback contract
-``ClaudeSessionWatcher`` uses, so :mod:`app_context`'s broadcast/SSE plumbing is
-unchanged). It reads the live file -- not mngr_codex's stream_transcript.sh mirror --
-because the mirror lags codex by up to its 1s poll, long enough for the optimistic
-"sending" bubble to visibly flip to "queued" before it reconciles. Reading the live
-file directly is how the claude watcher already works.
+Built on the shared :class:`~imbue.system_interface.harnesses.transcript_store` scaffolding
+with a single lane: codex is one logical session to the UI, and the accumulated timeline
+survives rollout rotation (a fresh file per session, and again on resume) because codex
+re-serialises history into the new rollout with the same stable ids -- the store dedups the
+copies and refreshes each event's source byte range to the newest serialisation, which is
+exactly what the on-demand payload reads want.
 
-Which rollout is live rotates (a fresh file per session, and again on resume), so --
-like claude following its ``claude_session_id_history`` -- we follow the active file
-via a marker: mngr_codex writes its absolute path to
-``<agent_state_dir>/codex_transcript_path`` every turn. Each cycle we re-read that
-marker; when it points somewhere new we switch files (from the new file's start),
-keeping the global line counter, tool-name map, and accumulated events/dedup so a
-resume's re-serialised history (same codex ``id``s) dedups against what we already
-emitted. The watchdog is a recursive observer on the stable
-``<agent_state_dir>/plugin/codex/home/sessions`` dir (all rollouts live under it), so
-appends -- to whichever rollout is live -- wake the loop immediately, with the 1s poll
-as a safety net.
+We tail codex's LIVE rollout directly (the same real-time file codex writes), not the
+stream_transcript.sh mirror -- the mirror lags codex by up to its 1s poll, long enough for
+the "sending" bubble to visibly flip to "queued" before it reconciles. Which file is live
+rotates, so we follow the ``codex_transcript_path`` marker (written by codex's
+``UserPromptSubmit`` hook), falling back to the newest ``rollout-*.jsonl`` for web/CLI-only
+agents whose hook never fires.
 
-Simpler than the claude watcher in the parse layer: no two-tier cache (the parser
-reads incrementally in order and never reparses a single line, so a plain in-memory
-list + stable event ids suffice), and (this first cut) no subagent-session tracking.
-It exposes the same read/pagination API the server calls; ``session_id`` on those
-methods is inert (codex is one logical session to the UI) and
-:meth:`get_subagent_metadata` always returns ``None``.
+Codex-specific pieces kept here: the effective per-turn model read from ``turn_context``
+lines and reflected into the model-bar state file, live suppression of ``user_message``
+events (the subscribed ledger owns the live user-turn handoff -- the A3b chip-out-then-turn
+ordering -- so the file reader must not broadcast a competing copy; the events stay in the
+store for the read paths), and synthetic "Interrupted." results for tool calls a user
+interrupt left open (codex never persists one, so the card would spin forever).
 """
 
 from __future__ import annotations
 
 import json
-import threading
 from pathlib import Path
 from typing import Any
-from typing import Callable
 
 from loguru import logger as _loguru_logger
 
@@ -50,36 +39,27 @@ from imbue.system_interface.harnesses.codex.session_parser import parse_lines
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.model import model_state_path
-from imbue.system_interface.harnesses.path_watch import PathWatcher
-from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
+from imbue.system_interface.harnesses.transcript_store import StoreBackedWatcher
+from imbue.system_interface.harnesses.transcript_store import iter_line_spans
+from imbue.system_interface.harnesses.transcript_store import split_at_last_complete_line
 
 logger = _loguru_logger
 
-# We tail codex's LIVE rollout directly (the same real-time file codex writes),
-# not the stream_transcript.sh mirror -- the mirror lags codex by up to its 1s poll,
-# long enough for the "sending" bubble to visibly flip to "queued" before it
-# reconciles. Reading the live file is the codex analogue of how the claude watcher
-# reads claude's own on-disk transcript directly.
-#
-# Which file is live rotates (a new rollout per session, and again on resume), so
-# like claude (claude_session_id_history), we follow it via a marker: mngr_codex
-# writes the active rollout's absolute path to <agent_state_dir>/codex_transcript_path
-# on every turn. All rollouts live under <agent_state_dir>/plugin/codex/home/sessions,
-# which we watchdog recursively (stable path, catches every rollout's appends without
-# re-scheduling on rotation). Constants kept local (not imported from the plugin),
-# mirroring claude_session_parser's reimplement-don't-import stance.
 _MARKER_RELATIVE = Path("codex_transcript_path")
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
+
+# The store's single lane: codex's whole timeline, across rollout rotations.
+_LANE = "main"
 
 
 def _is_live_suppressed(event: dict[str, Any]) -> bool:
     """Whether a parsed event is suppressed from the LIVE broadcast (kept in the store).
 
-    Only ``user_message`` events: the subscribed ledger owns the live user-turn and emits it in the
-    A3b ordered handoff (chip out, then turn), so the file reader must not broadcast a competing
-    copy. Everything else (agent output, tool calls, turn markers) the file reader still owns live.
-    The event stays in ``self._events``, so the read paths (page-load hydration, backfill) serve it.
+    Only ``user_message`` events: the subscribed ledger owns the live user-turn and emits it
+    in the A3b ordered handoff (chip out, then turn), so the file reader must not broadcast
+    a competing copy. The event stays in the store, so the read paths (page-load hydration,
+    backfill) serve it.
     """
     return event.get("type") == "user_message"
 
@@ -97,12 +77,11 @@ def read_marker_rollout_path(marker_path: Path) -> Path | None:
 def newest_rollout_under(sessions_dir: Path) -> Path | None:
     """The most-recently-modified ``rollout-*.jsonl`` under ``sessions_dir``, or None if none.
 
-    The marker file (``codex_transcript_path``) is written by codex's ``UserPromptSubmit`` hook,
-    which the app-server does NOT fire on a programmatic (web/CLI) ``turn/start`` -- only on a
-    turn typed into the ``--remote`` TUI. So a web-only codex agent never gets a marker and its
-    transcript would render empty. This is the marker-free fallback: with one thread per daemon
-    the live rollout is simply the newest rollout file (codex appends to it as the turn runs, so
-    it always carries the freshest mtime). A missing/empty sessions dir yields None.
+    The marker file (``codex_transcript_path``) is written by codex's ``UserPromptSubmit``
+    hook, which the app-server does NOT fire on a programmatic (web/CLI) ``turn/start`` --
+    only on a turn typed into the ``--remote`` TUI. So a web-only codex agent never gets a
+    marker and its transcript would render empty. This is the marker-free fallback: with one
+    thread per daemon the live rollout is simply the newest rollout file.
     """
     try:
         rollouts = list(sessions_dir.rglob("rollout-*.jsonl"))
@@ -114,13 +93,9 @@ def newest_rollout_under(sessions_dir: Path) -> Path | None:
 
 
 def resolve_active_rollout_path(agent_state_dir: Path) -> Path | None:
-    """The live rollout for a codex agent: the hook-written marker if present, else the newest
-    rollout on disk. Shared by the watcher and the model resolver so the resolution lives in one
-    place (they keep separate read cursors over the file itself, by design).
-
-    Preferring the marker keeps the deterministic path for TUI-driven turns (the hook records the
-    exact active rollout); falling back to the newest rollout covers web/CLI-only agents whose
-    ``UserPromptSubmit`` hook never fires (see :func:`newest_rollout_under`)."""
+    """The live rollout for a codex agent: the hook-written marker if present, else the
+    newest rollout on disk. Shared by the watcher and the model resolver so the resolution
+    lives in one place (they keep separate read cursors over the file itself, by design)."""
     marker_path = read_marker_rollout_path(agent_state_dir / _MARKER_RELATIVE)
     if marker_path is not None:
         return marker_path
@@ -133,44 +108,8 @@ def codex_sessions_dir(agent_state_dir: Path) -> Path:
     return agent_state_dir / _SESSIONS_RELATIVE
 
 
-class CodexSessionWatcher(AgentSessionWatcher):
+class CodexSessionWatcher(StoreBackedWatcher):
     """Watches a codex agent's raw rollout file and emits parsed UI events."""
-
-    # Instance attributes declared at class level so a `build()` classmethod (no
-    # __init__) can assign them while the type checker still resolves every access.
-    _agent_id: str
-    _marker_path: Path
-    _sessions_dir: Path
-    _on_events: Callable[[str, list[dict[str, Any]]], None]
-    _lock: threading.Lock
-    _events: list[dict[str, Any]]
-    _event_index: dict[str, int]
-    # Already-emitted events that a later rollout line superseded (same id, new
-    # content), keyed by id so repeated supersessions collapse to the latest. Drained
-    # by _emit_unsent, which re-broadcasts them so the client upgrades the held copy in
-    # place. A supersession of a not-yet-emitted event needs no entry -- the normal tail
-    # broadcast already carries its latest content.
-    _superseded_pending: dict[str, dict[str, Any]]
-    _current_path: Path | None
-    _byte_offset: int
-    _emitted_count: int
-    # A trailing partial line carried across reads as RAW BYTES (not str): a multi-byte
-    # UTF-8 character split across a read boundary must be completed before decoding, or
-    # decoding the fragment corrupts/drops the character.
-    _partial: bytes
-    _line_index: int
-    _tool_name_by_call_id: dict[str, str]
-    # The EFFECTIVE per-turn model/effort, updated from each rollout ``turn_context`` line (§4b):
-    # the model the turn actually RAN on. Threaded through ``parse_lines`` to stamp assistant events
-    # and reflected into the model-bar state file (:meth:`_reflect_effective_model`) so a framework
-    # fallback shows in the bar rather than the selected model lying.
-    _turn_state: dict[str, Any]
-    # The agent's uniform ``model_state.json`` -- where the effective model is reflected.
-    _model_state_path: Path
-    # The shared watch loop: a recursive watchdog on the sessions dir plus the poll
-    # safety net, invoking _emit_unsent once at start and on every wake. Replaces the
-    # bespoke thread/observer/poll block this watcher used to hand-roll.
-    _path_watcher: PathWatcher | None
 
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "CodexSessionWatcher":
@@ -178,222 +117,116 @@ class CodexSessionWatcher(AgentSessionWatcher):
         under the per-agent CODEX_HOME there, so ``claude_config_dir`` is never read."""
         agent_state_dir = agent_info.agent_state_dir
         self = cls.__new__(cls)
-        self._agent_id = agent_info.id
-        # Marker file holding the active rollout's absolute path (rewritten each turn,
-        # so it follows rotation), and the sessions dir we watchdog.
+        self._init_store_watcher(agent_info.id, on_events)
         self._marker_path = agent_state_dir / _MARKER_RELATIVE
         self._sessions_dir = codex_sessions_dir(agent_state_dir)
-        self._on_events = on_events
-
-        # Guards the in-memory transcript mirror and the tail cursor. Held across
-        # the (cheap, incremental) file read + adapt, but never across the
-        # ``on_events`` fan-out callback -- the same discipline ClaudeSessionWatcher
-        # follows.
-        self._lock = threading.Lock()
-        # Adapted UI events, in append (chronological) order.
-        self._events = []
-        # event_id -> index into _events, for O(1) offset lookup + dedup/supersede.
-        self._event_index = {}
-        # Already-emitted events a later line superseded, awaiting re-broadcast.
-        self._superseded_pending = {}
-        # The rollout file currently being tailed (resolved from the marker); None
-        # until the first turn writes the marker. Rotation = marker points elsewhere.
-        self._current_path = None
-        # Bytes of _current_path already consumed; reset only on rotation / re-read.
-        # This is a READ cursor: reads advance it too (see ``_refresh``), so it says
-        # nothing about what subscribers have seen.
+        # The rollout currently tailed (rotation = the marker points elsewhere) and the
+        # bytes of it consumed through the last complete line.
+        self._current_path: Path | None = None
         self._byte_offset = 0
-        # How many of _events have been broadcast via ``on_events``. Separate from the
-        # read cursor precisely so a read may advance the latter without the background
-        # thread then skipping those events -- ClaudeSessionWatcher keeps the same split,
-        # which is what lets its read paths refresh from disk on every call.
-        self._emitted_count = 0
-        # A trailing partial line (no newline yet) carried to the next read, as bytes.
-        self._partial = b""
-        # GLOBAL monotonic line counter for synthetic event ids (event_msg user_message
+        # GLOBAL monotonic line counter for synthetic event ids (an event_msg user_message
         # has no codex id). Never reset -- keeps ids unique ACROSS rollout files so a
-        # resume's line 5 can't collide with the prior file's line 5. (id-based events
-        # use codex's own msg id / call_id, so they dedup re-serialised copies
-        # regardless.)
+        # resume's line 5 cannot collide with the prior file's line 5.
         self._line_index = 0
-        # call_id -> tool_name, so a function_call_output can recover its tool name
-        # from the earlier function_call. Persists across files (a resume re-serialises
-        # the calls, but keeping the map is harmless and covers output-only cases).
-        self._tool_name_by_call_id = {}
-        # The effective per-turn model/effort, accumulated from turn_context lines (§4b).
-        self._turn_state = {}
-        # Where the effective model is reflected for the bar (same file the shared reader parses).
+        # call_id -> tool_name, so a function_call_output can recover its tool name from
+        # the earlier function_call. Persists across files (a resume re-serialises them).
+        self._tool_name_by_call_id: dict[str, str] = {}
+        # The EFFECTIVE per-turn model/effort, updated from each rollout ``turn_context``
+        # line: the model the turn actually RAN on. Reflected into the model-bar state file
+        # so a framework fallback shows in the bar rather than the selected model lying.
+        self._turn_state: dict[str, Any] = {}
         self._model_state_path = model_state_path(agent_state_dir, CODEX_STATE_RELATIVE_PATH)
-
-        self._path_watcher = None
         return self
 
-    def start(self) -> None:
-        """Start tailing the transcript in a background thread.
+    # -- base hooks -----------------------------------------------------------------------
 
-        The watch loop is the shared :class:`PathWatcher` on the stable sessions dir
-        (watched recursively, so appends to whichever rollout is live wake it without
-        re-scheduling on rotation). It calls ``_emit_unsent`` once at start -- to
-        broadcast whatever already exists, since the agent may have run before the UI
-        connected -- and again on every filesystem wake or poll timeout.
+    def _watch_paths(self) -> tuple[Path, ...]:
+        # CODEX_HOME (the parent of ``sessions/``), recursively, so an append to whichever
+        # rollout is live wakes the loop immediately, with the poll as the safety net.
+        return (self._sessions_dir.parent,)
 
-        Idempotent: a second call would otherwise strand the first watcher's thread.
-        """
-        if self._path_watcher is not None:
+    def _filter_broadcast(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [event for event in events if not _is_live_suppressed(event)]
+
+    def _refresh_locked(self) -> None:
+        """Bring the store up to date with the live rollout, following rotation."""
+        target = self._resolve_active_rollout()
+        if target is None:
             return
-        # Watch CODEX_HOME (the parent of ``sessions/``) recursively so an append to whichever
-        # rollout is live wakes the loop immediately, with the poll as the safety net. (The queue
-        # is owned by the live ledger now, not tailed here, so there is no sidecar to watch.)
-        self._path_watcher = PathWatcher.build((self._sessions_dir.parent,), self._emit_unsent)
-        self._path_watcher.start()
+        if target != self._current_path:
+            # First resolution or rotation (resume -> new rollout). Tail the new file from
+            # its start. The line counter, tool-name map, and store all persist, so a
+            # resume's re-serialised history (same codex ids) dedups against what we
+            # already hold -- with each event's source range refreshed to the live file.
+            self._current_path = target
+            self._byte_offset = 0
 
-    def stop(self) -> None:
-        """Stop tailing."""
-        if self._path_watcher is not None:
-            self._path_watcher.stop()
+        try:
+            size = target.stat().st_size
+        except OSError:
+            # The marker points at a not-yet-created file; retry next cycle.
+            return
+        # Rollouts are append-only; a shrink is unexpected. Re-read from the start -- the
+        # store's id-based dedup drops the re-read copies.
+        if size < self._byte_offset:
+            self._byte_offset = 0
+        if size == self._byte_offset:
+            return
 
-    def _refresh(self) -> None:
-        """Bring the in-memory transcript up to date with the rollout on disk.
+        try:
+            with target.open("rb") as f:
+                f.seek(self._byte_offset)
+                raw = f.read()
+        except OSError:
+            logger.debug("codex watcher: failed to read {}", target)
+            return
 
-        Called by the background loop AND by every read method, mirroring the
-        ``_discover_sessions()`` call at the top of ClaudeSessionWatcher's read paths:
-        a read must never depend on the loop having run, or the first request after a
-        restart answers "no history" for a transcript that is sitting on disk -- and the
-        client caches that answer. Incremental, so a caught-up refresh reads no bytes.
-        """
-        self._consume_new_lines()
+        complete, _fragment = split_at_last_complete_line(raw)
+        if not complete:
+            return
+        for byte_offset, byte_len, line_bytes in iter_line_spans(complete, self._byte_offset):
+            # Every physical line consumes an index (even blanks/skips) so a given line
+            # always maps to the same synthetic id across the run.
+            idx = self._line_index
+            self._line_index += 1
+            stripped = line_bytes.decode("utf-8", errors="replace").strip()
+            if not stripped:
+                continue
+            for event in self._adapt_line(stripped, idx):
+                self._store.ingest(_LANE, event, (target, byte_offset, byte_len))
+                # A user interrupt (turn_aborted) leaves any in-flight tool call with no
+                # result -- codex never persists one -- so its card would spin forever.
+                # Synthesise a terminal "Interrupted." result for every open call, keyed on
+                # the id a real result would use so a real one supersedes it.
+                if event.get("type") == SPECIAL_EVENT_TYPE and event.get("kind") == SpecialEventKind.TURN_ABORTED.value:
+                    for synthetic in self._interrupt_results(event.get("timestamp", "")):
+                        self._store.ingest(_LANE, synthetic)
+        self._byte_offset += len(complete)
 
-    def _emit_unsent(self) -> None:
-        """Refresh, then broadcast every event not yet sent to subscribers.
+        # Reflect the effective per-turn model into the model-bar state file, so a
+        # framework fallback (turn_context.model differing from the selected setting) shows
+        # in the bar. Runs on every refresh (reads included), gated on divergence, so the
+        # write is rare and cheap enough to do under the lock -- no callback runs here.
+        self._reflect_effective_model(self._turn_state.get("model"), self._turn_state.get("effort"))
 
-        Keyed off ``_emitted_count`` rather than off what this read happened to parse,
-        so events a *reader* pulled in are still delivered exactly once.
+    # -- codex plumbing -------------------------------------------------------------------
 
-        LIVE user-turns are SUPPRESSED here (Fix 1): the subscribed ledger owns the live user-turn
-        (it removes the queued chip, then emits the turn -- the A3b ordered handoff), so the file
-        reader must not emit a competing, unordered copy. The user-turns stay in ``self._events``,
-        so they are still served by the read paths -- which is exactly the hydration a page load /
-        reload rebuilds the whole committed transcript from. ``_emitted_count`` still advances past
-        them, so they are counted-as-sent and never leak into a later live broadcast.
-        """
-        self._refresh()
-        with self._lock:
-            # New tail events (delivered once), plus any already-emitted events a line
-            # superseded since the last emit -- re-broadcast so the client upgrades its
-            # held copy in place (order does not matter: the client keys the upgrade on
-            # event_id, not position).
-            pending = self._superseded_pending
-            self._superseded_pending = {}
-            to_send = [
-                event
-                for event in (list(pending.values()) + self._events[self._emitted_count :])
-                if not _is_live_suppressed(event)
-            ]
-            self._emitted_count = len(self._events)
-        if to_send:
-            self._on_events(self._agent_id, to_send)
-
-    def _read_active_rollout(self) -> Path | None:
-        """The absolute path of the live rollout: the hook-written marker, else the newest rollout.
-
-        The marker is only written by codex's ``UserPromptSubmit`` hook, which never fires on a
-        programmatic (web/CLI) turn, so a web-only agent has no marker; the newest-rollout fallback
-        keeps its transcript live regardless (see :func:`newest_rollout_under`)."""
+    def _resolve_active_rollout(self) -> Path | None:
         marker = read_marker_rollout_path(self._marker_path)
         if marker is not None:
             return marker
         return newest_rollout_under(self._sessions_dir)
 
-    def _consume_new_lines(self) -> list[dict[str, Any]]:
-        """Read bytes appended to the live rollout since the last cursor, following
-        rotation (a new rollout on resume) via the marker."""
-        target = self._read_active_rollout()
-        if target is None:
-            return []
-
-        new_events: list[dict[str, Any]] = []
-        with self._lock:
-            if target != self._current_path:
-                # First resolution or rotation (resume -> new rollout). Tail the new
-                # file from its start. Keep _line_index (global -> ids stay unique
-                # across files), _tool_name_by_call_id, and _events/_event_index so a
-                # resume's re-serialised history (same codex msg ids) dedups against
-                # what we already emitted and the accumulated transcript survives.
-                self._current_path = target
-                self._byte_offset = 0
-                self._partial = b""
-
-            try:
-                size = target.stat().st_size
-            except OSError:
-                # marker points at a not-yet-created file; retry next cycle
-                return []
-
-            # Codex rollouts are append-only; a shrink is unexpected. Re-read from the
-            # start -- id-based dedup drops the re-emitted assistant/tool events.
-            if size < self._byte_offset:
-                self._byte_offset = 0
-                self._partial = b""
-            if size == self._byte_offset and not self._partial:
-                return []
-
-            try:
-                with target.open("rb") as f:
-                    f.seek(self._byte_offset)
-                    raw = f.read()
-            except OSError:
-                logger.debug("codex watcher: failed to read {}", target)
-                return []
-            self._byte_offset += len(raw)
-
-            # Split on the newline BYTE and carry the trailing partial forward as bytes,
-            # then decode each COMPLETE line: a `\n` never falls inside a UTF-8 character,
-            # so a whole line always decodes cleanly, and a character split across the read
-            # boundary is completed (as bytes) before it is ever decoded.
-            byte_lines = (self._partial + raw).split(b"\n")
-            self._partial = byte_lines.pop()
-
-            for byte_line in byte_lines:
-                # Every physical line consumes an index (even blanks/skips) so a
-                # given line always maps to the same id across the run.
-                idx = self._line_index
-                self._line_index += 1
-                stripped = byte_line.decode("utf-8", errors="replace").strip()
-                if not stripped:
-                    continue
-                for event in self._adapt_line(stripped, idx):
-                    self._ingest_event(event, new_events)
-                    # A user interrupt (turn_aborted) leaves any in-flight tool call with
-                    # no result -- codex never persists one -- so its card would spin
-                    # forever. Synthesise a terminal "Interrupted." result for every open
-                    # call, keyed on the id a real result would use so a real one (if codex
-                    # ever writes it) supersedes this via the same path.
-                    if event.get("type") == SPECIAL_EVENT_TYPE and event.get("kind") == SpecialEventKind.TURN_ABORTED:
-                        for synthetic in self._interrupt_results(event.get("timestamp", "")):
-                            self._ingest_event(synthetic, new_events)
-
-            # Snapshot the effective model UNDER the lock (parse_lines mutated it above), so the
-            # file reflection below runs off a consistent read even if a read-path call races.
-            effective_model = self._turn_state.get("model")
-            effective_effort = self._turn_state.get("effort")
-
-        # Reflect the effective per-turn model into the model-bar state file OUTSIDE the lock (§4b):
-        # a framework fallback (turn_context.model differing from the selected setting) shows in the
-        # bar. A no-op when the file already reflects it (selected == effective, the common case).
-        self._reflect_effective_model(effective_model, effective_effort)
-        return new_events
-
     def _reflect_effective_model(self, model: Any, effort: Any) -> None:
-        """Write the effective per-turn model into ``model_state.json`` when it DIVERGES from
-        what the file already holds (§4b).
+        """Write the effective per-turn model into ``model_state.json`` when it DIVERGES
+        from what the file already holds.
 
-        The file is the harness-neutral model-bar read path; the ledger writes the SELECTED settings
-        to it on ``thread/settings/updated``. This writer reflects the EFFECTIVE model the rollout
-        records per turn -- so a per-turn framework fallback (over-quota / tier downgrade) shows in
-        the bar instead of the selected model lying. It writes only on divergence (model or effort
-        differs from the current file), preserving the file's ``fast`` bit -- ``turn_context`` carries
-        no service tier, so fast is owned by the ledger's selected-settings write. The subsequent
-        model-state watch fires the harness-neutral recompute, exactly as the ledger's write does.
+        The file is the harness-neutral model-bar read path; the ledger writes the SELECTED
+        settings to it on ``thread/settings/updated``. This writer reflects the EFFECTIVE
+        model the rollout records per turn -- so a per-turn framework fallback (over-quota /
+        tier downgrade) shows in the bar instead of the selected model lying. It writes only
+        on divergence, preserving the file's ``fast`` bit (``turn_context`` carries no
+        service tier, so fast is owned by the ledger's selected-settings write).
         """
         if not isinstance(model, str) or not model:
             return
@@ -401,45 +234,23 @@ class CodexSessionWatcher(AgentSessionWatcher):
         current = read_json_dict(self._model_state_path)
         if current.get("model") == model and current.get("effort") == effective_effort:
             return
-        # Preserve the ledger-owned fast bit (turn_context has no service tier of its own).
         write_codex_model_state(self._model_state_path, model, effective_effort, current.get("fast") is True)
-
-    def _ingest_event(self, event: dict[str, Any], new_events: list[dict[str, Any]]) -> None:
-        """Add one parsed event to the view: append a new id, supersede a changed one in
-        place (re-broadcasting an already-emitted change), drop an identical duplicate."""
-        event_id = event["event_id"]
-        existing_idx = self._event_index.get(event_id)
-        if existing_idx is not None:
-            # Supersession: codex re-serialises an event (same id) with updated content --
-            # replace the stored copy in place so the view holds the latest, not the stale
-            # first. An identical re-serialisation is a pure duplicate and is dropped. A
-            # re-broadcast lets the client upgrade its held copy; only an ALREADY-EMITTED
-            # supersession needs one (a not-yet-emitted event is carried latest by the tail).
-            if self._events[existing_idx] != event:
-                self._events[existing_idx] = event
-                new_events.append(event)
-                if existing_idx < self._emitted_count:
-                    self._superseded_pending[event_id] = event
-            return
-        self._event_index[event_id] = len(self._events)
-        self._events.append(event)
-        new_events.append(event)
 
     def _interrupt_results(self, timestamp: str) -> list[dict[str, Any]]:
         """Synthetic terminal tool_results for every tool call still open (no result) in
-        the accumulated view -- what an interrupt leaves behind. Each is keyed on the same
+        the store -- what an interrupt leaves behind. Each is keyed on the same
         ``codex-result-<call_id>`` id a real result would carry, so a real result written
         later supersedes it rather than duplicating."""
-        matched = {e.get("tool_call_id") for e in self._events if e.get("type") == "tool_result"}
+        events = self._store.all_events([_LANE])
+        matched = {e.get("tool_call_id") for e in events if e.get("type") == "tool_result"}
         results: list[dict[str, Any]] = []
-        for event in self._events:
+        for event in events:
             if event.get("type") != "assistant_message":
                 continue
             for tool_call in event.get("tool_calls") or ():
                 call_id = tool_call.get("tool_call_id")
                 if not call_id or call_id in matched:
                     continue
-                # Record it so a call appearing twice yields a single synthetic.
                 matched.add(call_id)
                 results.append(
                     {
@@ -461,87 +272,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
             record = json.loads(line)
         except json.JSONDecodeError as exc:
             # The rollout is codex-owned state, so a line we cannot parse is real
-            # corruption rather than a shape we should tolerate quietly: warn so it is
-            # visible, and skip the line so the rest of the transcript still renders.
+            # corruption rather than a shape to tolerate quietly: warn so it is visible,
+            # and skip the line so the rest of the transcript still renders.
             logger.warning("codex watcher: skipping malformed rollout line {}: {}", line_index, exc)
             return []
         if not isinstance(record, dict):
             return []
         return parse_lines(record, line_index, self._tool_name_by_call_id, self._turn_state)
-
-    # --- read API (mirrors AgentSessionWatcher) ----------------------------
-    #
-    # ``session_id`` is accepted for interface parity with AgentSessionWatcher but
-    # is inert: codex's common transcript is a single logical session with no
-    # subagent sessions to filter.
-
-    def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
-        """Return every parsed event in chronological order."""
-        self._refresh()
-        with self._lock:
-            return list(self._events)
-
-    def get_tail_events(self, limit: int, session_id: str | None = None) -> list[dict[str, Any]]:
-        """Return the most recent ``limit`` events (chronological order)."""
-        self._refresh()
-        if limit <= 0:
-            return []
-        with self._lock:
-            return list(self._events[-limit:])
-
-    def get_backfill_events(
-        self, before_event_id: str, limit: int = 50, session_id: str | None = None
-    ) -> list[dict[str, Any]]:
-        """Return up to ``limit`` events immediately before ``before_event_id``."""
-        self._refresh()
-        if limit <= 0:
-            return []
-        with self._lock:
-            idx = self._event_index.get(before_event_id)
-            if idx is None:
-                return []
-            start = max(0, idx - limit)
-            return list(self._events[start:idx])
-
-    def get_forward_events(
-        self, after_event_id: str, limit: int = 50, session_id: str | None = None
-    ) -> list[dict[str, Any]]:
-        """Return up to ``limit`` events immediately after ``after_event_id``."""
-        self._refresh()
-        if limit <= 0:
-            return []
-        with self._lock:
-            idx = self._event_index.get(after_event_id)
-            if idx is None:
-                return []
-            return list(self._events[idx + 1 : idx + 1 + limit])
-
-    def get_events_at_offset(self, offset: int, limit: int, session_id: str | None = None) -> list[dict[str, Any]]:
-        """Return up to ``limit`` events starting at global index ``offset`` (clamped)."""
-        self._refresh()
-        if limit <= 0:
-            return []
-        start = max(0, offset)
-        with self._lock:
-            return list(self._events[start : start + limit])
-
-    def get_event_offset(self, event_id: str, session_id: str | None = None) -> int:
-        """Global index of ``event_id``, or -1 if unknown."""
-        self._refresh()
-        with self._lock:
-            idx = self._event_index.get(event_id)
-            return idx if idx is not None else -1
-
-    def get_total_event_count(self, session_id: str | None = None) -> int:
-        """Total number of events in the transcript."""
-        self._refresh()
-        with self._lock:
-            return len(self._events)
-
-    def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
-        """codex has no subagent linkage in the common transcript -- always None."""
-        return None
-
-    def is_main_session_event(self, event: dict[str, Any]) -> bool:
-        """Every codex event belongs to the single main session."""
-        return True
