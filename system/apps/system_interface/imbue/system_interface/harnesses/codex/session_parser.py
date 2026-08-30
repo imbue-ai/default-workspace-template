@@ -465,7 +465,7 @@ def parse_lines(
         # Turn-lifecycle markers (task == turn). Codex writes these to the rollout in
         # real time -- ``task_started`` the instant the turn begins, ``task_complete``
         # when it ends -- so the activity layer can bracket "the agent is working"
-        # (see ``codex_activity_state.turn_open``). Verified against real
+        # (the codex tracker's folded turn latch). Verified against real
         # rollouts: ``task_complete`` lands just after the final assistant message, so
         # the dot clears only once the text is already on screen.
         if payload_type in ("task_started", "task_complete"):
