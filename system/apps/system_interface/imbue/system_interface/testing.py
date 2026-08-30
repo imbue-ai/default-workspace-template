@@ -236,8 +236,8 @@ def build_test_state(
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
     # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
-    manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
-    return SystemInterfaceState(
+    manager.set_transcript_broadcaster(event_queues.broadcast_batch)
+    state = SystemInterfaceState(
         # Never the production probe: it shells out to whatever claude/codex/agy/pi this
         # machine happens to have, over the network, from any test that reaches a sign-in
         # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
@@ -256,6 +256,9 @@ def build_test_state(
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
     )
+    # Match production: eviction drops a destroyed/stopped agent's watcher.
+    manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
+    return state
 
 
 class FakeFinishedProcess:

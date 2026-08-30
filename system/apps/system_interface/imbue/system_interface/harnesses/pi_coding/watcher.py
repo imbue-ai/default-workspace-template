@@ -69,6 +69,14 @@ def read_marker_session_path(marker_path: Path) -> Path | None:
     return Path(raw) if raw else None
 
 
+def _mtime_or_zero(path: Path) -> float:
+    """A file's mtime, or 0.0 when it cannot be statted (sorts unreadable files first)."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def _is_current_generation_drain(event_timestamp: str | None, process_started_at: float | None) -> bool:
     """Whether a drained ``user_message`` belongs to the current pi process generation.
 
@@ -87,6 +95,22 @@ def _is_current_generation_drain(event_timestamp: str | None, process_started_at
 
 class PiSessionWatcher(StoreBackedWatcher):
     """Watches a pi agent's native session files (+ inbox) and emits parsed UI events."""
+
+    # Instance attributes declared at class level so a `build()` classmethod (no
+    # __init__) can assign them while the type checker still resolves every access.
+    _marker_path: Path
+    _process_started_marker_path: Path
+    _sessions_dir: Path
+    _inbox_path: Path
+    _current_path: Path | None
+    _byte_offset: int
+    _consumed_static_paths: set[Path]
+    _is_static_scan_done: bool
+    _queue_tracker: PiQueueTracker
+    _inbox_offset: int
+    _inbox_line_count: int
+    _queue_snapshot_callback: QueueSnapshotCallback | None
+    _last_queue_snapshot: list[dict[str, str]]
 
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "PiSessionWatcher":
@@ -149,14 +173,7 @@ class PiSessionWatcher(StoreBackedWatcher):
             except OSError:
                 candidates = []
             static_paths = [path for path in candidates if path != target and path not in self._consumed_static_paths]
-
-            def _mtime(path: Path) -> float:
-                try:
-                    return path.stat().st_mtime
-                except OSError:
-                    return 0.0
-
-            for path in sorted(static_paths, key=lambda p: (_mtime(p), p.name)):
+            for path in sorted(static_paths, key=lambda p: (_mtime_or_zero(p), p.name)):
                 self._consume_whole_file_locked(path, process_started_at)
                 self._consumed_static_paths.add(path)
             self._is_static_scan_done = True

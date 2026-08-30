@@ -133,29 +133,46 @@ class _Lane:
 
     __slots__ = ("lane_id", "events", "emitted_count")
 
-    def __init__(self, lane_id: str) -> None:
+    lane_id: str
+    events: list[dict[str, Any]]
+    emitted_count: int
+
+    @classmethod
+    def build(cls, lane_id: str) -> "_Lane":
+        self = cls.__new__(cls)
         self.lane_id = lane_id
-        self.events: list[dict[str, Any]] = []
+        self.events = []
         self.emitted_count = 0
+        return self
 
 
 class TranscriptStore:
     """One agent's fully-resident parsed transcript: ordered lanes + one id index."""
 
-    def __init__(self) -> None:
-        self._lane_by_id: dict[str, _Lane] = {}
-        self._lane_order: list[str] = []
-        # event_id -> (lane_id, index within lane). The single dedup/pagination index.
-        self._ref_by_event_id: dict[str, tuple[str, int]] = {}
-        # Already-emitted events superseded or enriched since the last emit, keyed by id so
-        # repeated changes collapse to one re-broadcast of the (mutated-in-place) dict.
-        self._rebroadcast_pending: dict[str, dict[str, Any]] = {}
-        # Payload byte ranges, kept beside (not on) the events so nothing needs stripping
-        # before events reach the wire. A supersession updates the range to the newest copy.
-        self._source_by_event_id: dict[str, EventSource] = {}
-        # A second range for harnesses whose readable thinking lives on a different source
-        # line than the event itself (codex reasoning items).
-        self._thinking_source_by_event_id: dict[str, EventSource] = {}
+    _lane_by_id: dict[str, _Lane]
+    _lane_order: list[str]
+    # event_id -> (lane_id, index within lane). The single dedup/pagination index.
+    _ref_by_event_id: dict[str, tuple[str, int]]
+    # Already-emitted events superseded or enriched since the last emit, keyed by id so
+    # repeated changes collapse to one re-broadcast of the (mutated-in-place) dict.
+    _rebroadcast_pending: dict[str, dict[str, Any]]
+    # Payload byte ranges, kept beside (not on) the events so nothing needs stripping
+    # before events reach the wire. A supersession updates the range to the newest copy.
+    _source_by_event_id: dict[str, EventSource]
+    # A second range for harnesses whose readable thinking lives on a different source
+    # line than the event itself (codex reasoning items).
+    _thinking_source_by_event_id: dict[str, EventSource]
+
+    @classmethod
+    def build(cls) -> "TranscriptStore":
+        self = cls.__new__(cls)
+        self._lane_by_id = {}
+        self._lane_order = []
+        self._ref_by_event_id = {}
+        self._rebroadcast_pending = {}
+        self._source_by_event_id = {}
+        self._thinking_source_by_event_id = {}
+        return self
 
     # -- lanes ----------------------------------------------------------------------------
 
@@ -163,7 +180,7 @@ class TranscriptStore:
         """Register ``lane_id`` if new, at ``insert_index`` in the lane order (default: end)."""
         if lane_id in self._lane_by_id:
             return
-        self._lane_by_id[lane_id] = _Lane(lane_id)
+        self._lane_by_id[lane_id] = _Lane.build(lane_id)
         if insert_index is None:
             self._lane_order.append(lane_id)
         else:
@@ -400,7 +417,7 @@ class StoreBackedWatcher(AgentSessionWatcher, ABC):
         self._agent_id = agent_id
         self._on_events = on_events
         self._lock = threading.Lock()
-        self._store = TranscriptStore()
+        self._store = TranscriptStore.build()
         self._path_watcher = None
 
     # -- per-harness hooks ----------------------------------------------------------------

@@ -111,6 +111,17 @@ def codex_sessions_dir(agent_state_dir: Path) -> Path:
 class CodexSessionWatcher(StoreBackedWatcher):
     """Watches a codex agent's raw rollout file and emits parsed UI events."""
 
+    # Instance attributes declared at class level so a `build()` classmethod (no
+    # __init__) can assign them while the type checker still resolves every access.
+    _marker_path: Path
+    _sessions_dir: Path
+    _current_path: Path | None
+    _byte_offset: int
+    _line_index: int
+    _tool_name_by_call_id: dict[str, str]
+    _turn_state: dict[str, Any]
+    _model_state_path: Path
+
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "CodexSessionWatcher":
         """Build from the agent record. Codex needs only the state dir: its rollout lives

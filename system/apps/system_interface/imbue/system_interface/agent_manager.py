@@ -592,6 +592,12 @@ class AgentManager:
     # UI. Set once at composition (``set_transcript_broadcaster``) because the manager is built
     # before the event-queue fan-out exists; ``None`` (tests) makes ledger user-turns a no-op.
     _transcript_broadcaster: Callable[[str, list[dict[str, Any]]], None] | None
+    # Evicts one agent's session watcher (releasing its resident transcript, thread, and
+    # filesystem watches). Set once at composition (``set_watcher_eviction_callback``) --
+    # the watcher registry lives on the app state, which the manager must not import; the
+    # manager only knows WHEN an agent is positively gone or stopped. ``None`` (tests) =
+    # no eviction.
+    _watcher_eviction_callback: Callable[[str], None] | None
 
     @classmethod
     def build(
@@ -651,6 +657,7 @@ class AgentManager:
         manager._auto_open_ledger = auto_open_ledger if auto_open_ledger is not None else AutoOpenLedger(path=None)
         manager._pending_auto_open_name_by_id = {}
         manager._transcript_broadcaster = None
+        manager._watcher_eviction_callback = None
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
         # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
@@ -919,6 +926,8 @@ class AgentManager:
         self._stop_app_watcher(agent_id)
         self._stop_activity_tracking(agent_id)
         self._stop_model_tracking(agent_id)
+        # The agent is positively gone, so its watcher's resident transcript goes with it.
+        self._evict_watcher(agent_id)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
@@ -1744,6 +1753,15 @@ class AgentManager:
             for agent_id, agent in details_by_id.items()
             if agent_id in before_details and before_details[agent_id].state != agent.state
         }
+        # Agents whose lifecycle TRANSITIONED into a positively-dead state this event --
+        # a stop, an OOM shed, an idle shutdown. The chat-memory contract says a stopped
+        # chat holds no resident transcript, so their watchers are evicted below.
+        newly_dead_ids = {
+            agent_id
+            for agent_id in state_changed_ids
+            if is_lifecycle_dead(details_by_id[agent_id].state.value)
+            and not is_lifecycle_dead(before_details[agent_id].state.value)
+        }
 
         new_agents: dict[str, AgentStateItem] = {}
         new_matches: dict[str, AgentMatch] = {}
@@ -1793,6 +1811,7 @@ class AgentManager:
             self._stop_app_watcher(agent_id)
             self._stop_activity_tracking(agent_id)
             self._stop_model_tracking(agent_id)
+            self._evict_watcher(agent_id)
             with self._lock:
                 self._pending_auto_open_name_by_id.pop(agent_id, None)
             self._auto_open_ledger.forget(agent_id)
@@ -1808,6 +1827,13 @@ class AgentManager:
             recompute_ids = [agent_id for agent_id in state_changed_ids if agent_id in self._activity_tracked_agents]
         for agent_id in recompute_ids:
             self._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+        # Drop the resident transcript of every chat that just stopped. Edge-triggered
+        # (transition into dead, never dead-as-a-level): a user viewing a stopped chat's
+        # history rebuilds the watcher on read, and a level-triggered evict would tear that
+        # rebuild down again on the next observe tick.
+        for agent_id in newly_dead_ids:
+            self._evict_watcher(agent_id)
 
         # Broadcast the updated agent list BEFORE any auto-open: the frontend's open
         # handler resolves ``chat:<name>`` against its known-agents list and drops the
@@ -2069,6 +2095,21 @@ class AgentManager:
         ledger emits each committed user-turn through :meth:`_broadcast_codex_user_turn`, which
         routes to this."""
         self._transcript_broadcaster = broadcaster
+
+    def set_watcher_eviction_callback(self, callback: Callable[[str], None]) -> None:
+        """Wire watcher eviction (the composition root calls this once).
+
+        Invoked when an agent is removed (destroyed) or its lifecycle TRANSITIONS into a
+        positively-dead state -- stop from the UI, ``mngr stop``, an OOM shed, an idle
+        shutdown. Edge-triggered on purpose: a level-triggered evict would tear down the
+        watcher a user is actively viewing on a stopped chat, right after every
+        rebuild-on-read."""
+        self._watcher_eviction_callback = callback
+
+    def _evict_watcher(self, agent_id: str) -> None:
+        callback = self._watcher_eviction_callback
+        if callback is not None:
+            callback(agent_id)
 
     def _broadcast_codex_user_turn(self, agent_id: str, event: dict[str, Any]) -> None:
         """Broadcast one ledger-owned committed user-turn to the agent's transcript stream.
