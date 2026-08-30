@@ -6,6 +6,8 @@ from typing import Final
 
 from loguru import logger as _loguru_logger
 
+logger = _loguru_logger
+
 # Per-connection queue depth. Transcript deltas are bursty but small; a healthy SSE
 # generator drains continuously, so a full queue means the consumer has stopped draining
 # entirely (a wedged socket write), not that it is momentarily behind.
@@ -94,7 +96,7 @@ class AgentEventQueues:
             event_queue.put_nowait(None)
         except queue.Full:
             pass
-        _loguru_logger.warning("Disconnected an SSE consumer for agent {}: its event queue overflowed", agent_id)
+        logger.warning("Disconnected an SSE consumer for agent {}: its event queue overflowed", agent_id)
 
     def shutdown(self) -> None:
         with self._lock:
