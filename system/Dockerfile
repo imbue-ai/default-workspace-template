@@ -4,64 +4,29 @@ FROM python:3.12-slim-trixie
 # it on PATH for every build layer and at runtime.
 ENV PATH="/root/.local/bin:$PATH"
 
-# Pin Claude Code; passed to setup_system.sh and recorded for the runtime version
-# check. Keep in sync with agent_types.claude.version in .mngr/settings.toml and
-# the default in system/scripts/setup_system.sh. Bump deliberately, not by accident.
-ARG CLAUDE_CODE_VERSION=2.1.227
-ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
-
-# Pin Codex CLI; passed to setup_system.sh. Keep in sync with the default in
-# system/scripts/setup_system.sh. Bump deliberately, not by accident.
-ARG CODEX_VERSION=0.147.0
-ENV CODEX_VERSION=${CODEX_VERSION}
-
-# Pin Node.js (installed from a nodejs.org release tarball, not apt -- pi needs
-# Node 22+). Pin the Pi CLI. All passed to setup_system.sh; keep in sync
-# with the defaults there. Bump deliberately, not by accident.
-ARG NODE_VERSION=22.23.2
-ENV NODE_VERSION=${NODE_VERSION}
-# Playwright's own CLI: the agent's entire browser-driving interface. The fleet
-# (agentic-browser-fleet) owns browsers; this drives them, over the gated CDP endpoint
-# the fleet prints. NOTE it is "@playwright/cli" -- the bare "playwright-cli" package on
-# npm is a deprecated stub.
-ARG PLAYWRIGHT_CLI_VERSION=0.1.18
-ENV PLAYWRIGHT_CLI_VERSION=${PLAYWRIGHT_CLI_VERSION}
-ARG PI_VERSION=0.83.0
-ENV PI_VERSION=${PI_VERSION}
-ARG OPENCODE_VERSION=1.18.19
-ENV OPENCODE_VERSION=${OPENCODE_VERSION}
-
-# Antigravity (agy) has no version pin here -- upstream publishes a release only
-# under an opaque build id that its "latest" manifest alone reveals, so the lock
-# (URL + per-arch sha512) lives inside system/scripts/agy_install-1.1.16.sh.
-# Bumping agy means adding a new agy_install-<version>.sh, not editing an ARG.
-
-# Pin the pi extension packages baked into the image at /opt/pi-extensions
-# (setup_system.sh); seed_home_skeleton.sh copies the tree into ~/.pi/agent at
-# first boot. Keep in sync with the pins in seed_home_skeleton.sh.
-ARG PI_SUBAGENTS_VERSION=0.45.0
-ENV PI_SUBAGENTS_VERSION=${PI_SUBAGENTS_VERSION}
-ARG PI_WEB_ACCESS_VERSION=0.19.0
-ENV PI_WEB_ACCESS_VERSION=${PI_WEB_ACCESS_VERSION}
+# Every toolchain version pin (Claude Code, Codex, Node, pi, opencode, ...) lives
+# in system/scripts/setup_system.sh and nowhere in this file. An `ARG`/`ENV`
+# pin here would persist into the image's process environment, where a live
+# re-run of setup_system.sh (the update apply) would read it over the merged
+# tree's default and silently reinstall the image's version.
 
 # ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
-# toolchain AND invokes install_secret_scanners.sh to bake the publish-
-# template scan gate's secret-scanner binaries (betterleaks + kingfisher),
-# so both docker-built images and Lima VMs get the scanners from the same
-# common script. Copied with its sibling _provision_guard.sh (which
-# setup_system.sh sources via `dirname "$0"`) and install_secret_scanners.sh
-# (which it invokes the same way) and nothing else, so this expensive, stable
-# layer caches against these scripts + pinned versions, not application source.
-# install_secret_scanners.sh is the single source of truth for the version
-# pins and per-arch sha256s; it stays installed at
-# /usr/local/bin/default-workspace-template-install-secret-scanners so it is runnable by hand
-# if a scanner ever goes missing (the scan gate's error names that command).
-# Caching tradeoff: folding the scanner install into this layer means a pin
-# bump in install_secret_scanners.sh now rebuilds the whole system-toolchain
-# layer (apt/node/uv + scanners) rather than a scanner-only layer -- accepted
-# so a single common script covers docker AND Lima.
+# toolchain AND invokes the sibling installers (secret scanners, agy,
+# owner-exec, dufs), so every provisioning path -- docker-built images, Lima
+# VMs, and the update apply's live re-run -- gets every global binary from one
+# common script; system/test_provisioner_single_entry.py holds it to that.
+# Copied with its sibling _provision_guard.sh (which setup_system.sh sources
+# via `dirname "$0"`) and those installers (which it invokes the same way) and
+# nothing else, so this expensive, stable layer caches against these scripts +
+# pinned versions, not application source. Each installer is the single source
+# of truth for its version pin and per-arch sha256s, and stays installed under
+# /usr/local/bin/default-workspace-template-install-* so it is runnable by hand
+# if a binary ever goes missing (the scan gate's error names its command).
+# Caching tradeoff: a pin bump in any installer rebuilds the whole
+# system-toolchain layer rather than an installer-only layer -- accepted so a
+# single common script covers every provider.
 # ============================================================================
 # Pin every apt operation (this build and all runtime installs) to the
 # committed archive snapshot timestamp. Runs before any apt usage so the
@@ -77,21 +42,9 @@ COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-se
 COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
 COPY system/scripts/agy_install-1.1.16.sh /usr/local/bin/default-workspace-template-install-agy
-RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy && default-workspace-template-setup-system
-
-# Install the pinned owner-exec static binary (the in-container "inner" exec
-# service; supervisord runs it via system/scripts/run_owner_exec.sh). Pin +
-# per-arch sha256 verification live in the script; a version bump here rebuilds
-# only this small layer.
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
-RUN chmod +x /usr/local/bin/default-workspace-template-install-owner-exec && default-workspace-template-install-owner-exec
-
-# Install the pinned dufs static binary (the file-viewer server behind the
-# rail's File Viewer row; supervisord's [program:files] serves data/ with it).
-# Pin + per-arch sha256 verification live in the script; a version bump there
-# rebuilds only this small layer.
 COPY system/scripts/install_dufs.sh /usr/local/bin/default-workspace-template-install-dufs
-RUN chmod +x /usr/local/bin/default-workspace-template-install-dufs && default-workspace-template-install-dufs
+RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-dufs && default-workspace-template-setup-system
 
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
