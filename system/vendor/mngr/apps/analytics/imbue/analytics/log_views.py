@@ -3,11 +3,15 @@
 OpenObserve's data plane is zstd parquet in the tier's R2 bucket; our service
 log lines (the connector's ``http_request`` access records and
 ``share_visit_authorized`` records) arrive inside it as JSON strings in the
-record body. These views parse that JSON defensively: the emitting handler
-(``modal_app_kit``'s ``ensure_info_log_handler``) prefixes each line with the
-logging formatter's timestamp, so the JSON is extracted from the first ``{``
-onward (a no-op for pure-JSON bodies); a malformed or foreign body simply
-yields NULLs and is filtered out by the ``type`` predicate, never an error.
+record body. The emitting formatter (``modal_app_kit``'s
+``StructuredRecordJsonLogFormatter``) flattens each record into a JSON
+envelope that adds ``level`` / ``timestamp`` / ``logger`` alongside the
+record's own top-level fields, so ``type`` and the fields read here sit at
+the top level of the body. These views parse that JSON defensively: lines
+written before the JSON envelope carry a logging formatter's timestamp
+prefix, so the JSON is extracted from the first ``{`` onward (a no-op for
+pure-JSON bodies); a malformed or foreign body simply yields NULLs and is
+filtered out by the ``type`` predicate, never an error.
 
 The parquet layout and the body/timestamp column names are OpenObserve
 internals -- pinned here as parameters (with production defaults in
@@ -31,9 +35,12 @@ DEFAULT_BODY_COLUMN: Final[str] = "body"
 
 
 def _parsed_lines_cte(parquet_glob: str, body_column: str, timestamp_column: str) -> str:
-    # The payload starts at the body's first "{": the emitting log handler
-    # prefixes the JSON record with an asctime, and strpos misses (0) leave
-    # the body intact for TRY_CAST to reject as NULL.
+    # The payload starts at the body's first "{"; strpos misses (0) leave the
+    # body intact for TRY_CAST to reject as NULL.
+    # CLEANUP: drop the strpos prefix skip (and the asctime-prefix test) once
+    # the lines written before the JSON envelope -- "<asctime> {json}" bodies
+    # from the old "%(asctime)s %(message)s" handler -- have aged out of
+    # OpenObserve's 90-day retention (from December 2026 on).
     return (
         "WITH parsed AS ("
         f" SELECT to_timestamp(CAST({timestamp_column} AS BIGINT) / 1000000) AS line_at,"
@@ -71,7 +78,10 @@ def build_log_view_statements(
         " json_extract_string(payload, '$.method') AS method,"
         " json_extract_string(payload, '$.path') AS path,"
         " TRY_CAST(json_extract_string(payload, '$.status') AS INTEGER) AS status,"
-        " TRY_CAST(json_extract_string(payload, '$.duration_ms') AS DOUBLE) AS duration_ms"
+        " TRY_CAST(json_extract_string(payload, '$.duration_ms') AS DOUBLE) AS duration_ms,"
+        # The client's X-Imbue-Client self-identification (e.g. "minds/0.4.2
+        # imbue-cloud-plugin/0.1.6"); empty for clients older than 0.4.1.
+        " json_extract_string(payload, '$.imbue_client') AS imbue_client"
         " FROM parsed"
         " WHERE json_extract_string(payload, '$.type') = 'http_request'"
         f"{env_predicate}"

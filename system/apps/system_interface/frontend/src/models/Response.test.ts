@@ -11,10 +11,13 @@ vi.mock("mithril", () => ({
 }));
 
 import {
+  addMessageSentListener,
   appendEvents,
   appendForwardEvents,
   prependEvents,
-  evictOldEvents,
+  evictEvents,
+  removeMessageSentListener,
+  sendMessage,
   fetchEvents,
   fetchBackfillEvents,
   fetchForwardEvents,
@@ -23,14 +26,13 @@ import {
   getEventsForAgent,
   getEventCount,
   getFirstEventId,
+  getLastEventId,
   getFirstOffset,
   getRenderVersion,
   getTotalEventCount,
   hasMoreBefore,
   hasMoreAfter,
   isConversationNotFound,
-  MAX_HELD_EVENTS,
-  EVICT_TARGET_EVENTS,
   type AssistantMessageEvent,
   type ToolCall,
   type TranscriptEvent,
@@ -236,14 +238,14 @@ describe("window position (offset / total)", () => {
 
     // The older page brings the window start to 0.
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")], offset: 0, total: 3 });
-    await fetchBackfillEvents(agent);
+    await fetchBackfillEvents(agent, 50);
     expect(ids(agent)).toEqual(["a", "b", "c"]);
     expect(getFirstOffset(agent)).toBe(0);
     expect(hasMoreBefore(agent)).toBe(false);
 
     // A subsequent backfill must not hit the network at all.
     mockRequest.mockClear();
-    await fetchBackfillEvents(agent);
+    await fetchBackfillEvents(agent, 50);
     expect(mockRequest).not.toHaveBeenCalled();
   });
 
@@ -253,7 +255,7 @@ describe("window position (offset / total)", () => {
     await fetchEvents(agent);
 
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("e3"), makeEvent("e4")], offset: 3, total: 8 });
-    await fetchBackfillEvents(agent);
+    await fetchBackfillEvents(agent, 50);
 
     const call = mockRequest.mock.calls[mockRequest.mock.calls.length - 1][0];
     expect(call.params.before).toBe("e5");
@@ -269,7 +271,7 @@ describe("window position (offset / total)", () => {
     expect(hasMoreAfter(agent)).toBe(true);
 
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("m4"), makeEvent("m5")], offset: 4, total: 6 });
-    await fetchForwardEvents(agent);
+    await fetchForwardEvents(agent, 50);
 
     const call = mockRequest.mock.calls[mockRequest.mock.calls.length - 1][0];
     expect(call.params.after).toBe("m3"); // cursor is the last held event
@@ -278,7 +280,7 @@ describe("window position (offset / total)", () => {
 
     // No newer history left, so a further forward page makes no request.
     mockRequest.mockClear();
-    await fetchForwardEvents(agent);
+    await fetchForwardEvents(agent, 50);
     expect(mockRequest).not.toHaveBeenCalled();
   });
 
@@ -296,7 +298,7 @@ describe("window position (offset / total)", () => {
     // would stick true forever -- forward paging refires with no possible
     // progress and append() drops every future live event (frozen transcript).
     mockRequest.mockResolvedValueOnce({ events: [], offset: 10, total: 10 });
-    await fetchForwardEvents(agent);
+    await fetchForwardEvents(agent, 50);
     expect(hasMoreAfter(agent)).toBe(false);
     expect(getFirstOffset(agent)).toBe(9);
     expect(getTotalEventCount(agent)).toBe(10);
@@ -334,7 +336,7 @@ describe("window position (offset / total)", () => {
       prependEvents(agent, [makeEvent("a")], 3, 8);
       return { events: [makeEvent("z1"), makeEvent("z2")], offset: 2, total: 8 };
     });
-    await fetchBackfillEvents(agent);
+    await fetchBackfillEvents(agent, 50);
     expect(ids(agent)).toEqual(["a", "b", "c"]);
     expect(getFirstOffset(agent)).toBe(3);
   });
@@ -352,7 +354,7 @@ describe("window position (offset / total)", () => {
       appendForwardEvents(agent, [makeEvent("m4")], 6);
       return { events: [makeEvent("m4-dup"), makeEvent("m5")], offset: 4, total: 6 };
     });
-    await fetchForwardEvents(agent);
+    await fetchForwardEvents(agent, 50);
     expect(ids(agent)).toEqual(["m2", "m3", "m4"]);
   });
 
@@ -362,7 +364,7 @@ describe("window position (offset / total)", () => {
     await fetchEvents(agent);
 
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("mid")], offset: 40, total: 100 });
-    await fetchWindowAtOffset(agent, 40);
+    await fetchWindowAtOffset(agent, 40, 50);
 
     const call = mockRequest.mock.calls[mockRequest.mock.calls.length - 1][0];
     expect(call.params.offset).toBe("40");
@@ -373,43 +375,71 @@ describe("window position (offset / total)", () => {
   });
 });
 
-describe("evictOldEvents", () => {
-  it("does nothing below the cap", () => {
+describe("evictEvents", () => {
+  it("does nothing for a zero or negative count", () => {
     const agent = freshAgent();
     appendEvents(
       agent,
       Array.from({ length: 10 }, (_v, i) => makeEvent(`e${i}`)),
     );
-    expect(evictOldEvents(agent)).toBe(0);
+    expect(evictEvents(agent, "older", 0)).toBe(0);
+    expect(evictEvents(agent, "newer", -5)).toBe(0);
     expect(getEventCount(agent)).toBe(10);
   });
 
-  it("trims the oldest down to the target and flags more history", () => {
+  it("trims the oldest and flags more history above", () => {
     const agent = freshAgent();
-    const events = Array.from({ length: MAX_HELD_EVENTS + 200 }, (_v, i) => makeEvent(`e${i}`));
-    appendEvents(agent, events);
+    appendEvents(
+      agent,
+      Array.from({ length: 300 }, (_v, i) => makeEvent(`e${i}`)),
+    );
 
-    const removed = evictOldEvents(agent);
-    expect(removed).toBe(events.length - EVICT_TARGET_EVENTS);
-    expect(getEventCount(agent)).toBe(EVICT_TARGET_EVENTS);
+    const removed = evictEvents(agent, "older", 100);
+    expect(removed).toBe(100);
+    expect(getEventCount(agent)).toBe(200);
     // The oldest are gone; the newest are kept.
-    expect(getFirstEventId(agent)).toBe(`e${removed}`);
+    expect(getFirstEventId(agent)).toBe("e100");
     // The window start advanced past the dropped events, so older history is once
     // again reachable above -- the evicted events can be paged back in.
-    expect(getFirstOffset(agent)).toBe(removed);
+    expect(getFirstOffset(agent)).toBe(100);
     expect(hasMoreBefore(agent)).toBe(true);
+  });
+
+  it("trims the newest, pulling the window off the live tail", () => {
+    const agent = freshAgent();
+    appendEvents(
+      agent,
+      Array.from({ length: 300 }, (_v, i) => makeEvent(`e${i}`)),
+    );
+
+    const removed = evictEvents(agent, "newer", 50);
+    expect(removed).toBe(50);
+    expect(getEventCount(agent)).toBe(250);
+    expect(getLastEventId(agent)).toBe("e249");
+    expect(getFirstOffset(agent)).toBe(0);
+    // The evicted newer events remain on the server, reachable by forward paging.
+    expect(hasMoreAfter(agent)).toBe(true);
+  });
+
+  it("clamps the count to the held window", () => {
+    const agent = freshAgent();
+    appendEvents(agent, [makeEvent("only")]);
+    expect(evictEvents(agent, "older", 10)).toBe(1);
+    expect(getEventCount(agent)).toBe(0);
   });
 
   it("re-admits evicted ids on a later prepend (dedup index was pruned)", () => {
     const agent = freshAgent();
-    const events = Array.from({ length: MAX_HELD_EVENTS + 50 }, (_v, i) => makeEvent(`e${i}`));
-    appendEvents(agent, events);
-    const removed = evictOldEvents(agent);
+    appendEvents(
+      agent,
+      Array.from({ length: 100 }, (_v, i) => makeEvent(`e${i}`)),
+    );
+    const removed = evictEvents(agent, "older", 10);
     // Re-fetching an evicted event prepends it again rather than being deduped away.
     const reFetched = makeEvent("e0");
     prependEvents(agent, [reFetched]);
     expect(getFirstEventId(agent)).toBe("e0");
-    expect(removed).toBeGreaterThan(0);
+    expect(removed).toBe(10);
   });
 });
 
@@ -449,13 +479,13 @@ describe("render version", () => {
     const agent = freshAgent();
     appendEvents(
       agent,
-      Array.from({ length: MAX_HELD_EVENTS + 50 }, (_v, i) => makeEvent(`e${i}`)),
+      Array.from({ length: 100 }, (_v, i) => makeEvent(`e${i}`)),
     );
     const vBeforePrepend = getRenderVersion(agent);
     prependEvents(agent, [makeEvent("older")]);
     const vAfterPrepend = getRenderVersion(agent);
     expect(vAfterPrepend).toBeGreaterThan(vBeforePrepend);
-    evictOldEvents(agent);
+    evictEvents(agent, "older", 10);
     expect(getRenderVersion(agent)).toBeGreaterThan(vAfterPrepend);
   });
 
@@ -481,7 +511,7 @@ describe("render version", () => {
 
     // Server reports nothing before the cursor: the window already starts at 0.
     mockRequest.mockResolvedValueOnce({ events: [], total: 5 });
-    await fetchBackfillEvents(agent);
+    await fetchBackfillEvents(agent, 50);
 
     expect(getFirstOffset(agent)).toBe(0);
     expect(hasMoreBefore(agent)).toBe(false);
@@ -498,7 +528,7 @@ describe("render version", () => {
     // Server reports nothing after the cursor and a smaller total: the window now
     // reaches the live tail.
     mockRequest.mockResolvedValueOnce({ events: [], total: 4 });
-    await fetchForwardEvents(agent);
+    await fetchForwardEvents(agent, 50);
 
     expect(getTotalEventCount(agent)).toBe(4);
     expect(hasMoreAfter(agent)).toBe(false);
@@ -650,8 +680,44 @@ describe("snapshot load state", () => {
     // Paging failures are deliberately non-fatal: the older history just is not
     // loaded. Recording one would blank a transcript the user can still read.
     mockRequest.mockRejectedValueOnce(proxyUnavailableError());
-    await fetchBackfillEvents(agent);
+    await fetchBackfillEvents(agent, 50);
     expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
     expect(ids(agent)).toEqual(["b"]);
+  });
+});
+
+describe("message-sent listeners", () => {
+  it("notifies on a real send, skips whitespace-only, and stops after removal", async () => {
+    // sendMessage's request body reads the client identity, which needs
+    // localStorage (absent in the node test environment).
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {},
+    });
+    try {
+      const agent = freshAgent();
+      const seen: string[] = [];
+      const listener = (agentId: string) => seen.push(agentId);
+      addMessageSentListener(listener);
+      try {
+        mockRequest.mockResolvedValueOnce({});
+        await sendMessage(agent, "hello");
+        expect(seen).toEqual([agent]);
+
+        // A whitespace-only message returns early: no notification, no request.
+        mockRequest.mockClear();
+        await sendMessage(agent, "   ");
+        expect(seen).toEqual([agent]);
+        expect(mockRequest).not.toHaveBeenCalled();
+      } finally {
+        removeMessageSentListener(listener);
+      }
+
+      mockRequest.mockResolvedValueOnce({});
+      await sendMessage(agent, "again");
+      expect(seen).toEqual([agent]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

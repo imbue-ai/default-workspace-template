@@ -3,7 +3,6 @@ import type { PeekedChannel, UpdateChannel, UpdateState, UpdateStatus } from "..
 import { jsonResponse, settingsOverview, settle, withMindsNative, withReceiverGuardedGlobalFetch } from "../testing";
 import {
   DEFAULT_NOTIFICATION_PREFS,
-  applyNotificationPrefs,
   currentNotificationPrefs,
   resetNotificationPrefsForTests,
   type NotificationPrefs,
@@ -15,21 +14,12 @@ import {
   type SettingsOverview,
 } from "./settings";
 
-const BASE_OVERVIEW: SettingsOverview = {
-  services_overview: [],
-  file_sharing_grants: [],
-  workspace_delegation_grants: [],
-  permissions_unavailable: false,
-  is_master_password_set: false,
-  report_unexpected_errors: true,
-  version: "v-one",
-};
+const BASE_OVERVIEW: SettingsOverview = settingsOverview();
 
 const BASE_PREFS: NotificationPrefs = {
   is_enabled: true,
   style: "both",
   is_os_hint_dismissed: false,
-  os_permission_confirmed: false,
   version: "np-1",
 };
 
@@ -264,7 +254,6 @@ describe("SettingsModel", () => {
       is_enabled: true,
       style: "os",
       is_os_hint_dismissed: false,
-      os_permission_confirmed: false,
       version: "np-2",
     });
     // The app-wide applied prefs (which gate arrivals) follow the write.
@@ -288,7 +277,6 @@ describe("SettingsModel", () => {
       is_enabled: false,
       style: "cards",
       is_os_hint_dismissed: true,
-      os_permission_confirmed: false,
       version: "np-9",
     };
 
@@ -365,52 +353,6 @@ describe("SettingsModel", () => {
       "notifications are not available yet",
     );
     expect(model.notificationPrefs().is_enabled).toBe(true);
-  });
-
-  it("syncs the notification-prefs copy from the applied-prefs cell with no network request", async () => {
-    // Regression guard: this used to be a full model.load(), which could
-    // flip isLoadFailed (blanking the whole Settings modal) over a transient
-    // failure in what is only a best-effort background refresh.
-    const model = new SettingsModel(
-      async (input) => {
-        if (String(input).endsWith("/settings/notifications")) {
-          throw new Error("must not write during a local sync");
-        }
-        return jsonResponse({
-          ...BASE_OVERVIEW,
-          notification_prefs: BASE_PREFS,
-        });
-      },
-      () => {},
-    );
-    await model.load();
-
-    applyNotificationPrefs({
-      is_enabled: true,
-      style: "cards",
-      is_os_hint_dismissed: false,
-      os_permission_confirmed: false,
-      version: "np-9",
-    });
-    model.syncNotificationPrefsFromApplied();
-
-    expect(model.notificationPrefs()).toEqual({
-      is_enabled: true,
-      style: "cards",
-      is_os_hint_dismissed: false,
-      os_permission_confirmed: false,
-      version: "np-9",
-    });
-    expect(model.isLoadFailed).toBe(false);
-  });
-
-  it("does nothing before the overview has loaded", () => {
-    const model = new SettingsModel(
-      async () => jsonResponse(BASE_OVERVIEW),
-      () => {},
-    );
-    model.syncNotificationPrefsFromApplied();
-    expect(model.overview).toBeNull();
   });
 
   it("clears the open-failed flag on a successful OS-settings open", async () => {
@@ -781,10 +723,12 @@ describe("SettingsModel release channels", () => {
     });
   });
 
-  it("hides the Updates section in the browser build and shows it on desktop", async () => {
+  it("lists the Updates section in the browser build too, since machine updates are configured there", async () => {
+    // The app-updates half of the panel is desktop-only, but the panel itself
+    // is not: the machine-update window applies to every build.
     await withMindsNative(null, async () => {
       const names = new SettingsModel(undefined, () => {}).visibleSections.map((section) => section.name);
-      expect(names).not.toContain("updates");
+      expect(names).toContain("updates");
       expect(names).toContain("error-reporting");
     });
     await withMindsNative(nativeStub(RUNNING, PEEKED).surface, async () => {

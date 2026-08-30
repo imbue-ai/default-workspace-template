@@ -21,9 +21,13 @@ _FIXTURE_TABLE_DDL = (
     "CREATE TABLE rsc.download_events (created_at TIMESTAMPTZ)",
     (
         "CREATE TABLE rsc.account_entitlements ("
-        " user_id VARCHAR, plan_name VARCHAR, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ"
+        " user_id VARCHAR, plan_name VARCHAR, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ,"
+        " suspended_at TIMESTAMPTZ"
         ")"
     ),
+    # shares.user_id carries the 32-hex share label, not the SuperTokens id
+    # (see the share_enabled signal in aggregation.py).
+    "CREATE TABLE rsc.shares (host_id VARCHAR, user_id VARCHAR, state VARCHAR, created_at TIMESTAMPTZ)",
     # The ops job log behind pipeline_health.
     (
         "CREATE TABLE ops.job_runs ("

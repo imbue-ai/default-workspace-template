@@ -56,8 +56,10 @@ from imbue.minds.desktop_client.backup_env_store import write_canonical_env
 from imbue.minds.desktop_client.destroying import has_destroying_marker
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudLeaseActiveCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
 from imbue.minds.errors import BackupProvisioningError
+from imbue.minds.errors import WorkspaceRecordLeaseActiveError
 from imbue.minds.errors import WorkspaceRecordTooNewError
 from imbue.minds.errors import WorkspaceSyncError
 from imbue.minds.mngr_settings.provider_blocks import imbue_cloud_provider_name_for_account
@@ -161,6 +163,11 @@ def secrets_payload_content_hash(payload: WorkspaceSecretsPayload) -> str:
     # payload_format is versioning plumbing, not material: excluding it keeps
     # every pre-existing stamped hash stable (no fleet-wide re-push wave).
     return hashlib.sha256(payload.model_dump_json(exclude={"payload_format"}).encode("utf-8")).hexdigest()
+
+
+def encode_encrypted_secrets(dek: bytes, plaintext: bytes) -> str:
+    """The base64 AEAD blob a record's ``encrypted_secrets`` carries for ``plaintext`` under the account DEK."""
+    return b64encode(encrypt_secrets(dek, plaintext)).decode("ascii")
 
 
 class ReplicaRecord(FrozenModel):
@@ -584,9 +591,9 @@ class WorkspaceRecordStore(MutableModel):
                 return None
         own_fields = json.loads(payload.model_dump_json())
         merged = {**(existing_raw or {}), **own_fields}
-        blob = encrypt_secrets(dek, json.dumps(merged, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        plaintext = json.dumps(merged, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return BuiltRecordSecrets(
-            encrypted=b64encode(blob).decode("ascii"),
+            encrypted=encode_encrypted_secrets(dek, plaintext),
             content_hash=secrets_payload_content_hash(payload),
         )
 
@@ -823,6 +830,8 @@ class WorkspaceRecordStore(MutableModel):
             raise WorkspaceSyncError("machine sync is not configured (no imbue_cloud CLI)")
         try:
             self.cli.sync_record_delete(account_email, workspace_id)
+        except ImbueCloudLeaseActiveCliError as e:
+            raise WorkspaceRecordLeaseActiveError(str(e)) from e
         except ImbueCloudCliError as e:
             raise WorkspaceSyncError(f"could not remove the record from the connector: {e}") from e
         with self._lock:

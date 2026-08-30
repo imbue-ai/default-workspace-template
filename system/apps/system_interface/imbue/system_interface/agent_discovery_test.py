@@ -6,14 +6,18 @@ from pathlib import Path
 import pytest
 
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.message import AgentSendFailure
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import _first_failure
+from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 
 
@@ -150,7 +154,7 @@ def test_known_location_is_messaged_without_discovery() -> None:
         return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", (match,))
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (match,)) is None
     assert discover_calls == []
     assert send_calls == [(match,)]
 
@@ -170,7 +174,7 @@ def test_empty_known_locations_falls_back_to_discovery() -> None:
         return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", ())
+    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is None
     assert discover_calls == [_AGENT_ID]
     assert send_calls == [(discovered,)]
 
@@ -193,13 +197,15 @@ def test_stale_known_location_falls_back_to_discovery() -> None:
         return MessageResult(successful_agents=reached)
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", (stale,))
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (stale,)) is None
     assert discover_calls == [_AGENT_ID]
     assert send_calls == [(stale,), (fresh,)]
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
-def test_returns_false_when_nothing_reachable() -> None:
+def test_returns_a_reason_when_nothing_reachable() -> None:
+    """A send that reaches no agent reports why, since the reason is what the user can act on."""
+
     def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
         return ()
 
@@ -207,4 +213,102 @@ def test_returns_false_when_nothing_reachable() -> None:
         return MessageResult(successful_agents=[])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is False
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", ())
+    assert failure is not None
+    assert failure.reason == "The agent could not be reached."
+    # Nothing matched the id, and trying again will not change that.
+    assert failure.kind == "agent_unreachable"
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_reports_the_harness_reason_for_a_refused_send() -> None:
+    """mngr's own words are what come back, not a generic failure.
+
+    The harness knows what it is blocked on and says so in terms the user can act on -- which
+    key resolves the dialog holding its input, say. Reducing that to a bool here would leave
+    the chat with nothing to report but the fact that something went wrong.
+    """
+    refusal = "The agent is in shell mode with an unsubmitted command."
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        return (_make_match(),)
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        return MessageResult(
+            successful_agents=[],
+            failures=[AgentSendFailure(agent_name="alpha", reason=refusal, kind=SendFailureKind.INPUT_BLOCKED)],
+        )
+
+    messenger = MngrMessenger(discover=_discover, send=_send)
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", ())
+    assert failure is not None
+    assert failure.reason == refusal
+    # mngr classified it, and that classification comes through beside the words.
+    assert failure.kind == "input_blocked"
+
+
+def test_a_delivered_but_blocked_send_reports_the_dialog_not_an_unreachable_agent() -> None:
+    """mngr keeps "landed, then blocked" apart from "never landed"; the notice must too.
+
+    Reading only ``failures`` dropped this into the unreachable catch-all, which was false --
+    the agent is sitting on a dialog -- and, because the recovery buttons follow the kind,
+    withheld the Retry that answering the dialog makes work while offering a restart.
+    """
+    result = MessageResult()
+    result.blocked_agents.append(
+        (
+            "alpha",
+            "Failed to send message to agent alpha: Claude is waiting for you to confirm a model switch."
+            " Answer it in the agent's terminal.",
+        )
+    )
+    failure = _first_failure(result)
+    assert failure.kind == "input_blocked"
+    assert failure.reason.startswith("Claude is waiting for you to confirm a model switch.")
+    assert "Failed to send message to agent" not in failure.reason
+
+
+def test_a_real_failure_still_outranks_a_blocked_one() -> None:
+    """A send that never landed is the more urgent truth, so it is reported first."""
+    result = MessageResult()
+    result.failures.append(
+        AgentSendFailure(agent_name="alpha", reason="the pane is gone", kind=SendFailureKind.AGENT_UNREACHABLE)
+    )
+    result.blocked_agents.append(("alpha", "a dialog is up"))
+    failure = _first_failure(result)
+    assert failure.reason == "the pane is gone"
+    assert failure.kind == "agent_unreachable"
+
+
+def test_nothing_matched_is_still_the_unreachable_catch_all() -> None:
+    failure = _first_failure(MessageResult())
+    assert failure.kind == "agent_unreachable"
+    assert failure.reason == "The agent could not be reached."
+
+
+def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    """A settings file written for a newer mngr must not lock this server out.
+
+    During an update the on-disk `.mngr/settings.toml` can briefly be newer than
+    the mngr this long-lived process imported. Under strict parsing every read
+    path through `_get_mngr_context` -- listing agents, sending a message --
+    became a 500, which took down the very chat channel needed to finish the
+    update. The live read is therefore non-strict: the unknown field is dropped
+    with a logged warning and agents still list.
+    """
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "settings.toml").write_text('is_allowed_in_pytest = true\nfield_from_a_newer_mngr = "surprise"\n')
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+
+    # Local provider only: the point is the config-parse path every listing
+    # goes through, not remote-provider discovery.
+    agents = discover_agents(provider_names=("local",))
+
+    # The listing survived (a fresh empty host dir simply has no agents), and
+    # the unknown field was reported rather than swallowed silently.
+    assert agents == []
+    assert any("field_from_a_newer_mngr" in record for record in loguru_records)

@@ -93,7 +93,9 @@ class R2KeyInfo(BaseModel):
         default=None,
         description=(
             "Storage-quota enforcement state: 'read' when the sweep downgraded this key because the "
-            "owner is over their storage quota; None when the live token policy matches ``access``."
+            "owner is over their storage quota; 'pending' while a downgrade/restore is in flight "
+            "(the live token policy is unconfirmed and treated as read-only); None when the live "
+            "token policy matches ``access``."
         ),
     )
 
@@ -176,8 +178,13 @@ def measure_live_owner_usage_bytes(ops: CloudflareOps, user_id_prefix: str) -> i
 
 
 def _is_owner_enforced_over_quota(store: KeyStore, owner_user_id: str) -> bool:
-    """True when any of the owner's keys is currently sweep-downgraded (enforced read-only)."""
-    return any(row.get("enforced_access") == "read" for row in store.list_keys(owner_user_id, None))
+    """True when any of the owner's keys carries a quota-enforcement marker.
+
+    A ``'pending'`` marker (an in-flight transition whose Cloudflare outcome
+    is unconfirmed) counts as enforced: a fresh mint must stay conservative
+    until the next enforcement pass settles the marker.
+    """
+    return any(row.get("enforced_access") is not None for row in store.list_keys(owner_user_id, None))
 
 
 def _check_storage_quota_for_new_bucket(
@@ -428,7 +435,9 @@ def roll_bucket_key_endpoint(request: Request, name: str) -> dict[str, object]:
         newest = rows[-1]
         result = ops.roll_bucket_token_value(str(newest["access_key_id"]))
         secret_access_key = derive_s3_secret_access_key(str(result["value"]))
-        effective_access = str(newest.get("enforced_access") or newest["access"])
+        # Any enforcement marker ('read' or the in-flight 'pending') reports
+        # the conservative read-only scope.
+        effective_access = "read" if newest.get("enforced_access") is not None else str(newest["access"])
         return R2KeyMaterial(
             access_key_id=str(newest["access_key_id"]),
             secret_access_key=secret_access_key,

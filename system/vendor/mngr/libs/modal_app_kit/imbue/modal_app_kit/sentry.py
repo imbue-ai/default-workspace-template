@@ -31,8 +31,11 @@ from typing import Final
 
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.integrations.logging import ignore_logger
 from sentry_sdk.types import Event
 from sentry_sdk.types import Hint
+
+logger = logging.getLogger(__name__)
 
 # Kill switch: set to "1" at deploy time (or in a test run's env) to disable
 # reporting entirely without editing any Vault entry.
@@ -151,6 +154,15 @@ def resolve_sentry_dsn(environ: dict[str, str], dsn_env_var: str) -> str | None:
     return environ.get(dsn_env_var) or None
 
 
+# Loggers whose records must never become Bugsink events or breadcrumbs.
+# Modal's in-container client logs operational warnings about Modal's own
+# runtime (e.g. "Detected N background thread(s) still running after
+# container exit") whose messages embed variable content, so every variant
+# mints a brand-new issue -- noise about infrastructure we neither own nor
+# act on.
+_IGNORED_LOGGER_NAMES: Final[tuple[str, ...]] = ("modal-client",)
+
+
 # ``functools.cache`` makes repeated calls (every request / cron invocation in
 # a warm container) a no-op after the first: one init per (service, dsn) per
 # container, mirroring the connector's ``_init_supertokens_once`` pattern.
@@ -183,6 +195,8 @@ def _init_sentry_once(service_name: str, dsn: str, environment: str, release: st
         max_value_length=10_000,
         before_send=limiter.before_send,
     )
+    for ignored_logger_name in _IGNORED_LOGGER_NAMES:
+        ignore_logger(ignored_logger_name)
     sentry_sdk.set_tag("service", service_name)
 
 
@@ -222,16 +236,22 @@ def capture_unexpected_exception(exc: BaseException) -> str | None:
 
 @contextmanager
 def capture_and_reraise() -> Iterator[None]:
-    """Report any escaping exception to Sentry, then re-raise it.
+    """Report any escaping exception to Sentry and log it as one ERROR line, then re-raise it.
 
     For Modal cron / spawned functions: Modal owns their top-level exception
-    handling, so the SDK's excepthook integration never sees their failures.
-    A no-op when :func:`init_sentry` never activated (capture on an inactive
-    client is discarded by the SDK).
+    handling, so the SDK's excepthook integration never sees their failures,
+    and the traceback Modal itself prints for the re-raised exception arrives
+    in the log store as one level-less line per traceback line. The
+    ``logger.error`` here puts a single JSON line carrying ``level: ERROR``
+    and the folded traceback in the store; the SDK's Dedupe integration drops
+    the logging integration's capture of the same exception instance, so
+    Bugsink still gets one event. A no-op for Sentry when :func:`init_sentry`
+    never activated (capture on an inactive client is discarded by the SDK).
     """
     try:
         yield
-    except Exception:
+    except Exception as exc:
         sentry_sdk.capture_exception()
+        logger.error("Unhandled exception in Modal function", exc_info=exc)
         sentry_sdk.flush(timeout=5)
         raise

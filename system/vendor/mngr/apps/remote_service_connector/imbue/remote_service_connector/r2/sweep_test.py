@@ -1,6 +1,7 @@
-import contextlib
 from collections.abc import Callable
-from collections.abc import Iterator
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 
 import pytest
 
@@ -9,12 +10,13 @@ from imbue.remote_service_connector.testing import FakeCloudflareOps
 from imbue.remote_service_connector.testing import InMemoryEntitlementsStore
 from imbue.remote_service_connector.testing import InMemoryGrantStore
 from imbue.remote_service_connector.testing import InMemoryKeyStore
+from imbue.remote_service_connector.testing import InMemoryLeaseStore
 from imbue.remote_service_connector.testing import _seed_entitlements_row
 from imbue.remote_service_connector.testing import make_fake_entitlements_store
 from imbue.remote_service_connector.testing import make_fake_grant_store
 from imbue.remote_service_connector.testing import make_fake_key_store
+from imbue.remote_service_connector.testing import make_fake_lease_store
 from imbue.remote_service_connector.testing import make_fake_pool_backend
-from imbue.remote_service_connector.testing import noop_enforcement_lock
 
 
 def _sweep_fixtures() -> tuple[FakeCloudflareOps, InMemoryKeyStore, InMemoryEntitlementsStore]:
@@ -28,16 +30,18 @@ def _run_sweep(
     grant_store: InMemoryGrantStore | None = None,
     email_getter: Callable[[str], str | None] = lambda uid: None,
     only_user_id: str | None = None,
+    orphan_first_seen_getter: Callable[[str], datetime | None] = lambda bucket_name: None,
 ) -> dict[str, int]:
-    """Call run_r2_quota_sweep with test defaults (fresh grant store, no-op lock)."""
+    """Call run_r2_quota_sweep with test defaults (fresh grant and lease stores)."""
     return app_mod.run_r2_quota_sweep(
         ops,
         store,
         entitlements_store,
         grant_store if grant_store is not None else make_fake_grant_store(),
         email_getter=email_getter,
-        enforcement_lock=noop_enforcement_lock,
+        lease_store=make_fake_lease_store(),
         only_user_id=only_user_id,
+        orphan_first_seen_getter=orphan_first_seen_getter,
     )
 
 
@@ -166,6 +170,41 @@ def test_sweep_skips_unknown_owner_without_downgrading() -> None:
     assert counters["users_skipped"] == 1
     assert counters["keys_downgraded"] == 0
     assert ops.account_tokens[key_id]["access"] == "readwrite"
+    # A deleted owner's non-workspace-shaped bucket is one the retention
+    # reaper will never touch, so its lingering key rows are a real problem.
+    assert counters["users_skipped_orphan_reap_overdue"] == 1
+    assert counters["users_skipped_orphan_pending_reap"] == 0
+
+
+def test_sweep_counts_unknown_owner_with_unstamped_backup_bucket_as_pending_reap() -> None:
+    """A deleted owner's workspace-backup bucket awaiting its orphan stamp is expected, not a warning."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    key_id = _add_bucket_with_key(ops, store, "user-unknown", "uxprefix--host-abc123")
+    ops.usage_bytes_by_bucket["uxprefix--host-abc123"] = 10**15
+    counters = _run_sweep(ops, store, entitlements_store)
+    assert counters["users_skipped"] == 1
+    assert counters["users_skipped_orphan_pending_reap"] == 1
+    assert counters["users_skipped_orphan_reap_overdue"] == 0
+    assert ops.account_tokens[key_id]["access"] == "readwrite"
+
+
+def test_sweep_counts_unknown_owner_with_recent_orphan_stamp_as_pending_reap() -> None:
+    ops, store, entitlements_store = _sweep_fixtures()
+    _add_bucket_with_key(ops, store, "user-unknown", "uxprefix--host-abc123")
+    recent_stamp = datetime.now(timezone.utc) - timedelta(days=1)
+    counters = _run_sweep(ops, store, entitlements_store, orphan_first_seen_getter=lambda bucket_name: recent_stamp)
+    assert counters["users_skipped_orphan_pending_reap"] == 1
+    assert counters["users_skipped_orphan_reap_overdue"] == 0
+
+
+def test_sweep_warns_when_unknown_owner_orphan_is_well_past_the_reap_window() -> None:
+    """An orphan stamp far past retention-plus-slack means the reaper's cleanup is not coming."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    _add_bucket_with_key(ops, store, "user-unknown", "uxprefix--host-abc123")
+    stale_stamp = datetime.now(timezone.utc) - timedelta(days=45)
+    counters = _run_sweep(ops, store, entitlements_store, orphan_first_seen_getter=lambda bucket_name: stale_stamp)
+    assert counters["users_skipped_orphan_pending_reap"] == 0
+    assert counters["users_skipped_orphan_reap_overdue"] == 1
 
 
 def test_sweep_lazily_creates_row_for_resolvable_owner(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,7 +223,7 @@ def test_sweep_lazily_creates_row_for_resolvable_owner(monkeypatch: pytest.Monke
         entitlements_store,
         make_fake_grant_store(),
         email_getter=lambda uid: "nobody@gmail.com",
-        enforcement_lock=noop_enforcement_lock,
+        lease_store=make_fake_lease_store(),
     )
     assert counters["users_skipped"] == 0
     row = entitlements_store.get_entitlements("user-1")
@@ -254,24 +293,31 @@ def test_sweep_skips_owner_with_active_grant() -> None:
     assert ops.account_tokens[key_id]["access"] == "readwrite"
 
 
-def test_sweep_skips_downgrade_when_grant_appears_before_lock_acquisition() -> None:
-    """A grant created between the loop-top check and the lock must still block the downgrade.
+class _GrantCreatingLeaseStore(InMemoryLeaseStore):
+    """Lease store that creates a cleanup grant as part of granting the lease.
 
-    Simulates the interleave by injecting an enforcement lock that creates
-    the grant on entry (a real grant request holds the same lock while it
-    restores the keys, so from the sweep's perspective the grant simply
-    exists by the time it enters).
+    Simulates a grant request winning the lease first: by the time the
+    sweep's acquire succeeds, the grant exists (a real grant request holds
+    the lease while it creates the grant and restores the keys).
     """
+
+    def __init__(self, grant_store: InMemoryGrantStore, user_id_prefix: str) -> None:
+        super().__init__()
+        self._grant_store = grant_store
+        self._user_id_prefix = user_id_prefix
+
+    def try_acquire(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        self._grant_store.create_grant(owner_user_id, self._user_id_prefix, 1000, 60)
+        return super().try_acquire(owner_user_id, claim_id, duration_seconds)
+
+
+def test_sweep_skips_downgrade_when_grant_appears_before_lease_acquisition() -> None:
+    """A grant created between the loop-top check and the lease must still block the downgrade."""
     ops, store, entitlements_store = _sweep_fixtures()
     grant_store = make_fake_grant_store()
     _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 100)
     key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
     ops.usage_bytes_by_bucket["u1prefix--data"] = 1000
-
-    @contextlib.contextmanager
-    def grant_creating_lock(owner_user_id: str) -> Iterator[None]:
-        grant_store.create_grant(owner_user_id, "u1prefix", 1000, 60)
-        yield
 
     counters = app_mod.run_r2_quota_sweep(
         ops,
@@ -279,7 +325,7 @@ def test_sweep_skips_downgrade_when_grant_appears_before_lock_acquisition() -> N
         entitlements_store,
         grant_store,
         email_getter=lambda uid: None,
-        enforcement_lock=grant_creating_lock,
+        lease_store=_GrantCreatingLeaseStore(grant_store, "u1prefix"),
     )
     assert counters["users_skipped_for_grant"] == 1
     assert counters["keys_downgraded"] == 0
@@ -367,3 +413,148 @@ def test_sweep_never_touches_a_key_under_suspension_enforcement() -> None:
     # suspension marker blocks it.
     assert counters["keys_restored"] == 0
     assert ops.account_tokens[key_id]["access"] == "read"
+
+
+def test_sweep_failed_downgrade_leaves_pending_marker_and_next_sweep_settles_it() -> None:
+    """The write-ahead marker: a downgrade whose Cloudflare call fails leaves the key recorded as in-flight.
+
+    'pending' (rather than an untouched None) means the token's live policy
+    is untrusted, so the next pass re-asserts and settles it instead of
+    trusting a possibly-half-applied write.
+    """
+    ops, store, entitlements_store = _sweep_fixtures()
+    _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 100)
+    key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
+    ops.usage_bytes_by_bucket["u1prefix--data"] = 1000
+    ops.fail_next_update_token_access = True
+
+    failed = _run_sweep(ops, store, entitlements_store)
+    assert failed["key_update_failures"] == 1
+    assert failed["keys_downgraded"] == 0
+    pending_row = store.get_key(key_id)
+    assert pending_row is not None
+    assert pending_row["enforced_access"] == "pending"
+
+    retried = _run_sweep(ops, store, entitlements_store)
+    assert retried["keys_downgraded"] == 1
+    assert ops.account_tokens[key_id]["access"] == "read"
+    settled_row = store.get_key(key_id)
+    assert settled_row is not None
+    assert settled_row["enforced_access"] == "read"
+
+
+def test_sweep_failed_restore_leaves_pending_marker_and_next_sweep_settles_it() -> None:
+    """Restores are write-ahead too: an interrupted restore leaves 'pending', never its settled 'read' marker.
+
+    A stale 'read' marker on a key whose restore actually landed would be
+    trusted by a later over-quota pass as already-downgraded, leaving the
+    key silently writable; 'pending' is always re-asserted instead.
+    """
+    ops, store, entitlements_store = _sweep_fixtures()
+    _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 10**12)
+    key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
+    # A settled downgrade from an earlier over-quota pass; the owner is now
+    # far under quota, so this pass restores.
+    ops.update_bucket_token_access(key_id, "u1prefix--data", "read", "mngr-r2:u1prefix--data:default")
+    store.set_enforced_access(key_id, "read")
+    ops.fail_next_update_token_access = True
+
+    failed = _run_sweep(ops, store, entitlements_store)
+    assert failed["key_update_failures"] == 1
+    assert failed["keys_restored"] == 0
+    pending_row = store.get_key(key_id)
+    assert pending_row is not None
+    assert pending_row["enforced_access"] == "pending"
+
+    retried = _run_sweep(ops, store, entitlements_store)
+    assert retried["keys_restored"] == 1
+    assert ops.account_tokens[key_id]["access"] == "readwrite"
+    settled_row = store.get_key(key_id)
+    assert settled_row is not None
+    assert settled_row["enforced_access"] is None
+
+
+def test_sweep_restores_and_clears_a_stale_pending_marker_when_under_quota() -> None:
+    """A crash-orphaned 'pending' key is re-asserted to its intended access once the owner is under quota."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 10**12)
+    key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
+    # Model a crashed downgrade: the Cloudflare write landed (token read) but
+    # the settling DB write never did (marker still pending).
+    ops.update_bucket_token_access(key_id, "u1prefix--data", "read", "mngr-r2:u1prefix--data:default")
+    store.set_enforced_access(key_id, "pending")
+
+    counters = _run_sweep(ops, store, entitlements_store)
+    assert counters["keys_restored"] == 1
+    assert ops.account_tokens[key_id]["access"] == "readwrite"
+    restored_row = store.get_key(key_id)
+    assert restored_row is not None
+    assert restored_row["enforced_access"] is None
+
+
+def test_sweep_reasserts_a_stale_pending_marker_when_over_quota() -> None:
+    """A 'pending' key of an over-quota owner is re-driven to read-only and settled as 'read'."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 100)
+    key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
+    ops.usage_bytes_by_bucket["u1prefix--data"] = 1000
+    # Model a crashed downgrade where the Cloudflare write never landed.
+    store.set_enforced_access(key_id, "pending")
+
+    counters = _run_sweep(ops, store, entitlements_store)
+    assert counters["keys_downgraded"] == 1
+    assert ops.account_tokens[key_id]["access"] == "read"
+    settled_row = store.get_key(key_id)
+    assert settled_row is not None
+    assert settled_row["enforced_access"] == "read"
+
+
+class _RenewalFailingLeaseStore(InMemoryLeaseStore):
+    """Lease store whose renewals always fail, modeling a takeover mid-enforcement."""
+
+    def renew(self, owner_user_id: str, claim_id: str, duration_seconds: float) -> bool:
+        del owner_user_id, claim_id, duration_seconds
+        return False
+
+
+def test_sweep_aborts_an_owner_whose_lease_is_taken_over() -> None:
+    """A lost lease aborts that owner's pass before any Cloudflare write and is counted."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 100)
+    key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
+    ops.usage_bytes_by_bucket["u1prefix--data"] = 1000
+
+    counters = app_mod.run_r2_quota_sweep(
+        ops,
+        store,
+        entitlements_store,
+        make_fake_grant_store(),
+        email_getter=lambda uid: None,
+        lease_store=_RenewalFailingLeaseStore(),
+    )
+    assert counters["users_aborted_lease_lost"] == 1
+    assert counters["keys_downgraded"] == 0
+    assert ops.account_tokens[key_id]["access"] == "readwrite"
+
+
+def test_sweep_skips_an_owner_whose_lease_is_contended() -> None:
+    """An owner whose lease another holder keeps for the whole wait window is skipped and counted."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 100)
+    key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
+    ops.usage_bytes_by_bucket["u1prefix--data"] = 1000
+    lease_store = make_fake_lease_store()
+    lease_store.claim_by_owner["user-1"] = "someone-else"
+
+    counters = app_mod.run_r2_quota_sweep(
+        ops,
+        store,
+        entitlements_store,
+        make_fake_grant_store(),
+        email_getter=lambda uid: None,
+        lease_store=lease_store,
+        lease_wait_seconds=0.0,
+    )
+    assert counters["users_skipped_lease_contended"] == 1
+    assert counters["keys_downgraded"] == 0
+    assert ops.account_tokens[key_id]["access"] == "readwrite"

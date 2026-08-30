@@ -45,6 +45,7 @@ def test_publish_now_broadcasts_every_message_type_on_first_pass() -> None:
         "notifications",
         "providers",
         "requests",
+        "workspace_updates",
         "workspaces",
     ]
 
@@ -160,13 +161,13 @@ def test_publish_loop_survives_an_unexpected_derive_exception() -> None:
 def test_replayed_health_frames_say_they_are_a_replay() -> None:
     """A snapshot health frame is marked; the same state published live is not.
 
-    The SPA raises the recovery card on the edge into RESTART_FAILED, and a
+    The SPA raises the recovery card on the edge into RECOVERY_FAILED, and a
     failure that was already there when the window connected is not an edge. The
     frame has to say which it is: nothing about the connect sequence's shape is
     promised, so a client inferring it from position would go on inferring it
     after any reordering, silently.
     """
-    failed = UiHealthMessage(agent_id="agent-ab12", status=AgentHealth.RESTART_FAILED, error="no answer")
+    failed = UiHealthMessage(agent_id="agent-ab12", status=AgentHealth.RECOVERY_FAILED, error="no answer")
     publisher, client_queue = build_ui_state_publisher_for_test(
         _MutableWorkspaceSource().derive, derive_health_states=lambda: (failed,)
     )
@@ -195,6 +196,7 @@ def test_snapshot_frames_start_with_hello_and_cover_every_snapshot_type() -> Non
         "requests",
         "discovery_health",
         "notifications",
+        "workspace_updates",
         "environment",
     ]
 

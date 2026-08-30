@@ -3,6 +3,7 @@ import pytest
 from imbue.modal_app_kit.deploy import DEPLOY_ENV_VAR
 from imbue.modal_app_kit.deploy import DEPLOY_ID_ENV_VAR
 from imbue.modal_app_kit.deploy import DEPLOY_ID_UNSET_SENTINEL
+from imbue.modal_app_kit.deploy import deploy_metadata_entries
 from imbue.modal_app_kit.deploy import read_custom_domains
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
@@ -82,3 +83,21 @@ def test_read_custom_domains_returns_none_for_an_empty_value(monkeypatch: pytest
     monkeypatch.setenv("MODAL_APP_KIT_TEST_CUSTOM_DOMAINS_73519", " , ")
 
     assert read_custom_domains("MODAL_APP_KIT_TEST_CUSTOM_DOMAINS_73519") is None
+
+
+def test_deploy_metadata_entries_carry_tier_and_deploy_id_only_by_default() -> None:
+    assert deploy_metadata_entries("staging", "20260801t000000z", {}) == {
+        DEPLOY_ENV_VAR: "staging",
+        DEPLOY_ID_ENV_VAR: "20260801t000000z",
+    }
+
+
+def test_deploy_metadata_entries_thread_the_log_level_knob_when_the_deployer_exported_it() -> None:
+    entries = deploy_metadata_entries("dev", "20260801t000000z", {"MINDS_LOG_LEVEL": "DEBUG", "MINDS_OTHER": "x"})
+
+    assert entries["MINDS_LOG_LEVEL"] == "DEBUG"
+    assert "MINDS_OTHER" not in entries
+
+
+def test_deploy_metadata_entries_drop_an_empty_log_level_knob() -> None:
+    assert "MINDS_LOG_LEVEL" not in deploy_metadata_entries("dev", "id", {"MINDS_LOG_LEVEL": ""})

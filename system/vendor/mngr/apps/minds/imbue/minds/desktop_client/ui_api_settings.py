@@ -16,7 +16,6 @@ when absent) so a stale window can never silently clobber a newer change.
 
 import hashlib
 import json
-import os
 from typing import Callable
 from typing import TypeVar
 
@@ -32,8 +31,6 @@ from imbue.minds.bootstrap import MindsRoot
 from imbue.minds.desktop_client.account_plan_view import build_account_plan_view
 from imbue.minds.desktop_client.ai_keys import resolve_workspace_account
 from imbue.minds.desktop_client.backup_trim import BackupTrimStatus
-from imbue.minds.desktop_client.cookie_manager import SESSION_COOKIE_NAME
-from imbue.minds.desktop_client.cookie_manager import verify_session_cookie
 from imbue.minds.desktop_client.dek_store import is_master_password_set_for_account
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClientError
@@ -45,9 +42,11 @@ from imbue.minds.desktop_client.latchkey.permission_overview import build_file_s
 from imbue.minds.desktop_client.latchkey.permission_overview import build_permission_overview
 from imbue.minds.desktop_client.latchkey.permission_overview import build_workspace_overview
 from imbue.minds.desktop_client.minds_config import DEFAULT_NOTIFICATION_STYLE
+from imbue.minds.desktop_client.minds_config import DEFAULT_UPDATE_WINDOW
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.minds_config import NotificationStyle
 from imbue.minds.desktop_client.state import get_state
+from imbue.minds.desktop_client.ui_auth import is_ui_request_authenticated
 from imbue.minds.mngr_settings.imbue_cloud_accounts import is_imbue_cloud_provider_enabled_for_account
 from imbue.minds.utils.sentry.core import latchkey_forward_sentry_consent_path
 from imbue.minds.utils.sentry.core import write_latchkey_forward_sentry_consent
@@ -61,9 +60,6 @@ class UiNotificationPrefs(FrozenModel):
     is_enabled: bool = Field(description="Master notifications toggle (gates every OS nudge the app sends)")
     style: NotificationStyle = Field(description="Delivery style for feed-backed notifications")
     is_os_hint_dismissed: bool = Field(description="Whether the one-time OS-notification hint was dismissed")
-    os_permission_confirmed: bool = Field(
-        description="Whether the desktop app has ever confirmed native OS notification permission is granted"
-    )
     version: str = Field(description="If-Match version for the notification-prefs write")
 
 
@@ -90,12 +86,21 @@ class UiSettingsOverview(FrozenModel):
     notification_prefs: UiNotificationPrefs = Field(
         description="Notification preferences, carrying their own If-Match version"
     )
+    update_window_start_hour: int = Field(description="Local hour scheduled machine updates may start running at")
+    update_window_end_hour: int = Field(description="Local hour scheduled machine updates stop running at")
 
 
 class UiErrorReportingWrite(FrozenModel):
     """Body of the error-reporting opt-out write."""
 
     report_unexpected_errors: bool = Field(description="New value for the per-machine flag")
+
+
+class UiUpdateWindowWrite(FrozenModel):
+    """Body of the scheduled-update window write."""
+
+    start_hour: int = Field(ge=0, le=23, description="Local hour the window opens")
+    end_hour: int = Field(ge=0, le=23, description="Local hour the window closes")
 
 
 class UiAccountEntry(FrozenModel):
@@ -160,21 +165,6 @@ class UiAiKeysContext(FrozenModel):
     error_message: str = Field(description="Non-empty when minting is impossible; explains why")
 
 
-def _is_settings_request_authenticated() -> bool:
-    """The same session-cookie check the /ui index uses.
-
-    Duplicated (six lines) rather than imported from ``ui_api``: that module
-    imports this one to register routes, so importing back would be circular.
-    """
-    if os.getenv("SKIP_AUTH", "0") == "1":
-        return True
-    signing_key = get_state().auth_store.get_signing_key()
-    cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
-    if cookie_value is None:
-        return False
-    return verify_session_cookie(cookie_value=cookie_value, signing_key=signing_key)
-
-
 def _json_response(payload: FrozenModel, status_code: int = 200) -> Response:
     return Response(payload.model_dump_json(), status=status_code, mimetype="application/json")
 
@@ -219,14 +209,12 @@ def _current_notification_prefs() -> UiNotificationPrefs:
         is_enabled = True
         style: NotificationStyle = DEFAULT_NOTIFICATION_STYLE
         is_os_hint_dismissed = False
-        os_permission_confirmed = False
     else:
-        is_enabled, style, is_os_hint_dismissed, os_permission_confirmed = minds_config.get_notification_prefs()
+        is_enabled, style, is_os_hint_dismissed = minds_config.get_notification_prefs()
     return UiNotificationPrefs(
         is_enabled=is_enabled,
         style=style,
         is_os_hint_dismissed=is_os_hint_dismissed,
-        os_permission_confirmed=os_permission_confirmed,
         version=compute_notification_prefs_version(is_enabled, style, is_os_hint_dismissed),
     )
 
@@ -250,7 +238,7 @@ def _is_any_account_master_password_set() -> bool:
 
 def _handle_settings_overview() -> Response:
     """GET /ui/api/settings: the app-level settings page's full data payload."""
-    if not _is_settings_request_authenticated():
+    if not is_ui_request_authenticated():
         return _unauthenticated_response()
     services_overview: tuple[ServicePermissionOverview, ...] = ()
     file_sharing_grants: tuple[WorkspaceFileSharingGrant, ...] = ()
@@ -286,6 +274,7 @@ def _handle_settings_overview() -> Response:
             permissions_unavailable = True
     minds_config = get_state().minds_config
     report_unexpected_errors = minds_config.get_report_unexpected_errors() if minds_config else True
+    update_window = minds_config.get_update_window() if minds_config is not None else DEFAULT_UPDATE_WINDOW
     overview = UiSettingsOverview(
         services_overview=services_overview,
         file_sharing_grants=file_sharing_grants,
@@ -295,6 +284,8 @@ def _handle_settings_overview() -> Response:
         report_unexpected_errors=report_unexpected_errors,
         version=compute_error_reporting_version(report_unexpected_errors),
         notification_prefs=_current_notification_prefs(),
+        update_window_start_hour=update_window[0],
+        update_window_end_hour=update_window[1],
     )
     return _json_response(overview)
 
@@ -355,7 +346,7 @@ def _apply_error_reporting_write(
 
 def _handle_error_reporting_write() -> Response:
     """POST /ui/api/settings/error-reporting: If-Match-guarded opt-out write."""
-    if not _is_settings_request_authenticated():
+    if not is_ui_request_authenticated():
         return _unauthenticated_response()
     minds_config = get_state().minds_config
     if minds_config is None:
@@ -385,7 +376,7 @@ def _apply_notification_prefs_write(
 
 def _handle_notification_prefs_write() -> Response:
     """POST /ui/api/settings/notifications: If-Match-guarded notification-prefs write."""
-    if not _is_settings_request_authenticated():
+    if not is_ui_request_authenticated():
         return _unauthenticated_response()
     minds_config = get_state().minds_config
     if minds_config is None:
@@ -397,26 +388,12 @@ def _handle_notification_prefs_write() -> Response:
     )
 
 
-class UiNotificationOsPermissionWrite(FrozenModel):
-    """Body of the OS-notification-permission-confirmed write."""
+def _handle_update_window_write() -> Response:
+    """POST /ui/api/settings/update-window: set the local hours scheduled updates run in.
 
-    os_permission_confirmed: bool = Field(
-        description="Whether native OS notification permission was just confirmed granted"
-    )
-
-
-def _handle_notification_os_permission_write() -> Response:
-    """POST /ui/api/settings/notification-os-permission: records the desktop app's own
-    best-effort observation of whether native OS notification permission is granted.
-
-    Electron exposes no permission-status API on macOS, so this is set from a
-    probe notification's 'show' event actually firing (or not) -- the one
-    signal available. Deliberately unguarded by If-Match: this is
-    system-observed state the app derives for itself, not a user-typed
-    preference, so a lost update under a race just means probing once more
-    than strictly necessary, never a torn record.
+    No If-Match guard: a plain preference with no consent semantics.
     """
-    if not _is_settings_request_authenticated():
+    if not is_ui_request_authenticated():
         return _unauthenticated_response()
     minds_config = get_state().minds_config
     if minds_config is None:
@@ -425,17 +402,19 @@ def _handle_notification_os_permission_write() -> Response:
     if not isinstance(body, dict):
         return _error_response("Invalid JSON body", 400)
     try:
-        write = UiNotificationOsPermissionWrite.model_validate(body)
+        write = UiUpdateWindowWrite.model_validate(body)
     except ValidationError as e:
-        logger.debug("Rejected a malformed notification-os-permission write body: {}", e)
+        logger.debug("Rejected a malformed update-window write body: {}", e)
         return _error_response("Invalid JSON body", 400)
-    minds_config.set_notification_os_permission_confirmed(write.os_permission_confirmed)
-    return Response(status=204)
+    if write.start_hour == write.end_hour:
+        return _error_response("The update window needs a start and end that differ", 400)
+    minds_config.set_update_window(write.start_hour, write.end_hour)
+    return _json_response(UiUpdateWindowWrite(start_hour=write.start_hour, end_hour=write.end_hour))
 
 
 def _handle_accounts_detail() -> Response:
     """GET /ui/api/accounts: the Accounts page's account list."""
-    if not _is_settings_request_authenticated():
+    if not is_ui_request_authenticated():
         return _unauthenticated_response()
     session_store = get_state().session_store
     minds_config = get_state().minds_config
@@ -481,7 +460,7 @@ def _handle_account_plan(user_id: str) -> Response:
     A connector failure degrades to ``plan_view: null`` rather than an error
     status, so the card renders a plan-unavailable state instead of failing.
     """
-    if not _is_settings_request_authenticated():
+    if not is_ui_request_authenticated():
         return _unauthenticated_response()
     session_store = get_state().session_store
     cli = get_state().imbue_cloud_cli
@@ -513,7 +492,7 @@ def _handle_ai_keys_context() -> Response:
     A machine's host id is also accepted as the coordinate while in-workspace
     deep links (written before workspace ids) transition.
     """
-    if not _is_settings_request_authenticated():
+    if not is_ui_request_authenticated():
         return _unauthenticated_response()
     workspace_coordinate = request.args.get("workspace", "").strip()
     if not workspace_coordinate:
@@ -558,11 +537,7 @@ def register_settings_routes(blueprint: Blueprint) -> None:
     blueprint.add_url_rule("/api/settings", view_func=_handle_settings_overview)
     blueprint.add_url_rule("/api/settings/error-reporting", view_func=_handle_error_reporting_write, methods=["POST"])
     blueprint.add_url_rule("/api/settings/notifications", view_func=_handle_notification_prefs_write, methods=["POST"])
-    blueprint.add_url_rule(
-        "/api/settings/notification-os-permission",
-        view_func=_handle_notification_os_permission_write,
-        methods=["POST"],
-    )
+    blueprint.add_url_rule("/api/settings/update-window", view_func=_handle_update_window_write, methods=["POST"])
     blueprint.add_url_rule("/api/accounts", view_func=_handle_accounts_detail)
     blueprint.add_url_rule("/api/accounts/<user_id>/plan", view_func=_handle_account_plan)
     blueprint.add_url_rule("/api/ai-keys", view_func=_handle_ai_keys_context)

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from pydantic import AnyUrl
 from pydantic import Field
 
@@ -12,6 +13,7 @@ from imbue.minds.desktop_client.conftest import build_desktop_client_for_test
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
 from imbue.minds.desktop_client.latchkey.testing import build_fake_gateway_client
+from imbue.minds.desktop_client.minds_config import DEFAULT_UPDATE_WINDOW
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.minds_config import NotificationStyle
 from imbue.minds.desktop_client.testing import WriteCountingMindsConfig
@@ -82,6 +84,51 @@ def test_error_reporting_write_round_trips_with_the_served_version(tmp_path: Pat
     assert json.loads(consent_path.read_text())["report_unexpected_errors"] is False
 
 
+def test_update_window_write_round_trips_onto_the_overview(tmp_path: Path) -> None:
+    minds_config = MindsConfig(data_dir=tmp_path / "config")
+    client, _app, _auth_store = build_desktop_client_for_test(
+        tmp_path, is_authenticated=True, minds_config=minds_config
+    )
+    overview = json.loads(client.get("/ui/api/settings").data)
+    assert (overview["update_window_start_hour"], overview["update_window_end_hour"]) == (DEFAULT_UPDATE_WINDOW)
+
+    response = client.post("/ui/api/settings/update-window", json={"start_hour": 23, "end_hour": 3})
+
+    assert response.status_code == 200
+    assert minds_config.get_update_window() == (23, 3)
+    reread = json.loads(client.get("/ui/api/settings").data)
+    assert (reread["update_window_start_hour"], reread["update_window_end_hour"]) == (23, 3)
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        {"start_hour": 2, "end_hour": 24},
+        {"start_hour": -1, "end_hour": 5},
+        {"start_hour": 3, "end_hour": 3},
+        {"start_hour": 2},
+        {"start_hour": 2, "end_hour": "midnight"},
+    ),
+    ids=["hour-too-high", "hour-negative", "empty-window", "half-a-window", "not-a-number"],
+)
+def test_an_unusable_update_window_is_rejected_without_being_stored(tmp_path: Path, body: dict[str, object]) -> None:
+    minds_config = MindsConfig(data_dir=tmp_path / "config")
+    client, _app, _auth_store = build_desktop_client_for_test(
+        tmp_path, is_authenticated=True, minds_config=minds_config
+    )
+
+    response = client.post("/ui/api/settings/update-window", json=body)
+
+    assert response.status_code == 400
+    assert minds_config.get_update_window() == DEFAULT_UPDATE_WINDOW
+
+
+def test_update_window_write_requires_authentication(tmp_path: Path) -> None:
+    client, _app, _auth_store = build_desktop_client_for_test(tmp_path, is_authenticated=False)
+
+    assert client.post("/ui/api/settings/update-window", json={"start_hour": 1, "end_hour": 4}).status_code == 401
+
+
 def test_error_reporting_write_with_a_malformed_body_is_rejected_with_400(tmp_path: Path) -> None:
     minds_config = MindsConfig(data_dir=tmp_path / "config")
     client, _app, _auth_store = build_desktop_client_for_test(
@@ -144,7 +191,6 @@ def test_settings_overview_carries_the_default_notification_prefs_with_their_own
         "is_enabled": True,
         "style": "both",
         "is_os_hint_dismissed": False,
-        "os_permission_confirmed": False,
         "version": compute_notification_prefs_version(is_enabled=True, style="both", is_os_hint_dismissed=False),
     }
 
@@ -178,7 +224,7 @@ def test_notification_prefs_write_round_trips_with_the_served_version(tmp_path: 
     assert response.status_code == 200
     new_version = compute_notification_prefs_version(is_enabled=False, style="cards", is_os_hint_dismissed=True)
     assert json.loads(response.data)["version"] == new_version
-    assert minds_config.get_notification_prefs()[:3] == (False, "cards", True)
+    assert minds_config.get_notification_prefs() == (False, "cards", True)
     # The next overview serves the written values under the new version.
     assert json.loads(client.get("/ui/api/settings").data)["notification_prefs"]["version"] == new_version
 
@@ -204,7 +250,7 @@ def test_notification_prefs_write_lands_all_three_values_in_one_config_write(tmp
 
     assert response.status_code == 200
     assert minds_config.write_count == 1
-    assert minds_config.get_notification_prefs()[:3] == (False, "os", True)
+    assert minds_config.get_notification_prefs() == (False, "os", True)
 
 
 def test_notification_prefs_write_with_a_malformed_style_is_rejected_with_400(tmp_path: Path) -> None:
@@ -257,60 +303,6 @@ def test_notification_prefs_write_without_if_match_is_rejected_with_428(tmp_path
 
     assert response.status_code == 428
     assert minds_config.get_notification_prefs()[0] is True
-
-
-def test_notification_os_permission_write_persists_the_confirmed_flag(tmp_path: Path) -> None:
-    minds_config = MindsConfig(data_dir=tmp_path / "config")
-    client, _app, _auth_store = build_desktop_client_for_test(
-        tmp_path, is_authenticated=True, minds_config=minds_config
-    )
-
-    response = client.post(
-        "/ui/api/settings/notification-os-permission",
-        json={"os_permission_confirmed": True},
-    )
-
-    assert response.status_code == 204
-    assert minds_config.get_notification_prefs()[3] is True
-    assert json.loads(client.get("/ui/api/settings").data)["notification_prefs"]["os_permission_confirmed"] is True
-
-
-def test_notification_os_permission_write_requires_no_if_match(tmp_path: Path) -> None:
-    """Unlike the guarded prefs write: this is system-observed state, not a user
-    preference, so there is nothing for a stale window to clobber."""
-    minds_config = MindsConfig(data_dir=tmp_path / "config")
-    client, _app, _auth_store = build_desktop_client_for_test(
-        tmp_path, is_authenticated=True, minds_config=minds_config
-    )
-
-    response = client.post(
-        "/ui/api/settings/notification-os-permission",
-        json={"os_permission_confirmed": False},
-    )
-
-    assert response.status_code == 204
-
-
-def test_notification_os_permission_write_requires_authentication(tmp_path: Path) -> None:
-    client, _app, _auth_store = build_desktop_client_for_test(tmp_path, is_authenticated=False)
-
-    response = client.post(
-        "/ui/api/settings/notification-os-permission",
-        json={"os_permission_confirmed": True},
-    )
-
-    assert response.status_code == 401
-
-
-def test_notification_os_permission_write_rejects_a_malformed_body(tmp_path: Path) -> None:
-    minds_config = MindsConfig(data_dir=tmp_path / "config")
-    client, _app, _auth_store = build_desktop_client_for_test(
-        tmp_path, is_authenticated=True, minds_config=minds_config
-    )
-
-    response = client.post("/ui/api/settings/notification-os-permission", json={"confirmed": "yes"})
-
-    assert response.status_code == 400
 
 
 def test_notification_prefs_write_without_a_minds_config_is_rejected_with_503(tmp_path: Path) -> None:

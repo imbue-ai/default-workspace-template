@@ -126,7 +126,7 @@ Cuts are already serialized: `minds-launch-to-msg.yml` holds the `mac-runner` co
 | Channel | Cadence | Fed by | Default for |
 |---|---|---|---|
 | `stable` | roughly monthly | a PR editing `release-channels.toml` | everyone; installs predating channels still read ToDesktop's feed |
-| `beta` | roughly weekly | a PR editing `release-channels.toml`, by policy after a soak on `alpha` | nobody -- served by the same machinery but listed for no one (decision 4) |
+| `beta` | roughly weekly | a PR editing `release-channels.toml`, by policy after a soak on `alpha` | nobody -- selectable and serving a build since 2026-08-20, but nobody's default (decision 4) |
 | `alpha` | every green build, roughly daily | a PR editing `release-channels.toml` | opt-in |
 
 Every channel moves the same way: the promote workflow applies whatever
@@ -165,6 +165,89 @@ The versions printed beside each channel state the situation on their own.
 - On launch and every 10 minutes thereafter, plus on demand from the menu item.
 - The check resolves the feed from the stored channel, applies the fixed updater configuration, then checks.
 - Failure to reach a channel feed is reported as an error, never as "up to date".
+
+## Staged rollout
+
+A promotion says *which* build a channel serves. A staged rollout says *how much
+of the channel is offered it yet*. `stable` ramps a new build over several days --
+10% -> 50% -> 100% is a guideline, not a rule, and nothing enforces it -- one
+merged PR per step; `alpha` and `beta` stay at 100.
+
+The client half is electron-updater's, not ours: `stagingPercentage` is a
+top-level key it reads off the manifest, and each install buckets itself off the
+UUID at `<userDataPath>/.updaterId`. We write the key and leave the bucketing
+where it is.
+
+**So the whole feature is publisher-side. Not one line of `apps/minds/electron/`
+changes.** Two client changes were written and both were removed: a waiver
+letting a user-started check ignore the percentage (finding 16), and a loosening
+of `isAlreadyStaged` for an install the rollout no longer offers a build it has
+already staged. The second was removed while narrowing was still refused, which
+left that case unreachable. Finding 23 made it reachable again and the loosening
+has not come back, so the function stays as it was and the gap is open --
+finding 25.
+
+### Invariants, in addition to the four above
+
+5. **Required, never optional.** Every entry declares `rollout_percentage`.
+   Absence is not "no rollout" -- electron-updater offers the build to everyone
+   when the manifest declares no percentage, and does the same for a null, a
+   non-numeric one, or anything above 100. Nothing clamps, so the only spelling
+   that does not reach everyone reaches nobody instead: a negative. None of them
+   is what the file meant, so absence must not be expressible. See finding 14.
+6. **Nested bands.** Which installs a percentage admits is decided by that number
+   alone: the bucket hashes the install id and never the version, so every band is
+   a subset of every wider one. Widening therefore strictly adds installs and
+   nobody is offered a build that then disappears; narrowing strictly removes
+   them, which is not a mistake to guard against but the halt
+   ([The halt is the percentage itself](#the-halt-is-the-percentage-itself)).
+7. **Every check is gated, including the ones a user starts.** There is no
+   waiver. A held-back user who wants the build now switches to a channel that
+   is not ramping -- `beta` carries 100 by construction -- takes it there, and
+   switches back, parking until stable catches up. That round trip is already
+   designed, already explained by the panel's parked copy, and already the only
+   escape hatch; a second one for the ramp alone earned neither its complexity
+   nor its failure modes (see finding 16).
+
+### The halt is the percentage itself
+
+Lowering `rollout_percentage` stops a bad build part-way through a ramp, and
+nothing refuses it. `isStagingMatch` buckets each install off the UUID at
+`~/.minds/.updaterId`, which is fixed for the life of the install, and compares it
+against the percentage in the manifest it just fetched. So a band is nested and a
+narrower one is strictly smaller: whoever has not polled yet stops being offered
+the build. `0` stops it reaching anyone new.
+
+What it does **not** do is pull anyone back. `allowDowngrade` is false, and
+`downloadAndOffer` arms `autoInstallOnAppQuit` *before* the transfer, so an
+install that has fetched the bytes applies them at its next restart whatever the
+feed says next. Narrowing is a partial halt, not a rollback; moving those users
+needs a new build, which is the withdrawal path.
+
+Reverting a ramp step therefore does what a reader expects: it restores the
+previous, smaller band. Pausing a ramp is also still just not opening the next PR.
+
+### What the rollout does not reach
+
+- **New downloads.** The public download link resolves `files[]` out of
+  `stable-mac.yml` and redirects; it reads no other key. A brand-new install
+  therefore gets the newest stable build during a ramp, which is deliberate: a
+  fresh install has no existing `~/.minds` for a bad build to endanger, which is
+  the whole reason invariant 4 exists. The accepted cost is that a broken build is
+  a broken *first* experience for anyone signing up mid-ramp.
+- **Installs predating the feed.** They read ToDesktop's own feed and are governed
+  by nothing we publish.
+
+### Evaluating a ramp
+
+Sentry's `release` is the `package.json` version on both events and sessions, and
+a ramped build always carries a different version from the one it is replacing --
+so "is the new build worse" is answerable per release without the channel tag
+listed under [Not yet built](#not-yet-built). Two caveats belong on the record:
+the early cohort is a fixed set of machines rather than a random sample, so this
+compares two populations rather than treatment and control; and a user only runs
+the bytes at their next restart, so a soak measured in hours mostly measures
+whether the download succeeded.
 
 ## Architecture
 
@@ -357,14 +440,14 @@ So the credential read and the boto3 client have one definition, shared by the r
 
 At the repo root next to `scripts/lima_image/publish.py`, which is the existing home for operator-run release tooling -- **not** `apps/minds/scripts/`, which holds build-time Node scripts.
 
-Fetches ToDesktop's per-build manifest, rewrites its URLs to absolute, and uploads it as `<channel>-mac.yml` with a short `Cache-Control`. Gates before writing anything: the Lima image manifest must exist for the build's `FALLBACK_BRANCH` with each arch the run names, on a tier that configures an image store; the channel must not move backwards without `--allow-rollback`; every rewritten URL must keep a `.zip`/`.dmg` extension; and the version must be plain `X.Y.Z`, which is where the stamp-once rule is mechanically enforced.
+Fetches ToDesktop's per-build manifest, rewrites its URLs to absolute, and uploads it as `<channel>-mac.yml` with a short `Cache-Control`. Gates before writing anything: the Lima image manifest must exist for the build's `FALLBACK_BRANCH` with each arch the run names, on a tier that configures an image store; every rewritten URL must keep a `.zip`/`.dmg` extension; and the version must be plain `X.Y.Z` (`assert_plain_release_version`, called on its own rather than as a side effect of the backwards-move check).
 
 It is a library, not a command: it has no CLI, because a second entry point would be a second gate set to keep in step with the reviewed one.
 
 Network access is injected -- `fetch: Fetch = http_get` for the gates, `make_client: MakeS3Client = r2_client` for the upload -- so both are testable without monkeypatching.
 
 "What does this channel serve now" has two sources and they are not equally good.
-The manifest is uploaded with a short `max-age`, so reading it back through the public feed inside that window returns the *previous* promotion -- and the rollback gate would then compare against a version the channel has already left, and wave through the backwards move it exists to refuse.
+The manifest is uploaded with a short `max-age`, so reading it back through the public feed inside that window returns the *previous* promotion -- and every use of that answer is then wrong against a version the channel has already left: the line naming what it serves today, the BACKWARDS label, and the comparison that would otherwise report an applied promotion as a no-op.
 So a run holding the bucket credential reads the object itself, where R2 is read-after-write consistent.
 `read_current_channel_manifest` takes which source as a `from_bucket` flag rather than as an injected reader: the choice is made once, from the environment, in `publish.py`'s `main`, which also says out loud which one it used -- a credential-less dry run and the publish that follows it can differ.
 The public feed stays the fallback for the `validate` job, which is the one run that can afford a stale answer: it publishes nothing, so the worst it costs is a wrong preview.
@@ -374,9 +457,9 @@ Clients are unaffected either way -- they keep fetching the CDN copy, which is w
 
 `manifest.py` is the single-channel primitive, and has no entry point of its own. What operators touch is a declarative file, so a promotion is reviewable before it takes effect and the channel's history is the file's history.
 
-A channel moves only by repointing its entry. **Removing an entry withdraws nothing** -- no manifest is ever deleted, so the channel keeps serving its last build, and the run names it rather than reporting a promotion. So `git revert` is the undo only between two builds carrying the same version, which is the ordinary `alpha` case; reverting a version bump is refused unless `--allow-rollback` is passed, and CI never passes it, so a backwards withdrawal is run by hand (see `apps/minds/docs/release.md`).
+A channel moves only by repointing its entry. **Removing an entry withdraws nothing** -- no manifest is ever deleted, so the channel keeps serving its last build, and the run names it rather than reporting a promotion. So `git revert` is the undo only between two builds carrying the same version at the same percentage, which is the ordinary `alpha` case. Reverting a version bump moves the channel back to the older build, which publishes like any other move and is named as backwards on the report line. Reverting a ramp step restores the previous, smaller band, which is a supported move and the way a bad build is stopped part-way through a ramp.
 
-- **`apps/minds/release-channels.toml`** declares which build each channel serves (`build_id`, `version`, `fallback_branch`), `stable` included. `beta` has no entry: it is publishable, and gets one once alpha and stable are proven (see [Decisions owed](#decisions-owed)).
+- **`apps/minds/release-channels.toml`** declares which build each channel serves and how much of the channel is offered it (`build_id`, `version`, `fallback_branch`, `rollout_percentage` -- see [Staged rollout](#staged-rollout)), `stable` included. Every field is required and an unrecognised key is refused. `beta` carries an entry like the other two; what is still owed is the promotion cadence that keeps it moving (see [Decisions owed](#decisions-owed)).
 - **`scripts/release_channel/publish.py`** reads that file and makes it true, running every `manifest.py` gate per entry plus two the primitive has no basis for. The declared `version` must equal what the build actually is, or the diff a reviewer approves could say something different from what gets published. And `fallback_branch` must be `minds-v<that version>`: nothing here can read the tag baked into the build, so leaving the previous release's tag beside a bumped version would point the image gate at the previous release's image, find it, and pass -- the silent failure that gate exists to convert into a loud one, reported green. Re-running a promotion that is already applied is a no-op, decided by comparing the manifest it would publish against the one the channel serves -- not their versions, because a version is stamped once at cut and every build until the next one repeats it, so the ordinary `alpha` promotion is a new build at the version already served.
 - **`scripts/release_channel/resolve_tier.sh`** derives the app id, bucket, feed URL and image-store URL from files already in the repo, so the workflow carries no copies that can drift from the tier's own config. Bare values, never ready-made flags: the caller builds its own argv, so a config value carrying a space stays one argument instead of splitting into extra flags on a credentialed command. An unset `update_feed_base_url` is the honest "this tier serves no manifest yet" state, and the caller skips publishing rather than inventing a URL.
 - **`.github/workflows/minds-release-channels.yml`** runs it, split by trust: the `validate` job runs on the PR with **no credentials**, because every gate reads a public URL; only the push-to-main `publish` job takes the R2 credential, behind the `minds-release` environment.
@@ -391,8 +474,11 @@ A channel moves only by repointing its entry. **Removing an entry withdraws noth
   Keeping the pointer move as a merged PR is worth preserving even when the rest is automated: it is what makes `git log -p release-channels.toml` the channel history.
 - Surfacing the parked state anywhere. Nothing announces it: the Updates panel prints what each channel serves and leaves the reader to compare, on the reasoning above, so a parked user has to go looking and then do the comparison. Main pushes status to every window, and the shell consumes it for the update-ready card, so the delivery half already exists if this is ever wanted.
 - A gate on the dwt tag `fallback_branch` names: that it **exists** and is annotated. Its *name* is pinned to `minds-v<the build's version>`, and the Lima image manifest is checked for it, but only when the tier configures an image store; nothing confirms the tag is really in the template repo. The tag lives in default-workspace-template, and the `validate` job's `GITHUB_TOKEN` is scoped to this repository -- so the gate needs a cross-repo credential, which is precisely what the trust split keeps away from PR-authored code.
-- The Sentry channel tag.
-- `stagingPercentage`.
+- The Sentry channel tag. Note that a *tag* would slice error events and not
+  crash-free-session rate: a session envelope carries only `release`,
+  `environment`, `ip_address` and `user_agent`, never tags. A percentage ramp
+  does not need it -- the ramped build and its control always carry different
+  `release` strings -- so this is owed to the channel ladder, not to the ramp.
 - Linux (`<channel>-linux.yml`).
 
 ### Docs and changelog
@@ -423,9 +509,10 @@ That job is what makes the ordering rule's test a guard rather than a record: it
 - **`scripts/r2/client_test.py`**.
   That a credential which did not arrive is named -- absent or empty, since a publish job exports all three names unconditionally, so a secret Vault did not supply arrives as an empty string.
 - **`scripts/release_channel/manifest_test.py`**.
-  The rewrite is asserted against a **verbatim captured** ToDesktop manifest, so it has to survive spaces in filenames, the legacy top-level `path:`, and a quoted `releaseDate:`. Digests, sizes and `releaseDate` must come through byte-for-byte. Plus every gate: missing image, wrong tag, missing arch, rollback without the flag, a prerelease version, and an extensionless URL. And the upload itself, through a `botocore` stub: the key must be the `<channel>-mac.yml` electron-updater asks for, and the `Cache-Control` must carry the TTL the caller passed. The bucket reader gets the same stub treatment, including that only an absent object reads as "never published" -- a denied read or a throttle must refuse the promotion, since taking either as absence skips the rollback gate outright.
+  The rewrite is asserted against a **verbatim captured** ToDesktop manifest, so it has to survive spaces in filenames, the legacy top-level `path:`, and a quoted `releaseDate:`. Digests, sizes and `releaseDate` must come through unchanged. Plus every gate that remains: missing image, wrong tag, missing arch, a prerelease version, and an extensionless URL -- and that a backwards version move is reported rather than refused, in both directions, since standing still is not a decrease either. And that the published manifest declares exactly one `stagingPercentage`, parseable and top level, with the artifacts and digests untouched -- a stray key from upstream is replaced rather than joined, since two keys is an unparseable document rather than a merge. And that a channel is read back as the whole document rather than as its version, because two builds between cuts carry the same version. And that a document which is not a manifest at all is refused naming which one it was, rather than read past into a missing field -- unparseable, or a scalar, which is what an error page served with a 200 loads as. And that reading a percentage back refuses anything the writer would have refused, split the same two ways it splits them: not a whole number, or outside 0-100. This tool is the key's only writer, so a value out there means the object was hand-edited, and the reported state would otherwise name a percentage no client honoured. And the upload itself, through a `botocore` stub: the key must be the `<channel>-mac.yml` electron-updater asks for, and the `Cache-Control` must carry the TTL the caller passed. The bucket reader gets the same stub treatment, including that only an absent object reads as "never published" -- a denied read or a throttle must refuse the promotion, since taking either as absence would report a first publish over a channel the run cannot see.
 - **`scripts/release_channel/publish_test.py`**.
   That each source is really read from, proven by giving the feed a version the bucket does not have, so a run that claims the bucket and reads the feed returns the wrong one -- and by failing outright if a credential-less run builds an S3 client at all. Plus the declarative layer: the shipped `release-channels.toml` parses and names only publishable channels, `stable` is declared and published like any other channel, a channel nobody serves is refused, a missing field is rejected before any network call, a version that disagrees with its build is rejected before the image gate, a `fallback_branch` left on the previous release is rejected, re-running against an unchanged channel is a no-op, a channel the file no longer declares is reported as still being served, and a refused promotion leaves the process with a non-zero exit code -- which is the whole of what makes a gate turn the job red.
+  And the refusals that make an absent rollout inexpressible: an unknown field (the misspelling is the dangerous typo), a value that is not a whole number, one outside 0-100 -- while `0` survives as a value meaning nobody. And that a string field TOML let through as a bool, a number, a list or an empty string is refused by name too, since `build_id` reaches a URL. So is `channel` inside a table, which is the one key `extra="forbid"` cannot see -- it is a real field, so it reaches the constructor twice and raises past `main`'s handler instead of being named. Plus that every report line names the percentage, and that a ramp step, which changes nothing else in the manifest, republishes rather than reading as a no-op.
 - **`scripts/release_channel/resolve_tier_test.py`**.
   The one `grep` the promote job's publishing hangs on: what the shell extracts from the production tier's `client.toml` must equal what `tomllib` parses, and must not be empty. An indented key, a quoted key or a single-quoted value is legal TOML that the shell reads as empty, which skips both the dry-run and the publish and leaves the job green.
 - **Manual, in Electron.** The fixture-feed harness behind [Verification log](#verification-log). Not crystallized into CI: it needs a real Electron process, and the electron-updater behaviors it pins are already guarded by the unit test's mock.
@@ -502,9 +589,88 @@ the thing, not by reading about it.
     The check now races a deadline; the download, which legitimately runs for minutes, does not.
 
 13. **The declarative file could express a promotion but not a withdrawal.**
-    Nothing deletes a manifest, so removing an entry left the channel serving its last build while the run reported success -- and reverting a version *bump* is refused by the rollback guard, whose `--allow-rollback` the workflow never passes.
-    The design keeps both: deleting the manifest would leave every client on that channel erroring against a feed that serves nothing, and letting a merge roll a version back makes an incident action out of an ordinary approval.
-    So the run names a channel it no longer declares but is still serving, and a backwards withdrawal is an operator-run command.
+    Nothing deletes a manifest, so removing an entry left the channel serving its last build while the run reported success -- and reverting a version *bump* was refused by the rollback guard, whose `--allow-rollback` the workflow never passed (since removed -- finding 24).
+    The design kept both: deleting the manifest would leave every client on that channel erroring against a feed that serves nothing, and letting a merge roll a version back was held to make an incident action out of an ordinary approval.
+    The first half stands -- the run names a channel it no longer declares but is still serving.
+    The second did not survive finding 24: a backwards withdrawal goes through the reviewed file like any other move, and the report line names it.
+
+14. **Absence of `stagingPercentage` is the largest rollout, and the publish path produced absence on every mistake.**
+    `AppUpdater.isStagingMatch` returns true for an absent, null or non-numeric value (6.8.9, `AppUpdater.js:314-324`), driven directly and confirmed for `undefined`, `null`, `"abc"`, `true`, `[]` and `{}`.
+    Meanwhile `parse_channels` validated only its three required fields and copied exactly those into `ChannelEntry`, silently dropping every other key -- verified by parsing a table carrying `rollout_percentage`, `stagingPercentage` and `staging_pct` at once and getting an entry with none of them.
+    So `rollout_percentge = 10` would have published a full rollout while printing an ordinary promotion line.
+    The design's answer is that the field is required and unknown keys are refused, which makes absence inexpressible rather than dangerous.
+    Two smaller traps sit under the same finding: `0` is a legal percentage meaning *nobody* and is falsy in Python, so the file's own `if not fields.get(f)` idiom would have read it as missing and inverted it; and nothing downstream clamps, so `150` reaches everyone and `-5` reaches nobody.
+
+15. **The plan's "restate the percentage whenever the build changes" gate is not expressible, and was replaced.**
+    `version` and `fallback_branch` can be checked against the build because the build knows its own version. A percentage has no ground truth in the build -- any number is legal for any build -- so "you bumped `build_id` and left the percentage stale" cannot be distinguished from "you meant that percentage".
+    What replaced it is visibility rather than a gate: every publish line now names the percentage, including the credential-free dry run that runs on the PR. Before, a rung on the ladder, a jump to 100%, a malformed value and a stranded rollout all printed the byte-identical `stable: would publish 0.4.2 (currently 0.4.2)`.
+
+16. **The rollout waiver was built, then removed, and the reason it was removed is the reason to record.**
+    It let a user-started check ignore the percentage. Making that correct took a module-level flag whose lifetime spans *two* serialized tasks: `startDownload` re-checks before downloading, because `downloadUpdate()` takes no argument and serves whatever the last `checkForUpdates()` left on the shared updater -- so a waiver scoped to the check that queued the download is already restored by the time the download runs, and the gate re-applies to the very fetch the user asked for. That was got wrong first; the symptom is a button that appears to work and fetches nothing, the same class as findings 2 and 12.
+    It was removed because it was a *second* escape hatch. Switching to a channel that is not ramping already gets a held-back user the build, and switching back parks them until stable catches up -- a round trip the spec already designs, the panel already explains, and the tests already cover. One general mechanism beat one general mechanism plus a ramp-specific one, and deleting it took `main.js` out of the change entirely.
+
+17. **`isUserWithinRollout`'s default delegates to `this`, and survives a bare call only by accident.**
+    The override is a public settable property whose setter takes any truthy value (`if (value)`, `AppUpdater.js:98-101`), and the default is `updateInfo => this.isStagingMatch(updateInfo)` -- an arrow assigned in the constructor, so its `this` is bound and a bare call happens to work.
+    `isStagingMatch` itself is `private` in the type declarations, so it is not contract, and neither is the arrow.
+    The wrapper therefore had to invoke the captured predicate with the updater as its receiver, which the first version did not -- caught by writing the mock as a method rather than an arrow, where it threw `this.isStagingMatch is not a function`.
+    Recorded rather than deleted with the waiver (finding 16): anything that wraps this property again inherits the same trap, and nothing about it is contract.
+
+18. **Sentry sessions crashing at startup carried no user id, so the crash-free-*users* rate missed exactly them.**
+    `Sentry.setUser` ran 66 lines after `Sentry.init`. `mainProcessSessionIntegration.setup()` opens the release-health session from inside `init`, and `startSession` copies the user off the combined scope at that moment (`@sentry/core exports.js:264-276`).
+    The *live* session does get it -- `Scope.setUser` calls `updateSession` when a session is already open on the scope it writes to (`scope.js:193-195`), and that is the same isolation scope -- so a cleanly ended session always carried a `did`. Driven against the installed package to be sure: old ordering, live envelope `did` present.
+    What it missed is the snapshot `@sentry/electron`'s `sessions.startSession` writes to disk right there, from a copy of the session taken before `setUser` can run. A crash is reported on the *next* run, rebuilt from the last snapshot written -- `makeSession` carries only a `did` the snapshot already had.
+    That window is bounded, and narrower than this finding first claimed: `startSession` also arms a `PERSIST_INTERVAL_MS` (60s) timer that re-writes the live session, id included. So the old ordering lost the id from a crash that beat the first re-persist -- a startup crash, which is the failure a ramp exists to catch -- and not from every crashed session. Driven, old ordering: snapshot `did` `undefined` at 0.4s, `"anon-1234"` at 62s, and a session rebuilt from the 62s snapshot carries it.
+    `Sentry.setUser` writes to the isolation scope, which exists before the client does, so moving the call above `init` is the whole fix.
+    Found here because the ramp depends on it, but shipped as its own change rather than with the rollout.
+
+19. **The first merge republishes every channel, and the first ramp cannot be the build already being served.**
+    Both observed by running the real CLI as a dry run against the live production feed.
+    The manifests in the bucket declare no percentage and the new code always writes one, so the text differs and all three channels republish -- a behaviourally identical write, since absence and 100 mean the same thing to the client, but a write to production on merge nonetheless.
+    A ramp can also start on the build a channel already serves, though it reaches nobody new: everyone the channel was going to offer 0.4.2 to has already been offered it, so the percentage only binds the installs that have not polled since.
+
+20. **"The same build" is the build id, not the same bytes, and comparing bytes made the narrowing gate fail open.**
+    The gate answers "is this build the one the channel serves" before it compares percentages, and answering it by comparing the two manifests whole means any incidental byte difference reads as a *new* build -- which may start its ramp anywhere, so the gate returns having checked nothing.
+    Driven directly against the captured real manifest: a 50% -> 10% narrowing that is refused on the nominal case was allowed once the served manifest carried a trailing blank line, a trailing space on a url line, a key added upstream by ToDesktop, or urls left relative.
+    Two of those need nobody to do anything wrong -- ToDesktop adding a key of its own, or this repo changing what `rewrite_manifest` emits -- and each disarms the gate for every channel at once, with a green dry run that looks identical either way.
+    The harm is bounded, since narrowing recalls nobody. That is the argument for not building a halt; it is not an argument for a gate the spec, the runbook and both changelogs describe as absolute. A gate that fails open reproduces exactly the false belief of mitigation that the "no halt" decision exists to prevent.
+    The fix is that `entry.build_id` reaches the gate. ToDesktop names it in every artifact filename (`Minds 0.3.11 - Build 260801n4rh5zv5d-arm64-mac.zip`), so it outlives the rewrite, the encoding and anything added beside it. The whole-text comparison stays as the fallback for a manifest whose artifacts do not carry the id, which is what makes the change one that can only ever add refusals.
+
+21. **A YAML re-render *is* a copy here, and the argument against parsing was really an argument about which YAML.**
+    The manifest was edited a line at a time -- two regexes for `stagingPercentage`, one for the urls, a whole-number regex standing in for a type, and a guard against emitting the key twice -- on the stated premise that re-rendering ToDesktop's document would not preserve it.
+    Driven against the live build manifest for `260825un55i8ix7`: parse and re-emit preserves every value -- version, digests, sizes, `releaseDate`, and any key ToDesktop set that this code knows nothing about. It is byte-identical too if the dumper is told to indent sequences under their key, but nothing reads the layout, so that is not carried: the published manifest is pyyaml's default block style, which js-yaml reads identically.
+    So the premise was wrong, and the four regexes plus the duplicate-key guard are gone -- the last unreachable, because a mapping holds one key by construction.
+    The real hazard is a different one, and it was never about re-rendering. pyyaml is a **YAML 1.1** parser and the client's js-yaml is **1.2**: `010` is 8 to one and 10 to the other, `yes` is true to one and a string to the other, `1:30` is 90 to one.
+    Reading the manifest by a different schema than the client decides blast radius from a number the client never saw, and it fails *open* -- a `stagingPercentage: 010` read as 8 lets the monotonicity gate wave through a move to 9%, which is a narrowing.
+    Two fixes were built and both were dropped: a hand-rolled 1.2 loader rebuilding pyyaml's resolvers and int constructor (46 lines, and still wrong on `0b101` and `1_000`), and `ruamel.yaml`, which is 1.2 natively and needs four lines (correct on all 22 spellings tried). What settled it is that the hazard is not reachable from a manifest ToDesktop produces: electron-builder writes them *with js-yaml*, whose emitter is canonical 1.2, and re-reading a stock-pyyaml round-trip of the real manifest yields an equal document -- which it could not if any scalar in it read differently under 1.1.
+    So the reader is stock pyyaml, and the gap is documented rather than closed. Four shapes are read differently from the client and are silently in range: `010`, `017`, `050` and `1:30`. Every one needs the bucket object hand-edited, and the worst outcome is a narrowing slipping past the gate, which recalls nobody. `test_a_spelling_this_tool_never_writes_is_read_as_yaml_1_1` pins it so that closing it later is deliberate. *(Both consequences named above were the gate's, and finding 23 removed it. A misread value now only mis-states the percentage on the report line, which makes the decision to document rather than close the gap easier, not harder.)*
+
+22. **The build-id check was a substring match over the rendered manifest, so text anywhere in the file could claim a build.**
+    Finding 20 replaced a whole-text comparison with `entry.build_id`, but the id was then looked for with `build_id in current.text` -- which re-rendered the document to YAML and searched all of it, not the artifact urls the id actually lives in.
+    electron-builder manifests can carry free text (`releaseNotes` is a supported field), so a manifest for a *different* build that merely mentioned this one read as the same build, and the narrowing gate compared percentages across two builds. Reproduced directly, and covered by `test_a_build_id_outside_an_artifact_does_not_make_it_that_build`.
+    The id is now looked for in the `url` and `path` values themselves, found through the same rule the rewrite uses. The generator that does it also retires the out-parameter `rewrite_manifest` threaded through its helpers to answer whether any artifact was found.
+    Both halves of this gate have now failed open once, in the same direction, for the same underlying reason: a question about structure answered against text.
+
+
+23. **The narrowing gate was protecting against the one action an operator would actually want, and findings 20 and 22 were both inside it.**
+    The refusal rested on "narrowing recalls nobody, so it buys nothing an operator could act on". The first half is true. The second is wrong, and reading `isStagingMatch` in the shipped electron-updater says so: the staging id is fixed per install and the percentage is re-read from the manifest on every check, so a narrower band is strictly smaller and everyone who has not polled yet stops being offered the build. Lowering the percentage *is* a partial halt -- the capability [There is no halt](#the-halt-is-the-percentage-itself) was written to say we did not have -- and `0` stops a build reaching anyone new.
+    So the gate forbade stopping the bleed. `50 -> 5` is not a typo to guard against; it is the operator responding to a bad build.
+    Removing it deletes `assert_not_a_rollout_decrease` and `_serves_build` (35 lines) and nine tests. `_serves_build` existed only to serve this gate, and it is where **both** of the gate's own defects lived -- finding 20 and finding 22, each failing open, each caught in review. The whole build-identity question was machinery built to support a refusal that should not have been made, and it was got wrong twice.
+    What is given up is a check on a mistyped percentage. `release-channels.toml` is the reviewed artifact and every PR dry-runs it, printing `stable: would publish 0.4.2 to 5%`; a missed typo makes a rollout slower, and is fixed by the next PR. The version gate (`assert_not_a_rollback`) was kept here, on the argument that a version downgrade genuinely cannot be undone by a later manifest -- which finding 24 then reversed.
+
+
+24. **`--allow-rollback` guarded a coupling that every stable release already has.**
+    Finding 23 removed the rollout gate; the version gate survived it on the argument that a backwards move has a consequence outside this repo -- the connector's download fallback -- that the run cannot check. The runbook says otherwise at its own step: the connector fallback is bumped on **every** stable release, forward or back. So the flag was not guarding a rollback-specific hazard, it was guarding a routine one.
+    What a backwards move actually does, from `isUpdateAvailable`: `allowDowngrade` is false, so an install on the newer version is never offered the older one and stays put; a new download takes the older build. Nobody is moved backwards. It is the same shape as narrowing -- it changes who *arrives*, not who is already there.
+    And CI never passed the flag, so withdrawing a bad stable build could not go through the reviewed path at all. `git revert` of a bad promotion, the obvious undo, failed in CI. That is friction at the exact moment it is least wanted.
+    The refusal is now a report: `assert_not_a_rollback` becomes `is_a_version_decrease`, and the publish line says `-- BACKWARDS, so lower the connector download fallback too`. The plain-X.Y.Z rule it also carried is unchanged, since a prerelease version breaks the stamp-once model whichever direction it moves.
+    Both gates removed in findings 23 and 24 shared a premise: that the operator's emergency action is the thing to protect against. The two dials only ever change who a build *reaches*; neither can move an install that already has it.
+
+
+25. **Removing the narrowing gate re-opened the case the `isAlreadyStaged` loosening was built for.**
+    `isAlreadyStaged` requires `isUpdateAvailable`, which electron-updater also sets false for an install outside the channel's staged rollout while still naming the staged version as the feed version. So an install that downloaded a build at 50% and falls outside the band when the operator drops to 10% reads as "nothing staged": `runCheck` publishes `up-to-date`, and `views/shell/update-ready.ts` clears `readyVersion` on any status that is not `update-downloaded` -- withdrawing the restart card for bytes already handed to Squirrel, which install at the next restart anyway since `allowDowngrade` is false and `autoInstallOnAppQuit` is armed before the transfer.
+    The loosening -- keying `isAlreadyStaged` on the staged version alone, which is already proof the artifact is staged because `downloadedVersion` names a version *this* process fetched and is cleared on a channel switch -- was written for the waiver's route to this state and removed with it, on the argument that narrowing was refused so no other route existed. Finding 23 removed that refusal, and narrowing is the operator's halt: the installs shown a withdrawn restart card are exactly the ones the halt excluded.
+    Not fixed here. The fix is in `apps/minds/electron/update-channel.js` and this change is deliberately publisher-side.
+
 
 ## Verification log
 
@@ -521,20 +687,43 @@ What was observed, and what was not. Anything not listed here was reasoned about
 | Per-arch selection | `resolveFiles` + the MacUpdater arch predicate | arm64 and x64 each select their own zip |
 | Unreleased builds stay downloadable | Ranged GET of build `260718n3rfjcn9z` | 372,297,921 bytes, HTTP 206 |
 | Module graph loads in Electron | Loaded `updater.js` at module scope in Electron, ran `describe()` and `init()` | Loads; `allowDowngrade` still `false` after importing the ToDesktop runtime |
-| Unit + promotion tests | `just test-minds-js`, `just test-quick scripts/release_channel` | Both green |
+| Unit + promotion tests | `just test-minds-js`, `just test-quick scripts/release_channel` | Both green (129 JS on 2026-08-26; 97 promotion tests on 2026-08-28) |
 | **The whole publish path, for real** | Provisioned `minds-update-feed-dev-weishi` + `updates-dev-weishi.minds-dev.com`, published build `260801n4rh5zv5d` with `publish.py`, then pointed the real electron-updater at it through `feedForChannel` + `applyFeedToUpdater` | Manifest served over HTTPS (`text/yaml`, `max-age=60`); updater resolved `alpha-mac.yml`, reported 0.3.11 to a 0.3.0 client, offered the update, kept `allowDowngrade` false, and selected the arm64 zip on ToDesktop's CDN |
-| The production feed | `GET https://updates.imbueminds.com/{stable,alpha,beta}-mac.yml` (2026-08-14), and each answer compared against `rewrite_manifest` of the build its entry declares | `stable` 200 at 0.3.11 and `alpha` 200 at 0.3.12, both `text/yaml`, `public, max-age=60`, artifact URLs absolute to ToDesktop; `beta` 404. Both bodies are byte-identical to what `publish.py` would write for the entry in `release-channels.toml`, so the first run finds both channels already served and writes nothing |
-| Rollback gate | Published 0.3.8 over 0.3.11 on the live bucket | Refused; channel unchanged |
+| The production feed | `GET https://updates.imbueminds.com/{stable,alpha,beta}-mac.yml` (2026-08-14), and each answer compared against `rewrite_manifest` of the build its entry declares | `stable` 200 at 0.3.11 and `alpha` 200 at 0.3.12, both `text/yaml`, `public, max-age=60`, artifact URLs absolute to ToDesktop; `beta` 404. Both bodies carry the same document `publish.py` would write for the entry in `release-channels.toml`, so the first run finds both channels already served and writes nothing |
+| Rollback gate | Published 0.3.8 over 0.3.11 on the live bucket | Refused; channel unchanged. *(Gate since removed -- finding 24. A backwards move now publishes and is named on the report line.)* |
 | Lima-image gate | Pointed at an unreachable image store | Refused before writing; channel unchanged |
 
-**Now covered:** the workflow's `validate` job skipped its dry-run while no tier configured a feed. With production configured it runs for real on every PR touching the channel file. What *is* covered in CI is the file itself: `test_the_shipped_file_parses_and_declares_only_known_channels` parses the real `release-channels.toml`, so a malformed promotion fails the normal test suite. The first production promotion will be the first CI run of the gates; treat that run's output as unproven rather than routine.
+**Now covered:** the workflow's `validate` job skipped its dry-run while no tier configured a feed. With production configured it runs for real on every PR touching the channel file. What *is* covered in CI is the file itself: `test_the_shipped_file_parses_and_declares_only_known_channels` parses the real `release-channels.toml`, so a malformed promotion fails the normal test suite.
 
 **Not verified, and load-bearing:**
 
 - **The install-and-restart round trip.** Needs two signed builds and a restart. Everything up to the download is now proven end to end against a real bucket; this last step is not.
 - **ToDesktop's build smoke test still passes** with the runtime imported but not `init()`ed (finding 4).
 - **Whether ToDesktop will release a build that is not the newest.** If it refuses, stable promotion becomes a rebuild and stamp-once holds for every hop except the last.
-- **A promotion run by the workflow.** The production bucket, its custom domain, the rewrite, the key name and the TTL are all proven (see the row above), but the manifests now serving `stable` and `alpha` were published by hand. The first run of `minds-release-channels.yml` on main will be the first time CI drives the gates; treat its output as unproven rather than routine.
+- ~~**A promotion run by the workflow.**~~ Resolved 2026-08-25: three real publish runs have landed, the last one promoting 0.4.2 to all three channels.
+
+### Staged rollout (2026-08-25)
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| The rollout gate, against the real library | Constructed the real `AppUpdater` (6.8.9) on a temp data dir, let it mint a `.updaterId`, and found a percentage its bucket falls outside of | Excluded at that percentage, included at 100% and with no percentage declared. Drove the since-removed waiver too (finding 16): it worked, and was removed for being a second escape hatch rather than for being wrong |
+| `isStagingMatch`'s fail-open branches | Same real updater, driven with `undefined`, `null`, `"abc"`, `true`, `[]`, `{}`, `0`, `150`, `-5`, `99.9` | Everything but `0` and `-5` includes the install; `99.9` truncates to 99 |
+| The published manifest is parseable and declares one key | `with_rollout_percentage` over the captured real ToDesktop manifest, parsed with pyyaml | One top-level `stagingPercentage`, artifacts and digests byte-identical to the rewrite |
+| Parse and re-emit preserves ToDesktop's values | Live build manifest `260825un55i8ix7` through `parse_manifest`, then re-emitted | Every value survives, including keys this code knows nothing about. *(Byte identity was measured against the ruamel round-trip, which was replaced: the shipped reader is stock pyyaml and re-emits in its default block style, so the layout differs and nothing reads it -- finding 21.)* |
+| Editing by document matches editing by line | Old and new `rewrite_manifest` + `with_rollout_percentage` over the live manifest at 0/10/50/100% | The same document at every percentage. *(Measured as identical bytes against the ruamel round-trip; the shipped pyyaml emitter dedents the `files:` sequence, so the documents match and the bytes do not -- finding 21.)* |
+| A build id outside an artifact does not claim the build | A manifest for another build carrying `releaseNotes` that names this one | `_serves_build` returns False; the substring-over-text form returned True. *(Helper since removed with the gate it served -- finding 23.)* |
+| Where the reader disagrees with the client's YAML | 22 scalar spellings through stock pyyaml and the shipped js-yaml 4.1.1 | Four disagree silently and in range (`010`, `017`, `050`, `1:30`); the rest agree or are refused |
+| No scalar in the real manifest is schema-sensitive | Stock-pyyaml round-trip of the live build manifest | Every scalar re-emitted in the spelling it arrived in, so no value in it reads differently under 1.1; the `files:` sequence indentation is the only difference (finding 21) |
+| Unknown-key and range refusals | `parse_channels` over tables carrying a misspelled key, a string, a float, a bool, `150`, `-5`, and `0` | Every malformed spelling refused; `0` accepted and rendered |
+| Lowering the percentage narrows who is offered a build | `isStagingMatch` in the shipped electron-updater 6.8.9 | The staging id is fixed per install and the percentage is re-read each check, so a smaller band is a strict subset -- narrowing is a partial halt, not a no-op (finding 23) |
+| The narrowing gate against a served manifest that only looks different | Drove `assert_not_a_rollout_decrease` at 50% -> 10% with the served manifest carrying a trailing blank line, a trailing space on a url line, a key added upstream, and urls left relative | Every one of them was allowed while the gate identified the build by comparing the two manifests whole, and every one is refused once the build id reaches it (finding 20). *(Gate since removed -- finding 23.)* |
+| What the Sentry ordering costs, and for how long | Drove the real `@sentry/electron` `sessions.js` (7.13.0) on a stubbed `electron` app, old ordering, reading the on-disk snapshot over time | Snapshot `did` `undefined` at 0.4s and `"anon-1234"` at 62s, so the loss is bounded by the first re-persist tick rather than covering every crashed session (finding 18) |
+
+**Not verified, and load-bearing (rollout):**
+
+- **A ramp against a real feed.** Every gate and the client predicate are proven, but no manifest has yet been published carrying a percentage, and no install has been held back by one in the field.
+- **That the Sentry fix produces a `did` on a real crashed session envelope.** The ordering is proven against the installed SDK (finding 18); the observable check is a session in Sentry that crashed in its first minute carrying a distinguished id, which needs a shipped build and a startup crash in it.
+- **The held-back Settings panel.** `computeUpdateStatus` returns `up-to-date` for a held-back install, run directly; the resulting rendered panel was read, not rendered.
 
 ## Failure modes
 
@@ -548,9 +737,8 @@ What was observed, and what was not. Anything not listed here was reasoned about
 | dwt tag missing or moved | Agent creation fails at clone | **Not gated.** `fallback_branch` is reached only by the Lima image gate, which reads the image manifest rather than the tag -- and is skipped entirely on a tier with no image store. See [Not yet built](#not-yet-built). |
 | Old binary opens newer `~/.minds` | Raises where the state carries a field the older build does not declare | `extra="forbid"` on the shared base models, so this is loud rather than silent -- and it is why invariant 4 holds. See [Decisions owed](#decisions-owed) for what is still open. |
 
-**Note:** `stagingPercentage` is honored natively by electron-updater, and every channel's manifest is one we author, so it is available on `stable` on the same terms as on `alpha` and `beta`.
-No channel carries one today: `rewrite_manifest` changes only the artifact URLs and passes the rest of ToDesktop's manifest through, and ToDesktop's manifest has no such field.
-Staging a rollout therefore means teaching `publish.py` to write one, which is a change no channel needs before any other.
+**Note:** `stagingPercentage` is now written by `publish.py` from a required `rollout_percentage` on every entry.
+See [Staged rollout](#staged-rollout) for the model and the guards, and finding 14 for why the field is required rather than optional.
 
 ## Decisions owed
 
@@ -577,6 +765,8 @@ Staging a rollout therefore means teaching `publish.py` to write one, which is a
    Until then `beta` stays publishable with no entry: selecting a channel whose manifest 404s is refused by the panel, so listing it before publishing to it offers a disabled radio and nothing else.
    The failure mode to watch once it does exist is a promotion obligation nobody discharges -- "why is beta still on 0.4.12" six weeks later.
 
+   **Discharged 2026-08-20.** `beta` was given an entry the same day, on stable's build, so its radio is live rather than dead. What is still open is the half above: nothing promotes it on a cadence, and the phase table still lists a `beta` promotion job as not started.
+
 5. **Resolved 2026-08-13: there was no beta tier to collide with.**
    `paths.js` described the bundled `root_name` as the "production / staging / beta" case, but no beta tier was ever built -- there is no `minds-beta` anywhere, and `envs/` holds `dev`, `staging`, `production` and the two `ci` variants. The collision was a documentation error, not two shipped meanings.
    The comment now says what the axis is: a tier decides which infrastructure the app talks to and which data directory it owns; a channel decides which build it is offered and never moves data.
@@ -590,6 +780,8 @@ Staging a rollout therefore means teaching `publish.py` to write one, which is a
 
    Note `stagingPercentage` is native to electron-updater, not something we would build: `AppUpdater.isStagingMatch` reads it from the manifest and each install buckets itself from a UUID at `<userDataPath>/.updaterId`, comparing `readUInt32BE(12) / 0xffffffff < percentage`. The cohort is therefore **fixed** -- the hash covers the user id only, never the version -- so raising the percentage only ever adds installs, and the same installs are early for every build forever. Monotonic and consistent, but the same machines always carry the risk and a failure specific to the other 90% is never caught early.
 
+   **Correcting the pessimism, 2026-08-25.** The fixed cohort cuts the other way too, and this matters more than the sampling cost given that nobody can be pulled back. Because the ramp restarts at its first step with every build, the installs that took a bad build are also the first offered its replacement. The property that makes the cohort a poor sample makes it the right population to repair first.
+
 7. **Linux: deferred (decided 2026-08-12).**
    `latest-linux.yml` exists and ships an x86_64 AppImage with blockmaps, but Linux is not working well enough to carry channels.
    No `<channel>-linux.yml` is published, so a Linux client sees stable only.
@@ -601,9 +793,10 @@ Staging a rollout therefore means teaching `publish.py` to write one, which is a
 |---|---|---|
 | 0 | Investigate decision 3. Lima-image gate on the existing release procedure. | Gate implemented in `manifest.py`; **decision 3 still open** |
 | 1 | Replace the ToDesktop updater with `updater.js`. `allowDowngrade = false`. Sentry channel tag. | Done except the Sentry tag |
-| 2 | Channel preference, feed resolution, Settings picker, the switch confirmation, the declarative promotion mechanism. | Done and live: production sets `update_feed_base_url`, so a build cut from here offers alpha alongside stable. Beta is served by the same machinery but listed for nobody (decision 4). The production bucket serves both channels; **no promotion has yet been run by the workflow** (see [Verification log](#verification-log)). |
+| 2 | Channel preference, feed resolution, Settings picker, the switch confirmation, the declarative promotion mechanism. | Done and live: production sets `update_feed_base_url`, so a build cut from here offers alpha alongside stable. The production bucket serves all three: `beta` was given an entry on 2026-08-20 (decision 4). Corrected 2026-08-25: the workflow has now run three real publishes (2026-08-20, 08-21, 08-25), the last promoting 0.4.2 to all three channels. |
 | 3 | Automatic alpha cuts (see [Not yet built](#not-yet-built)). | Next |
-| 4 | `beta` promotion job, soak timer, `stagingPercentage`, dwt-tag gate, Linux. | Not started |
+| 4 | `stagingPercentage`: a required per-entry percentage and the publish-side guards. Every check is gated; there is no client-side waiver. | Done; see [Staged rollout](#staged-rollout) |
+| 5 | `beta` promotion job, soak timer, dwt-tag gate, Linux. | Not started |
 
 Phase 1 was worth doing on its own: it closes the `allowDowngrade` hazard and finding 2's latent "Update found" bug with no user-visible feature attached.
 

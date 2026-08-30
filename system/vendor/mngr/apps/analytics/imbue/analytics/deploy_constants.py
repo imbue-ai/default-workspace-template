@@ -21,5 +21,6 @@ THIRD_PARTY_IMPORT_ROOTS: Final[frozenset[str]] = frozenset(
         "paramiko",
         "psycopg2",
         "pydantic",
+        "tenacity",
     }
 )

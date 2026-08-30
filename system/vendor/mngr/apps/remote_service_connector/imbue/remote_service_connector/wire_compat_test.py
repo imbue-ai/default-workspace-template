@@ -44,6 +44,7 @@ from imbue.remote_service_connector.compat import wire_models_minds_0_3_16
 from imbue.remote_service_connector.compat import wire_models_minds_0_4_0
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID
+from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
 from imbue.remote_service_connector.testing import _make_bucket_test_client
 from imbue.remote_service_connector.testing import _make_pool_quota_test_client
@@ -279,7 +280,7 @@ def test_sync_responses_parse_for_all_snapshots(monkeypatch: pytest.MonkeyPatch)
     # The workspace-keyed route serves the same record shape (including one
     # carrying the new backup_bucket column, which must stay off the wire
     # while any strict snapshot is in-window).
-    workspace_put_body = dict(record_body, revision=2, backup_bucket="testuser--agent-compat01")
+    workspace_put_body = dict(record_body, revision=2, backup_bucket=f"{_USER_STUB_USER_ID_PREFIX}--agent-compat01")
     workspace_put = client.put(
         "/sync/records/by-workspace/agent-compat01", json=workspace_put_body, headers=_user_headers()
     )
@@ -397,6 +398,9 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("DELETE", "/shares/{host_id}"): _STATUS_ONLY,
     ("GET", "/shares/assignment"): _WORKSPACE_SIDE,
     ("POST", "/shares/cert"): _WORKSPACE_SIDE,
+    ("POST", "/frps/auth/{relay_id}"): _WORKSPACE_SIDE,
+    # CLEANUP: remove with the legacy path-secret route in shares.py once the
+    # whole relay fleet is on the header form and the secret is rotated.
     ("POST", "/frps/auth/{plugin_secret}/{relay_id}"): _WORKSPACE_SIDE,
     # The hosted accounts pages + web chrome (path-served bundles).
     ("GET", "/accounts/api/config"): _WEB_BUNDLE,
@@ -443,9 +447,11 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/admin/relays"): _OPERATOR,
     ("DELETE", "/admin/relays/{relay_id}"): _OPERATOR,
     ("POST", "/admin/sweep/backup-retention"): _OPERATOR,
+    ("POST", "/admin/sweep/lease-records"): _OPERATOR,
     ("POST", "/admin/sweep/r2"): _OPERATOR,
     ("POST", "/admin/test-signup"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/abandon"): _OPERATOR,
+    ("POST", "/admin/workspaces/{host_db_id}/release"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/stop"): _OPERATOR,
 }
 

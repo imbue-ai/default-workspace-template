@@ -37,7 +37,6 @@ from loguru import logger
 from imbue.imbue_common.logging import log_span
 from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
-from imbue.mngr_latchkey.additional_services import shared_schemas_file_content
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import CREDENTIALS_STORE_FILENAME
@@ -56,14 +55,13 @@ from imbue.mngr_latchkey.services_catalog import ServiceCatalogError
 from imbue.mngr_latchkey.services_catalog import ServicesCatalog
 from imbue.mngr_latchkey.store import LatchkeyPermissionsConfig
 from imbue.mngr_latchkey.store import LatchkeyStoreError
-from imbue.mngr_latchkey.store import SHARED_SCHEMAS_FILENAME
 from imbue.mngr_latchkey.store import load_permissions
 from imbue.mngr_latchkey.store import opaque_handles_for_host
 from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import plugin_data_dir
 
 # Version of the upstream ``latchkey`` CLI to install on the VPS.
-LATCHKEY_VERSION: Final[str] = "3.6.0"
+LATCHKEY_VERSION: Final[str] = "3.9.0"
 
 # datalib release the VPS fetches the "dispatch curl" + Chrome-impersonating
 # curl from (``curl-<triple>.tar.gz``). The gateway runs the dispatch curl as
@@ -142,8 +140,10 @@ _CREDENTIALS_FILENAME: Final[str] = CREDENTIALS_STORE_FILENAME
 
 # Name of the latchkey directory on the VPS, under the remote user's home. The
 # remote latchkey CLI runs as that user, so ``$HOME/.latchkey`` is the
-# LATCHKEY_DIRECTORY it reads its credentials and permissions from.
-_REMOTE_LATCHKEY_DIR_NAME: Final[str] = ".latchkey"
+# LATCHKEY_DIRECTORY it reads its credentials and permissions from. Public
+# because consumers outside this plugin read the gateway's logs at this
+# location.
+REMOTE_LATCHKEY_DIR_NAME: Final[str] = ".latchkey"
 
 # Filename the remote latchkey gateway reads its permissions config from. The
 # local per-host file is named ``latchkey_permissions.json``; on the VPS it
@@ -163,8 +163,9 @@ _REMOTE_FILE_MODE: Final[str] = "0600"
 
 # Filenames (under the remote ``$HOME/.latchkey`` directory) for the
 # supervisord-managed gateway and reverse-tunnel programs' stdout/stderr logs.
-_REMOTE_GATEWAY_LOG_FILENAME: Final[str] = "gateway.log"
-_REMOTE_TUNNEL_LOG_FILENAME: Final[str] = "tunnel.log"
+# Public for the same reason as :data:`REMOTE_LATCHKEY_DIR_NAME`.
+REMOTE_GATEWAY_LOG_FILENAME: Final[str] = "gateway.log"
+REMOTE_TUNNEL_LOG_FILENAME: Final[str] = "tunnel.log"
 
 # PID files a *pre-supervisord* build wrote under ``$HOME/.latchkey`` when it
 # launched the gateway and reverse tunnel detached via ``nohup``. A VPS
@@ -454,19 +455,17 @@ def _resolve_remote_latchkey_directory(host: OuterHostInterface) -> Path:
                 host.get_name(), result.stderr.strip() or result.stdout.strip() or "empty $HOME"
             )
         )
-    return Path(home) / _REMOTE_LATCHKEY_DIR_NAME
+    return Path(home) / REMOTE_LATCHKEY_DIR_NAME
 
 
 def _default_permissions_json() -> str:
     """Serialize the deny-all default permissions config (matches ``save_permissions`` output)."""
     config = LatchkeyPermissionsConfig()
-    # ``save_permissions`` omits an empty ``schemas``/``include`` block; mirror it
-    # so the remote file is byte-for-byte the same shape minds writes locally.
+    # ``save_permissions`` omits an empty ``schemas`` block; mirror it so the
+    # remote file is byte-for-byte the same shape the plugin writes locally.
     exclude: set[str] = set()
     if not config.schemas:
         exclude.add("schemas")
-    if not config.include:
-        exclude.add("include")
     return config.model_dump_json(indent=2, exclude=exclude)
 
 
@@ -678,21 +677,6 @@ def sync_permissions(host: OuterHostInterface, latchkey_directory: Path, host_id
         content = _default_permissions_json()
 
     remote_dir = _resolve_remote_latchkey_directory(host)
-    # Ship the shared additional-services schemas file *first*, next to the
-    # permissions file, so the bare ``include`` in the permissions file below
-    # always resolves on the VPS (detent resolves it relative to the permissions
-    # file's directory, ``~/.latchkey``). Writing it before the permissions file
-    # avoids a window where a permissions file referencing a custom scope is live
-    # but its schemas are missing.
-    shared_schemas_remote_path = remote_dir / SHARED_SCHEMAS_FILENAME
-    with log_span("Syncing shared latchkey schemas for host {} to VPS {}", host_id, host.get_name()):
-        host.write_file(
-            shared_schemas_remote_path,
-            shared_schemas_file_content().encode("utf-8"),
-            mode=_REMOTE_FILE_MODE,
-            is_atomic=True,
-        )
-
     content_bytes = content.encode("utf-8")
     remote_path = remote_dir / _REMOTE_PERMISSIONS_FILENAME
     with log_span("Syncing latchkey permissions for host {} to VPS {} ({})", host_id, host.get_name(), remote_path):
@@ -727,9 +711,7 @@ def _materialize_legacy_override_targets(
 
     Symlinking each of those paths at ``~/.latchkey/permissions.json`` makes the
     legacy override resolve to exactly the policy the VPS gateway would have
-    applied anyway. The shared schemas file is linked beside it too, since detent
-    resolves the permissions file's bare ``include`` relative to the referencing
-    file's own directory.
+    applied anyway.
 
     Workspaces created after the rollout send no override header at all, so this
     is dead weight for them: delete this function, its call site, and
@@ -741,7 +723,6 @@ def _materialize_legacy_override_targets(
         return
 
     permissions_target_q = shlex.quote(str(remote_dir / _REMOTE_PERMISSIONS_FILENAME))
-    schemas_target_q = shlex.quote(str(remote_dir / SHARED_SCHEMAS_FILENAME))
     script_lines = ["set -e"]
     for opaque_path in opaque_paths:
         if not opaque_path.is_absolute():
@@ -752,7 +733,6 @@ def _materialize_legacy_override_targets(
                 # ``-sfn`` keeps this idempotent and never dereferences an
                 # existing link into its target directory.
                 f"ln -sfn {permissions_target_q} {shlex.quote(str(opaque_path))}",
-                f"ln -sfn {schemas_target_q} {shlex.quote(str(opaque_path.parent / SHARED_SCHEMAS_FILENAME))}",
             )
         )
 
@@ -1074,7 +1054,7 @@ def _ensure_latchkey_gateway_running(
     password_file_path = _TMPFS_SECRETS_DIR / _GATEWAY_PASSWORD_FILENAME
     desktop_permissions_override_file_path = _TMPFS_SECRETS_DIR / _DESKTOP_PERMISSIONS_OVERRIDE_FILENAME
     run_script_path = remote_dir / _GATEWAY_RUN_SCRIPT_FILENAME
-    log_path = remote_dir / _REMOTE_GATEWAY_LOG_FILENAME
+    log_path = remote_dir / REMOTE_GATEWAY_LOG_FILENAME
     conf_path = _SUPERVISOR_CONFD_DIR / _GATEWAY_CONF_FILENAME
     host_name = host.get_name()
 
@@ -1206,7 +1186,7 @@ def _ensure_latchkey_gateway_reachable_from_container(
         inner_port=AGENT_SIDE_LATCHKEY_PORT,
         outer_port=OUTER_PORT,
     )
-    log_path = _resolve_remote_latchkey_directory(host) / _REMOTE_TUNNEL_LOG_FILENAME
+    log_path = _resolve_remote_latchkey_directory(host) / REMOTE_TUNNEL_LOG_FILENAME
     conf_path = _SUPERVISOR_CONFD_DIR / _TUNNEL_CONF_FILENAME
     conf = _build_supervisor_program_config(
         _TUNNEL_PROGRAM_NAME, command, str(log_path), _SUPERVISOR_TUNNEL_START_RETRIES

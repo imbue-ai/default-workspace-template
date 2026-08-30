@@ -1,0 +1,3 @@
+A run now aborts when a third or more of the hosts it asked for fail to create, instead of quietly packing every agent onto the survivors.
+
+Agents are placed round-robin over whatever hosts came back, so a pool that mostly failed silently multiplies how many agents share each remaining host. In the 20260823 TMR run 82 of 87 host creations failed, which put roughly 69 mappers on each of the 5 survivors; their worktrees then exhausted the host volume's inode quota, and the resulting `No space left on device` errors were reported by the agents as test failures. Failing the run makes the pool collapse visible where it happens.

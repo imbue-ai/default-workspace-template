@@ -1,0 +1,3 @@
+The analytics crons' log lines are now level-queryable JSON in the tier's OpenObserve `modal_logs` stream (mngr-internal#656): each Modal function calls the shared `configure_logging()` first, so every line is one JSON object with an explicit `level`. Previously the containers had no root log handler, so the jobs' INFO lines were never emitted and their warnings arrived as bare messages.
+
+The `logs` views over the OpenObserve parquet keep working unchanged: the new JSON envelope flattens the `http_request` / `share_visit_authorized` records so their `type` and fields stay top-level (pinned by a new test), while the first-`{` extraction still handles the older asctime-prefixed lines within the 90-day retention window.

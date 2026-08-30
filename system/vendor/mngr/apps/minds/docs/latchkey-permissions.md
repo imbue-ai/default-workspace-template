@@ -27,15 +27,17 @@ second gateway URL or a different agent skill.
      the user has not yet authenticated to the service.
    * 403 with `Error: Request not permitted by the user.`: the user has
      authenticated but has not allowed this kind of request.
-3. **Agent writes a request event.** On any of the blocked outcomes, the
-   agent appends a `LatchkeyPredefinedPermissionRequestEvent` to
-   `$MNGR_AGENT_STATE_DIR/events/requests/events.jsonl` with the latchkey
-   service name and a one-paragraph rationale, then ends its turn and goes
-   idle.
-4. **The user opens the request.** The desktop client consumes the
-   gateway's pending-request stream, but a pending request never opens
-   anything by itself: it waits behind the chat card's "Review & respond"
-   relay and the "Waiting on you" rows in a machine's Permissions tab.
+3. **Agent files a request with the gateway.** On any of the blocked
+   outcomes, the agent POSTs to the gateway's `/permission-requests`
+   extension with the request type, its type-specific payload, and a
+   one-paragraph rationale, then ends its turn and goes idle. The gateway
+   persists the request in its own queue.
+4. **The user opens the request.** The gateway's own persisted queue is
+   the pending set: the desktop client reads it on demand (minus requests
+   with a recorded verdict) and follows the gateway's stream only as a
+   change signal. A pending request never opens anything by itself: it
+   waits behind the chat card's "Review & respond" relay and the "Waiting
+   on you" rows in a machine's Permissions tab.
    Either one opens the permission popup as a **centered dialog** over the
    current window, on a dim backdrop. The popup is the only review
    surface; the other ways in all lead back to it: the titlebar bell's
@@ -122,22 +124,31 @@ second gateway URL or a different agent skill.
       `~/.minds/events/requests/events.jsonl`. (A `FAILED` approval writes
       no response event and leaves the request pending; see step 6.2.)
    6. On a `GRANTED` outcome, sends the agent a plain-English `mngr message`
-      describing the decision; the agent wakes up and decides whether to
-      retry. A `FAILED` or manual-credentials outcome leaves the request
-      pending and notifies only the user (in the dialog), not the agent.
+      describing the decision (with the request's id embedded, so the chat
+      harness can pair the notice with the right card); the agent wakes up
+      and decides whether to retry. Delivery is retried with backoff for as
+      long as the app runs, so a nudge for a stopped workspace lands when
+      that workspace next comes up; the in-chat card does not depend on it
+      (see step 8). A `FAILED` or manual-credentials outcome leaves the
+      request pending and notifies only the user (in the dialog), not the
+      agent.
 7. **User denies.** The desktop client appends a `DENIED` response event
-   and sends the agent a plain-English denial message. `latchkey_permissions.json`
-   is not touched.
+   and sends the agent a plain-English denial message (same id embedding
+   and retrying as the grant nudge). `latchkey_permissions.json` is not
+   touched.
 8. **The asking workspace hears the verdict at once.** Either resolution
-   also sends the workspace a `minds:permission-request-resolved` embed
-   contract message (see `docs/embed-contract.md`), so its in-chat card
-   flips to Approved/Denied without waiting for the agent's own resolution
-   message to travel back through the transcript. It goes only to the
-   workspace that asked, and only when that workspace is the one on screen
-   -- the chrome mounts one workspace frame at a time, so no other
-   workspace has a live page to update. The transcript stays authoritative:
-   the workspace shows the shell-reported verdict only until the classified
-   one lands.
+   also sends the workspace a one-entry `minds:permission-resolutions`
+   embed contract message (see `docs/embed-contract.md`), so its in-chat
+   card flips to Approved/Denied without waiting for the agent's own
+   resolution message to travel back through the transcript. It goes only
+   to the workspace that asked, and only when that workspace is the one on
+   screen -- the chrome mounts one workspace frame at a time, so no other
+   workspace has a live page to update. A workspace page built AFTER the
+   verdict (a reload, or returning to a workspace resolved while another
+   was displayed) is covered by the snapshot: whenever the chrome (re)loads
+   a frame it pushes that workspace's recent verdicts, read from the
+   response event log via `/ui/api/inbox/resolutions`. Once the
+   transcript's own classified resolution lands, it takes over.
 
 ## Manual credential entry
 
@@ -459,20 +470,22 @@ three latchkey features:
   then runs for it. `claude.ai` uses the `cookie-capture` flow: latchkey
   opens the claude.ai login page and stores the `sessionKey` session cookie
   as the credentials.
-* **Self-shipped detent schemas, referenced via `include`.** A custom scope
-  is not one of detent's builtin schemas, so each additional service ships
-  its own scope schema (matching the service domain) plus a permission
-  schema. Rather than inlining those schemas into every host's
-  `latchkey_permissions.json`, minds materializes them **once** into a
-  shared `minds_shared_schemas.json` file and has every per-host file
-  reference it through detent's [`include`](https://github.com/imbue-ai/detent)
-  directive. Granting an additional-service scope is then a plain rule
-  write (no schema injection); detent resolves the scope's schema from the
-  shared include. The include is a bare relative name, which detent resolves
-  relative to the referencing file's directory -- so the same host file
-  works both on the desktop (where the shared file lives in the gateway's
-  opaque-handle directory) and on a VPS (where it is shipped next to the
-  host's `~/.latchkey/permissions.json`).
+* **Self-shipped detent schemas, inlined into every permissions file.** A
+  custom scope is not one of detent's builtin schemas, so each additional
+  service ships its own scope schema (matching the service domain) plus a
+  permission schema. Those schemas are written into every host's
+  `latchkey_permissions.json` -- new files get them from the agent baseline,
+  and existing files pick up changes the next time an agent is registered on
+  the host. Granting an additional-service scope is then a plain rule write
+  against a file that already defines the scope. Keeping them in one shared
+  file that host files pull in through detent's
+  [`include`](https://github.com/imbue-ai/detent) directive does not work here:
+  detent resolves a bare include relative to the referencing file's own
+  directory, and a host's permissions file is read through several of them
+  (its canonical `hosts/<host_id>/` path, the opaque handle a desktop
+  workspace's JWT names, and `~/.latchkey/permissions.json` on a VPS), so the
+  shared file would have to be copied next to each -- and an include that fails
+  to resolve fails the whole permission check for that host.
 
 Additional services are merged into the same catalog the dialog reads, so
 they appear and are granted exactly like builtin ones. The seed entry is

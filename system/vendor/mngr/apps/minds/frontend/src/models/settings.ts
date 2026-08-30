@@ -20,7 +20,6 @@ import type { NotificationPrefs, NotificationStyle } from "./notificationsUi";
 import {
   DEFAULT_NOTIFICATION_PREFS,
   applyNotificationPrefs,
-  currentNotificationPrefs,
   postNotificationPrefsWrite,
 } from "./notificationsUi";
 
@@ -107,6 +106,8 @@ export interface SettingsOverview {
    * can still be running. */
   notification_prefs?: NotificationPrefs;
   version: string;
+  update_window_start_hour: number;
+  update_window_end_hour: number;
 }
 
 export type SettingsSection =
@@ -206,6 +207,7 @@ export class SettingsModel {
   isUpdateBusy = false;
   updateError = "";
   errorReportingError = "";
+  updateWindowError = "";
   notificationPrefsError = "";
   /** Set after a failed openNotificationOsSettings() call (e.g. no known
    * settings command found on this Linux desktop environment), so the panel
@@ -390,6 +392,44 @@ export class SettingsModel {
     this.redraw();
   }
 
+  /** Persist the local-clock window scheduled machine updates run in. No
+   * If-Match: a plain preference, so two windows racing costs nothing. */
+  async setUpdateWindow(startHour: number, endHour: number): Promise<void> {
+    const overview = this.overview;
+    if (overview === null) return;
+    this.updateWindowError = "";
+    try {
+      const response = await this.fetchImpl("/ui/api/settings/update-window", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_hour: startHour, end_hour: endHour }),
+      });
+      if (response.ok) {
+        // Merge onto the current overview, not the pre-await snapshot: a
+        // concurrent write may have landed while this request was in flight.
+        const latest = this.overview;
+        if (latest === null) return;
+        this.overview = {
+          ...latest,
+          update_window_start_hour: startHour,
+          update_window_end_hour: endHour,
+        };
+      } else {
+        const data = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        this.updateWindowError =
+          data.error ??
+          `Could not change the update window (HTTP ${response.status}).`;
+      }
+    } catch {
+      this.updateWindowError =
+        "Could not change the update window (network error).";
+    }
+    this.redraw();
+  }
+
   /** Write the notification prefs through the If-Match-guarded endpoint,
    * mirroring `setReportUnexpectedErrors`: a 412 (another window changed them
    * first) rebases by reloading rather than clobbering, and a refusal leaves
@@ -417,8 +457,6 @@ export class SettingsModel {
       }
       if (response.ok) {
         const result = (await response.json()) as { version: string };
-        // os_permission_confirmed is system-observed, not part of this
-        // write's payload: carry the prior value forward untouched.
         const applied: NotificationPrefs = {
           ...current,
           ...next,
@@ -451,22 +489,6 @@ export class SettingsModel {
       this.notificationPrefsError =
         "Could not update notifications (network error).";
     }
-    this.redraw();
-  }
-
-  /** Sync the model's notification-prefs copy from the shared applied-prefs
-   * cell (kept current by setNotificationPrefs above and by
-   * maybeProbeDesktopNotificationPermission's own writes). Local only -- no
-   * network request -- so a probe's server-side style downgrade can be
-   * reflected without risking the isLoadFailed error state a full reload
-   * would risk over a background refresh unrelated to what just landed. */
-  syncNotificationPrefsFromApplied(): void {
-    const overview = this.overview;
-    if (overview === null) return;
-    this.overview = {
-      ...overview,
-      notification_prefs: currentNotificationPrefs(),
-    };
     this.redraw();
   }
 
@@ -525,9 +547,7 @@ export class SettingsModel {
 
   /** The nav entries this build can actually service. */
   get visibleSections(): typeof SETTINGS_SECTIONS {
-    return SETTINGS_SECTIONS.filter(
-      (section) => section.name !== "updates" || electronBridge.isDesktop,
-    );
+    return SETTINGS_SECTIONS;
   }
 
   async loadUpdateState(): Promise<void> {
