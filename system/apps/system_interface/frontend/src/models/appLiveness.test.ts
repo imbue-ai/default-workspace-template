@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { AppEntry } from "./AgentManager";
-import { appStoppedDetail, isAppRunning, isAppStoppable, stoppedAppForServiceName } from "./appLiveness";
+import {
+  appStoppedDetail,
+  isAppRunning,
+  isAppStoppable,
+  isServiceNameUnregistered,
+  stoppedAppForServiceName,
+} from "./appLiveness";
 
 function app(overrides: Partial<AppEntry>): AppEntry {
   return { name: "web", url: "http://localhost:8000", label: "web-x7k9q2w1", ...overrides };
@@ -55,5 +61,20 @@ describe("stoppedAppForServiceName", () => {
     expect(stoppedAppForServiceName(apps, "web")).toBeNull();
     expect(stoppedAppForServiceName(apps, "nope")).toBeNull();
     expect(stoppedAppForServiceName(apps, null)).toBeNull();
+  });
+});
+
+describe("isServiceNameUnregistered", () => {
+  const apps = [app({ name: "docs", is_running: false, program: "docs" }), app({ name: "web" })];
+
+  it("flags only a name no registered app answers to", () => {
+    expect(isServiceNameUnregistered(apps, "renamed-away", true)).toBe(true);
+    expect(isServiceNameUnregistered(apps, "web", true)).toBe(false);
+    expect(isServiceNameUnregistered(apps, "docs", true)).toBe(false);
+    expect(isServiceNameUnregistered(apps, null, true)).toBe(false);
+  });
+
+  it("flags nothing before the app list has loaded", () => {
+    expect(isServiceNameUnregistered([], "renamed-away", false)).toBe(false);
   });
 });

@@ -44,3 +44,15 @@ export function stoppedAppForServiceName(apps: readonly AppEntry[], serviceName:
   if (app === undefined || isAppRunning(app)) return null;
   return app;
 }
+
+/** True when the app list is loaded and no registered app answers to this
+ *  name: the app was renamed or removed while a pane still referenced it.
+ *  Waits for the list because before it loads every name is unknown. */
+export function isServiceNameUnregistered(
+  apps: readonly AppEntry[],
+  serviceName: string | null,
+  appsLoaded: boolean,
+): boolean {
+  if (serviceName === null || !appsLoaded) return false;
+  return !apps.some((candidate) => candidate.name === serviceName);
+}

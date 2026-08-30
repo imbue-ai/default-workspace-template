@@ -1,8 +1,13 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
-import { getApps } from "../models/AgentManager";
+import { areAppsLoaded, getApps } from "../models/AgentManager";
 import type { AppEntry } from "../models/AgentManager";
-import { appStoppedDetail, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
+import {
+  appStoppedDetail,
+  isAppStoppable,
+  isServiceNameUnregistered,
+  stoppedAppForServiceName,
+} from "../models/appLiveness";
 import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
 import { appServiceDisplayName } from "./derived-names";
@@ -32,6 +37,11 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
     const stoppedApp = stoppedAppForServiceName(getApps(), serviceName ?? null);
     if (stoppedApp !== null) {
       return m(StoppedAppPlaceholder, { app: stoppedApp });
+    }
+    // An unregistered name would mount an iframe on a dead origin, which
+    // never errors -- it spins on "loading" forever. Say what happened.
+    if (isServiceNameUnregistered(getApps(), serviceName ?? null, areAppsLoaded())) {
+      return m(MissingAppPlaceholder, { title });
     }
     const attrs: Record<string, string> = {
       src: url,
@@ -103,6 +113,26 @@ const StoppedAppPlaceholder: m.Component<{ app: AppEntry }> = {
               `Start ${label}`,
             )
           : null,
+      ],
+    );
+  },
+};
+
+/** Unlike Stop there is nothing to restart -- the name resolves to no app --
+ *  so this just says what happened and leaves the user to close the tab. */
+const MissingAppPlaceholder: m.Component<{ title: string }> = {
+  view(vnode) {
+    return m(
+      "div",
+      { class: "si-missing-app flex h-full w-full flex-col items-center justify-center gap-3 bg-surface" },
+      [
+        m("div", { class: "text-[15px] font-medium text-text-primary" }, vnode.attrs.title),
+        m(
+          "div",
+          { class: "max-w-[28rem] text-center text-[13px] text-text-faint" },
+          "This app is no longer installed. It was most likely renamed or removed. " +
+            "Close this tab and open the app again under its current name.",
+        ),
       ],
     );
   },
