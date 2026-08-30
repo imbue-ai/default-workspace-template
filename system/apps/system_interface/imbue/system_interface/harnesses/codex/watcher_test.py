@@ -189,11 +189,11 @@ def test_a_read_does_not_stop_the_loop_broadcasting_those_events(tmp_path: Path)
     assert len(watcher.get_tail_events(50)) == 1
     assert broadcast == []
 
-    watcher._emit_unsent()
+    watcher._emit_cycle()
     assert [event["text"] for event in broadcast] == ["only"]
 
     # Idempotent: a second pass re-broadcasts nothing.
-    watcher._emit_unsent()
+    watcher._emit_cycle()
     assert len(broadcast) == 1
 
 
@@ -210,7 +210,7 @@ def test_live_user_turns_are_suppressed_from_the_broadcast_but_served_by_reads(t
         ],
     )
     watcher, broadcast = _build_watcher(tmp_path)
-    watcher._emit_unsent()
+    watcher._emit_cycle()
 
     # The broadcast carries the agent message but NOT the user turn.
     assert [event["type"] for event in broadcast] == ["assistant_message"]
@@ -218,7 +218,7 @@ def test_live_user_turns_are_suppressed_from_the_broadcast_but_served_by_reads(t
     all_types = [event["type"] for event in watcher.get_all_events()]
     assert all_types == ["user_message", "assistant_message"]
     # Suppressed events are still counted-as-sent: a later pass never leaks them into the broadcast.
-    watcher._emit_unsent()
+    watcher._emit_cycle()
     assert [event["type"] for event in broadcast] == ["assistant_message"]
 
 
@@ -258,25 +258,28 @@ def _wait_for(broadcast_signal: threading.Event, predicate: Callable[[], bool], 
 
 
 def test_start_tails_the_rollout_via_the_shared_watcher(tmp_path: Path) -> None:
-    """The started watcher broadcasts existing content and picks up an appended line.
+    """``start`` primes the backlog without broadcasting it, then picks up appends live.
 
-    This is the path the shared ``PathWatcher`` now drives (it replaced the watcher's
-    own thread/observer/poll loop): ``start`` emits whatever is already on disk, then a
-    later append reaches the broadcast via the watch loop. Uses assistant lines -- agent
-    output the file reader still broadcasts live (user turns are ledger-owned now)."""
+    This is the path the shared ``PathWatcher`` drives: the pre-existing transcript is
+    served over the REST read paths (broadcasting it would flood the bounded SSE queues on
+    long histories), while a line appended after start reaches the broadcast via the watch
+    loop. Uses assistant lines -- agent output the file reader still broadcasts live (user
+    turns are ledger-owned now)."""
     broadcast_signal = threading.Event()
     rollout = _write_rollout(tmp_path, [_assistant_line("m1", "first", "2026-08-03T00:00:01Z")])
     watcher, broadcast = _build_watcher(tmp_path, broadcast_signal)
     watcher.start()
     try:
-        _wait_for(broadcast_signal, lambda: [event["text"] for event in broadcast] == ["first"])
-        assert [event["text"] for event in broadcast] == ["first"]
+        # The backlog is resident (served by reads) but was never broadcast.
+        assert [event["text"] for event in watcher.get_all_events()] == ["first"]
+        assert broadcast == []
 
         with rollout.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(_assistant_line("m2", "second", "2026-08-03T00:00:02Z")) + "\n")
 
-        _wait_for(broadcast_signal, lambda: [event["text"] for event in broadcast] == ["first", "second"])
-        assert [event["text"] for event in broadcast] == ["first", "second"]
+        _wait_for(broadcast_signal, lambda: [event["text"] for event in broadcast] == ["second"])
+        assert [event["text"] for event in broadcast] == ["second"]
+        assert [event["text"] for event in watcher.get_all_events()] == ["first", "second"]
     finally:
         watcher.stop()
 
@@ -322,12 +325,12 @@ def test_supersession_replaces_and_rebroadcasts(tmp_path: Path) -> None:
     upgrades its held copy."""
     watcher, broadcast = _build_watcher(tmp_path)
     rollout = _write_rollout(tmp_path, [_assistant_line("m1", "first", "2026-08-03T00:00:01Z")])
-    watcher._emit_unsent()
+    watcher._emit_cycle()
     assert [e["text"] for e in broadcast if e["type"] == "assistant_message"] == ["first"]
 
     with rollout.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_assistant_line("m1", "first, corrected", "2026-08-03T00:00:02Z")) + "\n")
-    watcher._emit_unsent()
+    watcher._emit_cycle()
 
     assistants = [e for e in watcher.get_all_events() if e["type"] == "assistant_message"]
     assert [e["text"] for e in assistants] == ["first, corrected"]
@@ -391,12 +394,12 @@ def test_identical_reserialisation_is_dropped(tmp_path: Path) -> None:
     re-broadcast and not duplicated in the store."""
     watcher, broadcast = _build_watcher(tmp_path)
     rollout = _write_rollout(tmp_path, [_assistant_line("m1", "hello", "2026-08-03T00:00:01Z")])
-    watcher._emit_unsent()
+    watcher._emit_cycle()
     before = len(broadcast)
 
     with rollout.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_assistant_line("m1", "hello", "2026-08-03T00:00:01Z")) + "\n")
-    watcher._emit_unsent()
+    watcher._emit_cycle()
 
     assert len(broadcast) == before
     assert len([e for e in watcher.get_all_events() if e["type"] == "assistant_message"]) == 1

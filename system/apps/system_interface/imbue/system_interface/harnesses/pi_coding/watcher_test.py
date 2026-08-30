@@ -278,7 +278,7 @@ def test_queue_snapshot_parked_message_surfaces_immediately(tmp_path: Path) -> N
     # not after a stability window (contract A3/A3b: the UI queue IS the harness queue).
     watcher, pushes = _snapshot_watcher(tmp_path)
     (tmp_path / "pi_inbox").write_text(json.dumps("parked") + "\n")
-    watcher._emit_unsent()
+    watcher._emit_cycle()
     assert pushes == [["parked"]]
 
 
@@ -290,9 +290,9 @@ def test_queue_snapshot_transient_shows_then_clears(tmp_path: Path) -> None:
     watcher, pushes = _snapshot_watcher(tmp_path)
     session = tmp_path / "s.jsonl"
     (tmp_path / "pi_inbox").write_text(json.dumps("quick") + "\n")
-    watcher._emit_unsent()
+    watcher._emit_cycle()
     assert pushes == [["quick"]]
     # It drains on a later cycle -> the chip is removed (the queue empties).
     _append_session(session, [_message_record("u", _user("quick"))])
-    watcher._emit_unsent()
+    watcher._emit_cycle()
     assert pushes == [["quick"], []]
