@@ -5244,7 +5244,7 @@ def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     assert canonical is not None, f"the canonical regex is no longer declared in {origin_ts}"
 
     page = render_frontend_not_built_page("terminal-x7k9q2w1")
-    in_page = re.findall(r"(/\^\(\?:host\|agent\).+?/i)\.test\(", page)
+    in_page = re.findall(r"(/\^\(\?:.+?/i)\.test\(", page)
     assert in_page == [canonical.group(1)], (
         f"the placeholder's coordinate regex has drifted from {origin_ts}: "
         f"page has {in_page}, origin.ts has {canonical.group(1)!r}"
