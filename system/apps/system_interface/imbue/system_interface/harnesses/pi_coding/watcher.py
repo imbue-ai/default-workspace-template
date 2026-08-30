@@ -32,6 +32,7 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.pi_coding.inbox import is_sentinel_object
 from imbue.system_interface.harnesses.pi_coding.queue_tracker import PiQueueTracker
 from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record
+from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record_detail
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.session_watcher import QueueSnapshotCallback
 from imbue.system_interface.harnesses.transcript_store import StoreBackedWatcher
@@ -365,3 +366,47 @@ class PiSessionWatcher(StoreBackedWatcher):
             # the same empty set (the manager broadcasts the returned value directly).
             self._last_queue_snapshot = snapshot
         return snapshot
+
+    # -- on-demand payload detail ---------------------------------------------------------
+
+    def _parse_detail(
+        self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
+    ) -> dict[str, Any] | None:
+        if source_line is None:
+            return None
+        try:
+            record = json.loads(source_line.strip())
+        except json.JSONDecodeError as e:
+            # A recorded byte range no longer decodes: a stale range or real corruption,
+            # rare either way and worth surfacing (the fallback scan runs next).
+            logger.warning("pi watcher: undecodable session line during a payload read: {}", e)
+            return None
+        if not isinstance(record, dict):
+            return None
+        return parse_record_detail(record).get(event["event_id"])
+
+    def _find_detail_source_fallback(self, event: dict[str, Any]) -> str | None:
+        """Scan the live session file for the record that carries this event's payloads."""
+        with self._lock:
+            target = self._current_path
+        if target is None:
+            return None
+        event_id = event["event_id"]
+        try:
+            with target.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        record = json.loads(stripped)
+                    except json.JSONDecodeError as e:
+                        # A complete line failing to decode mid-scan is corruption; the
+                        # trailing partial line (mid-write) is the routine near-miss.
+                        logger.warning("pi watcher: undecodable line in a payload fallback scan: {}", e)
+                        continue
+                    if isinstance(record, dict) and event_id in parse_record_detail(record):
+                        return line
+        except OSError:
+            return None
+        return None

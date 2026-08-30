@@ -17,7 +17,6 @@ from imbue.system_interface.harnesses.tool_labels import mcp_caption
 from imbue.system_interface.harnesses.tool_labels import parse_input_preview
 from imbue.system_interface.harnesses.tool_labels import quoted
 from imbue.system_interface.harnesses.tool_labels import shorten
-from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
 
 # pi's built-in tool names are lowercase; title-case them for the header so it reads
 # like claude's ("Tool: Read"). A tool absent from this table falls back to its raw name.
@@ -118,27 +117,12 @@ def tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
 
 
 @pure
-def keeps_full_tool_input(tool_name: str, raw_input: str) -> bool:
-    """True when a pi tool call's input must NOT be truncated for display.
-
-    A ``bash`` call running a ``tk`` lifecycle command (``tk create|start|close``): the
-    step timeline reads its ``--step`` titles and close summaries out of the command, so
-    a mid-body clip would truncate the plan. Recognition uses the shared
-    ``tk_command_parsing`` shlex parser (as the claude/codex parsers do), so a ``tk close``
-    merely mentioned inside another command's quoted argument is not mistaken for a real
-    lifecycle call. ``raw_input`` is the untruncated ``{"command": ...}`` JSON.
-    """
-    command = shell_command(tool_name, raw_input)
-    return command is not None and is_tk_lifecycle_anywhere(command)
-
-
-@pure
 def shell_command(tool_name: str, raw_input: str) -> str | None:
     """The shell command this tool call runs, or None if it is not a shell call.
 
     The ONE question each harness answers for itself. Whether that command is a tk lifecycle
     invocation is decided centrally (``tool_output.is_pure_tk_lifecycle_command`` for the hide
-    rule, ``is_tk_lifecycle_anywhere`` for the truncation exemption), so the rules live in one
+    rule, ``is_tk_lifecycle_anywhere`` for the resident tk_command stamp), so the rules live in one
     place and cannot drift between harnesses.
     """
     if tool_name != _BASH_TOOL_NAME:

@@ -682,6 +682,28 @@ def _agent_not_found_response(agent_id: str) -> Response:
     return _json_response(error.model_dump(), status_code=404)
 
 
+def _get_event_detail(agent_id: str, event_id: str) -> Response:
+    """The full deferred payloads for one event: tool input(s), tool output, thinking.
+
+    Resident events are payload-free (the wire contract in ``harnesses/events``); this is
+    the on-demand read behind expanding a tool row or a thinking disclosure. The read is
+    stateless -- the watcher re-reads the source line (or re-queries agy's store) and
+    nothing is cached backend-side; only the frontend may cache what it fetched. When the
+    recorded byte range went stale the watcher falls back to scanning the source for the
+    event's own identity; only if that also fails does this answer 404, which the frontend
+    renders as a quiet "payload no longer available" placeholder.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    watcher = get_state().get_or_create_watcher(agent_info)
+    detail = watcher.get_event_detail(event_id)
+    if detail is None:
+        error = ErrorResponse(detail=f"Payload for event '{event_id}' is no longer available")
+        return _json_response(error.model_dump(), status_code=404)
+    return _json_response({"event_id": event_id, **detail})
+
+
 def _get_events(agent_id: str) -> Response:
     """Get events for an agent. Supports tail-first loading and backfill."""
     agent_info = _find_agent(agent_id)
@@ -3391,6 +3413,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
+    application.add_url_rule(
+        "/api/agents/<agent_id>/events/<event_id>/detail", view_func=_get_event_detail, methods=["GET"]
+    )
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/message", view_func=_send_message_endpoint, methods=["POST"])
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])

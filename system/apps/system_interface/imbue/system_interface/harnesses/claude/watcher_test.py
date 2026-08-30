@@ -1637,7 +1637,7 @@ def test_backfill_deep_in_history_returns_correct_bodies(tmp_path: Path) -> None
         oracle_event = body_by_id[event["event_id"]]
         assert event["type"] == oracle_event["type"]
         if event["type"] == "tool_result":
-            assert event["output"] == oracle_event["output"]
+            assert event["output_chars"] == oracle_event["output_chars"]
         if event["type"] == "assistant_message":
             assert event["text"] == oracle_event["text"]
 

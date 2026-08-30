@@ -32,15 +32,15 @@ from typing import Any
 from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
 from imbue.system_interface.harnesses.error_patterns import classify_api_error
 from imbue.system_interface.harnesses.error_patterns import is_provider_fault
-from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
-from imbue.system_interface.harnesses.pi_coding.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.pi_coding.tool_labels import shell_command
 from imbue.system_interface.harnesses.pi_coding.tool_labels import tool_labels
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
+from imbue.system_interface.harnesses.tool_output import error_snippet
 from imbue.system_interface.harnesses.tool_output import find_permission_request
 from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
-from imbue.system_interface.harnesses.tool_output import truncate_tool_output
+from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.system_interface.harnesses.tool_output import tk_stamp
 
 # "common" here means the normalized/common event *form*, not the on-disk common-transcript
 # file (which we do NOT read). Nothing in the pipeline branches on this string.
@@ -67,32 +67,20 @@ def _text_from_content(content: Any) -> str:
     )
 
 
-def _input_preview(tool_name: str, raw_input: str) -> str:
-    """The stored ``input_preview``: the raw arguments JSON, truncated to the shared cap --
-    but left whole for a tk lifecycle command, whose ``--step`` titles / close summaries the
-    step timeline reads in full (``keeps_full_tool_input``)."""
-    if keeps_full_tool_input(tool_name, raw_input):
-        return raw_input
-    if len(raw_input) > MAX_TOOL_INPUT_PREVIEW_LENGTH:
-        return raw_input[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
-    return raw_input
-
-
-def _labelled_tool_call(block: dict[str, Any]) -> dict[str, str]:
+def _labelled_tool_call(block: dict[str, Any]) -> dict[str, Any]:
     """A pi ``toolCall`` content block carrying its own human labels.
 
-    Labels come from the RAW arguments (not the truncated preview), so a tk command's
-    verb is read off the whole command. The stored ``input_preview`` is truncated for
-    display, except for the tk bodies the timeline needs whole (see :func:`_input_preview`).
+    Labels come from the FULL arguments; the input itself stays off the event (the
+    payload-free wire contract) and is served whole by the detail endpoint on expand.
     """
     call_id = str(block.get("id", ""))
     tool_name = str(block.get("name", ""))
     raw_input = json.dumps(block.get("arguments", {}))
     header_label, caption_label = tool_labels(tool_name, raw_input)
-    tool_call = {
+    tool_call: dict[str, Any] = {
         "tool_call_id": call_id,
         "tool_name": tool_name,
-        "input_preview": _input_preview(tool_name, raw_input),
+        "input_chars": len(raw_input),
         "header_label": header_label,
         "caption_label": caption_label,
     }
@@ -104,10 +92,29 @@ def _labelled_tool_call(block: dict[str, Any]) -> dict[str, str]:
     display = classify_tool_call_display(is_pure_tk=is_pure_tk, raw_input=raw_input)
     if display is not None:
         tool_call["display"] = display.value
+    # The step progress view reads step titles/summaries out of a tk lifecycle command
+    # itself, so that one command is stamped resident.
+    if command is not None and is_tk_lifecycle_anywhere(command):
+        tool_call["tk_command"] = command
     return tool_call
 
 
-def _tool_calls_from_content(content: Any) -> list[dict[str, str]]:
+def _thinking_text(content: Any) -> str:
+    """The joined text of an assistant message's ``thinking`` blocks ('' = none).
+
+    pi records readable reasoning inline in the message, so this both stamps
+    ``has_thinking`` and serves the detail endpoint.
+    """
+    if not isinstance(content, list):
+        return ""
+    return "\n\n".join(
+        block.get("thinking", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "thinking" and isinstance(block.get("thinking"), str)
+    ).strip()
+
+
+def _tool_calls_from_content(content: Any) -> list[dict[str, Any]]:
     """Every ``toolCall`` block in an assistant message, labelled (in source order)."""
     if not isinstance(content, list):
         return []
@@ -141,7 +148,7 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
     error_text = str(message.get("errorMessage") or "") if failed else ""
     text = _text_from_content(message.get("content")) or error_text
     api_error_kind = classify_api_error(error_text)
-    return {
+    event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "assistant_message",
         "event_id": event_id,
@@ -167,6 +174,9 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         "api_error_kind": api_error_kind,
         "is_provider_fault": is_provider_fault(api_error_kind),
     }
+    if _thinking_text(message.get("content")):
+        event["has_thinking"] = True
+    return event
 
 
 def _user_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[str, Any]:
@@ -187,10 +197,10 @@ def _user_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[
 
 def _tool_result_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[str, Any]:
     raw_output = _text_from_content(message.get("content"))
-    # Lift the permission-request object and preserve tk step decoration BEFORE truncation
-    # (shared with the claude/codex parsers -- see ``harnesses/tool_output``).
+    # The structured facts lifted from the full output, which itself stays off the event
+    # (the payload-free wire contract -- see ``harnesses/tool_output``).
     permission_request = find_permission_request(raw_output)
-    output = truncate_tool_output(raw_output, permission_request)
+    is_error = message.get("isError") is True
     event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "tool_result",
@@ -198,12 +208,18 @@ def _tool_result_event(event_id: str, timestamp: str, message: dict[str, Any]) -
         "source": SOURCE,
         "tool_call_id": str(message.get("toolCallId", "")),
         "tool_name": str(message.get("toolName", "")),
-        "output": output,
-        "is_error": message.get("isError") is True,
+        "output_chars": len(raw_output),
+        "is_error": is_error,
         "message_uuid": event_id,
     }
     if permission_request is not None:
         event["permission_request"] = permission_request.details
+    snippet = error_snippet(raw_output) if is_error else ""
+    if snippet:
+        event["error_snippet"] = snippet
+    stamped_tk = tk_stamp(raw_output)
+    if stamped_tk:
+        event["tk_stamp"] = stamped_tk
     return event
 
 
@@ -233,3 +249,45 @@ def parse_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         return [_tool_result_event(event_id, timestamp, message)]
     # bashExecution / custom / branchSummary / compactionSummary etc. -> not rendered.
     return []
+
+
+def parse_record_detail(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Full deferred payloads by event_id for one raw pi session record.
+
+    The read half of the payload-free wire contract: full tool inputs and readable thinking
+    for an assistant record, the full output for a toolResult record.
+    """
+    if record.get("type") != "message":
+        return {}
+    record_id = record.get("id")
+    message = record.get("message")
+    if not isinstance(record_id, str) or not record_id or not isinstance(message, dict):
+        return {}
+    event_id = f"pi-{record_id}"
+    role = message.get("role")
+    if role == "assistant":
+        content = message.get("content")
+        inputs_by_tool_call_id: dict[str, str] = {}
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "toolCall" and block.get("id"):
+                    inputs_by_tool_call_id[str(block["id"])] = json.dumps(block.get("arguments", {}), indent=2)
+        thinking = _thinking_text(content)
+        if not inputs_by_tool_call_id and not thinking:
+            return {}
+        return {
+            event_id: {
+                "inputs_by_tool_call_id": inputs_by_tool_call_id,
+                "output": None,
+                "thinking": thinking or None,
+            }
+        }
+    if role == "toolResult":
+        return {
+            event_id: {
+                "inputs_by_tool_call_id": {},
+                "output": _text_from_content(message.get("content")),
+                "thinking": None,
+            }
+        }
+    return {}
