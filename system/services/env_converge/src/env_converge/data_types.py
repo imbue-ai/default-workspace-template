@@ -70,6 +70,23 @@ class CargoState(FrozenModel):
     recorded_at: datetime = Field(description="When this state was captured (UTC)")
 
 
+class RecordSnapshot(FrozenModel):
+    """The record's per-source states as read at one moment (absent files are None)."""
+
+    apt_state: AptState | None = Field(
+        description="Recorded apt state, when the record has one"
+    )
+    npm_state: NpmGlobalState | None = Field(
+        description="Recorded npm global state, when the record has one"
+    )
+    uv_tool_state: UvToolState | None = Field(
+        description="Recorded uv tool state, when the record has one"
+    )
+    cargo_state: CargoState | None = Field(
+        description="Recorded cargo/rustup state, when the record has one"
+    )
+
+
 class UnitRunResult(FrozenModel):
     """Outcome of one env.d unit script run."""
 
