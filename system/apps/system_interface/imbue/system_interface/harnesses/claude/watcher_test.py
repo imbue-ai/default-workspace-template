@@ -1698,3 +1698,97 @@ def test_get_latest_main_session_file_none_without_history(tmp_path: Path) -> No
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
     assert watcher.get_latest_main_session_file() is None
+
+
+# --- On-demand payload detail ---
+
+
+def _make_bash_result_line(uuid: str, timestamp: str, call_id: str, output: str) -> str:
+    return json.dumps(
+        {
+            "type": "user",
+            "uuid": uuid,
+            "timestamp": timestamp,
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": call_id, "content": output}],
+            },
+        }
+    )
+
+
+def test_get_event_detail_serves_the_full_payloads_from_disk(tmp_path: Path) -> None:
+    """Resident events are payload-free; the detail read reconstructs the whole input and
+    output from the recorded source byte ranges."""
+    big_input = {"command": "echo " + "x" * 5000}
+    events = [
+        {
+            "type": "assistant",
+            "uuid": "uuid-a",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-test",
+                "content": [{"type": "tool_use", "id": "toolu_big", "name": "Bash", "input": big_input}],
+            },
+        },
+    ]
+    agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, events)
+    session_file = claude_config_dir / "projects" / "hash123" / f"{session_id}.jsonl"
+    with open(session_file, "a") as f:
+        f.write(_make_bash_result_line("uuid-r", "2026-01-01T00:00:02Z", "toolu_big", "y" * 9000) + "\n")
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    parsed = watcher.get_all_events()
+    assistant = next(e for e in parsed if e["type"] == "assistant_message")
+    result = next(e for e in parsed if e["type"] == "tool_result")
+    assert "input_preview" not in assistant["tool_calls"][0]
+    assert "output" not in result
+
+    detail = watcher.get_event_detail(assistant["event_id"])
+    assert detail is not None
+    assert "x" * 5000 in detail["inputs_by_tool_call_id"]["toolu_big"]
+    # Claude's thinking is encrypted and useless; never surfaced.
+    assert detail["thinking"] is None
+
+    detail = watcher.get_event_detail(result["event_id"])
+    assert detail is not None
+    assert detail["output"] == "y" * 9000
+
+
+def test_get_event_detail_falls_back_to_a_scan_when_the_range_is_stale(tmp_path: Path) -> None:
+    """A rewrite that shifts byte offsets under the recorded range still resolves: the
+    watcher scans the session file for the event's own identity before giving up."""
+    result_line = _make_bash_result_line("uuid-r", "2026-01-01T00:00:02Z", "toolu_1", "the real output")
+    agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, [_user_event(0)])
+    session_file = claude_config_dir / "projects" / "hash123" / f"{session_id}.jsonl"
+    with open(session_file, "a") as f:
+        f.write(result_line + "\n")
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    result = next(e for e in watcher.get_all_events() if e["type"] == "tool_result")
+
+    # Shift the file contents under the recorded range WITHOUT shrinking it (a shrink
+    # would trigger the truncation reset and re-derive fresh ranges): pad ahead of the
+    # recorded offset so the recorded range now reads garbage.
+    padding = json.dumps({"type": "noise", "uuid": "zz", "timestamp": "t", "message": None})
+    session_file.write_text(padding + "\n" + session_file.read_text())
+
+    detail = watcher.get_event_detail(result["event_id"])
+    assert detail is not None
+    assert detail["output"] == "the real output"
+
+
+def test_get_event_detail_answers_none_when_the_source_is_gone(tmp_path: Path) -> None:
+    agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, [_user_event(0)])
+    session_file = claude_config_dir / "projects" / "hash123" / f"{session_id}.jsonl"
+    with open(session_file, "a") as f:
+        f.write(_make_bash_result_line("uuid-r", "2026-01-01T00:00:02Z", "toolu_1", "soon gone") + "\n")
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    result = next(e for e in watcher.get_all_events() if e["type"] == "tool_result")
+
+    # The file is rewritten without the result line (same length class does not matter:
+    # the range no longer parses AND the scan finds nothing).
+    session_file.write_text(json.dumps(_user_event(7)) + "\n")
+    assert watcher.get_event_detail(result["event_id"]) is None
+    assert watcher.get_event_detail("unknown-event") is None

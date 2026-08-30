@@ -691,6 +691,97 @@ def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> N
     assert data["events"][1]["text"] == "Hi!"
 
 
+def test_get_event_detail_serves_and_404s(client: FlaskClient, tmp_path: Path) -> None:
+    """The detail endpoint reconstructs one event's full payloads from disk, and answers a
+    clean 404 (the frontend's quiet placeholder) for an unknown event."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir(parents=True)
+    claude_config_dir = tmp_path / "claude_config"
+    projects_dir = claude_config_dir / "projects" / "hash123"
+    projects_dir.mkdir(parents=True)
+    session_id = "detail-session"
+    session_file = projects_dir / f"{session_id}.jsonl"
+    session_file.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": "uuid-r",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "z" * 9000}],
+                },
+            }
+        )
+        + "\n"
+    )
+    (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
+
+    agent_info = AgentInfo(
+        id="agent-123",
+        name="test-agent",
+        state="RUNNING",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+    )
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        events = client.get("/api/agents/agent-123/events").get_json()["events"]
+        result_event = next(e for e in events if e["type"] == "tool_result")
+        # Payload-free wire: the output is not on the event.
+        assert "output" not in result_event
+        assert result_event["output_chars"] == 9000
+
+        detail = client.get(f"/api/agents/agent-123/events/{result_event['event_id']}/detail")
+        assert detail.status_code == 200
+        assert detail.get_json()["output"] == "z" * 9000
+
+        missing = client.get("/api/agents/agent-123/events/not-a-real-event/detail")
+        assert missing.status_code == 404
+
+
+def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
+    """Eviction releases the watcher (resident transcript, watch thread); a later read
+    rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
+    state = build_test_state()
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir(parents=True)
+    claude_config_dir = tmp_path / "claude_config"
+    (claude_config_dir / "projects" / "hash123").mkdir(parents=True)
+    (claude_config_dir / "projects" / "hash123" / "s1.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": "u1",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "message": {"role": "user", "content": "hello"},
+            }
+        )
+        + "\n"
+    )
+    (agent_state_dir / "claude_session_id_history").write_text("s1\n")
+    agent_info = AgentInfo(
+        id="evictable-agent",
+        name="evictable-agent",
+        state="RUNNING",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+    )
+
+    first = state.get_or_create_watcher(agent_info)
+    assert state.watchers == {"evictable-agent": first}
+    assert len(first.get_all_events()) == 1
+
+    state.stop_and_remove_watcher("evictable-agent")
+    assert state.watchers == {}
+    # Idempotent for an unknown/already-evicted agent.
+    state.stop_and_remove_watcher("evictable-agent")
+
+    rebuilt = state.get_or_create_watcher(agent_info)
+    assert rebuilt is not first
+    assert [e["content"] for e in rebuilt.get_all_events()] == ["hello"]
+    state.shutdown()
+
+
 def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Path) -> None:
     """The no-`before` events response is capped to the most recent N events,
     and older events remain reachable via the `before` backfill branch (issue I)."""
