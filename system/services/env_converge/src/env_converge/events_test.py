@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from env_converge.events import EnvConvergeEventType, default_events_path, emit_event
 
 
