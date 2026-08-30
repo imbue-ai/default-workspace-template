@@ -1,12 +1,19 @@
-"""Pin the workspace's Claude configuration contract after the ~/.claude cutover.
+"""Pin what must NOT pin ``CLAUDE_CONFIG_DIR`` workspace-wide.
 
-Every claude in a workspace (mngr-launched agents and a bare ``claude`` in a
-terminal alike) must resolve claude's own default config dir, the shared
-``~/.claude``. That relies on invariants spread across files that would
-otherwise drift silently:
+A chat agent runs against a per-account config directory: signing in through the provider
+chooser mints ``~/.minds/accounts/<id>/`` and ``mngr create`` binds the chat to it by setting
+``CLAUDE_CONFIG_DIR`` on that agent's own process. So "every claude resolves the shared
+``~/.claude``" is no longer the contract, and this file no longer claims it.
 
-1. Nothing in ``.mngr/settings.toml`` may export ``CLAUDE_CONFIG_DIR`` -- an
-   exported value would pin agents to a different dir than a bare ``claude``.
+What survives the accounts work, and is what these tests actually check, is the AMBIENT default:
+anything that did not ask for an account -- a bare ``claude`` in a terminal, the ``claude_p.py``
+resolver, a supervisord service -- must still land on claude's own ``~/.claude``. That holds only
+if nothing pins the variable at a level those inherit, which is exactly the two invariants below.
+They are spread across files that would otherwise drift silently:
+
+1. Nothing in ``.mngr/settings.toml`` may export ``CLAUDE_CONFIG_DIR`` -- an exported value
+   there is inherited by EVERY agent, which would override the per-account binding a chat was
+   created with and silently put every chat back on one shared credential.
 2. The ``main`` (services) agent type must resolve to the plain ``command``
    agent class, NOT a claude agent: a claude-typed services agent pins
    ``CLAUDE_CONFIG_DIR`` to its per-agent dir in its env, and everything it
