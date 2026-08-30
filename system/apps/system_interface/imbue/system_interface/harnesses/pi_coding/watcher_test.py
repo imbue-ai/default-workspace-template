@@ -328,6 +328,41 @@ def test_pre_rotation_session_files_are_recovered_from_disk(tmp_path: Path) -> N
     assert contents == ["first era", "second era", "current era", "still going"]
 
 
+def test_static_file_with_unflushed_trailing_line_is_retried_not_lost(tmp_path: Path) -> None:
+    """A non-live file swept the instant it stops being live but before its last write
+    finishes flushing must not be marked fully consumed: the partial line is retried on a
+    later cycle instead of being permanently dropped.
+
+    The recovered line can land after events the live file already contributed in the
+    meantime, rather than in strict chronological position -- a flat append-list can't
+    retroactively splice it back in -- but that is an accepted trade-off versus losing it
+    outright, so this only asserts nothing goes missing, not exact position.
+    """
+    sessions = tmp_path / "plugin" / "pi_coding" / "sessions" / "cwd"
+    old = sessions / "20260101_aaa.jsonl"
+    live = sessions / "20260102_bbb.jsonl"
+    sessions.mkdir(parents=True)
+    complete_line = json.dumps(_message_record("a1", _user("first era"))) + "\n"
+    second_record = _message_record("a2", _user("still writing"))
+    partial_fragment = json.dumps(second_record)[:20]
+    old.write_bytes((complete_line + partial_fragment).encode())
+    _write_session(live, [_message_record("b1", _user("current era"))])
+    os.utime(old, (1_700_000_000, 1_700_000_000))
+    os.utime(live, (1_700_001_000, 1_700_001_000))
+    _point_marker(tmp_path, live)
+
+    watcher = _build(tmp_path)
+    contents = [e["content"] for e in watcher.get_all_events()]
+    assert contents == ["first era", "current era"]
+
+    # The old file was not marked consumed, so once the write finishes flushing a later
+    # cycle picks up the completed line -- nothing was lost.
+    old.write_bytes((complete_line + json.dumps(second_record) + "\n").encode())
+    contents = [e["content"] for e in watcher.get_all_events()]
+    assert len(contents) == 3
+    assert set(contents) == {"first era", "still writing", "current era"}
+
+
 def test_get_event_detail_serves_full_input_output_and_thinking(tmp_path: Path) -> None:
     session = tmp_path / "plugin" / "pi_coding" / "sessions" / "cwd" / "s.jsonl"
     big_command = "echo " + "x" * 4000

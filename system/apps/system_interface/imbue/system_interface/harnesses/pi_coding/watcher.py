@@ -174,10 +174,16 @@ class PiSessionWatcher(StoreBackedWatcher):
             except OSError:
                 candidates = []
             static_paths = [path for path in candidates if path != target and path not in self._consumed_static_paths]
+            # Only stop re-scanning the directory once every candidate this pass actually
+            # finished (fully read, no dangling partial trailing line): a file swept the
+            # instant it's discovered but still mid-flush stays eligible for retry.
+            all_consumed = True
             for path in sorted(static_paths, key=lambda p: (_mtime_or_zero(p), p.name)):
-                self._consume_whole_file_locked(path, process_started_at)
-                self._consumed_static_paths.add(path)
-            self._is_static_scan_done = True
+                if self._consume_whole_file_locked(path, process_started_at):
+                    self._consumed_static_paths.add(path)
+                else:
+                    all_consumed = False
+            self._is_static_scan_done = all_consumed
 
         if target is None:
             return
@@ -187,7 +193,8 @@ class PiSessionWatcher(StoreBackedWatcher):
             # survive /new, so clear the queued set on a real rotation.
             if self._current_path is not None:
                 self._consume_live_tail_locked(self._current_path, process_started_at)
-                self._consumed_static_paths.add(self._current_path)
+                if self._is_fully_tailed_locked(self._current_path):
+                    self._consumed_static_paths.add(self._current_path)
                 self._queue_tracker.clear()
             self._current_path = target
             self._byte_offset = 0
@@ -195,13 +202,33 @@ class PiSessionWatcher(StoreBackedWatcher):
 
     # -- session-file consumption ---------------------------------------------------------
 
-    def _consume_whole_file_locked(self, path: Path, process_started_at: float | None) -> None:
+    def _consume_whole_file_locked(self, path: Path, process_started_at: float | None) -> bool:
+        """Read and ingest a non-live session file in full. Returns whether it was fully
+        consumed (safe to skip on future cycles): a read failure or a trailing partial
+        line -- possible if the file is swept the instant pi rotates away from it, before
+        its last write finishes flushing -- leaves it eligible for retry next cycle
+        instead of permanently losing the unflushed tail."""
         try:
             raw = path.read_bytes()
         except OSError:
             logger.debug("pi watcher: failed to read {}", path)
-            return
-        self._ingest_spans_locked(path, iter_line_spans(raw, 0), process_started_at)
+            return False
+        complete, fragment = split_at_last_complete_line(raw)
+        self._ingest_spans_locked(path, iter_line_spans(complete, 0), process_started_at)
+        return not fragment
+
+    def _is_fully_tailed_locked(self, path: Path) -> bool:
+        """Whether the live-tail cursor has caught up to ``path``'s current size on disk.
+
+        False when a trailing line is still mid-flush (or the file can no longer be
+        statted), so a departing-live file leaves out of ``_consumed_static_paths`` and
+        gets one more chance via the static-file sweep instead of losing its unflushed
+        tail permanently.
+        """
+        try:
+            return path.stat().st_size == self._byte_offset
+        except OSError:
+            return False
 
     def _consume_live_tail_locked(self, path: Path, process_started_at: float | None) -> None:
         try:
