@@ -790,10 +790,6 @@ export async function fetchForwardEvents(agentId: string, limit: number): Promis
   }
 }
 
-/** Mint a stable per-message id at send time (contract A4). The backend keys its
- *  'Sending' record on it so an interrupt can reconcile the message per id and
- *  return it to the composer if it never committed. Returned to the caller so a
- *  later optimistic "Sending..." paint can carry the same id. */
 /** The full deferred payloads of one event, fetched on demand from the detail endpoint. */
 export interface EventDetail {
   inputs_by_tool_call_id: Record<string, string>;
@@ -875,6 +871,10 @@ export function requestEventDetail(agentId: string, eventId: string): void {
     });
 }
 
+/** Mint a stable per-message id at send time (contract A4). The backend keys its
+ *  'Sending' record on it so an interrupt can reconcile the message per id and
+ *  return it to the composer if it never committed. Returned to the caller so a
+ *  later optimistic "Sending..." paint can carry the same id. */
 export function mintMessageId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
