@@ -18,38 +18,56 @@ each entry against reality, and calls it.
 
 import os
 import tomllib
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 from typing import Final
 
 import click
+from pydantic import StrictStr
+from pydantic import StringConstraints
+from pydantic import ValidationError
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from scripts.r2.client import R2CredentialsError
 from scripts.r2.client import has_r2_credentials
+from scripts.release_channel.manifest import FULL_ROLLOUT_PERCENTAGE
 from scripts.release_channel.manifest import Fetch
 from scripts.release_channel.manifest import MakeS3Client
+from scripts.release_channel.manifest import Manifest
 from scripts.release_channel.manifest import PUBLISHABLE_CHANNELS
 from scripts.release_channel.manifest import PromotionError
+from scripts.release_channel.manifest import RolloutPercentage
 from scripts.release_channel.manifest import assert_lima_image_published
-from scripts.release_channel.manifest import assert_not_a_rollback
+from scripts.release_channel.manifest import assert_plain_release_version
+from scripts.release_channel.manifest import channel_filename
 from scripts.release_channel.manifest import fetch_build_manifest
 from scripts.release_channel.manifest import http_get
+from scripts.release_channel.manifest import is_a_version_decrease
 from scripts.release_channel.manifest import r2_client
 from scripts.release_channel.manifest import read_current_channel_manifest
+from scripts.release_channel.manifest import read_rollout_percentage
 from scripts.release_channel.manifest import rewrite_manifest
 from scripts.release_channel.manifest import upload_manifest
+from scripts.release_channel.manifest import version_of
+from scripts.release_channel.manifest import with_rollout_percentage
 
-_REQUIRED_FIELDS: Final[tuple[str, ...]] = ("build_id", "version", "fallback_branch")
+# Strict because TOML admits a number, a bool or a list where a string is meant,
+# and `build_id` goes straight into a URL -- coerced, it 404s instead of refusing.
+DeclaredName = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-@dataclass(frozen=True)
-class ChannelEntry:
+class ChannelEntry(FrozenModel):
     """One channel's declared state."""
 
-    channel: str
-    build_id: str
-    version: str
-    fallback_branch: str
+    channel: StrictStr
+    build_id: DeclaredName
+    version: DeclaredName
+    fallback_branch: DeclaredName
+    rollout_percentage: RolloutPercentage
+
+
+# `channel` names the table rather than sitting inside it.
+_REQUIRED_FIELDS: Final[tuple[str, ...]] = tuple(n for n in ChannelEntry.model_fields if n != "channel")
 
 
 def parse_channels(text: str) -> tuple[ChannelEntry, ...]:
@@ -63,6 +81,12 @@ def parse_channels(text: str) -> tuple[ChannelEntry, ...]:
     # either place, and `main` catches only the errors raised here, so an entry that is
     # not a table reaches the promote job's output as a traceback rather than as
     # the one thing every other refusal here gives: the offending key by name.
+    # A misspelled table name is neither a parse error nor an unknown channel:
+    # it declares nothing, so the entry it was meant to be is skipped while the
+    # run publishes the rest and exits green.
+    stray = sorted(set(raw) - {"channels"})
+    if stray:
+        raise PromotionError(f"Unknown top-level key(s) {stray}. Every entry lives under `[channels.<name>]`.")
     declared = raw.get("channels", {})
     if not isinstance(declared, dict):
         raise PromotionError(f"`channels` must be a table of per-channel entries, not {declared!r}.")
@@ -80,17 +104,15 @@ def parse_channels(text: str) -> tuple[ChannelEntry, ...]:
             raise PromotionError(
                 f"[channels.{channel}] must be a table declaring {list(_REQUIRED_FIELDS)}, not {fields!r}."
             )
-        missing = [f for f in _REQUIRED_FIELDS if not fields.get(f)]
-        if missing:
-            raise PromotionError(f"[channels.{channel}] is missing {missing}.")
-        entries.append(
-            ChannelEntry(
-                channel=channel,
-                build_id=fields["build_id"],
-                version=fields["version"],
-                fallback_branch=fields["fallback_branch"],
+        if "channel" in fields:
+            raise PromotionError(
+                f"[channels.{channel}] declares `channel`, which names the table rather than a field."
             )
-        )
+        try:
+            entries.append(ChannelEntry(channel=channel, **fields))
+        except ValidationError as exc:
+            faults = "; ".join(f"{'.'.join(str(p) for p in e['loc'])} {e['msg'].lower()}" for e in exc.errors())
+            raise PromotionError(f"[channels.{channel}] {faults}.") from exc
     return tuple(entries)
 
 
@@ -134,7 +156,6 @@ def apply_entry(
     feed_base_url: str,
     lima_image_base_url: str | None,
     arches: tuple[str, ...],
-    allow_rollback: bool,
     cache_seconds: int,
     dry_run: bool,
     from_bucket: bool,
@@ -143,8 +164,10 @@ def apply_entry(
 ) -> str:
     """Run every gate for one channel, then publish unless this is a dry run."""
     manifest = rewrite_manifest(fetch_build_manifest(app_id, entry.build_id, fetch=fetch), app_id)
-    assert_version_matches_build(entry, manifest.version)
-    assert_fallback_branch_matches_build(entry, manifest.version)
+    assert_plain_release_version(version_of(manifest))
+    assert_version_matches_build(entry, version_of(manifest))
+    assert_fallback_branch_matches_build(entry, version_of(manifest))
+    manifest = with_rollout_percentage(manifest, entry.rollout_percentage)
 
     if lima_image_base_url:
         assert_lima_image_published(lima_image_base_url, entry.fallback_branch, arches, fetch=fetch)
@@ -157,21 +180,33 @@ def apply_entry(
         fetch=fetch,
         make_client=make_client,
     )
-    served = current.version if current is not None else None
-    assert_not_a_rollback(entry.channel, served, manifest.version, allow_rollback)
+    served_description = _describe_served(current, entry.channel)
+    served = version_of(current) if current is not None else None
+    backwards = (
+        " -- BACKWARDS, so lower the connector download fallback too"
+        if is_a_version_decrease(served, version_of(manifest))
+        else ""
+    )
 
-    # Compared whole rather than by version: a channel is declared by build id,
-    # and every build between two cuts carries the version of the last cut, so
-    # comparing versions would make the ordinary alpha promotion -- a new build
-    # at the version already served -- report success having published nothing.
-    if current is not None and current.text == manifest.text:
-        return f"{entry.channel}: already serving build {entry.build_id} ({manifest.version}), nothing to do"
+    rollout = f"{entry.rollout_percentage}%"
+    if current is not None and current == manifest:
+        return f"{entry.channel}: already serving build {entry.build_id} ({version_of(manifest)}) to {rollout}, nothing to do"
     if dry_run:
-        return f"{entry.channel}: would publish {manifest.version} (currently {served or 'nothing'})"
+        return f"{entry.channel}: would publish {version_of(manifest)} to {rollout} (currently {served_description}){backwards}"
     upload_manifest(
         manifest, bucket=bucket, channel=entry.channel, cache_seconds=cache_seconds, make_client=make_client
     )
-    return f"{entry.channel}: published {manifest.version} (was {served or 'nothing'})"
+    return f"{entry.channel}: published {version_of(manifest)} to {rollout} (was {served_description}){backwards}"
+
+
+def _describe_served(current: Manifest | None, channel: str) -> str:
+    """What a channel serves today, for the line reporting what it will serve next."""
+    if current is None:
+        return "nothing"
+    percentage = read_rollout_percentage(current, channel_filename(channel))
+    if percentage is None:
+        return f"{version_of(current)} to {FULL_ROLLOUT_PERCENTAGE}% (declaring no rollout)"
+    return f"{version_of(current)} to {percentage}%"
 
 
 def undeclared_channel_reports(
@@ -204,7 +239,7 @@ def undeclared_channel_reports(
         )
         if current is not None:
             reports.append(
-                f"{channel}: declared by no entry, but still serving {current.version}. Removing an entry "
+                f"{channel}: declared by no entry, but still serving {version_of(current)}. Removing an entry "
                 f"withdraws nothing; repoint it at another build to move the channel."
             )
     return tuple(reports)
@@ -222,7 +257,6 @@ def undeclared_channel_reports(
 @click.option("--feed-base-url", required=True, help="Public URL the bucket is served at")
 @click.option("--lima-image-base-url", default=None, help="Image chunk store to gate on; omit if the tier has none")
 @click.option("--arch", "arches", multiple=True, default=("aarch64",), help="Arches that must have an image")
-@click.option("--allow-rollback", is_flag=True, help="Permit moving a channel to an older version")
 @click.option("--cache-seconds", default=60, show_default=True, help="Cache-Control max-age on the manifest")
 @click.option("--dry-run", is_flag=True, help="Run every gate and report, but publish nothing")
 def main(
@@ -232,7 +266,6 @@ def main(
     feed_base_url: str,
     lima_image_base_url: str | None,
     arches: tuple[str, ...],
-    allow_rollback: bool,
     cache_seconds: int,
     dry_run: bool,
 ) -> None:
@@ -264,7 +297,6 @@ def main(
                     feed_base_url=feed_base_url,
                     lima_image_base_url=lima_image_base_url,
                     arches=arches,
-                    allow_rollback=allow_rollback,
                     cache_seconds=cache_seconds,
                     dry_run=dry_run,
                     from_bucket=from_bucket,

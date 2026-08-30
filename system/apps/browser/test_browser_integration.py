@@ -335,7 +335,14 @@ def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest
             # Discovery is rewritten: the response must never leak Chromium's real port.
             assert browser._chrome is not None
             real_port = str(browser._chrome.port)
-            body = urllib.request.urlopen(f"{browser.attach_url}/json/version/", timeout=5).read().decode()
+
+            # Off the loop. The proxy that answers this request runs on THIS loop, so a
+            # blocking urlopen here waits on a response only it could produce: a self-deadlock
+            # that times out and reads as "the documented attach workflow is broken".
+            def fetch_version() -> str:
+                return urllib.request.urlopen(f"{browser.attach_url}/json/version/", timeout=5).read().decode()
+
+            body = await asyncio.to_thread(fetch_version)
             assert real_port not in body, "the proxy leaked the upstream debug port"
             assert json.loads(body)["webSocketDebuggerUrl"].startswith("ws://127.0.0.1:")
         finally:

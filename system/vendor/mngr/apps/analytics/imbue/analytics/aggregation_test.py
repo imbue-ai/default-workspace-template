@@ -65,10 +65,10 @@ def test_activity_recompute_preserves_rows_older_than_the_window_and_is_idempote
     )
 
 
-def test_accounts_dimension_mirrors_entitlements() -> None:
+def test_accounts_dimension_includes_entitlements_only_accounts_with_plans() -> None:
     session = build_fixture_analytics_session()
     session.execute(
-        "INSERT INTO rsc.account_entitlements VALUES"
+        "INSERT INTO rsc.account_entitlements (user_id, plan_name, created_at, updated_at) VALUES"
         " ('user-a', 'explorer', '2026-08-01 00:00:00+00', '2026-08-02 00:00:00+00'),"
         " ('user-b', 'ally', '2026-08-03 00:00:00+00', '2026-08-03 00:00:00+00')"
     )
@@ -77,6 +77,76 @@ def test_accounts_dimension_mirrors_entitlements() -> None:
     account_rows = session.execute("SELECT account_id, plan FROM metrics.gold.accounts ORDER BY account_id").fetchall()
 
     assert account_rows == snapshot([("user-a", "explorer"), ("user-b", "ally")])
+
+
+def test_accounts_dimension_spans_signup_sources_and_flags_suspension() -> None:
+    session = build_fixture_analytics_session()
+    # First run only ensures the gold schema (incl. the accounts_signup
+    # backfill table) exists so the fixture rows below have somewhere to land.
+    run_aggregation(session, _WINDOW_START)
+    session.execute("INSERT INTO metrics.gold.accounts_signup VALUES ('user-a', '2026-08-01 09:00:00+00')")
+    # user-a's entitlements row was lazily created days after the real signup,
+    # and the account has since been suspended.
+    session.execute(
+        "INSERT INTO rsc.account_entitlements (user_id, plan_name, created_at, updated_at, suspended_at) VALUES"
+        " ('user-a', 'explorer', '2026-08-05 00:00:00+00', '2026-08-06 00:00:00+00', '2026-08-07 00:00:00+00')"
+    )
+    # user-b signed up after the backfill and has no entitlements row yet.
+    session.execute("INSERT INTO rsc.account_attribution VALUES ('user-b', '2026-08-12 08:00:00+00')")
+
+    run_aggregation(session, _WINDOW_START)
+    account_rows = session.execute(
+        "SELECT account_id, plan, CAST(signup_at AS VARCHAR), is_suspended"
+        " FROM metrics.gold.accounts ORDER BY account_id"
+    ).fetchall()
+
+    assert account_rows == snapshot(
+        [
+            ("user-a", "explorer", "2026-08-01 09:00:00+00", True),
+            ("user-b", None, "2026-08-12 08:00:00+00", False),
+        ]
+    )
+
+
+def test_signup_signal_prefers_the_supertokens_backfill_over_attribution() -> None:
+    session = build_fixture_analytics_session()
+    run_aggregation(session, _WINDOW_START)
+    # user-a is in the backfill and also has a later attribution row: one
+    # signup, on the backfill day. user-b exists only in attribution.
+    session.execute("INSERT INTO metrics.gold.accounts_signup VALUES ('user-a', '2026-08-11 09:00:00+00')")
+    session.execute("INSERT INTO rsc.account_attribution VALUES ('user-a', '2026-08-12 01:00:00+00')")
+    session.execute("INSERT INTO rsc.account_attribution VALUES ('user-b', '2026-08-13 01:00:00+00')")
+
+    run_aggregation(session, _WINDOW_START)
+    signup_rows = session.execute(
+        "SELECT account_id, CAST(day AS VARCHAR), signal_count FROM metrics.gold.activity"
+        " WHERE signal_type = 'signup' ORDER BY account_id"
+    ).fetchall()
+
+    assert signup_rows == snapshot(
+        [
+            ("user-a", "2026-08-11", 1),
+            ("user-b", "2026-08-13", 1),
+        ]
+    )
+
+
+def test_share_enabled_signal_maps_share_labels_back_to_account_ids() -> None:
+    session = build_fixture_analytics_session()
+    session.execute(
+        "INSERT INTO rsc.account_entitlements (user_id, plan_name, created_at, updated_at) VALUES"
+        " ('AB-12', 'explorer', '2026-08-01 00:00:00+00', '2026-08-01 00:00:00+00')"
+    )
+    # The share row carries the label form (lowercased, hyphens stripped).
+    session.execute("INSERT INTO rsc.shares VALUES ('host-1', 'ab12', 'active', '2026-08-12 10:00:00+00')")
+
+    run_aggregation(session, _WINDOW_START)
+    share_rows = session.execute(
+        "SELECT account_id, CAST(day AS VARCHAR), signal_count FROM metrics.gold.activity"
+        " WHERE signal_type = 'share_enabled'"
+    ).fetchall()
+
+    assert share_rows == snapshot([("AB-12", "2026-08-12", 1)])
 
 
 def test_funnel_daily_joins_sources_that_do_not_share_days() -> None:
@@ -101,6 +171,26 @@ def test_funnel_daily_joins_sources_that_do_not_share_days() -> None:
             ("2026-08-11", 2, 0, 0),
             ("2026-08-12", 0, 1, 0),
             ("2026-08-13", 0, 0, 1),
+        ]
+    )
+
+
+def test_funnel_daily_fills_gap_days_with_zeros() -> None:
+    session = build_fixture_analytics_session()
+    session.execute("INSERT INTO rsc.download_events VALUES ('2026-08-11 01:00:00+00')")
+    session.execute("INSERT INTO rsc.workspace_records VALUES ('user-a', 'host-1', '2026-08-14 01:00:00+00')")
+
+    run_aggregation(session, _WINDOW_START)
+    funnel_rows = session.execute(
+        "SELECT CAST(day AS VARCHAR), downloads, signups, first_workspaces FROM metrics.gold.funnel_daily ORDER BY day"
+    ).fetchall()
+
+    assert funnel_rows == snapshot(
+        [
+            ("2026-08-11", 1, 0, 0),
+            ("2026-08-12", 0, 0, 0),
+            ("2026-08-13", 0, 0, 0),
+            ("2026-08-14", 0, 0, 1),
         ]
     )
 
@@ -132,7 +222,10 @@ def test_pipeline_health_counts_failures_since_the_last_success() -> None:
 def test_run_aggregation_returns_row_counters() -> None:
     session = build_fixture_analytics_session()
     session.execute("INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0)")
-    session.execute("INSERT INTO rsc.account_entitlements VALUES ('user-a', 'explorer', now(), now())")
+    session.execute(
+        "INSERT INTO rsc.account_entitlements (user_id, plan_name, created_at, updated_at)"
+        " VALUES ('user-a', 'explorer', now(), now())"
+    )
 
     counters = run_aggregation(session, _WINDOW_START)
 
@@ -160,6 +253,7 @@ def _insert_raw_event(
     account_id: str,
     payload: str,
     collected_at: str = "2026-08-12 12:00:00+00",
+    host_id: str = "host-1",
 ) -> None:
     session.execute(
         f"INSERT INTO {table} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -169,7 +263,7 @@ def _insert_raw_event(
             event_type,
             feed_source,
             feed_source,
-            "host-1",
+            host_id,
             account_id,
             "run-1",
             collected_at,
@@ -228,6 +322,54 @@ def test_explorer_workspace_signals_join_activity_and_dedupe_replayed_events() -
             ("user-a", "2026-08-12", "workspace_user_message", 1),
         ]
     )
+
+
+def test_workspace_git_commits_shared_across_workspaces_are_excluded_as_template_history() -> None:
+    session = build_fixture_analytics_session()
+    # The same commit sha collected from two different workspaces is shared
+    # template/upstream history, not code the user produced: excluded for
+    # every account. user-a's unique sha is the only surviving signal.
+    _insert_raw_event(
+        session,
+        "metrics.raw.workspace_events",
+        "2026-08-12 10:00:00+00",
+        "sha-template",
+        "git_commit",
+        "git_numstat",
+        "user-a",
+        '{"insertions": 1}',
+        host_id="host-1",
+    )
+    _insert_raw_event(
+        session,
+        "metrics.raw.workspace_events",
+        "2026-08-12 10:00:00+00",
+        "sha-template",
+        "git_commit",
+        "git_numstat",
+        "user-b",
+        '{"insertions": 1}',
+        host_id="host-2",
+    )
+    _insert_raw_event(
+        session,
+        "metrics.raw.workspace_events",
+        "2026-08-12 11:00:00+00",
+        "sha-own",
+        "git_commit",
+        "git_numstat",
+        "user-a",
+        '{"insertions": 5}',
+        host_id="host-1",
+    )
+
+    run_aggregation(session, _WINDOW_START)
+    git_rows = session.execute(
+        "SELECT account_id, CAST(day AS VARCHAR), signal_count FROM metrics.gold.activity"
+        " WHERE signal_type = 'workspace_git_commit' ORDER BY account_id"
+    ).fetchall()
+
+    assert git_rows == snapshot([("user-a", "2026-08-12", 1)])
 
 
 def test_transcript_daily_derives_turns_tool_mix_and_errors_deduped() -> None:

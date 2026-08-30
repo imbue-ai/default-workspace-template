@@ -228,6 +228,7 @@ dependencies = [
     { name = "presidio-analyzer" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
+    { name = "tenacity" },
 ]
 
 [package.dev-dependencies]
@@ -236,6 +237,7 @@ image = [
     { name = "paramiko" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
+    { name = "tenacity" },
 ]
 
 [package.metadata]
@@ -250,6 +252,7 @@ requires-dist = [
     { name = "presidio-analyzer", specifier = ">=2.2" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "tenacity", specifier = ">=9.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -258,6 +261,7 @@ image = [
     { name = "paramiko", specifier = "==3.5.1" },
     { name = "psycopg2-binary", specifier = "==2.9.12" },
     { name = "pydantic", specifier = "==2.13.4" },
+    { name = "tenacity", specifier = "==9.1.4" },
 ]
 
 [[package]]
@@ -2416,6 +2420,7 @@ dev = [
     { name = "pytest-profiling" },
     { name = "pytest-split" },
     { name = "pytest-timeout" },
+    { name = "pyyaml" },
     { name = "ruff" },
     { name = "semver" },
     { name = "shellcheck-py" },
@@ -2442,6 +2447,7 @@ dev = [
     { name = "pytest-profiling" },
     { name = "pytest-split", specifier = ">=0.9.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "~=0.12.8" },
     { name = "semver", specifier = ">=3.0" },
     { name = "shellcheck-py", specifier = ">=0.10.0" },

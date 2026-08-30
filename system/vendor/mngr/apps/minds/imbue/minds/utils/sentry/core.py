@@ -85,15 +85,13 @@ _S3_ATTACHMENT_BUCKET_BY_ENVIRONMENT: Mapping[SentryDeployEnvironment, str | Non
 # The live/current files are uncompressed on disk (compressed on upload); the rotated ``*.gz``
 # files are already gzipped by the Electron rotation helper, so they are uploaded as-is.
 #
-# A manual bug report additionally *stages* up to two files into that same folder immediately
-# before it submits: ``bug-report-<collection slug>-workspace.zip`` (the archive the in-workspace
-# collector hands back, holding the workspace logs plus one ``.jsonl`` per recent chat -- staged
-# already compressed rather than as bare ``.jsonl`` files the backend-log groups above would sweep)
-# and ``bug-report-<collection slug>-console.log`` (the shell's captured console tail, staged
-# app-side). No group's glob matches either name -- ``*.jsonl`` and ``*.jsonl.*`` need a ``.jsonl``
-# that neither the ``.zip`` nor the ``.log`` has, and the remaining four are anchored on the exact
-# stems ``minds.log`` or ``electron.log`` -- so a staged file never joins a group and reaches only
-# the one report it was staged for (see the note below the groups).
+# A manual bug report's own files (the in-workspace archive and the shell's captured console
+# tail) are deliberately NOT in this folder: each report stages them into its own private temp
+# directory, so no group's glob can ever sweep one onto an unrelated event and concurrent reports
+# cannot touch each other's files (see the note below the groups). The workspace outer host's
+# latchkey gateway tail takes the opposite route: collection mirrors it into the latchkey plugin
+# data dir, where the ``latchkey_raw_logs`` group below sweeps it onto every event exactly like
+# the desktop gateway's own logs.
 _MINDS_LOG_ATTACHMENT_GROUPS = (
     # The live Python backend jsonl log (mutable -- re-upload on every report).
     LogAttachmentGroup(
@@ -145,8 +143,8 @@ _MINDS_LOG_ATTACHMENT_GROUPS = (
     ),
 )
 
-# The bug-report staged files (``bug-report-<collection slug>-workspace.zip``
-# and its ``-console.log`` sibling) are deliberately NOT attachment groups:
+# The bug-report staged files (the workspace archive and the console tail, each
+# in its report's own temp staging dir) are deliberately NOT attachment groups:
 # groups are process-global and swept onto every event, so a group matching them
 # would carry one report's consented files onto every unrelated automatic error
 # for as long as they sat on disk. They reach exactly one event instead --
@@ -282,6 +280,19 @@ def _external_log_attachment_groups(
             is_immutable=False,
             base_dir=mngr_cli_events_dir,
         ),
+        # The most recent rotated per-command mngr CLI log: rotation is
+        # size-based, so on a busy install the current file can cover only
+        # hours, and this log is where a spawned `mngr forward`'s stream
+        # diagnostics land (immutable: rotated files never change, so the S3
+        # key is reused).
+        LogAttachmentGroup(
+            group_name="mngr_cli_rotated_events",
+            glob="events.jsonl.*",
+            max_file_count=1,
+            is_compressed=True,
+            is_immutable=True,
+            base_dir=mngr_cli_events_dir,
+        ),
         # The daemon's structured loguru log (mutable -- re-upload on every report).
         LogAttachmentGroup(
             group_name="latchkey_live_logs",
@@ -289,6 +300,19 @@ def _external_log_attachment_groups(
             max_file_count=MAX_SENTRY_LIST_SIZE,
             is_compressed=True,
             is_immutable=False,
+            base_dir=latchkey_plugin_data_dir,
+        ),
+        # Its most recent rotation, on the same size-based scheme and for the
+        # same reason as the mngr CLI one above: measured at 5-6 hours per file
+        # on a busy install. Mirrors the group the daemon's own reports already
+        # carry (mngr_latchkey/sentry.py's "rotated_logs"); the raw *.log
+        # rotations are deliberately left behind there, so they are here too.
+        LogAttachmentGroup(
+            group_name="latchkey_rotated_logs",
+            glob="*.jsonl.*",
+            max_file_count=1,
+            is_compressed=True,
+            is_immutable=True,
             base_dir=latchkey_plugin_data_dir,
         ),
         # The daemon's raw stdout/stderr capture (latchkey_forward.log).

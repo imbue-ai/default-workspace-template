@@ -114,6 +114,26 @@ If litellm's map ever lags a brand-new model, the fix is a cost-map reload
 machines that never import litellm; `litellm_pricing_test` pins that copy against
 this same map so the two cannot drift.
 
+## Log lines
+
+Every line the deployed proxy emits is one JSON object carrying an explicit
+`level`, so severity queries over the tier's OpenObserve `modal_logs` stream
+use `spath(body, 'level')` (Modal's OTEL exporter itself
+stamps every line `INFO`). Two mechanisms cover the two halves of the
+container: the shared `imbue.modal_app_kit.log_format.configure_logging`
+bootstrap for our own lines (the access-log middleware, `migrate_db`), and
+LiteLLM's native JSON logging for its own -- `litellm_settings.json_logs`
+in the deployed config plus the `JSON_LOGS=1` / `LITELLM_LOG=INFO` env vars
+both Modal functions (`litellm_app()`, `migrate_db()`) export before importing
+LiteLLM. Once the config loads,
+LiteLLM's JSON handler also takes over the root logger, so our plain lines
+in the proxy container render through it from then on (still with `level`).
+`LITELLM_LOG` is the level LiteLLM's own loggers emit at: INFO matches our
+`imbue.*` packages (unset, they would inherit the root logger's WARNING);
+set `LITELLM_LOG=DEBUG` in the `litellm` secret of a dev env to get
+LiteLLM's debug output. The local-dev `litellm_proxy/config.yaml` keeps
+LiteLLM's human-readable text format.
+
 ## Checking spend
 
 ```bash

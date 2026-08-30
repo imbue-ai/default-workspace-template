@@ -8,7 +8,9 @@ Implements specs/minds-analytics/redaction-contract.md exactly:
 2. Text scrubbing (message text only): the workspace's pinned secret scanners
    (betterleaks + kingfisher) run over the surviving text and any finding's
    line is replaced with ``[REDACTED_SECRET]``; then a PII scrubber (Presidio,
-   wired in by ``collect.py``) replaces detected entities.
+   wired in by ``collect.py``) replaces detected entities; then random-looking
+   identifier tokens are replaced with ``[REDACTED_TOKEN]`` (workspace-local
+   paths are kept).
 
 Fail-closed everywhere: a record that does not match a known shape is dropped,
 a scanner that is missing or errors raises (failing the transcript feed for
@@ -21,8 +23,11 @@ pydantic. Never imports anything else from the monorepo.
 
 import json
 import logging
+import math
+import re
 import subprocess
 import tempfile
+from collections import Counter
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
@@ -36,6 +41,20 @@ from pydantic import Field
 logger = logging.getLogger("analytics_collect.redaction")
 
 REDACTED_SECRET_MARKER: Final[str] = "[REDACTED_SECRET]"
+REDACTED_TOKEN_MARKER: Final[str] = "[REDACTED_TOKEN]"
+
+# Chunks starting with these prefixes are workspace-local paths readers rely
+# on; they are kept whole, random-looking segments included.
+_KEPT_CHUNK_PREFIXES: Final[tuple[str, ...]] = ("/home/user", "~/")
+
+_UUID_SEGMENT_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_HEX_SEGMENT_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{16,}$")
+_DIGIT_RUN_RE: Final[re.Pattern[str]] = re.compile(r"\d{7,}")
+_TOKEN_CHARSET_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9+_=-]{20,}$")
+_ALNUM_SEGMENT_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9]{12,}$")
+_SURROUNDING_PUNCTUATION: Final[str] = ".,;:!?)('\"`<>[]{}"
 
 # Whole-text sentinel in a finding line set: a finding without a usable line
 # number redacts the entire text.
@@ -191,6 +210,94 @@ def redact_secret_lines(text: str, finding_lines: set[int]) -> str:
     return "\n".join(replaced)
 
 
+def _shannon_entropy(segment: str) -> float:
+    counts = Counter(segment)
+    total = len(segment)
+    return -sum((count / total) * math.log2(count / total) for count in counts.values())
+
+
+def _character_class(character: str) -> str:
+    if character.isdigit():
+        return "digit"
+    if character.islower():
+        return "lower"
+    if character.isupper():
+        return "upper"
+    return "other"
+
+
+def _character_class_alternations(segment: str) -> int:
+    """How often consecutive characters switch between digit/lower/upper/other."""
+    alternation_count = 0
+    previous_class = None
+    for character in segment:
+        current_class = _character_class(character)
+        if previous_class is not None and current_class != previous_class:
+            alternation_count += 1
+        previous_class = current_class
+    return alternation_count
+
+
+def _is_random_looking_segment(segment: str) -> bool:
+    if _UUID_SEGMENT_RE.match(segment) is not None:
+        return True
+    if _HEX_SEGMENT_RE.match(segment) is not None:
+        return True
+    if _DIGIT_RUN_RE.search(segment) is not None:
+        return True
+    digit_count = sum(1 for character in segment if character.isdigit())
+    # High-entropy token shapes (base64-ish, mixed alphanumerics). The digit
+    # and hyphen requirements keep hyphenated English and camelCase words out.
+    if (
+        _TOKEN_CHARSET_RE.match(segment) is not None
+        and digit_count >= 2
+        and segment.count("-") <= 1
+        and _character_class_alternations(segment) >= 6
+        and _shannon_entropy(segment) >= 3.5
+    ):
+        return True
+    if (
+        _ALNUM_SEGMENT_RE.match(segment) is not None
+        and digit_count >= 2
+        and _character_class_alternations(segment) >= 5
+        and _shannon_entropy(segment) >= 3.3
+    ):
+        return True
+    return False
+
+
+def _scrub_chunk_segments(chunk: str) -> str:
+    """Scrub one whitespace-delimited chunk per '/'-segment, keeping the readable parts."""
+    scrubbed_segments = []
+    for segment in chunk.split("/"):
+        core = segment.strip(_SURROUNDING_PUNCTUATION)
+        if core and _is_random_looking_segment(core):
+            scrubbed_segments.append(segment.replace(core, REDACTED_TOKEN_MARKER, 1))
+        else:
+            scrubbed_segments.append(segment)
+    return "/".join(scrubbed_segments)
+
+
+def scrub_random_tokens(text: str) -> str:
+    """Replace random-looking identifier tokens with ``[REDACTED_TOKEN]``.
+
+    Deliberately aggressive: collected transcripts exist for reading the
+    words, so identifier-shaped noise (uuids, long hex, long digit runs,
+    high-entropy tokens) is dropped. Workspace-local paths (``/home/user...``,
+    ``~/...``) are kept whole; other path-ish chunks are scrubbed per
+    '/'-segment so the readable part of a path survives.
+    """
+    output_pieces = []
+    for chunk in re.split(r"(\s+)", text):
+        if not chunk or chunk.isspace():
+            output_pieces.append(chunk)
+        elif chunk.strip(_SURROUNDING_PUNCTUATION).startswith(_KEPT_CHUNK_PREFIXES):
+            output_pieces.append(chunk)
+        else:
+            output_pieces.append(_scrub_chunk_segments(chunk))
+    return "".join(output_pieces)
+
+
 def replace_pii_spans(text: str, spans: Sequence[tuple[int, int, str]]) -> str:
     """Replace each (start, end, entity_type) span with ``[REDACTED_<ENTITY_TYPE>]``.
 
@@ -316,7 +423,7 @@ def redact_transcript_records(
     # Per-text PII scrubber. Production: the Presidio scrubber collect.py builds.
     scrub_pii: Callable[[str], str],
 ) -> RedactedTranscriptBatch:
-    """The full redaction pipeline: structural strip, then secret lines, then PII."""
+    """The full redaction pipeline: structural strip, secret lines, PII, then random tokens."""
     stripped_records: list[dict[str, Any]] = []
     dropped_record_count = 0
     for raw_record in raw_records:
@@ -337,7 +444,7 @@ def redact_transcript_records(
     finding_lines_by_text_idx = scan_texts(texts) if texts else []
     for slot_idx, (record, field, part_idx) in enumerate(slot_owners):
         secret_redacted = redact_secret_lines(texts[slot_idx], finding_lines_by_text_idx[slot_idx])
-        scrubbed = scrub_pii(secret_redacted)
+        scrubbed = scrub_random_tokens(scrub_pii(secret_redacted))
         if part_idx is not None:
             record[field][part_idx]["content"] = scrubbed
         else:

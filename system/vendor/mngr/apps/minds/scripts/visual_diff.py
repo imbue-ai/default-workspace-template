@@ -70,12 +70,19 @@ from imbue.minds.desktop_client.ui_models import UiBootstrapSeed
 from imbue.minds.desktop_client.ui_models import UiDiscoveryHealthMessage
 from imbue.minds.desktop_client.ui_models import UiEnvironmentMessage
 from imbue.minds.desktop_client.ui_models import UiHealthMessage
+from imbue.minds.desktop_client.ui_models import UiNotificationEntry
+from imbue.minds.desktop_client.ui_models import UiNotificationsMessage
 from imbue.minds.desktop_client.ui_models import UiProviderEntry
 from imbue.minds.desktop_client.ui_models import UiProvidersMessage
 from imbue.minds.desktop_client.ui_models import UiRequestsMessage
 from imbue.minds.desktop_client.ui_models import UiSnapshot
 from imbue.minds.desktop_client.ui_models import UiWorkspaceEntry
+from imbue.minds.desktop_client.ui_models import UiWorkspaceUpdate
+from imbue.minds.desktop_client.ui_models import UiWorkspaceUpdatesMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspacesMessage
+from imbue.minds.desktop_client.update_status import UpdateActivity
+from imbue.minds.desktop_client.update_status import UpdateAvailability
+from imbue.minds.desktop_client.update_status import UpdateVerdict
 from imbue.minds.errors import MindError
 
 
@@ -262,6 +269,38 @@ def _build_spa_fixture_bootstrap() -> UiBootstrap:
             is_remote=True,
             location="Alice's laptop",
         ),
+        UiWorkspaceEntry(
+            id="agent-00000000000000000000000000000005",
+            name="epsilon",
+            accent="#a87c96",
+            host_id="host-00000000000000000000000000000005",
+            supports_shutdown=True,
+            liveness="RUNNING",
+        ),
+        UiWorkspaceEntry(
+            id="agent-00000000000000000000000000000006",
+            name="zeta",
+            accent="#96a87c",
+            host_id="host-00000000000000000000000000000006",
+            supports_shutdown=True,
+            liveness="RUNNING",
+        ),
+        UiWorkspaceEntry(
+            id="agent-00000000000000000000000000000007",
+            name="eta",
+            accent="#7ca8a0",
+            host_id="host-00000000000000000000000000000007",
+            supports_shutdown=True,
+            liveness="RUNNING",
+        ),
+        UiWorkspaceEntry(
+            id="agent-00000000000000000000000000000008",
+            name="theta",
+            accent="#a89c7c",
+            host_id="host-00000000000000000000000000000008",
+            supports_shutdown=True,
+            liveness="RUNNING",
+        ),
     )
     snapshot = UiSnapshot(
         workspaces=UiWorkspacesMessage(
@@ -296,8 +335,79 @@ def _build_spa_fixture_bootstrap() -> UiBootstrap:
                 "req-00000000000000000000000000000002",
             ),
         ),
+        notifications=UiNotificationsMessage(
+            entries=(
+                UiNotificationEntry(
+                    id="req-00000000000000000000000000000001",
+                    created_at="2026-01-01T00:00:00+00:00",
+                    is_resolved=False,
+                    outcome=None,
+                    title="Sign in to Slack",
+                    body="alpha wants to connect your Slack account.",
+                    request_id="req-00000000000000000000000000000001",
+                    workspace_agent_id="agent-00000000000000000000000000000001",
+                    workspace_name="alpha",
+                    workspace_accent="#7c9885",
+                    service_name="slack",
+                ),
+            ),
+            unresolved_count=1,
+        ),
         health=(UiHealthMessage(agent_id="agent-00000000000000000000000000000002", status=AgentHealth.STUCK),),
         discovery_health=UiDiscoveryHealthMessage(state=DiscoveryHealth.HEALTHY),
+        # One machine per update badge state; two out of date raises the bulk strip.
+        workspace_updates=UiWorkspaceUpdatesMessage(
+            updates={
+                "agent-00000000000000000000000000000001": UiWorkspaceUpdate(
+                    availability=UpdateAvailability.OUT_OF_DATE,
+                    current_version="minds-v0.3.9",
+                    supported_version="minds-v0.4.1",
+                    is_version_from_label=False,
+                    activity=UpdateActivity.IDLE,
+                ),
+                "agent-00000000000000000000000000000002": UiWorkspaceUpdate(
+                    availability=UpdateAvailability.OUT_OF_DATE,
+                    current_version="minds-v0.3.1",
+                    supported_version="minds-v0.4.1",
+                    is_version_from_label=True,
+                    activity=UpdateActivity.IDLE,
+                    is_scheduled=True,
+                    last_skip_reason="Agents were still working in this machine during the last update window.",
+                ),
+                "agent-00000000000000000000000000000005": UiWorkspaceUpdate(
+                    availability=UpdateAvailability.OUT_OF_DATE,
+                    current_version="minds-v0.4.0",
+                    supported_version="minds-v0.4.1",
+                    is_version_from_label=False,
+                    activity=UpdateActivity.APPLYING,
+                ),
+                "agent-00000000000000000000000000000008": UiWorkspaceUpdate(
+                    availability=UpdateAvailability.OUT_OF_DATE,
+                    current_version="minds-v0.4.0",
+                    supported_version="minds-v0.4.1",
+                    is_version_from_label=False,
+                    activity=UpdateActivity.RUNNING,
+                    chat_agent_name="update-108129",
+                ),
+                "agent-00000000000000000000000000000006": UiWorkspaceUpdate(
+                    availability=UpdateAvailability.UP_TO_DATE,
+                    current_version="minds-v0.4.1",
+                    supported_version="minds-v0.4.1",
+                    is_version_from_label=False,
+                    activity=UpdateActivity.IDLE,
+                    verdict=UpdateVerdict.UPDATED,
+                    success_note_version="minds-v0.4.1",
+                ),
+                "agent-00000000000000000000000000000007": UiWorkspaceUpdate(
+                    availability=UpdateAvailability.UNKNOWN,
+                    current_version="",
+                    supported_version="minds-v0.4.1",
+                    is_version_from_label=False,
+                    activity=UpdateActivity.IDLE,
+                ),
+            },
+            update_window="2:00 AM-5:00 AM",
+        ),
         # The baseline every route is captured against, so no device condition:
         # seeding one would put a notice band over every machine page in every
         # capture. Flip it to see the two environment states.

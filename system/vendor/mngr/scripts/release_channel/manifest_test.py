@@ -5,17 +5,24 @@ from io import BytesIO
 from typing import Any
 
 import pytest
+import yaml
 from botocore.stub import Stubber
 
+from scripts.release_channel.manifest import Manifest
 from scripts.release_channel.manifest import PromotionError
 from scripts.release_channel.manifest import assert_lima_image_published
-from scripts.release_channel.manifest import assert_not_a_rollback
+from scripts.release_channel.manifest import assert_plain_release_version
 from scripts.release_channel.manifest import fetch_build_manifest
-from scripts.release_channel.manifest import parse_version
+from scripts.release_channel.manifest import is_a_version_decrease
+from scripts.release_channel.manifest import parse_manifest
 from scripts.release_channel.manifest import read_channel_manifest_from_bucket
 from scripts.release_channel.manifest import read_channel_manifest_from_feed
+from scripts.release_channel.manifest import read_rollout_percentage
+from scripts.release_channel.manifest import render
 from scripts.release_channel.manifest import rewrite_manifest
 from scripts.release_channel.manifest import upload_manifest
+from scripts.release_channel.manifest import version_of
+from scripts.release_channel.manifest import with_rollout_percentage
 
 APP_ID = "26032588hqdzk"
 
@@ -59,31 +66,41 @@ def _raising(code: int):
     return fetch
 
 
+def _rolled_out_at(percentage: int) -> Manifest:
+    """The real build's channel manifest, declaring `percentage`."""
+    return with_rollout_percentage(rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID), percentage)
+
+
 def test_rewrite_makes_every_artifact_absolute_to_todesktop() -> None:
     manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
-    urls = [line.split(": ", 1)[1] for line in manifest.text.splitlines() if ": http" in line]
+    urls = [line.split(": ", 1)[1] for line in render(manifest).splitlines() if ": http" in line]
     assert len(urls) == 5, "four files plus the legacy top-level path"
     assert all(url.startswith(f"https://download.todesktop.com/{APP_ID}/") for url in urls)
 
 
-def test_rewrite_preserves_digests_and_sizes_byte_for_byte() -> None:
-    """The whole point is that the promoted bytes are the bytes ToDesktop signed."""
-    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
-    for line in REAL_TODESKTOP_MANIFEST.splitlines():
-        if line.strip().startswith(("sha512:", "size:", "releaseDate:", "version:")):
-            assert line in manifest.text.splitlines()
+def test_rewrite_preserves_everything_but_the_artifact_references() -> None:
+    """The whole point is that the promoted artifacts are the ones ToDesktop signed."""
+    original = yaml.safe_load(REAL_TODESKTOP_MANIFEST)
+    published = yaml.safe_load(render(rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)))
+    assert published.keys() == original.keys(), "a key ToDesktop set was dropped"
+    assert published["version"] == original["version"]
+    assert published["releaseDate"] == original["releaseDate"]
+    # Paired and ordered, so a digest cannot end up against the wrong artifact.
+    assert [(f["sha512"], f["size"]) for f in published["files"]] == [
+        (f["sha512"], f["size"]) for f in original["files"]
+    ]
 
 
 def test_rewrite_percent_encodes_spaces_so_the_url_resolves() -> None:
     manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
-    assert "Minds%200.3.11%20-%20Build%20260801n4rh5zv5d-arm64-mac.zip" in manifest.text
-    assert "Minds 0.3.11 - Build" not in manifest.text
+    assert "Minds%200.3.11%20-%20Build%20260801n4rh5zv5d-arm64-mac.zip" in render(manifest)
+    assert "Minds 0.3.11 - Build" not in render(manifest)
 
 
 def test_rewrite_keeps_the_extension_electron_updater_selects_on() -> None:
     """MacUpdater picks the zip by URL pathname extension, so it must survive."""
     manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
-    zips = [line for line in manifest.text.splitlines() if line.strip().endswith("-mac.zip")]
+    zips = [line for line in render(manifest).splitlines() if line.strip().endswith("-mac.zip")]
     assert len(zips) == 3, "two per-arch zips plus the top-level path"
 
 
@@ -100,7 +117,7 @@ def test_rewrite_refuses_a_url_that_lost_its_extension() -> None:
 
 def test_rewrite_leaves_already_absolute_urls_alone() -> None:
     manifest = "version: 0.4.0\nfiles:\n  - url: https://cdn.example/Minds-arm64-mac.zip\n"
-    assert "https://cdn.example/Minds-arm64-mac.zip" in rewrite_manifest(manifest, APP_ID).text
+    assert "https://cdn.example/Minds-arm64-mac.zip" in render(rewrite_manifest(manifest, APP_ID))
 
 
 def test_rewrite_rejects_a_manifest_with_no_artifacts() -> None:
@@ -108,8 +125,8 @@ def test_rewrite_rejects_a_manifest_with_no_artifacts() -> None:
         rewrite_manifest("version: 0.4.0\nfiles:\n", APP_ID)
 
 
-def test_parse_version_reads_the_real_manifest() -> None:
-    assert parse_version(REAL_TODESKTOP_MANIFEST, "ToDesktop's build manifest") == "0.3.11"
+def test_parsing_reads_the_version_from_the_real_manifest() -> None:
+    assert version_of(parse_manifest(REAL_TODESKTOP_MANIFEST, "ToDesktop's build manifest")) == "0.3.11"
 
 
 def test_a_manifest_with_no_version_names_which_manifest_it_was() -> None:
@@ -118,6 +135,21 @@ def test_a_manifest_with_no_version_names_which_manifest_it_was() -> None:
         rewrite_manifest("files:\n  - url: Minds-arm64-mac.zip\n", APP_ID)
     with pytest.raises(PromotionError, match="https://releases.test/alpha-mac.yml has no"):
         read_channel_manifest_from_feed("https://releases.test", "alpha", fetch=_serving(b"files:\n"))
+
+
+def test_a_document_that_is_not_a_manifest_at_all_names_which_one_it_was() -> None:
+    """The shape a CDN or bucket error page arrives in, which is not a missing field.
+
+    An error page served with a 200 loads as a scalar rather than a mapping, and
+    a truncated object fails the loader outright -- so neither can be read past
+    into a `manifest["version"]`.
+    """
+    with pytest.raises(PromotionError, match="ToDesktop's build manifest is not valid YAML"):
+        rewrite_manifest("version: [0.4.0\n", APP_ID)
+    with pytest.raises(PromotionError, match="https://releases.test/alpha-mac.yml is not a YAML mapping"):
+        read_channel_manifest_from_feed(
+            "https://releases.test", "alpha", fetch=_serving(b"<html>404 Not Found</html>\n")
+        )
 
 
 def test_fetch_build_manifest_names_the_build_when_it_is_missing() -> None:
@@ -130,9 +162,11 @@ def test_a_channel_that_was_never_published_reads_as_none() -> None:
 
 
 def test_reading_a_channel_yields_the_whole_manifest_not_just_its_version() -> None:
-    """Two builds share a version between cuts, so only the text tells them apart."""
+    """Two builds share a version between cuts, so only the whole document tells them apart."""
     served = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
-    current = read_channel_manifest_from_feed("https://releases.test", "alpha", fetch=_serving(served.text.encode()))
+    current = read_channel_manifest_from_feed(
+        "https://releases.test", "alpha", fetch=_serving(render(served).encode())
+    )
     assert current == served
 
 
@@ -142,16 +176,15 @@ def test_reading_a_channel_propagates_errors_that_are_not_absence() -> None:
         read_channel_manifest_from_feed("https://releases.test", "alpha", fetch=_raising(503))
 
 
-def test_promotion_forward_and_to_the_same_version_is_allowed() -> None:
-    assert_not_a_rollback("alpha", "0.4.12", "0.4.13", allow_rollback=False)
-    assert_not_a_rollback("alpha", "0.4.12", "0.4.12", allow_rollback=False)
-    assert_not_a_rollback("alpha", None, "0.4.12", allow_rollback=False)
+def test_moving_forward_or_standing_still_is_not_a_decrease() -> None:
+    assert not is_a_version_decrease("0.4.12", "0.4.13")
+    assert not is_a_version_decrease("0.4.12", "0.4.12")
+    assert not is_a_version_decrease(None, "0.4.12")
 
 
-def test_moving_a_channel_backwards_needs_an_explicit_flag() -> None:
-    with pytest.raises(PromotionError, match="--allow-rollback"):
-        assert_not_a_rollback("alpha", "0.4.12", "0.4.11", allow_rollback=False)
-    assert_not_a_rollback("alpha", "0.4.12", "0.4.11", allow_rollback=True)
+def test_moving_a_channel_backwards_is_reported_rather_than_refused() -> None:
+    """Nobody is pulled back, so this only changes what a new download gets."""
+    assert is_a_version_decrease("0.4.12", "0.4.11")
 
 
 def test_a_prerelease_version_is_rejected() -> None:
@@ -161,11 +194,8 @@ def test_a_prerelease_version_is_rejected() -> None:
     new version -- and then the bytes that soaked are not the bytes that ship.
     """
     with pytest.raises(PromotionError, match="plain X.Y.Z"):
-        assert_not_a_rollback("alpha", "0.4.12", "0.5.0-alpha.1", allow_rollback=False)
-    # Turning a channel on has nothing to compare against, and is the promotion
-    # most likely to reach for a prerelease build.
-    with pytest.raises(PromotionError, match="plain X.Y.Z"):
-        assert_not_a_rollback("alpha", None, "0.5.0-alpha.1", allow_rollback=False)
+        assert_plain_release_version("0.5.0-alpha.1")
+    assert_plain_release_version("0.4.12")
 
 
 def _unreachable(_url: str) -> bytes:
@@ -240,7 +270,7 @@ def test_the_published_object_is_the_one_clients_fetch(stub_s3_client: Any) -> N
             expected_params={
                 "Bucket": "minds-update-feed-production",
                 "Key": "alpha-mac.yml",
-                "Body": manifest.text.encode("utf-8"),
+                "Body": render(manifest).encode("utf-8"),
                 "ContentType": "text/yaml",
                 "CacheControl": "public, max-age=30",
             },
@@ -269,11 +299,11 @@ def test_a_complete_lima_image_manifest_passes() -> None:
 
 
 def test_the_current_manifest_can_be_read_from_the_bucket_rather_than_the_cdn(stub_s3_client: Any) -> None:
-    """The read the rollback gate depends on, taken from the object itself.
+    """What a channel serves, taken from the object itself.
 
     Through the feed it is served with a max-age, so a promotion run inside that
-    window reads the previous manifest back and the gate compares against a
-    version the channel has already left.
+    window reads the previous manifest back and reports a version the channel has
+    already left.
     """
     client = stub_s3_client
     with Stubber(client) as stubber:
@@ -287,8 +317,8 @@ def test_the_current_manifest_can_be_read_from_the_bucket_rather_than_the_cdn(st
         )
         stubber.assert_no_pending_responses()
     assert current is not None
-    assert current.version == "0.4.12"
-    assert current.text == "version: 0.4.12\n"
+    assert version_of(current) == "0.4.12"
+    assert render(current) == "version: 0.4.12\n"
 
 
 def test_a_channel_with_no_object_yet_reads_as_never_published(stub_s3_client: Any) -> None:
@@ -303,10 +333,99 @@ def test_a_bucket_read_that_is_not_a_missing_object_refuses_the_promotion(stub_s
 
     A denied read or a throttle leaves the current version unknown, which is the
     one state a promotion must not proceed from -- taking it as "never
-    published" would skip the rollback gate entirely.
+    published" would report a first publish over a channel it cannot see.
     """
     client = stub_s3_client
     with Stubber(client) as stubber:
         stubber.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
         with pytest.raises(PromotionError, match="Cannot read the current alpha version"):
             read_channel_manifest_from_bucket("bucket", "alpha", make_client=lambda: client)
+
+
+def test_the_rollout_is_declared_where_electron_updater_reads_it() -> None:
+    """Top level, and parseable -- it reads `updateInfo.stagingPercentage` off the parsed document."""
+    published = _rolled_out_at(10)
+    assert yaml.safe_load(render(published))["stagingPercentage"] == 10
+
+
+def test_declaring_a_rollout_leaves_the_artifacts_untouched() -> None:
+    """The bytes a channel serves stay the ones ToDesktop signed."""
+    rewritten = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
+    published = with_rollout_percentage(rewritten, 30)
+    assert yaml.safe_load(render(published))["files"] == yaml.safe_load(render(rewritten))["files"]
+    assert version_of(published) == version_of(rewritten)
+
+
+# Every spelling js-yaml reads as the same key.
+@pytest.mark.parametrize("declared", ["stagingPercentage: 99", '"stagingPercentage": 99', "stagingPercentage : 99"])
+def test_a_rollout_arriving_from_upstream_is_replaced_rather_than_joined(declared: str) -> None:
+    """Two keys is not a merge, it is an unparseable document.
+
+    js-yaml refuses a duplicated mapping key, and electron-updater turns that
+    into a failed check for every install on the channel -- so a stray key in
+    ToDesktop's manifest would take the channel down rather than be ignored.
+    """
+    published = with_rollout_percentage(rewrite_manifest(f"{declared}\n" + REAL_TODESKTOP_MANIFEST, APP_ID), 10)
+    assert render(published).count("stagingPercentage") == 1
+    assert yaml.safe_load(render(published))["stagingPercentage"] == 10
+
+
+def test_a_manifest_declaring_no_rollout_reads_as_none() -> None:
+    """What every manifest published before rollouts existed looks like."""
+    assert read_rollout_percentage(parse_manifest(REAL_TODESKTOP_MANIFEST, "x"), "x") is None
+
+
+# Every spelling of null, which js-yaml reads the same way as pyyaml does.
+@pytest.mark.parametrize("declared", ["null", "~", ""])
+def test_a_rollout_declared_as_null_reads_as_none_rather_than_being_refused(declared: str) -> None:
+    """electron-updater skips staging for a null exactly as it does for no key.
+
+    So refusing it would stop a promotion -- including the operator lowering a
+    percentage to halt a bad build -- over a manifest the client reads as
+    declaring no rollout at all.
+    """
+    assert (
+        read_rollout_percentage(parse_manifest(f"version: 0.3.11\nstagingPercentage: {declared}\n", "x"), "x") is None
+    )
+
+
+@pytest.mark.parametrize("declared", ["ten", "99.9", "٣", "²"])
+def test_a_published_manifest_with_a_non_numeric_rollout_is_refused(declared: str) -> None:
+    """electron-updater rolls a NaN out to everyone and truncates a float, so neither can be read past."""
+    with pytest.raises(PromotionError, match="input should be a valid integer"):
+        read_rollout_percentage(parse_manifest(f"version: 0.3.11\nstagingPercentage: {declared}\n", "x"), "x")
+
+
+# pyyaml is YAML 1.1, where a leading zero is octal and `1:30` is sexagesimal.
+# The client's js-yaml is 1.2 and reads neither that way.
+@pytest.mark.parametrize(
+    ("declared", "read_as", "client_reads"),
+    [("010", 8, 10), ("017", 15, 17), ("050", 40, 50), ("1:30", 90, "1:30")],
+)
+def test_a_spelling_this_tool_never_writes_is_read_as_yaml_1_1(
+    declared: str, read_as: int, client_reads: object
+) -> None:
+    """The known gap, pinned so that closing it would be a deliberate act.
+
+    Only this tool writes the key and it writes plain decimal, so a value in one
+    of these shapes means the object in the bucket was hand-edited. What it costs
+    is the report line: nothing gates on the served rollout, so the run names a
+    percentage no client honoured and publishes anyway. Closing it costs either a
+    second YAML library or a hand-written 1.2 loader.
+    """
+    assert (
+        read_rollout_percentage(parse_manifest(f"version: 0.3.11\nstagingPercentage: {declared}\n", "x"), "x")
+        == read_as
+    )
+    assert read_as != client_reads
+
+
+@pytest.mark.parametrize("declared", ["-5", "150"])
+def test_a_published_manifest_with_an_out_of_range_rollout_is_refused_as_such(declared: str) -> None:
+    """A number, and refused too -- but named as the range failure it is.
+
+    Only this tool writes the key, and it range-checks, so a value out here means
+    the object was hand-edited rather than that the channel is at -5%.
+    """
+    with pytest.raises(PromotionError, match="input should be (less|greater) than or equal to"):
+        read_rollout_percentage(parse_manifest(f"version: 0.3.11\nstagingPercentage: {declared}\n", "x"), "x")

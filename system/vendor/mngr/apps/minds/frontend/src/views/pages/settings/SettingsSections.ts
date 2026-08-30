@@ -23,7 +23,6 @@ import {
 import { formatRelativeAgo } from "../../../models/backups";
 import type { NotificationStyle } from "../../../models/notificationsUi";
 import {
-  maybeProbeDesktopNotificationPermission,
   maybeRequestOsPermissionForStyle,
 } from "../../../models/notificationsUi";
 import { electronBridge } from "../../../electron-bridge";
@@ -534,12 +533,12 @@ const NOTIFICATION_STYLE_OPTIONS: {
   },
 ];
 
-/** No app can force a re-prompt once native OS notification permission is
- * declined (see maybeProbeDesktopNotificationPermission): this is the
- * escape hatch, pointing the reader at the OS's own settings pane. Surfaces
- * the open itself failing (e.g. no known settings command on this Linux
- * desktop environment) rather than leaving the button looking like it
- * silently did nothing. */
+/** System banners are the OS's call to make, and it never tells app code
+ * whether it is delivering them -- so this stands whenever OS delivery is
+ * selected, as the one place to go when banners do not appear. Surfaces the
+ * open itself failing (e.g. no known settings command on this Linux desktop
+ * environment) rather than leaving the button looking like it silently did
+ * nothing. */
 function notificationOsPermissionNotice(model: SettingsModel): m.Vnode {
   return m(
     Notice,
@@ -551,8 +550,8 @@ function notificationOsPermissionNotice(model: SettingsModel): m.Vnode {
         m(
           "span",
           {},
-          "This computer's OS notifications for minds may be turned off, " +
-            "so system banners might not appear.",
+          "System banners come from your operating system. If they don't " +
+            "appear, check its notification settings for minds.",
         ),
         m(
           Button,
@@ -595,20 +594,6 @@ function notificationsPanel(model: SettingsModel): m.Children {
         ...next,
         is_os_hint_dismissed: prefs.is_os_hint_dismissed,
       });
-      if (!next.is_enabled) return;
-      // Desktop: (re-)ask the OS, regardless of whether an earlier probe
-      // already confirmed it granted -- covers the first time this style is
-      // picked and a retry after the reader flipped it in System Settings
-      // (in either direction) since that probe. No gesture constraint here
-      // (Electron's native API has none), so this can safely wait for the
-      // write to land first. A denial downgrades the style server-side;
-      // sync the model's local copy from the applied-prefs cell the probe
-      // itself just updated, rather than reloading the whole settings
-      // payload -- a transient failure in an unrelated background refresh
-      // must never blank the entire modal over a write that already
-      // succeeded (see SettingsPage.ts's isLoadFailed handling).
-      await maybeProbeDesktopNotificationPermission();
-      model.syncNotificationPrefsFromApplied();
     })();
   };
   return m("section", [
@@ -701,10 +686,7 @@ function notificationsPanel(model: SettingsModel): m.Children {
           }),
         )
       : null,
-    electronBridge.isDesktop &&
-    prefs.is_enabled &&
-    prefs.style !== "cards" &&
-    !prefs.os_permission_confirmed
+    electronBridge.isDesktop && prefs.is_enabled && prefs.style !== "cards"
       ? notificationOsPermissionNotice(model)
       : null,
     model.notificationPrefsError !== ""
@@ -770,6 +752,57 @@ function errorReportingPanel(model: SettingsModel): m.Children {
       { class: "type-helper text-tertiary" },
       "Imbue will never look into your machines without your consent.",
     ),
+  ]);
+}
+
+/** Whole hours only: the setting means "while I am asleep". */
+const HOUR_OPTIONS: number[] = Array.from({ length: 24 }, (_unused, hour) => hour);
+
+function formatHour(hour: number): string {
+  const suffix = hour < 12 ? "AM" : "PM";
+  return `${hour % 12 || 12}:00 ${suffix}`;
+}
+
+function hourSelect(id: string, value: number, onchange: (hour: number) => void): m.Children {
+  return m(
+    "select",
+    {
+      id,
+      class: "h-[34px] px-2 rounded-md type-body bg-fill-subtle text-primary",
+      value: String(value),
+      onchange: (event: Event) => onchange(Number((event.target as HTMLSelectElement).value)),
+    },
+    HOUR_OPTIONS.map((hour) => m("option", { value: String(hour) }, formatHour(hour))),
+  );
+}
+
+/** The machine-updates half of the Updates panel: the window scheduled machine
+ * updates run in. Drawn whatever build this is -- the app-updates half above it
+ * is for installed desktop builds, but machines update the same way everywhere. */
+function machineUpdatesSection(model: SettingsModel): m.Children {
+  const overview = model.overview;
+  if (overview === null) return null;
+  const startHour = overview.update_window_start_hour;
+  const endHour = overview.update_window_end_hour;
+  return m("div", { class: "mt-8" }, [
+    m("h3", { class: "type-heading text-primary mb-2" }, "Machine updates"),
+    m(
+      "p",
+      { class: "type-body text-secondary mb-3" },
+      "When you schedule an update for a machine, Minds runs it inside this window. A machine that " +
+        "isn't reachable or has agents working in it when the window comes is skipped and tried again " +
+        "in the next one.",
+    ),
+    m("div", { class: "flex items-center gap-2 py-3 border-b border-subtle" }, [
+      m("label", { class: "type-body text-primary", for: "update-window-start" }, "Between"),
+      hourSelect("update-window-start", startHour, (hour) => void model.setUpdateWindow(hour, endHour)),
+      m("label", { class: "type-body text-primary", for: "update-window-end" }, "and"),
+      hourSelect("update-window-end", endHour, (hour) => void model.setUpdateWindow(startHour, hour)),
+      m("span", { class: "type-helper text-tertiary" }, "local time"),
+    ]),
+    model.updateWindowError
+      ? m("p", { class: "type-helper text-important mt-3", role: "alert" }, model.updateWindowError)
+      : null,
   ]);
 }
 
@@ -1129,18 +1162,25 @@ function internalChannelDisclosure(
 
 function updatesPanel(model: SettingsModel): m.Children {
   const state = model.updateState;
+  if (!electronBridge.isDesktop) {
+    // No app updater to describe outside the desktop build; the machine half stands alone.
+    return m("section", [
+      m("h2", { class: "type-heading-lg text-primary mb-2" }, "Updates"),
+      machineUpdatesSection(model),
+    ]);
+  }
   if (state === null) {
     return m("section", [
       m("h2", { class: "type-heading-lg text-primary mb-2" }, "Updates"),
-      // Only a desktop build renders this panel at all, so the state is either
-      // still being read or the read failed. Saying "updates are managed by the
-      // desktop app" here would tell a desktop user, on the surface built to
-      // manage them, that they are somebody else's business -- and the menu
-      // bar's "Check for Updates..." lands here from oninit, before the read
-      // has resolved.
+      // On a desktop build the state is either still being read or the read
+      // failed. Saying "updates are managed by the desktop app" here would tell
+      // a desktop user, on the surface built to manage them, that they are
+      // somebody else's business -- and the menu bar's "Check for Updates..."
+      // lands here from oninit, before the read has resolved.
       model.updateError !== ""
         ? m(Notice, { variant: "warn" }, `Could not read the update state: ${model.updateError}`)
         : m("p", { class: "type-body text-secondary" }, "Reading the update state..."),
+      machineUpdatesSection(model),
     ]);
   }
   const visible = visibleChannels(state);
@@ -1194,6 +1234,7 @@ function updatesPanel(model: SettingsModel): m.Children {
         ? m("span", { class: "type-helper text-tertiary" }, `Checked ${formatChecked(state.lastCheckedAt)}.`)
         : null,
     ]),
+    machineUpdatesSection(model),
     channelSwitchDialog(model),
   ]);
 }

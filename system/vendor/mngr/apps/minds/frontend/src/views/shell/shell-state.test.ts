@@ -469,23 +469,19 @@ describe("ShellState notifications popover", () => {
     expect(cleared).toBe(1);
   });
 
-  it("toggles from the bell, and Escape closes it first without touching history", () => {
+  it("closes on Escape first, without touching history", () => {
     const shell = makeShell();
     const back = vi.fn();
     vi.stubGlobal("window", { history: { length: 5, back } });
     land(shell, `/inbox?workspace=${WORKSPACE_ID}`);
 
-    shell.toggleNotifications();
+    shell.openNotifications();
     expect(shell.isNotificationsOpen).toBe(true);
     // The popover sits on top, so Escape takes it -- not the app overlay it
     // was opened over, which would have fired history.back().
     expect(shell.handleEscape()).toBe(true);
     expect(shell.isNotificationsOpen).toBe(false);
     expect(back).not.toHaveBeenCalled();
-
-    shell.toggleNotifications();
-    shell.toggleNotifications();
-    expect(shell.isNotificationsOpen).toBe(false);
   });
 
   it("closes on any navigation, like a dropdown would", () => {
@@ -500,6 +496,204 @@ describe("ShellState notifications popover", () => {
     // Leaving the surface (a feed row's jump to a machine) closes it.
     land(shell, `/workspace/${WORKSPACE_ID}`);
     expect(shell.isNotificationsOpen).toBe(false);
+  });
+});
+
+describe("ShellState.switchToNotifications", () => {
+  it("puts an open app modal away and raises the feed in its place", () => {
+    // Clicking the bell from Get help is a switch between two titlebar
+    // popups, not a navigation away from a surface -- so the arrival at the
+    // route the modal is dismissed to must not close the feed it opened.
+    const shell = makeShell();
+    // Real history depth, since Get help is a click away from the docked
+    // options panel: history.back() would land back ON that panel, which would
+    // then be standing under the feed this switch is opening.
+    let backCount = 0;
+    vi.stubGlobal("window", {
+      history: { length: 5, back: () => (backCount += 1) },
+    });
+    land(shell, `/help?workspace=${WORKSPACE_ID}`);
+    const routeSet = vi
+      .spyOn(m.route, "set")
+      .mockImplementation(() => undefined);
+
+    shell.switchToNotifications();
+
+    // Straight to the machine Get help named, replacing its entry rather than
+    // walking back through whatever opened it.
+    expect(routeSet).toHaveBeenCalledWith(
+      `/workspace/${WORKSPACE_ID}`,
+      undefined,
+      { replace: true },
+    );
+    expect(backCount).toBe(0);
+    expect(shell.isNotificationsOpen).toBe(true);
+    // The dismissal navigation lands: the feed rides across it.
+    land(shell, `/workspace/${WORKSPACE_ID}`);
+    expect(shell.isNotificationsOpen).toBe(true);
+    // And an ORDINARY navigation after that still closes it.
+    land(shell, "/create");
+    expect(shell.isNotificationsOpen).toBe(false);
+  });
+
+  it("falls back to history for a Get help that names no machine", () => {
+    // Opened from a hub page there is no machine to route to, and no titlebar
+    // popup can be waiting back there to come up under the feed either.
+    const shell = makeShell();
+    let backCount = 0;
+    vi.stubGlobal("window", {
+      history: { length: 5, back: () => (backCount += 1) },
+    });
+    land(shell, "/help");
+
+    shell.switchToNotifications();
+
+    expect(backCount).toBe(1);
+    expect(shell.isNotificationsOpen).toBe(true);
+  });
+
+  it("closes the docked options panel on its way to the feed, replacing its entry", () => {
+    // Replaced like every other strip switch: pushed, the panel would sit one
+    // Back away under the feed.
+    const shell = makeShell();
+    land(shell, `/workspace/${WORKSPACE_ID}/options?tab=share`);
+    const routeSet = vi
+      .spyOn(m.route, "set")
+      .mockImplementation(() => undefined);
+
+    shell.switchToNotifications();
+
+    expect(routeSet).toHaveBeenCalledWith(
+      `/workspace/${WORKSPACE_ID}`,
+      undefined,
+      { replace: true },
+    );
+    expect(shell.isNotificationsOpen).toBe(true);
+  });
+
+  it("puts a centered app modal away first, so the feed never raises beneath its backdrop", () => {
+    // The titlebar's real bell stays painted under Minds settings / Accounts
+    // (no raised strip covers it there), and the feed's backdrop draws under
+    // a later-DOM modal's at the same z -- so the bell's click must put the
+    // modal away, not float the feed beneath it.
+    const shell = makeShell();
+    const back = vi.fn();
+    vi.stubGlobal("window", { history: { length: 5, back } });
+    land(shell, "/settings");
+
+    shell.switchToNotifications();
+
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(shell.isNotificationsOpen).toBe(true);
+    // The dismissal navigation lands: the feed rides across it.
+    land(shell, "/");
+    expect(shell.isNotificationsOpen).toBe(true);
+  });
+
+  it("just opens the feed when there is no popup to put away", () => {
+    // Nothing was navigated, so nothing is armed: the next navigation closes
+    // the feed exactly as it would have before.
+    const shell = makeShell();
+    land(shell, "/create");
+
+    shell.switchToNotifications();
+    expect(shell.isNotificationsOpen).toBe(true);
+
+    land(shell, `/workspace/${WORKSPACE_ID}`);
+    expect(shell.isNotificationsOpen).toBe(false);
+  });
+});
+
+describe("ShellState.openHelp", () => {
+  it("floats over the displayed machine as an ordinary push", () => {
+    // No titlebar popup is up (the titlebar's own bug button), so dismissing
+    // Get help must be able to go back to this machine entry.
+    const shell = makeShell();
+    land(shell, `/workspace/${WORKSPACE_ID}`);
+    const routeSet = vi
+      .spyOn(m.route, "set")
+      .mockImplementation(() => undefined);
+
+    shell.openHelp();
+
+    expect(routeSet).toHaveBeenCalledWith(
+      "/help",
+      { workspace: WORKSPACE_ID, assist: "1" },
+      undefined,
+    );
+  });
+
+  it("replaces another titlebar popup's entry when switched to from its strip", () => {
+    // Options panel -> bug icon is a switch between two of the five surfaces:
+    // pushed, the panel would be left one Back away under Get help, and
+    // dismissing the form would re-raise the panel that was just left.
+    const shell = makeShell();
+    land(shell, `/workspace/${WORKSPACE_ID}/options?tab=share`);
+    const routeSet = vi
+      .spyOn(m.route, "set")
+      .mockImplementation(() => undefined);
+
+    shell.openHelp();
+
+    expect(routeSet).toHaveBeenCalledWith(
+      "/help",
+      { workspace: WORKSPACE_ID, assist: "1" },
+      { replace: true },
+    );
+  });
+
+  it("lets go of the panel the request popup was remembering", () => {
+    // Switching the popup for Get help leaves the panel like it leaves the
+    // popup. Kept, the panel stayed painted under Get help with its own
+    // backdrop and its own raised strip -- two of the five surfaces at once.
+    const shell = makeShell();
+    const optionsRoute = `/workspace/${WORKSPACE_ID}/options?tab=permissions&section=waiting`;
+    land(shell, optionsRoute);
+    const routeSet = vi
+      .spyOn(m.route, "set")
+      .mockImplementation(() => undefined);
+    shell.openInbox({ selected: "evt-a" });
+    land(shell, `/inbox?workspace=${WORKSPACE_ID}`);
+    expect(shell.panelRouteBehindOverlay).toBe(optionsRoute);
+
+    shell.openHelp();
+
+    expect(routeSet).toHaveBeenLastCalledWith(
+      "/help",
+      { workspace: WORKSPACE_ID, assist: "1" },
+      { replace: true },
+    );
+    // The panel lives exactly as long as /inbox is the route: it is let go
+    // the moment the /help route lands -- however /help was reached, the
+    // strip or an Electron open-overlay ask alike.
+    land(shell, `/help?workspace=${WORKSPACE_ID}&assist=1`);
+    expect(shell.panelRouteBehindOverlay).toBeNull();
+  });
+});
+
+describe("ShellState.dismissAppOverlay", () => {
+  it("leaves the popup's window for the machine, replacing the popup's entry", () => {
+    // The popup took the panel's window over, so dismissing it leaves the
+    // window rather than uncovering the panel -- and replaces, so Back from
+    // the machine does not re-raise the popup that was just dismissed.
+    const shell = makeShell();
+    const back = vi.fn();
+    vi.stubGlobal("window", { history: { length: 5, back } });
+    land(shell, `/workspace/${WORKSPACE_ID}/options?tab=permissions`);
+    const routeSet = vi
+      .spyOn(m.route, "set")
+      .mockImplementation(() => undefined);
+    shell.openInbox({ selected: "evt-a" });
+    land(shell, `/inbox?workspace=${WORKSPACE_ID}`);
+
+    expect(shell.dismissAppOverlay()).toBe(true);
+
+    expect(back).not.toHaveBeenCalled();
+    expect(routeSet).toHaveBeenLastCalledWith(
+      `/workspace/${WORKSPACE_ID}`,
+      undefined,
+      { replace: true },
+    );
   });
 });
 
@@ -754,15 +948,15 @@ describe("recovery card openness", () => {
 
   it("stays shut for every state but the one that means a restart is worth offering", () => {
     displaying(shell, AGENT);
-    for (const health of ["stuck", "restarting", "healthy"] as const) {
+    for (const health of ["stuck", "recovering", "healthy"] as const) {
       shell.handleHealthChanged(AGENT, health, false);
       expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(false);
     }
   });
 
-  it("raises itself on the edge into restart_failed for the displayed machine", () => {
+  it("raises itself on the edge into recovery_failed for the displayed machine", () => {
     displaying(shell, AGENT);
-    shell.handleHealthChanged(AGENT, "restart_failed", false);
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
     expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(true);
     expect(shell.isRecoveryModalAutoRaised(AGENT)).toBe(true);
   });
@@ -772,7 +966,7 @@ describe("recovery card openness", () => {
     // is not a transition, so the band reports it and "Open recovery" is one
     // click away -- a card taking over a window the user just opened is not.
     displaying(shell, AGENT);
-    shell.handleHealthChanged(AGENT, "restart_failed", true);
+    shell.handleHealthChanged(AGENT, "recovery_failed", true);
     expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(false);
   });
 
@@ -781,7 +975,7 @@ describe("recovery card openness", () => {
     // that came back on its own would otherwise leave a window reading
     // "unresponsive" over a working machine.
     displaying(shell, AGENT);
-    shell.handleHealthChanged(AGENT, "restart_failed", false);
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
     shell.handleHealthChanged(AGENT, "healthy", false);
 
     expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(false);
@@ -791,7 +985,7 @@ describe("recovery card openness", () => {
     // A machine that recovered while the socket was down replays no frame at
     // all, so nothing else would ever drop the card.
     displaying(shell, AGENT);
-    shell.handleHealthChanged(AGENT, "restart_failed", false);
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
     expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(true);
 
     shell.handleSnapshotStart();
@@ -818,7 +1012,7 @@ describe("recovery card openness", () => {
 
   it("does not raise itself for a machine the window is not showing", () => {
     displaying(shell, "agent-cd34");
-    shell.handleHealthChanged(AGENT, "restart_failed", false);
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
     expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(false);
   });
 
@@ -831,7 +1025,7 @@ describe("recovery card openness", () => {
       type: "discovery_health",
       state: "blocked",
     });
-    shell.handleHealthChanged(AGENT, "restart_failed", false);
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
     expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(false);
   });
 
@@ -845,12 +1039,12 @@ describe("recovery card openness", () => {
   });
 
   it("does not re-raise itself over a card the user is already looking at", () => {
-    // A second restart_failed frame -- a fresh failure reason on the same
+    // A second recovery_failed frame -- a fresh failure reason on the same
     // machine -- must not convert a deliberately opened card into one that
     // will dismiss itself under the user.
     displaying(shell, AGENT);
     shell.openRecoveryModal(AGENT);
-    shell.handleHealthChanged(AGENT, "restart_failed", false);
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
     expect(shell.isRecoveryModalAutoRaised(AGENT)).toBe(false);
   });
 
@@ -918,7 +1112,7 @@ describe("recovery card openness", () => {
       reload: () => (reloadCount += 1),
     };
 
-    shell.handleHealthChanged(AGENT, "restart_failed", false);
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
     shell.handleHealthChanged(AGENT, "healthy", false);
 
     expect(reloadCount).toBe(0);
@@ -997,5 +1191,145 @@ describe("ShellState.handleEscape", () => {
     expect(shell.handleEscape()).toBe(true);
 
     expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(false);
+  });
+});
+
+describe("ShellState update modal", () => {
+  type UpdateActivity = "IDLE" | "RUNNING" | "APPLYING";
+
+  function applyUpdateActivity(shell: ShellState, activity: UpdateActivity): void {
+    shell.stores.updates.applyUpdatesMessage({
+      type: "workspace_updates",
+      updates: {
+        [AGENT]: {
+          availability: "OUT_OF_DATE",
+          current_version: "minds-v0.3.9",
+          supported_version: "minds-v0.4.1",
+          is_version_from_label: false,
+          activity,
+        },
+      },
+      update_window: "2:00 AM-5:00 AM",
+    });
+  }
+
+  function outOfDateShell(activity: UpdateActivity = "IDLE"): ShellState {
+    const shell = new ShellState(createEmptyStores());
+    shell.stores.workspaces.applyWorkspacesMessage(workspacesMessage());
+    applyUpdateActivity(shell, activity);
+    return shell;
+  }
+
+  it("opens for a machine with no machine displayed, which is how the machines list opens it", () => {
+    // From a row on Home there is no displayed machine to key on.
+    const shell = outOfDateShell();
+    shell.openUpdateModal(AGENT);
+    expect(shell.openUpdateModalAgentId()).toBe(AGENT);
+  });
+
+  it("is dismissed by Escape wherever it was opened from", () => {
+    const shell = outOfDateShell();
+    shell.openUpdateModal(AGENT);
+    expect(shell.handleEscape()).toBe(true);
+    expect(shell.openUpdateModalAgentId()).toBeNull();
+  });
+
+  it("is dropped by a navigation to anywhere but its own machine", () => {
+    const shell = outOfDateShell();
+    stubAccentPainting();
+    shell.handleRouteChanged("/");
+    shell.openUpdateModal(AGENT);
+    shell.handleRouteChanged("/settings");
+    expect(shell.openUpdateModalAgentId()).toBeNull();
+  });
+
+  it("rides the navigation into its own machine, which Update now makes before dispatching", () => {
+    // The press enters the machine before dispatching (the chat tab opens only
+    // for connected clients), so the modal must survive that navigation.
+    const shell = outOfDateShell();
+    stubAccentPainting();
+    shell.handleRouteChanged("/");
+    shell.openUpdateModal(AGENT);
+    shell.handleRouteChanged(`/workspace/${AGENT}`);
+    expect(shell.openUpdateModalAgentId()).toBe(AGENT);
+    // Not pinned there: leaving the machine afterwards drops it like any other.
+    shell.handleRouteChanged("/");
+    expect(shell.openUpdateModalAgentId()).toBeNull();
+  });
+
+  it("leaves the recovery card alone while the machine is mid-apply", () => {
+    // The app took the services down itself; a recovery card would blame the
+    // machine for it.
+    const shell = outOfDateShell();
+    applyUpdateActivity(shell, "APPLYING");
+    displaying(shell, AGENT);
+
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
+
+    expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(false);
+  });
+
+  it("still retires an auto-raised recovery card once a mid-apply machine answers", () => {
+    // Health frames are edge-published: a healthy frame skipped mid-apply is
+    // the only one the machine sends.
+    const shell = outOfDateShell();
+    displaying(shell, AGENT);
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
+    expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(true);
+    applyUpdateActivity(shell, "APPLYING");
+
+    shell.handleHealthChanged(AGENT, "healthy", false);
+
+    expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(false);
+  });
+
+  it("raises the recovery card for a machine that dies mid-prepare, as for any other outage", () => {
+    // Only the apply is an expected outage.
+    const shell = outOfDateShell();
+    applyUpdateActivity(shell, "RUNNING");
+    displaying(shell, AGENT);
+
+    shell.handleHealthChanged(AGENT, "recovery_failed", false);
+
+    expect(shell.isRecoveryModalOpenFor(AGENT)).toBe(true);
+  });
+});
+
+describe("enterWorkspaceOrRecover", () => {
+  function shellWithMachine(liveness: string): { shell: ShellState; routeSet: ReturnType<typeof vi.fn> } {
+    const shell = new ShellState(createEmptyStores());
+    shell.stores.workspaces.applyWorkspacesMessage(workspacesMessage());
+    const routeSet = vi.spyOn(m.route, "set").mockImplementation(() => undefined);
+    const entry = shell.stores.workspaces.entryByAnyId("agent-aa11");
+    if (entry === null) throw new Error("fixture machine missing");
+    shell.enterWorkspaceOrRecover(entry, liveness);
+    return { shell, routeSet };
+  }
+
+  it("lands a healthy running machine on its surface", () => {
+    const { routeSet } = shellWithMachine("RUNNING");
+    expect(routeSet).toHaveBeenCalledWith("/workspace/agent-aa11", {});
+  });
+
+  it("sends a stopped machine through Recovery with a start, returning to the surface", () => {
+    // Entering a stopped container directly would strand the user on the
+    // loader; Recovery dispatches the start and comes back via /goto.
+    const { routeSet } = shellWithMachine("STOPPED");
+    expect(routeSet).toHaveBeenCalledWith(
+      `/agents/agent-aa11/recovery?return_to=${encodeURIComponent("/goto/agent-aa11/")}&intent=start`,
+    );
+  });
+
+  it("sends an unhealthy machine to Recovery without a start", () => {
+    const shell = new ShellState(createEmptyStores());
+    shell.stores.workspaces.applyWorkspacesMessage(workspacesMessage());
+    shell.stores.health.applyHealthMessage({ agent_id: "agent-aa11", status: "stuck" });
+    const routeSet = vi.spyOn(m.route, "set").mockImplementation(() => undefined);
+    const entry = shell.stores.workspaces.entryByAnyId("agent-aa11");
+    if (entry === null) throw new Error("fixture machine missing");
+    shell.enterWorkspaceOrRecover(entry, "RUNNING");
+    expect(routeSet).toHaveBeenCalledWith(
+      `/agents/agent-aa11/recovery?return_to=${encodeURIComponent("/goto/agent-aa11/")}`,
+    );
   });
 });

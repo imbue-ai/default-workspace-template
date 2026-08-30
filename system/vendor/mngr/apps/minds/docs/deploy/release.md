@@ -412,16 +412,33 @@ Edit `apps/minds/release-channels.toml` to name the build a channel should serve
 open a PR, and CI dry-runs every gate against it so review sees whether it would
 actually publish. Merging applies it.
 
+When the channel is **stable**, bump the connector's download fallback in the same
+PR: `_DEFAULT_TARGET_BY_PLATFORM[_MAC_ARM64_PLATFORM]` in
+`apps/remote_service_connector/imbue/remote_service_connector/accounts_web.py`, to
+`https://download.todesktop.com/26032588hqdzk/Minds%20<version>%20-%20Build%20<build_id>-arm64.dmg`.
+That is what `GET /download` serves while the feed cannot be read, so leaving it
+behind means an outage hands people an older build. Leaving it *ahead* of stable
+is the one to avoid: `allowDowngrade` is false, so those installs never come back
+down, while a fallback behind stable self-heals on the next update check.
+
+The bump reaches production at the next connector deploy rather than at merge,
+so the deployed value trails `main` for a while -- behind stable, which is the
+safe direction. Withdrawing stable moves the constant the other way and does not
+get that grace: until the deploy lands, the deployed fallback still names the
+withdrawn build. See Withdrawing a build.
+
 ```toml
 [channels.stable]
 build_id = "260801n4rh5zv5d"
 version = "0.3.11"
 fallback_branch = "minds-v0.3.11"
+rollout_percentage = 30
 
 [channels.alpha]
 build_id = "260814ybsmu8m14"
 version = "0.3.12"
 fallback_branch = "minds-v0.3.12"
+rollout_percentage = 100
 ```
 
 Installs that predate channels configure no feed host and keep reading
@@ -429,10 +446,17 @@ ToDesktop's feed, so moving `stable` here does not reach them. They roll onto
 this manifest the first time they take a build that names a host -- there is no
 flag day and nothing to migrate by hand.
 
-Nothing is written unless the build has a ToDesktop manifest, the declared
-version matches that build, and the move is not backwards (`--allow-rollback` to
-withdraw a build). Versions must be plain `X.Y.Z`: they are stamped once at cut
-so promotion stays a pointer move over the bytes that actually soaked.
+Nothing is written unless the build has a ToDesktop manifest and the declared
+version matches that build. A backwards move is not refused; it is named on the
+report line. Versions must be plain `X.Y.Z`: they are stamped once at cut so
+promotion stays a pointer move over the bytes that actually soaked.
+
+`rollout_percentage` is required on every entry, and it is how much of the
+channel is offered the build (see [Rolling out a build gradually](#rolling-out-a-build-gradually)).
+Beta and alpha stay at `100`. It is required rather than optional because a
+manifest that declares no percentage is offered to *everyone*: absence is the
+largest rollout, not the absence of one, so a forgotten or misspelled field would
+otherwise publish a full rollout and report it as an ordinary promotion.
 
 `fallback_branch` must be `minds-v<version>` — the tag a build at that version
 clones, since step 1 moves the version and `FALLBACK_BRANCH` together. Nothing
@@ -448,18 +472,50 @@ says so in its output — publish a build's image (§8b) before promoting it
 regardless, on every arch you ship, or those users silently lose the fast create
 path.
 
+### Rolling out a build gradually
+
+Stable does not have to push to everyone at once. A new build can start at
+`rollout_percentage = 10` and widen over several days -- 10% -> 50% -> 100% is a
+guideline, not a rule, and nothing enforces it. One merged PR per step, each
+reviewed and dry-run like any other promotion.
+
+Each install has a UUID at `~/.minds/.updaterId`, and that UUID decides whether it
+falls inside a given percentage. It is fixed for the life of the install, so a
+band is nested: everyone offered a build at 10% is also offered it at 50%. This
+only affects in-app updates; the stable download link always serves the latest
+stable version.
+
+**Lowering the percentage is how you stop a bad build part-way through a ramp.**
+electron-updater re-reads it on every check, so a narrower band is a strictly
+smaller one and whoever has not polled yet stops being offered the build. Drop to
+`0` to stop it reaching anyone new. This is a partial halt, not a rollback: it
+recalls nobody who already took it, because `allowDowngrade` is false and the
+updater arms the install before the download finishes. To move those users you
+need a *new* build, which is [withdrawing](#withdrawing-a-build).
+
 ### Withdrawing a build
+
+Withdrawing **stable** also means lowering the connector's download fallback to
+the build being rolled back to, and deploying the connector. Until that lands,
+the fallback names the withdrawn build -- the one direction the promotion step
+warns about, since `allowDowngrade` is false and anyone who takes it during a
+feed outage stays on it.
 
 A channel moves only by repointing its entry. **Removing an entry withdraws
 nothing** — no manifest is ever deleted, so the channel keeps serving its last
 build; the run names it instead of reporting a promotion.
 
-So `git revert` is the undo only between two builds carrying the *same* version,
-which is the ordinary alpha case (a version is stamped once per cut, and every
-build until the next cut repeats it). Reverting a version *bump* moves the channel
-backwards, which is refused unless `--allow-rollback` is passed — and CI never
-passes it, deliberately: a withdrawal is not something a merge should do by
-accident. Run it by hand against the bucket, with R2 credentials in the
+`git revert` is the undo for either dial. Reverting a *ramp step* restores the
+previous, smaller band, and reverting a version *bump* moves the channel back to
+the older build. Both publish through the reviewed file like any other move, and
+the dry run on the PR names a backwards version move so a reviewer sees it.
+
+A backwards move changes what a **new download** gets. It moves nobody who
+already has the newer build — `allowDowngrade` is false, so they stay there until
+a release passes it. Lower the connector's download fallback in the same change,
+exactly as you would for a forward stable promotion.
+
+To publish from your machine instead of a PR — with R2 credentials in the
 environment (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), after
 landing the file edit so the file and the bucket agree:
 
@@ -470,9 +526,7 @@ uv run python -m scripts.release_channel.publish \
   --feed-base-url https://updates.imbueminds.com --dry-run
 ```
 
-Drop `--dry-run` to write, and add `--allow-rollback` for the backwards case.
-Either way this only stops *new* installs: users who already took the withdrawn
-build stay on it, because `allowDowngrade` is false.
+Drop `--dry-run` to write.
 
 ## The public download link
 
@@ -493,23 +547,32 @@ happens to be reachable on either. They are not interchangeable elsewhere --
 `accounts` is the sign-in surface and the origin baked into password-reset
 links, `minds` is the hosted web chrome -- so share the `minds` one.
 
-Nothing to do at release time. The connector reads the arm64 `.dmg` out of
-`stable-mac.yml` and caches it briefly, so promoting stable moves the link by
-itself. The target is read rather than written here because the connector
-deploys on its own schedule: a value baked in during a release would not reach
-the running service until somebody redeployed it.
+The connector reads the arm64 `.dmg` out of `stable-mac.yml` and caches it
+briefly, so promoting stable moves the link by itself. The target is read rather
+than written because the connector deploys on its own schedule: a value baked in
+during a release would not reach the running service until somebody redeployed
+it.
 
-If the manifest cannot be read the link falls back to ToDesktop's own channel
-URL -- whatever was last *Released* there, which has not tracked our stable
-channel since release channels landed. That failure is cached for the same
-minute a success is, so an outage costs one download the fetch timeout rather
-than all of them.
+If the manifest cannot be read the link falls back to a build pinned in the
+connector. A failed read is cached for the same minute a success is, so an
+outage costs one download two fetch attempts rather than costing all of them.
 
-So the two below disagreeing is what an outage looks like, not proof the link
-stopped tracking stable. The connector logs `Could not resolve the stable
-download` with the reason, and that log is what tells the two apart.
+Promoting stable bumps that pin (see Release channels above), and the bump
+reaches production at the next connector deploy rather than at merge, so the
+deployed fallback lags `main` -- behind stable rather than ahead, which is the
+safe direction.
 
-To check the two agree:
+Because the pin names the build stable serves, the two below agree whether or
+not the feed was read: agreement is not proof the link is tracking stable. In
+the minute after a promotion a disagreement is just the connector's cache, and
+clears itself. After that it means both at once: the pin is served only when a
+read fails, so the feed could not be read *and* the deployed connector pins a
+build other than the one stable serves. The connector logs `Could not resolve
+the stable download link` when a read fails, with the failure attached to the
+event rather than spelled into the line, and that log is what tells a resolved
+redirect from a fallback one.
+
+To check the link serves what stable serves:
 
 ```bash
 curl -s https://updates.imbueminds.com/stable-mac.yml | grep -o 'https://[^ ]*arm64\.dmg'

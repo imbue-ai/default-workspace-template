@@ -11,6 +11,7 @@ from imbue.analytics.injected.workspace_redaction import redact_secret_lines
 from imbue.analytics.injected.workspace_redaction import redact_transcript_records
 from imbue.analytics.injected.workspace_redaction import replace_pii_spans
 from imbue.analytics.injected.workspace_redaction import scan_texts_for_secret_lines
+from imbue.analytics.injected.workspace_redaction import scrub_random_tokens
 from imbue.analytics.injected.workspace_redaction import strip_transcript_record
 
 _ENVELOPE = {
@@ -135,6 +136,45 @@ def test_redact_secret_lines_replaces_found_lines_or_the_whole_text() -> None:
     assert redact_secret_lines(text, set()) == text
 
 
+def test_scrub_random_tokens_redacts_identifier_shapes_and_keeps_words() -> None:
+    text = (
+        "deploy a0eaa1f2-3b4c-5d6e-7f80-91a2b3c4d5e6 at commit"
+        " eb40de1234567890abcdef1234567890abcdef12 for order 10486612345 with"
+        " token sk4Xt92bQ7LmPzR0aWq8vN31 after the 12-hour-forecast-check;"
+        " call 555-0134 about PostgreSQL15 and CamelCaseWord"
+    )
+
+    scrubbed = scrub_random_tokens(text)
+
+    assert scrubbed == snapshot(
+        "deploy [REDACTED_TOKEN] at commit [REDACTED_TOKEN] for order [REDACTED_TOKEN] with"
+        " token [REDACTED_TOKEN] after the 12-hour-forecast-check;"
+        " call 555-0134 about PostgreSQL15 and CamelCaseWord"
+    )
+
+
+def test_scrub_random_tokens_keeps_workspace_paths_and_scrubs_other_path_segments() -> None:
+    text = (
+        "see /home/user/workspace/data/.tasks/report-1755550000000/out.md"
+        " and ~/notes/8f14e45fceea167a5a36dedd4bea2543"
+        " but /tmp/8f14e45fceea167a5a36dedd4bea2543/log.txt"
+    )
+
+    scrubbed = scrub_random_tokens(text)
+
+    assert scrubbed == snapshot(
+        "see /home/user/workspace/data/.tasks/report-1755550000000/out.md"
+        " and ~/notes/8f14e45fceea167a5a36dedd4bea2543"
+        " but /tmp/[REDACTED_TOKEN]/log.txt"
+    )
+
+
+def test_scrub_random_tokens_leaves_existing_redaction_markers_alone() -> None:
+    text = "wrote to [REDACTED_EMAIL_ADDRESS] and [REDACTED_SECRET] stayed"
+
+    assert scrub_random_tokens(text) == text
+
+
 def test_replace_pii_spans_handles_multiple_spans_without_offset_drift() -> None:
     text = "email me at a@b.com or call 555-0134 ok"
 
@@ -163,6 +203,23 @@ def test_redact_transcript_records_runs_strip_then_secrets_then_pii() -> None:
 
     assert batch.dropped_record_count == 1
     assert batch.records[0]["content"] == snapshot("[REDACTED_SECRET]\nsafe line with [REDACTED_EMAIL_ADDRESS]")
+
+
+def test_redact_transcript_records_scrubs_random_tokens_after_pii() -> None:
+    records = [
+        {
+            **_ENVELOPE,
+            "type": "user_message",
+            "role": "user",
+            "content": "check run 3f9d2c81a4b04e12 in /home/user/workspace/data/.tasks/run-1755550000000",
+        }
+    ]
+
+    batch = redact_transcript_records(records, _no_findings, _keep_text)
+
+    assert batch.records[0]["content"] == snapshot(
+        "check run [REDACTED_TOKEN] in /home/user/workspace/data/.tasks/run-1755550000000"
+    )
 
 
 def test_redact_transcript_records_scrubs_text_parts_too() -> None:

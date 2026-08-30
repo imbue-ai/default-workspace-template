@@ -18,6 +18,7 @@ dependencies = [
     "paramiko>=3.0",
     "psycopg2-binary>=2.9",
     "pydantic>=2.0",
+    "tenacity>=9.0",
     # Used only by the injected collection script (imbue/analytics/injected/),
     # which runs inside workspaces under its own PEP 723 environment. Listed
     # here so the dev venv and the type checker see the same modules; the
@@ -42,6 +43,7 @@ image = [
     "paramiko==3.5.1",
     "psycopg2-binary==2.9.12",
     "pydantic==2.13.4",
+    "tenacity==9.1.4",
 ]
 
 [build-system]

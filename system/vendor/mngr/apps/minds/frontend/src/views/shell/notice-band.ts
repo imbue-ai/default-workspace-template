@@ -9,11 +9,12 @@
 // the loss of every machine, so it names itself rather than the stuck machine
 // it produces -- restarting that machine would not help.
 
-import type { DiscoveryHealth, EnvironmentBlock, WorkspaceHealth } from "../../models/health";
+import type { DiscoveryHealth, EnvironmentCondition, RecoveryKind, WorkspaceHealth } from "../../models/health";
+import type { StandingUpdateNotice, UpdateRunOutcome, UpdateRunPhase } from "../../models/updates";
 
 /** What an action asks the shell to do. The views bind these; the decision
  * itself stays free of routing and IPC. */
-export type NoticeActionKind = "open-recovery" | "restart-app";
+export type NoticeActionKind = "open-recovery" | "restart-app" | "update-workspace";
 
 export interface NoticeAction {
   label: string;
@@ -22,15 +23,33 @@ export interface NoticeAction {
 
 export interface NoticePayload {
   /** Identity for replacement. States that share a key never rewrite the
-   * strip as the tracker steps between them. */
-  key: "discovery-blocked" | "environment-blocked" | "workspace-recovering" | "workspace-restart-failed";
-  variant: "warn" | "error";
+   * strip as the tracker steps between them; a run's phases carry separate
+   * keys because the phase change is what the reader is owed. */
+  key:
+    | "discovery-blocked"
+    | "environment-blocked"
+    | "workspace-recovering"
+    | "workspace-restart-failed"
+    | "workspace-update-preparing"
+    | "workspace-update-applying"
+    | "workspace-update-waiting"
+    | "workspace-update-outcome"
+    | "workspace-out-of-date"
+    | "workspace-needs-recreation";
+  variant: "info" | "warn" | "error";
   message: string;
   action: NoticeAction | null;
 }
 
 const DISCOVERY_BLOCKED_MESSAGE =
   "Minds lost contact with your machines and can't reconnect on its own. Your work is safe.";
+
+/** The conditions with a line to say: a measured, confirmed block. */
+type EnvironmentBlock = Exclude<EnvironmentCondition, "NONE" | "UNKNOWN">;
+
+function isEnvironmentBlock(condition: EnvironmentCondition): condition is EnvironmentBlock {
+  return condition !== "NONE" && condition !== "UNKNOWN";
+}
 
 /**
  * What this device's own condition means, in one line.
@@ -46,7 +65,7 @@ const DISCOVERY_BLOCKED_MESSAGE =
  * stopped being able to look at exactly the moment it went offline, so a
  * machine that died a second earlier would be described as fine.
  */
-const ENVIRONMENT_BLOCKED_MESSAGE: Record<Exclude<EnvironmentBlock, "NONE">, string> = {
+const ENVIRONMENT_BLOCKED_MESSAGE: Record<EnvironmentBlock, string> = {
   OFFLINE: "No network connection.",
   SSH_BLOCKED: "This network blocks the connection to your machines.",
 };
@@ -71,12 +90,27 @@ export interface NoticeBandContext {
   isRestartAppAvailable?: boolean;
   /** The provider hosting this machine, when discovery cannot reach it. */
   unreachableProviderLabel?: string | null;
-  /** True of this device as a whole, before any machine has been convicted. */
-  deviceEnvironmentBlock?: EnvironmentBlock;
+  /** True of this device as a whole, before any machine has been convicted.
+   * "UNKNOWN" while nothing has been measured, which withholds every blame
+   * below it rather than clearing the device. */
+  deviceEnvironment?: EnvironmentCondition;
+  /** Which recovery is in flight, from the health frame: "restart" is the
+   * user's own stop+start bounce, "start" the app's unattended dispatch, null
+   * no recovery to describe. */
+  recoveryKind?: RecoveryKind | null;
   /** False for a machine on this device, which the network cannot explain. */
   isWorkspaceNetworkDependent?: boolean;
   /** This one connection failed on this device, on a network that works. */
   isDeviceCannotConnect?: boolean;
+  /** Which part of an update run owns this machine right now. */
+  updateRunPhase?: UpdateRunPhase;
+  /** The run's own line naming what it is waiting on, when it recorded a
+   * hold ("" for a hold with no line); null when it merely reads idle. */
+  updateHoldDetail?: string | null;
+  /** What this machine's last run left behind, once it is over. */
+  updateRunOutcome?: UpdateRunOutcome;
+  /** A standing condition rather than an event, so it is ranked below them all. */
+  standingUpdateNotice?: StandingUpdateNotice;
 }
 
 /**
@@ -98,6 +132,10 @@ export interface NoticeBandContext {
  * explained -- so the strip is not rewritten as an explanation lands and
  * clears. Discovery death does not: it is not this machine's condition at all,
  * and its notice carries its own key and its own action.
+ *
+ * An update's apply step ranks above the machine's own health (it explains it)
+ * but below this device's own condition (it does not); the rest of a run ranks
+ * below all of them.
  */
 export function noticeBandFor(
   workspaceHealth: WorkspaceHealth,
@@ -108,9 +146,14 @@ export function noticeBandFor(
   const {
     isRestartAppAvailable = true,
     unreachableProviderLabel = null,
-    deviceEnvironmentBlock = "NONE",
+    deviceEnvironment = "NONE",
+    recoveryKind = null,
     isWorkspaceNetworkDependent = true,
     isDeviceCannotConnect = false,
+    updateRunPhase = "none",
+    updateHoldDetail = null,
+    updateRunOutcome = "none",
+    standingUpdateNotice = "none",
   } = context;
   if (!isWorkspaceDisplayed) return null;
   if (discoveryHealth === "blocked") return discoveryBlockedNotice(isRestartAppAvailable);
@@ -120,18 +163,28 @@ export function noticeBandFor(
   // provider there would blame a backend that is fine for a condition the user
   // can fix. It keeps the recovering key, since the condition is still "we have
   // lost contact", only correctly attributed. It speaks over a healthy machine
-  // too, offering nothing: there is no recovery card to open. A restart that is
-  // actually running is the one exception, narrating itself -- there is a
-  // restart to report, so the waiting state would be false.
+  // too, offering nothing: there is no recovery card to open. The one exception
+  // is a restart the user asked for -- their own stop+start bounce narrates
+  // itself, since there is a recovery to report and the waiting state would be
+  // false. The app's own unattended start is not that: it is entered unasked,
+  // within seconds of any network flap, and lasts as long as the network is
+  // down, which is precisely when the device's condition is the explanation
+  // the user needs.
   //
   // And it is silent over a machine that runs on this device: a docker
   // container answers over loopback with the wifi off, so a dead network
   // explains nothing about its outage. Displacing its recovery notice would
   // blame the network for a machine the network cannot touch, and send the
-  // user to a card for a restart that would have worked.
-  const isRestartRunning = workspaceHealth === "restarting";
-  const block: EnvironmentBlock =
-    isRestartRunning || !isWorkspaceNetworkDependent ? "NONE" : deviceEnvironmentBlock;
+  // user to a card for a recovery that would have worked.
+  const isUserBounceRunning = workspaceHealth === "recovering" && recoveryKind === "restart";
+  const condition: EnvironmentCondition =
+    isUserBounceRunning || !isWorkspaceNetworkDependent ? "NONE" : deviceEnvironment;
+  // The apply outranks the machine's own health because it explains it: the
+  // app took those services down on purpose (the recovery card is withheld for
+  // the same reason). It explains nothing about this device, so a CONFIRMED
+  // device block speaks first; an unmeasured device names nobody, so the apply
+  // still speaks over it. A machine that dies mid-prepare is an ordinary outage.
+  if (updateRunPhase === "applying" && !isEnvironmentBlock(condition)) return updateRunNotice("applying", null);
   // The three explanations in rank order, each one line. They differ only in
   // what they say, so the ranking is the whole of the logic and is kept where
   // it can be read as a list -- the payload they share is built once below.
@@ -141,16 +194,22 @@ export function noticeBandFor(
   // or what minds is doing about it. The device-side line likewise says whose
   // fault it is and nothing else -- its remedy is an app restart, a real
   // interruption, offered from the card next to the error that justifies it.
-  const explanation =
-    block !== "NONE"
-      ? ENVIRONMENT_BLOCKED_MESSAGE[block]
-      : workspaceHealth === "healthy"
-        ? null
-        : unreachableProviderLabel !== null
-          ? `Can't connect to ${unreachableProviderLabel}`
-          : isDeviceCannotConnect
-            ? "Can't connect to this machine from this device"
-            : null;
+  //
+  // An unmeasured device names nobody. Both lines below it blame something on
+  // the far side of this device's network, and until a probe has looked at
+  // that network there is no ground to say the provider is what failed --
+  // after a wake, the provider's own poll errored because the laptop was
+  // asleep, and naming it would be the wrong headline. The generic recovering
+  // line below still speaks, so the user is not left with nothing.
+  const explanation = isEnvironmentBlock(condition)
+    ? ENVIRONMENT_BLOCKED_MESSAGE[condition]
+    : workspaceHealth === "healthy" || condition === "UNKNOWN"
+      ? null
+      : unreachableProviderLabel !== null
+        ? `Can't connect to ${unreachableProviderLabel}`
+        : isDeviceCannotConnect
+          ? "Can't connect to this machine from this device"
+          : null;
   if (explanation !== null) {
     return {
       key: "workspace-recovering",
@@ -161,7 +220,7 @@ export function noticeBandFor(
       action: workspaceHealth !== "healthy" ? { label: "Open recovery", kind: "open-recovery" } : null,
     };
   }
-  if (workspaceHealth === "restart_failed") {
+  if (workspaceHealth === "recovery_failed") {
     return {
       key: "workspace-restart-failed",
       variant: "error",
@@ -172,7 +231,7 @@ export function noticeBandFor(
       action: { label: "Open recovery", kind: "open-recovery" },
     };
   }
-  if (workspaceHealth === "stuck" || workspaceHealth === "restarting") {
+  if (workspaceHealth === "stuck" || workspaceHealth === "recovering") {
     return {
       key: "workspace-recovering",
       variant: "warn",
@@ -183,7 +242,99 @@ export function noticeBandFor(
       action: { label: "Open recovery", kind: "open-recovery" },
     };
   }
-  return null;
+  // Below the health conditions (the machine being unusable) and above the
+  // standing "out of date"; what a machine is doing outranks how its last
+  // attempt ended.
+  const runNotice = updateRunNotice(updateRunPhase, updateHoldDetail);
+  if (runNotice !== null) return runNotice;
+  const outcomeNotice = updateOutcomeNotice(updateRunOutcome);
+  if (outcomeNotice !== null) return outcomeNotice;
+  // Last: a standing condition, not an event; it will still be true tomorrow.
+  return standingNotice(standingUpdateNotice);
+}
+
+const SEE_UPDATE: NoticeAction = { label: "See update", kind: "update-workspace" };
+
+/** The line about a machine's version that will still be true tomorrow, or null. */
+function standingNotice(notice: StandingUpdateNotice): NoticePayload | null {
+  switch (notice) {
+    case "out-of-date":
+      return {
+        key: "workspace-out-of-date",
+        variant: "warn",
+        message: "This machine is running an older version of Minds.",
+        action: SEE_UPDATE,
+      };
+    case "needs-recreation":
+      // The same action as out-of-date: the modal behind it carries the steps.
+      return {
+        key: "workspace-needs-recreation",
+        variant: "warn",
+        message: "This machine is too old to update in place.",
+        action: { label: "See how to update", kind: "update-workspace" },
+      };
+    case "none":
+      return null;
+  }
+}
+
+/**
+ * What a run in flight says over the machine it is running in, or null.
+ * Preparing touches nothing; applying takes the services away, so it says so
+ * before the reader starts wondering; waiting names what for, when the run said.
+ */
+function updateRunNotice(phase: UpdateRunPhase, holdDetail: string | null): NoticePayload | null {
+  switch (phase) {
+    case "applying":
+      return {
+        key: "workspace-update-applying",
+        variant: "info",
+        message: "Updating this machine. Its services restart while the update lands.",
+        action: SEE_UPDATE,
+      };
+    case "preparing":
+      return {
+        key: "workspace-update-preparing",
+        variant: "info",
+        // The reader is using the machine meanwhile; the question is whether to stop.
+        message: "Preparing an update for this machine. Nothing changes until it's ready to land.",
+        action: SEE_UPDATE,
+      };
+    case "waiting": {
+      // A recorded hold is about something the reader built; the run's own line says which.
+      return {
+        key: "workspace-update-waiting",
+        variant: "warn",
+        message:
+          holdDetail !== null
+            ? `${holdDetail ? `${holdDetail} ` : ""}This machine's update is waiting for your decision in its chat.`
+            : "This machine's update has stopped to ask you something in its chat.",
+        action: SEE_UPDATE,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * What a finished run still owes the reader, or null: the machine-side
+ * counterpart to the row badge, which cannot be seen from inside the machine.
+ */
+function updateOutcomeNotice(outcome: UpdateRunOutcome): NoticePayload | null {
+  const message =
+    outcome === "failed"
+      ? "This machine's update didn't finish."
+      : outcome === "needs-attention"
+        ? "This machine updated, and the update agent left a note for you."
+        : null;
+  if (message === null) return null;
+  return {
+    key: "workspace-update-outcome",
+    variant: outcome === "needs-attention" ? "info" : "error",
+    message,
+    action: SEE_UPDATE,
+  };
 }
 
 /**
@@ -199,14 +350,23 @@ export function noticeBandFor(
 export function localPageNoticeFor(
   discoveryHealth: DiscoveryHealth,
   isRestartAppAvailable = true,
-  environmentBlock: EnvironmentBlock = "NONE",
+  environment: EnvironmentCondition = "NONE",
 ): NoticePayload | null {
   if (discoveryHealth === "blocked") return discoveryBlockedNotice(isRestartAppAvailable);
-  if (environmentBlock === "NONE") return null;
+  if (!isEnvironmentBlock(environment)) return null;
   return {
     key: "environment-blocked",
     variant: "warn",
-    message: ENVIRONMENT_BLOCKED_MESSAGE[environmentBlock],
+    message: ENVIRONMENT_BLOCKED_MESSAGE[environment],
     action: null,
   };
+}
+
+/**
+ * The notice the workspace's own hub page renders, or null. Reached through the
+ * band's standing leg so the two cannot drift; carries no health conditions,
+ * which the band over the machine already reports.
+ */
+export function workspacePageNoticeFor(notice: StandingUpdateNotice): NoticePayload | null {
+  return standingNotice(notice);
 }

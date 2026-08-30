@@ -12,12 +12,16 @@ import type { NotificationsUiController } from "../../models/notificationsUi";
 import {
   accentSourceForRoute,
   isAppOverlayPath,
+  isTitlebarPopupRoutePath,
   isWorkspaceOverlayPath,
   overlayBehindWorkspaceId,
   recoveryWorkspaceIdFromPath,
   workspaceDisplayIdFromPath,
   workspaceSurfaceIdFromPath,
 } from "./classify";
+import { recoveryRoute } from "../../models/create";
+import type { UiWorkspaceEntry } from "../../channel/messages";
+import { rowClickActionFor } from "../pages/landing-controls";
 
 /** Posts one permission-resolution message into the mounted workspace frame
  * over the embed contract. Registered by WorkspaceFrame, which owns the
@@ -95,6 +99,10 @@ export class ShellState {
    */
   private openRecovery: { agentId: string; isAutoRaised: boolean } | null =
     null;
+  /** Which machine's update modal is up. Unlike the recovery card this is not
+   * tied to a displayed machine (the machines list opens it from a row); it is
+   * dropped by the next navigation away from its machine. */
+  private openUpdateAgentId: string | null = null;
   /** The mounted content iframe, installed by WorkspaceFrame (null when none is
    * mounted: hub pages, recovery, destroying, the workspace sub-pages). The
    * frame is ALSO mounted behind an app modal that forwarded ?workspace=, which
@@ -105,6 +113,11 @@ export class ShellState {
    * idempotent, and a repeated Escape can reach it again before the first
    * back() has landed. Cleared on the next route change. */
   private isAppOverlayClosing = false;
+  /** Raised by `switchToNotifications`: the feed is being opened as PART of a
+   * navigation (the one putting the popup it is replacing away), so the
+   * arrival must not close it the way an ordinary navigation does. Consumed
+   * by the first route change that lands. */
+  private isNotificationsArmed = false;
   /** The path the last `handleRouteChanged` saw, so a redraw on the route the
    * window is already on is not mistaken for a navigation to it. */
   private lastHandledRoutePath: string | null = null;
@@ -164,6 +177,26 @@ export class ShellState {
   enterWorkspace(anyId: string, query: Record<string, string> = {}): void {
     const agentScoped = this.stores.workspaces.toAgentScopedId(anyId);
     m.route.set(`/workspace/${agentScoped}`, query);
+  }
+
+  /** Enter a workspace the way its machines-list row does: onto its surface
+   * when healthy and running, otherwise onto Recovery (with a start for a
+   * stopped container), which returns to the surface. `liveness` is the entry's
+   * raw field or the tracker's displayed reading. */
+  enterWorkspaceOrRecover(entry: UiWorkspaceEntry, liveness: string): void {
+    const isHealthy = this.stores.health.statusFor(entry.id) === "healthy";
+    const returnTo = `/goto/${entry.id}/`;
+    switch (rowClickActionFor(entry, liveness, isHealthy)) {
+      case "recover":
+        m.route.set(recoveryRoute(entry.id, returnTo, null));
+        return;
+      case "recover-start":
+        m.route.set(recoveryRoute(entry.id, returnTo, "start"));
+        return;
+      case "enter":
+        this.enterWorkspace(entry.id);
+        return;
+    }
   }
 
   /** Open the request-review popup over the current surface: forward the
@@ -266,9 +299,10 @@ export class ShellState {
    * asked: the chrome mounts a single workspace frame, so no other workspace
    * has a live page in this window, and posting a request id into a workspace
    * that did not ask would hand it to foreign content for nothing. A verdict
-   * given while looking at some other workspace is simply not relayed -- that
-   * page is rebuilt from the transcript when the user returns to it, by which
-   * point the agent's own resolution message has landed.
+   * given while looking at some other workspace is simply not relayed -- the
+   * frame pushes the workspace's verdict snapshot (from the response event
+   * log) whenever it next loads that page, so missing this send never
+   * strands a card.
    *
    * Both sides of the comparison are WORKSPACE agent ids. The request's own
    * ``agent_id`` is not usable here: latchkey requests are filed by the
@@ -291,13 +325,17 @@ export class ShellState {
     sender(resolved.requestId, resolved.verdict);
   }
 
-  /** Close the options overlay if one is open, returning whether it was. */
-  closeWorkspaceOverlay(): boolean {
+  /** Close the options overlay if one is open, returning whether it was.
+   * `routeOptions` is forwarded to the route set: a strip switch passes
+   * `{replace: true}` so the panel being left is not one Back away under the
+   * surface replacing it; a plain dismissal (Escape, the X) pushes, leaving
+   * the panel in history like any left page. */
+  closeWorkspaceOverlay(routeOptions?: { replace: boolean }): boolean {
     const path = this.currentRoutePath();
     if (!isWorkspaceOverlayPath(path)) return false;
     const surfaceId = workspaceSurfaceIdFromPath(path);
     if (surfaceId === null) return false;
-    m.route.set(`/workspace/${surfaceId}`);
+    m.route.set(`/workspace/${surfaceId}`, undefined, routeOptions);
     return true;
   }
 
@@ -408,8 +446,10 @@ export class ShellState {
         this.isAppOverlayClosing = true;
         // Straight to the machine rather than back through history: the panel
         // is the history entry, and going back to it is the thing this avoids.
-        // handleRouteChanged forgets the remembered panel on the way.
-        m.route.set(`/workspace/${behind}`);
+        // Replace, so Back from the machine does not re-raise the popup being
+        // dismissed. handleRouteChanged forgets the remembered panel on the
+        // way.
+        m.route.set(`/workspace/${behind}`, undefined, { replace: true });
         return true;
       }
     }
@@ -469,9 +509,32 @@ export class ShellState {
     }
     return (
       this.closeOpenRecoveryModal() ||
+      this.closeOpenUpdateModal() ||
       this.closeWorkspaceOverlay() ||
       this.dismissAppOverlay()
     );
+  }
+
+  /** The machine whose update modal is up, or null when none is. */
+  openUpdateModalAgentId(): string | null {
+    return this.openUpdateAgentId;
+  }
+
+  /** The user asked for the update modal (a badge, the band's "See update"). */
+  openUpdateModal(agentId: string): void {
+    this.openUpdateAgentId = agentId;
+  }
+
+  closeUpdateModal(): void {
+    this.openUpdateAgentId = null;
+  }
+
+  /** Close whichever update modal is up, reporting whether there was one. Not
+   * keyed on the displayed machine, because the modal is not. */
+  closeOpenUpdateModal(): boolean {
+    if (this.openUpdateAgentId === null) return false;
+    this.closeUpdateModal();
+    return true;
   }
 
   /** Route-change hook: track displayed workspace, repaint accent, register. */
@@ -497,20 +560,30 @@ export class ShellState {
     if (!isSameRoute) this.isAppOverlayClosing = false;
     // The feed is a popover over the surface it was opened on; leaving that
     // surface (a feed row's jump to a machine, the sidebar, anything) closes
-    // it, like a dropdown would.
-    if (!isSameRoute) this.isNotificationsOpen = false;
+    // it, like a dropdown would. A switch INTO it from another titlebar popup
+    // is the exception: that navigation is how the popup being replaced goes
+    // away, so the feed rides across it once.
+    if (!isSameRoute) {
+      if (this.isNotificationsArmed) this.isNotificationsArmed = false;
+      else this.isNotificationsOpen = false;
+    }
     // The dedup guard (see lastOpenedInboxSelectedId) only needs to survive
     // the race right at open time; once a real navigation lands away from
     // /inbox, the popup is confirmed gone and a later re-open of the SAME
     // request is a fresh, legitimate ask, not a duplicate.
     if (!isSameRoute && path !== "/inbox")
       this.lastOpenedInboxSelectedId = null;
-    // The panel (or page) underneath belongs to the modal that was opened over
-    // it; once the route is no longer a modal's, it is (or is not) the route.
-    if (!isSameRoute && !isAppOverlayPath(path)) {
-      this.panelRouteBehindOverlay = null;
+    // The panel underneath belongs to the request popup that took its window
+    // over, so it lives exactly as long as /inbox is the route: navigating to
+    // ANY other route -- including another app modal's, like a Get help the
+    // strip or an Electron open-overlay ask raised -- leaves the panel
+    // behind. A modal route that kept it would paint the panel underneath
+    // itself, backdrop and raised strip and all.
+    if (!isSameRoute && path !== "/inbox") this.panelRouteBehindOverlay = null;
+    // The page underneath belongs to the modal that was opened over it; once
+    // the route is no longer a modal's, it is (or is not) the route.
+    if (!isSameRoute && !isAppOverlayPath(path))
       this.pageRouteBehindOverlay = null;
-    }
     // Pass the query so an app modal opened over a workspace (/help?workspace=)
     // keeps that workspace's accent painting behind it.
     const accentSource = accentSourceForRoute(path, search);
@@ -547,6 +620,17 @@ export class ShellState {
       this.openRecovery.agentId !== heldAgentScoped
     ) {
       this.openRecovery = null;
+    }
+    // Dropped by a navigation to anywhere but its own machine: "Update now"
+    // enters the machine before dispatching (so the chat tab has a connected
+    // client to open in), and the modal rides that navigation. Keyed on the
+    // navigation because it can be open with no machine displayed.
+    if (
+      !isSameRoute &&
+      this.openUpdateAgentId !== null &&
+      this.openUpdateAgentId !== heldAgentScoped
+    ) {
+      this.openUpdateAgentId = null;
     }
     this.consumeReviewParam(path, search);
     this.channel?.setClientState(path, agentScoped);
@@ -719,13 +803,14 @@ export class ShellState {
   }
 
   /**
-   * Raise the card on the edge into restart_failed for the displayed machine,
+   * Raise the card on the edge into recovery_failed for the displayed machine,
    * and drop an auto-raised one on the edge back into healthy.
    *
-   * restart_failed means the app restarted the machine and it is still
-   * unresponsive. That is the end of the unattended path, and a one-line band
-   * is too quiet for it; every other condition leaves the band as the sole
-   * surface and waits to be asked.
+   * recovery_failed means the app tried to bring the machine back -- unattended,
+   * that is a plain start, not a bounce -- and it is still unresponsive. That is
+   * the end of the unattended path, and a one-line band is too quiet for it;
+   * every other condition leaves the band as the sole surface and waits to be
+   * asked.
    *
    * Only an edge raises it -- ``isSnapshotFrame`` marks the connect-time replay
    * of current state -- so a window that opens onto a machine already in this
@@ -752,7 +837,13 @@ export class ShellState {
         this.finishRecovery();
       return;
     }
-    if (isSnapshotFrame || health !== "restart_failed") return;
+    // Mid-apply the services are down because an update took them down;
+    // raising the recovery card would blame the machine for it. Only the raise
+    // is withheld: health frames are edge-published, so a card already up must
+    // still come down on the healthy frame. A machine that dies mid-prepare
+    // gets the normal card.
+    if (this.stores.updates.isApplying(agentId)) return;
+    if (isSnapshotFrame || health !== "recovery_failed") return;
     if (this.openRecovery !== null) return;
     if (this.stores.health.discoveryHealth === "blocked") return;
     const displayed = this.displayedWorkspaceAnyId;
@@ -778,6 +869,14 @@ export class ShellState {
     this.isSidebarOpen = false;
   }
 
+  /** The displayed workspace's stable agent id, or null on a hub page. */
+  displayedWorkspaceAgentId(): string | null {
+    const displayed = this.displayedWorkspaceAnyId;
+    return displayed === null
+      ? null
+      : this.stores.workspaces.toAgentScopedId(displayed);
+  }
+
   /** Open the bell's feed over the current surface. Opening acknowledges the
    * floating toasts (the feed is their durable home), so they retire. */
   openNotifications(): void {
@@ -789,8 +888,82 @@ export class ShellState {
     this.isNotificationsOpen = false;
   }
 
-  toggleNotifications(): void {
-    if (this.isNotificationsOpen) this.closeNotifications();
-    else this.openNotifications();
+  /**
+   * Open the bell's feed, putting away whatever floats on screen first: the
+   * raised strip's "go to another surface" for the bell, and equally the
+   * titlebar bell's own click (which is only reachable with no titlebar popup
+   * up, but IS reachable under a centered app modal -- which must leave, or
+   * the feed would raise beneath that modal's backdrop, dimmed and
+   * unclickable).
+   *
+   * Putting a route-backed surface away is a navigation, and an arriving
+   * navigation ordinarily closes the feed, so the feed is armed across that
+   * one arrival. Opened from a surface with nothing floating, there is
+   * nothing to put away and nothing to arm. The options panel's entry is
+   * REPLACED, like the other strip switches, so the panel is not one Back
+   * away under the feed.
+   */
+  switchToNotifications(): void {
+    this.isNotificationsArmed =
+      this.dismissHelpToItsMachine() ||
+      this.dismissAppOverlay() ||
+      this.closeWorkspaceOverlay({ replace: true });
+    this.openNotifications();
+  }
+
+  /**
+   * Put Get help away by routing straight to the machine it names, rather than
+   * back through history, reporting whether that applied.
+   *
+   * Get help is one click from the docked options panel, so the entry
+   * `history.back()` returns to is often that panel -- which the armed feed
+   * would then be sitting on top of, two of the five surfaces up at once, each
+   * drawing its own raised strip and its own backdrop. Same reasoning
+   * `dismissAppOverlay` applies to the request popup, and `replace` for the
+   * same reason: the surface landed on is not left one Back away from the modal
+   * again.
+   *
+   * Only with a machine named and no remembered page: the recovery page's Get
+   * help forwards the very machine nobody could load (see
+   * `pageRouteBehindOverlay`), and with no `?workspace=` at all history is the
+   * only thing that knows where this came from -- and no popup can be waiting
+   * there to come back up.
+   */
+  private dismissHelpToItsMachine(): boolean {
+    const path = this.currentRoutePath();
+    if (path !== "/help" || this.pageRouteBehindOverlay !== null) return false;
+    const behind = overlayBehindWorkspaceId(path, this.currentRouteSearch());
+    if (behind === null) return false;
+    m.route.set(`/workspace/${behind}`, undefined, { replace: true });
+    return true;
+  }
+
+  /**
+   * Open Get help / report a bug, carrying the displayed workspace so the page
+   * can offer the in-workspace /assist flow -- only when that workspace's
+   * interface is healthy, mirroring the legacy titlebar's assist gating. The
+   * one place the bug button's route is built, so the titlebar's own button
+   * and its raised copy open the identical page.
+   *
+   * Arrived at from another titlebar popup's route (the options panel or the
+   * request popup, via the raised strip), this is a switch, not a stack: that
+   * popup's history entry is replaced rather than built on. (The panel a
+   * request popup was remembering is let go by handleRouteChanged when the
+   * /help route lands -- the panel lives exactly as long as /inbox does.)
+   */
+  openHelp(): void {
+    const isSwitching = isTitlebarPopupRoutePath(this.currentRoutePath());
+    const routeOptions = isSwitching ? { replace: true } : undefined;
+    const agentScoped = this.displayedWorkspaceAgentId();
+    if (agentScoped === null) {
+      m.route.set("/help", undefined, routeOptions);
+      return;
+    }
+    const isHealthy = this.stores.health.isContentAssumedReady(agentScoped);
+    m.route.set(
+      "/help",
+      { workspace: agentScoped, assist: isHealthy ? "1" : "0" },
+      routeOptions,
+    );
   }
 }

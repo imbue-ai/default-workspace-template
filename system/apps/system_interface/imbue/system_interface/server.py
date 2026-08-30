@@ -39,6 +39,7 @@ from imbue.system_interface import member_locations
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailedError
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
@@ -108,13 +109,14 @@ from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
+from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 logger = _loguru_logger
 
-STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 # Stamped on every app-shell response so a caller can tell the real app from
 # the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
@@ -391,8 +393,7 @@ _SERVICE_REF_PREFIX = "service:"
 # the workspace root, exactly as ``.agents/shared/scripts/serve_isolated_instance.py``
 # invokes it. The root is this package's own location walked back out of
 # ``system/apps/system_interface/imbue/system_interface``.
-_WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
-_FORWARD_PORT_SCRIPT = _WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
+_FORWARD_PORT_SCRIPT = WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
 
 # Generous: the registration script runs under ``uv run``, which may have to
 # resolve the workspace environment before the (near-instant) TOML rewrite.
@@ -559,9 +560,37 @@ def _inject_feature_flag_meta_tags(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tags}\n</head>")
 
 
+def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) -> str:
+    """Inject the update-staleness variant so the frontend can render its banner.
+
+    Injected only when stale: the banner keys off the tag's presence, and a
+    consistent workspace's shell carries no tag at all.
+    """
+    if staleness is None:
+        return html_content
+    meta_tag = f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{html.escape(staleness, quote=True)}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
+def _shell_update_staleness() -> str | None:
+    """The staleness variant to inject into this app shell, if any.
+
+    Asked per built-shell request, so a tree that moved -- or an apply marker
+    that appeared -- after this process started is still seen. Skipped for
+    ``HEAD``: that is the not-built placeholder's own poll, once every ten
+    seconds per open tab for the length of an outage, and the placeholder
+    itself never asks (it carries no banner). Reading staleness forks git, and
+    an outage is precisely when the tree has moved and both of its reads run.
+    """
+    if request.method == "HEAD":
+        return None
+    return get_state().update_staleness.staleness()
+
+
 def _index() -> Response:
-    index_path = STATIC_DIRECTORY / "index.html"
+    index_path = get_state().static_directory / "index.html"
     if index_path.exists():
+        staleness = _shell_update_staleness()
         config: Config = get_state().config
         root_path = (request.script_root or "").rstrip("/")
         html_content = index_path.read_text()
@@ -569,6 +598,7 @@ def _index() -> Response:
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
         html_content = _inject_feature_flag_meta_tags(html_content)
+        html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _shell_response(html_content, is_frontend_built=True)
@@ -620,7 +650,7 @@ def _frontend_not_built_response() -> Response:
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
     _loguru_logger.warning(
-        "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
+        "Served the not-built placeholder: no frontend bundle at {}", get_state().static_directory / "index.html"
     )
     return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
@@ -637,14 +667,14 @@ def _index_catch_all(path: str) -> Response:
 
 
 def _favicon() -> Response:
-    favicon_path = STATIC_DIRECTORY / "favicon.ico"
+    favicon_path = get_state().static_directory / "favicon.ico"
     if favicon_path.exists():
         return send_file(favicon_path, mimetype="image/x-icon")
     return Response(status=404)
 
 
 def _serve_asset(filename: str) -> Response:
-    assets_directory = STATIC_DIRECTORY / "assets"
+    assets_directory = get_state().static_directory / "assets"
     # A missing asset is a plain 404, as for the favicon above, rather than the
     # HTML error page ``send_from_directory`` would raise. Existence and safety
     # are both left to ``send_from_directory``: ``filename`` arrives with any
@@ -831,7 +861,15 @@ def _send_message_endpoint(agent_id: str) -> Response:
     # for the duration); the codex session hands it to its live ledger, passing ``message_id``
     # only as the correlation token the committed item echoes back (Fix 2).
     session = agent_manager.get_or_create_session(agent_info)
-    outcome = session.send(send_message_request.message, message_id)
+    try:
+        outcome = session.send(send_message_request.message, message_id)
+    except SendFailedError as send_failure:
+        # The harness said why it refused, in words written for the person who has to fix it
+        # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
+        # than the generic failure below -- it is the only thing here the user can act on.
+        # The kind travels beside the detail so the chat can decide what to offer: trying again
+        # can clear a blocked input and cannot help when there is nothing left to talk to.
+        return _json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
     if outcome is SendOutcome.NOT_READY:
         failure = ErrorResponse(
             detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
@@ -951,7 +989,9 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
 
     identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
     result = resolver.switch(
-        identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
+        identity,
+        frozenset(req.axes),
+        lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line) is None,
     )
     if not result.ok:
         detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
@@ -1239,10 +1279,11 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
 
     if block:
         agent_manager: AgentManager = get_state().agent_manager
-        is_sent = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
-        if not is_sent:
-            error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
-            return _json_response(error.model_dump(), status_code=500)
+        resend_failure = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        if resend_failure is not None:
+            # The harness said why; passing that on rather than a generic sentence is the whole
+            # point of carrying it this far.
+            return _json_response({"detail": resend_failure.reason, "kind": resend_failure.kind}, status_code=500)
 
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
@@ -1290,7 +1331,7 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
         press_chord=lambda: agent_manager.press_key_chord_on_agent(
             AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
         ),
-        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
+        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
     )
     if outcome.error_detail is not None:
         error = ErrorResponse(detail=outcome.error_detail)
@@ -2392,7 +2433,7 @@ def _run_forward_port_removal(name: str) -> str | None:
     """
     result = run_local_command_modern_version(
         command=["uv", "run", "python3", str(_FORWARD_PORT_SCRIPT), "--remove", "--name", name],
-        cwd=_WORKSPACE_ROOT_DIRECTORY,
+        cwd=WORKSPACE_ROOT_DIRECTORY,
         is_checked=False,
         timeout=_FORWARD_PORT_TIMEOUT_SECONDS,
     )
@@ -2760,6 +2801,10 @@ def _run_ws_broadcast_loop(
                     layout_dir=layout_dir,
                     is_first_report=not is_client_registered,
                 ):
+                    if not is_client_registered:
+                        # Now that a client can apply layout ops, hand it the
+                        # chats that appeared while nobody could.
+                        agent_manager.flush_pending_auto_opens()
                     is_client_registered = True
                 incoming = websocket.receive(timeout=0)
             try:
