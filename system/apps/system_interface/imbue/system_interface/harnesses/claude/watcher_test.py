@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 
 
@@ -427,6 +429,7 @@ def test_get_all_events_parses_only_new_tail(tmp_path: Path) -> None:
         assert a is b
 
 
+@pytest.mark.timeout(60)
 def test_concurrent_reads_and_discovery_do_not_raise(tmp_path: Path) -> None:
     """Concurrent get_all_events + session discovery must not raise (issue C).
 
@@ -454,6 +457,11 @@ def test_concurrent_reads_and_discovery_do_not_raise(tmp_path: Path) -> None:
             except RuntimeError as e:
                 # "dictionary changed size during iteration" is the unlocked failure.
                 errors.append(e)
+            # Yield between reads: Python locks are not fair, and a reader that
+            # re-acquires the store lock back-to-back can starve the discoverer on a
+            # loaded machine, stretching the test past its timeout. A 1ms sleep still
+            # leaves hundreds of reads overlapping the 60 discovery rounds.
+            time.sleep(0.001)
 
     def discoverer() -> None:
         try:
