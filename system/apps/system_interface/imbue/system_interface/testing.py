@@ -93,17 +93,20 @@ class FakeSupervisorServer:
     """A supervisord-shaped XML-RPC server over a unix socket.
 
     Implements exactly the slice of the supervisor RPC namespace the liveness
-    module uses -- ``getProcessInfo`` / ``startProcess`` / ``stopProcess`` --
-    over ``statename_by_program``, with the same fault codes supervisord
-    answers, so both the probe and the stop/start actions are tested against
+    module uses -- ``getAllProcessInfo`` / ``startProcess`` / ``stopProcess``
+    -- over ``statename_by_program``, with the same fault codes supervisord
+    answers, so both the probes and the stop/start actions are tested against
     the real transport rather than a faked-out client.
     """
 
     def __init__(self, socket_path: Path) -> None:
         self.socket_path = socket_path
         self.statename_by_program: dict[str, str] = {}
+        # Lets tests assert on the sweep's RPC economy (e.g. that a registry
+        # with no supervised rows makes no supervisord call at all).
+        self.get_all_process_info_call_count = 0
         self._server = _UnixSocketXmlRpcServer(str(socket_path))
-        self._server.register_function(self._get_process_info, "supervisor.getProcessInfo")
+        self._server.register_function(self._get_all_process_info, "supervisor.getAllProcessInfo")
         self._server.register_function(self._start_process, "supervisor.startProcess")
         self._server.register_function(self._stop_process, "supervisor.stopProcess")
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -119,11 +122,9 @@ class FakeSupervisorServer:
     # The dispatch protocol hands every RPC argument over as a marshallable
     # value, so the handlers take ``object`` and stringify -- exactly what the
     # wire delivers.
-    def _get_process_info(self, name: object) -> dict[str, str]:
-        program = str(name)
-        if program not in self.statename_by_program:
-            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
-        return {"name": program, "statename": self.statename_by_program[program]}
+    def _get_all_process_info(self) -> list[dict[str, str]]:
+        self.get_all_process_info_call_count += 1
+        return [{"name": program, "statename": statename} for program, statename in self.statename_by_program.items()]
 
     def _start_process(self, name: object, _wait: object) -> bool:
         program = str(name)
