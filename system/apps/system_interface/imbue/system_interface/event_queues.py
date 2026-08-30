@@ -19,9 +19,7 @@ class AgentEventQueues:
 
     Delivery is live-only: nothing is buffered for replay, because every event is
     recoverable over the REST ``/events`` endpoint -- the stream is a low-latency hint and
-    the REST snapshot is the source of truth. (An earlier replay buffer inherited from
-    llm-webchat's ConversationEventQueues grew per-agent forever and duplicated the REST
-    path; it is gone.)
+    the REST snapshot is the source of truth.
 
     Each connection's queue is bounded, and a consumer whose queue overflows is evicted on
     the FIRST full ``put``: unlike the agents WebSocket's snapshot traffic (where the next

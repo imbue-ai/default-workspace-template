@@ -3,9 +3,7 @@
 Built on the shared :class:`~imbue.system_interface.harnesses.transcript_store` scaffolding:
 one lane per session file (main sessions plus subagents), every parsed event fully
 resident, and per-event source byte ranges kept beside the store for the on-demand payload
-reads. This replaced the earlier two-tier locator/body-LRU design -- at real transcript
-sizes the bounded cache saved little memory while costing a re-parse-from-disk path, and
-payload-free events make full residency cheap outright.
+reads.
 
 What stays claude-specific:
 

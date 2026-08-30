@@ -172,7 +172,7 @@ class HarnessActivityTracker(ABC):
         # The tail type skips non-turn events (a bar-sent /model and its confirmation must
         # not pin "Thinking..."); the tail timestamp tracks every event. Both advance only
         # forward in time so a re-broadcast old event cannot regress them; an unparseable
-        # timestamp advances (matching the old list-order semantics for such events).
+        # timestamp advances.
         if self._advances(event_at, self._last_turn_type_at) and not is_non_turn_tail_event(event):
             self._folded_last_type = event_type if isinstance(event_type, str) else None
             self._last_turn_type_at = event_at if event_at is not None else self._last_turn_type_at

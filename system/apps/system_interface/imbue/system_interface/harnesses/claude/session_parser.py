@@ -315,8 +315,7 @@ def _parse_assistant_message(
             if call_id and tool_name:
                 tool_name_by_call_id[call_id] = tool_name
 
-            # Labelled here, where the harness is known -- and from the FULL input, so a
-            # long command can no longer be labelled off a clipped copy. The raw input
+            # Labelled here, where the harness is known, and from the FULL input. The raw input
             # itself stays off the event (payload-free wire); ``input_chars`` tells the
             # frontend whether an expand has anything to fetch.
             header_label, caption_label = tool_labels(tool_name, raw_input)

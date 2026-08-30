@@ -38,10 +38,8 @@ SPECIAL_EVENT_TYPE: Final[str] = "special"
 # The wire is PAYLOAD-FREE: events carry identity, prose, labels, and small derived
 # stamps -- never raw tool inputs, tool outputs, or thinking. Those stay on disk and are
 # served whole, on demand, by the per-event detail endpoint (statelessly re-read; never
-# cached backend-side). This is what makes full residency of a whole conversation cheap,
-# and it replaced the old truncated-copy fields (a 200-char ``input_preview`` and a
-# 2000-char ``output``) that were the worst of both worlds: resident memory spent on
-# payloads that were still incomplete for display. What the default chat render needs from
+# cached backend-side). This is what makes full residency of a whole conversation cheap.
+# What the default chat render needs from
 # a payload is stamped at parse time instead: the labels (derived from the FULL input),
 # ``input_chars`` / ``output_chars`` (so the frontend knows whether there is anything to
 # fetch), ``error_snippet`` (a failed call stays glanceable without a fetch), ``tk_stamp``
