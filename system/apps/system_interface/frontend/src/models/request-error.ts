@@ -55,3 +55,26 @@ export function describeRequestError(error: unknown): string {
 
   return "unknown error";
 }
+
+/**
+ * mngr's classification of a failed send, when it supplied one.
+ *
+ * The reason a send failed is written for a person and varies per harness, so it cannot be used
+ * to decide whether trying again could possibly help. This is the machine-readable half. mngr
+ * names the situation and stops there -- it does not know what a button is -- so the mapping from
+ * a kind to what the user is offered lives here, in the workspace.
+ *
+ * Anything unrecognised (an older backend, a kind added later) reads as "unknown", which callers
+ * treat exactly as they behaved before kinds existed.
+ */
+export type SendFailureKind = "input_blocked" | "not_ready" | "agent_unreachable" | "unknown";
+
+const KNOWN_SEND_FAILURE_KINDS: ReadonlySet<string> = new Set(["input_blocked", "not_ready", "agent_unreachable"]);
+
+export function describeRequestErrorKind(error: unknown): SendFailureKind {
+  if (error === null || typeof error !== "object") {
+    return "unknown";
+  }
+  const kind = (error as { response?: { kind?: unknown } | null }).response?.kind;
+  return typeof kind === "string" && KNOWN_SEND_FAILURE_KINDS.has(kind) ? (kind as SendFailureKind) : "unknown";
+}

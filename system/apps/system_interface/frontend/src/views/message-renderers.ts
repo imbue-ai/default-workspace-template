@@ -5,12 +5,25 @@
 
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
+import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
-import { PermissionCard, isFiledPermissionRequest } from "./permission-card";
+import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
+
+/** A permission-request tool call's own verdict: its own request id's entry in
+ *  `resolutionsByRequestId`, or null while the request awaits a decision (or
+ *  when the call is unparseable). */
+function resolutionForCall(
+  toolCall: ToolCall,
+  toolResult: ToolResultEvent | null,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
+): PermissionResolution | null {
+  const details = parsePermissionRequest(toolCall, toolResult);
+  return (details ? resolutionsByRequestId.get(details.requestId) : undefined) ?? null;
+}
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
@@ -290,8 +303,11 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
   const inputText = toolCall.input_preview || "";
   const outputText = toolResult?.output || "";
   const isError = toolResult?.is_error === true;
+  // Keyed by the tool call's stable id so the expansion survives the row
+  // unmounting and remounting (virtualization) or re-rendering (streaming).
+  const expansionKey = `tc:${toolCall.tool_call_id}`;
 
-  return m("div", { class: "tool-call-block" }, [
+  return m("div", { class: `tool-call-block${isBlockExpanded(expansionKey) ? " tool-call-block--expanded" : ""}` }, [
     m(
       "div",
       {
@@ -299,7 +315,9 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
         onclick(e: Event) {
           const block = (e.currentTarget as HTMLElement).parentElement;
           if (block) {
-            block.classList.toggle("tool-call-block--expanded");
+            // Toggle the DOM directly (memoized wrappers skip re-patching)
+            // AND record it so a fresh mount renders in the same state.
+            setBlockExpanded(expansionKey, block.classList.toggle("tool-call-block--expanded"));
           }
         },
       },
@@ -333,7 +351,7 @@ export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
   agentId: string,
-  permissionResolution: PermissionResolution | null = null,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution> = new Map(),
 ): m.Children[] {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -345,12 +363,18 @@ export function renderAssistantMessageChildren(
       // provider-side fault (5xx / overloaded) add a grey "not Minds' fault" note.
       children.push(
         m("div.message-api-error", [
-          m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }),
+          m(MarkdownContent, {
+            content: textContent,
+            requestedAt: event.timestamp,
+            expansionKeyPrefix: event.event_id,
+          }),
           event.is_provider_fault ? m("div.message-api-error-note", providerFaultNote(event.api_error_kind)) : null,
         ]),
       );
     } else {
-      children.push(m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }));
+      children.push(
+        m(MarkdownContent, { content: textContent, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
+      );
     }
   }
   for (const toolCall of toolCalls) {
@@ -369,9 +393,12 @@ export function renderAssistantMessageChildren(
     // button, and the raw call) rather than a generic tool block.
     // Gated on the input-only predicate so the card shows even while the request
     // is still pending -- the same signal the timeline walk uses to lift it out
-    // of its step. The resolution (once the user decides) comes from the walk.
+    // of its step. The resolution (once the user decides) comes from the walk,
+    // looked up by this call's own request id so a message batching more than
+    // one permission request resolves each of its cards independently.
     if (isFiledPermissionRequest(toolCall, result)) {
-      children.push(m(PermissionCard, { toolCall, toolResult: result, resolution: permissionResolution }));
+      const resolution = resolutionForCall(toolCall, result, resolutionsByRequestId);
+      children.push(m(PermissionCard, { toolCall, toolResult: result, resolution }));
       continue;
     }
     children.push(renderToolCallBlock(toolCall, result));
@@ -390,7 +417,7 @@ export function renderPermissionItem(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
   agentId: string,
-  resolution: PermissionResolution | null,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
   domId: string = event.event_id,
 ): m.Vnode {
   // ``domId`` defaults to the event id but a top-level permission row passes its
@@ -401,6 +428,6 @@ export function renderPermissionItem(
   return m(
     "div",
     { id: domId, class: "message message-assistant", key: event.event_id },
-    renderAssistantMessageChildren(event, toolResults, agentId, resolution),
+    renderAssistantMessageChildren(event, toolResults, agentId, resolutionsByRequestId),
   );
 }
