@@ -148,6 +148,46 @@ describe("the provider chooser", () => {
     const text = render();
     expect(text).toContain("Signed in");
     expect(text).toContain("Anthropic 2 (Claude Code)");
+    // Signed-in leads; the lane list follows under its own header. What you already have
+    // must not sit below the fold of a long provider list.
+    expect(text.indexOf("Signed in")).toBeLessThan(text.indexOf("Add more"));
+    expect(text.indexOf("Anthropic 2 (Claude Code)")).toBeLessThan(text.indexOf("Add more"));
+  });
+
+  it("shows neither section header when nothing is signed in", () => {
+    const text = render();
+    expect(text).toContain("Anthropic");
+    expect(text).not.toContain("Signed in");
+    expect(text).not.toContain("Add more");
+  });
+
+  it("asks for confirmation in a layered dialog before removing an account", () => {
+    state.accounts = [
+      {
+        id: "a1",
+        lane: "anthropic",
+        harness: "claude",
+        provider: "Anthropic",
+        harness_label: "Claude Code",
+        seq: 1,
+        name: "",
+        label: "Anthropic (Claude Code)",
+      },
+    ];
+    const root = document.createElement("div");
+    const draw = () => m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
+    draw();
+    expect(root.textContent).not.toContain("Remove account");
+
+    (root.querySelector('[aria-label="Remove Anthropic (Claude Code)"]') as HTMLElement).click();
+    draw();
+    expect(root.textContent).toContain("Remove account");
+    expect(root.textContent).toContain("New chats can't be started on it.");
+    expect(root.querySelector(".destroy-dialog-btn-destroy")?.textContent).toBe("Remove");
+
+    (root.querySelector(".destroy-dialog-btn-cancel") as HTMLElement).click();
+    draw();
+    expect(root.textContent).not.toContain("Remove account");
   });
 
   it("renders a lane whose key picker has several providers", () => {

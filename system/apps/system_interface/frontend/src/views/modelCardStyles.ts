@@ -173,10 +173,6 @@ export const ROW_RENAME_INPUT =
   "w-full rounded-md border border-subtle bg-surface-primary px-1.5 text-[13px] leading-[27px] " +
   "text-primary outline-none";
 
-export const ROW_TRASH_ARMED =
-  "absolute right-8 top-1/2 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded bg-surface-primary px-1 type-helper text-important hover:bg-fill-hover";
-
 /* No tooltip classes live here on purpose.
  *
  * The mockup floats its own `bottom-full` chip inside the popover. That cannot work in this
