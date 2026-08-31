@@ -60,7 +60,11 @@ RELEASE_DATE = date(2026, 8, 18)
 # descriptions and the additive optional SyncWorkspaceRecord.backup_bucket
 # field (default None), which adds no required field; no new strict-parse call
 # sites were added client-side.
-SUPPORT_ENDS = date(2026, 9, 29)
+# Also covers minds 0.4.4 (released 2026-08-31): the strictly-parsed surface is
+# still identical -- the only wire_types change between the two tags is the
+# additive optional ShareInfo.chrome_origin field (default None), which adds no
+# required field; no new strict-parse call sites were added client-side.
+SUPPORT_ENDS = date(2026, 10, 1)
 
 
 class _TolerantModel(BaseModel):
