@@ -56,7 +56,8 @@ import { SHORTCUT_TOOLTIPS } from "./Sidebar";
  *  Distinct from MemberKind: "files" has no member ref yet (nothing backs it),
  *  and the tiles never start a URL tab. */
 export type LaunchTarget =
-  { kind: "chat"; harness: ChatHarness; first: boolean } | { kind: "files" | "browser" | "terminal" };
+  | { kind: "chat"; harness: ChatHarness; first: boolean }
+  | { kind: "files" | "browser" | "terminal" };
 
 /** One "Open new" tile: what it starts, and what it is called. */
 export interface LaunchTile {

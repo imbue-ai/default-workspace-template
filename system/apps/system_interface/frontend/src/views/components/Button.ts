@@ -17,7 +17,14 @@ import { TEXT_BODY_SIZE } from "./typography";
  * contiguous literal -- never build one by string interpolation. */
 
 export type ButtonVariant =
-  "primary" | "secondary" | "ghost" | "destructive" | "ghost-destructive" | "inverse" | "ghost-inverse" | "stop";
+  | "primary"
+  | "secondary"
+  | "ghost"
+  | "destructive"
+  | "ghost-destructive"
+  | "inverse"
+  | "ghost-inverse"
+  | "stop";
 
 export interface ButtonOptions {
   sm?: boolean;
