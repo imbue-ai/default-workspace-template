@@ -243,6 +243,9 @@ def _tags(user_id: str, ref: str) -> dict[str, str]:
 
 def _modal():
     # Deliberately lazy: the modal SDK import is heavy and S3-only commands never need it.
+    # Opt this box's sandboxes into Modal's V2 Sandbox backend (the mngr-wide default);
+    # setdefault keeps an explicit MODAL_SANDBOX_V2=0 opt-out working.
+    os.environ.setdefault("MODAL_SANDBOX_V2", "1")
     import modal
 
     return modal
