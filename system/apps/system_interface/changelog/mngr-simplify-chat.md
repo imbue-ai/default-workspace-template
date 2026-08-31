@@ -9,3 +9,5 @@ Chat memory now has a lifecycle: when an agent is destroyed or its lifecycle tra
 Also deflakes the antigravity tap storm test (a sub-millisecond turn-release margin decided by ISO timestamp rounding).
 
 Also hardens the first-run provider greeting: the boot-time account load now retries with backoff until the backend answers, so a page served before the API is up no longer silently skips the provider chooser on a workspace with nothing signed in.
+
+Also fixes a pre-existing antigravity watcher CPU spin: its per-poll read-only SQLite open/close wrote to the watched conversations directory (wal-index build and WAL reset on the `-shm`/`-wal` sidecars), so every scan woke the next one -- a ~500Hz self-sustaining loop pegging a core whenever an antigravity chat existed. The watcher now holds one read-only connection per conversation db (closed on stop/eviction), making its own reads side-effect-free while agy's real commits still wake it instantly.

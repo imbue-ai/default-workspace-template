@@ -1,0 +1,1 @@
+The standalone uv.lock picks up `watchdog`, a new transitive dependency via `imbue-mngr` (directory-change notifications for mngr's follow-mode event tails; see the mngr changelog entry for this branch).

@@ -109,6 +109,14 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     # monkeypatched, which the ratchets forbid (and rightly -- it leaks across tests).
     _delivery_witness_seconds: float
     _observer: Any
+    # One held read-only connection per conversation db, guarded by ``self._lock``. Held
+    # rather than opened per read because open/close is what WRITES to the watched
+    # directory (open builds the wal-index in ``-shm``, close resets the ``-wal``), and
+    # the observer above watches that directory -- a per-poll open/close makes every scan
+    # wake the next one, a self-sustaining ~500Hz loop that pegs a core. A held WAL
+    # reader running short queries reads through the mmap'd ``-shm`` with no write
+    # syscalls, so our own scans generate no events; agy's real commits still do.
+    _connections: dict[Path, sqlite3.Connection]
 
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "AntigravitySessionWatcher":
@@ -138,6 +146,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._flush_wake = threading.Event()
         self._flush_thread = None
         self._observer: Any = None
+        self._connections: dict[Path, sqlite3.Connection] = {}
         return self
 
     # --- paths ---------------------------------------------------------------------------
@@ -220,6 +229,9 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         # The tracker is NOT dropped: it is the agent's for the agent's life, and a queue held
         # across a watcher restart is still the same live session's. Only detach the wiring.
         self._queue.detach()
+        with self._lock:
+            for db_path in list(self._connections):
+                self._drop_connection_locked(db_path)
         drop_turn_state(self._agent_id)
 
     def _run(self) -> None:
@@ -303,18 +315,34 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._scan_from[conv_id] = next_scan_from
 
     def _read_rows(self, db_path: Path, scan_from: int) -> list[tuple[int, int, int, bytes]]:
+        """Read the steps at/after ``scan_from`` via the held connection. Caller must hold
+        ``self._lock`` (the connections are shared across the poll, flush, and detail
+        threads, so the lock is what serializes them)."""
         # Read-only + WAL-aware; agy is concurrently writing. A transient lock/checkpoint
-        # surfaces as sqlite3.Error -> skip this conversation this pass, retry next.
-        try:
-            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        except sqlite3.Error:
-            return []
+        # surfaces as sqlite3.Error -> drop the connection, skip this pass, retry next
+        # (dropping also covers a deleted/replaced db file). The query's implicit read
+        # transaction ends at fetchall, so the held connection never pins the WAL or
+        # blocks agy's checkpoints.
+        connection = self._connections.get(db_path)
+        if connection is None:
+            try:
+                connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+            except sqlite3.Error:
+                return []
+            self._connections[db_path] = connection
         try:
             return connection.execute(_STEPS_QUERY, (scan_from,)).fetchall()
         except sqlite3.Error:
+            self._drop_connection_locked(db_path)
             return []
-        finally:
-            connection.close()
+
+    def _drop_connection_locked(self, db_path: Path) -> None:
+        connection = self._connections.pop(db_path, None)
+        if connection is not None:
+            try:
+                connection.close()
+            except sqlite3.Error as e:
+                logger.debug("antigravity: closing the {} connection failed: {}", db_path, e)
 
     # --- read interface (single flat session; subagents not surfaced) --------------------
 
@@ -376,7 +404,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         db_path = self._conversations_dir() / f"{conv_id}.db"
         if not db_path.is_file():
             return None
-        rows = [row for row in self._read_rows(db_path, idx) if row[0] == idx]
+        with self._lock:
+            rows = [row for row in self._read_rows(db_path, idx) if row[0] == idx]
         if not rows:
             return None
         row_idx, step_type, status, payload = rows[0]
