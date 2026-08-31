@@ -11,3 +11,5 @@ Also deflakes the antigravity tap storm test (a sub-millisecond turn-release mar
 Also hardens the first-run provider greeting: the boot-time account load now retries with backoff until the backend answers, so a page served before the API is up no longer silently skips the provider chooser on a workspace with nothing signed in.
 
 Also fixes a pre-existing antigravity watcher CPU spin: its per-poll read-only SQLite open/close wrote to the watched conversations directory (wal-index build and WAL reset on the `-shm`/`-wal` sidecars), so every scan woke the next one -- a ~500Hz self-sustaining loop pegging a core whenever an antigravity chat existed. The watcher now holds one read-only connection per conversation db (closed on stop/eviction), making its own reads side-effect-free while agy's real commits still wake it instantly.
+
+Also fixes the thinking disclosure not collapsing on a second click: the memoized assistant-message wrapper skips vdom repaints on expansion toggles, so the disclosure now flips its expanded class directly on the DOM (the same pattern the tool-call rows use) with the body always mounted and CSS-revealed.

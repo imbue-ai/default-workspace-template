@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import m from "mithril";
 import type { ToolCall, ToolResultEvent, TranscriptEvent } from "../models/Response";
 import type { AssistantMessageEvent } from "../models/Response";
 import {
@@ -455,7 +456,81 @@ describe("thinking disclosure", () => {
     renderAssistantMessageChildren(assistantWithThinking("th-4", true), new Map(), "agent-1");
     expect(mockRequestDetail).not.toHaveBeenCalled();
   });
+
+  it("renders a fresh mount in the recorded expansion state", () => {
+    setBlockExpanded("think:th-5", true);
+    const expanded = renderAssistantMessageChildren(assistantWithThinking("th-5", true), new Map(), "agent-1");
+    expect(collectClasses(expanded)).toContain("thinking-disclosure thinking-disclosure--expanded");
+
+    const collapsed = renderAssistantMessageChildren(assistantWithThinking("th-6", true), new Map(), "agent-1");
+    expect(collectClasses(collapsed)).toContain("thinking-disclosure");
+    expect(collectClasses(collapsed)).not.toContain("thinking-disclosure thinking-disclosure--expanded");
+  });
+
+  it("collapses via the DOM class alone, so the memoized wrapper needs no repaint", () => {
+    // Regression: the assistant-message wrapper is memoized and skips re-rendering on a
+    // toggle, so a collapse that depends on a vdom re-render never happens. The handler
+    // must instead flip the class directly on the mounted element (and record the state),
+    // exactly like the tool-call header does.
+    const redraw = vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    setBlockExpanded("think:th-7", true);
+    const children = renderAssistantMessageChildren(assistantWithThinking("th-7", true), new Map(), "agent-1");
+    const toggle = findByClass(children, "thinking-toggle");
+    const classes = new Set(["thinking-disclosure", "thinking-disclosure--expanded"]);
+    const disclosureStub = {
+      classList: {
+        toggle(name: string): boolean {
+          if (classes.has(name)) {
+            classes.delete(name);
+            return false;
+          }
+          classes.add(name);
+          return true;
+        },
+      },
+    };
+    const click = () =>
+      (toggle?.attrs as { onclick: (e: unknown) => void }).onclick({
+        currentTarget: { parentElement: disclosureStub },
+      });
+
+    mockRequestDetail.mockReset();
+    click();
+    expect(classes.has("thinking-disclosure--expanded")).toBe(false);
+    // A collapse fetches nothing and needs no redraw -- the class flip IS the collapse.
+    expect(mockRequestDetail).not.toHaveBeenCalled();
+    expect(redraw).not.toHaveBeenCalled();
+
+    click();
+    expect(classes.has("thinking-disclosure--expanded")).toBe(true);
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-1", "th-7");
+
+    // The recorded state followed both flips, so a fresh mount agrees with the DOM.
+    const remount = renderAssistantMessageChildren(assistantWithThinking("th-7", true), new Map(), "agent-1");
+    expect(collectClasses(remount)).toContain("thinking-disclosure thinking-disclosure--expanded");
+    redraw.mockRestore();
+  });
 });
+
+// Walk a mithril vnode tree and return the first element vnode whose class contains `name`.
+function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
+  if (node == null) return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findByClass(child, name);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof node === "object") {
+    const v = node as { attrs?: { className?: unknown }; children?: unknown };
+    if (typeof v.attrs?.className === "string" && v.attrs.className.split(" ").includes(name)) {
+      return v as { attrs?: Record<string, unknown> };
+    }
+    return findByClass(v.children, name);
+  }
+  return null;
+}
 
 describe("expanded tool row payload states", () => {
   const call: ToolCall = { tool_call_id: "pc-1", tool_name: "Bash", input_chars: 20 };
