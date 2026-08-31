@@ -35,6 +35,7 @@ import m from "mithril";
 import { icon, loginSpinnerIcon, warningIcon } from "./icons";
 import { backdropDismissAttrs } from "./modalBackdrop";
 import { providerMark } from "./providerMarks";
+import { removeAccountDialog } from "./removeAccountDialog";
 import * as css from "./providerSignInStyles";
 import type { Lane, LaneMethod, ProviderAccount } from "../models/Providers";
 import {
@@ -310,12 +311,18 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       ];
     }
     if (!areLanesLoaded()) return statusScreen("pending", "Loading providers...", null);
+    // Signed-in accounts lead: what you already have is the answer to "can I chat?", so it
+    // must not hide below the fold of a long provider list. Both section headers exist only
+    // once there IS a signed-in section -- a first-run user sees the bare provider list,
+    // with nothing to explain.
+    const signedIn = renderAccounts();
     return [
-      m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
+      signedIn,
       // Removing an account can fail -- a row with no folder, a store that will not write --
       // and without this the row simply stays put with no explanation.
       error !== null ? m("p", { class: `${css.HINT} text-red-600` }, error) : null,
-      renderAccounts(),
+      signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
+      m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
     ];
   }
 
@@ -327,7 +334,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   function renderAccounts(): m.Children {
     const signedIn = getAccounts();
     if (signedIn.length === 0) return null;
-    return m("div", { class: "mt-6" }, [
+    const confirming = signedIn.find((account) => account.id === confirmingDelete) ?? null;
+    return m("div", [
       m("div", { class: css.SECTION_LABEL }, "Signed in"),
       m(
         "div",
@@ -355,28 +363,26 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               {
                 type: "button",
                 class: css.ROW_ACTION,
-                "data-confirm-delete": account.id,
-                "aria-label": confirmingDelete === account.id ? "Confirm removal" : `Remove ${account.label}`,
+                "aria-label": `Remove ${account.label}`,
                 onclick: () => {
-                  if (confirmingDelete !== account.id) {
-                    confirmingDelete = account.id;
-                    return;
-                  }
-                  confirmingDelete = null;
-                  void send(() => deleteAccount(account.id));
+                  confirmingDelete = account.id;
                 },
               },
-              confirmingDelete === account.id ? "Remove?" : m.trust(icon("trash", { size: 15 })),
+              m.trust(icon("trash", { size: 15 })),
             ),
           ]),
         ),
       ),
-      confirmingDelete !== null
-        ? m(
-            "p",
-            { class: css.HINT },
-            "New chats can't be started on it. A chat already running may keep going until it " +
-              "next restarts, since its harness is already holding the credential.",
+      confirming !== null
+        ? removeAccountDialog(
+            confirming,
+            () => {
+              confirmingDelete = null;
+              void send(() => deleteAccount(confirming.id));
+            },
+            () => {
+              confirmingDelete = null;
+            },
           )
         : null,
     ]);
@@ -850,16 +856,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               "aria-modal": "true",
               "aria-label": "Pick your AI provider",
               "data-e2e": "provider-chooser",
-              // Pressing anywhere that is NOT the armed Remove? disarms it. Someone who
-              // pressed the bin to find out what it did gets to back out by looking away.
-              // Keyed on the button's own id rather than a plain "did we hit a button",
-              // because mousedown lands before the click that confirms.
-              onmousedown: (event: MouseEvent) => {
-                if (confirmingDelete === null) return;
-                const armed = (event.target as HTMLElement).closest?.("[data-confirm-delete]");
-                if (armed?.getAttribute("data-confirm-delete") === confirmingDelete) return;
-                confirmingDelete = null;
-              },
             },
             m("div", { class: `${css.PANEL} ${size.width}` }, [
               m("div", { class: css.HEADER }, [

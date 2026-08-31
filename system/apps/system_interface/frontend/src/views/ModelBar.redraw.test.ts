@@ -137,18 +137,18 @@ describe("the card without a hand-cranked redraw", () => {
     expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
   });
 
-  it("arms the trash on the first press instead of closing the picker", async () => {
+  it("opens the removal dialog on a trash press instead of closing the picker", async () => {
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');
     await press('[aria-label="Sign out of Anthropic"]');
 
     // The bug: mousedown read as outside, the popover went away, and the click never landed.
     expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
-    expect(document.body.textContent).toContain("Remove?");
+    expect(document.body.textContent).toContain("Remove account");
     expect(deleted).toEqual([]);
 
-    // Armed means the SECOND press is the one that acts.
-    await press('[aria-label="Confirm removing Anthropic"]');
+    // Only the dialog's own red button acts.
+    await press(".destroy-dialog-btn-destroy");
     expect(deleted).toEqual(["acct-1"]);
   });
 
@@ -225,15 +225,20 @@ describe("the card without a hand-cranked redraw", () => {
     expect(renamed).toEqual([]);
   });
 
-  it("does not offer a rename on a row that is asking whether to delete itself", async () => {
+  it("cancels the removal dialog without deleting anything", async () => {
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');
     await press('[aria-label="Sign out of Anthropic"]');
-    expect(document.body.textContent).toContain("Remove?");
-    expect(document.querySelector('[aria-label="Rename Anthropic"]')).toBeNull();
+    expect(document.body.textContent).toContain("Remove account");
+
+    await press(".destroy-dialog-btn-cancel");
+    expect(document.body.textContent).not.toContain("Remove account");
+    expect(deleted).toEqual([]);
+    // Backing out of the dialog must not have taken the flyout down with it.
+    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
   });
 
-  it("keeps Remove? armed while the pointer wanders the rest of the submenu", async () => {
+  it("keeps the removal dialog open while the pointer wanders the rest of the submenu", async () => {
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');
     await press('[aria-label="Sign out of Anthropic"]');
@@ -241,7 +246,7 @@ describe("the card without a hand-cranked redraw", () => {
       .querySelector('[data-model-popover="flyout"]')
       ?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await settle();
-    expect(document.body.textContent).toContain("Remove?");
+    expect(document.body.textContent).toContain("Remove account");
   });
 
   it("opens the chooser from + Add a provider, and takes the picker down with it", async () => {

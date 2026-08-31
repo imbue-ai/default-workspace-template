@@ -249,21 +249,21 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
   });
 
-  it("arms the sign-out trash before it fires, and disarms it when the card closes", () => {
+  it("confirms a sign-out in a dialog, and closing the card takes the dialog with it", () => {
     // The bin only appears on hover and signing out cannot be undone, so a single click would
     // too often be someone finding out what it was.
     render();
     click(".model-selector-trigger");
     click('[data-card-row="providers"]');
-    expect(screenText()).not.toContain("Remove?");
+    expect(screenText()).not.toContain("Remove account");
     click('[aria-label="Sign out of Anthropic"]');
-    expect(screenText()).toContain("Remove?");
+    expect(screenText()).toContain("Remove account");
 
-    // Closing and reopening must not leave it primed.
+    // Closing and reopening must not leave the confirmation up.
     click(".model-selector-trigger");
     click(".model-selector-trigger");
     click('[data-card-row="providers"]');
-    expect(screenText()).not.toContain("Remove?");
+    expect(screenText()).not.toContain("Remove account");
   });
 
   it("states model, effort and fast on the trigger, from the card's own values", () => {

@@ -8,8 +8,9 @@
  * being typed out twice and drifting.
  *
  * State stays with the CALLER. Each menu already owns the lifecycle its controls hang off --
- * an armed "Remove?" belongs to the flyout it was armed in and has to be cleared when that
- * flyout closes -- and a module-level store here could not see either menu closing.
+ * an open removal confirmation belongs to the flyout it was opened from and has to be
+ * cleared when that flyout closes -- and a module-level store here could not see either
+ * menu closing.
  */
 
 import m from "mithril";
@@ -17,10 +18,11 @@ import { deleteAccount, loadAccounts, renameAccount } from "../models/Providers"
 import type { ProviderAccount } from "../models/Providers";
 import { icon } from "./icons";
 import * as css from "./modelCardStyles";
+import { removeAccountDialog } from "./removeAccountDialog";
 
 /** Which row, if any, is showing its controls in a non-resting state. Both are per-flyout. */
 export interface AccountRowState {
-  /** The row whose bin is armed into "Remove?", or null. */
+  /** The row whose removal confirmation dialog is open, or null. */
   confirmingRemoval: string | null;
   /** The row showing its inline rename field, or null. */
   renamingId: string | null;
@@ -137,7 +139,7 @@ function renameField(opts: AccountRowOptions): m.Vnode {
  *  as a list, and mithril refuses a fragment mixing keyed vnodes with anything else. */
 export function accountRow(opts: AccountRowOptions): m.Vnode {
   const { row, state, isCurrent } = opts;
-  const arming = state.confirmingRemoval === row.id;
+  const confirmingRemoval = state.confirmingRemoval === row.id;
   const renaming = state.renamingId === row.id;
 
   // Mid-rename the row is only the field: the tick, the bin and the pencil all stand down so
@@ -173,46 +175,48 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
       "button",
       {
         type: "button",
-        class: arming ? css.ROW_TRASH_ARMED : css.ROW_TRASH,
-        "aria-label": arming ? `Confirm removing ${row.provider}` : `Sign out of ${row.provider}`,
+        class: css.ROW_TRASH,
+        "aria-label": `Sign out of ${row.provider}`,
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
-          if (!arming) {
-            state.confirmingRemoval = row.id;
-            return;
-          }
-          state.confirmingRemoval = null;
-          void deleteAccount(row.id)
-            .then(() => opts.onChanged?.())
-            .catch((error: unknown) => {
-              // Already gone is the common case, and the list is the honest answer either way.
-              console.warn(`Could not remove account ${row.id}`, error);
-              void loadAccounts();
-            })
-            .finally(() => {
-              m.redraw();
-            });
+          state.confirmingRemoval = row.id;
         },
       },
-      arming ? "Remove?" : m.trust(icon("trash", { size: 13 })),
+      m.trust(icon("trash", { size: 13 })),
     ),
-    // Withheld while the bin is armed: "Remove?" is wide enough to reach under the pencil,
-    // and a row asking whether to delete itself should not also be offering to rename.
-    arming
-      ? null
-      : m(
-          "button",
-          {
-            type: "button",
-            class: css.ROW_PENCIL,
-            "aria-label": `Rename ${row.provider}`,
-            onclick: (event: MouseEvent) => {
-              event.stopPropagation();
-              state.confirmingRemoval = null;
-              beginRename(state, row);
-            },
+    m(
+      "button",
+      {
+        type: "button",
+        class: css.ROW_PENCIL,
+        "aria-label": `Rename ${row.provider}`,
+        onclick: (event: MouseEvent) => {
+          event.stopPropagation();
+          beginRename(state, row);
+        },
+      },
+      m.trust(icon("edit", { size: 13 })),
+    ),
+    confirmingRemoval
+      ? removeAccountDialog(
+          row,
+          () => {
+            state.confirmingRemoval = null;
+            void deleteAccount(row.id)
+              .then(() => opts.onChanged?.())
+              .catch((error: unknown) => {
+                // Already gone is the common case, and the list is the honest answer either way.
+                console.warn(`Could not remove account ${row.id}`, error);
+                void loadAccounts();
+              })
+              .finally(() => {
+                m.redraw();
+              });
           },
-          m.trust(icon("edit", { size: 13 })),
-        ),
+          () => {
+            state.confirmingRemoval = null;
+          },
+        )
+      : null,
   ]);
 }
