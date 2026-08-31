@@ -15,9 +15,10 @@ def test_activity_aggregates_every_signal_source_per_account_and_day() -> None:
     session = build_fixture_analytics_session()
     session.execute(
         "INSERT INTO logs.http_requests VALUES"
-        " ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/account', 200, 10.0),"
-        " ('2026-08-12 09:05:00+00', 'user-a', 'PUT', '/sync/records/h1', 200, 15.0),"
-        " ('2026-08-12 09:10:00+00', '', 'GET', '/version', 200, 1.0)"
+        " ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/account', 200, 10.0, 'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        " ('2026-08-12 09:05:00+00', 'user-a', 'PUT', '/sync/records/h1', 200, 15.0,"
+        "  'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        " ('2026-08-12 09:10:00+00', '', 'GET', '/version', 200, 1.0, '')"
     )
     session.execute(
         "INSERT INTO logs.share_visits VALUES"
@@ -45,7 +46,9 @@ def test_activity_aggregates_every_signal_source_per_account_and_day() -> None:
 
 def test_activity_recompute_preserves_rows_older_than_the_window_and_is_idempotent() -> None:
     session = build_fixture_analytics_session()
-    session.execute("INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0)")
+    session.execute(
+        "INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0, '')"
+    )
     run_aggregation(session, _WINDOW_START)
     # Simulate an aggregate written by an earlier run over a window that has
     # since aged out: the recompute must never touch it.
@@ -61,6 +64,73 @@ def test_activity_recompute_preserves_rows_older_than_the_window_and_is_idempote
         [
             ("user-old", "2026-07-01", "app_open", 5),
             ("user-a", "2026-08-12", "app_open", 1),
+        ]
+    )
+
+
+def test_client_versions_hourly_buckets_by_hour_and_keeps_the_raw_identifier() -> None:
+    session = build_fixture_analytics_session()
+    session.execute(
+        "INSERT INTO logs.http_requests VALUES"
+        # user-a polls twice in one hour, then once in the next, on 0.4.2.
+        " ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/sync/records', 200, 5.0,"
+        "  'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        " ('2026-08-12 09:59:00+00', 'user-a', 'GET', '/sync/records', 200, 5.0,"
+        "  'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        " ('2026-08-12 10:01:00+00', 'user-a', 'GET', '/sync/records', 200, 5.0,"
+        "  'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        # user-b runs a newer build in the same hour.
+        " ('2026-08-12 09:30:00+00', 'user-b', 'GET', '/sync/records', 200, 5.0,"
+        "  'minds/0.4.3 imbue-cloud-plugin/0.1.7'),"
+        # A pre-header line (NULL) and a pre-0.4.1 client ('') both land in the
+        # '' bucket instead of being dropped.
+        " ('2026-08-12 09:40:00+00', 'user-c', 'GET', '/sync/records', 200, 5.0, NULL),"
+        " ('2026-08-12 09:45:00+00', 'user-c', 'GET', '/sync/records', 200, 5.0, ''),"
+        # Unauthenticated requests carry no account and are excluded.
+        " ('2026-08-12 09:50:00+00', '', 'GET', '/version', 200, 1.0, 'minds/0.4.3 imbue-cloud-plugin/0.1.7')"
+    )
+
+    run_aggregation(session, _WINDOW_START)
+    version_rows = session.execute(
+        "SELECT account_id, CAST(hour AS VARCHAR), imbue_client, request_count"
+        " FROM metrics.gold.client_versions_hourly ORDER BY account_id, hour"
+    ).fetchall()
+
+    assert version_rows == snapshot(
+        [
+            ("user-a", "2026-08-12 09:00:00+00", "minds/0.4.2 imbue-cloud-plugin/0.1.6", 2),
+            ("user-a", "2026-08-12 10:00:00+00", "minds/0.4.2 imbue-cloud-plugin/0.1.6", 1),
+            ("user-b", "2026-08-12 09:00:00+00", "minds/0.4.3 imbue-cloud-plugin/0.1.7", 1),
+            ("user-c", "2026-08-12 09:00:00+00", "", 2),
+        ]
+    )
+
+
+def test_client_versions_hourly_recompute_preserves_rows_older_than_the_window_and_is_idempotent() -> None:
+    session = build_fixture_analytics_session()
+    session.execute(
+        "INSERT INTO logs.http_requests VALUES"
+        " ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0, 'minds/0.4.2 imbue-cloud-plugin/0.1.6')"
+    )
+    run_aggregation(session, _WINDOW_START)
+    # Simulate an aggregate written by an earlier run over a window that has
+    # since aged out: the recompute must never touch it.
+    session.execute(
+        "INSERT INTO metrics.gold.client_versions_hourly VALUES"
+        " ('user-old', TIMESTAMPTZ '2026-07-01 08:00:00+00', 'minds/0.3.16 imbue-cloud-plugin/0.1.2', 5)"
+    )
+
+    run_aggregation(session, _WINDOW_START)
+    run_aggregation(session, _WINDOW_START)
+    all_rows = session.execute(
+        "SELECT account_id, CAST(hour AS VARCHAR), imbue_client, request_count"
+        " FROM metrics.gold.client_versions_hourly ORDER BY hour"
+    ).fetchall()
+
+    assert all_rows == snapshot(
+        [
+            ("user-old", "2026-07-01 08:00:00+00", "minds/0.3.16 imbue-cloud-plugin/0.1.2", 5),
+            ("user-a", "2026-08-12 09:00:00+00", "minds/0.4.2 imbue-cloud-plugin/0.1.6", 1),
         ]
     )
 
@@ -221,7 +291,9 @@ def test_pipeline_health_counts_failures_since_the_last_success() -> None:
 
 def test_run_aggregation_returns_row_counters() -> None:
     session = build_fixture_analytics_session()
-    session.execute("INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0)")
+    session.execute(
+        "INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0, '')"
+    )
     session.execute(
         "INSERT INTO rsc.account_entitlements (user_id, plan_name, created_at, updated_at)"
         " VALUES ('user-a', 'explorer', now(), now())"
@@ -230,6 +302,7 @@ def test_run_aggregation_returns_row_counters() -> None:
     counters = run_aggregation(session, _WINDOW_START)
 
     assert counters.activity_rows == 1
+    assert counters.client_version_rows == 1
     assert counters.account_rows == 1
     assert counters.funnel_rows == 0
     assert counters.pipeline_health_rows == 0

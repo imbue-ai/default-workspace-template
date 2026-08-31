@@ -2843,6 +2843,11 @@ dependencies = [
     { name = "websockets" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "imbue-mngr-behaviors" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "click" },
@@ -2863,6 +2868,9 @@ requires-dist = [
     { name = "starlette" },
     { name = "websockets", specifier = ">=13" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "imbue-mngr-behaviors", editable = "libs/mngr_behaviors" }]
 
 [[package]]
 name = "imbue-mngr-gcp"
