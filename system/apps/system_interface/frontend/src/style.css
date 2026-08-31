@@ -42,8 +42,13 @@
 :root {
   --c-bg: #fafaf8;
   --c-bg-sidebar: #f3f2ef;
-  --c-bg-hover: #edecea;
-  --c-bg-active: #e8e6e1;
+  /* State fills are translucent (like minds) rather than opaque hexes so they
+     stack: a control's hover tint over an already-tinted row reads one step
+     deeper, which is what keeps a hover-revealed control's own hover visible.
+     Alphas keep the previous rendered strength over white (was #edecea /
+     #e8e6e1); warmth comes from the surface underneath, not the tint. */
+  --c-fill-hover: rgb(0 0 0 / 0.07);
+  --c-fill-active: rgb(0 0 0 / 0.11);
   --c-bg-user-bubble: #ededed;
   --c-bg-composer: #ffffff;
   --c-bg-chat: #ffffff;
@@ -129,8 +134,8 @@
   --color-inverse: var(--c-inverse-surface);
   --color-inverse-hover: var(--c-inverse-surface-hover);
   /* fills: bg-fill-hover / bg-fill-active (control state tints) */
-  --color-fill-hover: var(--c-bg-hover);
-  --color-fill-active: var(--c-bg-active);
+  --color-fill-hover: var(--c-fill-hover);
+  --color-fill-active: var(--c-fill-active);
   /* accent / interactive */
   --color-accent: var(--c-accent);
   --color-accent-hover: var(--c-accent-hover);
@@ -806,7 +811,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .dockview-theme-light .dv-tabs-overflow-dropdown-default:hover {
-  background-color: var(--c-bg-hover);
+  background-color: var(--c-fill-hover);
   color: var(--c-text-primary);
 }
 
@@ -834,7 +839,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .dockview-theme-light .dv-tabs-overflow-container .dv-tab:hover {
-  background-color: var(--c-bg-hover);
+  background-color: var(--c-fill-hover);
 }
 
 .dockview-theme-light .dv-tabs-overflow-container .dv-tab.dv-active-tab .dv-default-tab-content {
@@ -968,7 +973,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .dockview-add-tab-button:hover {
-  background: var(--c-bg-hover);
+  background: var(--c-fill-hover);
   color: var(--c-text-primary);
 }
 
