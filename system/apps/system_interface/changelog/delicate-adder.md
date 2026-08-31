@@ -64,6 +64,14 @@ pixel-identical render.
   text colour; a genuinely secondary line opts into the muted colour at its own
   call site.
 
+- **Translucent state fills.** The hover/active fill tokens are translucent
+  black (`rgb(0 0 0 / 0.07)` / `0.11`, renamed `--c-fill-*` to match minds)
+  rather than opaque warm hexes, so nested tints stack: a hover-revealed
+  control's own hover tint over an already-tinted row now reads one step
+  deeper instead of disappearing into it (previously both were the same
+  opaque `#edecea`, making the rail's kebab/pin hover invisible). Alphas are
+  tuned to keep the previous rendered strength over white.
+
 - **Guidance (not enforced).** `frontend/style_guide.md` documents the
   convention (where styling goes, what stays CSS, the primitives, the Tailwind
   scanner's contiguous-literal rule). It is an optional convention for the
