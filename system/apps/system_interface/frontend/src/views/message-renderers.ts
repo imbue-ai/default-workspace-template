@@ -485,40 +485,43 @@ function renderThinkingDisclosure(event: AssistantMessageEvent, agentId: string)
   if (isExpanded) {
     requestEventDetail(agentId, event.event_id);
   }
-  const detail = isExpanded ? getEventDetailState(agentId, event.event_id) : undefined;
-  let body: m.Vnode | null = null;
-  if (isExpanded) {
-    if (detail?.state === "loaded") {
-      body = m("div", { class: "thinking-body" }, detail.detail.thinking ?? "");
-    } else if (detail?.state === "unavailable") {
-      body = m("div", { class: "thinking-body thinking-body--note" }, "No longer available");
-    } else {
-      body = m("div", { class: "thinking-body thinking-body--note" }, "Loading\u2026");
-    }
+  // The body is always in the DOM (CSS reveals it under --expanded), so the click
+  // handler's direct class toggle is all a collapse needs -- no re-render.
+  const detail = getEventDetailState(agentId, event.event_id);
+  let body: m.Vnode;
+  if (detail?.state === "loaded") {
+    body = m("div", { class: "thinking-body" }, detail.detail.thinking ?? "");
+  } else if (detail?.state === "unavailable") {
+    body = m("div", { class: "thinking-body thinking-body--note" }, "No longer available");
+  } else {
+    body = m("div", { class: "thinking-body thinking-body--note" }, "Loading\u2026");
   }
-  return m("div", { class: "thinking-disclosure" }, [
+  return m("div", { class: `thinking-disclosure${isExpanded ? " thinking-disclosure--expanded" : ""}` }, [
     m(
       "button",
       {
         type: "button",
-        class: `thinking-toggle${isExpanded ? " thinking-toggle--expanded" : ""}`,
-        onclick() {
-          if (setAndReturnToggled(expansionKey)) {
-            requestEventDetail(agentId, event.event_id);
+        class: "thinking-toggle",
+        onclick(e: Event) {
+          const disclosure = (e.currentTarget as HTMLElement).parentElement;
+          if (disclosure) {
+            // Toggle the DOM directly (memoized wrappers skip re-patching)
+            // AND record it so a fresh mount renders in the same state.
+            const nowExpanded = disclosure.classList.toggle("thinking-disclosure--expanded");
+            setBlockExpanded(expansionKey, nowExpanded);
+            if (nowExpanded) {
+              // Kick off the fetch; the redraw renders the loading note (or the
+              // cached text) into the just-revealed body.
+              requestEventDetail(agentId, event.event_id);
+              m.redraw();
+            }
           }
-          m.redraw();
         },
       },
       [m("span", { class: "tool-call-chevron" }, "\u25B8"), "thinking"],
     ),
     body,
   ]);
-}
-
-function setAndReturnToggled(expansionKey: string): boolean {
-  const next = !isBlockExpanded(expansionKey);
-  setBlockExpanded(expansionKey, next);
-  return next;
 }
 
 export function renderAssistantMessageChildren(

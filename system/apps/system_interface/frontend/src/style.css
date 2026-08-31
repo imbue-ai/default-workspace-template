@@ -1589,17 +1589,24 @@ body {
   opacity: 1;
 }
 
-.thinking-toggle--expanded .tool-call-chevron {
+.thinking-disclosure--expanded .tool-call-chevron {
   transform: rotate(90deg);
 }
 
+/* Always in the DOM, revealed by the class the click handler toggles directly --
+   the memoized message wrapper skips re-patching, so a collapse must not need one. */
 .thinking-body {
+  display: none;
   margin: 2px 0 6px;
   padding: 6px 10px;
   border-left: 2px solid var(--color-border);
   font-size: 13px;
   color: var(--color-text-secondary);
   white-space: pre-wrap;
+}
+
+.thinking-disclosure--expanded .thinking-body {
+  display: block;
 }
 
 .thinking-body--note {
