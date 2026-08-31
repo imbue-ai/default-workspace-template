@@ -9,6 +9,14 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# Pin $HOME to the image-build home. Several installers below follow $HOME (the
+# claude.ai installer, the uv installer, `uv python install` / `uv tool install`),
+# while the checks and PATH entries in this script are fixed to /root/.local. A
+# live re-provision (the update apply, or an agent running this by hand) runs
+# under HOME=/home/user -- root's passwd home at runtime -- so without this pin
+# the installers "succeed" into the wrong home and the version checks fail.
+export HOME=/root
+
 # Skip if this exact repo tree was already provisioned (e.g. baked into the image).
 . "$(dirname "$0")/_provision_guard.sh"
 provision_skip_if_done setup_system
@@ -30,8 +38,10 @@ else
         "$(cat /etc/default-workspace-template-apt-snapshot-timestamp)"
 fi
 
-# Pinned versions (single source of truth; override via env if needed). Keep
-# CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
+# Pinned versions (single source of truth; override via env if needed -- the
+# update apply's live re-run deliberately drops any *_VERSION it inherited, so
+# only an explicit by-hand override reaches here). Keep CLAUDE_CODE_VERSION in
+# sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
 : "${NODE_VERSION:=22.23.2}"
@@ -131,8 +141,18 @@ case "${restic_arch}" in
 esac
 curl -fsSL "${CURL_RETRY[@]}" "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${restic_goarch}.bz2" -o /tmp/restic.bz2
 echo "${restic_sha256}  /tmp/restic.bz2" | sha256sum -c -
-bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic
-chmod +x /usr/local/bin/restic
+# Decompress-then-rename, the same motion as install_downloaded_binary (which
+# cannot be used directly because of the bunzip2 step): a plain `bunzip2 -c >
+# /usr/local/bin/restic` truncates the binary in place, which fails with
+# ETXTBSY when the live host_backup service is executing it during a
+# re-provision. The temp file shares the destination directory so the mv is an
+# atomic same-filesystem rename.
+restic_tmp="$(mktemp /usr/local/bin/restic.XXXXXX)"
+# A failed decompress must not leave a partial binary beside the real one.
+trap 'rm -f "$restic_tmp"' EXIT
+bunzip2 -c /tmp/restic.bz2 > "$restic_tmp"
+chmod 0755 "$restic_tmp"
+mv -f "$restic_tmp" /usr/local/bin/restic
 rm /tmp/restic.bz2
 
 # ttyd (terminal-over-web) binary from GitHub releases (not in apt).
@@ -232,8 +252,7 @@ fi
 # /usr/local so node/npm/npx land on PATH). NOT the trixie apt nodejs (20.x): the
 # pi CLI ships an `undici` that calls `worker_threads.markAsUncloneable`, which is
 # absent on Node 20 and crashes pi at import -- so we pin Node 22 LTS. Installs like
-# gh/caddy/restic above: fixed version, checksummed download. Keep NODE_VERSION in
-# sync with the Dockerfile ARG.
+# gh/caddy/restic above: fixed version, checksummed download.
 node_arch="$(uname -m)"
 case "${node_arch}" in
     x86_64) node_goarch="x64"; node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" ;;
@@ -309,13 +328,18 @@ test -d /opt/pi-extensions/npm/node_modules
 # apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the
 # environment record under ~/.mngr/plugin/env-converge re-captures from dpkg's
 # own database -- zero agent cooperation required ("dpkg is truth"). The hook
-# no-ops during image builds and provisioning (no mngr host dir yet) and is
-# always best-effort: a capture failure must never break apt itself.
+# no-ops during image builds and provisioning (no mngr host dir yet) and on a
+# rootfs that has never completed a converge (no identity stamp -- there the
+# record is authoritative and about to be replayed, so a capture would clobber
+# it; the `env-converge capture` CLI applies the same guard, and this line
+# covers workspace checkouts that predate it). Always best-effort: a capture
+# failure must never break apt itself.
 cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 #!/bin/sh
 # Best-effort apt Post-Invoke hook: refresh the environment record.
 [ -d /home/user/.mngr ] || exit 0
 [ -d /home/user/workspace/system/services/env_converge ] || exit 0
+[ -e /var/lib/minds/env-converge/rootfs-id ] || exit 0
 cd /home/user/workspace || exit 0
 MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
 HOOK
@@ -386,6 +410,22 @@ if [ -f "$setup_dir/install_secret_scanners.sh" ]; then
     bash "$setup_dir/install_secret_scanners.sh"
 else
     bash "$setup_dir/default-workspace-template-install-secret-scanners"
+fi
+
+# owner-exec (the in-container exec daemon) and dufs (the file-viewer server),
+# each a pinned, sha256-verified static binary with its own idempotent installer.
+# Invoked from here rather than as their own Dockerfile layers so that a live
+# re-provision (the update apply) and a non-Docker provider get them too: this
+# script is the only provisioning path every provider shares.
+if [ -f "$setup_dir/install_owner_exec.sh" ]; then
+    bash "$setup_dir/install_owner_exec.sh"
+else
+    bash "$setup_dir/default-workspace-template-install-owner-exec"
+fi
+if [ -f "$setup_dir/install_dufs.sh" ]; then
+    bash "$setup_dir/install_dufs.sh"
+else
+    bash "$setup_dir/default-workspace-template-install-dufs"
 fi
 
 # Playwright + Chromium is deliberately NOT installed here; the deferred-install

@@ -19,11 +19,11 @@ import subprocess
 import urllib.request
 
 # Resolve the workspace server base URL the same way the repo's other loopback
-# posters do (system/scripts/layout.py, reveal_system_interface.py): honor the
-# MINDS_WORKSPACE_SERVER_URL override and default to the server's default bind
-# address (config.system_interface_host is 127.0.0.1). Using 127.0.0.1 rather
-# than "localhost" avoids an IPv6 (::1) resolution that the IPv4-only server
-# would refuse.
+# posters do (system/scripts/layout.py, the update-self skill's
+# scripts/update_self.py): honor the MINDS_WORKSPACE_SERVER_URL override and
+# default to the server's default bind address (config.system_interface_host is
+# 127.0.0.1). Using 127.0.0.1 rather than "localhost" avoids an IPv6 (::1)
+# resolution that the IPv4-only server would refuse.
 _DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 _WORKSPACE_URL = os.environ.get(
     "MINDS_WORKSPACE_SERVER_URL", _DEFAULT_WORKSPACE_URL

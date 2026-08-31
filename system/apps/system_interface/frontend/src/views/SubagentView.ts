@@ -3,16 +3,15 @@ import { apiUrl } from "../base-path";
 import type { TranscriptEvent, SubagentMetadata } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 import { parseJsonMessage } from "../models/ws-json";
-import { computeTranscriptSlices } from "../models/virtualWindow";
-import { OVERSCAN_PX } from "./row-measurement";
 import {
   buildConversationRows,
   isSubagentRunning,
+  MESSAGE_LIST_CLASS,
   renderTranscriptSegments,
   type RowDescriptor,
 } from "./conversation-rows";
-import { resolveSelectionRowRange } from "./scroll-selection";
-import { createTranscriptScroll } from "./transcript-scroll";
+import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
+import { TranscriptScrollbar } from "./TranscriptScrollbar";
 import { badgeClass } from "./components/Badge";
 
 interface SubagentViewAttrs {
@@ -34,18 +33,30 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   let loadingError: string | null = null;
   let eventSource: EventSource | null = null;
 
-  // Virtualization: only the viewport window (plus any selected rows) is rendered.
-  // The scroll-follow machinery -- tail following, native-anchoring stability, the
-  // drag/resize lifecycle and the row measurer -- lives in the shared controller.
-  const scroll = createTranscriptScroll();
   // Memoized rows. buildConversationRows walks the whole subagent transcript, so
   // it is recomputed only when the event set or idleness changes -- not on every
   // scroll redraw. The transcript is append-only here (no in-place upgrades, no
   // eviction), so the event count plus the idle flag is a sufficient cache key.
   let rowsCacheKey = "";
   let cachedRows: RowDescriptor[] = [];
-  // Row key -> index in cachedRows, for resolving a selection's DOM rows to pin.
-  let cachedKeyToIndex = new Map<string, number>();
+  // Monotonic version for the engine's geometry cache, bumped with the rows.
+  let rowsVersion = 0;
+
+  // The same scroll engine as the main chat, with an empty virtual layer: the
+  // whole subagent transcript is loaded, so the custom scrollbar is 100%
+  // physical (pixel-space) and the fill planner has nothing to fetch. No
+  // persistence key: a subagent tab always opens at the live tail.
+  const engine = createTranscriptScrollEngine({
+    isVisible: () => true,
+    dataSource: {
+      getRows: () => cachedRows,
+      getWindowEventIds: () => events.map((event) => event.event_id),
+      getFirstOffset: () => 0,
+      getTotalEvents: () => (loading ? null : events.length),
+      getRenderVersion: () => rowsVersion,
+      executeFill: () => Promise.resolve(),
+    },
+  });
 
   function addEvents(incoming: TranscriptEvent[]): boolean {
     let added = false;
@@ -127,31 +138,21 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       // subagent's conversation renders an identical progress timeline; only the
       // idle source differs (derived here rather than from activity_state).
       cachedRows = buildConversationRows(agentId, events, agentIsIdle);
-      cachedKeyToIndex = new Map(cachedRows.map((row, index) => [row.key, index]));
-      scroll.rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
+      rowsVersion += 1;
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
-    const getHeight = (index: number): number => scroll.rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
-    const effectiveViewportHeight =
-      scroll.viewportHeight > 0 ? scroll.viewportHeight : (scroll.scrollEl?.clientHeight ?? 2000);
-    // A live selection's rows are kept mounted as a (possibly disjoint) run so
-    // scrolling/streaming past them doesn't collapse the selection -- with no gap
-    // cap, since a disjoint run mounts only the selected rows, not those in between.
-    const { segments } = computeTranscriptSlices({
-      count: rows.length,
-      getHeight,
-      scrollTop: scroll.scrollTop,
-      viewportHeight: effectiveViewportHeight,
-      overscanPx: OVERSCAN_PX,
-      pinnedRange: resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex),
-    });
 
+    const plan = engine.computeRenderPlan();
     return m("div", { class: "message-list-wrapper" }, [
       m(
         "div",
-        { class: "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6" },
-        renderTranscriptSegments(rows, segments),
+        { class: MESSAGE_LIST_CLASS },
+        renderTranscriptSegments(rows, [
+          { kind: "spacer", height: plan.topPadPx },
+          { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
+          { kind: "spacer", height: plan.bottomPadPx },
+        ]),
       ),
     ]);
   }
@@ -159,6 +160,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   return {
     oninit(vnode) {
       const { agentId, subagentSessionId } = vnode.attrs;
+      engine.setAgent(null);
       fetchSubagentEvents(agentId, subagentSessionId).then(() => {
         connectToStream(agentId, subagentSessionId);
       });
@@ -166,7 +168,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
 
     onremove() {
       disconnectFromStream();
-      scroll.detach();
+      engine.detach();
     },
 
     view(vnode) {
@@ -209,27 +211,23 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
 
       return m("div", { class: "app-content-wrapper flex-1 flex flex-col min-h-0" }, [
         header,
-        m(
-          "main",
-          {
-            class: "app-content flex-1 overflow-y-auto bg-chat px-8 py-6",
-            onscroll: (event: Event) => scroll.onScroll(event),
-            onpointerdown: () => scroll.onPointerDown(),
-            oncreate: (mainVnode: m.VnodeDOM) => {
-              const element = mainVnode.dom as HTMLElement;
-              scroll.attach(element);
-              scroll.applyScrollPosition(element);
-              scroll.scheduleMeasure();
+        m("div", { class: "subagent-transcript-area relative flex-1 min-h-0 flex flex-col" }, [
+          m(
+            "main",
+            {
+              class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-8 py-6",
+              tabindex: 0,
+              oncreate: (mainVnode: m.VnodeDOM) => {
+                engine.afterRender(mainVnode.dom as HTMLElement);
+              },
+              onupdate: (mainVnode: m.VnodeDOM) => {
+                engine.afterRender(mainVnode.dom as HTMLElement);
+              },
             },
-            onupdate: (mainVnode: m.VnodeDOM) => {
-              const element = mainVnode.dom as HTMLElement;
-              scroll.attach(element);
-              scroll.applyScrollPosition(element);
-              scroll.scheduleMeasure();
-            },
-          },
-          content,
-        ),
+            content,
+          ),
+          m(TranscriptScrollbar, { engine }),
+        ]),
         // No footer/message input -- read-only
       ]);
     },

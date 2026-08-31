@@ -11,10 +11,14 @@
  * survives memoized redraws (StableAssistantMessage skips re-rendering, and a
  * re-render would reset vnode state). The children react to it through
  * `group-[.tool-call-block--expanded]/tool:*` variants, so the whole state
- * machine still lives in the markup.
+ * machine still lives in the markup. A caller that also passes `expansionKey`
+ * gets persistence across full unmounts too (virtualization evicting the row):
+ * the toggle is recorded in the session-scoped expansion store and a fresh
+ * mount renders back in the recorded state.
  */
 
 import m from "mithril";
+import { isBlockExpanded, setBlockExpanded } from "../expansion-state";
 
 /** The class names are bare markers (markdown.ts drives the same state class;
  *  the inspector reads them); the utilities beside them carry the look. */
@@ -60,9 +64,14 @@ export function renderToolBlock(options: {
   outputText?: string;
   isError?: boolean;
   extra?: string;
+  /** Stable identity in the expansion store (e.g. the tool call's id), so the
+   *  open state survives the row unmounting and remounting (virtualization)
+   *  or re-rendering (streaming). Omitted: open state is this-mount-only. */
+  expansionKey?: string;
 }): m.Vnode {
-  const { headerText, inputText = "", outputText = "", isError = false, extra = "" } = options;
-  return m("div", { class: `${BLOCK_CLASS} ${extra}`.trim() }, [
+  const { headerText, inputText = "", outputText = "", isError = false, extra = "", expansionKey } = options;
+  const startExpanded = expansionKey !== undefined && isBlockExpanded(expansionKey);
+  return m("div", { class: `${BLOCK_CLASS}${startExpanded ? " tool-call-block--expanded" : ""} ${extra}`.trim() }, [
     m(
       "div",
       {
@@ -70,7 +79,12 @@ export function renderToolBlock(options: {
         onclick(e: Event) {
           const block = (e.currentTarget as HTMLElement).parentElement;
           if (block) {
-            block.classList.toggle("tool-call-block--expanded");
+            // Toggle the DOM directly (memoized wrappers skip re-patching)
+            // AND record it so a fresh mount renders in the same state.
+            const isNowExpanded = block.classList.toggle("tool-call-block--expanded");
+            if (expansionKey !== undefined) {
+              setBlockExpanded(expansionKey, isNowExpanded);
+            }
           }
         },
       },
