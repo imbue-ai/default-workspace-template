@@ -37,7 +37,9 @@ pixel-identical render.
   `selected` -- the on/off toggle recipe that replaced the old `.toggle` -- and
   `readonly` for non-interactive-but-explained controls), plus `inputClass`
   (`components/Input.ts`), `badgeClass` (`components/Badge.ts`), a single CSS
-  `.spinner`, one shared collapsible tool block (`components/ToolCallBlock.ts`),
+  `.spinner`, one shared collapsible tool block (`components/ToolCallBlock.ts`;
+  its optional `expansionKey` records the open state in main's session-scoped
+  expansion store, so expansion survives virtualization remounts),
   the shared `Modal` shell and `NoticeDialog`, and one tooltip mechanism (the
   JS hover tooltip; the CSS `data-tooltip` bubble is gone). The bespoke
   per-feature buttons, badges, spinners, toggles, and tooltip bubbles across
