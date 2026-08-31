@@ -1320,6 +1320,11 @@ def _write_files_on_container(
                 raise paramiko.SSHException(f"writing {remote_path} failed (exit {exit_status}): {stderr_text}")
 
 
+def _share_chrome_origin() -> str:
+    """The hosted-chrome origin allowed to embed shared workspaces (empty disables it)."""
+    return os.environ.get("SHARE_CHROME_ORIGIN", "").strip().rstrip("/")
+
+
 @router.post("/hosts/{host_db_id}/enable-sharing")
 def enable_sharing(request: Request, host_db_id: UUID) -> dict[str, object]:
     """Bring sharing up for one of the caller's leased hosts, server-side.
@@ -1439,7 +1444,7 @@ def _enable_sharing_core(
         relay_token=relay_token,
         connector_url=base_url,
         broker_url=base_url,
-        chrome_origin=shares_module.share_chrome_origin(),
+        chrome_origin=_share_chrome_origin(),
     )
     grants_text = build_owner_grants_toml(user.email)
     try:
@@ -1587,8 +1592,8 @@ def _adopt_workspace_on_container(
 
     The connector-side port of the plugin's fast-path adopt (see
     ``mngr_imbue_cloud.providers.instance`` / ``hosts.host``): rewrite the
-    host record's placeholder ``host_name`` (the dwt system_interface reads
-    it as the workspace's name), stamp the minds labels on the pre-baked
+    host record's placeholder ``host_name`` (the dwt bootstrap reads it to
+    name the initial chat agent), stamp the minds labels on the pre-baked
     services agent, and write the connector URL into the host env file so
     everything on the host can reach this tier's connector. All writes go
     through SFTP (no shell quoting of user-controlled names).

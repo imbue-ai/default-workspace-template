@@ -278,18 +278,6 @@ def share_content_domain() -> str:
     return require_share_env("SHARE_CONTENT_DOMAIN")
 
 
-def share_chrome_origin() -> str:
-    """The tier's hosted web-chrome origin (e.g. ``https://minds.imbue.com``), or empty when none is configured.
-
-    Set by ``minds-admin env deploy`` from ``deploy.toml [origins].chrome_origin``
-    (falling back to the bare connector origin on web-workspace tiers without an
-    ``[origins]`` block). Reported on the share endpoints so desktop clients
-    stamp the same value into ``share.env`` that the server-side enable-sharing
-    path uses.
-    """
-    return os.environ.get("SHARE_CHROME_ORIGIN", "").strip().rstrip("/")
-
-
 def resolve_share_region(datacenter: str | None, eligible_regions: list[str], host_id: str) -> str:
     """Pick the region code for a fresh share: the host's datacenter's region when a relay serves it, else spread.
 
@@ -1109,10 +1097,6 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
             "region": region,
             "relay_endpoints": relay_endpoints,
             "relay_token": relay_token,
-            # The tier's hosted-chrome origin, for the client to stamp into
-            # share.env as SHARE_CHROME_ORIGIN (clients without it fall back to
-            # the connector origin). None when the tier has none configured.
-            "chrome_origin": share_chrome_origin() or None,
         }
 
 
@@ -1211,7 +1195,6 @@ def get_share_status(request: Request, host_id: str) -> dict[str, object]:
             "relays": relay_logins,
             "cert_not_after": cert_not_after,
             "entry_label": share.get("entry_label"),
-            "chrome_origin": share_chrome_origin() or None,
         }
 
 

@@ -1059,7 +1059,7 @@ def _bake_one_slice(
     Returns an outcome (never raises). ``bake_pool_host`` carves the VM (over
     SSH on the box, inside the slice provider) and bakes the shared container; the
     shared :func:`finalize_baked_pool_host` then hardens the container sshd and
-    clears the baked git identity over the slice (direct-SSH) transport. Any
+    tears down the bootstrap chat agent over the slice (direct-SSH) transport. Any
     failure once the VM exists rolls the VM back so it does not leak its box
     slot/ports (a ``mngr create`` failure is already rolled back by the provider).
     """
@@ -1114,10 +1114,11 @@ def _bake_one_slice(
                 wait_for_deferred_install(_slice_run_in_container, baked, host_name=host_name)
             # Stop the services agent so it lands in the pool STOPPED.
             # The fast-path lease then *starts* the adopted agent, which re-runs the
-            # DEFAULT_WORKSPACE_TEMPLATE bootstrap (it runs on every start, e.g.
-            # re-supplying the neutral git identity finalize unset above). Without
-            # this stop the agent stays running from bake through lease and the
-            # adopting user's boot-time setup never re-runs. We stop it inside the
+            # DEFAULT_WORKSPACE_TEMPLATE bootstrap -- and because finalize removed the initial-chat sentinel,
+            # the bootstrap re-creates the chat agent under the leasing user's
+            # workspace name. Without this stop the agent stays running from bake
+            # through lease, the one-shot bootstrap never re-runs, and the workspace
+            # hangs at "Waiting for initial chat agent...". We stop it inside the
             # container (the operator's mngr can't resolve the slice's in-memory
             # forwarded ports, so the OVH local-stop approach can't be reused here).
             stop_rc, _stop_out, stop_err = _slice_run_in_container(
