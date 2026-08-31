@@ -94,6 +94,7 @@ lead already pasted into the task body).
 from __future__ import annotations
 
 import argparse
+import functools
 import io
 import json
 import os
@@ -515,22 +516,34 @@ def launch(
     if lead_rc is not None:
         return lead_rc
 
-    runner.run(
-        [
-            "mngr",
-            "create",
-            name,
-            "-t",
-            template,
-            # Marks this as an agent-created (worker) agent so the OOM
-            # agent-tagging hook puts it in the worker-agent band -- shed before
-            # user-created agents (but after every agent's subprocesses) under
-            # memory pressure.
-            "--label",
-            "agent_created=true",
-        ],
-        check=True,
-    )
+    try:
+        runner.run(
+            [
+                "mngr",
+                "create",
+                name,
+                "-t",
+                template,
+                # Marks this as an agent-created (worker) agent so the OOM
+                # agent-tagging hook puts it in the worker-agent band -- shed
+                # before user-created agents (but after every agent's
+                # subprocesses) under memory pressure.
+                "--label",
+                "agent_created=true",
+            ],
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        # mngr's own refusals (a duplicate name the listing could not reveal,
+        # a dirty tree) are printed by mngr itself; the launch reports the
+        # failure in its own terms rather than as a traceback.
+        print(
+            f"create_worker: `mngr create {name}` failed with exit code "
+            f"{exc.returncode}; no worker was created. See mngr's output above "
+            "(a duplicate name is refused there).",
+            file=sys.stderr,
+        )
+        return 2
 
     rsync_dir(name, runtime_dir, runner)
     if artifacts_dir is not None:
@@ -594,16 +607,15 @@ def _worker_has_pending_shed(worker_name: str) -> bool:
     return has_pending_shed(worker_name)
 
 
-def _worker_is_idle(worker_name: str) -> bool:
-    """Whether the worker's agent has ended its turn (state WAITING/STOPPED).
+# The lifecycle state mngr reports after ``mngr stop``.
+_STOPPED_STATE = "STOPPED"
 
-    Queried from ``mngr list`` (the same source the lead's other liveness
-    checks use). Deliberately failure-tolerant: any query error answers
-    "not idle" so a transient mngr hiccup can never abort a healthy await --
-    the timeout remains the backstop.
-    """
+
+def _worker_state(worker_name: str, runner: Runner) -> str | None:
+    """The mngr lifecycle state of ``worker_name``, or ``None`` when no such
+    agent exists or the listing could not be read."""
     try:
-        result = subprocess.run(
+        result = runner.run(
             ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
             capture_output=True,
             text=True,
@@ -611,20 +623,30 @@ def _worker_is_idle(worker_name: str) -> bool:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    if result.returncode != 0:
-        return False
-    for line in result.stdout.splitlines():
+        return None
+    if getattr(result, "returncode", 0) != 0:
+        return None
+    for line in (getattr(result, "stdout", "") or "").splitlines():
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("resource_type") != "agent":
+        if record.get("resource_type") != "agent" or record.get("name") != worker_name:
             continue
-        if record.get("name") != worker_name:
-            continue
-        return record.get("state") in ("WAITING", "STOPPED")
-    return False
+        state = record.get("state")
+        return str(state) if state is not None else None
+    return None
+
+
+def _worker_is_idle(worker_name: str, runner: Runner) -> bool:
+    """Whether the worker's agent has ended its turn (state WAITING/STOPPED).
+
+    Queried from ``mngr list`` through ``runner`` (the same source the lead's
+    other liveness checks use). Deliberately failure-tolerant: any query error
+    answers "not idle" so a transient mngr hiccup can never abort a healthy
+    await -- the timeout remains the backstop.
+    """
+    return _worker_state(worker_name, runner) in ("WAITING", _STOPPED_STATE)
 
 
 def await_report(
@@ -875,7 +897,7 @@ def launch_sync(
         out=buffer,
         worker_name=name,
         pending_shed_check=_worker_has_pending_shed,
-        idle_check=_worker_is_idle,
+        idle_check=functools.partial(_worker_is_idle, runner=runner),
     )
     branch = f"mngr/{name}"
     if await_rc != 0:
@@ -948,7 +970,7 @@ def _run_await(args: argparse.Namespace) -> int:
         poll_interval_seconds=args.poll_interval,
         worker_name=args.name,
         pending_shed_check=_worker_has_pending_shed,
-        idle_check=_worker_is_idle,
+        idle_check=functools.partial(_worker_is_idle, runner=Runner()),
     )
 
 

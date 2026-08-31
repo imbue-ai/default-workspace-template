@@ -43,11 +43,11 @@ changes are not applied in place. The canonical flow is the
 `update-system-interface` agent skill: a change is delegated to a worker, tested
 in isolation (including Playwright against an isolated instance) and run through
 the review gates; then **previewed** to the user as a tab before merging; and,
-once approved, merged and revealed. See
+once approved, applied. See
 `.agents/skills/update-system-interface/SKILL.md`.
 
-The same `reveal_system_interface.py` script owns the deterministic setup/teardown
-on both sides of that user gate, as sub-commands:
+`reveal_system_interface.py` owns the deterministic preview setup/teardown, as
+sub-commands:
 
 - `preview --slug <name> --work-dir <worker-work-dir>` boots the worker's
   already-built work_dir (a local worktree-agent folder in this same container)
@@ -60,43 +60,49 @@ on both sides of that user gate, as sub-commands:
   `mngr ls --include 'name=="<name>"' --format json` -> `agents[0].work_dir`.)
 - `unpreview --slug <name>` tears that down -- kill both servers, deregister both
   services (idempotent).
-- `reveal --rollback-to <sha>` reveals the merged change (below).
 
-The reveal, after merge, is a single self-healing command. With the known-good
-revision captured before the merge (`ROLLBACK_TO=$(git rev-parse HEAD)`):
+Going live, after approval, is the general **update apply** -- shared with the
+`update-self` flow:
 
 ```bash
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal --rollback-to "$ROLLBACK_TO"
+python3 .agents/skills/update-self/scripts/update_self.py apply \
+    --merge-ref "mngr/update-<slug>" \
+    --worker-bundle "<work_dir>/system/apps/system_interface/imbue/system_interface/static"
 ```
 
-It classifies what changed and does only what is needed: refreshes dependencies
+It merges the worker's branch (capturing the rollback point internally),
+classifies what changed and does only what is needed: refreshes dependencies
 if a manifest changed (`npm ci`, plus the vendored mngr tool, the backend tool
 and the workspace venv -- the same environments `build_workspace.sh` builds),
-rebuilds the gitignored `static/` bundle (frontend), and/or
-pre-flights the merged code on a throwaway port before restarting the services
-agent so the editable backend re-imports the merged `.py` (backend). It then
-polls the loopback endpoint to confirm health and checks that the frontend
-really serves, and only after those does it ask every open view of the workspace
-to reload -- unconditionally, since a backend-only change leaves the open page
-rendering what it had already fetched, but last, so a reveal that regressed the
-frontend rolls back instead of asking every open view to reload into it. If
-anything fails, it restores the tree to `--rollback-to` as a forward revert
-commit, restores the bundle, restarts only if the failed reveal had already
-restarted the service, and re-confirms the UI is healthy -- so the served
-interface can never be left broken. The exit code reports the outcome (`0`
-revealed, `2` rolled back, `3` emergency, `1` precondition error).
+installs the worker's already-built `static/` bundle (live build as fallback),
+and/or pre-flights the merged code on a throwaway port before restarting the
+services agent so the editable backend re-imports the merged `.py` (backend).
+It then polls the loopback endpoint to confirm health and checks that the
+frontend really serves, and only after those does it ask every open view of the
+workspace to reload -- unconditionally, since a backend-only change leaves the
+open page rendering what it had already fetched, but last, so an apply that
+regressed the frontend rolls back instead of asking every open view to reload
+into it. If anything fails, it reverts the entire merge as a forward revert
+commit, restores the pre-apply snapshots, restarts only if the failed apply had
+already restarted the service, and re-confirms the UI is healthy -- so the
+served interface can never be left broken. The exit code reports the outcome
+(`0` applied, `2` rolled back, `3` emergency, `1` precondition error). A
+persistent marker under `data/.state/update-apply/` makes even a hard kill
+mid-apply recoverable (`update_self.py recover`, run automatically at boot and
+from a recovery cron).
 
-Two properties are load-bearing there. It **snapshots `static/` before anything
-destructive runs**, because both steps delete before they produce (`npm ci`
-removes `node_modules`; the build empties the bundle directory) -- so a rollback
-restores a *copy* rather than re-running the build that just failed, and a broken
-build environment cannot take the UI down with it. And it **checks that the
-frontend actually serves**, not just that the backend answers: the "not built"
-placeholder and an unserved `/assets` path are both HTTP 200s to `/api/agents`,
-so the probe confirms the app shell is the real app and that its module script
-comes back as JavaScript.
+Two properties are load-bearing there. It **snapshots `static/` (and the
+affected environments) before anything destructive runs**, because the
+destructive steps delete before they produce (`npm ci` removes `node_modules`;
+the build empties the bundle directory; the env refreshes rebuild the venv and
+tool environments) -- so a rollback restores a *copy* rather than re-running
+the build that just failed, and a broken build environment cannot take the UI
+down with it. And it **checks that the frontend actually serves**, not just
+that the backend answers: the "not built" placeholder and an unserved
+`/assets` path are both HTTP 200s to `/api/agents`, so the probe confirms the
+app shell is the real app and that its module script comes back as JavaScript.
 
-The reveal's reload of every open view is delegated to
+The apply's reload of every open view is delegated to
 `system/scripts/refresh_workspace_view.py`, the shared
 helper every flow that restarts the services agent uses. It fires two channels,
 because neither reaches every viewer: a `reload_system_interface` op, and the Minds
@@ -115,7 +121,7 @@ iframe/panel for arranging the workspace.
 ## When the bundle is missing
 
 `static/` is gitignored build output, produced at workspace creation
-(`system/scripts/build_workspace.sh`) and by the reveal above. Nothing rebuilds
+(`system/scripts/build_workspace.sh`) and by the apply above. Nothing rebuilds
 it at service start, so a code refresh that replaces the tree can leave the
 backend with nothing to serve. In that state `/` serves a placeholder, and
 because the placeholder is a string in the backend rather than part of the
@@ -197,13 +203,49 @@ there is no terminal to protect.
 Two things make that state recoverable rather than terminal. Every app-shell
 response carries an `X-Frontend-Built` header, so the placeholder is
 distinguishable from the real app without pattern-matching its markup -- that is
-what the reveal's frontend probe reads. And `/assets/<path>` is registered
+what the apply's frontend probe reads. And `/assets/<path>` is registered
 unconditionally rather than only when the bundle exists at startup: a route
 decided at construction time can never notice a bundle that appears later, and
 without it asset requests fall through to the SPA catch-all and come back as
 `index.html` with a `text/html` type, which the browser refuses as a module
 script -- a blank screen instead of the placeholder. A genuinely missing asset
 gets a plain 404.
+
+## When the served code is behind the tree
+
+A missing bundle is the loud version of a more general problem: an update lands
+by advancing the working tree, and this process only becomes consistent with it
+once it restarts into the merged code. The apply does both in one motion, but
+an interrupted apply, a failed apply whose rollback could not restore health,
+or a hand merge outside the flow can leave a live server rendering old code
+over new on-disk state -- silently, which is the shape the geebspace incident
+took.
+
+So the server says so. It records the tree HEAD it started from and, when the
+live tree has moved *in a way that affects what this process runs*, injects a
+`system-interface-update-staleness` meta tag into the built app shell, from
+which the frontend renders one dismissible informational line. Three values, checked in
+this order:
+
+- `update-emergency` when the apply's emergency record
+  (`data/.state/update-apply/emergency.json`) is present -- a rollback that
+  could not put a healthy workspace back. It outranks the other two because it
+  is the one state here that does not resolve itself, and the one neither of
+  them can see: that exit clears the marker, and its rollback has already put
+  the tree content back, so both would read as consistent.
+- `update-interrupted` when the apply's marker
+  (`data/.state/update-apply/marker.json`) is present.
+- `updated-not-activated` otherwise.
+
+"Affects what this process runs" is the whole design (see `update_staleness.py`
+for the rules and their test table). A bare HEAD comparison would show the
+banner near-permanently -- minds commit their ordinary work in this repo
+constantly, the apply's own version-history commit lands after the restart, and
+a frontend-only apply rebuilds the served bundle without restarting -- so the
+check diffs the startup HEAD against the current one and reports only when a
+changed path is backend code this process imports, a manifest its environment
+was resolved from, the vendored mngr, or `.mngr/settings.toml`. The banner
+informs only; acting on it stays with the agent.
 
 ## Projects
 
@@ -512,4 +554,10 @@ cd system/apps/system_interface/frontend
 npm run build
 ```
 
-This compiles the frontend into `imbue/system_interface/static/`.
+This compiles the frontend into `imbue/system_interface/static/`. The
+`postbuild` step stamps the output with `git rev-parse HEAD:./` -- the hash of
+the *committed* frontend tree, not of the files just built. A build from a
+frontend tree with uncommitted changes is stamped as its last commit, so the
+update apply's stamp check (which compares it against the merged tree) cannot
+tell that bundle from one built at that commit. Commit before building a
+bundle that will be handed to the apply.

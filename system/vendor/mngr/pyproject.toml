@@ -18,6 +18,12 @@ dependencies = [
 # fresh dep and break resolution. This only buys a detection delay;
 # it can't catch a compromise that stays undetected past the window.
 exclude-newer = "2026-07-20T00:00:00Z"
+# modal 1.5.4 (2026-08-12) is the first release carrying the MODAL_SANDBOX_V2
+# opt-in for Modal's V2 Sandbox backend, so it postdates the global cutoff -- but
+# it has been public well past the 2-week cooldown window. Override just this
+# package rather than advancing the global cutoff, which would adopt every dep's
+# newer releases at once.
+exclude-newer-package = { modal = "2026-08-13T00:00:00Z" }
 
 [tool.uv.sources]
 imbue-common = { workspace = true }
@@ -26,12 +32,12 @@ overlay = { workspace = true }
 [tool.uv.workspace]
 members = ["libs/*", "apps/*"]
 # apps/minds_evals is a standalone uv project with its own pyproject.toml and
-# uv.lock, not a workspace member. It depends on harbor, whose rich>=14.1.0 and
-# modal>=1.5.1 floors cannot co-resolve with this workspace's litellm[proxy]
-# (rich<14) and modal==1.4.3 pins -- uv enforces one version per package across
-# a workspace, so the only way harbor gets its declared dependencies is a
-# separate lock. It is built, tested, and type-checked by the `test-minds-evals`
-# CI job (see justfile's test-minds-evals); nothing here installs or collects it.
+# uv.lock, not a workspace member. It depends on harbor, whose rich>=14.1.0
+# floor cannot co-resolve with this workspace's litellm[proxy] (rich<14) -- uv
+# enforces one version per package across a workspace, so the only way harbor
+# gets its declared dependencies is a separate lock. It is built, tested, and
+# type-checked by the `test-minds-evals` CI job (see justfile's test-minds-evals);
+# nothing here installs or collects it.
 exclude = ["apps/minds_evals"]
 
 [dependency-groups]
@@ -50,6 +56,7 @@ dev = [
     "tomlkit>=0.12.0",
     "imbue-common[dev]",
     "shellcheck-py>=0.10.0",
+    "pyyaml>=6.0",
     # In-memory AWS service mocks for unit tests (S3 state-bucket round-trips).
     "moto[s3]>=5.0",
     # Validates the generated /api/schema OpenAPI document in minds tests.

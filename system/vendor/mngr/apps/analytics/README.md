@@ -18,7 +18,9 @@ A cron-only Modal app (`analytics-<env>`, no web endpoint):
   analytics ops DB, and views over the tier's OpenObserve log parquet -- then
   rewrites the gold tables: `activity` (per-account per-day signal counts,
   server-side and in-workspace signals alike; "active" is defined at query
-  time), `accounts`, `funnel_daily`, `pipeline_health`,
+  time), `client_versions_hourly` (per-account per-hour client-version
+  request counts from the `X-Imbue-Client` header, for watching release
+  rollouts), `accounts`, `funnel_daily`, `pipeline_health`,
   `transcript_daily`/`transcript_tools_daily` (derived from the transcripts
   lake without touching workspaces), and `collection_health`.
 - `collection_poll` (every 15 minutes): syncs explorer-plan membership into

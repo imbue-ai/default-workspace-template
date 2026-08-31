@@ -504,6 +504,11 @@ def _conftest_registers_plugin_test_fixtures(conftest_path: Path) -> bool:
     return False
 
 
+# Walks every subproject and AST-parses each of its conftest.py files; fast
+# locally but observed exceeding the default 10s pytest-timeout under CI load.
+# See test_no_import_layer_violations for the flaky/timeout rationale.
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_every_mngr_plugin_isolates_home_in_tests() -> None:
     """Ensure each mngr plugin pulls in mngr's shared test fixtures.
 
@@ -1495,4 +1500,4 @@ def test_prevent_workspace_vocabulary_in_mngr_level_code() -> None:
 def test_prevent_minds_references_in_mngr_level_code() -> None:
     """Keep minds / default-workspace-template references out of mngr-level code (count may only fall)."""
     chunks = _mngr_level_terminology_chunks(_PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE)
-    assert len(chunks) <= snapshot(352), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+    assert len(chunks) <= snapshot(348), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))

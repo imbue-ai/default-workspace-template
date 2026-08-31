@@ -108,6 +108,13 @@ ZO_HTTP_PORT="{OPENOBSERVE_HTTP_PORT}"
 ZO_TELEMETRY="false"
 ZO_MAX_FILE_RETENTION_TIME="{_MAX_FILE_RETENTION_TIME_SECONDS}"
 ZO_COMPACT_DATA_RETENTION_DAYS="{config.metrics_retention_days}"
+# warn, not the info default: the instance's own INFO chatter (per-ingest
+# access lines, tantivy/parquet job logs) re-enters the store through the
+# local collector's journald pipeline as the largest log stream by far.
+RUST_LOG="warn"
+# The parquet-merge job's DataFusion plan dumps are println-based (not
+# tracing), gated only by this flag -- which defaults to true.
+ZO_PRINT_KEY_SQL="false"
 """
 
 

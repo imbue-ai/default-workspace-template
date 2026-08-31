@@ -874,7 +874,7 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         1. ``toolUseId`` from each subagent's `<id>.meta.json`, which names the
            parent Agent tool_use directly. Written at spawn time, so it links
            running subagents immediately. Emitted by the pinned Claude Code
-           version (see CLAUDE_CODE_VERSION in the Dockerfile).
+           version (see CLAUDE_CODE_VERSION in system/scripts/setup_system.sh).
 
         2. ``subagent_id`` from the parent's tool_result (structured
            `toolUseResult.agentId` or the legacy `agentId:` trailer), accumulated

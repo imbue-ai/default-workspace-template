@@ -29,6 +29,7 @@ import { ClaudeLoginModal } from "./ClaudeLoginModal";
 import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
 import { FastModeModal } from "./FastModeModal";
 import { Sidebar } from "./Sidebar";
+import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import type { AppEntry } from "../models/AgentManager";
 import { checkAuthStatusOnLoad, isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
@@ -51,6 +52,11 @@ export function App(): m.Component {
         // title bar, so there is no title-bar height to subtract here.
         { class: "app-layout flex h-screen flex-col" },
         [
+          // Present only when the workspace's code has moved under this
+          // interface: a failed update's rollback could not restore it, an
+          // update apply was interrupted, or the tree advanced without a
+          // restart into it; see the component.
+          m(UpdateStalenessBanner),
           // The whole content area is one grey surface with the rail sitting on
           // it, directly left of the dock. Which view you are in is said by the
           // rail's own header now, so there is no bar above this row.

@@ -6,8 +6,9 @@ in production also runs in tests against local fixtures.
 
 Idempotency model:
 
-- ``activity`` is windowed: each run deletes and recomputes the trailing
-  window, so late-arriving log parquet and missed runs heal themselves.
+- ``activity`` and ``client_versions_hourly`` are windowed: each run deletes
+  and recomputes the trailing window, so late-arriving log parquet and missed
+  runs heal themselves.
 - The dimension and small fact tables (``accounts``, ``funnel_daily``,
   ``pipeline_health``) are fully rewritten each run -- they are tiny, and a
   full rewrite is the simplest idempotent shape.
@@ -39,6 +40,38 @@ _GOLD_SCHEMA_STATEMENTS = (
         " signal_count BIGINT"
         ")"
     ),
+    # The signup dimension statically backfilled from SuperTokens on shared
+    # tiers (docs/bringup.md section 7). Ensured here so the signup-timestamp
+    # coalesce below always has the table to read; where no backfill ran (dev
+    # envs, tests) it stays empty and attribution alone supplies signups.
+    "CREATE TABLE IF NOT EXISTS metrics.gold.accounts_signup (account_id VARCHAR, joined_at TIMESTAMPTZ)",
+    (
+        "CREATE TABLE IF NOT EXISTS metrics.gold.client_versions_hourly ("
+        " account_id VARCHAR,"
+        " hour TIMESTAMPTZ,"
+        " imbue_client VARCHAR,"
+        " request_count BIGINT"
+        ")"
+    ),
+)
+
+# The signup-timestamp rule (docs/bringup.md section 7): SuperTokens truth
+# where the static backfill has it, attribution otherwise. account_attribution
+# is written at account creation on every path since 2026-08-17, so the union
+# covers accounts created after the backfill.
+_SIGNUP_MOMENTS_SUBQUERY = (
+    "SELECT account_id, joined_at AS signup_at FROM metrics.gold.accounts_signup"
+    " UNION ALL"
+    " SELECT user_id AS account_id, created_at AS signup_at FROM rsc.account_attribution"
+    " WHERE user_id NOT IN (SELECT account_id FROM metrics.gold.accounts_signup)"
+)
+
+# Every account id any signup-shaped source knows: the spine for the accounts
+# dimension and for mapping share labels back to full SuperTokens ids.
+_ACCOUNT_ID_SPINE_SUBQUERY = (
+    "SELECT account_id FROM metrics.gold.accounts_signup"
+    " UNION SELECT user_id AS account_id FROM rsc.account_entitlements"
+    " UNION SELECT user_id AS account_id FROM rsc.account_attribution"
 )
 
 # Each activity signal is one SELECT producing (account_id, day, signal_type,
@@ -74,12 +107,27 @@ _ACTIVITY_SIGNAL_SELECTS = (
         " WHERE CAST(created_at AS DATE) >= DATE {window_start}"
         " GROUP BY 1, 2"
     ),
-    # Account creation.
+    # Account creation, on the coalesced signup timestamp (see
+    # _SIGNUP_MOMENTS_SUBQUERY).
     (
-        "SELECT user_id AS account_id, CAST(created_at AS DATE) AS day, 'signup' AS signal_type,"
+        "SELECT account_id, CAST(signup_at AS DATE) AS day, 'signup' AS signal_type,"
         " count(*) AS signal_count"
-        " FROM rsc.account_attribution"
-        " WHERE CAST(created_at AS DATE) >= DATE {window_start}"
+        " FROM (" + _SIGNUP_MOMENTS_SUBQUERY + ")"
+        " WHERE CAST(signup_at AS DATE) >= DATE {window_start}"
+        " GROUP BY 1, 2"
+    ),
+    # Enabling sharing for a workspace. shares.user_id stores the 32-hex share
+    # label (the SuperTokens id lowercased with hyphens stripped -- the
+    # connector's derive_share_user_label), so it maps back to the full id
+    # through the known-account spine. created_at marks the first enablement;
+    # re-shares only rotate the token and touch updated_at.
+    (
+        "SELECT ids.account_id, CAST(shares.created_at AS DATE) AS day, 'share_enabled' AS signal_type,"
+        " count(*) AS signal_count"
+        " FROM rsc.shares AS shares"
+        " JOIN (" + _ACCOUNT_ID_SPINE_SUBQUERY + ") AS ids"
+        "  ON replace(lower(ids.account_id), '-', '') = shares.user_id"
+        " WHERE CAST(shares.created_at AS DATE) >= DATE {window_start}"
         " GROUP BY 1, 2"
     ),
     # Explorer in-workspace signals (collected feeds; distinct event ids so
@@ -92,13 +140,23 @@ _ACTIVITY_SIGNAL_SELECTS = (
         " AND CAST(event_at AS DATE) >= DATE {window_start}"
         " GROUP BY 1, 2"
     ),
-    # Git commits landing in explorer workspaces.
+    # Git commits landing in explorer workspaces. The signal means new code
+    # produced IN the workspace, but every workspace clone carries the
+    # template repo's commit history (and update-self pulls more of it), so a
+    # commit sha seen in more than one workspace is upstream history, not the
+    # user's work. The multi-workspace scan is deliberately unwindowed:
+    # template commits dated inside the window stay excluded.
     (
         "SELECT account_id, CAST(event_at AS DATE) AS day, 'workspace_git_commit' AS signal_type,"
         " count(DISTINCT event_id) AS signal_count"
         " FROM metrics.raw.workspace_events"
         " WHERE feed_source = 'git_numstat' AND event_type = 'git_commit'"
         " AND CAST(event_at AS DATE) >= DATE {window_start}"
+        " AND event_id IN ("
+        "  SELECT event_id FROM metrics.raw.workspace_events"
+        "  WHERE feed_source = 'git_numstat'"
+        "  GROUP BY event_id HAVING count(DISTINCT host_id) = 1"
+        " )"
         " GROUP BY 1, 2"
     ),
     # User messages in collected (redacted) transcripts -- the calibration
@@ -113,35 +171,81 @@ _ACTIVITY_SIGNAL_SELECTS = (
     ),
 )
 
-_ACCOUNTS_STATEMENT = (
-    "CREATE OR REPLACE TABLE metrics.gold.accounts AS"
-    " SELECT user_id AS account_id, plan_name AS plan, created_at, updated_at"
-    " FROM rsc.account_entitlements"
+# The fleet-version picture: which client version each account's requests
+# carried, hour by hour, so a release rollout (or a staged-rollout halt) is
+# observable as it happens. The desktop client polls sync endpoints about
+# once a minute while it runs, so any hour a client was open is represented.
+# The raw ``X-Imbue-Client`` identifier is kept verbatim (e.g. "minds/0.4.2
+# imbue-cloud-plugin/0.1.6"); parsing out the product version is a query-time
+# decision, like the "active" cut. Lines without the header (clients older
+# than minds 0.4.1, and pre-header log history) land in the '' bucket rather
+# than being dropped, so the unversioned share of the fleet stays visible.
+_CLIENT_VERSIONS_HOURLY_SELECT = (
+    "SELECT user_id AS account_id,"
+    " date_trunc('hour', line_at) AS hour,"
+    " coalesce(imbue_client, '') AS imbue_client,"
+    " count(*) AS request_count"
+    " FROM logs.http_requests"
+    " WHERE user_id IS NOT NULL AND user_id != ''"
+    " AND CAST(line_at AS DATE) >= DATE {window_start}"
+    " GROUP BY 1, 2, 3"
 )
 
+# The account dimension spans every id any signup source knows, not just the
+# lazily-created entitlements rows: plan is NULL until the account's first
+# quota-relevant request creates its entitlements row, signup_at follows the
+# section-7 coalesce rule (entitlements.created_at is the lazy-creation
+# moment, not the signup), and is_suspended lets reports exclude
+# operator-suspended accounts at query time.
+_ACCOUNTS_STATEMENT = (
+    "CREATE OR REPLACE TABLE metrics.gold.accounts AS"
+    " WITH ids AS (" + _ACCOUNT_ID_SPINE_SUBQUERY + ")"
+    " SELECT ids.account_id,"
+    "  entitlements.plan_name AS plan,"
+    "  coalesce(signup.joined_at, attribution.created_at) AS signup_at,"
+    "  entitlements.suspended_at IS NOT NULL AS is_suspended,"
+    "  entitlements.created_at AS entitlements_created_at,"
+    "  entitlements.updated_at AS entitlements_updated_at"
+    " FROM ids"
+    " LEFT JOIN metrics.gold.accounts_signup AS signup ON signup.account_id = ids.account_id"
+    " LEFT JOIN rsc.account_entitlements AS entitlements ON entitlements.user_id = ids.account_id"
+    " LEFT JOIN rsc.account_attribution AS attribution ON attribution.user_id = ids.account_id"
+    " ORDER BY ids.account_id"
+)
+
+# The funnel is written over a full day spine (first source day through last),
+# so days where nothing happened appear as zeros instead of silent gaps.
 _FUNNEL_STATEMENT = (
     "CREATE OR REPLACE TABLE metrics.gold.funnel_daily AS"
     " WITH downloads AS ("
     "  SELECT CAST(created_at AS DATE) AS day, count(*) AS downloads"
     "  FROM rsc.download_events GROUP BY 1"
     " ), signups AS ("
-    "  SELECT CAST(created_at AS DATE) AS day, count(*) AS signups"
-    "  FROM rsc.account_attribution GROUP BY 1"
+    "  SELECT CAST(signup_at AS DATE) AS day, count(*) AS signups"
+    "  FROM (" + _SIGNUP_MOMENTS_SUBQUERY + ") GROUP BY 1"
     " ), first_workspaces AS ("
     "  SELECT first_day AS day, count(*) AS first_workspaces FROM ("
     "   SELECT user_id, CAST(min(created_at) AS DATE) AS first_day"
     "   FROM rsc.workspace_records GROUP BY 1"
     "  ) GROUP BY 1"
+    " ), bounds AS ("
+    "  SELECT min(day) AS min_day, max(day) AS max_day FROM ("
+    "   SELECT day FROM downloads"
+    "   UNION ALL SELECT day FROM signups"
+    "   UNION ALL SELECT day FROM first_workspaces"
+    "  )"
+    " ), days AS ("
+    "  SELECT CAST(unnest(generate_series(min_day, max_day, INTERVAL 1 DAY)) AS DATE) AS day"
+    "  FROM bounds WHERE min_day IS NOT NULL"
     " )"
-    " SELECT"
-    "  coalesce(downloads.day, signups.day, first_workspaces.day) AS day,"
+    " SELECT days.day,"
     "  coalesce(downloads.downloads, 0) AS downloads,"
     "  coalesce(signups.signups, 0) AS signups,"
     "  coalesce(first_workspaces.first_workspaces, 0) AS first_workspaces"
-    " FROM downloads"
-    " FULL OUTER JOIN signups ON signups.day = downloads.day"
-    " FULL OUTER JOIN first_workspaces"
-    "  ON first_workspaces.day = coalesce(downloads.day, signups.day)"
+    " FROM days"
+    " LEFT JOIN downloads USING (day)"
+    " LEFT JOIN signups USING (day)"
+    " LEFT JOIN first_workspaces USING (day)"
     " ORDER BY day"
 )
 
@@ -244,6 +348,7 @@ class AggregationCounters(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     activity_rows: int = Field(description="Rows in the recomputed activity window")
+    client_version_rows: int = Field(description="Rows in the recomputed client_versions_hourly window")
     account_rows: int = Field(description="Rows in the accounts dimension")
     funnel_rows: int = Field(description="Rows in funnel_daily")
     pipeline_health_rows: int = Field(description="Rows in pipeline_health")
@@ -263,10 +368,21 @@ def build_activity_statements(window_start: date) -> list[str]:
     ]
 
 
+def build_client_versions_statements(window_start: date) -> list[str]:
+    """The windowed delete-and-recompute for the client_versions_hourly table."""
+    window_literal = f"'{window_start.isoformat()}'"
+    return [
+        f"DELETE FROM metrics.gold.client_versions_hourly WHERE hour >= DATE {window_literal}",
+        "INSERT INTO metrics.gold.client_versions_hourly "
+        + _CLIENT_VERSIONS_HOURLY_SELECT.format(window_start=window_literal),
+    ]
+
+
 def build_aggregation_statements(window_start: date) -> list[str]:
     return [
         *_GOLD_SCHEMA_STATEMENTS,
         *build_activity_statements(window_start),
+        *build_client_versions_statements(window_start),
         _ACCOUNTS_STATEMENT,
         _FUNNEL_STATEMENT,
         _PIPELINE_HEALTH_STATEMENT,
@@ -295,6 +411,7 @@ def run_aggregation(connection: Any, window_start: date) -> AggregationCounters:
             raise AggregationError(f"Aggregation statement failed: {statement[:120]}...") from e
     return AggregationCounters(
         activity_rows=_count_rows(connection, "metrics.gold.activity"),
+        client_version_rows=_count_rows(connection, "metrics.gold.client_versions_hourly"),
         account_rows=_count_rows(connection, "metrics.gold.accounts"),
         funnel_rows=_count_rows(connection, "metrics.gold.funnel_daily"),
         pipeline_health_rows=_count_rows(connection, "metrics.gold.pipeline_health"),

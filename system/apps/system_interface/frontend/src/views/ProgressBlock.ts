@@ -13,6 +13,7 @@
 
 import m from "mithril";
 import { MarkdownContent, renderMarkdown } from "../markdown";
+import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import type { ToolResultEvent, AssistantMessageEvent } from "../models/Response";
 import {
   renderAssistantMessage,
@@ -117,14 +118,15 @@ function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolRes
 }
 
 export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
-  // Per-step expand state, keyed by ticket_id. Each section mounts its own
-  // ProgressBlock instance (keyed by section), so a carryover step rendered in
-  // two turns holds independent expand state with no collision.
-  const expanded = new Set<string>();
+  // Per-step expand state lives in the shared in-memory expansion store, keyed
+  // by section id + ticket_id: component state would be lost every time the
+  // virtualized window unmounts and remounts this block (collapsing what the
+  // user opened, and snapping the row height -- a visible jump). The section id
+  // in the key keeps a carryover step rendered in two turns independent.
+  let blockKeyPrefix = "";
 
-  function toggle(ticket_id: string): void {
-    if (expanded.has(ticket_id)) expanded.delete(ticket_id);
-    else expanded.add(ticket_id);
+  function stepKey(ticket_id: string): string {
+    return `step:${blockKeyPrefix}:${ticket_id}`;
   }
 
   function renderStepNode(
@@ -134,7 +136,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
     agentId: string,
   ): m.Vnode {
     const canExpand = step.events.length > 0;
-    const isExpanded = expanded.has(step.ticket_id);
+    const isExpanded = isBlockExpanded(stepKey(step.ticket_id));
     // The status/step modifiers are bare markers (the status look is resolved
     // in code -- see TITLE_CLASS and statusIcon); the padding caps the thread
     // on the last node.
@@ -160,7 +162,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             type: "button",
             class: TITLE_CLASS,
             disabled: !canExpand,
-            onclick: canExpand ? () => toggle(step.ticket_id) : undefined,
+            onclick: canExpand ? () => toggleBlockExpanded(stepKey(step.ticket_id)) : undefined,
           },
           [
             step.title,
@@ -186,6 +188,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
   return {
     view(vnode) {
       const { items, trailing_reply, toolResults, agentId, id } = vnode.attrs;
+      blockKeyPrefix = id ?? "";
 
       // Index of the last step item, so only it gets the `--last` thread cap.
       let lastStepIdx = -1;
@@ -254,7 +257,11 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
                 m(
                   "div",
                   { class: "pv-final mt-4 text-(length:--font-size-body) leading-normal text-primary" },
-                  m(MarkdownContent, { content: ev.text ?? "", requestedAt: ev.timestamp }),
+                  m(MarkdownContent, {
+                    content: ev.text ?? "",
+                    requestedAt: ev.timestamp,
+                    expansionKeyPrefix: ev.event_id,
+                  }),
                 ),
               )
             : null,

@@ -12,15 +12,20 @@ filenames, their sizes, and their sha512 digests. Promoting a channel copies
 that manifest, rewrites its relative ``url:`` fields to absolute ones pointing
 back at ToDesktop's CDN, and uploads the result as ``<channel>-mac.yml``.
 
-So the artifacts are never re-hosted and the digests are never recomputed: the
-bytes a channel serves are the exact bytes ToDesktop signed and notarized. One
-manifest lists every arch and the client picks, which is why promoting a channel
-uploads one file rather than four. Every channel goes through this, ``stable``
-included.
+So the artifacts are never re-hosted and the digests are never recomputed: a
+channel serves the same signed, notarized bytes ToDesktop does, from ToDesktop's
+own CDN. The manifest itself is unsigned -- it is what tells the client which
+digest to expect, so whoever can write the bucket decides that, and access to the
+bucket is the only thing protecting it. One manifest lists every arch and the
+client picks, which is why promoting a channel uploads one file rather than four.
+Every channel goes through this, ``stable`` included.
 
-The gates below guard the write because both failures are otherwise silent -- a
-channel moving backwards, and a build whose pre-baked Lima image is missing,
-which turns every create into a slow in-VM build without anything turning red.
+The gates below guard the write because the failures they catch are otherwise
+silent: a build whose pre-baked Lima image is missing turns every create into a
+slow in-VM build without anything turning red, and an artifact url that loses its
+extension stops being the one electron-updater selects. A channel moving
+backwards is reported rather than refused -- it changes what a new download gets
+and moves nobody who already has the newer build.
 """
 
 import json
@@ -30,12 +35,18 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Iterator
+from collections.abc import Mapping
+from typing import Annotated
 from typing import Any
 from typing import Final
 
-import click
+import yaml
 from botocore.exceptions import ClientError
+from pydantic import Field
+from pydantic import StrictInt
+from pydantic import TypeAdapter
+from pydantic import ValidationError
 
 from scripts.r2.client import read_r2_credentials
 from scripts.r2.client import s3_client
@@ -52,17 +63,35 @@ _REQUIRED_EXTENSIONS: Final[tuple[str, ...]] = (".zip", ".dmg")
 
 _VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^\d+\.\d+\.\d+$")
 
+# electron-updater yaml's key name for the rollout, not the staging tier.
+_ROLLOUT_KEY: Final[str] = "stagingPercentage"
+
+_REFERENCE_KEYS: Final[frozenset[str]] = frozenset({"url", "path"})
+
+# What electron-updater serves when the key is absent or null.
+FULL_ROLLOUT_PERCENTAGE: Final[int] = 100
+
+RolloutPercentage = Annotated[StrictInt, Field(ge=0, le=FULL_ROLLOUT_PERCENTAGE)]
+_ROLLOUT_PERCENTAGE = TypeAdapter(RolloutPercentage)
+
 
 class PromotionError(Exception):
     """A promotion refused before writing anything."""
 
 
-@dataclass(frozen=True)
-class Manifest:
-    """A parsed electron-updater channel manifest."""
+# We start from ToDesktop's manifest (binary url, sha, etc.),
+# make modifications (resolve the relative urls, add the rollout percentage, etc.) and then publish to r2 bucket.
+Manifest = Mapping[str, Any]
 
-    version: str
-    text: str
+
+def version_of(manifest: Manifest) -> str:
+    """Guaranteed present: ``parse_manifest`` is the only way one is read in."""
+    return str(manifest["version"])
+
+
+def render(manifest: Manifest) -> str:
+    """The document as the client will read it."""
+    return yaml.dump(dict(manifest), sort_keys=False)
 
 
 def channel_filename(channel: str) -> str:
@@ -70,8 +99,8 @@ def channel_filename(channel: str) -> str:
 
     One definition for the read and the write, because a drift between them is
     silent both ways: the promotion writes an object no client ever fetches, and
-    the rollback gate reads a name nothing publishes, finds nothing, and waves
-    every move through as a first publish.
+    the read of what a channel serves asks for a name nothing publishes, finds
+    nothing, and reports every move as a first publish.
     """
     return f"{channel}-mac.yml"
 
@@ -97,17 +126,22 @@ def fetch_build_manifest(app_id: str, build_id: str, fetch: Fetch = http_get) ->
         raise PromotionError(f"Cannot reach {url}: {exc.reason}.") from exc
 
 
-def parse_version(manifest_text: str, source: str) -> str:
+def parse_manifest(manifest_text: str, source: str) -> Manifest:
     """``source`` names the document, because two different ones reach here.
 
     ToDesktop's build manifest and the channel's own manifest fail identically
     otherwise, and they mean different things: pick another build, versus the
     feed bucket holds something the publish path should never have written.
     """
-    for line in manifest_text.splitlines():
-        if line.startswith("version:"):
-            return line.split(":", 1)[1].strip()
-    raise PromotionError(f"{source} has no `version:` line.")
+    try:
+        document = yaml.safe_load(manifest_text)
+    except yaml.YAMLError as exc:
+        raise PromotionError(f"{source} is not valid YAML: {exc}.") from exc
+    if not isinstance(document, dict):
+        raise PromotionError(f"{source} is not a YAML mapping.")
+    if "version" not in document:
+        raise PromotionError(f"{source} has no `version:` key.")
+    return document
 
 
 def rewrite_manifest(manifest_text: str, app_id: str) -> Manifest:
@@ -117,31 +151,74 @@ def rewrite_manifest(manifest_text: str, app_id: str) -> Manifest:
     the manifest wins over the feed's own base -- which is what lets a manifest
     we host point at artifacts ToDesktop hosts.
     """
+    manifest = parse_manifest(manifest_text, "ToDesktop's build manifest")
     base = f"{TODESKTOP_FEED}/{app_id}/"
-    rewritten: list[str] = []
-    seen_artifact = False
-    for line in manifest_text.splitlines():
-        match = re.match(r"^(\s*(?:-\s+)?(?:url|path):\s*)(\S.*)$", line)
-        if match is None:
-            rewritten.append(line)
-            continue
-        prefix, value = match.groups()
-        value = value.strip()
-        if value.startswith("http://") or value.startswith("https://"):
-            absolute = value
-        else:
-            absolute = base + urllib.parse.quote(value)
-        if not absolute.lower().endswith(_REQUIRED_EXTENSIONS):
-            raise PromotionError(
-                f"Refusing to publish {absolute!r}: electron-updater selects the macOS artifact by "
-                f"URL extension, so every url must end in one of {_REQUIRED_EXTENSIONS}."
-            )
-        seen_artifact = True
-        rewritten.append(prefix + absolute)
-    if not seen_artifact:
+    document = _with_absolute_references(manifest, base)
+    if not list(_references(document)):
         raise PromotionError("Manifest lists no artifacts.")
-    text = "\n".join(rewritten) + "\n"
-    return Manifest(version=parse_version(text, "ToDesktop's build manifest"), text=text)
+    return document
+
+
+def _with_absolute_references(node: Any, base: str) -> Any:
+    """Every ``url`` and ``path`` made absolute, at whatever depth it sits."""
+    if isinstance(node, dict):
+        return {
+            key: _absolute_reference(value, base)
+            if key in _REFERENCE_KEYS and isinstance(value, str)
+            else _with_absolute_references(value, base)
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_with_absolute_references(item, base) for item in node]
+    return node
+
+
+def _references(node: Any) -> Iterator[str]:
+    """Every ``url`` and ``path`` the document names, at whatever depth it sits."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _REFERENCE_KEYS and isinstance(value, str):
+                yield value
+            else:
+                yield from _references(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _references(item)
+
+
+def _absolute_reference(value: str, base: str) -> str:
+    absolute = value if value.startswith(("http://", "https://")) else base + urllib.parse.quote(value)
+    if not absolute.lower().endswith(_REQUIRED_EXTENSIONS):
+        raise PromotionError(
+            f"Refusing to publish {absolute!r}: electron-updater selects the macOS artifact by "
+            f"URL extension, so every url must end in one of {_REQUIRED_EXTENSIONS}."
+        )
+    return absolute
+
+
+def read_rollout_percentage(manifest: Manifest, source: str) -> int | None:
+    """The rollout percentage a manifest declares, or None when it declares none.
+
+    Every manifest published before rollouts existed reads as None. ``source``
+    names the object, because one run reads three of them and the refusal below
+    asks for a hand edit to whichever one it was.
+    """
+    declared = manifest.get(_ROLLOUT_KEY)
+    if declared is None:
+        return None
+    try:
+        return _ROLLOUT_PERCENTAGE.validate_python(declared)
+    except ValidationError as exc:
+        raise PromotionError(
+            f"{source} declares {_ROLLOUT_KEY} {declared!r}, which is not a rollout percentage: "
+            f"{exc.errors()[0]['msg'].lower()}. electron-updater refuses none of these -- a non-numeric value "
+            f"reaches everyone and a float truncates. Fix the object in the bucket by hand."
+        ) from exc
+
+
+def with_rollout_percentage(manifest: Manifest, percentage: int) -> Manifest:
+    """Declare the rollout percentage, replacing whatever the build manifest carried."""
+    return {**manifest, _ROLLOUT_KEY: percentage}
 
 
 def assert_lima_image_published(
@@ -204,25 +281,28 @@ def read_channel_manifest_from_feed(feed_base_url: str, channel: str, fetch: Fet
         # Never mistake an unreachable feed for "nothing published yet": that
         # would turn a network blip into an unguarded overwrite.
         raise PromotionError(f"Cannot reach {url} to read the current {channel} version: {exc.reason}.") from exc
-    return Manifest(version=parse_version(text, url), text=text)
+    return parse_manifest(text, url)
 
 
-def assert_not_a_rollback(channel: str, current: str | None, incoming: str, allow_rollback: bool) -> None:
-    # Keyed before the never-published early return, because _version_key is
-    # also where the plain-X.Y.Z rule is enforced, and it applies to a channel's
-    # first publish exactly as much as to its tenth.
-    incoming_key = _version_key(incoming)
+def assert_plain_release_version(version: str) -> None:
+    """A version is stamped once at cut, so promotion is a pointer move.
+
+    A prerelease suffix means the promoted build would have to be rebuilt under a
+    new version -- and then the bytes that soaked are not the bytes that ship.
+    """
+    _version_key(version)
+
+
+def is_a_version_decrease(current: str | None, incoming: str) -> bool:
+    """Whether this moves a channel to an older version, which is a supported move.
+
+    Nobody is pulled back: ``allowDowngrade`` is false, so an install that took
+    the newer version stays there until a release passes it. What it changes is
+    what a *new* download gets.
+    """
     if current is None:
-        return
-    if incoming_key >= _version_key(current):
-        return
-    if not allow_rollback:
-        raise PromotionError(
-            f"{channel} currently serves {current} and this would move it back to {incoming}. "
-            f"Pass --allow-rollback if you mean to withdraw a build. Note that users who already "
-            f"took {current} stay on it -- allowDowngrade is false -- so this only stops new installs."
-        )
-    click.echo(f"Rolling {channel} back from {current} to {incoming}.", err=True)
+        return False
+    return _version_key(incoming) < _version_key(current)
 
 
 def _version_key(version: str) -> tuple[int, ...]:
@@ -245,10 +325,11 @@ def read_channel_manifest_from_bucket(
     """What a channel serves now, read from the bucket rather than through the CDN.
 
     The manifest is uploaded with a short max-age, so a promotion run inside that
-    window reads the *previous* one back through the feed -- and that is the one
-    answer the rollback gate must never get, because it would wave through the
-    backwards move the gate exists to refuse. The bucket holds the object itself
-    and R2 is read-after-write consistent on it, so this cannot be stale.
+    window reads the *previous* one back through the feed -- which then names the
+    wrong served state, settles the BACKWARDS label against a version the channel
+    has already left, and republishes a promotion already applied. The bucket
+    holds the object itself and R2 is read-after-write consistent on it, so this
+    cannot be stale.
 
     Needs a credential, which is why the public reader still exists: the
     validate job deliberately holds none.
@@ -265,7 +346,7 @@ def read_channel_manifest_from_bucket(
         # one state a promotion must not proceed from.
         raise PromotionError(f"Cannot read the current {channel} version from {bucket}/{key}: {exc}.") from exc
     text = response["Body"].read().decode("utf-8")
-    return Manifest(version=parse_version(text, f"{bucket}/{key}"), text=text)
+    return parse_manifest(text, f"{bucket}/{key}")
 
 
 def read_current_channel_manifest(
@@ -300,7 +381,7 @@ def upload_manifest(
     make_client().put_object(
         Bucket=bucket,
         Key=key,
-        Body=manifest.text.encode("utf-8"),
+        Body=render(manifest).encode("utf-8"),
         ContentType="text/yaml",
         CacheControl=f"public, max-age={cache_seconds}",
     )

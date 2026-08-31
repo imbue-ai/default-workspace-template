@@ -13,7 +13,6 @@ from imbue.mngr_behaviors.cli import behaviors
 from imbue.mngr_behaviors.testing import write_behavior_corpus
 
 _VALID_CORPUS = {
-    "overview.md": "corpus context\n",
     "browser-authorization/signin.feature": (
         "Feature: Sign-in\n"
         "\n"

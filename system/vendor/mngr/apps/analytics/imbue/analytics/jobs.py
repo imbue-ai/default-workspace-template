@@ -14,10 +14,17 @@ from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import Final
+from typing import TypeVar
 
+import duckdb
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from tenacity import before_sleep_log
+from tenacity import retry
+from tenacity import retry_if_exception
+from tenacity import stop_after_attempt
+from tenacity import wait_fixed
 
 import imbue.analytics.ops_db as ops_db
 from imbue.analytics.aggregation import run_aggregation
@@ -52,6 +59,36 @@ COLLECTION_POLL_JOB_NAME: Final[str] = "collection_poll"
 AGGREGATION_WARN_SECONDS: Final[float] = 300.0
 LAKE_MAINTENANCE_WARN_SECONDS: Final[float] = 600.0
 COLLECTION_POLL_WARN_SECONDS: Final[float] = 600.0
+
+# One in-cron retry for reads racing OpenObserve's parquet compaction: the log
+# glob is listed and read at different moments, so an object can 404 between
+# the two. A second attempt re-lists; anything persistent still fails the run.
+_TRANSIENT_SOURCE_RETRY_ATTEMPTS: Final[int] = 2
+_TRANSIENT_SOURCE_RETRY_WAIT_SECONDS: Final[float] = 15.0
+
+_CallableT = TypeVar("_CallableT", bound=Callable[..., Any])
+
+
+def _is_transient_source_error(exception: BaseException) -> bool:
+    """Whether an error chain bottoms out in an object-store HTTP read failure."""
+    cause: BaseException | None = exception
+    while cause is not None:
+        if isinstance(cause, duckdb.HTTPException):
+            return True
+        cause = cause.__cause__
+    return False
+
+
+def build_transient_source_retry(wait_seconds: float) -> Callable[[_CallableT], _CallableT]:
+    return retry(
+        retry=retry_if_exception(_is_transient_source_error),
+        stop=stop_after_attempt(_TRANSIENT_SOURCE_RETRY_ATTEMPTS),
+        wait=wait_fixed(wait_seconds),
+        # A retried attempt never reaches job_runs (the retry is inside the
+        # recorded body), so the warning here is its only trace.
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
 
 
 class JobRunRecord(BaseModel):
@@ -200,6 +237,7 @@ def record_run_row_in_ops_db(connection_factory: Callable[[], Any], record: JobR
         connection.close()
 
 
+@build_transient_source_retry(_TRANSIENT_SOURCE_RETRY_WAIT_SECONDS)
 def _aggregation_body(settings: AnalyticsSettings) -> dict[str, int]:
     connection = build_metrics_session(settings)
     try:
@@ -209,6 +247,7 @@ def _aggregation_body(settings: AnalyticsSettings) -> dict[str, int]:
         connection.close()
     return {
         "activity_rows": counters.activity_rows,
+        "client_version_rows": counters.client_version_rows,
         "account_rows": counters.account_rows,
         "funnel_rows": counters.funnel_rows,
         "pipeline_health_rows": counters.pipeline_health_rows,

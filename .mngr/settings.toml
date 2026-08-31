@@ -32,8 +32,8 @@ host_env__extend = [
     # mode as "currently unavailable" -- so without this, /fast is refused in
     # the container even though the same account gets fast mode on the laptop.
     "CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1",
-    # Lock Claude Code to the version pinned in agent_types.claude.version and the
-    # Dockerfile's CLAUDE_CODE_VERSION; disable the auto-updater + background
+    # Lock Claude Code to the version pinned in agent_types.claude.version and
+    # setup_system.sh's CLAUDE_CODE_VERSION; disable the auto-updater + background
     # feedback pings so the installed binary cannot silently drift. Tracks the
     # FIXME on ClaudeAgentConfig.version in libs/mngr_claude/.../plugin.py.
     "DISABLE_AUTOUPDATER=1",
@@ -160,7 +160,7 @@ settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerou
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py claude"
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
-# sync with CLAUDE_CODE_VERSION in the Dockerfile.
+# sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
 version = "2.1.227"
 # Do not provision a per-agent Claude config dir: every claude in the workspace
 # shares one config dir so auth, plugins, marketplaces, and sessions are
@@ -408,6 +408,17 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # --- Provider configurations ---
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers
+
+# Applies to mngr commands run from the workspace root INSIDE the container
+# (project config is cwd-based), where `local` is the only enabled provider.
+# The in-container `mngr observe` discovery poll is purely a reconciliation
+# sweep -- creates/destroys/renames arrive through the incremental discovery
+# log, and local agent process death through observe's PID watchers -- so it
+# only catches out-of-band changes (e.g. a tmux session killed by hand) and
+# can run rarely: each poll costs file reads plus tmux forks, which is what
+# makes it matter at idle (~3x as expensive under gVisor).
+[providers.local]
+discovery_poll_interval_seconds = 60.0
 
 [providers.modal]
 is_enabled = false

@@ -335,6 +335,9 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
     // The markdown rhythm: the same vertical slot a paragraph-adjacent block
     // gets in the assistant flow.
     extra: "my-[0.25em]",
+    // Keyed by the tool call's stable id so the expansion survives the row
+    // unmounting and remounting (virtualization) or re-rendering (streaming).
+    expansionKey: `tc:${toolCall.tool_call_id}`,
   });
 }
 
@@ -367,7 +370,11 @@ export function renderAssistantMessageChildren(
       // provider-side fault (5xx / overloaded) add a grey "not Minds' fault" note.
       children.push(
         m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [
-          m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }),
+          m(MarkdownContent, {
+            content: textContent,
+            requestedAt: event.timestamp,
+            expansionKeyPrefix: event.event_id,
+          }),
           event.is_provider_fault
             ? m(
                 "div",
@@ -378,7 +385,9 @@ export function renderAssistantMessageChildren(
         ]),
       );
     } else {
-      children.push(m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }));
+      children.push(
+        m(MarkdownContent, { content: textContent, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
+      );
     }
   }
   for (const toolCall of toolCalls) {

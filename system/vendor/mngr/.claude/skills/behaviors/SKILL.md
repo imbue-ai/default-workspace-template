@@ -1,6 +1,6 @@
 ---
 name: behaviors
-description: The definitional reference for behaviors in this repo - Gherkin .feature files in per-project corpora at <project>/behaviors/ (e.g. apps/minds/behaviors/), their folder and tag organization, coordinates, invariants as Rule blocks with folder scoping, overview/sidecar prose files, the witnesses test back-link convention, and the mngr behaviors CLI. Use whenever reading, writing, validating, querying, or otherwise reasoning about behaviors or .feature files in this repo.
+description: The definitional reference for behaviors in this repo - Gherkin .feature files in per-project corpora at <project>/behaviors/ (e.g. apps/minds/behaviors/), their folder and tag organization, coordinates, invariants as Rule blocks with folder scoping, README/sidecar prose files, the witnesses test back-link convention, and the mngr behaviors CLI. Use whenever reading, writing, validating, querying, or otherwise reasoning about behaviors or .feature files in this repo.
 ---
 
 # behaviors
@@ -29,13 +29,13 @@ Behaviors are organized into corpora, one per independent system.
 A corpus root is that system's own `behaviors/` directory - `<project>/behaviors/` - so the corpus, its live-corpus guard test, and its witnesses markers travel with the codebase that owns them, including out of this monorepo if a project is ever spun out.
 The first corpus in this repo is `apps/minds/behaviors/`; other systems (e.g. `libs/mngr_forward`) grow their own the same way.
 
-Within a corpus, folders group behaviors by area; a folder holds `.feature` files (one Feature each) plus optional prose files:
+Within a corpus, folders group behaviors by area; a folder holds its required `README.md`, its `.feature` files (one Feature each), and optional per-feature prose sidecars:
 
 ```
 apps/minds/behaviors/
-  overview.md                # context for the whole corpus
+  README.md                  # context for the whole corpus
   browser-authorization/
-    overview.md              # context for browser-authorization/ and below
+    README.md                # context for browser-authorization/ and below
     invariants.feature       # Rules that hold for browser-authorization/ and below
     signin.feature           # one Feature: the sign-in flow
     signin.md                # optional prose sidecar for signin.feature
@@ -44,12 +44,17 @@ apps/minds/behaviors/
 
 Naming and structure rules:
 
-- Folder names and file basenames are kebab-case.
-- Two filenames are reserved in every folder: `invariants.feature` (see "Invariants and scope") and `overview.md` (prose context for the folder and everything below it).
-  No `.feature` file may be named `overview`, since that would make `overview.md` read as its sidecar.
-  Definitions live in the repo's committed glossaries (e.g. `apps/minds/docs/workspace/glossary.md`); an `overview.md` references them and weaves any corpus-specific definitions into its prose rather than keeping a glossary section.
-- Any other `.md` file is the sidecar of the `.feature` file with the same basename in the same folder; `invariants.md` is simply the sidecar of `invariants.feature`.
-  An `.md` file with no matching `.feature` is invalid.
+- Folder names and file basenames are kebab-case; the sole exception is the reserved `README.md`, spelled in the conventional uppercase.
+- Every folder contains a `README.md`: the prose context for that folder and everything below it.
+  `README` is reserved, so no `.feature` file may be named `README`.
+  Every `README.md` opens with this incipit, verbatim, as its first line after the folder's title heading:
+
+  > Understanding this behavior corpus calls for the tmr-behaviors skill; consult it when reading this file.
+
+  Definitions live in the repo's committed glossaries (e.g. `apps/minds/docs/workspace/glossary.md`); a `README.md` references them and weaves any corpus-specific definitions into its prose rather than keeping a glossary section.
+- `invariants.feature` is the other reserved filename (see "Invariants and scope").
+- Any `.md` file other than `README.md` is the sidecar of the `.feature` file with the same basename in the same folder; `invariants.md` is simply the sidecar of `invariants.feature`.
+  A non-`README.md` `.md` file with no matching `.feature` is invalid.
 - Every folder has the same semantics, including the corpus root itself.
   Nesting is permitted; depth carries no special meaning.
 
@@ -118,7 +123,7 @@ Elimination is preferred to marking; the marker is a last resort.
 This rule governs descriptive prose only.
 It does not license editing normative Gherkin steps or `Examples` tables to strip concrete values - those are the observable contract, and enumerating concrete inputs and outputs there is correct and required.
 
-A statement that holds across a folder subtree belongs once, in the most-scoping `overview.md`, and is referenced rather than repeated per file.
+A statement that holds across a folder subtree belongs once, in the most-scoping `README.md`, and is referenced rather than repeated per file.
 
 Calibrate on this pair:
 

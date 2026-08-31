@@ -37,8 +37,8 @@ export const USER_BUBBLE_CLASS =
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
  *  of source; only the label and body differ. Width-capped like the user
  *  bubbles on its rail (the assistant flow's blocks run full-width instead). */
-function renderSystemChip(label: string, body: string): m.Vnode {
-  return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]" });
+function renderSystemChip(label: string, body: string, expansionKey: string): m.Vnode {
+  return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]", expansionKey });
 }
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
@@ -60,7 +60,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       const cls = classifyUserMessage(event);
 
       if (cls.kind === UserMessageKind.SystemChip) {
-        return renderSystemChip(cls.label ?? "System message", cls.body);
+        return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
       }
 
       const bubbleChildren: m.Children[] = [];
