@@ -42,7 +42,7 @@ The recorder is built to be invisible to the work going on around it:
   `nice`, tags itself into oom_priority's `AGENT_SUBPROCESS` band, and is
   capped at 15 minutes.
 
-`data/.imbue/plans/` (and a `README.md` for the `data/.imbue/` bucket it shares
-with the analytics footprint) now ships with the template, and
-`agent_require_steps_pretool.sh` exempts the recorder so it never nudges the
+`data/.imbue/plans/` now ships with the template, described in `data/README.md`
+alongside the analytics footprint it shares the `data/.imbue/` bucket with. And
+`agent_require_steps_pretool.sh` exempts the recorder, so it never nudges the
 agent to declare a step for something the user must not be shown.
