@@ -25,8 +25,17 @@ say at the call site.
   `@theme inline` block in `src/style.css`. Raw palette values live once, as
   `--c-*` on `:root`; hand-written CSS references those directly
   (`var(--c-accent)`), never a hex.
+  - The provider/combo-card surfaces ported from the mockup
+    (`prototypes/minds-harness` in imbue-ai/mind-sketches) speak the mockup's
+    own names — `text-tertiary`, `border-strong`, `bg-surface-primary`,
+    `bg-fill-subtle`, `text-important` — registered in the same `@theme inline`
+    block as aliases onto the same `--c-*` values, so those class strings port
+    verbatim and stay diffable against the source (`providerSignInStyles.ts`
+    states the rule; `providerSignInStyles.test.ts` asserts the aliases exist).
+    New non-ported code uses the primary names.
 - **Type roles** are the `type-*` utilities (`type-heading-lg`, `type-heading`,
-  `type-label`, `type-body`, `type-helper`, `type-section`) — use a role before
+  `type-label`, `type-body`, `type-helper`, `type-section`, plus the mockup's
+  dense-chrome `type-subsection`/`type-badge`) — use a role before
   hand-setting font-size/weight. For an off-role size, reference the token:
   `text-(length:--font-size-body)`; dense chrome (the rail, menus, launcher
   tables) sits on `--font-size-row` (13px).
