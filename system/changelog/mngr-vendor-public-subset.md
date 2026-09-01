@@ -5,3 +5,7 @@ This repo is public, and its contents are baked into every workspace we hand a u
 Nothing the workspace runs is affected: the root `uv.lock` is unchanged (identical resolution), every path dependency and every `pyproject.toml` the Dockerfile COPYs survives, and `mngr --version` plus the full plugin list are identical between an image built from the old tree and one built from this one.
 
 The mngr-side change that produces this tree is `scripts/public_subset.py` (imbue-ai/mngr-internal). One dangling cross-reference to a now-absent vendored path was dropped from `docs/system/specs/rail-shortcuts-and-app-lifecycle.md`.
+
+`system/scripts/pull_upstreams.sh` re-vendors from `mngr-internal` directly, so the mngr-side filter never reached it. It now materializes mngr's public subset from the clone and syncs from that. Left as it was, it would have re-added excluded files landing in an already-vendored directory, and restored the unstripped content of files carrying internal blocks.
+
+`system/test_vendored_mngr_contract.py` pins both halves of the contract on the artifact that is actually committed here: no path the mirror keeps private may appear in `system/vendor/mngr`, and every vendored path this repo's own manifests name (the Dockerfile COPYs, `mngr_plugins.toml`, `build_workspace.sh`, `run_ttyd.sh`, the `[tool.uv.sources]` deps) must exist.
