@@ -3,11 +3,10 @@ skill fires off, as a `write_plan.sh` wrapper plus the `SKILL.md` instructions
 it feeds in. It records, for offline analysis, a routing plan for the same
 request. Nothing in the workspace reads the result.
 
-The plan always comes from Opus 5, named by its exact `claude-opus-5` id rather
-than the `opus` alias: that alias resolved to Opus 4.8 until Claude Code
-2.1.219, so an alias would leave the plan's model up to whichever CLI version a
-workspace happens to be pinned to. Plans are compared with each other offline,
-which they cannot be if they came from different models.
+The plan is written by `--model opus`, which on the pinned Claude Code (2.1.227)
+is Opus 5 -- the same model the workspace's own chat agent runs on. The alias
+rather than an exact id, so the recorder follows the workspace's Opus instead of
+being held on one model after the workspace moves.
 
 The plan is written in the conductor three-list form -- `capability`,
 `subtasks`, and `access list`, one entry per step, up to five steps. Steps get
