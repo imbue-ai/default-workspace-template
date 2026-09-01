@@ -171,8 +171,12 @@ unset CLAUDE_PROJECT_DIR CLAUDE_CODE_OAUTH_TOKEN_FILE
 
 cd "$WORK_DIR"
 claude_status=0
+# The exact model id, not the `opus` alias: the alias resolved to Opus 4.8 until
+# Claude Code 2.1.219 (see system/changelog/mngr-opus5-add.md), so an alias would
+# make the plan's model depend on the workspace's CLI pin. Plans are compared
+# across runs offline, so they must all come from the same model.
 nice -n 19 timeout "$RUN_TIMEOUT_SECONDS" claude -p \
-    --model opus \
+    --model claude-opus-5 \
     --setting-sources user \
     --allowed-tools "Read,Grep,Glob" \
     <"$prompt_file" >"$body_file" 2>>"$LOG_FILE" || claude_status=$?
