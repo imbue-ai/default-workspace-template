@@ -409,6 +409,17 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers
 
+# Applies to mngr commands run from the workspace root INSIDE the container
+# (project config is cwd-based), where `local` is the only enabled provider.
+# The in-container `mngr observe` discovery poll is purely a reconciliation
+# sweep -- creates/destroys/renames arrive through the incremental discovery
+# log, and local agent process death through observe's PID watchers -- so it
+# only catches out-of-band changes (e.g. a tmux session killed by hand) and
+# can run rarely: each poll costs file reads plus tmux forks, which is what
+# makes it matter at idle (~3x as expensive under gVisor).
+[providers.local]
+discovery_poll_interval_seconds = 60.0
+
 [providers.modal]
 is_enabled = false
 

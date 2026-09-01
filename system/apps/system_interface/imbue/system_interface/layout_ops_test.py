@@ -33,6 +33,13 @@ _LOCAL_WORKSPACE_HOST = "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421"
 # identical, only the base after ``host-<hex>`` is longer.
 _SHARED_WORKSPACE_HOST = "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.us-east.imbueminds.com"
 
+# A workspace-keyed share hostname: the coordinate leads with the bare 32-hex
+# share label (no ``host-`` prefix), followed by the one-way user hash. The
+# nesting rule is the same -- a service prefixes its label as one more label.
+_WORKSPACE_KEYED_SHARED_HOST = (
+    "5f13881abca599b0e91695294922fd15.103de49d5bad06cb6892f8c9e68c0cf6.us1.imbueminds.com"
+)
+
 
 def test_is_sessionless_browser_ref() -> None:
     # Bare browser ref (or an empty session) is the orphan-pane case -> rejected.
@@ -619,8 +626,10 @@ def test_service_name_from_url_requires_the_workspace_coordinate() -> None:
     first label; the bare workspace origin and external hosts yield None."""
     assert _service_name_from_url(f"http://web.{_LOCAL_WORKSPACE_HOST}/") == "web"
     assert _service_name_from_url(f"https://api.{_SHARED_WORKSPACE_HOST}/health") == "api"
+    assert _service_name_from_url(f"https://api.{_WORKSPACE_KEYED_SHARED_HOST}/health") == "api"
     # The bare workspace origin is the shell itself, not a service.
     assert _service_name_from_url(f"http://{_LOCAL_WORKSPACE_HOST}/") is None
+    assert _service_name_from_url(f"https://{_WORKSPACE_KEYED_SHARED_HOST}/") is None
     # External panels never masquerade as services.
     assert _service_name_from_url("https://example.com/") is None
     assert _service_name_from_url("https://host-abc.example.com/") is None
@@ -644,8 +653,10 @@ def test_service_name_from_url_agrees_with_layout_script_parser() -> None:
         f"http://api.{_LOCAL_WORKSPACE_HOST}/health",
         f"http://web.{_LOCAL_WORKSPACE_HOST}/",
         f"https://api.{_SHARED_WORKSPACE_HOST}/health",
+        f"https://api.{_WORKSPACE_KEYED_SHARED_HOST}/health",
         "https://example.com/",
         f"http://{_LOCAL_WORKSPACE_HOST}/",
+        f"https://{_WORKSPACE_KEYED_SHARED_HOST}/",
         "https://host-abc.example.com/",
         f"http://terminal.{_LOCAL_WORKSPACE_HOST}/?arg=_&arg=agent&arg=main",
     )

@@ -283,8 +283,9 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
 
   // Mirrors deriveServiceOrigin/workspaceHostCoordinate in
   // frontend/src/origin.ts, which is canonical: a service origin is its label
-  // prefixed onto the workspace host COORDINATE -- the host-<hex> label and
-  // everything after it -- and never onto this page's host verbatim, which
+  // prefixed onto the workspace COORDINATE -- the first host-<hex> (or, on a
+  // workspace-keyed share domain, bare 32-hex share) label and everything
+  // after it -- and never onto this page's host verbatim, which
   // would nest the service under the shell's own label and route back here.
   //
   // It differs from origin.ts in one way, deliberately: no coordinate label
@@ -299,7 +300,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       // matching -- otherwise a coordinate that happens to BE the last label
       // reads as an ordinary one and the terminal is silently not offered.
       // The slice below keeps it, which is what the origin needs.
-      if (/^(?:host|agent)-[a-f0-9]+$/i.test(labels[index].split(":")[0])) {
+      if (/^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/i.test(labels[index].split(":")[0])) {
         return window.location.protocol + "//" + label + "." +
                labels.slice(index).join(".") + "/";
       }
