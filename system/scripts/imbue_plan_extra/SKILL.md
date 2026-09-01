@@ -49,9 +49,15 @@ side by side.
 ### What to optimise, in order
 
 1. **The task gets done.** Where you are unsure, buy the capability.
-2. **Cost.** Among plans that will work, prefer the cheaper one.
-3. **Parallelization.** Among plans that will work and cost about the same,
-   prefer the wider graph.
+2. **Cost.** Among plans that will work, prefer the cheaper one. Capability is
+   one input to cost, and the tokens each node reads are another: a wide access
+   list ships a long history into every node that carries it, and a context
+   re-read down a chain is paid for on each node that reads it. A careful
+   `high` node can cost less than several `low` ones that each drag the whole
+   history along.
+3. **Speed.** Among plans that will work and cost about the same, prefer the
+   one that finishes sooner. That usually means more work running side by side,
+   though a wider graph is worth it only when it actually shortens the run.
 
 Where you traded one of these against another, say so in your reasoning.
 
@@ -163,8 +169,9 @@ What you can write in one:
 - `["all"]` -- the node sees everything before it, and waits for all of it.
 
 Give each node the narrowest access list that lets it succeed. Narrow lists keep
-context small and widen the graph, so more work runs at once. `["all"]` suits a
-node that genuinely needs the whole history, such as a final assembly.
+each node's context small, which is where much of the token cost sits, and they
+free nodes to run at the same time. `["all"]` suits a node that genuinely needs
+the whole history, such as a final assembly.
 
 Some nodes are mostly waiting. Connecting an account or granting access to a
 third-party service -- the `latchkey` skill -- costs time: the request goes up
