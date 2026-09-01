@@ -1,1 +1,0 @@
-The behavior-mapper prompt used by `mngr tmr-behaviors` now tells mapper agents to read each folder's `README.md` files for context, following the corpus convention that renames `overview.md` to `README.md`.

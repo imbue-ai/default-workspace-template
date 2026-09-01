@@ -1,9 +1,0 @@
-Add `specs/minds-bugsink-error-tracking.md`: the design for self-hosted, per-tier error tracking of the minds remote services (remote service connector, LiteLLM proxy, OAuth redirector) using Bugsink on a per-tier OVH VPS -- the OpenObserve hosting pattern per mngr-internal#464 (Cloudflare-fronted DSN-ingest-only public surface, SSH-tunnel-only UI, operator lifecycle).
-
-The spec pins the decisions validated by a working dev-tier prototype of the earlier Modal-hosted revision: one isolated instance per tier (production, staging, and a shared dev/CI instance), eager-mode task processing (no snappea foreman), Vault-held DSNs and credentials, a shared `modal_app_kit` SDK-init helper with client-side dedup, VPS regions chosen near each tier's Neon, 30-day retention, and no alerting integrations (separate inspector services will poll the REST APIs).
-
-Root-level implementation follow-through: `.minds/template/bugsink.sh` (operator-only instance schema: DSN, break-glass account, SSH keypair, origin TLS material) + `sentry.sh` Vault schemas, the `just provision-bugsink` / `provision-bugsink-projects` / `list-bugsink-instances` / `destroy-bugsink-instance` recipe family, and `scripts/provision_bugsink_config.py` (the Vault glue that resolves the tier's entries and stores the minted DSNs + API token back).
-
-The Bugsink spec now records the sentry-sdk 2.66.0 pin (>= 2.63.0 required): older SDKs leak a `_sentry_call` wrapper per request around sync FastAPI endpoints served through lazy router inclusion, killing warm connector containers with RecursionError after ~990 requests (mngr-internal#493, found on the staging bring-up).
-
-`mirror/overlay/uv.lock` is regenerated (via `mirror/materialize_public_tree.sh --lock`) to carry the same sentry-sdk 2.66.0 resolution and >=2.63.0 floors, keeping the Mirror gate's lock-freshness check green.

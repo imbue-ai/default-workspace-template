@@ -1,1 +1,0 @@
-The eval bridge's box-side env activation and the environment template's entrypoint now shell out to `minds-admin env activate` (the `minds env` group moved to the private `minds-admin` operator CLI and was deleted from `minds`). No behavior change beyond the command spelling.
