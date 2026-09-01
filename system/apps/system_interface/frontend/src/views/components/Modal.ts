@@ -77,9 +77,8 @@ export interface ModalAttrs {
 // One stable Escape keydown handler: the returned function reads the current
 // guard through `getOnEscape` at event time, so a component registers it once
 // on mount and `onremove` unregisters that very function even though the guard
-// is re-pointed between redraws. Shared with ClaudeLoginModal, the one dialog
-// that stays off this shell.
-export function escapeKeydownHandler(getOnEscape: () => (() => void) | undefined): (event: KeyboardEvent) => void {
+// is re-pointed between redraws.
+function escapeKeydownHandler(getOnEscape: () => (() => void) | undefined): (event: KeyboardEvent) => void {
   return (event: KeyboardEvent): void => {
     const onEscape = getOnEscape();
     if (event.key !== "Escape" || onEscape === undefined) return;

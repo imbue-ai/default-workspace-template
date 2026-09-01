@@ -16,6 +16,7 @@ import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
 import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
+import { getEventDetailState, requestEventDetail } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
@@ -449,15 +450,38 @@ export function PermissionCard(): m.Component<{
   toolCall: ToolCall;
   toolResult: ToolResultEvent | null;
   resolution: PermissionResolution | null;
+  // For the raw disclosure's on-demand payload fetch (the wire is payload-free).
+  agentId: string;
+  assistantEventId: string;
 }> {
   let rawOpen = false;
   return {
     view(vnode) {
-      const { toolCall, toolResult, resolution } = vnode.attrs;
+      const { toolCall, toolResult, resolution, agentId, assistantEventId } = vnode.attrs;
       const details = parsePermissionRequest(toolCall, toolResult);
       const scopeInfo = details?.scope ? getScopeInfo(details.scope) : null;
-      const rawInput = toolCall.input_preview || "";
-      const rawOutput = toolResult?.output || "";
+      // The raw disclosure fetches the full input/output on open (cached frontend-side);
+      // until they land, the structured request object stands in.
+      if (rawOpen) {
+        if (toolCall.input_chars > 0) {
+          requestEventDetail(agentId, assistantEventId);
+        }
+        if (toolResult && toolResult.output_chars > 0) {
+          requestEventDetail(agentId, toolResult.event_id);
+        }
+      }
+      const inputDetail = rawOpen ? getEventDetailState(agentId, assistantEventId) : undefined;
+      const outputDetail = rawOpen && toolResult ? getEventDetailState(agentId, toolResult.event_id) : undefined;
+      const rawInput =
+        inputDetail?.state === "loaded"
+          ? (inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? "")
+          : "";
+      const fallbackRaw = toolResult?.permission_request
+        ? JSON.stringify(toolResult.permission_request, null, 2)
+        : toolResult
+          ? "Open to load the raw output\u2026"
+          : "";
+      const rawOutput = outputDetail?.state === "loaded" ? (outputDetail.detail.output ?? "") : fallbackRaw;
       const rawText = rawOutput ? `${rawInput}\n\n${rawOutput}` : rawInput;
       // The transcript-classified resolution wins; before it lands, a verdict
       // the shell reported for this request (the user just resolved it in the

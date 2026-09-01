@@ -44,7 +44,7 @@ const mocks = vi.hoisted(() => {
     drainToComposer: vi.fn(async () => ({ block: "" })),
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     interruptAgent: vi.fn(async () => {}),
-    openAgentAuth: vi.fn(),
+    openProviderChooser: vi.fn(),
     listeners,
     agent,
   };
@@ -114,7 +114,7 @@ vi.mock("../models/HarnessCatalog", () => {
   };
 });
 vi.mock("../models/AgentManager", () => ({ getAgentById: () => mocks.agent }));
-vi.mock("../models/AgentAuth", () => ({ openAgentAuth: mocks.openAgentAuth }));
+vi.mock("../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));
 vi.mock("./icons", () => ({ icon: () => "", stopIcon: () => "" }));
 
 import { MessageInput } from "./MessageInput";
@@ -240,7 +240,7 @@ async function typeAndSend(component: m.Component<{ agentId: string | null }>, a
 describe("MessageInput send guard", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
-    mocks.openAgentAuth.mockClear();
+    mocks.openProviderChooser.mockClear();
     mocks.agent.harness = "claude";
     mocks.agent.activity_state = undefined;
     localStorage.clear();
@@ -317,10 +317,11 @@ describe("MessageInput send guard", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     expect(renderedText(after)).toContain("Sign-in is managed here");
 
-    // "Open agent auth" routes through the per-harness dispatch.
+    // The notice offers the provider chooser, which signs in to an account of its
+    // own rather than running the agent's auth flow inside the agent's terminal.
     const openButton = findByClass(after, "btn--primary");
     (openButton?.attrs?.onclick as (() => void) | undefined)?.();
-    expect(mocks.openAgentAuth).toHaveBeenCalledWith("agent-1");
+    expect(mocks.openProviderChooser).toHaveBeenCalled();
   });
 
   it("intercepts auth commands for every harness that declared them", async () => {
@@ -379,7 +380,9 @@ describe("MessageInput stop-to-composer handback", () => {
     agentId: string,
   ): Promise<AnyVnode | undefined> {
     const render = () => component.view!({ attrs: { agentId } } as never);
-    const stopButton = findByAttr(render(), "aria-label", "Interrupt and bring queued messages to the composer");
+    // The label states what the press will do; with nothing queued (this mock
+    // agent has no queued_messages) it reads as a plain interrupt.
+    const stopButton = findByAttr(render(), "aria-label", "Interrupt agent");
     const onclick = stopButton?.attrs?.onclick as (() => Promise<void>) | undefined;
     expect(onclick, "stop button should be present while the agent works").toBeTruthy();
     await onclick!();
@@ -413,7 +416,7 @@ describe("MessageInput stop-to-composer handback", () => {
 describe("MessageInput send failure notice", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
-    mocks.openAgentAuth.mockClear();
+    mocks.openProviderChooser.mockClear();
     mocks.agent.harness = "claude";
     mocks.agent.activity_state = undefined;
     mocks.getComposerAttachments.mockReturnValue([]);

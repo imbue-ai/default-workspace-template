@@ -14,6 +14,8 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { getAgentById } from "../models/AgentManager";
+import { isAgentProcessDead } from "./agentLiveness";
 import { IframePanel } from "./IframePanel";
 
 interface AgentTerminalPanelAttrs {
@@ -63,6 +65,52 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
           "div",
           { class: "agent-terminal-starting flex items-center justify-center h-full" },
           m("p", { class: "text-secondary" }, "Starting agent..."),
+        );
+      }
+
+      // A dead agent has no tmux session, so a mounted ttyd client reconnect-loops
+      // against it (spawn `tmux attach`, exit, retry -- several times a second, each
+      // attempt claiming the page's focus before the client was patched not to). Same
+      // pattern as IframePanel's stopped-service placeholder: unmount the iframe while
+      // the agent is positively dead; the agents push after a start swaps it back in.
+      // An untracked id or UNKNOWN state keeps the iframe -- non-evidence is not death.
+      const agent = vnode.attrs.agentId === "" ? undefined : getAgentById(vnode.attrs.agentId);
+      if (agent !== undefined && isAgentProcessDead(agent.state)) {
+        return m(
+          "div",
+          { class: "agent-terminal-stopped flex h-full w-full flex-col items-center justify-center gap-3 bg-surface" },
+          [
+            m("div", { class: "text-[15px] font-medium text-primary" }, agent.name),
+            m(
+              "div",
+              { class: "text-[13px] text-faint" },
+              "This agent is stopped, so its terminal has nothing to attach to.",
+            ),
+            // A failed start leaves the agent dead, which lands back on this face --
+            // without this line the Start button would appear to silently do nothing.
+            startError === null
+              ? null
+              : m(
+                  "div",
+                  { class: "agent-terminal-start-error text-[13px] text-red-500" },
+                  `Could not start agent: ${startError}`,
+                ),
+            m(
+              "button",
+              {
+                type: "button",
+                class:
+                  "agent-terminal-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
+                  "border-default px-4 text-[13px] font-medium text-primary hover:bg-fill-hover",
+                onclick: () => {
+                  starting = true;
+                  startError = null;
+                  void ensureAgentStarted(vnode.attrs.agentId);
+                },
+              },
+              "Start agent",
+            ),
+          ],
         );
       }
 

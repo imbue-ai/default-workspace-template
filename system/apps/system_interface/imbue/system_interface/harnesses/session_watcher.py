@@ -90,6 +90,14 @@ class AgentSessionWatcher(ABC):
     def get_total_event_count(self, session_id: str | None = None) -> int:
         """How many events have been parsed."""
 
+    def get_event_detail(self, event_id: str) -> dict[str, Any] | None:
+        """The full deferred payloads for one event -- tool input(s), tool output, readable
+        thinking -- re-read statelessly from the harness's own transcript, or None when the
+        event is unknown or its source is gone. Never cached backend-side. Default: no
+        deferred payloads (a harness that has not adopted deferral).
+        """
+        return None
+
     @abstractmethod
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         """Metadata for a subagent's session, or None when the harness has no subagents."""

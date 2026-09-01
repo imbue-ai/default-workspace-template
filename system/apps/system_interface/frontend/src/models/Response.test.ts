@@ -30,6 +30,9 @@ import {
   getFirstOffset,
   getRenderVersion,
   getTotalEventCount,
+  getEventDetailState,
+  getEventDetailVersion,
+  requestEventDetail,
   hasMoreBefore,
   hasMoreAfter,
   isConversationNotFound,
@@ -67,7 +70,7 @@ function assistantWithAgentToolCall(
       {
         tool_call_id: toolCallId,
         tool_name: "Agent",
-        input_preview: "{}",
+        input_chars: 2,
         ...(metadata ? { subagent_metadata: metadata } : {}),
       },
     ],
@@ -718,6 +721,66 @@ describe("message-sent listeners", () => {
       expect(seen).toEqual([agent]);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("event detail cache", () => {
+  const detail = { inputs_by_tool_call_id: { c1: "full input" }, output: "full output", thinking: null };
+
+  it("fetches once and serves later requests from the cache", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce(detail);
+    requestEventDetail(agent, "e1");
+    expect(getEventDetailState(agent, "e1")).toEqual({ state: "loading" });
+    await Promise.resolve();
+    expect(getEventDetailState(agent, "e1")).toEqual({ state: "loaded", detail });
+    expect(getEventDetailVersion(agent)).toBe(1);
+
+    // Cache hit: a later request (the expanded render's heal pass) fetches nothing.
+    requestEventDetail(agent, "e1");
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks a 404 unavailable and never refetches it", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce(Object.assign(new Error("{}"), { code: 404 }));
+    requestEventDetail(agent, "gone");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(getEventDetailState(agent, "gone")).toEqual({ state: "unavailable" });
+
+    requestEventDetail(agent, "gone");
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("paces the retry of a transient failure instead of looping", async () => {
+    // A non-404 failure (backend restarting) must not become a tight fetch loop:
+    // the expanded row re-requests on every render, so the failed entry has to keep
+    // blocking re-requests until the retry delay elapses.
+    vi.useFakeTimers();
+    try {
+      const agent = freshAgent();
+      mockRequest.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: 500 }));
+      requestEventDetail(agent, "flaky");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Still "loading": an immediate re-request (a redraw of the expanded row) is a no-op.
+      expect(getEventDetailState(agent, "flaky")).toEqual({ state: "loading" });
+      requestEventDetail(agent, "flaky");
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+
+      // After the delay the entry is dropped, so the next render retries -- once.
+      vi.advanceTimersByTime(5000);
+      expect(getEventDetailState(agent, "flaky")).toBeUndefined();
+      mockRequest.mockResolvedValueOnce(detail);
+      requestEventDetail(agent, "flaky");
+      await Promise.resolve();
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+      expect(getEventDetailState(agent, "flaky")).toEqual({ state: "loaded", detail });
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

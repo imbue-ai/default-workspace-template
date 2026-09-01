@@ -10,7 +10,6 @@ import { apiUrl } from "../base-path";
 import { ReconnectBackoff } from "./backoff";
 import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
 import { parseJsonMessage } from "./ws-json";
-import { openAgentAuth } from "./AgentAuth";
 
 const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
@@ -38,15 +37,6 @@ const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
 // cycle would spawn two future loops (the new stream's error handler plus the
 // snapshot retry), multiplying attempts for as long as the backend stays down.
 const pendingReconnectTimersByAgent = new Map<string, ReturnType<typeof setTimeout>>();
-
-// An auth-error on an agent's stream opens that agent's harness-declared
-// auth surface: the shared managed login modal for claude (its auth is
-// mind-global), the terminal instructions notice for the others.
-function openAgentAuthIfAuthError(agentId: string, event: TranscriptEvent): void {
-  if (event.type === "assistant_message" && event.is_auth_error === true) {
-    openAgentAuth(agentId);
-  }
-}
 
 export interface StreamingMessage {
   conversationId: string;
@@ -87,7 +77,6 @@ export function connectToStream(agentId: string): void {
     } else {
       appendEvents(agentId, [event]);
     }
-    openAgentAuthIfAuthError(agentId, event);
   };
 
   eventSource.onerror = () => {
