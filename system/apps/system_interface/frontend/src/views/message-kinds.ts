@@ -157,10 +157,10 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   },
   [UserMessageKind.StatusMessage]: {
     rail: Rail.User,
-    boundary: false,
+    boundary: true,
     netVisual:
-      "A subtle inline status message (e.g. 'Context was compacted') tucked " +
-      "into the current turn -- it does NOT start a new turn.",
+      "A subtle centered status pill (e.g. 'Context was compacted') rendered as " +
+      "its own row between turns or at the start/end of a turn.",
   },
 };
 
