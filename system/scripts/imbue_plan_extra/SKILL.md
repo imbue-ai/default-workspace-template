@@ -47,18 +47,17 @@ lists you output:
 3. **access list** -- which earlier nodes it depends on, and whose handoffs it
    sees. A list of earlier node indices, or the single entry `"all"`.
 
-Position i of every list describes node i. Two nodes, just to show how they
-line up (real plans start at three):
+Position i of every list describes node i, so a three-node plan reads like this:
 
 ```
-capability = ["high", "medium"]
-subtasks = ["Decide the data model and hand back a spec.", "Build the page against that spec."]
-access list = [[], [0]]
+capability = ["high", "medium", "low"]
+subtasks = ["Decide the data model and hand back a spec.", "Build the page against that spec.", "Hand the app to crystallize-creation with type=app."]
+access list = [[], [0], [0, 1]]
 ```
 
 Node 0 is a strong worker settling the data model, starting from the request
-alone. Node 1 is an ordinary one building against it, and waits because it lists
-node 0.
+alone. Node 1 builds against it, and waits because it lists node 0. Node 2 is
+the handoff. The full output format is at the end of this document.
 
 Work out the shape first: what has to happen before what, and what can happen
 side by side.
@@ -213,9 +212,9 @@ verbatim under a fixed header, so whatever you emit is the plan.
 Where you cut the work and why, and why each node got the capability it got.
 </thinking>
 <output>
-capability = ["high", "low"]
-subtasks = ["...", "..."]
-access list = [[], [0]]
+capability = ["high", "low", "medium", "low"]
+subtasks = ["Decide the data model and hand back a spec.", "Draw the app's icon.", "Build the page against the spec, using that icon.", "Hand the app to crystallize-creation with type=app."]
+access list = [[], [], [0, 1], [0, 2]]
 </output>
 ```
 
