@@ -5,10 +5,14 @@
 #
 #   system/scripts/write_unused_plan.sh "<the user's request>"
 #
-# Returns immediately: the first invocation re-execs itself detached and exits,
+# Returns immediately: the first invocation re-execs itself detached and exits 0,
 # so the calling agent never waits and never sees a failure. All of the work
 # happens in the detached child, whose only effect on the workspace is one file
 # written under data/.imbue/plans/ (plus its own log line).
+#
+# Strict mode is on, so every failure this script tolerates is written out as an
+# explicit `|| true` or a checked branch at the point it can happen. Nothing here
+# may propagate a non-zero exit to the agent that called it.
 #
 # The child runs a separate headless claude:
 #
@@ -19,8 +23,8 @@
 #                            spawned us. This is the same flag the project-scoped
 #                            plugin install in claude_update_plugin.sh is written to
 #                            protect. It also means project skills are NOT discovered,
-#                            which is why the instructions are passed as the prompt
-#                            rather than invoked as /write-unused-plan.
+#                            which is why the instructions are fed in as the prompt
+#                            rather than invoked as a slash command.
 #   --allowed-tools          Read-only. The plan comes back on stdout; the child has
 #                            no tool that can write to the workspace, so the only
 #                            file that appears is the one this script writes.
@@ -33,8 +37,7 @@
 # provisioning on every build-app call, and would have to be destroyed afterwards.
 # A plain claude process is invisible and exits on its own.
 
-# Deliberately no `-e`: this must never fail the agent that called it.
-set -uo pipefail
+set -euo pipefail
 
 readonly WORK_DIR="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
 readonly PLANS_DIR="${WORK_DIR}/data/.imbue/plans"
@@ -52,20 +55,22 @@ readonly RUN_TIMEOUT_SECONDS=900
 readonly OOM_SCORE_ADJ=900
 
 log() {
-    mkdir -p "$PLANS_DIR" 2>/dev/null
-    printf '%s write_unused_plan: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE" 2>/dev/null
+    mkdir -p "$PLANS_DIR" || true
+    printf '%s write_unused_plan: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE" || true
 }
 
 # ---- Parent: detach and return -----------------------------------------------
 # The caller gets its shell back here, before any of the work below runs.
 if [ "${WRITE_UNUSED_PLAN_DETACHED:-}" != "1" ]; then
-    mkdir -p "$PLANS_DIR" 2>/dev/null
+    mkdir -p "$PLANS_DIR" || true
+    # setsid is util-linux, so it is present in the workspace container but not on
+    # a macOS checkout; nohup alone still detaches from the caller's stdio.
     if command -v setsid >/dev/null 2>&1; then
         WRITE_UNUSED_PLAN_DETACHED=1 setsid nohup "$0" "$@" </dev/null >>"$LOG_FILE" 2>&1 &
     else
         WRITE_UNUSED_PLAN_DETACHED=1 nohup "$0" "$@" </dev/null >>"$LOG_FILE" 2>&1 &
     fi
-    disown 2>/dev/null
+    disown || true
     exit 0
 fi
 
@@ -86,9 +91,9 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 # Guarded rather than redirected: a failing redirection reports on the shell's own
-# stderr, which 2>/dev/null on the echo does not cover.
+# stderr, which a 2>/dev/null on the echo would not cover.
 if [ -w /proc/self/oom_score_adj ]; then
-    echo "$OOM_SCORE_ADJ" >/proc/self/oom_score_adj
+    echo "$OOM_SCORE_ADJ" >/proc/self/oom_score_adj || true
 fi
 
 # The spawning agent's mngr identity must not follow us in: mngr's hooks would
@@ -97,28 +102,27 @@ unset MNGR_AGENT_STATE_DIR MNGR_AGENT_ID MNGR_AGENT_NAME MAIN_CLAUDE_SESSION_ID
 unset CLAUDE_PROJECT_DIR CLAUDE_CODE_OAUTH_TOKEN_FILE
 
 output_file="${PLANS_DIR}/$(date -u +%Y%m%dT%H%M%SZ)-$$.md"
-body_file="$(mktemp)" || exit 0
-trap 'rm -f "$body_file"' EXIT
-
-log "planning: ${request:0:120}"
+body_file="$(mktemp)"
+prompt_file="$(mktemp)"
+trap 'rm -f "$body_file" "$prompt_file"' EXIT
 
 # The prompt goes in on stdin, not as an argument: the instructions open with YAML
 # frontmatter, and claude reads a leading `---` as an option. Stdin also sidesteps
 # the argv length limit, which a long request would otherwise reach.
-prompt_file="$(mktemp)" || exit 0
-trap 'rm -f "$body_file" "$prompt_file"' EXIT
 {
     cat "$INSTRUCTIONS"
     printf '\n\n# The request\n\n%s\n' "$request"
 } >"$prompt_file"
 
-cd "$WORK_DIR" 2>/dev/null || exit 0
+log "planning: ${request:0:120}"
+
+cd "$WORK_DIR"
+claude_status=0
 nice -n 19 timeout "$RUN_TIMEOUT_SECONDS" claude -p \
     --model opus \
     --setting-sources user \
     --allowed-tools "Read,Grep,Glob" \
-    <"$prompt_file" >"$body_file" 2>>"$LOG_FILE"
-claude_status=$?
+    <"$prompt_file" >"$body_file" 2>>"$LOG_FILE" || claude_status=$?
 
 if [ "$claude_status" -ne 0 ]; then
     log "claude exited ${claude_status}; no plan written"
@@ -131,6 +135,7 @@ fi
 
 # The header is written here rather than asked of the model so that it is on
 # every plan regardless of what the model did with its instructions.
+write_status=0
 {
     cat <<'HEADER'
 > DO NOT USE THIS PLAN. It was written by a separate process that is not part
@@ -140,6 +145,10 @@ fi
 
 HEADER
     cat "$body_file"
-} >"$output_file" 2>/dev/null
+} >"$output_file" || write_status=$?
 
+if [ "$write_status" -ne 0 ]; then
+    log "could not write ${output_file} (exit ${write_status})"
+    exit 0
+fi
 log "wrote ${output_file}"
