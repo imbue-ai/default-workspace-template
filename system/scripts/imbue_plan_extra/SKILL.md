@@ -62,12 +62,18 @@ reasoning.
 
 ### Subtasks
 
-A subtask is an instruction to a capable model, not a specification for a
-compiler. Write one or two sentences saying what to accomplish and what to
-produce. Leave the how to the model that receives it -- it can reason and plan
-for itself, and over-specifying throws that away.
+Most of the planning happens inside the workers, not here. The pool you route
+to reaches up to frontier models, so a worker can take an objective and do its
+own decomposition, research and design before it acts. Your plan decides what
+work exists and who does it; each worker decides how its own piece gets done.
 
-A subtask can ask a model to do the work from scratch, refine what an earlier
+So write a subtask as an objective: one or two sentences naming what to
+accomplish and what to hand back. Add detail only where that detail is a
+constraint the worker could not have worked out for itself -- a format a later
+step needs, a convention specific to this workspace, a decision already made
+upstream. Everything else is the worker's to figure out.
+
+A subtask can ask a worker to do the work from scratch, refine what an earlier
 step produced, criticise it, or do something different entirely that makes a
 later step easier.
 
