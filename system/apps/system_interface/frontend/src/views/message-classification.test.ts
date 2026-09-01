@@ -80,11 +80,11 @@ describe("classifyUserMessage", () => {
 });
 
 describe("semantic helpers", () => {
-  it("isNonBoundaryUserMessage is true for every non-baseline kind", () => {
+  it("isNonBoundaryUserMessage is true for non-boundary kinds and false for prompt and status boundaries", () => {
     expect(isNonBoundaryUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(
       true,
     );
-    expect(isNonBoundaryUserMessage({ content: "x", display: "status" })).toBe(true);
+    expect(isNonBoundaryUserMessage({ content: "x", display: "status" })).toBe(false);
     expect(isNonBoundaryUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "/welcome", display: "hidden" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "a normal message" })).toBe(false);

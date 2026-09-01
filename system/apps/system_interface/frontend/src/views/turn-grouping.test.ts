@@ -873,7 +873,7 @@ describe("audit regressions", () => {
   // The post-auto-compaction status carries display: "status" and is the FIRST
   // event of a resumed session -- there is no section open yet. It must still
   // render (as a status item in a fresh section), not be dropped.
-  it("renders a LEADING compaction status instead of dropping it", () => {
+  it("renders a LEADING compaction status as the opening user event", () => {
     const summary: UserMessageEvent = {
       ...userMsg("t0", "Context was compacted", "cs1"),
       display: "status",
@@ -881,12 +881,11 @@ describe("audit regressions", () => {
     const events = [summary, assistantText("t1", "continuing the work", "a1")];
     const sections = run(events);
     expect(sections.length).toBe(1);
-    // It is folded, not a user-prompt turn boundary.
-    expect(sections[0].user_event).toBeNull();
-    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs1")).toBe(true);
+    expect(sections[0].user_event?.event_id).toBe("cs1");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
   });
 
-  it("folds a mid-session compaction status into the current section", () => {
+  it("opens a new section when mid-session compaction occurs, preserving the previous trailing reply", () => {
     const summary: UserMessageEvent = {
       ...userMsg("t2", "Context was compacted", "cs2"),
       display: "status",
@@ -898,8 +897,51 @@ describe("audit regressions", () => {
       assistantText("t3", "more", "a2"),
     ];
     const sections = run(events);
-    expect(sections.length).toBe(1);
-    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs2")).toBe(true);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u-t0");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
+    expect(sections[1].user_event?.event_id).toBe("cs2");
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a2"]);
+  });
+
+  it("preserves previous trailing reply when compaction occurs after assistant prose at turn end", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t2", "Context was compacted", "cs3"),
+      display: "status",
+    };
+    const events = [userMsg("t0", "Hi", "u1"), assistantText("t1", "Hi Daniel", "a1"), summary];
+    const sections = run(events);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u1");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
+    expect(sections[1].user_event?.event_id).toBe("cs3");
+    expect(sections[1].trailing_reply).toHaveLength(0);
+  });
+
+  it("preserves trailing reply under ProgressBlock when compaction occurs after a turn with steps", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t5", "Context was compacted", "cs4"),
+      display: "status",
+    };
+    const events = [
+      userMsg("t0", "fix bug", "u1"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      tkMsg("t3", "tk close s1", "k2"),
+      result("t3", "k2", closeOut("s1", "Do it", "did it")),
+      assistantText("t4", "All fixed.", "reply"),
+      summary,
+    ];
+    const sections = run(events);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u1");
+    const steps = stepItems(sections[0].items);
+    expect(steps.map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+    expect(sections[1].user_event?.event_id).toBe("cs4");
+    expect(sections[1].trailing_reply).toHaveLength(0);
   });
 });
 

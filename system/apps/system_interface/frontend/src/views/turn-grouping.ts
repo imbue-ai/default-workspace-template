@@ -77,7 +77,6 @@ import type { PermissionResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
 import {
   isNonBoundaryUserMessage,
-  isStatusUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
@@ -455,16 +454,12 @@ export function buildSections(
       }
       if (isNonBoundaryUserMessage(e)) {
         // Collapsed system chips (Stop-hook feedback, browser-fleet nudges,
-        // background task-notifications) and subtle status messages ("Context was compacted")
-        // fold into the current section as a chip/status rather than opening a new turn. The
-        // backend's display decision says which is which; nothing is re-derived
-        // here. A chip goes into the skeleton so it both renders at its
-        // chronological spot and marks the turn end that ends a step's stint
-        // (see collectEjectedProse).
-        if (isSystemChipUserMessage(e) || isStatusUserMessage(e)) {
-          // The status message / compaction summary can be the FIRST event of a resumed session,
-          // with no section open yet; open a pre-section so it is not dropped
-          // (mirrors the leading-assistant-message case below).
+        // background task-notifications) fold into the current section as a chip
+        // rather than opening a new turn. The backend's display decision says
+        // which is which; nothing is re-derived here. A chip goes into the skeleton
+        // so it both renders at its chronological spot and marks the turn end that
+        // ends a step's stint (see collectEjectedProse).
+        if (isSystemChipUserMessage(e)) {
           if (current === null) current = ensureSection(null, "section-pre");
           current.entries.push({ kind: "chip", event: e });
         }
@@ -692,7 +687,7 @@ function finalizeSection(
     // reply.
     if (en.kind === "permission") lastWorkEntryIdx = i;
     else if (en.kind === "event" && isWork(en.event)) lastWorkEntryIdx = i;
-    if (en.kind === "step") lastStepEntryIdx = i;
+    else if (en.kind === "step") lastStepEntryIdx = i;
   }
   const replyBoundary = Math.max(lastWorkEntryIdx, lastStepEntryIdx);
   const trailingIds = new Set<string>();
