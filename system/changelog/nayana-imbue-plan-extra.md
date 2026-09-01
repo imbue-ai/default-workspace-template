@@ -9,12 +9,12 @@ rather than an exact id, so the recorder follows the workspace's Opus instead of
 being held on one model after the workspace moves.
 
 The plan is written in the conductor three-list form -- `capability`,
-`subtasks`, and `access list`, one entry per step, up to five steps. Steps get
+`subtasks`, and `access list`, one entry per node, three to ten nodes. Nodes get
 a capability bucket (`low` / `medium` / `high`) rather than a named model, on
-the assumption of a suite of general-intelligence models differing only in
-capability and cost. Each step's access list names the earlier steps it sees,
-so steps with empty access lists are independent and can run in parallel. The
-plan writer reads `build-app` first and routes the work that skill describes.
+the assumption of a spectrum of general-purpose models with a cost tradeoff.
+Each node's access list names the earlier nodes it depends on, so nodes with
+empty access lists are independent and run in parallel. The plan writer reads
+`build-app` first and routes the work that skill describes.
 
 Each call gets its own directory,
 `data/.imbue/plans/<utc-timestamp>-<agent>/`, holding `request.txt`, `plan.md`,

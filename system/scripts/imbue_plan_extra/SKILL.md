@@ -39,7 +39,7 @@ Then read enough of the workspace to ground the plan:
 
 The plan is a DAG of subtasks handed out to workers. Each node is one piece of
 the work assigned to one worker, and the edges are what each node depends on.
-Use at most 5 nodes.
+Use at least 3 nodes and at most 10.
 
 Three things define a node, and they are the three lists you output:
 
@@ -122,9 +122,10 @@ handoff. The rest comes from whatever a given request drags in: connecting an
 account the app needs, fetching real data and confirming its shape, formatting
 output into the form the next node needs.
 
-With 5 nodes and more shapes than that available, most nodes combine several --
-one node routinely decides, builds and verifies. Cut where the work genuinely
-changes hands.
+Nodes routinely combine several of these -- one node deciding, building and
+verifying is an ordinary node, not an overloaded one. The range is wide enough
+that the count should fall out of the work rather than being aimed at: cut where
+the work genuinely changes hands, and let that decide how many you end up with.
 
 Splitting has a payoff and a price. More nodes let more work run at once, and
 they let the routine parts go to cheaper workers while the hard parts get an
@@ -165,7 +166,7 @@ neighbours own the rest, and neither gets a node:
 - `update-app` owns modifying and removing an app, which is a different flow
   from building one.
 
-A node spent on either routes someone else's work out of your own 5-node budget.
+A node spent on either routes someone else's work out of your own budget.
 
 ### The access list
 
