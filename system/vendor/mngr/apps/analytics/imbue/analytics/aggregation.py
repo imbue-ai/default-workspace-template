@@ -6,8 +6,9 @@ in production also runs in tests against local fixtures.
 
 Idempotency model:
 
-- ``activity`` is windowed: each run deletes and recomputes the trailing
-  window, so late-arriving log parquet and missed runs heal themselves.
+- ``activity`` and ``client_versions_hourly`` are windowed: each run deletes
+  and recomputes the trailing window, so late-arriving log parquet and missed
+  runs heal themselves.
 - The dimension and small fact tables (``accounts``, ``funnel_daily``,
   ``pipeline_health``) are fully rewritten each run -- they are tiny, and a
   full rewrite is the simplest idempotent shape.
@@ -44,6 +45,14 @@ _GOLD_SCHEMA_STATEMENTS = (
     # coalesce below always has the table to read; where no backfill ran (dev
     # envs, tests) it stays empty and attribution alone supplies signups.
     "CREATE TABLE IF NOT EXISTS metrics.gold.accounts_signup (account_id VARCHAR, joined_at TIMESTAMPTZ)",
+    (
+        "CREATE TABLE IF NOT EXISTS metrics.gold.client_versions_hourly ("
+        " account_id VARCHAR,"
+        " hour TIMESTAMPTZ,"
+        " imbue_client VARCHAR,"
+        " request_count BIGINT"
+        ")"
+    ),
 )
 
 # The signup-timestamp rule (docs/bringup.md section 7): SuperTokens truth
@@ -160,6 +169,26 @@ _ACTIVITY_SIGNAL_SELECTS = (
         " AND CAST(event_at AS DATE) >= DATE {window_start}"
         " GROUP BY 1, 2"
     ),
+)
+
+# The fleet-version picture: which client version each account's requests
+# carried, hour by hour, so a release rollout (or a staged-rollout halt) is
+# observable as it happens. The desktop client polls sync endpoints about
+# once a minute while it runs, so any hour a client was open is represented.
+# The raw ``X-Imbue-Client`` identifier is kept verbatim (e.g. "minds/0.4.2
+# imbue-cloud-plugin/0.1.6"); parsing out the product version is a query-time
+# decision, like the "active" cut. Lines without the header (clients older
+# than minds 0.4.1, and pre-header log history) land in the '' bucket rather
+# than being dropped, so the unversioned share of the fleet stays visible.
+_CLIENT_VERSIONS_HOURLY_SELECT = (
+    "SELECT user_id AS account_id,"
+    " date_trunc('hour', line_at) AS hour,"
+    " coalesce(imbue_client, '') AS imbue_client,"
+    " count(*) AS request_count"
+    " FROM logs.http_requests"
+    " WHERE user_id IS NOT NULL AND user_id != ''"
+    " AND CAST(line_at AS DATE) >= DATE {window_start}"
+    " GROUP BY 1, 2, 3"
 )
 
 # The account dimension spans every id any signup source knows, not just the
@@ -319,6 +348,7 @@ class AggregationCounters(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     activity_rows: int = Field(description="Rows in the recomputed activity window")
+    client_version_rows: int = Field(description="Rows in the recomputed client_versions_hourly window")
     account_rows: int = Field(description="Rows in the accounts dimension")
     funnel_rows: int = Field(description="Rows in funnel_daily")
     pipeline_health_rows: int = Field(description="Rows in pipeline_health")
@@ -338,10 +368,21 @@ def build_activity_statements(window_start: date) -> list[str]:
     ]
 
 
+def build_client_versions_statements(window_start: date) -> list[str]:
+    """The windowed delete-and-recompute for the client_versions_hourly table."""
+    window_literal = f"'{window_start.isoformat()}'"
+    return [
+        f"DELETE FROM metrics.gold.client_versions_hourly WHERE hour >= DATE {window_literal}",
+        "INSERT INTO metrics.gold.client_versions_hourly "
+        + _CLIENT_VERSIONS_HOURLY_SELECT.format(window_start=window_literal),
+    ]
+
+
 def build_aggregation_statements(window_start: date) -> list[str]:
     return [
         *_GOLD_SCHEMA_STATEMENTS,
         *build_activity_statements(window_start),
+        *build_client_versions_statements(window_start),
         _ACCOUNTS_STATEMENT,
         _FUNNEL_STATEMENT,
         _PIPELINE_HEALTH_STATEMENT,
@@ -370,6 +411,7 @@ def run_aggregation(connection: Any, window_start: date) -> AggregationCounters:
             raise AggregationError(f"Aggregation statement failed: {statement[:120]}...") from e
     return AggregationCounters(
         activity_rows=_count_rows(connection, "metrics.gold.activity"),
+        client_version_rows=_count_rows(connection, "metrics.gold.client_versions_hourly"),
         account_rows=_count_rows(connection, "metrics.gold.accounts"),
         funnel_rows=_count_rows(connection, "metrics.gold.funnel_daily"),
         pipeline_health_rows=_count_rows(connection, "metrics.gold.pipeline_health"),

@@ -60,6 +60,7 @@ from imbue.remote_service_connector.auth_proxy import init_supertokens
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.hosts import reconcile_slice_boxes
 from imbue.remote_service_connector.lease_records import run_lease_record_sweep
+from imbue.remote_service_connector.pool_gauges import run_pool_gauge_sweep_from_db
 from imbue.remote_service_connector.r2.sweep import run_r2_quota_sweep
 from imbue.remote_service_connector.relay_health import get_dns_record_set_ops
 from imbue.remote_service_connector.relay_health import probe_relay_healthz
@@ -334,6 +335,31 @@ def _lease_record_sweep() -> dict[str, object]:
     result = run_lease_record_sweep()
     logger.info("Lease-record sweep done: %s", result)
     return result
+
+
+@app.function(
+    name="pool_gauge_sweep",
+    secrets=_connector_secrets(),
+    # Every-5-minutes pool gauges: the fleet-version dashboards' source for
+    # baked-host composition and per-region slot capacity. Pure observation --
+    # two SQL reads and a batch of metric log lines, no external APIs -- so it
+    # stays deliberately separate from the control-loop sweeps.
+    schedule=modal.Cron("*/5 * * * *"),
+    cpu=0.25,
+    memory=512,
+    timeout=120,
+)
+def pool_gauge_sweep() -> dict[str, int]:
+    configure_logging()
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _pool_gauge_sweep()
+
+
+def _pool_gauge_sweep() -> dict[str, int]:
+    counters = run_pool_gauge_sweep_from_db()
+    logger.info("Pool gauge sweep done: %s", counters)
+    return counters
 
 
 @app.function(

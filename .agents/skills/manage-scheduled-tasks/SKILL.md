@@ -80,6 +80,10 @@ the repo root:
 Also redirect output to a log file (cron would otherwise try to mail it):
 `>> /var/log/supervisor/<job-name>.log 2>&1`.
 
+The one exception is the built-in `update-apply-recover` guard, which carries
+its own `PATH` line and `cd` (see the map below). Every job you write goes
+through the wrapper.
+
 ## Entries live in data/.state/cron.d, installed live to /etc/cron.d
 
 `/etc/cron.d/` sits on the container rootfs, which starts fresh if the
@@ -232,6 +236,21 @@ The complete map of the scheduling machinery, for edits and debugging:
   ordinary schedule lines (cron rescans the directory within a minute).
 - `/etc/cron.d/minds-caretaker` -- the Caretaker's drop-in (only exists
   while the Caretaker is enabled; see enable-caretaker/disable-caretaker).
+- `/etc/cron.d/update-apply-recover` -- the update-apply recovery guard, the
+  one permanently-installed built-in entry. The bootstrap writes it at each
+  boot (so it has no durable `data/.state/cron.d/` copy -- `/etc/cron.d` lives
+  on the container rootfs, and this guard has to be back the moment the
+  container is recreated), just before it installs the `data/.state/cron.d/`
+  entries, so a deliberate same-named entry there still overrides it. It runs
+  `update_self.py recover --if-stale` every five minutes to roll back an update
+  apply that was killed without a container restart. A tick that acts can
+  outlast the next one, so the entry serializes itself under a `flock` and a
+  tick that finds the lock held skips silently. It is also the one entry that
+  deliberately skips the env wrapper below, carrying its own `PATH` line and
+  `cd` instead: the wrapper needs `/home/user/.mngr/env` and `jq` and exits
+  non-zero without them, which is exactly the state this guard exists to
+  recover from. It is a silent no-op in every normal state and is not a user
+  schedule -- do not remove it, and do not "fix" it onto the wrapper.
 - `/home/user/workspace/system/libs/automations/run_job.sh` -- the runner (cadence, catch-up,
   completion tracking, and retry -- with unit tests in
   `system/libs/automations/run_job_test.py`).

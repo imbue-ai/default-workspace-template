@@ -1,0 +1,326 @@
+{
+  "version": 5,
+  "dashboardId": "",
+  "title": "Fleet version mix",
+  "description": "Active clients per version, lease demand and outcomes, baked pool composition, and bare-metal slot capacity. Sources: the connector's http_request access records and the pool_gauge_sweep / host_lease_request metric records in modal_logs. Set minds_env only on the shared dev instance.",
+  "role": "",
+  "owner": "",
+  "created": "2026-08-30T00:00:00.000Z",
+  "defaultDatetimeDuration": {
+    "type": "relative",
+    "relativeTimePeriod": "2d"
+  },
+  "variables": {
+    "showDynamicFilters": false,
+    "list": [
+      {
+        "type": "textbox",
+        "name": "minds_env",
+        "label": "minds_env (blank = all; set on the shared dev instance)",
+        "value": "",
+        "multiSelect": false,
+        "hideOnDashboard": false
+      }
+    ]
+  },
+  "tabs": [
+    {
+      "tabId": "default",
+      "name": "Default",
+      "panels": [
+        {
+          "id": "Panel_active_clients_by_version",
+          "type": "line",
+          "title": "Active accounts by client version (hourly)",
+          "description": "Distinct authenticated accounts per X-Imbue-Client identifier. The desktop polls sync endpoints about once a minute while open, so any hour a client ran is represented. '' = pre-0.4.1 / unversioned clients.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 0,
+            "axis_border_show": false,
+            "legend_width": { "unit": "px", "value": null },
+            "no_value_replacement": "",
+            "wrap_table_cells": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp, '1 hour') AS x_axis_1, spath(body, 'imbue_client') AS breakdown_1, count(DISTINCT spath(body, 'user')) AS y_axis_1 FROM \"modal_logs\" WHERE spath(body, 'type') = 'http_request' AND coalesce(spath(body, 'user'), '') != '' AND ('$minds_env' = '' OR spath(body, 'minds_env') = '$minds_env') GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "modal_logs",
+                "stream_type": "logs",
+                "x": [
+                  { "label": "Hour", "alias": "x_axis_1", "column": "x_axis_1", "color": null, "isDerived": false }
+                ],
+                "y": [
+                  { "label": "Accounts", "alias": "y_axis_1", "column": "y_axis_1", "color": null, "isDerived": false }
+                ],
+                "z": [],
+                "breakdown": [
+                  { "label": "Client version", "alias": "breakdown_1", "column": "breakdown_1", "color": null, "isDerived": false }
+                ],
+                "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] }
+              },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1, "limit": 0, "min": 0, "max": 100, "time_shift": [] }
+            }
+          ],
+          "layout": { "x": 0, "y": 0, "w": 24, "h": 9, "i": 1 },
+          "htmlContent": "",
+          "markdownContent": ""
+        },
+        {
+          "id": "Panel_lease_requests_by_version",
+          "type": "line",
+          "title": "Lease requests by client version and HTTP status (hourly)",
+          "description": "POST /hosts/lease and /hosts/claim from the access records: create demand per client version, with failures visible as non-2xx statuses.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 0,
+            "axis_border_show": false,
+            "legend_width": { "unit": "px", "value": null },
+            "no_value_replacement": "",
+            "wrap_table_cells": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp, '1 hour') AS x_axis_1, concat(spath(body, 'imbue_client'), ' -> ', spath(body, 'status')) AS breakdown_1, count(*) AS y_axis_1 FROM \"modal_logs\" WHERE spath(body, 'type') = 'http_request' AND spath(body, 'method') = 'POST' AND spath(body, 'path') IN ('/hosts/lease', '/hosts/claim') AND ('$minds_env' = '' OR spath(body, 'minds_env') = '$minds_env') GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "modal_logs",
+                "stream_type": "logs",
+                "x": [
+                  { "label": "Hour", "alias": "x_axis_1", "column": "x_axis_1", "color": null, "isDerived": false }
+                ],
+                "y": [
+                  { "label": "Requests", "alias": "y_axis_1", "column": "y_axis_1", "color": null, "isDerived": false }
+                ],
+                "z": [],
+                "breakdown": [
+                  { "label": "Version -> status", "alias": "breakdown_1", "column": "breakdown_1", "color": null, "isDerived": false }
+                ],
+                "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] }
+              },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1, "limit": 0, "min": 0, "max": 100, "time_shift": [] }
+            }
+          ],
+          "layout": { "x": 24, "y": 0, "w": 24, "h": 9, "i": 2 },
+          "htmlContent": "",
+          "markdownContent": ""
+        },
+        {
+          "id": "Panel_lease_outcomes",
+          "type": "line",
+          "title": "Lease outcomes by region and branch (hourly)",
+          "description": "host_lease_request metric records: leased vs pool_exhausted / no_host_keys / injection_failed, tagged with the requested region and template branch. pool_exhausted rising for one branch is the restock signal.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 0,
+            "axis_border_show": false,
+            "legend_width": { "unit": "px", "value": null },
+            "no_value_replacement": "",
+            "wrap_table_cells": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp, '1 hour') AS x_axis_1, concat(spath(body, 'tags.outcome'), ' | ', spath(body, 'tags.region'), ' | ', spath(body, 'tags.branch')) AS breakdown_1, sum(CAST(spath(body, 'value') AS DOUBLE)) AS y_axis_1 FROM \"modal_logs\" WHERE spath(body, 'type') = 'metric' AND spath(body, 'name') = 'host_lease_request' AND ('$minds_env' = '' OR spath(body, 'minds_env') = '$minds_env') GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "modal_logs",
+                "stream_type": "logs",
+                "x": [
+                  { "label": "Hour", "alias": "x_axis_1", "column": "x_axis_1", "color": null, "isDerived": false }
+                ],
+                "y": [
+                  { "label": "Requests", "alias": "y_axis_1", "column": "y_axis_1", "color": null, "isDerived": false }
+                ],
+                "z": [],
+                "breakdown": [
+                  { "label": "Outcome | region | branch", "alias": "breakdown_1", "column": "breakdown_1", "color": null, "isDerived": false }
+                ],
+                "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] }
+              },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1, "limit": 0, "min": 0, "max": 100, "time_shift": [] }
+            }
+          ],
+          "layout": { "x": 0, "y": 9, "w": 24, "h": 9, "i": 3 },
+          "htmlContent": "",
+          "markdownContent": ""
+        },
+        {
+          "id": "Panel_available_hosts",
+          "type": "line",
+          "title": "Baked available hosts by branch and region",
+          "description": "pool_hosts_count gauge (status = available), emitted every 5 minutes by pool_gauge_sweep with explicit zeros, so a drained series drops to 0 instead of going stale.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 0,
+            "axis_border_show": false,
+            "legend_width": { "unit": "px", "value": null },
+            "no_value_replacement": "",
+            "wrap_table_cells": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp, '5 minutes') AS x_axis_1, concat(spath(body, 'tags.branch'), ' @ ', spath(body, 'tags.region')) AS breakdown_1, max(CAST(spath(body, 'value') AS DOUBLE)) AS y_axis_1 FROM \"modal_logs\" WHERE spath(body, 'type') = 'metric' AND spath(body, 'name') = 'pool_hosts_count' AND spath(body, 'tags.status') = 'available' AND ('$minds_env' = '' OR spath(body, 'minds_env') = '$minds_env') GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "modal_logs",
+                "stream_type": "logs",
+                "x": [
+                  { "label": "Time", "alias": "x_axis_1", "column": "x_axis_1", "color": null, "isDerived": false }
+                ],
+                "y": [
+                  { "label": "Available hosts", "alias": "y_axis_1", "column": "y_axis_1", "color": null, "isDerived": false }
+                ],
+                "z": [],
+                "breakdown": [
+                  { "label": "Branch @ region", "alias": "breakdown_1", "column": "breakdown_1", "color": null, "isDerived": false }
+                ],
+                "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] }
+              },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1, "limit": 0, "min": 0, "max": 100, "time_shift": [] }
+            }
+          ],
+          "layout": { "x": 24, "y": 9, "w": 24, "h": 9, "i": 4 },
+          "htmlContent": "",
+          "markdownContent": ""
+        },
+        {
+          "id": "Panel_leased_hosts",
+          "type": "line",
+          "title": "Leased workspaces by branch and region",
+          "description": "pool_hosts_count gauge (status = leased): the fleet-composition view -- how many live workspaces still sit on each template branch.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 0,
+            "axis_border_show": false,
+            "legend_width": { "unit": "px", "value": null },
+            "no_value_replacement": "",
+            "wrap_table_cells": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp, '5 minutes') AS x_axis_1, concat(spath(body, 'tags.branch'), ' @ ', spath(body, 'tags.region')) AS breakdown_1, max(CAST(spath(body, 'value') AS DOUBLE)) AS y_axis_1 FROM \"modal_logs\" WHERE spath(body, 'type') = 'metric' AND spath(body, 'name') = 'pool_hosts_count' AND spath(body, 'tags.status') = 'leased' AND ('$minds_env' = '' OR spath(body, 'minds_env') = '$minds_env') GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "modal_logs",
+                "stream_type": "logs",
+                "x": [
+                  { "label": "Time", "alias": "x_axis_1", "column": "x_axis_1", "color": null, "isDerived": false }
+                ],
+                "y": [
+                  { "label": "Leased workspaces", "alias": "y_axis_1", "column": "y_axis_1", "color": null, "isDerived": false }
+                ],
+                "z": [],
+                "breakdown": [
+                  { "label": "Branch @ region", "alias": "breakdown_1", "column": "breakdown_1", "color": null, "isDerived": false }
+                ],
+                "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] }
+              },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1, "limit": 0, "min": 0, "max": 100, "time_shift": [] }
+            }
+          ],
+          "layout": { "x": 0, "y": 18, "w": 24, "h": 9, "i": 5 },
+          "htmlContent": "",
+          "markdownContent": ""
+        },
+        {
+          "id": "Panel_slot_capacity",
+          "type": "line",
+          "title": "Bare-metal slot capacity by region",
+          "description": "pool_slots_total vs pool_slots_used per region (ready boxes; occupancy = placed pool rows). The gap between the two lines is the empty slots.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 0,
+            "axis_border_show": false,
+            "legend_width": { "unit": "px", "value": null },
+            "no_value_replacement": "",
+            "wrap_table_cells": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp, '5 minutes') AS x_axis_1, concat(spath(body, 'name'), ' @ ', spath(body, 'tags.region')) AS breakdown_1, max(CAST(spath(body, 'value') AS DOUBLE)) AS y_axis_1 FROM \"modal_logs\" WHERE spath(body, 'type') = 'metric' AND spath(body, 'name') IN ('pool_slots_total', 'pool_slots_used') AND ('$minds_env' = '' OR spath(body, 'minds_env') = '$minds_env') GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "modal_logs",
+                "stream_type": "logs",
+                "x": [
+                  { "label": "Time", "alias": "x_axis_1", "column": "x_axis_1", "color": null, "isDerived": false }
+                ],
+                "y": [
+                  { "label": "Slots", "alias": "y_axis_1", "column": "y_axis_1", "color": null, "isDerived": false }
+                ],
+                "z": [],
+                "breakdown": [
+                  { "label": "Gauge @ region", "alias": "breakdown_1", "column": "breakdown_1", "color": null, "isDerived": false }
+                ],
+                "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] }
+              },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1, "limit": 0, "min": 0, "max": 100, "time_shift": [] }
+            }
+          ],
+          "layout": { "x": 24, "y": 18, "w": 24, "h": 9, "i": 6 },
+          "htmlContent": "",
+          "markdownContent": ""
+        },
+        {
+          "id": "Panel_gauge_heartbeat",
+          "type": "line",
+          "title": "Pool gauge sweep heartbeat",
+          "description": "pool_gauge_sweep_ok records per 10 minutes (expected: 2). A gap here means the gauge panels above are stale, not that the pool is fine.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 0,
+            "axis_border_show": false,
+            "legend_width": { "unit": "px", "value": null },
+            "no_value_replacement": "",
+            "wrap_table_cells": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "SELECT histogram(_timestamp, '10 minutes') AS x_axis_1, count(*) AS y_axis_1 FROM \"modal_logs\" WHERE spath(body, 'type') = 'metric' AND spath(body, 'name') = 'pool_gauge_sweep_ok' AND ('$minds_env' = '' OR spath(body, 'minds_env') = '$minds_env') GROUP BY x_axis_1 ORDER BY x_axis_1",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": {
+                "stream": "modal_logs",
+                "stream_type": "logs",
+                "x": [
+                  { "label": "Time", "alias": "x_axis_1", "column": "x_axis_1", "color": null, "isDerived": false }
+                ],
+                "y": [
+                  { "label": "Sweep runs", "alias": "y_axis_1", "column": "y_axis_1", "color": null, "isDerived": false }
+                ],
+                "z": [],
+                "breakdown": [],
+                "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] }
+              },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1, "limit": 0, "min": 0, "max": 100, "time_shift": [] }
+            }
+          ],
+          "layout": { "x": 0, "y": 27, "w": 48, "h": 6, "i": 7 },
+          "htmlContent": "",
+          "markdownContent": ""
+        }
+      ]
+    }
+  ]
+}

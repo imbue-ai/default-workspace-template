@@ -67,7 +67,6 @@ from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
-from imbue.system_interface.server import _WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
@@ -82,6 +81,7 @@ from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Generous: the first receive occasionally exceeded the previous 5.0s cap on a
@@ -112,14 +112,15 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><body>test</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
-        assert response.status_code == 200
-        assert "test" in response.text
-        # Both the app and the placeholder are HTTP 200 HTML, so the header is
-        # the only thing that distinguishes them to a health check.
-        assert response.headers[FRONTEND_BUILT_HEADER] == "true"
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
+    assert response.status_code == 200
+    assert "test" in response.text
+    # Both the app and the placeholder are HTTP 200 HTML, so the header is
+    # the only thing that distinguishes them to a health check.
+    assert response.headers[FRONTEND_BUILT_HEADER] == "true"
 
 
 def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
@@ -136,11 +137,12 @@ def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> Non
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><body>test</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
-        assert response.status_code == 200
-        assert response.headers["Cache-Control"] == "no-store"
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) -> None:
@@ -153,9 +155,10 @@ def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) ->
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
 
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "false"
@@ -178,9 +181,10 @@ def test_not_built_placeholder_polls_rather_than_refreshing_the_whole_page(tmp_p
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
 
     scriptless_only = re.sub(r"<noscript>.*?</noscript>", "", response.text, flags=re.DOTALL)
     assert 'http-equiv="refresh"' not in scriptless_only
@@ -205,9 +209,10 @@ def test_not_built_placeholder_offers_the_registered_terminal(tmp_path: Path, mo
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
 
     assert '"terminal-x7k9q2w1"' in response.text
     assert 'id="terminal"' in response.text
@@ -230,9 +235,10 @@ def test_not_built_placeholder_renders_without_a_terminal_to_offer(
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
 
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "false"
@@ -250,7 +256,7 @@ def _chat_create_template() -> dict[str, object]:
     the loader would fold in user and local layers that a workspace being repaired
     may not have. ``server.py`` resolves the workspace root the same way.
     """
-    settings = tomllib.loads((_WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
+    settings = tomllib.loads((WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
     return settings["create_templates"]["chat"]
 
 
@@ -429,9 +435,10 @@ def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path)
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/assets/index-abc123.js")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/assets/index-abc123.js")
 
     assert response.status_code == 404
     # The app-shell marker is absent, proving the request did not reach the
@@ -451,11 +458,12 @@ def test_assets_do_not_reveal_whether_files_outside_the_directory_exist(tmp_path
     (static_dir / "assets").mkdir(parents=True)
     (static_dir / "index.html").write_text("<html>app</html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        # index.html exists one level above assets/; a file two levels up does not.
-        exists_outside = test_client.get("/assets/../index.html")
-        missing_outside = test_client.get("/assets/../../no-such-file")
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    # index.html exists one level above assets/; a file two levels up does not.
+    exists_outside = test_client.get("/assets/../index.html")
+    missing_outside = test_client.get("/assets/../../no-such-file")
 
     for response in (exists_outside, missing_outside):
         assert response.status_code == 404
@@ -471,13 +479,14 @@ def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> No
     static_dir = tmp_path / "static"
     static_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        # App built while there is no bundle at all, as it is on a cold start
-        # into a wiped tree.
-        test_client = create_application(build_test_state()).test_client()
-        (static_dir / "assets").mkdir()
-        (static_dir / "assets" / "index-abc123.js").write_text("console.log('app');")
-        response = test_client.get("/assets/index-abc123.js")
+    state = build_test_state()
+    state.static_directory = static_dir
+    # App built while there is no bundle at all, as it is on a cold start
+    # into a wiped tree.
+    test_client = create_application(state).test_client()
+    (static_dir / "assets").mkdir()
+    (static_dir / "assets" / "index-abc123.js").write_text("console.log('app');")
+    response = test_client.get("/assets/index-abc123.js")
 
     assert response.status_code == 200
     assert "javascript" in response.headers["Content-Type"]
@@ -2385,11 +2394,12 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
-        assert response.status_code == 200
-        assert "system-interface-hostname" in response.text
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
+    assert response.status_code == 200
+    assert "system-interface-hostname" in response.text
 
 
 def test_index_enable_other_harnesses_meta_tag_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2399,10 +2409,11 @@ def test_index_enable_other_harnesses_meta_tag_off_by_default(tmp_path: Path, mo
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(build_test_state()).test_client().get("/")
-        assert response.status_code == 200
-        assert '<meta name="system-interface-enable-other-harnesses" content="false">' in response.text
+    state = build_test_state()
+    state.static_directory = static_dir
+    response = create_application(state).test_client().get("/")
+    assert response.status_code == 200
+    assert '<meta name="system-interface-enable-other-harnesses" content="false">' in response.text
 
 
 def test_index_enable_other_harnesses_meta_tag_on_when_flag_set(
@@ -2414,10 +2425,11 @@ def test_index_enable_other_harnesses_meta_tag_on_when_flag_set(
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(build_test_state()).test_client().get("/")
-        assert response.status_code == 200
-        assert '<meta name="system-interface-enable-other-harnesses" content="true">' in response.text
+    state = build_test_state()
+    state.static_directory = static_dir
+    response = create_application(state).test_client().get("/")
+    assert response.status_code == 200
+    assert '<meta name="system-interface-enable-other-harnesses" content="true">' in response.text
 
 
 def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5162,7 +5174,7 @@ def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     assert canonical is not None, f"the canonical regex is no longer declared in {origin_ts}"
 
     page = render_frontend_not_built_page("terminal-x7k9q2w1")
-    in_page = re.findall(r"(/\^\(\?:host\|agent\).+?/i)\.test\(", page)
+    in_page = re.findall(r"(/\^\(\?:.+?/i)\.test\(", page)
     assert in_page == [canonical.group(1)], (
         f"the placeholder's coordinate regex has drifted from {origin_ts}: "
         f"page has {in_page}, origin.ts has {canonical.group(1)!r}"
@@ -5181,10 +5193,11 @@ def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> N
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        head = test_client.head("/")
-        get = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    head = test_client.head("/")
+    get = test_client.get("/")
 
     assert head.headers[FRONTEND_BUILT_HEADER] == "false"
     assert get.headers[FRONTEND_BUILT_HEADER] == "false"

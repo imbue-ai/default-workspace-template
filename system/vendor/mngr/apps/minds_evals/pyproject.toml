@@ -25,11 +25,11 @@ minds-evals-harbor = "imbue.minds_evals.generate:main"
 
 # This project is deliberately NOT a member of the monorepo's uv workspace (the
 # root pyproject.toml excludes it) and resolves against its own uv.lock. harbor
-# declares rich>=14.1.0 and modal>=1.5.1; the workspace is held at rich<14 by
-# litellm[proxy] and at modal==1.4.3 by imbue-mngr-modal, and uv allows only one
-# version of a package per workspace, so inside the workspace harbor could only
-# ever run below its declared floors. Resolving here instead means harbor gets
-# the dependencies it asks for. The cost is that this lock drifts from the root
+# declares rich>=14.1.0; the workspace is held at rich<14 by litellm[proxy], and
+# uv allows only one version of a package per workspace, so inside the workspace
+# harbor could only ever run below its declared floor. Resolving here instead
+# means harbor gets the dependencies it asks for. The cost is that this lock
+# drifts from the root
 # one; keep the shared surface (the cooldown policy, .python-version) identical so
 # the drift stays confined to what isolation is actually for.
 [tool.uv]

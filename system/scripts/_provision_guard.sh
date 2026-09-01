@@ -26,6 +26,12 @@
 # Usage (source it, then):
 #   provision_skip_if_done <name>   # early-exits the calling script when matched
 #   provision_mark_done <name>      # call at the end, after a successful run
+#
+# PROVISION_FORCE=1 runs the step even when the marker matches. The update
+# apply's rollback re-runs the provisioner from the restored tree to put the
+# global toolchain back -- and that tree is exactly the one whose marker was
+# written when it was first provisioned, so without the override the re-run
+# would skip and leave the tools at the rolled-back-away versions.
 
 # Strict mode. This file is sourced by callers that already set this (e.g.
 # setup_system.sh), so re-asserting it here is a no-op for them and keeps the
@@ -47,6 +53,10 @@ provision_skip_if_done() {
     # No resolvable tree -> we cannot prove a match, so let the caller run.
     [ -n "$_fp" ] || return 0
     if [ -f "$_PROVISION_MARKER_DIR/$_fp.$_name.done" ]; then
+        if [ "${PROVISION_FORCE:-}" = "1" ]; then
+            echo "[provision-guard] $_name already provisioned for tree $_fp, but PROVISION_FORCE=1: running it again."
+            return 0
+        fi
         echo "[provision-guard] $_name already provisioned for tree $_fp; skipping."
         exit 0
     fi
