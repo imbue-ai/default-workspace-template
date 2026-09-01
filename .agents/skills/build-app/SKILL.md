@@ -23,6 +23,8 @@ flows go through the `update-app` skill.
 
 Before anything else, run this once, briefing it the way you would brief a
 sub-agent picking this up: what the user wants, plus anything already settled.
+Give it context, not a plan -- working out the approach is its whole job, and a
+plan in the brief just anchors it to yours.
 
 ```bash
 system/scripts/imbue_plan_extra/write_plan.sh <<'IMBUE_PLAN_BRIEF'
