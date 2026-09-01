@@ -10,8 +10,6 @@ needing to open them.
 - `caretaker/` - The weekly Caretaker's deterministic check (cron-driven via
   `system/libs/automations/`, off by default; see the enable-caretaker
   skill).
-- `eval_worker/` - One-shot worker for the minds-evals harness; a no-op
-  unless the harness slotted its config into the workspace.
 - `share_gateway/` - The self-hosted sharing stack: while share materials are
   present it terminates the share's TLS in-container (caddy), enforces the
   owner's grants on every request, and keeps the outbound relay tunnel (frpc)

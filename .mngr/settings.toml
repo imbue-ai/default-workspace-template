@@ -726,13 +726,14 @@ extra_provision_command__extend = [
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
 ]
 
-# Short-timeout overlay for eval-worker Modal sandboxes. Always stacked on top of
-# `modal` (`--template modal --template modal_eval`), mirroring how `docker_runsc`
+# Short-timeout overlay for the workspaces an eval run creates. Always stacked on top
+# of `modal` (`--template modal --template modal_eval`), mirroring how `docker_runsc`
 # overlays `docker`: it reuses the entire `modal` body and only shortens the sandbox
-# timeout to 3h (10710 + the provider's 90s shutdown buffer = 10800s), since eval runs
-# are short-lived and self-terminate at their per-case budget. The eval harness selects
-# it via the MINDS_MODAL_EXTRA_TEMPLATE env var on the eval box; normal Modal creates
-# use plain `modal` (24h). Keeping it separate leaves the global `modal` template alone.
+# timeout to 3h (10710 + the provider's 90s shutdown buffer = 10800s). An eval trial
+# tears its own workspaces down when it finishes, so this timeout is the backstop for
+# the case where the driver dies without doing so. The eval harness selects it via the
+# MINDS_MODAL_EXTRA_TEMPLATE env var on the eval box; normal Modal creates use plain
+# `modal` (24h). Keeping it separate leaves the global `modal` template alone.
 [create_templates.modal_eval]
 setting__extend = ["providers.modal.default_sandbox_timeout=10710"]
 

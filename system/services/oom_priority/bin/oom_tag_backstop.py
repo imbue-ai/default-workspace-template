@@ -22,7 +22,7 @@ process already tagged higher (a Chromium process the browser service's sweep
 remapped into the shared-browser band, reachable here as a descendant of the
 ``browser`` program) is left alone, and programs whose expected band is
 ``PROTECTED`` (earlyoom, this listener itself, and the one-shots env-converge
-and eval-worker) are never touched. Raising is also the direction that needs no
+and vm-exec-register) are never touched. Raising is also the direction that needs no
 capability.
 
 stdout carries the supervisord event-listener protocol (READY / RESULT
