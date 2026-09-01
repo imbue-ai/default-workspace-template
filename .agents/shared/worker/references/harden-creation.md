@@ -114,11 +114,11 @@ coverage that does not exist.
 Autofix's normal final step asks the user to keep or revert each proposed fix
 via AskUserQuestion, which is unavailable in a worker -- so split that decision
 out and make it yourself. Invoke autofix so it *applies* its fixes but leaves
-the keep/revert judgment to you:
+the keep/revert judgment to you, and request a single fix loop to bound the review time:
 
     /autofix Run fully unattended: never call AskUserQuestion. Run the fix
     loop, leave every fix commit applied, and report the fix commits (hash +
-    full message). Do not revert anything yourself -- the caller will decide.
+    full message). Do not revert anything yourself -- the caller will decide. Run only a SINGLE fix loop.
 
 Then review those fix commits against what this branch is meant to do. You hold
 the task context the fix subagents run without, so you are the right judge of
