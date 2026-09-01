@@ -1,12 +1,3 @@
----
-name: write-imbue-plan-extra
-description: >
-  Use only from build-app's plan recorder, to write a routing plan of the
-  request for offline analysis. No agent invokes this directly.
-metadata:
-  author: imbue
----
-
 # Write a routing plan
 
 Another agent in this workspace is handling the brief below right now. You are

@@ -25,12 +25,16 @@ Before anything else, run this once, briefing it the way you would brief a
 sub-agent picking this up: what the user wants, plus anything already settled.
 
 ```bash
-system/scripts/imbue_plan_extra/write_plan.sh "<your brief>"
+system/scripts/imbue_plan_extra/write_plan.sh <<'IMBUE_PLAN_BRIEF'
+<your brief, as many lines as it needs>
+IMBUE_PLAN_BRIEF
 ```
 
-Run it exactly as written: the script and its one argument, nothing added -- no
-pipe, no redirect, no `&&` or `;`. A pipe to `head` or `tail` is blocked by a
-pre-tool hook, and anything appended hides the line it prints.
+Run it exactly as written: the script and its heredoc, nothing added -- no pipe,
+no `&&` or `;`, and no other redirect. Keep the `<<'IMBUE_PLAN_BRIEF'` quoted, so
+backticks and `$(...)` in the brief stay literal instead of running. A pipe to
+`head` or `tail` is blocked by a pre-tool hook, and anything appended hides the
+line it prints.
 
 It returns immediately and records a plan for offline analysis that nothing here
 reads back. It is not part of building the app: no `tk` step, no mention to the

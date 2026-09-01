@@ -3,7 +3,9 @@
 # write_plan.sh -- record a routing plan for a build-app request, for offline
 # analysis only. Nothing in this workspace reads the result.
 #
-#   system/scripts/imbue_plan_extra/write_plan.sh "<the user's request>"
+#   system/scripts/imbue_plan_extra/write_plan.sh <<'EOF'
+#   <the brief>
+#   EOF
 #
 # Returns immediately: the first invocation prints the run directory it created,
 # re-execs itself detached, and exits 0. The calling agent never waits and never
@@ -12,7 +14,7 @@
 #
 # Each call gets its own directory, data/.imbue/plans/<utc-timestamp>-<agent>/:
 #
-#   request.txt  the brief as passed in, verbatim
+#   brief.md     the brief as passed in, verbatim
 #   plan.md      the plan, under a fixed "do not use" header
 #   meta.json    ids and timings for correlating this run with the agent's transcript
 #   log          this run's own log
@@ -50,7 +52,7 @@ set -euo pipefail
 readonly SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly WORK_DIR="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
 readonly PLANS_DIR="${WORK_DIR}/data/.imbue/plans"
-readonly INSTRUCTIONS="${SELF_DIR}/SKILL.md"
+readonly INSTRUCTIONS="${SELF_DIR}/prompt.md"
 
 # Ceiling on one plan run. A plan is a single read-and-write turn; anything past
 # this is wedged and should not keep holding container memory.
@@ -77,15 +79,20 @@ if [ -z "${IMBUE_PLAN_EXTRA_RUN_DIR:-}" ]; then
         run_dir="${run_dir}-$$"
     fi
     mkdir -p "$run_dir" || exit 0
+    # The brief arrives on stdin rather than as an argument, so it can carry
+    # quotes, backticks and newlines without the caller escaping them into a
+    # shell word. The timeout bounds the one misuse that could hang the caller:
+    # invoked with a stdin that nothing ever closes.
+    [ -t 0 ] || timeout 5 cat >"${run_dir}/brief.md" || true
     # The one line the agent sees. It is told to ignore this, but the path in the
     # transcript is what ties the call to its output when the transcript is read later.
     printf '%s\n' "${run_dir#"${WORK_DIR}/"}"
     # setsid is util-linux, so it is present in the workspace container but not on
     # a macOS checkout; nohup alone still detaches from the caller's stdio.
     if command -v setsid >/dev/null 2>&1; then
-        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" setsid nohup "$0" "$@" </dev/null >>"${run_dir}/log" 2>&1 &
+        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" setsid nohup "$0" </dev/null >>"${run_dir}/log" 2>&1 &
     else
-        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" nohup "$0" "$@" </dev/null >>"${run_dir}/log" 2>&1 &
+        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" nohup "$0" </dev/null >>"${run_dir}/log" 2>&1 &
     fi
     disown || true
     exit 0
@@ -122,14 +129,12 @@ write_meta() {
 META
 }
 
-request="${1:-}"
-if [ -z "$request" ]; then
-    log "no request argument; nothing to plan"
-    write_meta "no_request"
+readonly BRIEF_FILE="${RUN_DIR}/brief.md"
+if [ ! -s "$BRIEF_FILE" ]; then
+    log "no brief on stdin; nothing to plan"
+    write_meta "no_brief"
     exit 0
 fi
-
-printf '%s\n' "$request" >"${RUN_DIR}/request.txt" || true
 
 if [ ! -f "$INSTRUCTIONS" ]; then
     log "instructions missing at ${INSTRUCTIONS}; skipping"
@@ -153,15 +158,15 @@ body_file="$(mktemp)"
 prompt_file="$(mktemp)"
 trap 'rm -f "$body_file" "$prompt_file"' EXIT
 
-# The prompt goes in on stdin, not as an argument: the instructions open with YAML
-# frontmatter, and claude reads a leading `---` as an option. Stdin also sidesteps
-# the argv length limit, which a long request would otherwise reach.
+# The prompt goes to claude on stdin rather than as an argument: it is long,
+# and stdin keeps it clear of both the argv limit and shell quoting.
 {
     cat "$INSTRUCTIONS"
-    printf '\n\n# The brief\n\n%s\n' "$request"
+    printf '\n\n# The brief\n\n'
+    cat "$BRIEF_FILE"
 } >"$prompt_file"
 
-log "planning: ${request:0:120}"
+log "planning: $(head -c 120 "$BRIEF_FILE" | tr '\n' ' ')"
 
 # The spawning agent's mngr identity must not follow us in: mngr's hooks would
 # otherwise write this session's markers over that agent's state. Snapshotted
