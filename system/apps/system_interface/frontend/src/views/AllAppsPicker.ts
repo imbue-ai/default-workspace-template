@@ -353,7 +353,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           ? m("input", {
               type: "text",
               class:
-                "mx-3 my-1 h-7 shrink-0 rounded-md bg-sidebar px-2 text-[13px] text-primary outline-none " +
+                "mx-3 my-1 h-7 shrink-0 rounded-md bg-sidebar px-2 text-(length:--font-size-row) text-primary outline-none " +
                 "placeholder:text-faint",
               value: filterText,
               placeholder: "Filter apps",
@@ -380,7 +380,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
             })
           : null,
         rows.length === 0 && shortcutRows.length === 0
-          ? m("div", { class: "px-3 py-2 text-[13px] text-faint" }, emptyMessage)
+          ? m("div", { class: "px-3 py-2 text-(length:--font-size-row) text-faint" }, emptyMessage)
           : m("div", { class: "min-h-0 flex-1 overflow-y-auto" }, [
               ...shortcutRows.map((row) => shortcutRow(row, attrs)),
               ...rows.map((app) => appRow(app, projectName !== null, fadingNames.has(app.name), attrs)),

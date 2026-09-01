@@ -29,19 +29,12 @@ function promptingAgentName(): string | null {
 
 export function FastModeModal(): m.Component {
   return {
-    oncreate() {
-      document.addEventListener("keydown", handleKeydown);
-    },
-
-    onremove() {
-      document.removeEventListener("keydown", handleKeydown);
-    },
-
     view() {
       return m(
         Modal,
         {
           onDismiss: () => resolveFastModePrompt(false),
+          onEscape: () => resolveFastModePrompt(false),
           width: 460,
           card: {
             role: "dialog",
@@ -113,10 +106,4 @@ export function FastModeModal(): m.Component {
       );
     },
   };
-}
-
-function handleKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") {
-    resolveFastModePrompt(false);
-  }
 }

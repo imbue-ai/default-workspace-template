@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => {
     key: () => null,
     length: 0,
   } as Storage;
-  // The notice registers a document keydown listener for Escape; capture it so a test can fire it.
+  // The node test env has no document; provide a minimal one for code that wires
+  // document listeners when lifecycle hooks actually run (they don't in these
+  // vnode-only tests, but imports must not explode).
   const listeners = new Map<string, ((event: unknown) => void)[]>();
   globalThis.document ??= {
     addEventListener: (type: string, fn: (event: unknown) => void) => {
@@ -168,6 +170,38 @@ function findByClass(node: unknown, className: string): AnyVnode | undefined {
   });
 }
 
+/** The first onEscape guard in the tree -- the attr a dialog hands the Modal shell. Walks the
+ *  raw vnodes rather than flatten(), which drops closure-component vnodes (Modal is one). */
+function findEscapeGuard(node: unknown): (() => void) | undefined {
+  if (node === null || node === undefined || typeof node !== "object") {
+    return undefined;
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findEscapeGuard(child);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  const vnode = node as AnyVnode;
+  if (typeof vnode.attrs?.onEscape === "function") {
+    return vnode.attrs.onEscape as () => void;
+  }
+  if (typeof vnode.tag === "function") {
+    const component = (vnode.tag as (v: AnyVnode) => { view: (v: AnyVnode) => unknown })(vnode);
+    return findEscapeGuard(component.view(vnode));
+  }
+  const tag = vnode.tag as unknown;
+  if (tag !== null && typeof tag === "object" && typeof (tag as { view?: unknown }).view === "function") {
+    const rendered = (tag as { view: (v: unknown) => unknown }).view({
+      attrs: vnode.attrs ?? {},
+      children: vnode.children,
+    });
+    return findEscapeGuard(rendered);
+  }
+  return findEscapeGuard(vnode.children);
+}
+
 /** Let queued promise callbacks run. The notice's buttons are `() => void action()`, which is
  *  right for mithril but discards the promise, so awaiting the handler does not await the work. */
 async function flushAsync(): Promise<void> {
@@ -248,27 +282,19 @@ describe("MessageInput send guard", () => {
   it("dismisses the notice on Escape", async () => {
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "/status");
-    // Run the overlay's oncreate so the keydown listener registers, as mithril would on mount.
-    const overlay = findByClass(after, "modal-overlay");
-    (overlay?.attrs?.oncreate as (() => void) | undefined)?.();
-
-    const keydownHandlers = mocks.listeners.get("keydown") ?? [];
-    expect(keydownHandlers.length, "notice should register a keydown listener").toBeGreaterThan(0);
-    keydownHandlers.forEach((handler) => handler({ key: "Escape" }));
+    // The notice hands its Escape guard to the Modal shell via onEscape; the
+    // shell's real document listener is covered in NoticeDialog.test.ts (these
+    // tests render vnodes with no DOM), so fire the guard directly here.
+    const escapeGuard = findEscapeGuard(after);
+    expect(escapeGuard, "notice should hand the shell an Escape guard").toBeTypeOf("function");
+    escapeGuard!();
 
     const reRendered = component.view!({ attrs: { agentId: "agent-1" } } as never);
     expect(renderedText(reRendered)).not.toContain("can't be sent from chat");
   });
 
-  it("removes the keydown listener when the notice goes away", async () => {
-    const component = MessageInput();
-    const after = await typeAndSend(component, "agent-1", "/status");
-    const overlay = findByClass(after, "modal-overlay");
-    (overlay?.attrs?.oncreate as (() => void) | undefined)?.();
-    const registered = (mocks.listeners.get("keydown") ?? []).length;
-    (overlay?.attrs?.onremove as (() => void) | undefined)?.();
-    expect((mocks.listeners.get("keydown") ?? []).length).toBe(registered - 1);
-  });
+  // Listener add/remove symmetry for Escape lives with the Modal shell now and is
+  // covered against a real document in NoticeDialog.test.ts.
 
   it("sends a command another harness never declared", async () => {
     // /status is claude's declaration; codex declared its own list, and /status

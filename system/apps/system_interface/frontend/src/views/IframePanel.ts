@@ -76,7 +76,7 @@ const StoppedAppPlaceholder: m.Component<{ app: AppEntry }> = {
       },
       [
         m("div", { class: "text-[15px] font-medium text-primary" }, label),
-        m("div", { class: "text-[13px] text-faint" }, appStoppedDetail(app)),
+        m("div", { class: "text-(length:--font-size-row) text-faint" }, appStoppedDetail(app)),
         isAppStoppable(app)
           ? m(
               Button,

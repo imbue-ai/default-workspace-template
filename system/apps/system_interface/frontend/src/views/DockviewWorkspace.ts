@@ -70,6 +70,7 @@ import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
 import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "./components/hoverTooltip";
+import { menuCardClass, menuRowClass } from "./components/menu";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
@@ -582,12 +583,11 @@ function tabIconMarkupForPanel(params: PanelParams | undefined): string {
 // the ObjectMenuActions that module asks for, and the floating-card chrome
 // that renders whatever list comes back.
 
-// Menu chrome, settled in the design (§6) and shared with the sidebar's menus:
-// a floating card on the primary surface with a hairline border, 8px radius and
-// the overlay elevation shadow, holding 32px rows of icon + label.
-const TAB_MENU_CARD_CLASS =
-  "fixed z-(--z-dropdown) min-w-[180px] rounded-lg border border-default bg-surface py-1 text-[13px] shadow-overlay";
-const TAB_MENU_ROW_CLASS = "flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left hover:bg-fill-hover";
+// Menu chrome: the shared floating-menu recipe (components/menu.ts), fixed and
+// placed by the sidebar's placeMenu so every floating menu flips and clamps by
+// one rule.
+const TAB_MENU_CARD_CLASS = menuCardClass("fixed min-w-[180px] text-(length:--font-size-row)");
+const TAB_MENU_ROW_CLASS = menuRowClass();
 
 // The one open tab menu, if any. Only one is ever up: opening another closes
 // this one first, and so does an outside press, Escape, a scroll, a resize, or

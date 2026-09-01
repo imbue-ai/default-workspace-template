@@ -34,3 +34,16 @@ export function splitAttrs<T extends m.Attributes>(attrs: T, ownKeys: readonly (
   }
   return passthrough;
 }
+
+// The class-only half of the splitAttrs contract, for components that accept a
+// whole attrs object to merge onto an element they style (Modal's card/overlay).
+// Lifecycle hooks stay: on an element vnode they run once and are a documented
+// use (e.g. an autofocus oncreate on a modal card).
+export function omitClassAttrs(source: Record<string, unknown>): Record<string, unknown> {
+  const rest: Record<string, unknown> = {};
+  for (const key of Object.keys(source)) {
+    if (key === "class" || key === "className") continue;
+    rest[key] = source[key];
+  }
+  return rest;
+}

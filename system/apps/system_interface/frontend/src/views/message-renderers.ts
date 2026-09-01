@@ -8,6 +8,7 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
 import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { activityDotClass } from "./components/activityDot";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
@@ -245,11 +246,9 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
   // whole card also drops its green accent for neutral grey, since green reads as "active".
   const statusIndicator = isRunning
     ? m("span", {
-        // Pulsing green dot; reuses the agent-activity-pulse keyframes (style.css)
-        // so it matches the main chat's activity dot.
-        class:
-          "subagent-card-status-dot subagent-card-status-dot--running h-[7px] w-[7px] shrink-0 rounded-full " +
-          "bg-accent animate-[agent-activity-pulse_1.4s_ease-in-out_infinite]",
+        // The chat activity dot's shared recipe (components/activityDot.ts), one
+        // size up for the card.
+        class: `subagent-card-status-dot subagent-card-status-dot--running ${activityDotClass("h-[7px] w-[7px]")}`,
         "aria-label": "Sub-agent is working",
         ...hoverTooltipAttrs("Working"),
       })

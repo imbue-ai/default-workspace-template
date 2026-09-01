@@ -39,13 +39,6 @@ export interface ProjectMembershipDialogAttrs {
 
 export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAttrs> {
   const selected = new Set<string>();
-  let latestAttrs: ProjectMembershipDialogAttrs | null = null;
-
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Escape" || latestAttrs === null) return;
-    latestAttrs.onCancel();
-    m.redraw();
-  }
 
   function projectRow(attrs: ProjectMembershipDialogAttrs, project: ProjectInfo): m.Vnode {
     // A project already showing the object is settled: its box stays checked
@@ -79,33 +72,21 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
           { class: "flex h-4 w-4 shrink-0 items-center justify-center" },
           m.trust(squiggleMarkup(project.glyph, project.color, ROW_GLYPH_SIZE)),
         ),
-        m("span", { class: "min-w-0 flex-1 truncate text-[13px] text-primary" }, project.name),
+        m("span", { class: "min-w-0 flex-1 truncate text-(length:--font-size-row) text-primary" }, project.name),
         isFixed ? m("span", { class: "shrink-0 text-[11px] text-faint" }, "already added") : null,
       ],
     );
   }
 
   return {
-    oninit(vnode) {
-      latestAttrs = vnode.attrs;
-    },
-
     view(vnode) {
       const attrs = vnode.attrs;
-      latestAttrs = attrs;
 
       return m(
         Modal,
         {
           onDismiss: attrs.onCancel,
-          overlay: {
-            oncreate() {
-              document.addEventListener("keydown", handleKeydown);
-            },
-            onremove() {
-              document.removeEventListener("keydown", handleKeydown);
-            },
-          },
+          onEscape: attrs.onCancel,
           title: "Add to project",
           actions: [
             m(Button, { onclick: attrs.onCancel }, "Cancel"),
@@ -129,7 +110,11 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
             ".",
           ]),
           attrs.projects.length === 0
-            ? m("p", { class: "py-2 text-[13px] text-faint" }, "There are no projects on this machine yet.")
+            ? m(
+                "p",
+                { class: "py-2 text-(length:--font-size-row) text-faint" },
+                "There are no projects on this machine yet.",
+              )
             : m(
                 "div",
                 { class: "mb-3 flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto" },

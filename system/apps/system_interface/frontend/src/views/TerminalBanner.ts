@@ -17,6 +17,7 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
 import { Button } from "./components/Button";
+import { bannerClass } from "./components/banner";
 
 const PERSISTENCE_DOC_URL = "https://github.com/imbue-ai/mngr/blob/main/apps/minds/docs/persistent-terminals.md";
 
@@ -62,9 +63,8 @@ export function TerminalBanner(): m.Component {
       return m(
         "div",
         {
-          class:
-            "terminal-banner flex flex-none items-center justify-between gap-3 border-b border-default " +
-            "bg-surface-secondary px-2.5 py-1.5 text-(length:--font-size-body) leading-[1.4] text-secondary",
+          // The shared banner box (components/banner.ts), neutral tint.
+          class: bannerClass("terminal-banner", "neutral"),
         },
         [
           m("span", { class: "terminal-banner-text min-w-0" }, [
