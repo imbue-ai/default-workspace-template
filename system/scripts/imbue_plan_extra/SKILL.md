@@ -204,8 +204,10 @@ work allows, so the waiting overlaps the pre-flight, the icon, or the mock.
 
 ## Output
 
-Emit exactly this and nothing else. The wrapper writes your stdout to a file
-verbatim under a fixed header, so whatever you emit is the plan.
+Emit the two tags and the three lists, and nothing else -- no preamble, no
+sign-off, no prose outside the tags. The shape below is fixed; the content is
+yours. The wrapper writes your stdout to a file verbatim under a fixed header,
+so whatever you emit is the plan.
 
 ```
 <thinking>
@@ -215,6 +217,16 @@ Where you cut the work and why, and why each node got the capability it got.
 capability = ["high", "low", "medium", "low"]
 subtasks = ["Decide the data model and hand back a spec.", "Draw the app's icon.", "Build the page against the spec, using that icon.", "Hand the app to crystallize-creation with type=app."]
 access list = [[], [], [0, 1], [0, 2]]
+</output>
+```
+
+The same shape at six nodes, with three of them starting at once:
+
+```
+<output>
+capability = ["high", "low", "low", "medium", "high", "low"]
+subtasks = ["Connect the account the app reads from and hand back a sample of its real records.", "Pick the app's name and a free port.", "Draw the app's icon.", "Scaffold the app and serve a throwaway mock of the page.", "Replace the mock with the real page and the data layer behind it.", "Hand the app to crystallize-creation with type=app."]
+access list = [[], [], [], [1, 2], [0, 3], [3, 4]]
 </output>
 ```
 
