@@ -1,10 +1,8 @@
 ---
 name: write-imbue-plan-extra
 description: >
-  Write a routing plan for a build-app request. The plan is collected for
-  offline analysis and is never read back by anything in this workspace. It is
-  passed as a prompt by the write_plan.sh script beside it, and lives outside
-  .agents/skills/ so that it stays out of every agent's skill menu.
+  Use only from build-app's plan recorder, to write a routing plan of the
+  request for offline analysis. No agent invokes this directly.
 metadata:
   author: imbue
 ---
