@@ -153,19 +153,12 @@ starts from, and the outcome it has to reach.
 
 ### Scope
 
-Route the work build-app does, and let your plan end where build-app ends.
-
-Your last node is always the handoff to `crystallize-creation`, and it does
-nothing else. Its whole job is that one call and the arguments it carries -- the
-app's name, its lib path, its URL segment and a line on what it does -- which it
-takes from what the nodes before it produced. Fold no other work into it. That
-skill takes over from there and owns the tracking ticket, the hardening pass and
-the review gates: everything on the far side of the handoff is its work, and
-gets no node from you.
-
-`update-app` owns modifying and removing an app, which is a different flow from
-building one. It gets no node either. A node spent there routes someone else's
-work.
+Route the work build-app does. Your last node is always the handoff to
+`crystallize-creation` and does nothing else: that one call, carrying the app's
+name, lib path, URL segment and a line on what it does. Everything past the
+handoff belongs to that skill -- the tracking ticket, the hardening pass, the
+review gates -- and gets no node. Neither does `update-app`, which owns
+modifying and removing an app.
 
 ### The access list
 
