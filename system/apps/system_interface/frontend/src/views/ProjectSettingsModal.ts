@@ -17,11 +17,10 @@
  * project's own view and member list and nothing more, so there is no longer
  * any consequence for the confirmation to enumerate beyond that.
  *
- * Built on the shared Modal shell (views/Modal.ts): a backdrop mousedown to
- * dismiss, Enter in the name field to save. Escape is listened for on the
- * document (wired through the shell's `overlay` hook, as FastModeModal does)
- * rather than on the name field alone, because focus here just as easily sits
- * on a swatch or a glyph.
+ * Built on the shared Modal shell (views/components/Modal.ts): a backdrop mousedown to
+ * dismiss, Enter in the name field to save, and Escape through the shell's
+ * `onEscape` rather than a key handler on the name field alone, because focus
+ * here just as easily sits on a swatch or a glyph.
  */
 
 import m from "mithril";

@@ -9,10 +9,10 @@
  * offered: it is the home, lists the whole machine, and an object leaves it
  * only by being deleted.
  *
- * Built on the shared Modal shell (views/Modal.ts): its backdrop-mousedown
- * dismissal, and a document-level Escape wired through the shell's `overlay`
- * hook (as ProjectSettingsModal does, and for the same reason: focus sits on a
- * checkbox row as easily as anywhere).
+ * Built on the shared Modal shell (views/components/Modal.ts): its backdrop-mousedown
+ * dismissal, and Escape through the shell's `onEscape` rather than a key
+ * handler on any one control, because focus sits on a checkbox row as easily
+ * as anywhere.
  */
 
 import m from "mithril";

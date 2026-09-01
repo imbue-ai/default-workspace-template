@@ -268,7 +268,6 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
         ),
       );
 
-  // Once finished, the card drops its green accent for neutral grey -- green reads as active.
   const cardTone = isRunning
     ? "border-accent bg-accent-light"
     : "subagent-card--done border-default bg-surface-secondary";

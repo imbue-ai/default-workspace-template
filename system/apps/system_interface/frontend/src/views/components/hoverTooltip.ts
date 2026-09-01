@@ -105,10 +105,7 @@ function placeTooltipBelow(anchor: TooltipAnchor, bubble: TooltipSize, viewport:
  * when it would otherwise overflow the right edge (and there is room over
  * there). Unlike the below/above flip, both axes get the full min-and-max
  * clamp here rather than only the near-edge one: a rail row's tooltip must
- * never run off the right edge of the viewport (the one direction "below"
- * tolerates overflowing, in the pathological case of a trigger taller than
- * the viewport, has no equivalent excuse on this axis), so this clamps hard
- * both ways instead of reproducing that allowance.
+ * never run off the right edge of the viewport.
  */
 function placeTooltipRight(anchor: TooltipAnchor, bubble: TooltipSize, viewport: TooltipSize): TooltipPosition {
   const verticalCenter = anchor.top + (anchor.bottom - anchor.top) / 2 - bubble.height / 2;

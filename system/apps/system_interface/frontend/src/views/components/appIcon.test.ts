@@ -413,7 +413,6 @@ describe("a hostile icon, taken all the way into the document", () => {
       const host = document.createElement("div");
       document.body.appendChild(host);
       try {
-        // Exactly the call the sidebar row and the dock tab make.
         host.innerHTML = serviceIconMarkup("hostile", 16, FALLBACK);
         expect(host.querySelectorAll(FORBIDDEN_SELECTOR)).toHaveLength(0);
         for (const element of [host, ...Array.from(host.querySelectorAll("*"))]) {

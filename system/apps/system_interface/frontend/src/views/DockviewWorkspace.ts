@@ -1424,11 +1424,9 @@ function createTabActionButton(
 ): HTMLButtonElement {
   const button = document.createElement("button");
   // The shared ghost icon-Button recipe supplies the box, radius and hover
-  // square; `dv-custom-tab-action` stays as a bare marker for the E2E selectors,
-  // and `shrink-0` preserves the old flex-shrink behaviour in the strip.
+  // square; `dv-custom-tab-action` stays as a bare marker for the E2E selectors.
   button.className = buttonClass("ghost", { icon: true, xs: true, extra: "dv-custom-tab-action shrink-0" });
   button.setAttribute("aria-label", title);
-  // 12px glyphs, matching the pre-primitive size (previously forced by CSS).
   button.innerHTML = iconName === "kebab" ? tabIcon("kebab", 12) : icon(iconName, { size: 12 });
   const tooltip = attachHoverTooltip(button);
   tooltip.setText(title);

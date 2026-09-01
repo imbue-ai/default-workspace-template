@@ -1001,8 +1001,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         state: idx < activeIdx ? ("done" as const) : idx === activeIdx ? ("active" as const) : ("pending" as const),
       })),
     ];
-    // The item's text tone and its icon's treatment both key off the step
-    // state; the --state suffix stays as an interpolated marker.
+    // The --state suffix stays as an interpolated marker.
     const itemTone = { done: "text-secondary", active: "font-medium text-primary", pending: "text-secondary" };
     const iconBase = "claude-login-checklist-icon inline-flex h-[18px] w-[18px] flex-none items-center justify-center";
     const iconTone = {

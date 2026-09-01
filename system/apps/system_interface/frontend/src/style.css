@@ -45,8 +45,7 @@
   /* State fills are translucent rather than opaque hexes so they
      stack: a control's hover tint over an already-tinted row reads one step
      deeper, which is what keeps a hover-revealed control's own hover visible.
-     Alphas keep the previous rendered strength over white (was #edecea /
-     #e8e6e1); warmth comes from the surface underneath, not the tint. */
+     Warmth comes from the surface underneath, not the tint. */
   --c-fill-hover: rgb(0 0 0 / 0.07);
   --c-fill-active: rgb(0 0 0 / 0.11);
   --c-bg-user-bubble: #ededed;
@@ -111,11 +110,9 @@
   --width-message-column: 740px;
 }
 
-/* The colour-utility layer: clean semantic names over the --c-* values —
- * text (primary/secondary/faint/on-accent), borders
- * (default/subtle), surfaces, fills (hover/active state tints), accent, and
- * status. Utilities generate on demand: text-primary, bg-page, bg-fill-hover,
- * border-default, bg-danger-surface, ... */
+/* The colour-utility layer: clean semantic names over the --c-* values,
+ * grouped by role below. Utilities generate on demand: text-primary, bg-page,
+ * bg-fill-hover, border-default, bg-danger-surface, ... */
 @theme inline {
   /* text: text-primary / -secondary / -faint / -on-accent */
   --color-primary: var(--c-text-primary);
@@ -802,8 +799,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    dockview builds this from theme variables this app sets to transparent (the
    divider is the tab gap, the group background is the canvas), so untouched it
    renders as bare text floating over the pane. It is a menu, so it wears the
-   same chrome as every other floating card: primary surface, hairline border,
-   8px radius, the overlay shadow, and 32px rows with the shared hover fill. */
+   same chrome as every other floating card. */
 .dockview-theme-light .dv-tabs-overflow-dropdown-default {
   gap: --spacing(1);
   padding: 0 --spacing(1.5);
@@ -1092,9 +1088,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-left: --spacing(1);
 }
 
-/* The tab-action buttons (close, kebab) now wear the shared ghost icon-Button
+/* The tab-action buttons (close, kebab) wear the shared ghost icon-Button
  * recipe (buttonClass in views/components/Button.ts) for their box, radius and
- * hover square; `.dv-custom-tab-action` stays only as a bare marker the E2E
+ * hover square; `.dv-custom-tab-action` is only a bare marker the E2E
  * selectors query, and the 12px glyph size is set on the icon markup at the
  * call site. Only the `.dv-custom-tab-actions` container styling lives here. */
 

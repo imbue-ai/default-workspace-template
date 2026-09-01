@@ -4,8 +4,7 @@ import { TEXT_BODY_SIZE } from "./typography";
  * One text-field style for <input> / <textarea>. Options: mono (id/token-like
  * fields), withAction (reserves room for a trailing inline action button),
  * extra. Text fields are always focus-visible, so the accent ring also shows
- * on click. Genuinely special fields stay bespoke: the composer textbox, the
- * model-search field, and the inline tab-rename editor.
+ * on click. Genuinely special fields stay bespoke.
  *
  * A class builder, not a component, on purpose: the recipe spans two element
  * types that differ in their attribute surface, and there is no invariant a

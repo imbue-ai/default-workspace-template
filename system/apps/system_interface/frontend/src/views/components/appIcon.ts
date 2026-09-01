@@ -5,10 +5,9 @@
  * An app registers its icon as SVG markup (`forward_port.py --icon`), the
  * registry carries it verbatim on the app's row, and the server hands it to
  * this UI on `AppEntry.icon`. That markup is authored by a skill, so it is
- * untrusted: every surface that draws an app -- the rail's shortcut rows and
- * tab list, the "All apps" popover, the New Tab launcher's tables, the dock
- * tab -- goes through `appIconMarkup`/`serviceIconMarkup` here, and nothing
- * inlines a registry string on its own.
+ * untrusted: every surface that draws an app goes through
+ * `appIconMarkup`/`serviceIconMarkup` here, and nothing inlines a registry
+ * string on its own.
  *
  * The gate is `sanitizeIconMarkup`, and it is deliberately the only one:
  *
@@ -16,11 +15,10 @@
  *   mutation-XSS gets in; DOMPurify parses the markup with the browser's own
  *   parser and keeps only an SVG allowlist.
  * - Anything that can execute or reach off the page is refused rather than
- *   repaired at the edges: `<script>`, `<a>` (navigates), `<image>` and
- *   `<iframe>` (load), `<foreignObject>` (embeds arbitrary HTML), the
- *   animation elements (`<animate>` and friends, which can retarget an
- *   attribute at runtime), `<style>` and `style=` (CSS can fetch), `on*`
- *   handlers, and any URI that is not a `#fragment` inside the icon itself.
+ *   repaired at the edges: elements that run code, navigate, load a resource,
+ *   embed foreign HTML, or retarget an attribute at runtime, `<style>` and
+ *   `style=` (CSS can fetch), `on*` handlers, and any URI that is not a
+ *   `#fragment` inside the icon itself.
  * - `class` goes too. With no stylesheet of its own an icon's classes can only
  *   match the workspace's, which is a way to borrow layout rules rather than a
  *   way to draw.
@@ -155,8 +153,7 @@ function onlyElementChild(fragment: DocumentFragment): Element | null {
  *
  * DOMPurify has already been asked for all of this through its config; this
  * runs anyway, because the rules are the point and reading them at the DOM
- * they apply to is the only way to be sure of them. It is also what the tests
- * assert against.
+ * they apply to is the only way to be sure of them.
  */
 function scrubAttributes(root: Element): void {
   for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
@@ -245,10 +242,9 @@ function normalizeRoot(root: Element, sizePx: number): boolean {
  *
  * Null is the answer for anything at all doubtful -- unparseable markup,
  * markup not rooted at a single `<svg>` element, art with no size to scale
- * from,
- * markup over MAX_ICON_LENGTH, or a page with no DOM to sanitize against.
- * Callers draw their own generic glyph on null, so refusing an icon costs a
- * picture rather than a surface.
+ * from, markup over MAX_ICON_LENGTH, or a page with no DOM to sanitize
+ * against. Callers draw their own generic glyph on null, so refusing an icon
+ * costs a picture rather than a surface.
  */
 export function sanitizeIconMarkup(rawMarkup: string, sizePx: number): string | null {
   const markup = rawMarkup.trim();
@@ -289,9 +285,7 @@ function sanitizeUncached(markup: string, sizePx: number): string | null {
  * the caller's generic glyph otherwise.
  *
  * The fallback is passed in rather than chosen here because each surface's
- * generic glyph is its own -- the rail, the launcher and the dock tab each draw
- * an app on their own grid -- and an app without an icon must look exactly as
- * it looked before icons existed.
+ * generic glyph is its own, drawn on its own grid.
  */
 export function appIconMarkup(
   rawIcon: string | undefined | null,
@@ -308,10 +302,9 @@ export function appIconMarkup(
  * What an app wears when it has registered no icon of its own.
  *
  * Almost every app is in this case, so the fallback cannot be one shared glyph:
- * a list of them all wearing the same box tells the reader nothing, which is
- * what "notes" and "counter" looked like side by side. A monogram -- the app's
- * initial in an outlined tile -- at least differs per app and stays put, so the
- * same app is recognisable in the rail, the launcher and its tab.
+ * a list of them all wearing the same box tells the reader nothing. A monogram
+ * -- the app's initial in an outlined tile -- at least differs per app and
+ * stays put, so the same app is recognisable everywhere it is drawn.
  *
  * It is drawn in the house icon style: currentColor strokes on a transparent
  * background, the same frame every glyph in icons.ts uses, so an unnamed app
@@ -339,9 +332,8 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
 }
 
 /**
- * The same, for surfaces that hold a service name rather than the app row: the
- * rail's tab list, the launcher's tables and the dock tab all address an app by
- * the name in its `service:<name>` ref.
+ * The same, for surfaces that hold a service name rather than the app row --
+ * ones that address an app by the name in its `service:<name>` ref.
  *
  * An unknown name (an app that has since been deregistered, a ref from a
  * hand-edited layout) has no icon to draw and takes the fallback.
