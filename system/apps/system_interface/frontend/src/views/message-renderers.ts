@@ -5,6 +5,7 @@
 
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
+import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
 import { hoverTooltipAttrs } from "./hoverTooltip";
@@ -302,8 +303,11 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
   const inputText = toolCall.input_preview || "";
   const outputText = toolResult?.output || "";
   const isError = toolResult?.is_error === true;
+  // Keyed by the tool call's stable id so the expansion survives the row
+  // unmounting and remounting (virtualization) or re-rendering (streaming).
+  const expansionKey = `tc:${toolCall.tool_call_id}`;
 
-  return m("div", { class: "tool-call-block" }, [
+  return m("div", { class: `tool-call-block${isBlockExpanded(expansionKey) ? " tool-call-block--expanded" : ""}` }, [
     m(
       "div",
       {
@@ -311,7 +315,9 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
         onclick(e: Event) {
           const block = (e.currentTarget as HTMLElement).parentElement;
           if (block) {
-            block.classList.toggle("tool-call-block--expanded");
+            // Toggle the DOM directly (memoized wrappers skip re-patching)
+            // AND record it so a fresh mount renders in the same state.
+            setBlockExpanded(expansionKey, block.classList.toggle("tool-call-block--expanded"));
           }
         },
       },
@@ -357,12 +363,18 @@ export function renderAssistantMessageChildren(
       // provider-side fault (5xx / overloaded) add a grey "not Minds' fault" note.
       children.push(
         m("div.message-api-error", [
-          m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }),
+          m(MarkdownContent, {
+            content: textContent,
+            requestedAt: event.timestamp,
+            expansionKeyPrefix: event.event_id,
+          }),
           event.is_provider_fault ? m("div.message-api-error-note", providerFaultNote(event.api_error_kind)) : null,
         ]),
       );
     } else {
-      children.push(m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }));
+      children.push(
+        m(MarkdownContent, { content: textContent, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
+      );
     }
   }
   for (const toolCall of toolCalls) {

@@ -3865,9 +3865,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: default;
 }
 
-/* Terminal lifecycle banner: a thin bar above each terminal tab explaining
-   that terminal state lives in memory only. */
-.terminal-banner {
+/* The workspace's two thin notice bars -- the terminal lifecycle banner above
+   each terminal tab, and the update-staleness banner at the top of the shell.
+   They are the same box; each names its own surface colours below. */
+.terminal-banner,
+.update-staleness-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3876,12 +3878,18 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 6px 10px;
   font-size: 0.8125rem;
   line-height: 1.4;
+}
+
+/* Terminal lifecycle banner: explains that terminal state lives in memory
+   only. */
+.terminal-banner {
   color: var(--color-text-secondary);
   background: var(--color-bg-secondary, #f8fafc);
   border-bottom: 1px solid var(--color-border, #e5e7eb);
 }
 
-.terminal-banner-text {
+.terminal-banner-text,
+.update-staleness-banner-text {
   min-width: 0;
 }
 
@@ -3896,7 +3904,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex: 0 0 auto;
 }
 
-.terminal-banner-btn {
+/* Both banners' dismiss buttons. */
+.terminal-banner-btn,
+.update-staleness-banner-btn {
   padding: 2px 8px;
   font-size: 0.75rem;
   color: var(--color-text-secondary);
@@ -3906,6 +3916,68 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: pointer;
 }
 
-.terminal-banner-btn:hover {
+.terminal-banner-btn:hover,
+.update-staleness-banner-btn:hover {
   background: var(--color-bg-hover, #eef2f7);
+}
+
+/* --- Transcript custom scrollbar (transcript-smooth-scroll spec) ----------- */
+
+/* The transcript scroll container hides its native scrollbar entirely; the
+   TranscriptScrollbar overlay replaces it (physical region in pixel space,
+   virtual regions in index space). */
+.transcript-scroll {
+  scrollbar-width: none;
+  outline: none;
+  /* The engine owns viewport stability (anchor-derived scrollTop each frame);
+     the browser's native scroll anchoring would fight those writes with its
+     own adjustments, so it is disabled for this scroller entirely. */
+  overflow-anchor: none;
+}
+
+.transcript-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Overlay track along the panel's right edge. Auto-hides: transparent unless
+   scrolled recently, hovered, or mid-drag (the -shown class). Pointer events
+   stay on so the edge is grabbable even while faded out. */
+.transcript-scrollbar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  right: 2px;
+  width: 12px;
+  z-index: 20;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  touch-action: none;
+}
+
+.transcript-scrollbar-shown,
+.transcript-scrollbar:hover {
+  opacity: 1;
+}
+
+.transcript-scrollbar-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 5px;
+  background: var(--color-border);
+  pointer-events: none;
+}
+
+.transcript-scrollbar:hover .transcript-scrollbar-thumb,
+.transcript-scrollbar-shown .transcript-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text-secondary) 55%, transparent);
+}
+
+/* Update-staleness banner: amber, shown when the workspace's on-disk code has
+   moved under the running interface (an interrupted, not-yet-activated, or
+   emergency-exited update). Informational only. */
+.update-staleness-banner {
+  color: var(--color-text-primary, #1f2937);
+  background: var(--color-warning-bg, #fef3c7);
+  border-bottom: 1px solid var(--color-warning-border, #f59e0b);
 }

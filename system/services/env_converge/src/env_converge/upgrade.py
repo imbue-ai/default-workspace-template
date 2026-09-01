@@ -74,7 +74,7 @@ def run_upgrade(
     # Units re-run at the new pins (the template merge may have bumped them),
     # then the record re-captures against the new base.
     run_unit_scripts(workspace_dir, overlay_dir)
-    capture_all(record_dir, target_timestamp, workspace_dir)
+    capture_all(record_dir, target_timestamp, workspace_dir, record_to_preserve=None)
 
     upgraded = read_apt_state(record_dir)
     versions_after = dict(upgraded.version_by_package) if upgraded is not None else {}
