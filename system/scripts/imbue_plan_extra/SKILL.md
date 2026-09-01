@@ -116,6 +116,14 @@ With 5 nodes and more shapes than that available, most nodes combine several --
 one node routinely decides, builds and verifies. Cut where the work genuinely
 changes hands.
 
+Splitting has a payoff and a price. More nodes let more work run at once, and
+they let the routine parts go to cheaper workers while the hard parts get an
+expensive one. Each split also costs: a handoff for one worker to write and the
+next to read, the earlier context carried into the new node, and a worker
+starting cold on work the previous one already had in hand. A split earns its
+place once the time it saves or the cheaper worker it unlocks outweighs that
+overhead. Below that line the two pieces belong in one node.
+
 The main agent owns the conversation with the user, so a node produces the thing
 the user is shown and hands it up there. The two points where build-app waits on
 the user -- the mock, then the working site -- still order the graph: work behind
