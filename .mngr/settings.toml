@@ -698,9 +698,9 @@ idle_mode = "disabled"
 # minds-facing sizing + timeouts HERE rather than in the mngr_modal provider
 # defaults: 2 CPU / 4 GB (matching the lima/docker convention) and a ~24h sandbox
 # timeout. The sandbox timeout (86310) plus the provider's 90s shutdown buffer
-# lands at 86400s (24h), Modal's hard cap. Eval workers instead stack the
-# `modal_eval` overlay below for a shorter timeout, leaving this global template
-# untouched.
+# lands at 86400s (24h), Modal's hard cap. The workspaces an eval run creates
+# instead stack the `modal_eval` overlay below for a shorter timeout, leaving
+# this global template untouched.
 setting__extend = [
     "providers.modal.is_enabled=true",
     "providers.modal.default_cpu=2.0",
