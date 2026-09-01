@@ -1,4 +1,4 @@
-The eval worker is gone: `system/services/eval_worker/` is deleted, its `[program:eval-worker]` block is removed from `system/supervisord.conf`, and it is unwired from the workspace root `pyproject.toml` and `uv.lock` (which also drops `boto3`, a dependency nothing else here declared).
+The eval worker is gone: `system/services/eval_worker/` is deleted, its `[program:eval-worker]` block is removed from `system/supervisord.conf`, and it is unwired from the workspace root `pyproject.toml` and `uv.lock`. Its `boto3` requirement goes with it, though the lock still carries `boto3` itself: the vendored `imbue-common` depends on it.
 
 It existed to drive multi-turn conversations from *inside* an eval workspace, self-completing a run and snapshotting to S3, and no-op'd in every normal workspace. The Minds persona eval harness has since moved to a host-side driver that reaches in over the system interface, so nothing slots the `test_case_metadata.json` the worker waited for. Workspaces now boot one fewer supervisord program.
 
