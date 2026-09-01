@@ -42,8 +42,7 @@ Three things define a node, and they are the three lists you output:
 
 1. **capability** -- how strong a worker the node is worth.
    One of `"low"`, `"medium"` or `"high"`.
-2. **subtask** -- what that worker is asked to accomplish.
-   A string.
+2. **subtask** (a string) -- what that worker is asked to accomplish.
 3. **access list** -- which earlier nodes it depends on, and whose handoffs it
    sees.
    A list of earlier node indices, any length from empty upwards, or the single
