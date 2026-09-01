@@ -103,7 +103,7 @@ is already there for a later one to find. What a node's access list controls is
 the ordering and the handoffs:
 
 - **Ordering.** A node waits on the nodes in its access list and on nothing
-  else. Steps that are not waiting on each other run in parallel. Position in
+  else. Nodes that are not waiting on each other run in parallel. Position in
   the lists orders nothing by itself.
 - **Handoffs.** A node sees the subtask and the reply of each node it lists.
   That is how one worker learns what another decided, named, or deliberately
