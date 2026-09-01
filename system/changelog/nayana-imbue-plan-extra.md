@@ -20,7 +20,11 @@ Each call gets its own directory,
 `data/.imbue/plans/<utc-timestamp>-<agent>/`, holding `request.txt`, `plan.md`,
 a `meta.json` of ids and timings, and that run's `log`. The wrapper prints the
 directory it created as its only output, so a `write_plan.sh` call in an
-agent's transcript maps straight to its results.
+agent's transcript maps straight to its results. build-app therefore tells the
+agent to run the command exactly as written, with nothing piped, redirected or
+chained onto it: decorating the call swallows that line, and a pipe to `head` or
+`tail` is refused outright by the `agent_block_pipe_tail_head.sh` pre-tool hook,
+costing a denied call and a retry.
 
 The recorder is built to be invisible to the work going on around it:
 
