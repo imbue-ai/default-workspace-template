@@ -27,6 +27,7 @@ from pydantic import SecretStr
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.observability.data_types import DashboardSummary
 from imbue.observability.data_types import SenderCredential
 from imbue.observability.errors import ObservabilityError
 from imbue.observability.primitives import ALL_LOG_STREAM_NAMES
@@ -81,6 +82,18 @@ class OpenObserveApiInterface(MutableModel, ABC):
     @abstractmethod
     def update_stream_retention(self, stream_name: str, stream_type: str, retention_days: int) -> bool:
         """Set one stream's data retention in days; False when the stream does not exist yet."""
+
+    @abstractmethod
+    def list_dashboard_summaries(self) -> list[DashboardSummary]:
+        """Return every dashboard's id and title in the organization's default folder."""
+
+    @abstractmethod
+    def create_dashboard(self, definition: Mapping[str, object]) -> None:
+        """Create one dashboard from its full definition document."""
+
+    @abstractmethod
+    def delete_dashboard(self, dashboard_id: str) -> None:
+        """Delete one dashboard by its server-assigned id."""
 
 
 class OpenObserveHttpApi(OpenObserveApiInterface):
@@ -139,6 +152,60 @@ class OpenObserveHttpApi(OpenObserveApiInterface):
                 f"Setting retention on stream {stream_name} failed ({response.status_code}): {response.text}"
             )
         return True
+
+    def list_dashboard_summaries(self) -> list[DashboardSummary]:
+        response = self._request("GET", f"/api/{OPENOBSERVE_ORGANIZATION}/dashboards", None)
+        if response.status_code != 200:
+            raise OpenObserveApiError(f"Listing dashboards failed ({response.status_code}): {response.text}")
+        payload = response.json()
+        entries = payload.get("dashboards") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            # A shape drift must fail loudly: an empty result would make the
+            # import create a duplicate beside every existing dashboard.
+            raise OpenObserveApiError(
+                f"Unexpected dashboards listing payload shape (no 'dashboards' list): {payload!r}"
+            )
+        for entry in entries:
+            # Same loud-failure policy per entry: a silently dropped entry
+            # would make the import duplicate that one dashboard.
+            if not isinstance(entry, dict):
+                raise OpenObserveApiError(f"Unexpected dashboards listing entry shape (not an object): {entry!r}")
+        return [_dashboard_summary_from_listing_entry(entry) for entry in entries]
+
+    def create_dashboard(self, definition: Mapping[str, object]) -> None:
+        response = self._request("POST", f"/api/{OPENOBSERVE_ORGANIZATION}/dashboards", dict(definition))
+        if response.status_code != 200:
+            raise OpenObserveApiError(
+                f"Creating dashboard {definition.get('title')!r} failed ({response.status_code}): {response.text}"
+            )
+
+    def delete_dashboard(self, dashboard_id: str) -> None:
+        response = self._request("DELETE", f"/api/{OPENOBSERVE_ORGANIZATION}/dashboards/{dashboard_id}", None)
+        if response.status_code != 200:
+            raise OpenObserveApiError(
+                f"Deleting dashboard {dashboard_id} failed ({response.status_code}): {response.text}"
+            )
+
+
+def _dashboard_summary_from_listing_entry(entry: Mapping[str, object]) -> DashboardSummary:
+    """Extract one listing entry's id + title, tolerating the schema-version nesting.
+
+    The listing wraps each dashboard under its schema-version key (``"v5":
+    {...}`` on the pinned release); older releases returned the document
+    flat. Read whichever nested document is present, falling back to the
+    entry itself, so a version bump changes at most the nesting key.
+    """
+    document: Mapping[str, object] = entry
+    for key, value in entry.items():
+        if key.startswith("v") and key[1:].isdigit() and isinstance(value, Mapping):
+            # Re-key the nested mapping so its (unverified) key type never
+            # leaks into the str-keyed reads below.
+            document = {str(nested_key): nested_value for nested_key, nested_value in value.items()}
+            break
+    return DashboardSummary(
+        dashboard_id=str(document.get("dashboardId", "")),
+        title=str(document.get("title", "")),
+    )
 
 
 @pure

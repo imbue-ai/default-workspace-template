@@ -9,7 +9,7 @@ from loguru import logger
 from env_converge.converge import (
     DEFAULT_OVERLAY_DIR,
     DEFAULT_WORKSPACE_DIR,
-    capture_all,
+    capture_unless_fresh_rootfs,
     read_pinned_snapshot_timestamp,
     run_fast_phase,
     run_slow_phase,
@@ -61,15 +61,32 @@ def run(phase: str) -> None:
 
 
 @main.command()
-def capture() -> None:
-    """Re-capture actual installed state into the record."""
+@click.option(
+    "--force",
+    "is_forced",
+    is_flag=True,
+    default=False,
+    help="Capture even on a rootfs that has never completed a converge "
+    "(normally skipped there so the record survives to be replayed)",
+)
+def capture(is_forced: bool) -> None:
+    """Re-capture actual installed state into the record.
+
+    Skipped on a rootfs without the converge identity stamp (a rebuild or
+    restore whose record has not been replayed yet), so the apt Post-Invoke
+    hook cannot clobber the record before the slow phase replays it.
+    """
     workspace_dir = DEFAULT_WORKSPACE_DIR
-    capture_all(
-        default_record_dir(),
-        read_pinned_snapshot_timestamp(workspace_dir),
-        workspace_dir,
+    is_captured = capture_unless_fresh_rootfs(
+        default_record_dir(), workspace_dir, is_forced=is_forced
     )
-    logger.info("Captured environment state into {}", default_record_dir())
+    if is_captured:
+        logger.info("Captured environment state into {}", default_record_dir())
+    else:
+        logger.info(
+            "Skipped capture into {} (fresh rootfs; pass --force to override)",
+            default_record_dir(),
+        )
 
 
 @main.command()

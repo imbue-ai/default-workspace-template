@@ -36,6 +36,7 @@ import imbue.remote_service_connector.relays as relays_module
 import imbue.remote_service_connector.shares as shares_module
 import imbue.remote_service_connector.storage as storage_module
 import imbue.remote_service_connector.sync as sync_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import require_admin_key
@@ -197,6 +198,54 @@ _POOL_HOST_STATUS_UNREACHABLE: Final = "unreachable"
 # bounds the request's worst-case latency (each injection attempt can take up
 # to two 15s SSH timeouts).
 _LEASE_MAX_HOST_ATTEMPTS: Final = 3
+
+# The ``host_lease_request`` metric's request-derived tags come from the client
+# body, and metric tags must stay low-cardinality (each distinct combination
+# is a separate series in OpenObserve). Values outside this conservative shape
+# collapse into one "other" bucket instead of minting arbitrary series.
+# Matched with fullmatch: a $-anchored match() would still accept a trailing
+# newline.
+_LEASE_METRIC_TAG_RE: Final = re.compile(r"[A-Za-z0-9._/-]{1,64}")
+
+_LEASE_METRIC_TAG_OTHER: Final = "other"
+
+
+def _lease_metric_tag_value(value: object) -> str:
+    """Clamp one client-supplied tag value: '' when unset, 'other' when unsafe."""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, str) and _LEASE_METRIC_TAG_RE.fullmatch(value):
+        return value
+    return _LEASE_METRIC_TAG_OTHER
+
+
+def build_lease_request_metric_tags(
+    is_leased: bool,
+    is_pool_exhausted: bool,
+    is_missing_host_keys: bool,
+    requested_region: str | None,
+    requested_branch: object,
+) -> dict[str, str]:
+    """The ``host_lease_request`` metric's tags for one lease attempt (pure).
+
+    The outcome precedence mirrors the response precedence in
+    ``_lease_pool_host``: a lease beats every failure, missing host keys beat
+    pool exhaustion, and the remaining case is an injection failure (every
+    candidate row was quarantined).
+    """
+    if is_leased:
+        outcome = "leased"
+    elif is_missing_host_keys:
+        outcome = "no_host_keys"
+    elif is_pool_exhausted:
+        outcome = "pool_exhausted"
+    else:
+        outcome = "injection_failed"
+    return {
+        "outcome": outcome,
+        "region": _lease_metric_tag_value(requested_region),
+        "branch": _lease_metric_tag_value(requested_branch),
+    }
 
 
 def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, expected_host_public_key: str) -> None:
@@ -868,6 +917,21 @@ def _lease_pool_host(
                         container_host_public_key=container_host_public_key,
                     )
                     break
+    # One metric record per attempt that reached host selection: create demand
+    # (and its failures) charted per requested region/branch. Quota and auth
+    # refusals raise before this point and stay visible via the access log's
+    # status codes instead.
+    emit_metric(
+        "host_lease_request",
+        1,
+        build_lease_request_metric_tags(
+            is_leased=leased is not None,
+            is_pool_exhausted=is_pool_exhausted,
+            is_missing_host_keys=no_host_keys_detail is not None,
+            requested_region=body.region,
+            requested_branch=body.attributes.get("repo_branch_or_tag"),
+        ),
+    )
     if leased is not None:
         return leased
     # Nothing leased. The quarantines above are already committed (the
@@ -1320,11 +1384,6 @@ def _write_files_on_container(
                 raise paramiko.SSHException(f"writing {remote_path} failed (exit {exit_status}): {stderr_text}")
 
 
-def _share_chrome_origin() -> str:
-    """The hosted-chrome origin allowed to embed shared workspaces (empty disables it)."""
-    return os.environ.get("SHARE_CHROME_ORIGIN", "").strip().rstrip("/")
-
-
 @router.post("/hosts/{host_db_id}/enable-sharing")
 def enable_sharing(request: Request, host_db_id: UUID) -> dict[str, object]:
     """Bring sharing up for one of the caller's leased hosts, server-side.
@@ -1444,7 +1503,7 @@ def _enable_sharing_core(
         relay_token=relay_token,
         connector_url=base_url,
         broker_url=base_url,
-        chrome_origin=_share_chrome_origin(),
+        chrome_origin=shares_module.share_chrome_origin(),
     )
     grants_text = build_owner_grants_toml(user.email)
     try:

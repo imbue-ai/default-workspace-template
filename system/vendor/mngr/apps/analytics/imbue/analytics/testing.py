@@ -46,7 +46,8 @@ _FIXTURE_TABLE_DDL = (
     "CREATE SCHEMA logs",
     (
         "CREATE TABLE logs.http_requests ("
-        " line_at TIMESTAMPTZ, user_id VARCHAR, method VARCHAR, path VARCHAR, status INTEGER, duration_ms DOUBLE"
+        " line_at TIMESTAMPTZ, user_id VARCHAR, method VARCHAR, path VARCHAR, status INTEGER, duration_ms DOUBLE,"
+        " imbue_client VARCHAR"
         ")"
     ),
     (

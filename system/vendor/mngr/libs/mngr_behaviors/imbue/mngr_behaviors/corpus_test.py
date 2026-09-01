@@ -8,6 +8,7 @@ from pathlib import Path
 
 from inline_snapshot import snapshot
 
+from imbue.mngr_behaviors.corpus import REQUIRED_README_INCIPIT
 from imbue.mngr_behaviors.corpus import behavior_unit_to_record
 from imbue.mngr_behaviors.corpus import binding_invariant_coordinates
 from imbue.mngr_behaviors.corpus import scan_corpus
@@ -228,14 +229,13 @@ def test_scan_corpus_reports_non_kebab_folder_and_file_names_and_unexpected_file
     assert {unit.coordinate for unit in scan.units} == {"Bad_Folder.a-tag", "good-folder.b-tag"}
 
 
-def test_scan_corpus_enforces_reserved_names_for_overview_and_invariants(tmp_path: Path) -> None:
+def test_scan_corpus_enforces_reserved_names_for_readme_and_invariants(tmp_path: Path) -> None:
     valid_feature = "Feature: F\n\n  @a-tag\n  Scenario: s\n    Given a\n"
     root = write_behavior_corpus(
         tmp_path / "behaviors",
         {
-            "overview.md": "corpus context, no matching feature needed\n",
-            "browser-authorization/overview.md": "folder context\n",
-            "browser-authorization/overview.feature": valid_feature,
+            # README.feature is reserved; README.md (auto-filled) is exempt from the sidecar rule.
+            "browser-authorization/README.feature": valid_feature,
             "browser-authorization/invariants.feature": valid_feature.replace("@a-tag", "@b-tag"),
             "browser-authorization/invariants.md": "sidecar of invariants.feature\n",
             "networking/invariants.md": "dangling: no invariants.feature here\n",
@@ -247,10 +247,50 @@ def test_scan_corpus_enforces_reserved_names_for_overview_and_invariants(tmp_pat
 
     messages = sorted(violation.message for violation in scan.violations)
     assert len(messages) == 2
-    assert any("overview" in message and "reserved" in message for message in messages)
+    assert any("README" in message and "reserved" in message for message in messages)
     assert any("invariants.md" in message and "no matching" in message for message in messages)
-    overview_violation = next(v for v in scan.violations if "reserved" in v.message)
-    assert overview_violation.file == root / "browser-authorization" / "overview.feature"
+    reserved_violation = next(v for v in scan.violations if "reserved" in v.message)
+    assert reserved_violation.file == root / "browser-authorization" / "README.feature"
+
+
+def test_scan_corpus_requires_a_readme_with_the_incipit_in_every_folder(tmp_path: Path) -> None:
+    valid_feature = "Feature: F\n\n  @a-tag\n  Scenario: s\n    Given a\n"
+    root = write_behavior_corpus(
+        tmp_path / "behaviors",
+        {
+            # The root README is present but omits the incipit; the area folder has no README at all.
+            "README.md": "# Corpus\n\nNo incipit here.\n",
+            "browser-authorization/signin.feature": valid_feature,
+        },
+        fill_readmes=False,
+    )
+
+    scan = scan_corpus(root)
+
+    messages = sorted(violation.message for violation in scan.violations)
+    assert len(messages) == 2
+    assert any("incipit" in message for message in messages)
+    assert any("must contain a README.md" in message for message in messages)
+    missing_violation = next(v for v in scan.violations if "must contain" in v.message)
+    assert missing_violation.file == root / "browser-authorization" / "README.md"
+
+
+def test_scan_corpus_accepts_readmes_that_open_with_the_incipit_under_a_title(tmp_path: Path) -> None:
+    root = write_behavior_corpus(
+        tmp_path / "behaviors",
+        {
+            "README.md": f"# Corpus\n\n{REQUIRED_README_INCIPIT}\n\nCorpus-wide context.\n",
+            "browser-authorization/README.md": f"# Browser authorization\n\n{REQUIRED_README_INCIPIT}\n",
+            "browser-authorization/signin.feature": "Feature: F\n\n  @a-tag\n  Scenario: s\n    Given a\n",
+        },
+        fill_readmes=False,
+    )
+
+    scan = scan_corpus(root)
+
+    # A README whose incipit follows its title heading is accepted, and prose files add no units.
+    assert scan.violations == ()
+    assert [unit.coordinate for unit in scan.units] == ["browser-authorization.a-tag"]
 
 
 def test_scan_corpus_rejects_language_headers_even_for_english(tmp_path: Path) -> None:
@@ -394,7 +434,7 @@ def test_scan_corpus_accepts_a_rich_fully_valid_corpus(tmp_path: Path) -> None:
     root = write_behavior_corpus(
         tmp_path / "behaviors",
         {
-            "overview.md": "corpus-wide context\n",
+            "README.md": f"# Corpus\n\n{REQUIRED_README_INCIPIT}\n\nCorpus-wide context.\n",
             "invariants.feature": (
                 "Feature: Corpus invariants\n"
                 "\n"
@@ -402,7 +442,7 @@ def test_scan_corpus_accepts_a_rich_fully_valid_corpus(tmp_path: Path) -> None:
                 "  Rule: Secrets never appear in plain text\n"
                 "    Rationale prose.\n"
             ),
-            "browser-authorization/overview.md": "browser-authorization context\n",
+            "browser-authorization/README.md": f"# Browser authorization\n\n{REQUIRED_README_INCIPIT}\n",
             "browser-authorization/signin.feature": (
                 "@signin-surface\n"
                 "Feature: Sign-in with a one-time login code\n"
