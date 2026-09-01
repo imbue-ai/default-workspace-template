@@ -1,0 +1,1 @@
+`max_local_snapshots` now defaults to 1 (was 5) for the `outer_trigger` backup path: restic reads only the newest on-host btrfs snapshot, and every retained snapshot pins its copy-on-write delta on the slice's data disk, which matters under the gen-2 slices' per-machine disk quotas.

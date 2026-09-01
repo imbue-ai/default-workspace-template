@@ -447,8 +447,10 @@ host_log_dir = "/var/log/mngr"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. Mirrors the tmpfs /run that the
-# aws-<region> provider start args and the ovh/vultr/imbue_cloud host setup apply.
+# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
+# by the aws-<region> provider start args and by the imbue_cloud slice bake's
+# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
+# slices run under runsc from the bake).
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
 # persist or ride a backup.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
