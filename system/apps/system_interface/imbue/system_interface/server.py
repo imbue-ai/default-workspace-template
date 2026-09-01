@@ -63,6 +63,7 @@ from imbue.system_interface.harnesses.registry import HARNESS_SPECS
 from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import get_catalog
 from imbue.system_interface.harnesses.registry import get_harness_spec
+from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -826,6 +827,49 @@ def _stream_events(agent_id: str) -> Response:
     return _sse_response(_stream_filtered_events(agent_id, event_queues, event_queue, watcher.is_main_session_event))
 
 
+# A NOT_READY send's revive budget. ``start_agent`` returns once mngr has launched the
+# session WITHOUT awaiting the daemon handshake (codex readiness is only awaited on
+# create), so the daemon needs a few more seconds before the session can connect.
+_REVIVE_RETRY_INTERVAL_SECONDS: Final[float] = 0.5
+_REVIVE_RETRY_BUDGET_SECONDS: Final[float] = 15.0
+
+
+def _revive_and_retry_send(
+    agent_info: AgentInfo,
+    agent_manager: AgentManager,
+    session: AgentHarnessSession,
+    send_message_request: SendMessageRequest,
+    message_id: str,
+    sleep: Callable[[float], None] = time.sleep,
+    budget_seconds: float = _REVIVE_RETRY_BUDGET_SECONDS,
+) -> SendOutcome:
+    """Start a not-ready agent and retry the send, giving every harness the revive invariant.
+
+    The file-session harnesses auto-start a STOPPED agent inside mngr's own send
+    (``is_start_desired``) -- "sending the agent a message revives it". A live-connection
+    harness (codex) instead reports NOT_READY when its daemon is unreachable, so this
+    supplies the same behavior at the endpoint: start the agent through the exact path the
+    start endpoint and terminal-open use (a no-op when it is already running), then retry
+    while the daemon comes up. Returns the final outcome -- a daemon still unreachable at
+    the deadline keeps the honest NOT_READY -> 503, and a ``SendFailedError`` from a retry
+    propagates to the caller's handler like a first-attempt one.
+    """
+    try:
+        start_agent(agent_info.name)
+    except MngrError as e:
+        logger.warning("Could not revive agent {} for a send: {}", agent_info.name, e)
+        return SendOutcome.NOT_READY
+    # The observe stream will not see the revival for minutes (no pid to watch while the
+    # agent was stopped); reflect it now so the UI's liveness unblocks with the send.
+    agent_manager.note_agent_alive(agent_info.id)
+    deadline = time.monotonic() + budget_seconds
+    outcome = SendOutcome.NOT_READY
+    while outcome is SendOutcome.NOT_READY and time.monotonic() < deadline:
+        sleep(_REVIVE_RETRY_INTERVAL_SECONDS)
+        outcome = session.send(send_message_request.message, message_id)
+    return outcome
+
+
 def _send_message_endpoint(agent_id: str) -> Response:
     """Send a message to an agent."""
     agent_info = _find_agent(agent_id)
@@ -851,6 +895,8 @@ def _send_message_endpoint(agent_id: str) -> Response:
     session = agent_manager.get_or_create_session(agent_info)
     try:
         outcome = session.send(send_message_request.message, message_id)
+        if outcome is SendOutcome.NOT_READY:
+            outcome = _revive_and_retry_send(agent_info, agent_manager, session, send_message_request, message_id)
     except SendFailedError as send_failure:
         # The harness said why it refused, in words written for the person who has to fix it
         # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
@@ -2986,6 +3032,9 @@ def _start_agent(agent_id: str) -> Response:
         error = ErrorResponse(detail=f"Failed to start agent '{agent_info.name}': {e}")
         return _json_response(error.model_dump(), status_code=500)
 
+    # The observe stream will not see the revival for minutes (no pid to watch while the
+    # agent was stopped); reflect it now so the UI's liveness unblocks with the start.
+    get_state().agent_manager.note_agent_alive(agent_info.id)
     return _json_response(StartAgentResponse(status="ok").model_dump())
 
 

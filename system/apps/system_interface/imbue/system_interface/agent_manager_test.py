@@ -3030,3 +3030,36 @@ def test_lifecycle_transition_into_dead_evicts_the_watcher_once(agent_manager: A
     agent_manager._handle_observe_event(make_agent_state_event(running))
     agent_manager._handle_observe_event(make_agent_state_event(stopped))
     assert evicted == [str(agent.id), str(agent.id)]
+
+
+def test_note_agent_alive_flips_a_dead_state_to_waiting(agent_manager: AgentManager) -> None:
+    """After this server starts an agent itself, the tracked state reflects the revival
+    immediately: the observe stream only notices a revival on its five-minute full
+    snapshot (a stopped agent has no pid to watch), which left the chat reading dead
+    for minutes while the agent was demonstrably up."""
+    _seed_agent(agent_manager, "revived", state="DONE")
+    agent_manager.note_agent_alive("revived")
+    revived = agent_manager.get_agent_by_id("revived")
+    assert revived is not None
+    assert revived.state == "WAITING"
+    assert agent_manager.is_agent_alive("revived")
+
+
+def test_note_agent_alive_leaves_live_and_unknown_states_alone(agent_manager: AgentManager) -> None:
+    """Only a positively-dead state is corrected: RUNNING must not be demoted to WAITING
+    (the fold would lose a turn in flight), UNKNOWN is non-evidence, and an untracked id
+    is not something to invent a record for."""
+    _seed_agent(agent_manager, "busy", state="RUNNING")
+    agent_manager.note_agent_alive("busy")
+    busy = agent_manager.get_agent_by_id("busy")
+    assert busy is not None
+    assert busy.state == "RUNNING"
+
+    _seed_agent(agent_manager, "unseen", state="UNKNOWN")
+    agent_manager.note_agent_alive("unseen")
+    unseen = agent_manager.get_agent_by_id("unseen")
+    assert unseen is not None
+    assert unseen.state == "UNKNOWN"
+
+    agent_manager.note_agent_alive("never-tracked")
+    assert agent_manager.get_agent_by_id("never-tracked") is None
