@@ -59,9 +59,14 @@ an encrypted restic repo on cheaper object storage.
     `<btrfs-mount>/snapshots/<timestamp>` -- never a reused path. Under the
     sandbox's file gofer a reused path serves a stale, deleted subvolume, so
     only the first post-boot backup would capture data; unique names avoid
-    that. After the backup, the oldest snapshots beyond `max_local_snapshots`
-    (default 1) are deleted by name via a `cleanup` request that carries the
-    snapshot name as `target`.
+    that. As soon as restic has finished reading, the snapshot is deleted by
+    name via a `cleanup` request that carries the snapshot name as `target`,
+    so no snapshot exists between ticks: the local snapshot is only restic's
+    consistent read source (history lives in the repository), and a retained
+    one would pin the copy-on-write delta of everything deleted since it was
+    taken -- under the slice data disk's quota, space the workspace could not
+    reclaim until the next tick. A leftover from a crashed tick is swept the
+    same way before the next snapshot is taken.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
@@ -136,7 +141,7 @@ Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 - `capabilities_detected` (once at service startup)
 - `backup_started`, `snapshot_created`, `snapshot_failed` (the snapshot step
   aborted the tick before restic ran), `snapshot_deleted` (one per deleted
-  snapshot -- `outer_trigger` may emit several per tick during keep-N pruning)
+  snapshot -- `outer_trigger` may emit several per tick when it sweeps leftovers)
 - `restic_backup_succeeded`, `restic_backup_failed`
 - `backup_repeatedly_failing` (escalation alarm after N consecutive failures)
 - `forget_completed`, `prune_completed`, `prune_skipped`
