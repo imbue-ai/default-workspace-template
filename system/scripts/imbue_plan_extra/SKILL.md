@@ -53,7 +53,8 @@ side by side.
 
 ### What to optimise, in order
 
-1. **The task gets done.** Where you are unsure, buy the capability.
+1. **The task gets done.** When you cannot tell how hard a node will be, give it
+   the stronger worker.
 2. **Cost.** Among plans that will work, prefer the cheaper one. Two things
    drive the bill. A more capable model costs more per token. And every node
    pays for the tokens it reads, so a long access list means each node carrying
