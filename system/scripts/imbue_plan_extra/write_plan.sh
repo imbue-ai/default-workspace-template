@@ -97,6 +97,12 @@ readonly RUN_DIR="$IMBUE_PLAN_EXTRA_RUN_DIR"
 readonly LOG_FILE="${RUN_DIR}/log"
 readonly STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# Snapshot the caller's identity now. These are the keys that tie a run to the
+# transcript it came from, and they are unset further down before claude starts.
+readonly CALLER_AGENT_NAME="${MNGR_AGENT_NAME:-}"
+readonly CALLER_AGENT_ID="${MNGR_AGENT_ID:-}"
+readonly CALLER_SESSION_ID="${MAIN_CLAUDE_SESSION_ID:-}"
+
 log() {
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE" || true
 }
@@ -108,9 +114,9 @@ write_meta() {
   "started_at": "${STARTED_AT}",
   "finished_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "status": "$1",
-  "caller_agent_name": "${MNGR_AGENT_NAME:-}",
-  "caller_agent_id": "${MNGR_AGENT_ID:-}",
-  "caller_session_id": "${MAIN_CLAUDE_SESSION_ID:-}",
+  "caller_agent_name": "${CALLER_AGENT_NAME}",
+  "caller_agent_id": "${CALLER_AGENT_ID}",
+  "caller_session_id": "${CALLER_SESSION_ID}",
   "work_dir": "${WORK_DIR}"
 }
 META
@@ -158,8 +164,8 @@ trap 'rm -f "$body_file" "$prompt_file"' EXIT
 log "planning: ${request:0:120}"
 
 # The spawning agent's mngr identity must not follow us in: mngr's hooks would
-# otherwise write this session's markers over that agent's state. Captured into
-# meta.json above before being cleared here.
+# otherwise write this session's markers over that agent's state. Snapshotted
+# into CALLER_* at the top of the child, so meta.json still records it.
 unset MNGR_AGENT_STATE_DIR MNGR_AGENT_ID MNGR_AGENT_NAME MAIN_CLAUDE_SESSION_ID
 unset CLAUDE_PROJECT_DIR CLAUDE_CODE_OAUTH_TOKEN_FILE
 
