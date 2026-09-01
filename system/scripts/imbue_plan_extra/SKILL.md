@@ -111,15 +111,15 @@ read the following as a sample of the space rather than a checklist, and let the
 request decide.
 
 Most of it comes from build-app itself: settling the defaults and the small
-plan, pre-flight like picking a DNS-safe name and a free port, drawing the icon,
-running the scaffolder and bringing the program up under supervisord, wrapping a
-pre-existing server through the escape hatch where scaffolding does not apply,
-designing the on-disk store under `DATA_DIR`, building the throwaway mock and
-then the real page, implementing routes and persistence, verifying with a request
-and a browser assertion, diagnosing what the verification turns up, surfacing the
-tab, and assembling the handoff. The rest comes from whatever a given request
-drags in: connecting an account through the `latchkey` skill, fetching real data
-and confirming its shape, formatting output into the form the next node needs.
+plan, the pre-flight of naming the app and finding it a port, drawing its icon,
+scaffolding it and getting it running as a supervised process, wrapping a
+pre-existing server where scaffolding does not apply, deciding where and how its
+data is stored, building the throwaway mock and then the real page, implementing
+the routes and the persistence behind it, verifying it serves and renders,
+diagnosing what the verification turns up, surfacing the tab, and assembling the
+handoff. The rest comes from whatever a given request drags in: connecting an
+account the app needs, fetching real data and confirming its shape, formatting
+output into the form the next node needs.
 
 With 5 nodes and more shapes than that available, most nodes combine several --
 one node routinely decides, builds and verifies. Cut where the work genuinely
@@ -140,15 +140,17 @@ one begins once it clears.
 
 ### Handing a node to a skill
 
-Much of this work already exists here. build-app names three skills it calls as
-it goes: `frontend-design` before any markup, `use-ai-integration` when the app
+Much of this work already exists here. build-app names the skills it calls as it
+goes: `frontend-design` before any markup, `use-ai-integration` when the app
 itself calls a model, and `manage-layout` for tab work beyond opening and
-refreshing. It drives the rest through scripts -- the Flask scaffolder,
-`forward_port.py`, `layout.py`, `supervisorctl`. Check what exists before
-writing a node that would rebuild one.
+refreshing. It drives the rest through its own scripts. Take the real set from
+what you read in Step 1, since it moves as the product does, and check what
+exists before writing a node that would rebuild one.
 
-When a node is a skill, name the skill and stop. The worker follows that skill's
-own steps, so the subtask stays at the level of which skill, and to what end.
+When a node is a skill, naming the skill is usually enough. The worker follows
+that skill's own steps, so the subtask can stay at the level of which skill and
+to what end, and you add more only where this run needs something the skill
+would not do on its own.
 
 ### Scope
 
@@ -156,10 +158,11 @@ Route the work build-app does, and let your plan end where build-app ends. Two
 neighbours own the rest, and neither gets a node:
 
 - `crystallize-creation` takes over once build-app hands off the confirmed app,
-  and owns the tracking ticket, the hardening pass and the review gates. Making
-  that handoff can be the tail of your last node; everything past it is that
-  skill's work.
-- `update-app` owns modifying and removing an app.
+  and owns the tracking ticket, the hardening pass and the review gates from
+  there. Making that handoff can be the tail of your last node; everything past
+  it is that skill's work.
+- `update-app` owns modifying and removing an app, which is a different flow
+  from building one.
 
 A node spent on either routes someone else's work out of your own 5-node budget.
 
@@ -186,11 +189,10 @@ each node's context small, which is where much of the token cost sits, and they
 free nodes to run at the same time. `["all"]` suits a node that genuinely needs
 the whole history, such as a final assembly.
 
-Some nodes are mostly waiting. Connecting an account or granting access to a
-third-party service -- the `latchkey` skill -- costs time: the request goes up
-to the user, and everyone waits on them. Put those on an empty access list
-wherever the work allows, so the waiting overlaps the pre-flight, the icon, or
-the mock.
+Some nodes are mostly waiting. Connecting an account or granting access to an
+outside service -- the `latchkey` skill -- costs time rather than capability:
+the request goes up to the user, and everyone waits on them. Put those on an empty access list wherever the
+work allows, so the waiting overlaps the pre-flight, the icon, or the mock.
 
 ## Output
 
