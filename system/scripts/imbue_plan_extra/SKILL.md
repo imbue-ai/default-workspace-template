@@ -164,7 +164,7 @@ neighbours own the rest, and neither gets a node:
 - `update-app` owns modifying and removing an app, which is a different flow
   from building one.
 
-A node spent on either routes someone else's work out of your own budget.
+A node spent on either routes someone else's work.
 
 ### The access list
 
