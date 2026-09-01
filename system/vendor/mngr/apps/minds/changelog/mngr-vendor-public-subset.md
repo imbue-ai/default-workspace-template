@@ -5,3 +5,5 @@ The subset is defined once, in `mirror/copy.bara.sky`. The new `scripts/public_s
 `.github/workflows/mirror-gate.yml` gains a step that runs the pinned Copybara jar and diffs its tree against `scripts/public_subset.py`, so the two implementations cannot drift apart silently.
 
 Changed here: `scripts/propagate_changes` (the dev-loop sync into a running container) and `imbue/minds/desktop_client/default_workspace_template_worktree.py` (the paired-worktree vendorer used by the workspace-creation tests) both materialize the public subset. `docs/vendor-mngr-sync.md` -- the canonical account of how `system/vendor/mngr` is synced -- is rewritten around the new model and now lists every path that populates it.
+
+`docs/deploy/release.md`'s vendor-match invariant is corrected: it told a release engineer that `system/vendor/mngr` must be the `git archive` of the paired mngr SHA, which after this change would put private code in a public repo by hand. It now reads "the public subset of" that SHA.
