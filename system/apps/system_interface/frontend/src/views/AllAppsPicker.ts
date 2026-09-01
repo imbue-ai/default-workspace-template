@@ -202,7 +202,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
         key: `shortcut:${row.shortcut}`,
         class:
           "project-rail-app project-rail-app-shortcut group flex h-8 w-full items-center gap-2 px-3 text-left " +
-          "transition-all duration-150 " +
+          "transition-all duration-(--dur-base) " +
           (row.isOpenable ? "cursor-pointer text-primary hover:bg-fill-hover" : "text-faint"),
         onclick: row.isOpenable ? () => attrs.onOpenShortcut(row.shortcut) : undefined,
       },
@@ -252,7 +252,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
         class:
           "project-rail-app group flex w-full items-center gap-2 px-3 text-left " +
           (isStopped ? "project-rail-app-stopped text-faint " : "text-primary ") +
-          "transition-all duration-150 " +
+          "transition-all duration-(--dur-base) " +
           (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-fill-hover"),
         ...(isStopped && !isFadingOut ? hoverTooltipAttrs(`${label} — ${appStoppedDetail(app)}`) : {}),
         onclick: isFadingOut ? undefined : () => attrs.onOpenApp(app),

@@ -491,7 +491,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (isConversationNotFound(agentId)) {
       fetchScreenCapture(agentId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
-        m("p", { class: "text-lg font-semibold text-primary" }, "No conversation data"),
+        m("p", { class: "type-heading text-primary" }, "No conversation data"),
         m("p", { class: "text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
         screenLoading
           ? m("p", { class: "text-secondary" }, "Loading terminal output...")
@@ -537,7 +537,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     if (hasNothingToShow && load.error !== null) {
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
-        m("p", { class: "text-red-500" }, `Error: ${load.error}`),
+        m("p", { class: "text-danger" }, `Error: ${load.error}`),
         m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
       ]);
     }
@@ -555,7 +555,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
             "div",
             { class: "message-list-stale-notice flex items-center gap-3 border-b border-default px-3 py-1.5" },
             [
-              m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
+              m("span", { class: "text-sm text-danger" }, `Couldn't refresh this conversation: ${load.error}`),
               m(
                 Button,
                 { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) },

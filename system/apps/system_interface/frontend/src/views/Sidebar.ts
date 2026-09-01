@@ -246,8 +246,7 @@ function railAction(options: {
 // Menu chrome, settled in the design (§6): a floating card on the primary
 // surface with a hairline border, 8px radius and the overlay elevation shadow,
 // holding 32px rows of icon + label.
-const MENU_CARD_CLASS = `project-rail-menu fixed z-50 rounded-lg border border-default bg-surface py-1 ${ROW_TEXT_CLASS} text-primary`;
-const MENU_SHADOW_STYLE = "box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);";
+const MENU_CARD_CLASS = `project-rail-menu fixed z-(--z-dropdown) rounded-lg border border-default bg-surface py-1 shadow-overlay ${ROW_TEXT_CLASS} text-primary`;
 // `group` so a row's own trailing controls (the switcher's edit pencil) can
 // reveal themselves on `group-hover:`, the same reveal-on-hover pattern the
 // tab list's kebab uses. `gap-1` (4px) matches the rail's own rows
@@ -262,8 +261,11 @@ const MENU_ROW_CLASS =
 // falls through to whatever control happens to sit underneath -- activating
 // it, and dragging hover state across it on the way. The scrim gives the
 // dismissing press somewhere of its own to land, so closing the menu is *all*
-// it does.
-const MENU_SCRIM_CLASS = "fixed inset-0 z-40";
+// it does. It shares the menu card's --z-dropdown layer; the card stays on top
+// because it renders after the scrim as a sibling (see the view's tail).
+// `project-rail-menu-scrim` is a bare marker like `btn` (tests find the scrim
+// by it).
+const MENU_SCRIM_CLASS = "project-rail-menu-scrim fixed inset-0 z-(--z-dropdown)";
 
 // Minimum gap between a floating menu and the window edges, matching the
 // tooltip's own margin so everything that floats clears the frame alike.
@@ -1035,7 +1037,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       "span",
       {
         class:
-          `min-w-0 flex-1 truncate pr-1 ${ROW_TEXT_CLASS} whitespace-nowrap transition-opacity duration-150 ` +
+          `min-w-0 flex-1 truncate pr-1 ${ROW_TEXT_CLASS} whitespace-nowrap transition-opacity duration-(--dur-base) ` +
           `${extraClass} ` +
           (expanded ? "opacity-100" : "opacity-0"),
       },
@@ -1141,7 +1143,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           "span",
           {
             class:
-              "flex shrink-0 items-center pr-1 text-secondary transition-opacity duration-150 " +
+              "flex shrink-0 items-center pr-1 text-secondary transition-opacity duration-(--dur-base) " +
               (expanded ? "opacity-100" : "opacity-0"),
           },
           m.trust(icon("chevron-down", { size: ACTION_ICON_SIZE })),
@@ -1660,7 +1662,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       {
         class: MENU_CARD_CLASS,
         role: options.role,
-        style: `left: 0; top: 0; ${options.width === null ? "" : `width: ${options.width}px;`} ${MENU_SHADOW_STYLE}`,
+        style: `left: 0; top: 0; ${options.width === null ? "" : `width: ${options.width}px;`}`,
         oncreate: place,
         onupdate: place,
       },
@@ -1694,7 +1696,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const tone = options.isDisabled
       ? "project-rail-menu-item-disabled text-faint cursor-default hover:bg-transparent"
       : options.isDestructive
-        ? "text-red-600"
+        ? "text-danger"
         : options.isQuiet
           ? "text-faint hover:text-primary"
           : "text-primary";
@@ -1781,7 +1783,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         {
           class:
             "project-rail-check pointer-events-none absolute inset-0 flex items-center justify-center " +
-            "text-secondary transition-opacity duration-100 group-hover:opacity-0",
+            "text-secondary transition-opacity duration-(--dur-base) group-hover:opacity-0",
         },
         m.trust(icon("check", { size: ACTION_ICON_SIZE })),
       ),
@@ -1835,7 +1837,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             void createNewProject(attrs);
           },
         }),
-        menuError === null ? null : m("div", { class: "px-3 py-1 text-[12px] text-red-600" }, menuError),
+        menuError === null ? null : m("div", { class: "px-3 py-1 text-[12px] text-danger" }, menuError),
         m("div", { class: "my-1 border-t border-default" }),
         // Everything sits below the divider because it is not one of the
         // projects -- it is the unfiltered view they all live inside -- but it
@@ -2101,8 +2103,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 // `select-none`: the expanded rail overlays the panels to its
                 // right, so a drag starting on a row must not select the
                 // labels it sweeps across.
-                "machine-sidebar absolute top-[1px] bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border select-none " +
-                `${RAIL_PADDING_CLASS} transition-[width] duration-150 ease-out ` +
+                "machine-sidebar absolute top-[1px] bottom-[4px] left-0 z-(--z-sticky) flex flex-col overflow-hidden border select-none " +
+                `${RAIL_PADDING_CLASS} transition-[width] duration-(--dur-base) ease-out ` +
                 (expanded ? EXPANDED_CLASS : COLLAPSED_CLASS),
             },
             [

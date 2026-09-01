@@ -180,7 +180,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         "header",
         { class: "app-header flex shrink-0 items-baseline gap-3 border-b border-default bg-page px-8 py-3.5" },
         [
-          m("h1", { class: "app-header-title text-(length:--font-size-heading) font-semibold text-primary" }, title),
+          m("h1", { class: "app-header-title type-heading text-primary" }, title),
           agentType ? m("span", { class: badgeClass("neutral", { mono: true }) }, agentType) : null,
         ],
       );
@@ -197,7 +197,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         content = m(
           "div",
           { class: "message-list-error flex items-center justify-center h-full" },
-          m("p", { class: "text-red-500" }, `Error: ${loadingError}`),
+          m("p", { class: "text-danger" }, `Error: ${loadingError}`),
         );
       } else if (events.length === 0) {
         content = m(

@@ -449,7 +449,7 @@ describe("Sidebar menus hold the rail open", () => {
 describe("Sidebar menu scrim", () => {
   it("renders no scrim when nothing is open", () => {
     const { root } = mountSidebar(makeAttrs());
-    expect(root.querySelector(".fixed.inset-0.z-40")).toBeNull();
+    expect(root.querySelector(".project-rail-menu-scrim")).toBeNull();
   });
 
   it("renders a scrim behind an open menu, and a press on it closes the menu and collapses the rail", () => {
@@ -458,7 +458,7 @@ describe("Sidebar menu scrim", () => {
     redraw();
     click(root.querySelector(".project-rail-header"));
     redraw();
-    const scrim = root.querySelector(".fixed.inset-0.z-40");
+    const scrim = root.querySelector(".project-rail-menu-scrim");
     expect(scrim).not.toBeNull();
 
     scrim?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
