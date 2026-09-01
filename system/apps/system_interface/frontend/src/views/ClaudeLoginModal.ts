@@ -126,8 +126,7 @@ const LEAD_CLASS = "claude-login-lead mb-4.5 text-(length:--font-size-body) lead
 
 /** A numbered OAuth-flow step and its label/badge. */
 const STEP_CLASS = "claude-login-step mb-4 last:mb-0";
-const STEP_LABEL_CLASS =
-  "claude-login-step-label mb-2 flex items-center gap-2 text-(length:--font-size-body) font-semibold text-primary";
+const STEP_LABEL_CLASS = "claude-login-step-label mb-2 flex items-center gap-2 type-label text-primary";
 const STEP_NUM_CLASS =
   "claude-login-step-num inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent " +
   "text-(length:--font-size-helper) font-semibold text-on-accent";
@@ -140,7 +139,7 @@ const HELPER_CLASS = "claude-login-helper mt-1.5 text-(length:--font-size-helper
  *  between scale tiers. */
 const ALT_CLASS =
   "claude-login-alt group flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border " +
-  "bg-surface px-3.5 py-3 text-left shadow-raised transition-[border-color,box-shadow] duration-100 ease-[ease] " +
+  "bg-surface px-3.5 py-3 text-left shadow-raised transition-[border-color,box-shadow] duration-(--dur-base) ease-[ease] " +
   "hover:border-accent hover:shadow-[0_2px_6px_rgba(0,0,0,0.08)] " +
   "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent";
 
@@ -619,7 +618,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   function renderAltCard(name: string, desc: string, onclick: () => void): m.Vnode {
     return m("button", { class: ALT_CLASS, type: "button", onclick }, [
       m("span", { class: "claude-login-alt-text flex min-w-0 flex-col gap-[3px]" }, [
-        m("span", { class: "claude-login-alt-name text-(length:--font-size-body) font-semibold text-primary" }, name),
+        m("span", { class: "claude-login-alt-name type-label text-primary" }, name),
         m(
           "span",
           { class: "claude-login-alt-desc text-(length:--font-size-helper) leading-[1.4] text-secondary" },
@@ -630,7 +629,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         "span",
         {
           class:
-            "claude-login-alt-go flex flex-none text-faint transition-colors duration-100 ease-[ease] group-hover:text-accent",
+            "claude-login-alt-go flex flex-none text-faint transition-colors duration-(--dur-base) ease-[ease] group-hover:text-accent",
         },
         m.trust(icon("chevron-right", { size: 18 })),
       ),
@@ -1079,11 +1078,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         },
         statusGlyph,
       ),
-      m(
-        "p",
-        { class: "claude-login-status-title mb-1 text-(length:--font-size-heading) font-semibold text-primary" },
-        title,
-      ),
+      m("p", { class: "claude-login-status-title mb-1 type-heading text-primary" }, title),
       detail !== null
         ? m(
             "p",
@@ -1278,8 +1273,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
                 m(
                   "h2",
                   {
-                    class:
-                      "claude-login-title text-(length:--font-size-heading) font-semibold tracking-[-0.005em] text-primary",
+                    class: "claude-login-title type-heading tracking-[-0.005em] text-primary",
                   },
                   titleForMode(),
                 ),

@@ -479,7 +479,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "div",
       {
         class:
-          "absolute top-full right-0 z-30 mt-1 min-w-[170px] rounded-lg border border-default bg-surface py-1 shadow-lg",
+          "absolute top-full right-0 z-(--z-dropdown) mt-1 min-w-[170px] rounded-lg border border-default bg-surface py-1 shadow-overlay",
         oncreate: (vnode: m.VnodeDOM) => {
           menuElement = vnode.dom as HTMLElement;
           document.addEventListener("pointerdown", onDocumentPointerDown);

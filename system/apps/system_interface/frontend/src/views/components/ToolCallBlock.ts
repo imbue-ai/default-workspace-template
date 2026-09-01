@@ -26,11 +26,11 @@ const BLOCK_CLASS = "tool-call-block group/tool overflow-hidden rounded-md borde
 
 const HEADER_CLASS =
   "tool-call-header flex cursor-pointer items-center gap-1.5 px-2.5 py-[3px] font-mono " +
-  "text-(length:--font-size-body) text-secondary select-none transition-colors duration-100 hover:bg-fill-hover";
+  "text-(length:--font-size-body) text-secondary select-none transition-colors duration-(--dur-base) hover:bg-fill-hover";
 
 // text-[10px]: icon glyph (the chevron), sized independently of the text scale.
 const CHEVRON_CLASS =
-  "tool-call-chevron inline-block text-[10px] transition-transform duration-150 " +
+  "tool-call-chevron inline-block text-[10px] transition-transform duration-(--dur-base) " +
   "group-[.tool-call-block--expanded]/tool:rotate-90";
 
 const DETAILS_CLASS = "tool-call-details hidden border-t group-[.tool-call-block--expanded]/tool:block";

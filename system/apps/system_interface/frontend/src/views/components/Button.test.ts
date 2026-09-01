@@ -43,6 +43,29 @@ describe("Button readonly option", () => {
   });
 });
 
+describe("Button lifecycle passthrough", () => {
+  it("runs a caller's lifecycle hooks once, not once per vnode layer", () => {
+    // Mithril invokes hooks found in the component vnode's attrs itself; if
+    // splitAttrs also forwarded them to the inner <button>, each would fire
+    // twice with the same vnode.dom (double-attaching e.g. hover tooltips).
+    const oncreate = vi.fn();
+    const onremove = vi.fn();
+    const root = document.createElement("div");
+    m.render(root, m(Button, { oncreate, onremove }, "Press"));
+    expect(oncreate).toHaveBeenCalledTimes(1);
+    m.render(root, []);
+    expect(onremove).toHaveBeenCalledTimes(1);
+  });
+
+  it("still passes ordinary event handlers and HTML attrs through", () => {
+    const onclick = vi.fn();
+    const element = renderButton({ onclick, "data-kind": "probe" });
+    element.dispatchEvent(new MouseEvent("click"));
+    expect(onclick).toHaveBeenCalledTimes(1);
+    expect(element.getAttribute("data-kind")).toBe("probe");
+  });
+});
+
 describe("Button selected option", () => {
   it("swaps the ghost palette for the accent tint, dropping the hover utilities", () => {
     const element = renderButton({ variant: "ghost", selected: true });

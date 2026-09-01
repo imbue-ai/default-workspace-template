@@ -17,7 +17,7 @@
 
 import m from "mithril";
 import { backdropDismissAttrs } from "./modalBackdrop";
-import { TEXT_BODY_SIZE, TEXT_HEADING_SIZE } from "./typography";
+import { TEXT_BODY_SIZE } from "./typography";
 
 /* Modal shell recipe.
  * The dimmed overlay + centered card + header/title + body copy + actions row
@@ -37,7 +37,7 @@ export const MODAL_CARD_CLASS =
 
 export const MODAL_HEADER_CLASS = "modal-header mb-4 flex items-center gap-2";
 
-export const MODAL_TITLE_CLASS = `modal-title m-0 ${TEXT_HEADING_SIZE} font-semibold text-primary`;
+export const MODAL_TITLE_CLASS = "modal-title m-0 type-heading text-primary";
 
 // Dialog body copy reads at full strength by default -- it is the point of the
 // dialog. A genuinely secondary line (a footnote, a hint) opts into

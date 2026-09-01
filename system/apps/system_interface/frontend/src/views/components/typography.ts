@@ -5,4 +5,3 @@
 // utility first (see the style guide).
 export const TEXT_BODY_SIZE = "text-(length:--font-size-body)";
 export const TEXT_HELPER_SIZE = "text-(length:--font-size-helper)";
-export const TEXT_HEADING_SIZE = "text-(length:--font-size-heading)";

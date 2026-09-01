@@ -585,8 +585,8 @@ function tabIconMarkupForPanel(params: PanelParams | undefined): string {
 // Menu chrome, settled in the design (§6) and shared with the sidebar's menus:
 // a floating card on the primary surface with a hairline border, 8px radius and
 // the overlay elevation shadow, holding 32px rows of icon + label.
-const TAB_MENU_CARD_CLASS = "fixed z-50 min-w-[180px] rounded-lg border border-default bg-surface py-1 text-[13px]";
-const TAB_MENU_SHADOW_STYLE = "box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);";
+const TAB_MENU_CARD_CLASS =
+  "fixed z-(--z-dropdown) min-w-[180px] rounded-lg border border-default bg-surface py-1 text-[13px] shadow-overlay";
 const TAB_MENU_ROW_CLASS = "flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left hover:bg-fill-hover";
 
 // The one open tab menu, if any. Only one is ever up: opening another closes
@@ -620,7 +620,7 @@ function openTabMenuAt(
   const element = document.createElement("div");
   element.className = TAB_MENU_CARD_CLASS;
   element.setAttribute("role", "menu");
-  element.style.cssText = `left: 0; top: 0; ${TAB_MENU_SHADOW_STYLE}`;
+  element.style.cssText = "left: 0; top: 0;";
 
   const close = (): void => {
     document.removeEventListener("pointerdown", onOutsidePointerDown, true);
@@ -650,7 +650,7 @@ function openTabMenuAt(
       continue;
     }
     const row = document.createElement("div");
-    row.className = `${TAB_MENU_ROW_CLASS} ${entry.isDestructive ? "text-red-600" : "text-primary"}`;
+    row.className = `${TAB_MENU_ROW_CLASS} ${entry.isDestructive ? "text-danger" : "text-primary"}`;
     row.setAttribute("role", "menuitem");
     const glyph = document.createElement("span");
     glyph.className = "flex w-4 shrink-0 items-center justify-center";

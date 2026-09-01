@@ -8,8 +8,9 @@
  * harness-agnostic intent (`POST /shoulder-tap-atomic`, which the backend dispatches
  * per harness) and paints nothing locally -- the next backend queue snapshot and the
  * committed turn reflect the result. Whether the tap is AVAILABLE is entirely the
- * backend's call, reported as ``shoulder_tap_available``; that flag alone greys the
- * button, so it can never be pressed in a state the backend would refuse (no error
+ * backend's call, reported as ``shoulder_tap_available``; that flag greys the button
+ * (aria-disabled, so the explanatory tooltip keeps working) and gates the click
+ * handler, so it can never be pressed in a state the backend would refuse (no error
  * path). The only thing the frontend adds is a local guard against double-firing its
  * own in-flight request.
  * (Interrupt-to-composer lives on the composer's Stop button -- see MessageInput.)
@@ -41,10 +42,12 @@ const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a bre
 const inFlightAgentIds = new Set<string>();
 
 async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
-  // Never fire while our own tap is already running. The button is greyed while it is,
-  // but ``disabled`` only takes effect on the next redraw, so a click can beat it --
-  // this synchronous re-check at click time is the actual double-fire guard.
-  if (inFlightAgentIds.has(agentId)) {
+  // Never fire while our own tap is already running or the backend reports the tap
+  // unavailable. The button is greyed in both states, but via ``aria-disabled`` rather
+  // than ``disabled`` (a disabled button suppresses the hover/focus events its
+  // explanatory tooltip needs), so clicks still arrive -- this synchronous check at
+  // click time is the real gate, and it also covers a click racing a redraw.
+  if (inFlightAgentIds.has(agentId) || !getShoulderTapAvailableForAgent(agentId)) {
     return;
   }
   inFlightAgentIds.add(agentId);
@@ -127,8 +130,12 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   }
   // The button's enabled state = the backend's availability flag, AND-ed with the local
   // double-fire guard. The frontend computes nothing about availability itself: if the
-  // backend says a send is in flight (or the queue is empty), ``shoulder_tap_available`` is
-  // false and the button is greyed -- so it can never be pressed into a refusal/error.
+  // backend says a send is in flight (or the queue is empty), ``shoulder_tap_available``
+  // is false and the button is greyed. The greying is ``aria-disabled``, not
+  // ``disabled``: a disabled button suppresses the hover/focus events the explanatory
+  // tooltip needs, and the tooltip matters most exactly while the button is greyed.
+  // The same condition is re-checked synchronously at click time (see above), so it
+  // still can never be pressed into a refusal/error.
   const isInFlight = inFlightAgentIds.has(agentId);
   const isDisabled = isInFlight || !getShoulderTapAvailableForAgent(agentId);
 
@@ -164,7 +171,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
       {
         sm: true,
         extra: "queued-action queued-action--flush shrink-0",
-        disabled: isDisabled,
+        ...(isDisabled ? { "aria-disabled": "true" } : {}),
         ...hoverTooltipAttrs(SHOULDER_TAP_TOOLTIP),
         "aria-label": SHOULDER_TAP_TOOLTIP,
         onclick: () => shoulderTapQueuedMessages(agentId),

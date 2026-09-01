@@ -56,7 +56,8 @@ const TITLE_CLASS =
 /** The expand chevron beside the title. text-[18px]: icon glyph, sized
  *  independently of the text scale (and deliberately not text-lg, whose
  *  line-height would reflow the row). */
-const CHEV_CLASS = "pv-chev ml-1.5 inline-block text-[18px] font-normal transition-transform duration-150 ease-[ease]";
+const CHEV_CLASS =
+  "pv-chev ml-1.5 inline-block text-[18px] font-normal transition-transform duration-(--dur-base) ease-[ease]";
 
 function statusIcon(status: StepStatus, is_frontier: boolean): m.Children {
   if (status === "done") {
