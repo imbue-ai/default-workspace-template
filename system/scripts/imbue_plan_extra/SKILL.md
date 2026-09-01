@@ -53,8 +53,12 @@ side by side.
    drive the bill. A more capable model costs more per token. And every node
    pays for the tokens it reads, so a long access list means each node carrying
    it reads that whole history, and a history passed down a chain is paid for
-   again at every node in the chain. One careful `high` node can come out
-   cheaper than several `low` ones that each re-read everything.
+   again at every node in the chain.
+
+   Those two pull in opposite directions, so check both. Splitting routine work
+   out to a `low` worker saves paying the strong model's rate for it; folding
+   work back into one `high` node saves the handoffs and the re-reading. Which
+   one wins depends on the request in front of you.
 3. **Speed.** Among plans that will work and cost about the same, prefer the
    one that finishes sooner. That usually means more work running side by side,
    though a wider graph is worth it only when it actually shortens the run.
@@ -131,10 +135,12 @@ one begins once it clears.
 
 ### Handing a node to a skill
 
-Much of this work already exists here, and build-app reaches for several skills
-as it goes: the Flask scaffolder script, `frontend-design` before any markup,
-`use-ai-integration` when the app itself calls a model, `manage-layout` to place
-the tab. Check what exists before writing a node that would rebuild one.
+Much of this work already exists here. build-app names three skills it calls as
+it goes: `frontend-design` before any markup, `use-ai-integration` when the app
+itself calls a model, and `manage-layout` for tab work beyond opening and
+refreshing. It drives the rest through scripts -- the Flask scaffolder,
+`forward_port.py`, `layout.py`, `supervisorctl`. Check what exists before
+writing a node that would rebuild one.
 
 When a node is a skill, name the skill and stop. The worker follows that skill's
 own steps, so the subtask stays at the level of which skill, and to what end.
