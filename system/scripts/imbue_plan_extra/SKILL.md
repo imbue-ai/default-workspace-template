@@ -40,10 +40,11 @@ Use at least 3 nodes and at most 10.
 
 Three things define a node, and they are the three lists you output:
 
-1. **capability** -- how strong a worker the node is worth.
-2. **subtask** -- what that worker is asked to accomplish.
-3. **access list** -- which earlier nodes it depends on, and whose handoffs it
-   sees.
+1. **capability** (`"low"`, `"medium"` or `"high"`) -- how strong a worker the
+   node is worth.
+2. **subtask** (a string) -- what that worker is asked to accomplish.
+3. **access list** (`[]`, `[0, 2]` or `["all"]`) -- which earlier nodes it
+   depends on, and whose handoffs it sees.
 
 Work out the shape first: what has to happen before what, and what can happen
 side by side.
