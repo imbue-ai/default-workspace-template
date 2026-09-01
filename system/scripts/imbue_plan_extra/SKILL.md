@@ -38,15 +38,27 @@ The plan is a DAG of subtasks handed out to workers. Each node is one piece of
 the work assigned to one worker, and the edges are what each node depends on.
 Use at least 3 nodes and at most 10.
 
-Three things define a node, and they are the three lists you output:
+Three things define a node, and each is that node's entry in one of the three
+lists you output:
 
 1. **capability** -- how strong a worker the node is worth.
    One of `"low"`, `"medium"` or `"high"`.
 2. **subtask** (a string) -- what that worker is asked to accomplish.
 3. **access list** -- which earlier nodes it depends on, and whose handoffs it
-   sees.
-   A list of earlier node indices, any length from empty upwards, or the single
-   entry `"all"`; for example `[]`, `[0, 2]` or `["all"]`.
+   sees. A list of earlier node indices, or the single entry `"all"`.
+
+Position i of every list describes node i. Two nodes, just to show how they
+line up (real plans start at three):
+
+```
+capability = ["high", "medium"]
+subtasks = ["Decide the data model and hand back a spec.", "Build the page against that spec."]
+access list = [[], [0]]
+```
+
+Node 0 is a strong worker settling the data model, starting from the request
+alone. Node 1 is an ordinary one building against it, and waits because it lists
+node 0.
 
 Work out the shape first: what has to happen before what, and what can happen
 side by side.
