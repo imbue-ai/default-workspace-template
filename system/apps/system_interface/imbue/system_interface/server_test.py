@@ -28,6 +28,7 @@ from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
+from imbue.mngr.errors import MngrError
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
@@ -50,10 +51,12 @@ from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToCompos
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.harnesses.registry import build_shoulder_tap
 from imbue.system_interface.harnesses.session import FileHarnessSession
+from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session import SessionDeps
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.member_titles import MAX_MEMBER_TITLE_LENGTH
 from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
@@ -72,6 +75,7 @@ from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
 from imbue.system_interface.server import _build_stop_command
 from imbue.system_interface.server import _handle_client_state_message
+from imbue.system_interface.server import _revive_and_retry_send
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import mint_account_dir
@@ -984,16 +988,74 @@ def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
 
 
 def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: Path) -> None:
-    """No live ledger (daemon starting) surfaces an explicit, retryable not-ready error."""
+    """No live ledger and a failed revive surface an explicit, retryable not-ready error.
+
+    A NOT_READY send first tries to revive the agent through the same start path the
+    start endpoint uses; when even that fails (here: mngr cannot start it), the honest
+    503 stands."""
     agent_id = "codex-agent-2"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     client = _codex_client(agent_info)
+    started: list[str] = []
+
+    def failing_start(agent_name: str) -> None:
+        started.append(agent_name)
+        raise MngrError("no such agent")
+
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.server.start_agent", failing_start),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi"})
     assert response.status_code == 503
+    assert started == [agent_info.name]
+
+
+def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -> None:
+    """A NOT_READY codex send starts the agent and retries, giving codex the same
+    "sending the agent a message revives it" invariant the file-session harnesses get
+    from mngr's own auto-start."""
+    agent_id = "codex-agent-9"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    client = _codex_client(agent_info)
+    ledger = _FakeCodexLedger()
+
+    # The daemon is down until the revive starts the agent; the retry then finds the ledger.
+    session = CodexHarnessSession.__new__(CodexHarnessSession)
+    session.ensure_live = lambda: None
+    live: list[_FakeCodexLedger] = []
+    session._live_ledger = lambda: live[0] if live else None
+
+    def fake_start(agent_name: str) -> None:
+        live.append(ledger)
+
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.server.start_agent", fake_start),
+        patch.object(AgentManager, "get_or_create_session", return_value=session),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi", "message_id": "m9"})
+    assert response.status_code == 200
+    assert ledger.sent == [("hi", "m9")]
+
+
+def test_revive_and_retry_send_gives_up_after_the_budget(
+    tmp_path: Path, agent_manager: AgentManager
+) -> None:
+    """A daemon that never comes up keeps the honest NOT_READY after the retry budget --
+    the retries are paced by the injected sleep, never a spin."""
+    agent_info = _model_agent_info("codex-agent-10", tmp_path, harness=HarnessType.CODEX)
+    session = _codex_session_over(None)
+    sleeps: list[float] = []
+    request_body = SendMessageRequest(message="hi", message_id="m10")
+
+    with patch("imbue.system_interface.server.start_agent", lambda name: None):
+        outcome = _revive_and_retry_send(
+            agent_info, agent_manager, session, request_body, "m10", sleep=sleeps.append, budget_seconds=0.0
+        )
+    assert outcome is SendOutcome.NOT_READY
+    assert sleeps == []
 
 
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:

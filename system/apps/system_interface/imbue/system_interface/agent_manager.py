@@ -898,6 +898,26 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
         return agent_state is not None and not is_lifecycle_dead(agent_state.state)
 
+    def note_agent_alive(self, agent_id: str) -> None:
+        """Record that this server just started ``agent_id``, without waiting for observe.
+
+        The observe stream notices a death instantly (a pidfd watcher on the live process)
+        but a REVIVAL only on its five-minute full snapshot -- a stopped agent has no pid to
+        watch. So after this server itself starts an agent (the start endpoint, or a send
+        reviving a not-ready one), the tracked state would stay dead for minutes while the
+        agent is demonstrably up. This flips a positively-dead tracked state to WAITING and
+        broadcasts; the observe stream stays the authority and overwrites on its next event
+        (the same direct-injection precedent as a successful create).
+        """
+        with self._lock:
+            agent_state = self._agents.get(agent_id)
+            if agent_state is None or not is_lifecycle_dead(agent_state.state):
+                return
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().state, "WAITING")
+            )
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
 
