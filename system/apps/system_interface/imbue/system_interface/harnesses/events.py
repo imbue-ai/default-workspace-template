@@ -93,3 +93,6 @@ class DisplayKind(StrEnum):
     # user_message only: a latchkey verdict -- no row; the ``resolution`` field is written
     # onto the earlier permission card.
     PERMISSION_RESOLUTION = "permission_resolution"
+    # A subtle inline status message (e.g. "Context was compacted").
+    STATUS = "status"
+

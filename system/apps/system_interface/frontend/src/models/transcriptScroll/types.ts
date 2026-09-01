@@ -54,8 +54,7 @@ export interface ScrollAnchor {
 }
 
 export type ScrollPositionState =
-  | { readonly kind: "FOLLOW" }
-  | { readonly kind: "USER_CONTROLLED"; readonly anchor: ScrollAnchor };
+  { readonly kind: "FOLLOW" } | { readonly kind: "USER_CONTROLLED"; readonly anchor: ScrollAnchor };
 
 /** Every input that can express scroll intent is first-class. */
 export type ScrollInputSource = "wheel" | "keyboard" | "scrollbar" | "selection-autoscroll";
