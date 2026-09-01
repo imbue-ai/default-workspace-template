@@ -49,12 +49,12 @@ side by side.
 ### What to optimise, in order
 
 1. **The task gets done.** Where you are unsure, buy the capability.
-2. **Cost.** Among plans that will work, prefer the cheaper one. Capability is
-   one input to cost, and the tokens each node reads are another: a wide access
-   list ships a long history into every node that carries it, and a context
-   re-read down a chain is paid for on each node that reads it. A careful
-   `high` node can cost less than several `low` ones that each drag the whole
-   history along.
+2. **Cost.** Among plans that will work, prefer the cheaper one. Two things
+   drive the bill. A more capable model costs more per token. And every node
+   pays for the tokens it reads, so a long access list means each node carrying
+   it reads that whole history, and a history passed down a chain is paid for
+   again at every node in the chain. One careful `high` node can come out
+   cheaper than several `low` ones that each re-read everything.
 3. **Speed.** Among plans that will work and cost about the same, prefer the
    one that finishes sooner. That usually means more work running side by side,
    though a wider graph is worth it only when it actually shortens the run.
@@ -63,9 +63,9 @@ Where you traded one of these against another, say so in your reasoning.
 
 ### Capability
 
-You route to a spectrum of general-purpose LLMs, from less to more capable,
-where more capable costs more per node. Each node is a judgment about where on
-that spectrum the work belongs, expressed as a bucket:
+The workers are general-purpose LLMs of varying strength, and the stronger ones
+cost more to run. For each node, decide how strong a worker the work needs, as
+one of three buckets:
 
 - `low` -- mechanical, well-specified work with a clear right answer:
   reformatting, extracting, applying a decided pattern, routine scaffolding.
