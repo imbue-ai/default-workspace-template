@@ -32,7 +32,7 @@ const BADGE_TONES: Record<BadgeTone, string> = {
   accent: "bg-surface text-accent border-accent",
   danger: "bg-danger-surface text-danger border-danger-border",
   warning: "bg-warning-surface text-warning border-transparent",
-  success: "bg-success/14 text-success border-success/35",
+  success: "bg-success-surface text-success border-success-border",
 };
 
 export function badgeClass(tone: BadgeTone, options: BadgeOptions = {}): string {

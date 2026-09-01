@@ -9,9 +9,10 @@ import { hoverTooltipAttrs } from "./hoverTooltip";
  * Every notice in the chat used to re-type this markup -- the declined-command notice, the auth
  * notice, the send-failure notice, and three dialogs elsewhere. The copies drifted in exactly the
  * way hand-copying drifts: two registered an Escape handler and one did not, so Escape dismissed
- * some notices and not others, and only some focused their first button. Owning the overlay, the
- * Escape listener, the backdrop press and the focus rule in one place is what makes those
- * behaviours the same everywhere rather than the same by coincidence.
+ * some notices and not others, and only some focused their first button. Owning the backdrop
+ * press, the focus rule, and the Escape guard in one place (with the Escape listener itself on
+ * the Modal shell, via ``onEscape``) is what makes those behaviours the same everywhere rather
+ * than the same by coincidence.
  *
  * Dismissal is uniform on purpose: the button, Escape, and a backdrop press all call ``onDismiss``,
  * so a caller cannot make one of them mean something different from the others. A caller that must
@@ -23,6 +24,8 @@ export interface NoticeAction {
   tooltip?: string;
   /** Destructive actions are styled apart so they are not the easy button to reach. */
   isDestructive?: boolean;
+  /** Greys the button and ignores its clicks. The greying is aria-disabled, not the native
+   *  ``disabled``, so ``tooltip`` stays reachable while the button cannot be used. */
   isDisabled?: boolean;
   run: () => void;
 }
@@ -45,37 +48,18 @@ export interface NoticeDialogAttrs {
  *  (a URL, a traceback line) rather than one tidy sentence. */
 const NOTICE_BODY_CLASS = `${MODAL_MESSAGE_CLASS} wrap-anywhere max-h-[40vh] overflow-y-auto`;
 
-/**
- * Closure state, so the Escape listener registered in ``oncreate`` is the SAME function object
- * ``onremove`` unregisters. A handler defined inside ``view`` is a new closure on every redraw,
- * which ``removeEventListener`` cannot match -- so every redraw would leave another live listener
- * behind, and each one would keep dismissing long after its notice was gone.
- */
 export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
-  let dismiss: () => void = () => {};
-
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") dismiss();
-  }
-
   return {
     view(vnode) {
       const { title, body, dismissLabel, actions = [], isDismissable = true, onDismiss } = vnode.attrs;
-      dismiss = (): void => {
+      const dismiss = (): void => {
         if (isDismissable) onDismiss();
       };
       return m(
         Modal,
         {
           onDismiss: dismiss,
-          overlay: {
-            oncreate() {
-              document.addEventListener("keydown", handleKeydown);
-            },
-            onremove() {
-              document.removeEventListener("keydown", handleKeydown);
-            },
-          },
+          onEscape: dismiss,
           title,
           actions: [
             m(
@@ -86,7 +70,9 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
                 // Focused on open: the dismissive button is the only one that does not act, so it
                 // is the safe thing for Enter and Space to land on.
                 oncreate: (buttonVnode) => (buttonVnode.dom as HTMLButtonElement).focus(),
-                disabled: !isDismissable,
+                // aria-disabled, not disabled, like the action buttons below; ``dismiss``
+                // itself refuses while the notice is not dismissable.
+                ...(isDismissable ? {} : { "aria-disabled": "true" }),
                 onclick: dismiss,
               },
               dismissLabel,
@@ -99,8 +85,13 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
                   // apart from the primary action rather than being the easy button to reach.
                   variant: action.isDestructive ? "ghost-destructive" : "primary",
                   ...(action.tooltip === undefined ? {} : hoverTooltipAttrs(action.tooltip)),
-                  disabled: action.isDisabled === true,
-                  onclick: () => action.run(),
+                  // aria-disabled, not disabled: a disabled button suppresses the hover/focus
+                  // events the tooltip above needs, and the explanation matters most exactly
+                  // while the button is greyed (e.g. mid-retry). Clicks are gated here instead.
+                  ...(action.isDisabled === true ? { "aria-disabled": "true" } : {}),
+                  onclick: () => {
+                    if (action.isDisabled !== true) action.run();
+                  },
                 },
                 action.label,
               ),
@@ -115,6 +106,5 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
   };
 }
 
-// Deliberately no shared instance: the factory holds the dismiss handler its Escape listener
-// closes over, so two notices sharing one would have the second overwrite the first's. Each
-// render site makes its own.
+// The factory shape predates the Modal shell owning the Escape listener and is kept so render
+// sites stay unchanged; instances hold no state anymore.

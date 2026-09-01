@@ -15,6 +15,7 @@
 
 import m from "mithril";
 import { Button } from "./components/Button";
+import { bannerClass } from "./components/banner";
 
 const META_TAG_NAME = "system-interface-update-staleness";
 
@@ -60,14 +61,11 @@ export function UpdateStalenessBanner(): m.Component {
       if (hidden) return null;
       const message = STALENESS_MESSAGES.get(getUpdateStalenessVariant());
       if (message === undefined) return null;
-      // The terminal banner's box (TerminalBanner.ts) with the warning tint;
-      // the class names are bare markers for the vitest suite.
+      // The shared banner box (components/banner.ts) with the warning tint.
       return m(
         "div",
         {
-          class:
-            "update-staleness-banner flex flex-none items-center justify-between gap-3 border-b border-warning " +
-            "bg-warning-surface px-2.5 py-1.5 text-(length:--font-size-body) leading-[1.4] text-primary",
+          class: bannerClass("update-staleness-banner", "warning"),
         },
         [
           m("span", { class: "update-staleness-banner-text min-w-0" }, message),

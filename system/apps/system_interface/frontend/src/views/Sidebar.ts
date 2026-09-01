@@ -52,6 +52,7 @@ import type { UnpinnedShortcutRow } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./components/appIcon";
 import { Button, buttonClass } from "./components/Button";
 import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { menuCardClass, menuRowClass } from "./components/menu";
 import type { TooltipPlacement } from "./components/hoverTooltip";
 import { icon } from "./components/icons";
 import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
@@ -201,7 +202,7 @@ const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t border-default";
 // row's trailing controls draw at instead (a kebab, a rename pencil, a pin
 // toggle, the switcher's chevron) -- those are secondary to the row, not what
 // it is, and stayed a consistent 14px even while the rows around them drifted.
-const ROW_TEXT_CLASS = "text-[13px]";
+const ROW_TEXT_CLASS = "text-(length:--font-size-row)";
 const ROW_ICON_SIZE = 16;
 const ACTION_ICON_SIZE = 14;
 
@@ -243,17 +244,15 @@ function railAction(options: {
   );
 }
 
-// Menu chrome, settled in the design (§6): a floating card on the primary
-// surface with a hairline border, 8px radius and the overlay elevation shadow,
-// holding 32px rows of icon + label.
-const MENU_CARD_CLASS = `project-rail-menu fixed z-(--z-dropdown) rounded-lg border border-default bg-surface py-1 shadow-overlay ${ROW_TEXT_CLASS} text-primary`;
+// Menu chrome: the shared floating-menu recipe (components/menu.ts), fixed and
+// placed by placeMenu, at the rail's own text size.
+const MENU_CARD_CLASS = `project-rail-menu ${menuCardClass(`fixed ${ROW_TEXT_CLASS} text-primary`)}`;
 // `group` so a row's own trailing controls (the switcher's edit pencil) can
 // reveal themselves on `group-hover:`, the same reveal-on-hover pattern the
-// tab list's kebab uses. `gap-1` (4px) matches the rail's own rows
-// (ROW_CLASS) -- it used to be a looser `gap-2`, which is what made a menu
-// row read as less tight than the rail row sitting right above it.
-const MENU_ROW_CLASS =
-  "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-1 px-3 text-left hover:bg-fill-hover";
+// tab list's kebab uses. tightGap (4px) matches the rail's own rows
+// (ROW_CLASS) -- it used to be the recipe's looser 8px, which is what made a
+// menu row read as less tight than the rail row sitting right above it.
+const MENU_ROW_CLASS = `project-rail-menu-item group ${menuRowClass({ tightGap: true })}`;
 
 // A transparent overlay rendered behind any open menu and above everything
 // else. Menus already dismiss on an outside pointerdown (see

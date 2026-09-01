@@ -69,21 +69,6 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   let isDeleting = false;
   let isConfirmingDelete = false;
   let error: string | null = null;
-  // The Escape handler is registered on the document once, so it reaches the
-  // callbacks through this rather than through a vnode captured at create time.
-  let latestAttrs: ProjectSettingsModalAttrs | null = null;
-
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Escape" || latestAttrs === null) return;
-    // Escape undoes the delete confirmation first: it should back out of the
-    // step the user just took, not close the whole modal from under it.
-    if (isConfirmingDelete) {
-      isConfirmingDelete = false;
-    } else {
-      latestAttrs.onCancel();
-    }
-    m.redraw();
-  }
 
   async function save(attrs: ProjectSettingsModalAttrs): Promise<void> {
     const chosen = name.trim();
@@ -223,7 +208,6 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   return {
     oninit(vnode) {
       const attrs = vnode.attrs;
-      latestAttrs = attrs;
       name = attrs.project.name;
       color = attrs.project.color;
       glyphIndex = normalizedGlyphIndex(attrs.project.glyph);
@@ -231,20 +215,20 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
 
     view(vnode) {
       const attrs = vnode.attrs;
-      latestAttrs = attrs;
       const trimmedName = name.trim();
 
       return m(
         Modal,
         {
           onDismiss: attrs.onCancel,
-          overlay: {
-            oncreate() {
-              document.addEventListener("keydown", handleKeydown);
-            },
-            onremove() {
-              document.removeEventListener("keydown", handleKeydown);
-            },
+          // Escape undoes the delete confirmation first: it should back out of
+          // the step the user just took, not close the whole modal from under it.
+          onEscape: () => {
+            if (isConfirmingDelete) {
+              isConfirmingDelete = false;
+            } else {
+              attrs.onCancel();
+            }
           },
           title: "Project settings",
           actions: isConfirmingDelete ? deleteConfirmationActions(attrs) : editActions(attrs, trimmedName),

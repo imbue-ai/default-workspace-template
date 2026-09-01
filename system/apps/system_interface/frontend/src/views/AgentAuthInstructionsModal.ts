@@ -15,21 +15,7 @@ import { dismissAuthInstructions, getAuthInstructionsAgentId } from "../models/A
 import { Button } from "./components/Button";
 
 export function AgentAuthInstructionsModal(): m.Component {
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      dismissAuthInstructions();
-    }
-  }
-
   return {
-    oncreate() {
-      document.addEventListener("keydown", handleKeydown);
-    },
-
-    onremove() {
-      document.removeEventListener("keydown", handleKeydown);
-    },
-
     view() {
       const agentId = getAuthInstructionsAgentId();
       if (agentId === null) {
@@ -42,6 +28,9 @@ export function AgentAuthInstructionsModal(): m.Component {
         Modal,
         {
           onDismiss: dismissAuthInstructions,
+          // On the Modal shell, so the listener exists only while the notice is
+          // up (this component itself stays mounted, rendering null when closed).
+          onEscape: dismissAuthInstructions,
           title: "Sign-in runs in the terminal",
           actions: [
             m(

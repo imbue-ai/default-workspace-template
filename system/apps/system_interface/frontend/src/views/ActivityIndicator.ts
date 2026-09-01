@@ -15,6 +15,7 @@
  */
 
 import m from "mithril";
+import { activityDotClass } from "./components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { getAgentById } from "../models/AgentManager";
 
@@ -92,9 +93,7 @@ function renderStrip(label: string, state: string | null | undefined): m.Vnode {
     },
     [
       m("span", {
-        class:
-          "agent-activity-indicator__dot h-1.5 w-1.5 shrink-0 rounded-full bg-accent " +
-          "animate-[agent-activity-pulse_1.4s_ease-in-out_infinite]",
+        class: `agent-activity-indicator__dot ${activityDotClass("h-1.5 w-1.5")}`,
       }),
       m("span", { class: "agent-activity-indicator__label truncate" }, label),
     ],

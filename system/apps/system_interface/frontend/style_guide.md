@@ -28,7 +28,8 @@ say at the call site.
 - **Type roles** are the `type-*` utilities (`type-heading-lg`, `type-heading`,
   `type-label`, `type-body`, `type-helper`, `type-section`) — use a role before
   hand-setting font-size/weight. For an off-role size, reference the token:
-  `text-(length:--font-size-body)`.
+  `text-(length:--font-size-body)`; dense chrome (the rail, menus, launcher
+  tables) sits on `--font-size-row` (13px).
 - **Spacing** uses the stock scale (`p-N`/`gap-N`/`m-N`; 4px per step). Steps in
   use: 0.5/1/1.5/2/3/4/5/6/8. Off-grid pixel values are allowed where the design
   needs them (`h-[34px]`), as deliberate exceptions.

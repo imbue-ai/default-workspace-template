@@ -39,6 +39,7 @@ import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./components/appIcon";
 import { areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
 import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { menuCardClass, menuRowClass } from "./components/menu";
 import { icon } from "./components/icons";
 import { buttonClass } from "./components/Button";
 import { SHORTCUT_TOOLTIPS } from "./Sidebar";
@@ -434,7 +435,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "label",
       {
         key: kind,
-        class: "flex h-8 cursor-pointer items-center gap-2 px-3 text-[13px] text-primary hover:bg-fill-hover",
+        class: menuRowClass({ extra: "text-(length:--font-size-row) text-primary" }),
       },
       [
         m("span", { class: "relative flex h-4 w-4 shrink-0 items-center justify-center" }, [
@@ -478,8 +479,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     return m(
       "div",
       {
-        class:
-          "absolute top-full right-0 z-(--z-dropdown) mt-1 min-w-[170px] rounded-lg border border-default bg-surface py-1 shadow-overlay",
+        class: menuCardClass("absolute top-full right-0 mt-1 min-w-[170px]"),
         oncreate: (vnode: m.VnodeDOM) => {
           menuElement = vnode.dom as HTMLElement;
           document.addEventListener("pointerdown", onDocumentPointerDown);
@@ -502,7 +502,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             type: "button",
             disabled: isPristine,
             class:
-              "flex h-8 w-full items-center px-3 text-left text-[13px] " +
+              "flex h-8 w-full items-center px-3 text-left text-(length:--font-size-row) " +
               (isPristine ? "text-faint cursor-default" : "text-secondary cursor-pointer hover:bg-fill-hover"),
             onclick: () => resetHiddenKinds(hidden),
           },
@@ -524,7 +524,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         type: "button",
         class:
           "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
-          "text-[13px] hover:bg-fill-hover " +
+          "text-(length:--font-size-row) hover:bg-fill-hover " +
           (stoppedApp !== null ? "new-tab-launcher-row-stopped text-faint opacity-60" : "text-primary"),
         ...(stoppedApp !== null ? hoverTooltipAttrs(`${row.label} — ${appStoppedDetail(stoppedApp)}`) : {}),
         onclick: () => onOpen(row),
@@ -567,7 +567,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         openFilterFor === section.key ? filterMenu(section) : null,
       ]),
       visible.length === 0
-        ? m("p", { class: "text-faint px-2 py-1 text-[13px]" }, emptyMessage)
+        ? m("p", { class: "text-faint px-2 py-1 text-(length:--font-size-row)" }, emptyMessage)
         : visible.map((row) => memberRow(row, nowMs, onOpen)),
     ]);
   }
@@ -606,7 +606,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                   "aria-disabled": isDisabled ? "true" : undefined,
                   class:
                     "new-tab-launcher-tile border-default flex h-9 min-w-0 flex-1 items-center justify-center gap-2 " +
-                    "rounded-lg border px-4 text-[13px] font-medium " +
+                    "rounded-lg border px-4 text-(length:--font-size-row) font-medium " +
                     (isDisabled ? "text-faint cursor-not-allowed" : "text-primary hover:bg-fill-hover cursor-pointer"),
                   onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
                   // Every idle tile explains what it starts (the rail's own
