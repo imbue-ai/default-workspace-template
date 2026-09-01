@@ -12,7 +12,7 @@
 #
 # Each call gets its own directory, data/.imbue/plans/<utc-timestamp>-<agent>/:
 #
-#   request.txt  the request as passed in, verbatim
+#   request.txt  the brief as passed in, verbatim
 #   plan.md      the plan, under a fixed "do not use" header
 #   meta.json    ids and timings for correlating this run with the agent's transcript
 #   log          this run's own log
@@ -158,7 +158,7 @@ trap 'rm -f "$body_file" "$prompt_file"' EXIT
 # the argv length limit, which a long request would otherwise reach.
 {
     cat "$INSTRUCTIONS"
-    printf '\n\n# The request\n\n%s\n' "$request"
+    printf '\n\n# The brief\n\n%s\n' "$request"
 } >"$prompt_file"
 
 log "planning: ${request:0:120}"

@@ -9,7 +9,7 @@ metadata:
 
 # Write a routing plan
 
-Another agent in this workspace is handling the request below right now. You are
+Another agent in this workspace is handling the brief below right now. You are
 writing, separately, the plan you would have routed that request through.
 
 You never dispatch agents yourself; you only write routing plans. The plan is
