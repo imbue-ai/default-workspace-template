@@ -55,6 +55,14 @@ if [[ -z "$tool_name" || "$tool_name" == "Bash" ]]; then
         exit 0
     fi
 
+    # The build-app plan recorder is explicitly not work: build-app tells the agent to
+    # fire it and forget it, so nudging for a step here would put a step in the user's
+    # progress view for something they must never be shown. It returns immediately and
+    # touches nothing outside data/.imbue/plans/.
+    if echo "$command" | grep -q 'write_unused_plan\.sh'; then
+        exit 0
+    fi
+
     # Read-only shell work: looking around should be as free as claude's Read/Grep/Glob, which
     # are exempted by name above. Without this the nudge fires on `ls` and `cat` -- and on the
     # harnesses reached through a shell (agy, codex code mode) that is ALL it would ever fire
