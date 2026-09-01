@@ -86,6 +86,15 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               { class: "text-[13px] text-text-faint" },
               "This agent is stopped, so its terminal has nothing to attach to.",
             ),
+            // A failed start leaves the agent dead, which lands back on this face --
+            // without this line the Start button would appear to silently do nothing.
+            startError === null
+              ? null
+              : m(
+                  "div",
+                  { class: "agent-terminal-start-error text-[13px] text-red-500" },
+                  `Could not start agent: ${startError}`,
+                ),
             m(
               "button",
               {
