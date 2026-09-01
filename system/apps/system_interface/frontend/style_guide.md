@@ -42,17 +42,17 @@ recipes, the tooltip mechanism, the icon set); when a look starts being reused
 across features, it belongs here.
 
 - **Buttons are the `Button` component** in `src/views/components/Button.ts`:
-  `m(Button, {variant, sm, icon, round, selected, block, extra, ...attrs},
-children)` renders a real `<button type="button">`, applies the shared
-  recipe, and passes through every attr it doesn't consume (`onclick`,
-  `disabled`, `aria-*`, `oncreate`, ...). A caller's `class` never passes
-  through — additive utilities/markers go in `extra`. The class recipe
+  `m(Button, {variant, sm, xs, icon, round, selected, readonly, quiet, block,
+extra, ...attrs}, children)` renders a real `<button type="button">`, applies
+  the shared recipe, and passes through every attr it doesn't consume
+  (`onclick`, `disabled`, `aria-*`, `oncreate`, ...). A caller's `class` never
+  passes through — additive utilities/markers go in `extra`. The class recipe
   (`buttonClass()`) is exported from the same file for the rare place a
   component can't go: an element that must stay a real anchor (the login
   modal's OAuth link) or DOM built outside mithril (the lightbox). A dialog's
-  confirming action is `variant: "primary"`; a lone dismiss/cancel stays quiet
-  (the `secondary` default); a destructive confirm is `"destructive"` (quiet
-  form: `"ghost-destructive"`).
+  confirming action is `variant: "primary"`; a lone dismiss/cancel keeps the
+  `secondary` default; a destructive confirm is `"destructive"` (ghost form:
+  `"ghost-destructive"`).
 - **Other shared recipes** (a look used by more than one file) live one file
   per primitive under `components/`: `inputClass()` in
   `src/views/components/Input.ts`, `badgeClass()` in

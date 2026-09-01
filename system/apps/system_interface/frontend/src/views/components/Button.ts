@@ -40,18 +40,22 @@ export interface ButtonOptions {
    *  hover/press. The element stays enabled so a hover tooltip can explain
    *  why; the component marks it aria-disabled for assistive tech. */
   readonly?: boolean;
+  /** Regular text weight, for a button that should read as quiet inline text
+   *  among other text (the composer under-bar's actions, next to the model
+   *  bar's regular-weight triggers) rather than as a labeled control. */
+  quiet?: boolean;
   block?: boolean;
   extra?: string;
 }
 
-// No border-color or radius here: two utilities on the same property tie-break
-// by their order in the COMPILED bundle, not by class order, so a base
-// border-transparent would defeat every variant's border colour (and a base
-// rounded-md would defeat the round option). Each property is emitted exactly
-// once, resolved in the builder.
+// No border-color, radius, or font weight here: two utilities on the same
+// property tie-break by their order in the COMPILED bundle, not by class
+// order, so a base border-transparent would defeat every variant's border
+// colour (a base rounded-md the round option, a base font-medium the quiet
+// option). Each property is emitted exactly once, resolved in the builder.
 const BTN_BASE =
   "btn inline-flex items-center justify-center gap-1.5 " +
-  `${TEXT_BODY_SIZE} leading-none font-medium whitespace-nowrap border ` +
+  `${TEXT_BODY_SIZE} leading-none whitespace-nowrap border ` +
   "transition-[color,background-color,border-color] duration-(--dur-base) ease-[ease] " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
   "disabled:opacity-50 disabled:cursor-not-allowed " +
@@ -107,6 +111,7 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
     round = false,
     selected = false,
     readonly = false,
+    quiet = false,
     block = false,
     extra = "",
   } = options;
@@ -130,6 +135,7 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
     readonly ? BTN_READONLY : BTN_INTERACTIVE,
     `btn--${variant}`,
     size,
+    quiet ? "font-normal" : "font-medium",
     round ? "rounded-full" : "rounded-md",
     selected ? BTN_SELECTED : BTN_VARIANTS[variant],
   ];
@@ -142,12 +148,12 @@ interface ButtonAttrs extends m.Attributes, ButtonOptions {
   variant?: ButtonVariant;
 }
 
-const OWN_KEYS = ["variant", "sm", "xs", "icon", "round", "selected", "readonly", "block", "extra"] as const;
+const OWN_KEYS = ["variant", "sm", "xs", "icon", "round", "selected", "readonly", "quiet", "block", "extra"] as const;
 
 export function Button(): m.Component<ButtonAttrs> {
   return {
     view(vnode) {
-      const { variant = "secondary", sm, xs, icon, round, selected, readonly, block, extra } = vnode.attrs;
+      const { variant = "secondary", sm, xs, icon, round, selected, readonly, quiet, block, extra } = vnode.attrs;
       // The passthrough spread comes after `type` (so a caller can still opt
       // into type="submit" if a form ever appears) and after the readonly
       // aria-disabled default (so an explicit caller value wins).
@@ -155,7 +161,7 @@ export function Button(): m.Component<ButtonAttrs> {
         "button",
         {
           type: "button",
-          class: buttonClass(variant, { sm, xs, icon, round, selected, readonly, block, extra }),
+          class: buttonClass(variant, { sm, xs, icon, round, selected, readonly, quiet, block, extra }),
           ...(readonly === true ? { "aria-disabled": "true" } : null),
           ...splitAttrs(vnode.attrs, OWN_KEYS),
         },

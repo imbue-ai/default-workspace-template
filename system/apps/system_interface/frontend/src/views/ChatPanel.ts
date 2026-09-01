@@ -767,12 +767,15 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                   },
                   [
                     m(ModelBar, { agentId }),
+                    // `quiet`: the under-bar reads as one row of inline text
+                    // actions, so these match the model bar's regular weight.
                     m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
                       m(
                         Button,
                         {
                           variant: "ghost",
                           sm: true,
+                          quiet: true,
                           onclick: () => openAgentTerminalTab(agentId),
                         },
                         "Open agent terminal",
@@ -784,6 +787,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                         {
                           variant: "ghost",
                           sm: true,
+                          quiet: true,
                           onclick: () => openAgentAuth(agentId),
                         },
                         "Agent auth",
