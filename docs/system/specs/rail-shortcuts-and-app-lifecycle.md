@@ -6,7 +6,7 @@ The two parts are independently shippable but share vocabulary and one interacti
 
 Audience: implementers of `system/apps/system_interface/` (backend and frontend), `system/scripts/forward_port.py`, and the `build-app` / `update-app` skills.
 
-Related reading: the system_interface README's "Projects" section (the verb set and rail as they are today), `frontend/src/views/objectMenu.ts` (the object verb set this spec extends), `.agents/skills/manage-projects/SKILL.md` (the agent-facing project/view layer), and `system/vendor/mngr/blueprint/random-service-labels/` (why registry labels are stable).
+Related reading: the system_interface README's "Projects" section (the verb set and rail as they are today), `frontend/src/views/objectMenu.ts` (the object verb set this spec extends), `.agents/skills/manage-projects/SKILL.md` (the agent-facing project/view layer).
 
 ## Background: the current state
 
