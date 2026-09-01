@@ -147,10 +147,10 @@ refreshing. It drives the rest through its own scripts. Take the real set from
 what you read in Step 1, since it moves as the product does, and check what
 exists before writing a node that would rebuild one.
 
-When a node is a skill, naming the skill is usually enough. The worker follows
+When a node is a skill, naming the skill is sometimes enough. The worker follows
 that skill's own steps, so the subtask can stay at the level of which skill and
-to what end, and you add more only where this run needs something the skill
-would not do on its own.
+to what end. Add to that what this run needs on top of the skill: the inputs it
+starts from, and the outcome it has to reach.
 
 ### Scope
 
