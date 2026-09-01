@@ -58,6 +58,15 @@ readonly INSTRUCTIONS="${SELF_DIR}/prompt.md"
 # this is wedged and should not keep holding container memory.
 readonly RUN_TIMEOUT_SECONDS=900
 
+# Hard ceiling on what one plan may spend. Almost all of the cost is input: the
+# plan is short, and reading build-app plus the workspace is what fills the
+# context. A run against a bare template checkout measures at about $0.62, and a
+# lived-in workspace reads more -- its apps, memories and tickets -- so treat
+# that as the floor rather than the typical. Exceeding this ceiling exits
+# non-zero and writes no plan, with the spend up to that point still incurred,
+# so it is a runaway guard rather than a way to buy cheaper plans.
+readonly MAX_BUDGET_USD=5.00
+
 # oom_priority's AGENT_SUBPROCESS band (system/services/oom_priority/src/oom_priority/bands.py):
 # any agent's subprocess is shed before the agents themselves. This process is
 # more expendable than that, but the band is positive-only and 900 is the highest
@@ -183,6 +192,7 @@ nice -n 19 timeout "$RUN_TIMEOUT_SECONDS" claude -p \
     --model opus \
     --setting-sources user \
     --allowed-tools "Read,Grep,Glob" \
+    --max-budget-usd "$MAX_BUDGET_USD" \
     <"$prompt_file" >"$body_file" 2>>"$LOG_FILE" || claude_status=$?
 
 if [ "$claude_status" -ne 0 ]; then
