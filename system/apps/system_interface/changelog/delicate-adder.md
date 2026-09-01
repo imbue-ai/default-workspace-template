@@ -55,7 +55,9 @@ pixel-identical render.
   (`components/NoticeDialog.ts` -- the declined-command, auth, and send-failure
   notices) all render through it.
   Deliberately left off the shell: the full-bleed image lightbox and the
-  multi-step Claude sign-in modal (forcing either on would regress it).
+  multi-step provider chooser (forcing either on would regress it; the chooser
+  keeps the mockup's own multi-screen panel and shares only the backdrop
+  helper).
 
 - **Dialog emphasis.** A dialog's confirming action -- a real choice it asks the
   user to make -- is the primary Button; a button that only dismisses or
@@ -82,3 +84,22 @@ pixel-identical render.
 
 - **Test infrastructure.** Removed the dev-only visual-diff gallery harness
   used during the migration.
+
+- **Merge reconciliation with the provider-selection work (auth-provider-lanes
+  + simplify-chat).** Main's multi-harness UI -- the provider chooser, the
+  provider+model combo card, the chat/terminal flip card, the payload-free
+  event wire -- landed while this branch held the design system, and the two
+  meet as follows. The mockup-ported surfaces keep their verbatim class
+  strings, with the mockup's token names (`text-tertiary`, `border-strong`,
+  `bg-surface-primary`, `bg-fill-subtle`, `text-important`,
+  `bg-surface-overlay`) registered as `@theme inline` aliases onto the same
+  `--c-*` palette, and the `type-subsection`/`type-badge` roles added to the
+  ramp. The shared `ToolCallBlock` absorbed the new deferred-payload behavior
+  (loading/unavailable pane notes, the always-visible error snippet, an
+  `onExpand` fetch hook) rather than the transcript reverting to hand-rolled
+  block markup. Main's new component CSS (chat flip card, terminal-view
+  toggle, model-flyout scrollbar and search field, thinking disclosure, the
+  chooser backdrop) is ported onto the `--c-*`/token layer; the under-bar and
+  footer stay utilities-in-markup. Old-namespace utility spellings from before
+  the token layer (`text-text-*`, `hover:bg-bg-hover`, `border-border`), which
+  resolve to nothing under it, are normalized to the semantic names.
