@@ -328,13 +328,18 @@ test -d /opt/pi-extensions/npm/node_modules
 # apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the
 # environment record under ~/.mngr/plugin/env-converge re-captures from dpkg's
 # own database -- zero agent cooperation required ("dpkg is truth"). The hook
-# no-ops during image builds and provisioning (no mngr host dir yet) and is
-# always best-effort: a capture failure must never break apt itself.
+# no-ops during image builds and provisioning (no mngr host dir yet) and on a
+# rootfs that has never completed a converge (no identity stamp -- there the
+# record is authoritative and about to be replayed, so a capture would clobber
+# it; the `env-converge capture` CLI applies the same guard, and this line
+# covers workspace checkouts that predate it). Always best-effort: a capture
+# failure must never break apt itself.
 cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 #!/bin/sh
 # Best-effort apt Post-Invoke hook: refresh the environment record.
 [ -d /home/user/.mngr ] || exit 0
 [ -d /home/user/workspace/system/services/env_converge ] || exit 0
+[ -e /var/lib/minds/env-converge/rootfs-id ] || exit 0
 cd /home/user/workspace || exit 0
 MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
 HOOK
