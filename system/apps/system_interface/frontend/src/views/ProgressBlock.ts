@@ -40,8 +40,8 @@ interface ProgressBlockAttrs {
 }
 
 /* Styling.
- * Utilities in the markup; the pv-* class names stay as bare markers. What
- * remains in style.css for this view: the narration shimmer (a keyframe +
+ * Utilities in the markup; the pv-* class names stay as bare markers. In
+ * style.css for this view: the narration shimmer (a keyframe +
  * background-clip machine), the narration/expanded markdown-child rules
  * (rendered content), and the expanded panel's tool-block override (a
  * contextual rule over shared markup). */

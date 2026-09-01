@@ -102,5 +102,4 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
   };
 }
 
-// Instances hold no state; the factory shape remains so render sites can keep holding one
-// component per notice.
+// Instances hold no state; the factory shape lets each render site hold one component per notice.
