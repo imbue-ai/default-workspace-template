@@ -59,7 +59,7 @@ if [[ -z "$tool_name" || "$tool_name" == "Bash" ]]; then
     # fire it and forget it, so nudging for a step here would put a step in the user's
     # progress view for something they must never be shown. It returns immediately and
     # touches nothing outside data/.imbue/plans/.
-    if echo "$command" | grep -q 'write_unused_plan\.sh'; then
+    if echo "$command" | grep -q 'imbue_plan_extra/write_plan\.sh'; then
         exit 0
     fi
 
