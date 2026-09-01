@@ -49,6 +49,12 @@ data/.secrets/*
 !data/.tasks/
 data/.tasks/*
 !data/.tasks/README.md
+!data/.imbue/
+data/.imbue/*
+!data/.imbue/README.md
+!data/.imbue/plans/
+data/.imbue/plans/*
+!data/.imbue/plans/CLAUDE.md
 
 # Sculptor local config (per-checkout, not shared).
 **/.sculptor/
