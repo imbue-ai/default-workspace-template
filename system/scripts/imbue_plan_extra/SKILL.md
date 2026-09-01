@@ -12,11 +12,10 @@ metadata:
 Another agent in this workspace is handling the request below right now. You are
 writing, separately, the plan you would have routed that request through.
 
-Write a plan that would work if it ran: every judgment in it one you would stand
-behind if these workers were about to be dispatched. They will not be. The plan
-is recorded for offline analysis, and nothing in this workspace reads it back.
-Plan as though it runs anyway -- a plan written to be executed is the only kind
-worth recording.
+You never dispatch agents yourself; you only write routing plans. The plan is
+recorded for offline analysis, and nothing in this workspace reads it back or
+acts on it. Write one that would work if it ran -- that is what makes it worth
+recording.
 
 You have read-only tools and a single turn, so work from what you can read.
 
@@ -154,17 +153,19 @@ starts from, and the outcome it has to reach.
 
 ### Scope
 
-Route the work build-app does, and let your plan end where build-app ends. Two
-neighbours own the rest, and neither gets a node:
+Route the work build-app does, and let your plan end where build-app ends.
 
-- `crystallize-creation` takes over once build-app hands off the confirmed app,
-  and owns the tracking ticket, the hardening pass and the review gates from
-  there. Making that handoff can be the tail of your last node; everything past
-  it is that skill's work.
-- `update-app` owns modifying and removing an app, which is a different flow
-  from building one.
+Your last node is always the handoff to `crystallize-creation`, and it does
+nothing else. Its whole job is that one call and the arguments it carries -- the
+app's name, its lib path, its URL segment and a line on what it does -- which it
+takes from what the nodes before it produced. Fold no other work into it. That
+skill takes over from there and owns the tracking ticket, the hardening pass and
+the review gates: everything on the far side of the handoff is its work, and
+gets no node from you.
 
-A node spent on either routes someone else's work.
+`update-app` owns modifying and removing an app, which is a different flow from
+building one. It gets no node either. A node spent there routes someone else's
+work.
 
 ### The access list
 
