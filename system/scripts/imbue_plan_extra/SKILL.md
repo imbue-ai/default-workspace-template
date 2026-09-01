@@ -153,17 +153,15 @@ own steps, so the subtask stays at the level of which skill, and to what end.
 ### Scope
 
 Route the work build-app does, and let your plan end where build-app ends. Two
-neighbours own the rest, and their work stays out of your plan:
+neighbours own the rest, and neither gets a node:
 
 - `crystallize-creation` takes over once build-app hands off the confirmed app,
   and owns the tracking ticket, the hardening pass and the review gates. Making
-  that handoff can be the tail of your last node; everything past the handoff
-  belongs to that skill and gets no node here.
-- `update-app` owns modifying and removing an app, and gets no node here either.
+  that handoff can be the tail of your last node; everything past it is that
+  skill's work.
+- `update-app` owns modifying and removing an app.
 
-Leave both of them out of the plan entirely. A node spent on either one routes
-someone else's work, spends part of the same 5-node budget, and describes
-something these workers were never going to do.
+A node spent on either routes someone else's work out of your own 5-node budget.
 
 ### The access list
 
