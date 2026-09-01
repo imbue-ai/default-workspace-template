@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import type { ToolCall, TranscriptEvent } from "../models/Response";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import m from "mithril";
+import type { ToolCall, ToolResultEvent, TranscriptEvent } from "../models/Response";
 import type { AssistantMessageEvent } from "../models/Response";
 import {
   buildToolResultsWithSkillExpansions,
@@ -8,11 +9,25 @@ import {
   renderToolCallBlock,
 } from "./message-renderers";
 import { isSkillExpansionUserMessage } from "./message-classification";
+import { setBlockExpanded } from "./expansion-state";
 
 // Avoid importing the heavy/DOM-dependent module graph (dockview, dompurify) at test time;
 // renderSubagentCard only needs openSubagentTab, and the card path never calls MarkdownContent.
 vi.mock("./DockviewWorkspace", () => ({ openSubagentTab: vi.fn() }));
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
+
+// The render paths ask the detail cache for on-demand payloads (and kick off fetches);
+// stub those three so tests control the state machine without mithril's XHR.
+const { mockDetailState, mockRequestDetail } = vi.hoisted(() => ({
+  mockDetailState: vi.fn(),
+  mockRequestDetail: vi.fn(),
+}));
+vi.mock("../models/Response", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Response")>()),
+  getEventDetailState: mockDetailState,
+  getEventDetailVersion: () => 0,
+  requestEventDetail: mockRequestDetail,
+}));
 
 function skillToolCall(ts: string, callId: string): TranscriptEvent {
   return {
@@ -22,7 +37,7 @@ function skillToolCall(ts: string, callId: string): TranscriptEvent {
     source: "test",
     model: "test-model",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: "Skill", input_preview: "{}" }],
+    tool_calls: [{ tool_call_id: callId, tool_name: "Skill", input_chars: 2 }],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
@@ -33,6 +48,8 @@ function skillToolCall(ts: string, callId: string): TranscriptEvent {
 }
 
 function toolResult(ts: string, callId: string, output: string): TranscriptEvent {
+  // `output` models the inline body only a frontend-synthesized result carries; real wire
+  // events are payload-free (output_chars only). The merge tests exercise both.
   return {
     timestamp: ts,
     type: "tool_result",
@@ -40,6 +57,7 @@ function toolResult(ts: string, callId: string, output: string): TranscriptEvent
     source: "test",
     tool_call_id: callId,
     tool_name: "test-tool",
+    output_chars: output.length,
     output,
     is_error: false,
   };
@@ -173,8 +191,8 @@ describe("buildToolResultsWithSkillExpansions", () => {
         model: "test-model",
         text: "",
         tool_calls: [
-          { tool_call_id: "tc-a", tool_name: "Skill", input_preview: "{}" },
-          { tool_call_id: "tc-b", tool_name: "Skill", input_preview: "{}" },
+          { tool_call_id: "tc-a", tool_name: "Skill", input_chars: 2 },
+          { tool_call_id: "tc-b", tool_name: "Skill", input_chars: 2 },
         ],
         stop_reason: null,
         usage: null,
@@ -217,7 +235,7 @@ describe("buildToolResultsWithSkillExpansions", () => {
         source: "test",
         model: "test-model",
         text: "",
-        tool_calls: [{ tool_call_id: "tc-read", tool_name: "Read", input_preview: "" }],
+        tool_calls: [{ tool_call_id: "tc-read", tool_name: "Read", input_chars: 0 }],
         stop_reason: null,
         usage: null,
         is_auth_error: false,
@@ -249,7 +267,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       description: "explore foo",
       subagent_type: "Explore",
     };
@@ -268,7 +286,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       description: "explore foo",
       subagent_type: "Explore",
       subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
@@ -283,7 +301,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       description: "explore foo",
       subagent_type: "Explore",
       subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
@@ -298,7 +316,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       description: "explore foo",
       subagent_type: "Explore",
       subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
@@ -316,7 +334,7 @@ describe("renderSubagentCard", () => {
     const toolCall: ToolCall = {
       tool_call_id: "t1",
       tool_name: "Agent",
-      input_preview: "{}",
+      input_chars: 2,
       subagent_metadata: { agent_type: "Explore", description: "from metadata", session_id: "agent-sub1" },
     };
     const text = allText(renderSubagentCard(toolCall, "agent-1", false));
@@ -325,28 +343,43 @@ describe("renderSubagentCard", () => {
   });
 });
 
-describe("renderToolCallBlock header", () => {
+describe("renderToolCallBlock", () => {
   // A real codex code-mode call: tool_name is always "exec"; the operation is buried
   // in the JS input as tools.<fn>(...). The header should surface what it ran.
   const execCall: ToolCall = {
     tool_call_id: "c1",
     tool_name: "exec",
-    input_preview: 'const r = await tools.exec_command({"cmd":"ls -la ."}); text(r.output);',
+    input_chars: 72,
     header_label: "Tool: Bash",
   };
 
-  it("renders the parser's header label, keeping the raw input in the body", () => {
-    const text = allText(renderToolCallBlock(execCall, null));
+  it("renders the parser's header label", () => {
+    const text = allText(renderToolCallBlock(execCall, null, "agent-x", "a-1"));
     // A codex exec is headed by what it actually did, never the bare "Tool: exec".
     expect(text).toContain("Tool: Bash");
     expect(text).not.toContain("Tool: exec");
-    // preserve-raw: the JS program is still shown in the block body.
-    expect(text).toContain("tools.exec_command");
   });
 
   it("falls back to 'Tool: <name>' for a call parsed before labels existed", () => {
-    const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_preview: "ls -la" };
-    expect(allText(renderToolCallBlock(bash, null))).toContain("Tool: Bash");
+    const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_chars: 6 };
+    expect(allText(renderToolCallBlock(bash, null, "agent-x", "a-1"))).toContain("Tool: Bash");
+  });
+
+  it("keeps a failed call glanceable via the resident error snippet", () => {
+    const call: ToolCall = { tool_call_id: "c3", tool_name: "Bash", input_chars: 6 };
+    const failed: ToolResultEvent = {
+      timestamp: "t",
+      type: "tool_result",
+      event_id: "r-c3",
+      source: "test",
+      tool_call_id: "c3",
+      tool_name: "Bash",
+      output_chars: 5000,
+      is_error: true,
+      error_snippet: "FileNotFoundError: no such file",
+    };
+    const text = allText(renderToolCallBlock(call, failed, "agent-x", "a-1"));
+    expect(text).toContain("FileNotFoundError: no such file");
   });
 });
 
@@ -363,3 +396,186 @@ function collectClasses(node: unknown): string[] {
   }
   return [];
 }
+
+describe("thinking disclosure", () => {
+  function assistantWithThinking(eventId: string, hasThinking: boolean): AssistantMessageEvent {
+    return {
+      timestamp: "2026-08-06T00:00:00.000Z",
+      type: "assistant_message",
+      event_id: eventId,
+      source: "test",
+      model: "m",
+      text: "the answer",
+      tool_calls: [],
+      stop_reason: null,
+      usage: null,
+      is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
+      ...(hasThinking ? { has_thinking: true } : {}),
+    };
+  }
+
+  beforeEach(() => {
+    mockDetailState.mockReset();
+    mockRequestDetail.mockReset();
+  });
+
+  it("renders the toggle only when the harness recorded readable thinking", () => {
+    const withToggle = renderAssistantMessageChildren(assistantWithThinking("th-1", true), new Map(), "agent-1");
+    expect(collectClasses(withToggle)).toContain("thinking-toggle");
+
+    const without = renderAssistantMessageChildren(assistantWithThinking("th-2", false), new Map(), "agent-1");
+    expect(collectClasses(without)).not.toContain("thinking-toggle");
+  });
+
+  it("shows a loading note, then the fetched thinking, then unavailable, when expanded", () => {
+    setBlockExpanded("think:th-3", true);
+    const event = assistantWithThinking("th-3", true);
+
+    mockDetailState.mockReturnValue(undefined);
+    let children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("Loading");
+    // Expanding kicks off (or heals) the on-demand fetch.
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-1", "th-3");
+
+    mockDetailState.mockReturnValue({
+      state: "loaded",
+      detail: { inputs_by_tool_call_id: {}, output: null, thinking: "pondering deeply" },
+    });
+    children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("pondering deeply");
+
+    mockDetailState.mockReturnValue({ state: "unavailable" });
+    children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("No longer available");
+  });
+
+  it("does not fetch while collapsed", () => {
+    renderAssistantMessageChildren(assistantWithThinking("th-4", true), new Map(), "agent-1");
+    expect(mockRequestDetail).not.toHaveBeenCalled();
+  });
+
+  it("renders a fresh mount in the recorded expansion state", () => {
+    setBlockExpanded("think:th-5", true);
+    const expanded = renderAssistantMessageChildren(assistantWithThinking("th-5", true), new Map(), "agent-1");
+    expect(collectClasses(expanded)).toContain("thinking-disclosure thinking-disclosure--expanded");
+
+    const collapsed = renderAssistantMessageChildren(assistantWithThinking("th-6", true), new Map(), "agent-1");
+    expect(collectClasses(collapsed)).toContain("thinking-disclosure");
+    expect(collectClasses(collapsed)).not.toContain("thinking-disclosure thinking-disclosure--expanded");
+  });
+
+  it("collapses via the DOM class alone, so the memoized wrapper needs no repaint", () => {
+    // Regression: the assistant-message wrapper is memoized and skips re-rendering on a
+    // toggle, so a collapse that depends on a vdom re-render never happens. The handler
+    // must instead flip the class directly on the mounted element (and record the state),
+    // exactly like the tool-call header does.
+    const redraw = vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    setBlockExpanded("think:th-7", true);
+    const children = renderAssistantMessageChildren(assistantWithThinking("th-7", true), new Map(), "agent-1");
+    const toggle = findByClass(children, "thinking-toggle");
+    const classes = new Set(["thinking-disclosure", "thinking-disclosure--expanded"]);
+    const disclosureStub = {
+      classList: {
+        toggle(name: string): boolean {
+          if (classes.has(name)) {
+            classes.delete(name);
+            return false;
+          }
+          classes.add(name);
+          return true;
+        },
+      },
+    };
+    const click = () =>
+      (toggle?.attrs as { onclick: (e: unknown) => void }).onclick({
+        currentTarget: { parentElement: disclosureStub },
+      });
+
+    mockRequestDetail.mockReset();
+    click();
+    expect(classes.has("thinking-disclosure--expanded")).toBe(false);
+    // A collapse fetches nothing and needs no redraw -- the class flip IS the collapse.
+    expect(mockRequestDetail).not.toHaveBeenCalled();
+    expect(redraw).not.toHaveBeenCalled();
+
+    click();
+    expect(classes.has("thinking-disclosure--expanded")).toBe(true);
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-1", "th-7");
+
+    // The recorded state followed both flips, so a fresh mount agrees with the DOM.
+    const remount = renderAssistantMessageChildren(assistantWithThinking("th-7", true), new Map(), "agent-1");
+    expect(collectClasses(remount)).toContain("thinking-disclosure thinking-disclosure--expanded");
+    redraw.mockRestore();
+  });
+});
+
+// Walk a mithril vnode tree and return the first element vnode whose class contains `name`.
+function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
+  if (node == null) return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findByClass(child, name);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof node === "object") {
+    const v = node as { attrs?: { className?: unknown }; children?: unknown };
+    if (typeof v.attrs?.className === "string" && v.attrs.className.split(" ").includes(name)) {
+      return v as { attrs?: Record<string, unknown> };
+    }
+    return findByClass(v.children, name);
+  }
+  return null;
+}
+
+describe("expanded tool row payload states", () => {
+  const call: ToolCall = { tool_call_id: "pc-1", tool_name: "Bash", input_chars: 20 };
+  const result: ToolResultEvent = {
+    timestamp: "t",
+    type: "tool_result",
+    event_id: "r-pc-1",
+    source: "test",
+    tool_call_id: "pc-1",
+    tool_name: "Bash",
+    output_chars: 5000,
+    is_error: false,
+  };
+
+  beforeEach(() => {
+    mockDetailState.mockReset();
+    mockRequestDetail.mockReset();
+    setBlockExpanded("tc:pc-1", true);
+  });
+
+  it("shows loading notes and requests the payloads while nothing is cached", () => {
+    mockDetailState.mockReturnValue(undefined);
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("Loading");
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "a-pc-1");
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "r-pc-1");
+  });
+
+  it("renders the full fetched input and output once loaded", () => {
+    mockDetailState.mockImplementation((_agentId: string, eventId: string) =>
+      eventId === "a-pc-1"
+        ? {
+            state: "loaded",
+            detail: { inputs_by_tool_call_id: { "pc-1": "the whole input" }, output: null, thinking: null },
+          }
+        : { state: "loaded", detail: { inputs_by_tool_call_id: {}, output: "the whole output", thinking: null } },
+    );
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("the whole input");
+    expect(text).toContain("the whole output");
+  });
+
+  it("shows the quiet placeholder when the payload is gone", () => {
+    mockDetailState.mockReturnValue({ state: "unavailable" });
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("No longer available");
+  });
+});

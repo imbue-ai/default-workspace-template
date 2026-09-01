@@ -46,6 +46,8 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_chat_display_label_command
 from imbue.system_interface.agent_manager import _build_chat_rename_command
@@ -151,6 +153,19 @@ def _last_agents_updated(messages: list[dict[str, Any]]) -> dict[str, Any] | Non
         if message.get("type") == "agents_updated":
             return message
     return None
+
+
+@pytest.fixture(autouse=True)
+def _signed_in_account() -> None:
+    """One account, because creating a chat now requires one.
+
+    There is no shared login to fall back to: `resolve_binding` raises rather than returning
+    None, so a chat create with no account is refused. Autouse because every create in this
+    module wants the ordinary case; the two that care about a SPECIFIC account mint their own
+    and pass its id, and this one is simply not chosen.
+    """
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
 
 
 def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
@@ -518,9 +533,6 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Both menu entries make a chat, so creation_type is the role -- never the harness."""
-    # Stub the sign-in preflight to always report signed in, so the create does not depend
-    # on a real (possibly signed-out) codex CLI in the test env.
-    agent_manager._auth_gate = lambda check: None
     q = broadcaster.register()
 
     with agent_manager._lock:
@@ -532,7 +544,9 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
             work_dir=str(git_work_dir),
         )
 
-    created = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
+    codex_account_id, _ = mint_account_dir()
+    commit_account(codex_account_id, "openai", "OpenAI")
+    created = agent_manager.create_chat_agent("test-codex", account_id=codex_account_id)
     agent_manager.stop()
 
     assert isinstance(created.agent_id, str)
@@ -1629,11 +1643,22 @@ def test_create_chat_agent_counts_in_flight_creates_as_taken(
 
 def test_create_chat_agent_numbers_each_harness_under_its_own_word(
     agent_manager: AgentManager,
+    tmp_path: Path,
 ) -> None:
-    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently."""
-    agent_manager._auth_gate = lambda check: None
+    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently.
+
+    The harness comes from the bound account, so the codex one is named by signing in
+    rather than by asking for it -- which is the point: a caller cannot name a harness
+    that disagrees with the credential the chat will actually run on.
+    """
+    # The plain chat is created first, while there is nothing signed in, so it lands on
+    # the workspace login as claude. Signing in afterwards is what makes the second one
+    # codex -- and note it would also make an unbound THIRD chat codex, since the most
+    # recently used account is the default.
     chat = agent_manager.create_chat_agent("")
-    codex = agent_manager.create_chat_agent("", HarnessType.CODEX)
+    codex_account_id, _ = mint_account_dir()
+    commit_account(codex_account_id, "openai", "OpenAI")
+    codex = agent_manager.create_chat_agent("", account_id=codex_account_id)
     agent_manager.stop()
 
     assert chat.display_name == "Chat 1"
@@ -2964,3 +2989,77 @@ def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentMa
     agent_manager._stop_activity_tracking("agent-1")
     assert agent_manager._session_by_agent["agent-1"] is session
     assert session.in_flight_block() == "caught mid-send"
+
+
+# --- Watcher eviction (the chat-memory lifecycle) ---
+
+
+def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
+    """A destroyed agent's watcher is evicted along with its tracking state."""
+    evicted: list[str] = []
+    agent_manager.set_watcher_eviction_callback(evicted.append)
+    agent = _agent_details("doomed-agent")
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+
+    agent_manager.remove_agent(str(agent.id))
+    assert evicted == [str(agent.id)]
+
+
+def test_lifecycle_transition_into_dead_evicts_the_watcher_once(agent_manager: AgentManager) -> None:
+    """Eviction is edge-triggered on the transition into a positively-dead lifecycle: a
+    stop (from the UI, mngr, an OOM shed, idle shutdown) drops the resident transcript,
+    while further observe ticks of the already-stopped agent do NOT re-evict -- a user
+    viewing a stopped chat's history rebuilds the watcher on read, and a level-triggered
+    evict would tear that rebuild down again every tick."""
+    evicted: list[str] = []
+    agent_manager.set_watcher_eviction_callback(evicted.append)
+    agent = _agent_details("stoppable-agent")
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    assert evicted == []
+
+    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id)]
+
+    # Another tick of the same dead state: no edge, no eviction.
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id)]
+
+    # A restart followed by another stop evicts again.
+    running = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.RUNNING))
+    agent_manager._handle_observe_event(make_agent_state_event(running))
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id), str(agent.id)]
+
+
+def test_note_agent_alive_flips_a_dead_state_to_waiting(agent_manager: AgentManager) -> None:
+    """After this server starts an agent itself, the tracked state reflects the revival
+    immediately: the observe stream only notices a revival on its five-minute full
+    snapshot (a stopped agent has no pid to watch), which left the chat reading dead
+    for minutes while the agent was demonstrably up."""
+    _seed_agent(agent_manager, "revived", state="DONE")
+    agent_manager.note_agent_alive("revived")
+    revived = agent_manager.get_agent_by_id("revived")
+    assert revived is not None
+    assert revived.state == "WAITING"
+    assert agent_manager.is_agent_alive("revived")
+
+
+def test_note_agent_alive_leaves_live_and_unknown_states_alone(agent_manager: AgentManager) -> None:
+    """Only a positively-dead state is corrected: RUNNING must not be demoted to WAITING
+    (the fold would lose a turn in flight), UNKNOWN is non-evidence, and an untracked id
+    is not something to invent a record for."""
+    _seed_agent(agent_manager, "busy", state="RUNNING")
+    agent_manager.note_agent_alive("busy")
+    busy = agent_manager.get_agent_by_id("busy")
+    assert busy is not None
+    assert busy.state == "RUNNING"
+
+    _seed_agent(agent_manager, "unseen", state="UNKNOWN")
+    agent_manager.note_agent_alive("unseen")
+    unseen = agent_manager.get_agent_by_id("unseen")
+    assert unseen is not None
+    assert unseen.state == "UNKNOWN"
+
+    agent_manager.note_agent_alive("never-tracked")
+    assert agent_manager.get_agent_by_id("never-tracked") is None

@@ -10,8 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record
+from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record_detail
 
 _TESTDATA = Path(__file__).parent / "testdata"
 
@@ -79,7 +79,8 @@ def test_tool_result_correlates_by_toolcall_id() -> None:
     assert event["type"] == "tool_result"
     assert event["tool_call_id"] == "toolu_1"
     assert event["tool_name"] == "bash"
-    assert event["output"] == "output here"
+    assert event["output_chars"] == len("output here")
+    assert "output" not in event
     assert event["is_error"] is False
 
 
@@ -98,27 +99,51 @@ def test_record_without_id_is_skipped() -> None:
     assert parse_record({"type": "message", "timestamp": "t", "message": {"role": "user", "content": "x"}}) == []
 
 
-def test_tk_lifecycle_input_is_not_truncated() -> None:
+def test_tk_lifecycle_command_is_stamped_resident() -> None:
     long_summary = "x" * 400
     command = f'tk close wor-step-abcd "{long_summary}"'
     message = {
         "role": "assistant",
         "content": [{"type": "toolCall", "id": "t", "name": "bash", "arguments": {"command": command}}],
     }
-    preview = parse_record(_message_record("m", message))[0]["tool_calls"][0]["input_preview"]
-    # The whole summary survives (no "..." cut mid-summary).
-    assert long_summary in preview
+    tool_call = parse_record(_message_record("m", message))[0]["tool_calls"][0]
+    # The whole command (summary included) is resident, so the step view reads it
+    # without fetching the input.
+    assert tool_call["tk_command"] == command
 
 
-def test_plain_bash_input_is_truncated() -> None:
+def test_tool_input_stays_off_the_event() -> None:
     command = "echo " + "a" * 400
     message = {
         "role": "assistant",
         "content": [{"type": "toolCall", "id": "t", "name": "bash", "arguments": {"command": command}}],
     }
-    preview = parse_record(_message_record("m", message))[0]["tool_calls"][0]["input_preview"]
-    assert preview.endswith("...")
-    assert len(preview) == MAX_TOOL_INPUT_PREVIEW_LENGTH + len("...")
+    tool_call = parse_record(_message_record("m", message))[0]["tool_calls"][0]
+    # Payload-free wire: no input on the event, just its size (so the frontend knows an
+    # expand has something to fetch) -- the full input comes from parse_record_detail.
+    assert "input_preview" not in tool_call
+    assert "tk_command" not in tool_call
+    assert tool_call["input_chars"] > 400
+
+
+def test_detail_reconstructs_full_input_output_and_thinking() -> None:
+    assistant = {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "pondering"},
+            {"type": "toolCall", "id": "t1", "name": "bash", "arguments": {"command": "echo " + "a" * 400}},
+        ],
+    }
+    assistant_event = parse_record(_message_record("m1", assistant))[0]
+    assert assistant_event["has_thinking"] is True
+    detail = parse_record_detail(_message_record("m1", assistant))[assistant_event["event_id"]]
+    assert "a" * 400 in detail["inputs_by_tool_call_id"]["t1"]
+    assert detail["thinking"] == "pondering"
+
+    result = {"role": "toolResult", "toolCallId": "t1", "toolName": "bash", "content": "big " * 999, "isError": False}
+    result_event = parse_record(_message_record("m2", result))[0]
+    detail = parse_record_detail(_message_record("m2", result))[result_event["event_id"]]
+    assert detail["output"] == "big " * 999
 
 
 def test_parses_captured_live_session_with_tools() -> None:
@@ -130,3 +155,48 @@ def test_parses_captured_live_session_with_tools() -> None:
     call_ids = {c["tool_call_id"] for e in events if e["type"] == "assistant_message" for c in e["tool_calls"]}
     result_ids = {e["tool_call_id"] for e in events if e["type"] == "tool_result"}
     assert result_ids <= call_ids
+
+
+_ANTHROPIC_401 = '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'
+_ANTHROPIC_529 = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+
+
+def test_failed_turn_shows_its_error_instead_of_a_blank_bubble() -> None:
+    """pi puts nothing in `content` when a turn fails and everything in `errorMessage`.
+
+    Reading text from `content` alone emitted `text: ""`, so the transcript painted an empty
+    bubble -- an agent stuck on a rejected key looked like one that had simply stopped.
+    """
+    message = {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": _ANTHROPIC_401}
+    event = parse_record(_message_record("m", message))[0]
+    assert event["text"] == _ANTHROPIC_401
+    assert event["is_auth_error"] is True
+    # Auth and API are exclusive: two subtexts would offer two contradictory next steps.
+    assert event["is_api_error"] is False
+
+
+def test_failed_turn_classifies_a_provider_fault() -> None:
+    message = {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": _ANTHROPIC_529}
+    event = parse_record(_message_record("m", message))[0]
+    assert event["is_api_error"] is True
+    assert event["api_error_kind"] == "overloaded"
+    assert event["is_provider_fault"] is True
+    assert event["is_auth_error"] is False
+
+
+def test_a_reply_that_merely_quotes_an_error_is_not_one() -> None:
+    """The gate is `stopReason`, not the presence of `errorMessage`.
+
+    Asking the agent about a 401 gets a reply whose text contains one; styling that as a
+    failure would put a sign-in button under an ordinary answer.
+    """
+    message = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": f"You are seeing {_ANTHROPIC_401} because the key expired."}],
+        "stopReason": "end_turn",
+        "errorMessage": _ANTHROPIC_401,
+    }
+    event = parse_record(_message_record("m", message))[0]
+    assert event["is_auth_error"] is False
+    assert event["is_api_error"] is False
+    assert "You are seeing" in event["text"]

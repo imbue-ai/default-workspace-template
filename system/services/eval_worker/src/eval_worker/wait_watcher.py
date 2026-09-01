@@ -5,11 +5,9 @@ inside the sandbox)."""
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 SYSTEM_INTERFACE = "http://127.0.0.1:8000"
 _POLL_SECONDS = 3.0
@@ -22,13 +20,21 @@ def _get_json(url: str) -> dict:
 
 
 def resolve_chat_agent_id(deadline: float) -> str | None:
-    """The chat (primary) agent id is persisted by the manager at $MNGR_HOST_DIR/initial_chat_agent_id."""
-    id_path = Path(os.environ.get("MNGR_HOST_DIR", "/home/user/.mngr")) / "initial_chat_agent_id"
+    """The first user-created chat, polled until one exists.
+
+    Used to read a sidecar file the bootstrap wrote when it created a chat at boot. It does
+    not any more: a chat runs on a provider account and a fresh workspace has none, so the
+    first chat is whichever one the user starts. `user_created` is the label every chat-create
+    path sets, which is what makes "a chat the user has" answerable without a sidecar.
+    """
     while time.time() < deadline:
-        if id_path.is_file():
-            value = id_path.read_text().strip()
-            if value:
-                return value
+        try:
+            agents = _get_json("{}/api/agents".format(SYSTEM_INTERFACE)).get("agents", [])
+        except (urllib.error.URLError, OSError, ValueError):
+            agents = []
+        for agent in agents:
+            if (agent.get("labels") or {}).get("user_created") == "true":
+                return str(agent.get("id") or "") or None
         time.sleep(_POLL_SECONDS)
     return None
 

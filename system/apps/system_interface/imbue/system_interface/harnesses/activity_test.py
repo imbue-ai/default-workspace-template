@@ -251,8 +251,6 @@ def test_placeholder_harness_reports_an_empty_transcript(harness: HarnessType) -
     spec = get_harness_spec(harness)
     assert spec.catalog_factory().options == ()
     assert spec.special_kinds == frozenset()
-    # No auth gate: a fail-closed probe that has not been verified would refuse every create.
-    assert spec.auth_check is None
 @pytest.mark.parametrize(
     ("harness", "expected"),
     [
