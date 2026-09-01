@@ -1,83 +1,85 @@
 # How `system/vendor/mngr` is synced
 
-`default-workspace-template` (DEFAULT_WORKSPACE_TEMPLATE) vendors a full copy of the mngr monorepo at
-`system/vendor/mngr/`. The DEFAULT_WORKSPACE_TEMPLATE Docker build installs the container's `mngr` from that
-directory editable (`uv tool install -e system/vendor/mngr/libs/mngr`, run by
-`system/scripts/build_workspace.sh`), so whatever lands in `system/vendor/mngr/` *is* the
-mngr that runs inside every agent.
+`default-workspace-template` (DEFAULT_WORKSPACE_TEMPLATE) vendors a copy of the mngr
+monorepo at `system/vendor/mngr/`. The DEFAULT_WORKSPACE_TEMPLATE Docker build installs the
+container's `mngr` from that directory editable (`uv tool install -e
+system/vendor/mngr/libs/mngr`, run by `system/scripts/build_workspace.sh`), so whatever
+lands in `system/vendor/mngr/` *is* the mngr that runs inside every agent.
 
 `system/vendor/mngr/` is a plain copied-in snapshot. It is **not** a git subtree and
-**not** a git submodule -- never run `git subtree` or `git submodule` against
-it. It is refreshed by copying mngr's files in, via one of two mechanisms.
+**not** a git submodule -- never run `git subtree` or `git submodule` against it.
 
-## The two mechanisms
+## Only the public subset may travel
 
-| Mechanism | Form | Carries | Commits in DEFAULT_WORKSPACE_TEMPLATE? | Used for |
+`imbue-ai/default-workspace-template` is a **public** repo, and its contents are baked
+into every workspace we hand a user. So the vendored tree is not the monorepo: it is
+the monorepo's *public subset* -- byte for byte the same tree the Copybara mirror
+publishes to `imbue-ai/mngr`.
+
+That subset is defined once, in `mirror/copy.bara.sky` (`PUBLIC_FILES`, plus the
+internal-block strip and the `mirror/overlay` move).
+`scripts/public_subset.py` reads that definition -- it never restates it -- and
+materializes the tree. Every sync path calls it, and nothing else may populate
+`system/vendor/mngr/`.
+
+Copybara itself is not usable on these paths: it needs a JVM and a committed ref,
+while the dev loop has to filter an uncommitted working tree offline in seconds. The
+two implementations are held together by the `Public subset matches copybara byte for
+byte` step in `.github/workflows/mirror-gate.yml`, which runs the pinned Copybara jar
+and diffs its tree against `scripts/public_subset.py`'s on every PR. If that step ever
+fails, the vendored tree has stopped matching what the mirror publishes -- which is
+how private files leak -- so fix the filter, never the diff.
+
+## The two modes
+
+| Mode | Form | Carries | Commits in DEFAULT_WORKSPACE_TEMPLATE? | Used for |
 |---|---|---|---|---|
-| **`git archive`** | `git archive HEAD` -> wipe `system/vendor/mngr/` -> untar | committed/tracked files at an exact SHA; permissions normalized; reproducible | yes | releases |
-| **`rsync`** | `rsync -a --delete --filter=':- .gitignore' --exclude=.git --exclude=uv.lock` | the working tree, including uncommitted edits, gitignore-filtered | no | dev iteration and pool bakes |
+| **at a ref** | `public_subset.py DEST --ref <sha> --replace` | the public subset of committed content at an exact SHA; permissions preserved; reproducible | yes | releases |
+| **working tree** | `public_subset.py STAGING` then `rsync -a --delete --checksum` | the public subset of the working tree, uncommitted edits included | no | dev iteration and pool bakes |
 
-Use **archive** for a reproducible, committed snapshot tied to an exact mngr SHA
-(the release flow). Use **rsync** to get your *uncommitted* local mngr changes
-into a container without a commit (the dev loop, and baking a pool host from a
-working tree).
+Use **at a ref** for a reproducible, committed snapshot tied to an exact mngr SHA (the
+release flow). Use **working tree** to get your *uncommitted* local mngr changes into a
+container without a commit (the dev loop, and baking a pool host from a working tree).
 
-## `git archive` -- the release sync
+The working-tree mode materializes into a staging dir and then rsyncs with
+`--checksum`. That matters: a freshly materialized tree has fresh mtimes on every file,
+so a default (size+mtime) rsync would treat all 3,300 files as changed and re-transfer
+them on every iteration. `--checksum` keeps unchanged files' mtimes at the destination,
+which also preserves Docker layer-cache hits on re-bakes.
 
-`just sync-vendor-mngr [default-workspace-template-path]` (root `justfile`) archives mngr `HEAD`,
-replaces `system/vendor/mngr/` with the snapshot, and commits in DEFAULT_WORKSPACE_TEMPLATE. It carries only
-committed content, so position your mngr checkout at the exact commit you want
-to vendor first.
+## Every path that populates it
 
-Both archive callers -- this recipe and the `sync_vendor` job in
-`.github/workflows/minds-launch-to-msg.yml` -- also run `uv lock` in the DEFAULT_WORKSPACE_TEMPLATE root
-and commit the result with the snapshot. DEFAULT_WORKSPACE_TEMPLATE's root `uv.lock` pins the vendored
-mngr libraries as editable path deps (`imbue-mngr`, `imbue-common`, `overlay`,
-`resource-guards`, `concurrency-group`, `mngr_claude`) and records their resolved
-`requires-dist`, so a snapshot that moves any of their dependencies strands it.
-That lock is the DEFAULT_WORKSPACE_TEMPLATE root's own, not the `system/vendor/mngr/uv.lock` inside the
-snapshot, which the relock leaves untouched -- so the vendor-match invariant
-(`system/vendor/mngr` equals the archive of its mngr SHA, blob for blob) still
-holds. The full release procedure -- including the vendor-match
-invariant (DEFAULT_WORKSPACE_TEMPLATE `system/vendor/mngr` must be the `git archive` of the exact mngr SHA it
-is tagged with) -- is in `apps/minds/docs/deploy/release.md`.
+| Path | Where | Mode | Trigger |
+|---|---|---|---|
+| `just sync-vendor-mngr` | `private.just` | at a ref (`HEAD`) | releases |
+| `sync_vendor` job | `.github/workflows/minds-launch-to-msg.yml` | at a ref | launch-to-msg; pushes to the public DEFAULT_WORKSPACE_TEMPLATE `main` |
+| `just sync-vendor-mngr-live` | `private.just` | working tree | every dev-app startup (`just minds-start` calls it), or on demand |
+| `sync_mngr_into_template` | `apps/minds_admin/.../bake/pool_bake.py` | working tree | `minds-admin pool create --mngr-source ...` |
+| `propagate_changes` | `apps/minds/scripts/propagate_changes` | working tree | each dev-loop iteration into a running container |
+| `_vendor_mngr_into_default_workspace_template` | `apps/minds/imbue/minds/desktop_client/default_workspace_template_worktree.py` | at a ref (`HEAD`) | workspace-creation tests (snapshot bake, create+chat, full flow) |
+| `_vendor_mngr` | `apps/mngr_minds_eval/.../launch.py` | working tree | eval batch launch |
 
-## `rsync` -- the dev / bake sync
+Adding a new one means calling `scripts/public_subset.py`; do not hand-roll a filter.
 
-Every rsync path uses one form:
-
-```
-rsync -a --delete --filter=':- .gitignore' --exclude=.git --exclude=uv.lock SRC/ system/vendor/mngr/
-```
-
-- `--filter=':- .gitignore'` is rsync's dir-merge filter: it reads `.gitignore`
-  at each level under the source and applies its exclude rules, so
-  `__pycache__`, `.venv`, `node_modules`, `.test_output`, `.mypy_cache`,
-  `.ruff_cache`, `.pytest_cache`, `.external_worktrees`, etc. are excluded
-  without being listed.
-- The two manual excludes cover what `.gitignore` deliberately omits: `.git`
-  (git's internal dir) and `uv.lock` (committed at the mngr root, but each
-  install context regenerates its own).
-
-The exclude set is defined once in code, in
-`apps/minds_admin/imbue/minds_admin/bake/pool_bake.py`
-(`_VENDOR_RSYNC_MANUAL_EXCLUDES` and `_GITIGNORE_RSYNC_FILTER`). Three paths
-populate `system/vendor/mngr/` from the monorepo with this form; keep them in step with
-those constants:
-
-| Path | Where | Trigger |
-|---|---|---|
-| `just sync-vendor-mngr-live` | root `justfile` | every dev-app startup (`just minds-start` calls it), or on demand |
-| `sync_mngr_into_template` | `pool_bake.py` (the constants) | `minds-admin pool create --mngr-source ...` |
-| `propagate_changes` | `apps/minds/scripts/propagate_changes` (`RSYNC_EXCLUDES`) | each dev-loop iteration into a running container |
+Both at-a-ref callers that commit also run `uv lock` in the DEFAULT_WORKSPACE_TEMPLATE root
+and commit the result with the snapshot. DEFAULT_WORKSPACE_TEMPLATE's root `uv.lock` pins the
+vendored mngr libraries as editable path deps (`imbue-mngr`, `imbue-common`,
+`resource-guards`, `concurrency-group`, `mngr_claude`, ...) and records their resolved
+`requires-dist`, so a snapshot that moves any of their dependencies strands it. That
+lock is the DEFAULT_WORKSPACE_TEMPLATE root's own, not the `system/vendor/mngr/uv.lock`
+inside the snapshot, which the sync leaves untouched -- so the vendor-match invariant
+(`system/vendor/mngr` equals the public subset of its mngr SHA, blob for blob) still
+holds. The full release procedure, including that invariant, is in
+`apps/minds/docs/deploy/release.md`.
 
 `propagate_changes` additionally protects `data/`, `.mngr/`, and
 `.claude/settings.local.json` from deletion when rsyncing into `/home/user/workspace/`.
 
-The desktop client's Create flow performs a *separate* rsync -- the DEFAULT_WORKSPACE_TEMPLATE worktree
-over a shallow clone into `/home/user/workspace/` -- not a monorepo->`system/vendor/mngr` sync.
+The desktop client's Create flow performs a *separate* rsync -- the DEFAULT_WORKSPACE_TEMPLATE
+worktree over a shallow clone into `/home/user/workspace/` -- not a
+monorepo->`system/vendor/mngr` sync.
 
-### The rsync'd copy is meant to be uncommitted
+### The synced copy is meant to be uncommitted
 
 `just sync-vendor-mngr-live` deliberately leaves the DEFAULT_WORKSPACE_TEMPLATE worktree dirty; the
 code-guardian stop hook exempts `system/vendor/mngr` from its commit check

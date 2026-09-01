@@ -143,9 +143,9 @@ fi
 #   - .git: gitignore never lists it (git's internal dir).
 #   - uv.lock: committed at the mngr root on purpose, but each install
 #     context regenerates its own.
-# Both rsync sources (mngr monorepo for step 1, default workspace template for step 2/3)
-# carry their own .gitignore at the root, so the same filter applies cleanly
-# to all three rsync calls below.
+# The default workspace template (the rsync source for steps 2/3) carries its own
+# .gitignore at the root. Step 1 does not use these excludes: it materializes the
+# mngr public subset, which is already exactly the file set that may travel.
 # ---------------------------------------------------------------------------
 
 RSYNC_EXCLUDES=(
@@ -158,10 +158,17 @@ RSYNC_EXCLUDES=(
 # Step 1: Sync mngr repo into template's system/vendor/mngr/
 # ---------------------------------------------------------------------------
 
-echo "[1/4] Syncing mngr repo into template system/vendor/mngr/..."
-rsync -a --delete \
-    "${RSYNC_EXCLUDES[@]}" \
-    "${MNGR_REPO_ROOT}/" "${TEMPLATE_DIR}/system/vendor/mngr/"
+echo "[1/4] Syncing the public subset of the mngr repo into template system/vendor/mngr/..."
+# default-workspace-template is a public repo, so it may only ever carry the public
+# subset of mngr -- the same tree the Copybara mirror exports. Materializing to a
+# staging dir and rsyncing with --checksum keeps unchanged files' mtimes, so steps
+# 2/3 below still transfer only what actually changed.
+PUBLIC_SUBSET_STAGING="$(mktemp -d)"
+trap 'rm -rf "${PUBLIC_SUBSET_STAGING}"' EXIT
+python3 "${MNGR_REPO_ROOT}/scripts/public_subset.py" "${PUBLIC_SUBSET_STAGING}/mngr" \
+    --repo-root "${MNGR_REPO_ROOT}" --quiet
+rsync -a --delete --checksum \
+    "${PUBLIC_SUBSET_STAGING}/mngr/" "${TEMPLATE_DIR}/system/vendor/mngr/"
 echo "      Done."
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,7 @@
+`default-workspace-template` is a **public** repo, and `system/vendor/mngr/` in it was an unfiltered `git archive` of the private `imbue-ai/mngr-internal` monorepo -- so the whole private tree was being published to GitHub and baked into every user workspace. Every vendoring path now materializes only the **public subset**: byte for byte the same tree the Copybara mirror publishes to `imbue-ai/mngr`.
+
+The subset is defined once, in `mirror/copy.bara.sky`. The new `scripts/public_subset.py` reads that definition rather than restating it, applies the same internal-block strip and `mirror/overlay` move, and fails closed if a marker survives. It is stdlib-only, needs no JVM, and works on an uncommitted working tree, so the dev loop and the bake can use it where Copybara cannot.
+
+`.github/workflows/mirror-gate.yml` gains a step that runs the pinned Copybara jar and diffs its tree against `scripts/public_subset.py`, so the two implementations cannot drift apart silently.
+
+Changed here: `scripts/propagate_changes` (the dev-loop sync into a running container) and `imbue/minds/desktop_client/default_workspace_template_worktree.py` (the paired-worktree vendorer used by the workspace-creation tests) both materialize the public subset. `docs/vendor-mngr-sync.md` -- the canonical account of how `system/vendor/mngr` is synced -- is rewritten around the new model and now lists every path that populates it.
