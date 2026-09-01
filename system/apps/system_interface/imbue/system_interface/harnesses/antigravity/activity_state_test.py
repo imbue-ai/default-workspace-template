@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.harnesses.antigravity.activity import _tail_is_final_answer
+from imbue.system_interface.harnesses.antigravity.activity import AntigravityActivityTracker
 from imbue.system_interface.harnesses.antigravity.activity_state import derive
 
 
@@ -52,12 +54,19 @@ def test_empty_planner_tail_mid_turn_stays_thinking() -> None:
     assert _derive(tail_event_type="assistant_message", tail_is_final_answer=False) == ActivityState.THINKING
 
 
+def _folded_tail_is_final_answer(events: list[dict[str, Any]]) -> bool:
+    """The tracker's folded tail-is-final-answer signal after observing ``events``."""
+    tracker = AntigravityActivityTracker.build()
+    tracker.observe(events)
+    return bool(tracker._current_extra()[0])
+
+
 def test_tail_is_final_answer_detects_substantive_answer() -> None:
     events = [
         {"type": "user_message", "content": "hi"},
         {"type": "assistant_message", "text": "here is my answer", "tool_calls": []},
     ]
-    assert _tail_is_final_answer(events) is True
+    assert _folded_tail_is_final_answer(events) is True
 
 
 def test_tail_is_final_answer_false_for_empty_planner() -> None:
@@ -65,7 +74,7 @@ def test_tail_is_final_answer_false_for_empty_planner() -> None:
         {"type": "user_message", "content": "hi"},
         {"type": "assistant_message", "text": "", "tool_calls": [], "thinking": "hmm"},
     ]
-    assert _tail_is_final_answer(events) is False
+    assert _folded_tail_is_final_answer(events) is False
 
 
 def test_tail_is_final_answer_false_after_tool_result() -> None:
@@ -73,7 +82,7 @@ def test_tail_is_final_answer_false_after_tool_result() -> None:
         {"type": "assistant_message", "text": "", "tool_calls": [{"tool_call_id": "c"}]},
         {"type": "tool_result", "tool_call_id": "c", "output": "done"},
     ]
-    assert _tail_is_final_answer(events) is False
+    assert _folded_tail_is_final_answer(events) is False
 
 
 # --- the marker is a supporting rung, never an override --------------------------------

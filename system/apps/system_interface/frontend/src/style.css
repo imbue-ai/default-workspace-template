@@ -37,6 +37,112 @@
   --logo-url: none;
 }
 
+/*
+ * The mockup's token names, over this app's existing palette.
+ *
+ * `prototypes/minds-harness` in imbue-ai/mind-sketches is the design source, and the rule is
+ * that a surface it defines is ported verbatim. Its class strings say `text-tertiary`,
+ * `border-subtle`, `bg-fill-hover`; this app's `@theme` above says `--color-text-faint`,
+ * `--color-border`, `--color-bg-hover`. Same intent, different names -- so "verbatim" was
+ * being hand-translated hex by hex, and 60-odd arbitrary-value classes (`text-[#202020]`)
+ * accumulated in the ported files.
+ *
+ * That translation fails SILENTLY: Tailwind v4 emits nothing at all for an unknown color
+ * utility, so `hover:bg-fill-hover` simply has no hover state -- no build error, no lint, no
+ * type error, nothing to notice in review.
+ *
+ * Registering the mockup's names here makes the rule followable and the diff meaningful. The
+ * VALUES stay this app's -- the mockup is two-layer light/dark and this app is light only, so
+ * a token whose point is the dark half (`--color-inverse-*`) is deliberately absent rather
+ * than faked. A class using one of those is a signal to port the dark mode properly, not to
+ * paper over it.
+ */
+@theme inline {
+  /* text: text-primary / -secondary / -tertiary */
+  --color-primary: var(--color-text-primary);
+  --color-secondary: var(--color-text-secondary);
+  --color-tertiary: var(--color-text-faint);
+  /* borders: border-subtle / -default / -strong */
+  --color-subtle: var(--color-border-faint);
+  --color-default: var(--color-border);
+  --color-strong: var(--color-border-code);
+  /* surfaces: bg-surface-primary, and the modal scrim */
+  --color-surface-primary: var(--color-surface);
+  --color-surface-overlay: rgb(0 0 0 / 0.35);
+  /* fills: the resting / hover / pressed tints over a surface */
+  --color-fill-subtle: var(--color-bg-sidebar);
+  --color-fill-hover: var(--color-bg-hover);
+  --color-fill-active: var(--color-bg-active);
+  /* status: text-/bg-/border-{important,success,warning,info} */
+  --color-important: #d90c00;
+  --color-success: #0c8106;
+  --color-warning: #b45300;
+  --color-info: #166fc7;
+}
+
+/*
+ * Elevation, copied from the mockup. `overlay` is the soft shadow for anything floating above
+ * the page -- menus, modals, tooltips -- which is most of the combo card. Without it those
+ * surfaces render as white boxes on white with only a hairline border, and nothing reports it.
+ */
+@theme {
+  --shadow-raised: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-overlay: 0 0px 2px 0px rgb(0 0 0 / 0.08), 0 3px 8px 2px var(--tw-shadow-color, rgb(0 0 0 / 0.08));
+}
+
+/*
+ * The mockup's type ramp, copied verbatim. Each bundles size + weight + line-height into one
+ * utility; COLOR is orthogonal, composed with text-primary / -secondary / -tertiary.
+ *
+ * Registered for the same reason as the color tokens above: the mockup's markup says
+ * `type-helper`, and an unknown utility in Tailwind v4 emits NOTHING -- so a ported row would
+ * silently take the inherited font size and read as nearly-right rather than wrong.
+ */
+@utility type-heading-lg {
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+  font-weight: 700;
+}
+@utility type-heading {
+  font-size: var(--text-lg);
+  line-height: 1.333;
+  font-weight: 600;
+}
+@utility type-label {
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  font-weight: 600;
+}
+@utility type-body {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  font-weight: 400;
+}
+@utility type-helper {
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  font-weight: 400;
+}
+@utility type-section {
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+@utility type-subsection {
+  font-size: 10px;
+  line-height: 1.3;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+@utility type-badge {
+  font-size: 10px;
+  line-height: 12px;
+  font-weight: 700;
+}
+
 body {
   font-family: var(--font-family-base);
   font-size: 15px;
@@ -337,11 +443,23 @@ body {
 }
 
 /* ── Lifted Composer ── */
+/* The footer holds the composer and stops there. The under-bar below it used to live in here
+   too and now sits outside the flip card entirely, so the bottom gutter moved with it --
+   otherwise the 24px would fall BETWEEN the composer and the under-bar rather than under both. */
 .app-footer {
-  padding: 0 32px 24px;
+  padding: 0 32px;
   flex-shrink: 0;
   background: var(--color-bg-chat);
   border: none;
+}
+
+/* The under-bar's gutter, carrying what `.app-footer` used to supply. Separate from
+   `.composer-under-bar` because that element is max-width-constrained and centred: padding on it
+   would eat into the column rather than sit outside it. */
+.chat-under-bar {
+  flex-shrink: 0;
+  padding: 0 32px 24px;
+  background: var(--color-bg-chat);
 }
 
 /* The row below the chat input: model bar on the left, agent-terminal + harness-auth actions
@@ -888,11 +1006,102 @@ body {
   padding: 4px 10px 6px;
 }
 
+/* The chat card and its two faces.
+   A chat and its agent's terminal are one conversation rendered two ways, so they are the front
+   and back of one surface rather than two places. The mockup's FlipSurface, ported: perspective
+   on the frame, preserve-3d on the turner, both faces backface-hidden with the back pre-turned
+   so it reads correctly once around. */
+.chat-flip {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  perspective: 2000px;
+}
+.chat-flip-inner {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 600ms cubic-bezier(0.45, 0, 0.25, 1);
+}
+/* Both faces keep their SIZE while hidden. ttyd sizes the agent's tmux window to its client
+   viewport (`window-size latest`), so a display:none back face would hand the agent a
+   zero-column terminal; a zero-sized front face would lose the transcript's scroll offset.
+   backface-visibility is what hides them, and it costs no layout. */
+.chat-flip-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
+     as a hole with two pictures behind it. */
+  background: var(--color-surface);
+  border-radius: inherit;
+  overflow: hidden;
+}
+.chat-flip-back {
+  transform: rotateY(180deg);
+}
+
+/* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
+   turning goes away. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-flip-inner {
+    transition: none;
+  }
+}
+
+/* The switch that turns the card over. Only the row around it is styled here -- the switch
+   itself is the shared one from `modelCardStyles`, at its own size. Overriding that size with
+   CSS is what broke it: the knob's offset comes from a Tailwind utility, so a `transform` here
+   simply lost to it and left the knob sitting outside the track. */
+.terminal-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+  transition: color 120ms;
+}
+.terminal-view-toggle:hover,
+.terminal-view-toggle[aria-checked="true"] {
+  color: var(--color-text-primary);
+}
+
+/* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its
+   base and grows upward, so its top edge is not somewhere the eye naturally checks for "more",
+   and an overlay scrollbar that only appears mid-scroll says nothing until it is too late. */
+.model-flyout-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong, #c4c4c4) transparent;
+}
+.model-flyout-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.model-flyout-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.model-flyout-scroll::-webkit-scrollbar-thumb {
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background-color: var(--color-border-strong, #c4c4c4);
+}
+.model-flyout-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-faint, #8c8c8c);
+}
+
 .model-selector-search {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 0 2px 6px;
+  margin: 6px 2px 0;
   padding: 0 8px;
   height: 30px;
   border: 1px solid var(--color-border);
@@ -1340,6 +1549,70 @@ body {
   padding: 8px 12px;
 }
 
+/* A failed call's stamped first line: visible on the collapsed row, no fetch needed. */
+.tool-call-error-snippet {
+  padding: 2px 10px 4px 26px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--color-error, #b91c1c);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The quiet interim state of an on-demand payload section (loading / gone). */
+.tool-call-payload-note {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* The tiny muted thinking disclosure atop an assistant message. */
+.thinking-disclosure {
+  margin-bottom: 2px;
+}
+
+.thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.thinking-toggle:hover {
+  opacity: 1;
+}
+
+.thinking-disclosure--expanded .tool-call-chevron {
+  transform: rotate(90deg);
+}
+
+/* Always in the DOM, revealed by the class the click handler toggles directly --
+   the memoized message wrapper skips re-patching, so a collapse must not need one. */
+.thinking-body {
+  display: none;
+  margin: 2px 0 6px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.thinking-disclosure--expanded .thinking-body {
+  display: block;
+}
+
+.thinking-body--note {
+  font-style: italic;
+}
+
 .tool-call-input + .tool-call-output {
   border-top: 1px solid var(--color-border-faint);
 }
@@ -1382,6 +1655,22 @@ body {
   margin-top: 0.4em;
   font-size: 0.85em;
   color: rgba(120, 120, 120, 0.95);
+}
+
+/* The re-auth affordance under an auth failure. A link rather than a button shape: it sits
+   inside a sentence, and the surrounding block is already the alarming part. */
+.message-api-error-action {
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+  background: none;
+  border: none;
+}
+
+.message-api-error-action:hover {
+  color: var(--color-accent-hover);
 }
 
 /* ── Sub-agent link card ── */
@@ -2695,17 +2984,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   }
 }
 
-@keyframes claude-login-modal-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 @keyframes claude-login-spin {
   to {
     transform: rotate(360deg);
@@ -3130,416 +3408,17 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   animation: claude-login-overlay-in 150ms ease-out;
 }
 
-.claude-login-modal {
-  position: relative;
-  background: var(--color-surface);
-  border-radius: 12px;
-  width: 100%;
-  max-width: 460px;
-  max-height: calc(100vh - 32px);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.06),
-    0 16px 40px rgba(0, 0, 0, 0.18);
-  animation: claude-login-modal-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.claude-login-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px 22px 14px;
-  border-bottom: 1px solid var(--color-border-faint);
-}
-
-.claude-login-title {
-  font-size: 1.0625rem;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0;
-  letter-spacing: -0.005em;
-}
-
-.claude-login-close {
-  background: transparent;
-  border: none;
-  width: 28px;
-  height: 28px;
-  margin: -4px;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--color-text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background 100ms ease,
-    color 100ms ease;
-}
-
-.claude-login-close:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-.claude-login-close:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-}
-
-.claude-login-body {
-  padding: 18px 22px 4px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.claude-login-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 14px 22px 18px;
-  border-top: 1px solid var(--color-border-faint);
-}
-
-.claude-login-footer--spread {
-  justify-content: space-between;
-}
-
 /* One-line intro shown above a form's inputs */
-.claude-login-lead {
-  color: var(--color-text-secondary);
-  margin: 0 0 18px;
-  font-size: 0.875rem;
-  line-height: 1.5;
-}
-
 /* Provider selection: prominent subscription block + collapsed alternatives */
-.claude-login-select {
-  margin-bottom: 8px;
-}
-
-.claude-login-primary {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 4px 4px 2px;
-}
-
-.claude-login-logo {
-  width: 46px;
-  height: 46px;
-  fill: hsl(14.8, 63.1%, 59.6%);
-  margin-bottom: 12px;
-}
-
-.claude-login-primary-headline {
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: var(--color-text-primary);
-  margin: 0 0 4px;
-  letter-spacing: -0.005em;
-}
-
-.claude-login-primary-sub {
-  font-size: 0.85rem;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  margin: 0 auto 16px;
-  max-width: 320px;
-}
 
 /* "Other ways to sign in" disclosure */
-.claude-login-alts {
-  margin-top: 14px;
-  border-top: 1px solid var(--color-border-faint);
-  padding-top: 12px;
-}
-
-.claude-login-alts-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin: 0 auto;
-  padding: 4px 8px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-}
-
-.claude-login-alts-toggle:hover {
-  color: var(--color-text-primary);
-}
-
-.claude-login-alts-toggle:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-.claude-login-alts-caret {
-  display: inline-flex;
-  transition: transform 120ms ease;
-}
-
-.claude-login-alts-caret--open {
-  transform: rotate(180deg);
-}
-
-.claude-login-alts-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.claude-login-alt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  text-align: left;
-  width: 100%;
-  padding: 12px 14px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-  transition:
-    border-color 100ms ease,
-    box-shadow 100ms ease;
-}
-
-.claude-login-alt:hover {
-  border-color: var(--color-accent);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
-}
-
-.claude-login-alt:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-}
-
-.claude-login-alt-text {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.claude-login-alt-name {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.claude-login-alt-desc {
-  font-size: 0.78rem;
-  color: var(--color-text-secondary);
-  line-height: 1.4;
-}
-
-.claude-login-alt-go {
-  display: flex;
-  flex: none;
-  color: var(--color-text-faint);
-  transition: color 100ms ease;
-}
-
-.claude-login-alt:hover .claude-login-alt-go {
-  color: var(--color-accent);
-}
-
 /* Numbered steps (OAuth flow) */
-.claude-login-step {
-  margin-bottom: 16px;
-}
-
-.claude-login-step:last-child {
-  margin-bottom: 0;
-}
-
-.claude-login-step-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin-bottom: 8px;
-}
-
-.claude-login-step-num {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  color: #fff;
-  font-size: 0.6875rem;
-  font-weight: 600;
-}
-
 /* "Copy the link" fallback under the Open-sign-in-page button */
-.claude-login-copylink {
-  font-size: 0.78rem;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  margin: 9px 0 0;
-}
-
-.claude-login-copylink-action {
-  font: inherit;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--color-accent);
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.claude-login-copylink-action:hover {
-  color: var(--color-accent-hover);
-}
-
-.claude-login-copylink-action:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-
 /* Raw OAuth URL fallback, shown when the clipboard write was rejected. */
-.claude-login-rawurl {
-  margin-top: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-surface);
-  font-family: var(--font-family-mono);
-  font-size: 0.75rem;
-  line-height: 1.4;
-  color: var(--color-text-primary);
-  word-break: break-all;
-  user-select: all;
-}
-
-.claude-login-rawurl:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-}
-
 /* Inputs */
-.claude-login-field {
-  display: flex;
-  flex-direction: column;
-}
-
-.claude-login-input-wrap {
-  position: relative;
-  display: flex;
-}
-
-.claude-login-input {
-  width: 100%;
-  padding: 9px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-size: 0.875rem;
-  color: var(--color-text-primary);
-  background: var(--color-surface);
-  transition:
-    border-color 80ms ease,
-    box-shadow 80ms ease;
-  font-family: inherit;
-}
-
-.claude-login-input--mono {
-  font-family: var(--font-family-mono);
-  font-size: 0.8125rem;
-  letter-spacing: 0.01em;
-}
-
-.claude-login-input--with-action {
-  padding-right: 64px;
-}
-
-.claude-login-input:focus {
-  outline: none;
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(47, 107, 79, 0.15);
-}
-
-.claude-login-input-action {
-  position: absolute;
-  top: 50%;
-  right: 6px;
-  transform: translateY(-50%);
-  background: transparent;
-  border: none;
-  padding: 4px 8px;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.claude-login-input-action:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-}
-
-.claude-login-helper {
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-  margin-top: 6px;
-  line-height: 1.4;
-}
-
-.claude-login-helper--center {
-  text-align: center;
-}
-
 /* Muted "currently signed in via ..." header on the provider-selection screen */
-.claude-login-current-mode {
-  font-size: 0.75rem;
-  color: var(--color-text-faint);
-  text-align: center;
-  margin: 0 0 10px;
-}
-
 /* Multi-line credential paste (the Imbue env-blob textarea) */
-.claude-login-textarea {
-  resize: vertical;
-  min-height: 64px;
-  line-height: 1.5;
-}
-
 /* Waiting-for-browser-approval indicator on the setup-token screen */
-.claude-login-waiting {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.8125rem;
-  color: var(--color-text-secondary);
-  padding: 6px 0;
-}
-
 /* Body copy for the /logout interception notice dialog */
 .logout-notice-body {
   font-size: 0.875rem;
@@ -3556,223 +3435,12 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* Step checklist shown while the background agent restart runs */
-.claude-login-applying {
-  padding: 8px 0;
-}
-
-.claude-login-checklist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.claude-login-checklist-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 0.875rem;
-}
-
-.claude-login-checklist-icon {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-}
-
-.claude-login-checklist-item--done {
-  color: var(--color-text-secondary);
-}
-
-.claude-login-checklist-item--done .claude-login-checklist-icon {
-  color: var(--color-success, #22a06b);
-}
-
-.claude-login-checklist-item--active {
-  color: var(--color-text-primary);
-  font-weight: 500;
-}
-
-.claude-login-checklist-item--pending {
-  color: var(--color-text-tertiary, var(--color-text-secondary));
-}
-
-.claude-login-checklist-item--pending .claude-login-checklist-icon::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.4;
-}
-
 /* Collapsed-by-default affordances (paste-code fallback, direct-token paste) */
-.claude-login-subtle {
-  margin-top: 10px;
-}
-
-.claude-login-subtle-toggle {
-  background: none;
-  border: none;
-  padding: 0;
-  font-size: 0.75rem;
-  color: var(--color-text-faint);
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.claude-login-subtle-toggle:hover {
-  color: var(--color-text-secondary);
-  text-decoration: underline;
-}
-
-.claude-login-subtle-body {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 6px;
-}
-
-.claude-login-subtle-body .claude-login-input {
-  flex: 1;
-}
-
 /* Buttons */
-.claude-login-button {
-  padding: 8px 16px;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background 80ms ease,
-    border-color 80ms ease;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--color-text-primary);
-  font-family: inherit;
-}
-
-.claude-login-button:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-.claude-login-button--ghost {
-  border-color: var(--color-border);
-  background: var(--color-surface);
-}
-
-.claude-login-button--ghost:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
-
-.claude-login-button--primary {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.claude-login-button--primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
-}
-
-.claude-login-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* Full-width button (subscription CTA, "Open sign-in page") */
-.claude-login-button--block {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 100%;
-  padding: 10px 16px;
-}
-
 /* An <a> styled as a button -- strip link decoration */
-.claude-login-button--link {
-  text-decoration: none;
-  box-sizing: border-box;
-}
-
 /* Inline error callout */
-.claude-login-error-callout {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  background: #fdecea;
-  border: 1px solid #f4c7c3;
-  border-radius: 8px;
-  color: #80261f;
-  font-size: 0.8125rem;
-  line-height: 1.45;
-  margin-bottom: 14px;
-}
-
-.claude-login-error-callout svg {
-  flex: none;
-  margin-top: 1px;
-}
-
 /* Full-bleed status state (verifying / success / error) */
-.claude-login-status {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 16px 8px 8px;
-}
-
-.claude-login-status-icon {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 14px;
-}
-
-.claude-login-status-icon--success {
-  background: var(--color-accent-light);
-  color: var(--color-accent);
-}
-
-.claude-login-status-icon--error {
-  background: #fdecea;
-  color: #c5221f;
-}
-
-.claude-login-status-icon--loading {
-  background: transparent;
-  color: var(--color-accent);
-}
-
-.claude-login-status-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0 0 4px;
-}
-
-.claude-login-status-detail {
-  font-size: 0.875rem;
-  color: var(--color-text-secondary);
-  margin: 0;
-  line-height: 1.5;
-  max-width: 320px;
-}
-
 .claude-login-spinner {
   width: 32px;
   height: 32px;
