@@ -87,48 +87,91 @@ the buckets are not a budget to spread evenly -- spend where the risk is.
 
 ### Subtasks
 
-Most of the planning happens inside the workers, not here. The pool you route
-to reaches up to frontier models, so a worker can take an objective and do its
-own decomposition, research and design before it acts. Your plan decides what
-work exists and who does it; each worker decides how its own piece gets done.
+Write a subtask as an objective: one or two sentences naming what to accomplish
+and what to hand back. Add detail only where that detail is a constraint the
+worker could not have worked out for itself -- a format a later node needs, a
+convention specific to this workspace, a decision already made upstream.
+Everything else is the worker's to figure out.
 
-So write a subtask as an objective: one or two sentences naming what to
-accomplish and what to hand back. Add detail only where that detail is a
-constraint the worker could not have worked out for itself -- a format a later
-node needs, a convention specific to this workspace, a decision already made
-upstream. Everything else is the worker's to figure out.
+That is because most of the planning happens inside the workers, not here. The
+pool you route to reaches up to frontier models, so a worker can take an
+objective and do its own decomposition, research and design before it acts.
+Your plan decides what work exists and who does it; each worker decides how its
+own piece gets done.
 
 A subtask can ask a worker to do the work from scratch, refine what an earlier
 node produced, criticise it, or do something different entirely that makes a
 later node easier.
 
+Nodes take many shapes. A non-exhaustive list, drawn from the work build-app
+actually covers: settling the defaults and the small plan, pre-flight like
+picking a DNS-safe name and a free port, drawing the icon, running the
+scaffolder and bringing the program up under supervisord, designing the on-disk
+store under `DATA_DIR`, connecting an account when the app needs a third-party
+service, fetching real data and confirming its shape, building the throwaway
+mock and then the real page, implementing routes and persistence, setting up a
+scheduled refresh, verifying with a request and a browser assertion, diagnosing
+what the verification turns up, surfacing the tab, formatting something into the
+shape the next node needs, and assembling the handoff.
+
+With at most 5 nodes and more shapes than that available, most nodes combine
+several -- one node routinely decides, builds and verifies. Cut on where the
+work genuinely changes hands, never to collect shapes.
+
+Do not write nodes around talking to the user: the main agent owns that
+conversation, not the workers, so a node produces the thing the user is shown
+and stops there. The two points where build-app waits on the user -- the mock,
+then the working site -- still order the graph, since nothing behind one can
+start until it clears.
+
+A background component is its own decision, and the default is that there is
+not one. In preference order: an app that does its work on request needs
+nothing; an app that needs periodically refreshed data wants a scheduled
+automation writing into its data dir; only a genuinely continuous need earns a
+supervisord program of its own. Do not plan a background component the request
+has not asked for.
+
 ### Nodes that are just a skill or a service
 
 Much of this work already exists here. `.agents/skills/` holds the workspace's
-skills and `system/services/` its background services, and build-app itself
-leans on several -- the Flask scaffolder script, the `frontend-design` skill
-before any markup, `crystallize-creation` at the end. Read what is there before
-you write a node that reimplements one.
+skills and `system/services/` its background services, and build-app reaches
+for several as it goes: the Flask scaffolder script, the `frontend-design`
+skill before any markup, `use-ai-integration` when the app itself calls a
+model, `manage-layout` to place the tab. Read what is there before you write a
+node that reimplements one.
 
-Routing a node to an existing skill is a good outcome, not a shortcut. When a
-node is one, name the skill and stop: the worker running it will follow that
-skill's own steps, so re-specifying them in the subtask only invites the worker
-to diverge from them.
+Routing a node to an existing skill is a good outcome. When a node is one, name
+the skill and stop: the worker running it will follow that skill's own steps,
+so re-specifying them in the subtask only invites the worker to diverge.
 
-This also changes the shape of the graph, because some skills are mostly
-*waiting*:
+### Stay inside build-app's scope
 
-- A node that needs a human -- connecting an account, granting a permission,
-  putting a credential through the `latchkey` skill -- is blocked on a person,
-  not on a model. Its cost is latency.
-- Latency-bound nodes belong on an empty access list wherever the work allows,
-  so they start at once and the waiting overlaps unrelated work instead of
-  being spent alone.
+Route the work build-app itself does, and stop there. Some skills sit on the
+other side of its boundary and are not yours to plan:
 
-So if an app needs a third-party connection, start the connection node
-immediately and let the scaffolding, the icon, or the mock proceed beside it.
-Sequencing a human wait behind work that does not depend on it is the most
-common way a plan wastes real time.
+- **What build-app hands off.** It finishes by handing the confirmed app to
+  `crystallize-creation`, which then owns everything after -- the tracking
+  ticket, the hardening pass, the review gates. Making the handoff can be the
+  tail of your last node; what happens on the other side of it is not a node.
+- **What build-app routes elsewhere.** Modifying or removing an app belongs to
+  `update-app`, not here.
+
+Absorbing either is planning someone else's work, and the nodes you spend on it
+are not real -- they eat the 5-node budget without moving this task forward.
+
+### Nodes that are mostly waiting
+
+Some work in scope is blocked on a person rather than on a model. Connecting an
+account or granting access to a third-party service -- the `latchkey` skill --
+costs latency, not capability: the request goes up to the user and then
+everyone waits on them.
+
+Put those on an empty access list wherever the work allows, so they start at
+once and the waiting overlaps unrelated work instead of being spent alone. If
+an app needs a third-party connection, start the connection node immediately
+and let the pre-flight, the icon, or the mock proceed beside it. Sequencing a
+human wait behind work that does not depend on it is the most common way a plan
+wastes real time.
 
 ### The access list -- the ordering of the work
 
