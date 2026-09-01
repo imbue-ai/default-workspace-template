@@ -23,9 +23,15 @@ one turn with no reply.
 
 Read `.agents/skills/build-app/SKILL.md` before you plan anything. It is the
 flow the request will actually be built through, and your plan should be a
-routing of *that* work. Read whatever else you need to ground the plan --
-`system/apps/` for the apps that already exist, `data/` for the shape of the
-workspace's stored data.
+routing of *that* work.
+
+Then read enough of the workspace to ground the plan in what is already here:
+
+- `.agents/skills/` -- the skills you can route a node to. Read the `name` and
+  `description` frontmatter of each; open the ones the request plausibly needs.
+- `system/services/` -- the background services already running.
+- `system/apps/` -- the apps that already exist.
+- `data/` -- the shape of the workspace's stored data.
 
 ## Step 2: write the routing-level plan
 
@@ -95,6 +101,34 @@ upstream. Everything else is the worker's to figure out.
 A subtask can ask a worker to do the work from scratch, refine what an earlier
 node produced, criticise it, or do something different entirely that makes a
 later node easier.
+
+### Nodes that are just a skill or a service
+
+Much of this work already exists here. `.agents/skills/` holds the workspace's
+skills and `system/services/` its background services, and build-app itself
+leans on several -- the Flask scaffolder script, the `frontend-design` skill
+before any markup, `crystallize-creation` at the end. Read what is there before
+you write a node that reimplements one.
+
+Routing a node to an existing skill is a good outcome, not a shortcut. When a
+node is one, name the skill and stop: the worker running it will follow that
+skill's own steps, so re-specifying them in the subtask only invites the worker
+to diverge from them.
+
+This also changes the shape of the graph, because some skills are mostly
+*waiting*:
+
+- A node that needs a human -- connecting an account, granting a permission,
+  putting a credential through the `latchkey` skill -- is blocked on a person,
+  not on a model. Its cost is latency.
+- Latency-bound nodes belong on an empty access list wherever the work allows,
+  so they start at once and the waiting overlaps unrelated work instead of
+  being spent alone.
+
+So if an app needs a third-party connection, start the connection node
+immediately and let the scaffolding, the icon, or the mock proceed beside it.
+Sequencing a human wait behind work that does not depend on it is the most
+common way a plan wastes real time.
 
 ### The access list -- the ordering of the work
 
