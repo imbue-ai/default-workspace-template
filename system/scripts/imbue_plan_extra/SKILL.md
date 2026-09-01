@@ -96,19 +96,21 @@ node produced, criticise it, or do something else that makes a later node
 easier.
 
 Nodes take many shapes, and which ones appear follows from the request. A
-dashboard over a third-party service needs an account connected and its data
+dashboard over someone's Slack account needs that account connected and its data
 shape confirmed; a self-contained tool over data already here needs neither. So
 read the following as a sample of the space rather than a checklist, and let the
-request decide. Drawn from what build-app covers: settling the defaults
-and the small plan, pre-flight like picking a DNS-safe name and a free port,
-drawing the icon, running the scaffolder and bringing the program up under
-supervisord, designing the on-disk store under `DATA_DIR`, connecting an account
-when the app needs a third-party service, fetching real data and confirming its
-shape, building the throwaway mock and then the real page, implementing routes
-and persistence, setting up a scheduled refresh, verifying with a request and a
-browser assertion, diagnosing what the verification turns up, surfacing the tab,
-formatting output into the shape the next node needs, and assembling the
-handoff.
+request decide.
+
+Most of it comes from build-app itself: settling the defaults and the small
+plan, pre-flight like picking a DNS-safe name and a free port, drawing the icon,
+running the scaffolder and bringing the program up under supervisord, wrapping a
+pre-existing server through the escape hatch where scaffolding does not apply,
+designing the on-disk store under `DATA_DIR`, building the throwaway mock and
+then the real page, implementing routes and persistence, verifying with a request
+and a browser assertion, diagnosing what the verification turns up, surfacing the
+tab, and assembling the handoff. The rest comes from whatever a given request
+drags in: connecting an account through the `latchkey` skill, fetching real data
+and confirming its shape, formatting output into the form the next node needs.
 
 With 5 nodes and more shapes than that available, most nodes combine several --
 one node routinely decides, builds and verifies. Cut where the work genuinely
@@ -118,12 +120,6 @@ The main agent owns the conversation with the user, so a node produces the thing
 the user is shown and hands it up there. The two points where build-app waits on
 the user -- the mock, then the working site -- still order the graph: work behind
 one begins once it clears.
-
-A background component is its own decision. In preference order: an app that
-does its work on request needs nothing; an app whose data needs periodic
-refreshing wants a scheduled automation writing into its data dir; a genuinely
-continuous need earns a supervisord program of its own. Plan one where the
-request calls for it.
 
 ### Handing a node to a skill
 
