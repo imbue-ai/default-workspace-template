@@ -1,0 +1,3 @@
+Add a `client_versions_hourly` gold table (account x hour x raw `X-Imbue-Client` identifier, with request counts) to the hourly aggregation, so the fleet's client-version mix -- and how a release rollout moves through it -- is queryable from the metrics lake instead of only from the 90-day raw log parquet. Windowed delete-and-recompute like `activity`; the identifier is stored verbatim (version parsing is a query-time decision), and lines without the header land in the `''` bucket so pre-0.4.1 clients stay visible.
+
+A new worked example, `reports/client_versions.sql`, shows distinct accounts per minds version per hour and a one-row-per-version current-mix cut.

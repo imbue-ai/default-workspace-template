@@ -21,6 +21,8 @@ import json
 import os
 import socket
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
@@ -43,6 +45,9 @@ from imbue.observability.bugsink_remote_install import await_bugsink_serving
 from imbue.observability.bugsink_remote_install import bugsink_cloud_init_path
 from imbue.observability.bugsink_remote_install import deploy_bugsink_instance
 from imbue.observability.collector_install import render_collector_install_script
+from imbue.observability.dashboards import dashboard_definitions_dir
+from imbue.observability.dashboards import ensure_dashboards
+from imbue.observability.dashboards import load_dashboard_definitions
 from imbue.observability.data_types import BugsinkInstanceConfig
 from imbue.observability.data_types import CollectorInstallConfig
 from imbue.observability.data_types import ObservabilityInstanceConfig
@@ -355,26 +360,21 @@ def _wait_for_openobserve_ready(client: httpx.Client, base_url: str) -> None:
     _probe_openobserve_ready(client, base_url)
 
 
-@main.command(name="provision-accounts")
-@click.option("--ssh-host", required=True, help="Instance host IP (the API is reached over an SSH tunnel)")
-@click.option("--ssh-user", default="debian", show_default=True, help="SSH user on the instance host")
-def provision_accounts(ssh_host: str, ssh_user: str) -> None:
-    """Mint the per-sender-class ingest users and apply log-stream retention; print the result as JSON.
+@contextmanager
+def _openobserve_api_over_ssh_tunnel(ssh_host: str, ssh_user: str, group_name: str) -> Iterator[OpenObserveHttpApi]:
+    """Yield a root-authenticated API client for one instance, through a short-lived SSH tunnel.
 
-    Idempotent: senders whose INGEST_CREDENTIAL_* environment variable already
-    carries a value are left alone; retention overrides on streams that do not
-    exist yet are reported as skipped (re-run after data flows). The API is
-    only reachable on the instance's loopback (the public gate exposes ingest
-    routes only), so the calls run through a short-lived SSH tunnel.
+    The API is only reachable on the instance's loopback (the public gate
+    exposes ingest routes only). ssh binds the -L port as soon as it
+    authenticates, which says nothing about the remote service -- and the
+    provisioning recipe runs seconds after ``deploy`` (re)started openobserve
+    (whose first boot migrates the metadata store before its HTTP server
+    answers) -- so the API itself is waited for before yielding.
     """
     root_email = _require_env(ROOT_EMAIL_ENV_VAR)
     root_password = _require_env(ROOT_PASSWORD_ENV_VAR)
-    existing_credential_by_sender = {
-        sender_class: os.environ.get(env_var_name, "")
-        for sender_class, env_var_name in _INGEST_CREDENTIAL_ENV_VAR_BY_SENDER.items()
-    }
     local_port = _find_free_local_port()
-    with ConcurrencyGroup(name="observability-provision-accounts") as concurrency_group:
+    with ConcurrencyGroup(name=group_name) as concurrency_group:
         tunnel_process = concurrency_group.run_process_in_background(
             [
                 "ssh",
@@ -393,26 +393,39 @@ def provision_accounts(ssh_host: str, ssh_user: str) -> None:
         try:
             _wait_for_local_port(local_port, tunnel_process)
             base_url = f"http://127.0.0.1:{local_port}"
-            # ssh binds the -L port as soon as it authenticates, which says
-            # nothing about the remote service -- and the provisioning recipe
-            # runs this seconds after ``deploy`` (re)started openobserve
-            # (whose first boot migrates the metadata store before its HTTP
-            # server answers). Wait for the API itself rather than failing
-            # the first minting call.
             with httpx.Client(timeout=_API_READY_PROBE_TIMEOUT_SECONDS) as ready_client:
                 _wait_for_openobserve_ready(ready_client, base_url)
-            api = OpenObserveHttpApi(
+            yield OpenObserveHttpApi(
                 base_url=base_url,
                 root_user_email=root_email,
                 root_user_password=SecretStr(root_password),
             )
-            credential_by_sender = ensure_sender_credentials(api, existing_credential_by_sender)
-            is_applied_by_stream = apply_log_stream_retention(api, LOGS_RETENTION_DAYS)
         finally:
             # ``ssh -N`` never exits on its own: tearing it down on every path
             # keeps the group exit from stalling on (and mis-reporting) a
             # still-running tunnel when the API work fails.
             tunnel_process.terminate()
+
+
+@main.command(name="provision-accounts")
+@click.option("--ssh-host", required=True, help="Instance host IP (the API is reached over an SSH tunnel)")
+@click.option("--ssh-user", default="debian", show_default=True, help="SSH user on the instance host")
+def provision_accounts(ssh_host: str, ssh_user: str) -> None:
+    """Mint the per-sender-class ingest users and apply log-stream retention; print the result as JSON.
+
+    Idempotent: senders whose INGEST_CREDENTIAL_* environment variable already
+    carries a value are left alone; retention overrides on streams that do not
+    exist yet are reported as skipped (re-run after data flows). The API is
+    only reachable on the instance's loopback (the public gate exposes ingest
+    routes only), so the calls run through a short-lived SSH tunnel.
+    """
+    existing_credential_by_sender = {
+        sender_class: os.environ.get(env_var_name, "")
+        for sender_class, env_var_name in _INGEST_CREDENTIAL_ENV_VAR_BY_SENDER.items()
+    }
+    with _openobserve_api_over_ssh_tunnel(ssh_host, ssh_user, "observability-provision-accounts") as api:
+        credential_by_sender = ensure_sender_credentials(api, existing_credential_by_sender)
+        is_applied_by_stream = apply_log_stream_retention(api, LOGS_RETENTION_DAYS)
     _emit_json(
         {
             "credential_by_sender": {
@@ -424,6 +437,33 @@ def provision_accounts(ssh_host: str, ssh_user: str) -> None:
                 for sender_class, credential in credential_by_sender.items()
             },
             "log_stream_retention_applied": is_applied_by_stream,
+        }
+    )
+
+
+@main.command(name="import-dashboards")
+@click.option("--ssh-host", required=True, help="Instance host IP (the API is reached over an SSH tunnel)")
+@click.option("--ssh-user", default="debian", show_default=True, help="SSH user on the instance host")
+def import_dashboards(ssh_host: str, ssh_user: str) -> None:
+    """Import every committed dashboard definition into the instance; print the result as JSON.
+
+    Replace-by-title: an existing dashboard with a committed definition's
+    title is deleted and recreated from the repo, so re-running converges on
+    exactly what the repo holds. Iterate in the UI, export back into
+    ``imbue/observability/dashboards/``, then re-import everywhere.
+    """
+    definitions = load_dashboard_definitions(dashboard_definitions_dir())
+    with _openobserve_api_over_ssh_tunnel(ssh_host, ssh_user, "observability-import-dashboards") as api:
+        actions = ensure_dashboards(api, definitions)
+    _emit_json(
+        {
+            "imported": [
+                {
+                    "title": action.title,
+                    "replaced_dashboard_ids": list(action.replaced_dashboard_ids),
+                }
+                for action in actions
+            ],
         }
     )
 
