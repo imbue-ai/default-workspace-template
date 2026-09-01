@@ -1,5 +1,5 @@
 Added `system/scripts/imbue_plan_extra/`: the plan recorder the `build-app`
-skill fires off, as a `write_plan.sh` wrapper plus the `SKILL.md` instructions
+skill fires off, as a `write_plan.sh` wrapper plus the `prompt.md` instructions
 it feeds in. It records, for offline analysis, a routing plan for the same
 request. Nothing in the workspace reads the result.
 
