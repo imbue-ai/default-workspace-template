@@ -74,19 +74,26 @@ export interface ModalAttrs {
   actions?: m.Children;
 }
 
-// A closure component so each open modal owns ONE stable keydown handler: the
-// handler reads the latest attrs through `currentOnEscape` (re-pointed every
-// view), so `onremove` unregisters the very function `oncreate` registered even
+// One stable Escape keydown handler: the returned function reads the current
+// guard through `getOnEscape` at event time, so a component registers it once
+// on mount and `onremove` unregisters that very function even though the guard
+// is re-pointed between redraws. Shared with ClaudeLoginModal, the one dialog
+// that stays off this shell.
+export function escapeKeydownHandler(getOnEscape: () => (() => void) | undefined): (event: KeyboardEvent) => void {
+  return (event: KeyboardEvent): void => {
+    const onEscape = getOnEscape();
+    if (event.key !== "Escape" || onEscape === undefined) return;
+    onEscape();
+    // A document-level listener sits outside mithril's auto-redraw loop.
+    m.redraw();
+  };
+}
+
+// A closure component so each open modal owns ONE stable keydown handler even
 // though callers pass a fresh onEscape closure per redraw.
 export function Modal(): m.Component<ModalAttrs> {
   let currentOnEscape: (() => void) | undefined;
-
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Escape" || currentOnEscape === undefined) return;
-    currentOnEscape();
-    // A document-level listener sits outside mithril's auto-redraw loop.
-    m.redraw();
-  }
+  const handleKeydown = escapeKeydownHandler(() => currentOnEscape);
 
   return {
     oncreate() {

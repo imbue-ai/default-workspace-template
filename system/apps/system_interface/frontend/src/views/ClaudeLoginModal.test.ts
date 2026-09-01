@@ -168,6 +168,44 @@ describe("ClaudeLoginModal", () => {
   });
 });
 
+describe("ClaudeLoginModal Escape dismissal", () => {
+  it("dismisses on Escape while mounted and stops listening once removed", () => {
+    // The node test env has no `document`, so a minimal stand-in records the
+    // keydown listener the modal registers on mount and plays the DOM's part
+    // in dispatching to it.
+    const keydownListeners: Array<(event: KeyboardEvent) => void> = [];
+    const documentStub = {
+      addEventListener(type: string, listener: unknown): void {
+        if (type === "keydown") keydownListeners.push(listener as (event: KeyboardEvent) => void);
+      },
+      removeEventListener(type: string, listener: unknown): void {
+        const index = keydownListeners.indexOf(listener as (event: KeyboardEvent) => void);
+        if (type === "keydown" && index !== -1) keydownListeners.splice(index, 1);
+      },
+    };
+    vi.stubGlobal("document", documentStub);
+    try {
+      const component = ClaudeLoginModal();
+      const onDismiss = vi.fn();
+      const vnode = { attrs: { onDismiss } } as unknown as Parameters<NonNullable<typeof component.oncreate>>[0];
+      component.oncreate?.(vnode);
+      expect(keydownListeners).toHaveLength(1);
+
+      keydownListeners[0]?.({ key: "a" } as KeyboardEvent);
+      expect(onDismiss).not.toHaveBeenCalled();
+      keydownListeners[0]?.({ key: "Escape" } as KeyboardEvent);
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+
+      // Unmount unregisters the very listener mount registered, so a closed
+      // modal no longer reacts to Escape.
+      component.onremove?.(vnode);
+      expect(keydownListeners).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("the Open-the-Imbue-key-page embed-contract handshake", () => {
   // The workspace page cannot know the minds app's backend origin, so the
   // mint button sends `minds:open-ai-keys-page` to the embedding chrome via

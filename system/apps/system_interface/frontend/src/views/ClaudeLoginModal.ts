@@ -35,6 +35,7 @@
  */
 
 import m from "mithril";
+import { escapeKeydownHandler } from "./components/Modal";
 import { backdropDismissAttrs } from "./components/modalBackdrop";
 import { OPEN_AI_KEYS_ACK, OPEN_AI_KEYS_PAGE } from "@minds/embed-contract";
 import { apiUrl } from "../base-path";
@@ -107,15 +108,16 @@ const MINT_PAGE_ACK_TIMEOUT_MS = 300;
 
 /* Styling.
  * Utilities in the markup; the claude-login-* class names stay as bare markers
- * (the vitest suite drives the flow by them). The modal deliberately stays off
- * the shared .modal-* shell: it is a scrollable, sectioned, multi-step flow
- * whose header/body/footer own their padding, and it sits at z-50 -- a
- * design-system-exception mid layer below the main modal overlay stack. Its
- * two entry animations stay in style.css as keyframes. */
+ * (the vitest suite drives the flow by them). The modal stays off the shared
+ * .modal-* shell for structure alone -- it is a scrollable, sectioned,
+ * multi-step flow whose header/body/footer own their padding -- but its
+ * backdrop follows the shell's conventions: the --z-overlay layer (above the
+ * rail and menus) and the same flat dim, no blur. Its two entry animations
+ * stay in style.css as keyframes. */
 
 const OVERLAY_CLASS =
-  "claude-login-overlay absolute inset-0 z-50 flex items-center justify-center bg-[rgba(20,20,20,0.45)] p-4 " +
-  "backdrop-blur-[3px] animate-[claude-login-overlay-in_150ms_ease-out]";
+  "claude-login-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-black/40 p-4 " +
+  "animate-[claude-login-overlay-in_150ms_ease-out]";
 
 const MODAL_CLASS =
   "claude-login-modal relative flex max-h-[calc(100vh-32px)] w-full max-w-[460px] flex-col overflow-hidden " +
@@ -1232,9 +1234,18 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     return renderFooterRow(false, [m(Button, { onclick: () => goBackToProviderSelection() }, "Back")]);
   }
 
+  // Escape mirrors the backdrop press: dismiss from any screen. Wired the
+  // same way the shared Modal shell owns its onEscape -- one stable document
+  // listener across the component's lifetime.
+  function dismissOnEscape(): void {
+    attrsRef?.onDismiss();
+  }
+  const handleEscapeKeydown = escapeKeydownHandler(() => dismissOnEscape);
+
   return {
     oncreate(vnode: m.VnodeDOM<ClaudeLoginModalAttrs>) {
       attrsRef = vnode.attrs;
+      document.addEventListener("keydown", handleEscapeKeydown);
       loadCurrentStatus();
     },
 
@@ -1243,6 +1254,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     },
 
     onremove() {
+      document.removeEventListener("keydown", handleEscapeKeydown);
       abortSetupTokenIfActive();
       stopApplyingPoll();
       clearMintAckWait();
