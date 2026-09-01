@@ -77,12 +77,20 @@ A subtask can ask a worker to do the work from scratch, refine what an earlier
 step produced, criticise it, or do something different entirely that makes a
 later step easier.
 
-### The access list -- the edges of the graph
+### The access list -- the ordering of the work
 
-Each step gets an access list: the earlier steps whose subtask and response it
-will see in its context. These are the dependencies, and they are the only
-thing that orders the plan. A step's position in the lists does not make it
-wait for anything -- only its access list does.
+The workers all share one workspace, so whatever an earlier step wrote to disk
+is already there for a later one to find. What a step's access list controls is
+the ordering and the handoffs:
+
+- **Ordering.** A step waits on the steps in its access list and on nothing
+  else. Steps that are not waiting on each other run in parallel. Position in
+  the lists orders nothing by itself.
+- **Handoffs.** A step sees the subtask and the reply of each step it lists.
+  That is how one worker learns what another decided, named, or deliberately
+  left alone -- the things the files themselves do not say.
+
+What you can write in one:
 
 - `[]` -- an empty list. The step sees only the original request. Two steps that
   both take `[]` are independent of each other and **can run in parallel**.
