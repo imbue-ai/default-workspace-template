@@ -1,0 +1,1 @@
+This branch's changes to this project come from merging `mngr/update-auth-pr` (the provider-accounts sign-in refactor) as its base -- see that branch's `mngr-update-auth-pr.md` / `minh-auth-provider-lanes.md` entries for the substance. The branch's own work (the chat data-model simplification) lives in `system/apps/system_interface`.

@@ -44,11 +44,11 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.auth_flows import AuthFlowService
+from imbue.system_interface.harnesses.signed_in import SignedIn
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
-from imbue.system_interface.harnesses.claude.auth import RestartProgress
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -219,7 +219,7 @@ def build_test_state(
     config: Config | None = None,
     agent_manager: AgentManager | None = None,
     claude_auth_service: ClaudeAuthService | None = None,
-    welcome_resender: WelcomeResender | None = None,
+    auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
@@ -237,8 +237,15 @@ def build_test_state(
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
     # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
-    manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
-    return SystemInterfaceState(
+    manager.set_transcript_broadcaster(event_queues.broadcast_batch)
+    state = SystemInterfaceState(
+        # Never the production probe: it shells out to whatever claude/codex/agy/pi this
+        # machine happens to have, over the network, from any test that reaches a sign-in
+        # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
+        # that cares about the verdict injects its own service.
+        auth_flows=auth_flows
+        if auth_flows is not None
+        else AuthFlowService.create(probe=lambda *_args: SignedIn.UNKNOWN),
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),
@@ -247,15 +254,12 @@ def build_test_state(
         event_queues=event_queues,
         layout_mutex=LayoutMutex(),
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        welcome_resender=welcome_resender
-        if welcome_resender is not None
-        else WelcomeResender(
-            resolve_agent=manager.get_agent_info_by_id,
-            send_message_fn=manager.send_message_to_agent,
-        ),
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
     )
+    # Match production: eviction drops a destroyed/stopped agent's watcher.
+    manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
+    return state
 
 
 class FakeFinishedProcess:
@@ -290,9 +294,17 @@ class FakePexpectProcess:
     against their wall-clock deadline.
     """
 
-    def __init__(self, expect_script: Sequence[tuple[int, str]], drain_chunks: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        expect_script: Sequence[tuple[int, str]],
+        drain_chunks: Sequence[str] = (),
+        is_alive: bool = True,
+    ) -> None:
         assert expect_script, "expect_script must have at least one entry"
         self._script = list(expect_script)
+        # Hardcoding this True made every "the CLI has exited" arm unreachable from tests --
+        # including the only success signal codex's device flow has, which is process exit.
+        self._is_alive = is_alive
         self._call_idx = 0
         self._drain_chunks = list(drain_chunks)
         self.sendline_calls: list[str] = []
@@ -327,7 +339,12 @@ class FakePexpectProcess:
         self.send_calls.append(s)
 
     def isalive(self) -> bool:
-        return True
+        return self._is_alive
+
+    def exit(self) -> None:
+        """Let the scripted CLI finish. `terminate` does not: the production teardown calls
+        it on paths where the process was already gone, so it cannot mean "now exited"."""
+        self._is_alive = False
 
     def terminate(self, force: bool = False) -> None:
         self.terminate_calls += 1
@@ -335,23 +352,6 @@ class FakePexpectProcess:
     def close(self) -> None:
         self.close_calls += 1
 
-
-def wait_for_background_apply(service: ClaudeAuthService) -> RestartProgress:
-    """Join the service's background credential-apply thread; return its final progress.
-
-    Tests that trigger an apply (submit paths, switch-flavored oauth
-    completions) call this so post-apply state -- the settings write, the
-    recorded mngr calls, the welcome-resend hook -- is stable before
-    asserting on it. Callers assert on the returned progress themselves
-    (most expect DONE; failure tests expect FAILED).
-    """
-    thread = service._restart_thread
-    assert thread is not None, "no background apply was started"
-    thread.join(timeout=10)
-    assert not thread.is_alive(), "background apply did not finish in time"
-    progress = service.current_restart_progress()
-    assert progress is not None
-    return progress
 
 
 def _find_free_port() -> int:

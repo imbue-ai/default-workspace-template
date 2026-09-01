@@ -1,0 +1,1 @@
+Rewrite `docs/system/blueprint/scaling-design/plan-scaling-design.md` to describe the chat backend's replacement architecture (the full-residency payload-free transcript store, the on-demand detail endpoint, and watcher eviction) in place of the retired two-tier evicting cache, and add the `docs/system/blueprint/simplify-chat-data-model/` plan the work followed.
