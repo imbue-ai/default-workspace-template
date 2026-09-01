@@ -61,7 +61,6 @@ export function UpdateStalenessBanner(): m.Component {
       if (hidden) return null;
       const message = STALENESS_MESSAGES.get(getUpdateStalenessVariant());
       if (message === undefined) return null;
-      // The shared banner box (components/banner.ts) with the warning tint.
       return m(
         "div",
         {

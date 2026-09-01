@@ -63,7 +63,6 @@ export function TerminalBanner(): m.Component {
       return m(
         "div",
         {
-          // The shared banner box (components/banner.ts), neutral tint.
           class: bannerClass("terminal-banner", "neutral"),
         },
         [

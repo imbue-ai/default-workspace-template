@@ -28,8 +28,8 @@ export function AgentAuthInstructionsModal(): m.Component {
         Modal,
         {
           onDismiss: dismissAuthInstructions,
-          // On the Modal shell, so the listener exists only while the notice is
-          // up (this component itself stays mounted, rendering null when closed).
+          // The listener must exist only while the notice is up: this component
+          // stays mounted and renders null when closed.
           onEscape: dismissAuthInstructions,
           title: "Sign-in runs in the terminal",
           actions: [

@@ -6,13 +6,9 @@ import { hoverTooltipAttrs } from "./hoverTooltip";
 /**
  * The workspace's one notice modal: a title, a body, and buttons.
  *
- * Every notice in the chat used to re-type this markup -- the declined-command notice, the auth
- * notice, the send-failure notice, and three dialogs elsewhere. The copies drifted in exactly the
- * way hand-copying drifts: two registered an Escape handler and one did not, so Escape dismissed
- * some notices and not others, and only some focused their first button. Owning the backdrop
- * press, the focus rule, and the Escape guard in one place (with the Escape listener itself on
- * the Modal shell, via ``onEscape``) is what makes those behaviours the same everywhere rather
- * than the same by coincidence.
+ * The backdrop press, the focus rule, and the Escape guard are owned in one place (the Escape
+ * listener itself lives on the Modal shell, via ``onEscape``), so every notice behaves the same
+ * way rather than the same by coincidence.
  *
  * Dismissal is uniform on purpose: the button, Escape, and a backdrop press all call ``onDismiss``,
  * so a caller cannot make one of them mean something different from the others. A caller that must
@@ -87,7 +83,7 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
                   ...(action.tooltip === undefined ? {} : hoverTooltipAttrs(action.tooltip)),
                   // aria-disabled, not disabled: a disabled button suppresses the hover/focus
                   // events the tooltip above needs, and the explanation matters most exactly
-                  // while the button is greyed (e.g. mid-retry). Clicks are gated here instead.
+                  // while the button is greyed. Clicks are gated here instead.
                   ...(action.isDisabled === true ? { "aria-disabled": "true" } : {}),
                   onclick: () => {
                     if (action.isDisabled !== true) action.run();
@@ -106,5 +102,5 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
   };
 }
 
-// The factory shape predates the Modal shell owning the Escape listener and is kept so render
-// sites stay unchanged; instances hold no state anymore.
+// Instances hold no state; the factory shape remains so render sites can keep holding one
+// component per notice.

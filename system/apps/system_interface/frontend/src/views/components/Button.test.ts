@@ -45,9 +45,9 @@ describe("Button readonly option", () => {
 
 describe("Button lifecycle passthrough", () => {
   it("runs a caller's lifecycle hooks once, not once per vnode layer", () => {
-    // Mithril invokes hooks found in the component vnode's attrs itself; if
-    // splitAttrs also forwarded them to the inner <button>, each would fire
-    // twice with the same vnode.dom (double-attaching e.g. hover tooltips).
+    // Mithril itself invokes hooks found in a component vnode's attrs;
+    // forwarding them to the inner <button> too would fire each twice with
+    // the same vnode.dom.
     const oncreate = vi.fn();
     const onremove = vi.fn();
     const root = document.createElement("div");

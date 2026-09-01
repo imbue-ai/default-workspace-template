@@ -1,8 +1,7 @@
 /* The full-width dismissable banner box: a bordered strip pinned above its
- * pane's content, message left, actions right. Shared by TerminalBanner
- * (neutral) and UpdateStalenessBanner (warning) so the box geometry cannot
- * drift between them; only the tone tokens differ. The marker is a bare class
- * (like `btn`) so the vitest suites can find each banner. */
+ * pane's content, message left, actions right; tones swap only the colour
+ * tokens, so the box geometry cannot drift between banners. The marker is a
+ * bare class (like `btn`) so tests can find each banner. */
 
 export type BannerTone = "neutral" | "warning";
 

@@ -293,9 +293,6 @@ describe("MessageInput send guard", () => {
     expect(renderedText(reRendered)).not.toContain("can't be sent from chat");
   });
 
-  // Listener add/remove symmetry for Escape lives with the Modal shell now and is
-  // covered against a real document in NoticeDialog.test.ts.
-
   it("sends a command another harness never declared", async () => {
     // /status is claude's declaration; codex declared its own list, and /status
     // is not on it, so for a codex agent it goes through with no notice.

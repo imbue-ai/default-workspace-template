@@ -36,17 +36,16 @@ import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-displa
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
 const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
 
-// Agents with the shoulder-tap request in flight. While it runs the button is disabled so
-// it cannot double-fire; cleared when the request settles. This is the ONLY thing the
+// Agents with the shoulder-tap request in flight. While it runs the button is greyed and
+// the click gate refuses, so it cannot double-fire; cleared when the request settles. This is the ONLY thing the
 // frontend tracks here -- whether the tap is otherwise available is the backend's flag.
 const inFlightAgentIds = new Set<string>();
 
 async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
   // Never fire while our own tap is already running or the backend reports the tap
-  // unavailable. The button is greyed in both states, but via ``aria-disabled`` rather
-  // than ``disabled`` (a disabled button suppresses the hover/focus events its
-  // explanatory tooltip needs), so clicks still arrive -- this synchronous check at
-  // click time is the real gate, and it also covers a click racing a redraw.
+  // unavailable. The greyed button is aria-disabled (see the render site for why), so
+  // clicks still arrive -- this synchronous check is the real gate, and it also
+  // covers a click racing a redraw.
   if (inFlightAgentIds.has(agentId) || !getShoulderTapAvailableForAgent(agentId)) {
     return;
   }
@@ -131,11 +130,11 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   // The button's enabled state = the backend's availability flag, AND-ed with the local
   // double-fire guard. The frontend computes nothing about availability itself: if the
   // backend says a send is in flight (or the queue is empty), ``shoulder_tap_available``
-  // is false and the button is greyed. The greying is ``aria-disabled``, not
-  // ``disabled``: a disabled button suppresses the hover/focus events the explanatory
-  // tooltip needs, and the tooltip matters most exactly while the button is greyed.
-  // The same condition is re-checked synchronously at click time (see above), so it
-  // still can never be pressed into a refusal/error.
+  // is false and the button is greyed. The greying is aria-disabled, not disabled: a
+  // disabled button suppresses the hover/focus events the explanatory tooltip needs,
+  // and the tooltip matters most exactly while the button is greyed; the click
+  // handler re-checks this condition synchronously, so it can never be pressed into
+  // a refusal/error.
   const isInFlight = inFlightAgentIds.has(agentId);
   const isDisabled = isInFlight || !getShoulderTapAvailableForAgent(agentId);
 

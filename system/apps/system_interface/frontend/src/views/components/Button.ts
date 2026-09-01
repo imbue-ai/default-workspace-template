@@ -69,9 +69,9 @@ const BTN_READONLY = "cursor-default";
 const BTN_VARIANTS: Record<ButtonVariant, string> = {
   primary:
     "bg-accent text-on-accent border-accent not-disabled:not-aria-disabled:hover:bg-accent-hover not-disabled:not-aria-disabled:hover:border-accent-hover",
-  // The fill-tinted variants pair hover with the one-step-deeper pressed tint
-  // (bg-fill-active); the solid variants keep their own hover colours and the
-  // shared translate-y press cue instead.
+  // The fill-tinted variants pair hover with the one-step-deeper pressed tint;
+  // the solid variants keep their own hover colours and the shared translate-y
+  // press cue instead.
   secondary:
     "bg-surface text-primary border-default not-disabled:not-aria-disabled:hover:bg-fill-hover not-disabled:not-aria-disabled:active:bg-fill-active",
   ghost:
