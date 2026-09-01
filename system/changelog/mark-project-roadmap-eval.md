@@ -1,0 +1,1 @@
+Branch pinned by the project-roadmap minds eval: carries the eval's uploaded data drops and raises the `modal_eval` overlay's workspace sandbox timeout from 3h to 5h (17910s + 90s shutdown buffer) so a 4h-conversation eval case survives Modal's sandbox lifetime through verification and the final snapshot.
