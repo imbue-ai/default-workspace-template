@@ -16,7 +16,8 @@ import * as css from "./modelCardStyles";
 
 export interface TerminalViewToggleAttrs {
   on: boolean;
-  onToggle: () => void;
+  /** Receives the click event so the caller can locate its own panel in the DOM. */
+  onToggle: (event: Event) => void;
 }
 
 export const TerminalViewToggle: m.Component<TerminalViewToggleAttrs> = {
