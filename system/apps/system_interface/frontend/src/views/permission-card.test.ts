@@ -58,11 +58,11 @@ function deliverFromEmbedder(data: Record<string, unknown>, options: { isFromEmb
   vi.restoreAllMocks();
 }
 
-function makeToolCall(inputPreview: string, display?: "permission_request"): ToolCall {
+function makeToolCall(inputChars: number, display?: "permission_request"): ToolCall {
   return {
     tool_call_id: "call-1",
     tool_name: "Bash",
-    input_preview: inputPreview,
+    input_chars: inputChars,
     ...(display ? { display } : {}),
   };
 }
@@ -92,7 +92,7 @@ function makeResult(output: string, isError = false, permissionRequest?: Record<
     message_uuid: "uuid-1",
     tool_call_id: "call-1",
     tool_name: "Bash",
-    output,
+    output_chars: output.length,
     is_error: isError,
     ...(derived === undefined ? {} : { permission_request: derived }),
   };
@@ -112,9 +112,13 @@ function renderCardFor(
   onToggleRaw: () => void = () => {},
 ): m.Vnode {
   const details = parsePermissionRequest(toolCall, toolResult);
-  const rawInput = toolCall.input_preview || "";
-  const rawOutput = toolResult?.output || "";
-  const rawText = rawOutput ? `${rawInput}\n\n${rawOutput}` : rawInput;
+  // The live card assembles rawText from on-demand fetches; these tests drive the pure
+  // renderer, so the structured request object (or the open-to-load placeholder) stands in.
+  const rawText = toolResult?.permission_request
+    ? JSON.stringify(toolResult.permission_request, null, 2)
+    : toolResult
+      ? "Open to load the raw output\u2026"
+      : "";
   return renderPermissionCard(details, scopeInfo, resolution, rawText, toolResult !== null, rawOpen, onToggleRaw);
 }
 
@@ -158,7 +162,7 @@ const ACCOUNTS_OUTPUT = `{"request_id":"acct-1","rationale":"check which account
 describe("parsePermissionRequest", () => {
   it("parses the rich details of a successful predefined creation POST", () => {
     const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(PERMISSION_OUTPUT),
     );
     expect(result).toEqual({
@@ -174,7 +178,7 @@ describe("parsePermissionRequest", () => {
 
   it("parses a file-sharing request's path and access mode", () => {
     const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(FILE_SHARING_OUTPUT),
     );
     expect(result).toMatchObject({
@@ -188,7 +192,7 @@ describe("parsePermissionRequest", () => {
 
   it("parses a workspace request's id and type", () => {
     const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(WORKSPACE_OUTPUT),
     );
     expect(result).toMatchObject({
@@ -201,35 +205,36 @@ describe("parsePermissionRequest", () => {
   });
 
   it("ignores tool calls that are not permission-request POSTs", () => {
-    const unrelated = makeToolCall(JSON.stringify({ command: "ls -la" }));
+    const unrelated = makeToolCall(24);
     expect(parsePermissionRequest(unrelated, makeResult("anything"))).toBeNull();
   });
 
   it("ignores reads of the latchkey permissions endpoints (non-POST host)", () => {
-    const read = makeToolCall(
-      JSON.stringify({ command: "latchkey curl http://latchkey-self.invalid/permissions/self" }),
-    );
+    const read = makeToolCall(72);
     expect(parsePermissionRequest(read, makeResult('{"rules": []}'))).toBeNull();
   });
 
   it("returns null while the tool result is still pending", () => {
-    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT, "permission_request"), null)).toBeNull();
+    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT.length, "permission_request"), null)).toBeNull();
   });
 
   it("returns null when the creation call errored", () => {
     const errored = makeResult("request not permitted by the user", true);
-    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT, "permission_request"), errored)).toBeNull();
+    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT.length, "permission_request"), errored)).toBeNull();
   });
 
   it("returns null when the output has no JSON body", () => {
     expect(
-      parsePermissionRequest(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult("nope")),
+      parsePermissionRequest(makeToolCall(PERMISSION_INPUT.length, "permission_request"), makeResult("nope")),
     ).toBeNull();
   });
 
   it("returns null when the JSON body has no request_id", () => {
     expect(
-      parsePermissionRequest(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult('{"agent_id":"a"}')),
+      parsePermissionRequest(
+        makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+        makeResult('{"agent_id":"a"}'),
+      ),
     ).toBeNull();
   });
 
@@ -238,7 +243,7 @@ describe("parsePermissionRequest", () => {
     // event. Pair a deliberately unreadable output with that field to prove the
     // field is what's read -- there is nothing in this output to recover from.
     const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult("  % Total    % Received\n{ truncated beyond repai...", false, {
         request_id: "885711ec07bf47239d71294e1534330b",
         rationale: "read the deploy thread",
@@ -336,7 +341,7 @@ describe("isFiledPermissionRequest", () => {
   // harness returns the block message as an errored result and nothing ever
   // reaches the gateway. Rendering that as a permission card sent the user to a
   // Permissions tab with nothing in it.
-  const call = makeToolCall(PERMISSION_INPUT, "permission_request");
+  const call = makeToolCall(PERMISSION_INPUT.length, "permission_request");
 
   it("counts a request whose result has not arrived yet", () => {
     expect(isFiledPermissionRequest(call, null)).toBe(true);
@@ -362,13 +367,16 @@ describe("isFiledPermissionRequest", () => {
   });
 
   it("does not count an ordinary tool call", () => {
-    expect(isFiledPermissionRequest(makeToolCall('{"command":"echo hi"}'), null)).toBe(false);
+    expect(isFiledPermissionRequest(makeToolCall(22), null)).toBe(false);
   });
 });
 
 describe("renderPermissionCard", () => {
   it("shows the eyebrow, title, rationale, and review button on a pending card", () => {
-    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT));
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(PERMISSION_OUTPUT),
+    );
 
     // The eyebrow reads "Permission request"; the title carries the specific
     // subject (the raw scope until the gateway catalog resolves a name).
@@ -392,7 +400,10 @@ describe("renderPermissionCard", () => {
   });
 
   it("wires the button to open the modal with the request id", () => {
-    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT));
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(PERMISSION_OUTPUT),
+    );
     const button = findReviewButton(vnode) as { attrs?: { onclick?: (e: Event) => void } } | null;
 
     resetEmbedEndpointForTesting();
@@ -407,7 +418,7 @@ describe("renderPermissionCard", () => {
   });
 
   it("shows a pending state with no review button before the result arrives", () => {
-    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), null);
+    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT.length, "permission_request"), null);
 
     expect(textOf(findByClass(vnode, "permission-request-eyebrow"))).toBe("Permission request");
     expect(findReviewButton(vnode)).toBeNull();
@@ -415,7 +426,10 @@ describe("renderPermissionCard", () => {
   });
 
   it("shows a short unreadable status, not a paragraph, when nothing could be recovered", () => {
-    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult('{"agent_id":"a"}'));
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult('{"agent_id":"a"}'),
+    );
 
     expect(findReviewButton(vnode)).toBeNull();
     expect(textOf(findByClass(vnode, "permission-request-status"))).toBe(
@@ -427,17 +441,26 @@ describe("renderPermissionCard", () => {
   });
 
   it("titles a file-sharing request 'Local files'", () => {
-    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(FILE_SHARING_OUTPUT));
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(FILE_SHARING_OUTPUT),
+    );
     expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Local files");
   });
 
   it("titles an accounts request 'Device accounts'", () => {
-    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(ACCOUNTS_OUTPUT));
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(ACCOUNTS_OUTPUT),
+    );
     expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Device accounts");
   });
 
   it("titles a workspace request 'Other machines' with a button and no permission specifics", () => {
-    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(WORKSPACE_OUTPUT));
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(WORKSPACE_OUTPUT),
+    );
 
     expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Other machines");
 
@@ -464,7 +487,7 @@ describe("renderPermissionCard", () => {
 
   it("shows an Approved receipt and no review button once granted", () => {
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(PERMISSION_OUTPUT),
       "granted",
     );
@@ -479,7 +502,7 @@ describe("renderPermissionCard", () => {
 
   it("shows a Denied receipt once denied", () => {
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(PERMISSION_OUTPUT),
       "denied",
     );
@@ -491,7 +514,7 @@ describe("renderPermissionCard", () => {
 
   it("shows a couldn't-complete receipt for an error outcome", () => {
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(PERMISSION_OUTPUT),
       "error",
     );
@@ -509,7 +532,7 @@ describe("renderPermissionCard", () => {
       permissions: [{ name: "slack-read-all", description: "All read operations across the Slack API." }],
     };
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(PERMISSION_OUTPUT),
       null,
       scopeInfo,
@@ -520,7 +543,7 @@ describe("renderPermissionCard", () => {
   it("offers a closed raw disclosure whose toggle reports the click", () => {
     const onToggleRaw = vi.fn();
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(PERMISSION_OUTPUT),
       null,
       null,
@@ -542,7 +565,7 @@ describe("renderPermissionCard", () => {
 
   it("renders the raw request text and a 'Hide' toggle when the disclosure is open", () => {
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(PERMISSION_OUTPUT),
       null,
       null,
@@ -561,7 +584,7 @@ describe("renderPermissionCard", () => {
 
   it("keeps the raw disclosure available on a resolved card", () => {
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(PERMISSION_OUTPUT),
       "granted",
       null,
@@ -573,14 +596,21 @@ describe("renderPermissionCard", () => {
 
   it("heads every card state with a key, and never brings the lock back", () => {
     const states: [string, m.Vnode][] = [
-      ["pending", renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT))],
+      [
+        "pending",
+        renderCardFor(makeToolCall(PERMISSION_INPUT.length, "permission_request"), makeResult(PERMISSION_OUTPUT)),
+      ],
       [
         "resolved",
-        renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT), "granted"),
+        renderCardFor(
+          makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+          makeResult(PERMISSION_OUTPUT),
+          "granted",
+        ),
       ],
       [
         "unreadable",
-        renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult('{"agent_id":"a"}')),
+        renderCardFor(makeToolCall(PERMISSION_INPUT.length, "permission_request"), makeResult('{"agent_id":"a"}')),
       ],
     ];
     for (const [state, vnode] of states) {
@@ -591,7 +621,7 @@ describe("renderPermissionCard", () => {
 
   it("badges a service request with that service's own mark", () => {
     const badge = findByClass(
-      renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT)),
+      renderCardFor(makeToolCall(PERMISSION_INPUT.length, "permission_request"), makeResult(PERMISSION_OUTPUT)),
       "permission-request-badge",
     );
     expect(markSrc(badge)).toContain("slack");
@@ -602,7 +632,7 @@ describe("renderPermissionCard", () => {
   it("badges a request that names no app with the cube", () => {
     // A file-sharing request is about local files; there is no app to show.
     const badge = findByClass(
-      renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(FILE_SHARING_OUTPUT)),
+      renderCardFor(makeToolCall(PERMISSION_INPUT.length, "permission_request"), makeResult(FILE_SHARING_OUTPUT)),
       "permission-request-badge",
     );
     expect(trustedHtmlIn(badge)).toContain(CUBE_PATH);
@@ -611,7 +641,7 @@ describe("renderPermissionCard", () => {
 
   it("badges a service we ship no mark for with the cube", () => {
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(UNBUNDLED_SERVICE_OUTPUT),
     );
     const badge = findByClass(vnode, "permission-request-badge");
@@ -624,7 +654,11 @@ describe("renderPermissionCard", () => {
 
   it("keeps the service mark on the resolved receipt", () => {
     const badge = findByClass(
-      renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT), "granted"),
+      renderCardFor(
+        makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+        makeResult(PERMISSION_OUTPUT),
+        "granted",
+      ),
       "permission-request-badge--sm",
     );
     expect(markSrc(badge)).toContain("slack");
@@ -634,7 +668,7 @@ describe("renderPermissionCard", () => {
     // The receipt renders before the unreadable-request branch, so `details` is
     // null there and the badge must still have something to draw.
     const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult('{"agent_id":"a"}'),
       "granted",
     );
@@ -697,7 +731,7 @@ describe("shell-reported verdicts", () => {
     const card = PermissionCard();
     const vnode = card.view({
       attrs: {
-        toolCall: makeToolCall(PERMISSION_INPUT, "permission_request"),
+        toolCall: makeToolCall(PERMISSION_INPUT.length, "permission_request"),
         toolResult: makeResult(FILE_SHARING_OUTPUT),
         resolution: null,
       },

@@ -16,7 +16,12 @@ under the manager's own lock without any ordering between the two.
 import threading
 from collections.abc import Callable
 
+from loguru import logger
+
+from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import TransportClosedError
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailedError
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
 from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
@@ -133,15 +138,30 @@ class CodexHarnessSession(AgentHarnessSession):
 
         ``message_id`` is passed only as a CORRELATION TOKEN (``clientUserMessageId``), which
         codex echoes back on the committed item so the ledger can link the commit to this
-        send -- it is NOT the delivery key (Fix 2). ``send`` returns as soon as the daemon
-        accepts the message (opening a turn, or parking a steer); the ledger then carries its
-        real state, which is what drops the frontend's optimistic "Sending" bubble.
+        send -- it is NOT the delivery key (Fix 2). OK means the daemon ACCEPTED the message
+        (opening a turn, or parking a steer); the ledger then carries its real state, which is
+        what drops the frontend's optimistic "Sending" bubble -- so a send the daemon never
+        accepted must NOT be OK, or that bubble waits forever on an arrival that cannot come.
+
+        A transport that died under the submit is the same daemon-unreachable condition a
+        failed connection build reports, just observed a moment later (the reader thread
+        notices a closed transport only on its next poll), so both map to NOT_READY: the
+        endpoint's revive-retry loop rebuilds the connection and re-submits with the SAME
+        ``message_id``, which every dedup layer keys on, so the retry stays one message. Any
+        other daemon refusal raises ``SendFailedError`` with the daemon's own words; the
+        endpoint's error response restores the text to the composer.
         """
         self.ensure_live()
         ledger = self._live_ledger()
         if ledger is None:
             return SendOutcome.NOT_READY
-        ledger.send(text, client_id=message_id)
+        try:
+            ledger.send(text, client_id=message_id)
+        except TransportClosedError as exc:
+            logger.debug("codex session: transport died under a send ({}); reporting not-ready", exc)
+            return SendOutcome.NOT_READY
+        except CodexAppServerError as exc:
+            raise SendFailedError(str(exc)) from exc
         return SendOutcome.OK
 
     def is_sending(self) -> bool:

@@ -16,7 +16,7 @@ import { buildMessageWithAttachments, formatFileSize } from "../models/attachmen
 import { drainToComposer, interruptAgent, sendMessage } from "../models/Response";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "../models/request-error";
-import { openAgentAuth } from "../models/AgentAuth";
+import { openProviderChooser } from "../models/Providers";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
 import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
@@ -728,18 +728,17 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           title: command === "/logout" ? "Sign-out is managed here" : "Sign-in is managed here",
           body: [
             `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +
-              "outside this workspace's managed sign-in. Use the agent auth screen instead.",
+              "where this workspace cannot see the result. Sign in from the provider list instead: " +
+              "it signs in to a fresh account of its own, so the agent's own credential is left alone.",
           ],
           dismissLabel: "Cancel",
           onDismiss: dismissAuthCommandNotice,
           actions: [
             {
-              label: "Open agent auth",
+              label: "Open providers",
               run: () => {
                 dismissAuthCommandNotice();
-                if (agentId) {
-                  openAgentAuth(agentId);
-                }
+                openProviderChooser();
               },
             },
           ],
@@ -755,6 +754,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       // above the input, read straight off the backend-derived activity state.
       const isAgentWorking = isWorkingActivityState(getAgentById(agentId)?.activity_state ?? null);
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
+      // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
+      const hasQueuedMessages = (getAgentById(agentId)?.queued_messages ?? []).length > 0;
+      const stopButtonLabel = hasQueuedMessages
+        ? "Interrupt agent and bring queued messages to draft area"
+        : "Interrupt agent";
 
       return m("div", { class: "message-input mx-auto w-full" }, [
         interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
@@ -828,8 +832,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     "button",
                     {
                       class: "message-input-stop-button",
-                      "data-tooltip": "Interrupt and bring queued messages to the composer",
-                      "aria-label": "Interrupt and bring queued messages to the composer",
+                      // The label states what THIS press will do. The button always interrupts;
+                      // it only hands messages back when there are some parked in the harness,
+                      // so promising that unconditionally described a case that usually is not
+                      // the one in front of the user.
+                      "data-tooltip": stopButtonLabel,
+                      "aria-label": stopButtonLabel,
                       onclick: handleStopToComposer,
                     },
                     m.trust(stopIcon(14)),

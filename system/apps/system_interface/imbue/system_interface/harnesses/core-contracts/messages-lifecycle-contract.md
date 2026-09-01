@@ -185,12 +185,16 @@ rollout-poll.
 ## Part B — Per-operation contracts
 
 ### Send
-On POST the frontend shows "Sending…" immediately (the one permitted optimism, A2). Within a
-bounded time the backend resolves the message to exactly one of Delivered (agent was idle: the
-message starts and commits a turn) / Queued (agent busy: parked in the harness queue) / Returned
-(send failed). On resolve, the real representation (transcript turn or queued chip) appears
-first and only then is "Sending…" removed — reconciliation goes through the message, so it is
-never in a no-visible-state gap. Never stuck Sending, never silently gone.
+On POST the frontend shows "Sending…" immediately (the one permitted optimism, A2). A
+successful POST means the harness ACCEPTED the message; within a bounded time it then resolves
+to exactly one of Delivered (agent was idle: the message starts and commits a turn) / Queued
+(agent busy: parked in the harness queue) / Returned (accepted but never committed — the
+Interrupt/Queue rules). On resolve, the real representation (transcript turn or queued chip)
+appears first and only then is "Sending…" removed — reconciliation goes through the message, so
+it is never in a no-visible-state gap. A message the harness never accepted must resolve as a
+FAILED POST — the error response is what restores the text to the composer — never as a
+quietly-recorded Returned, which no surface shows and which would leave "Sending…" stuck
+waiting on an arrival that cannot come. Never stuck Sending, never silently gone.
 
 ### Queue — an EPHEMERAL STORE, bound to the session's life
 A Queued message persists across UI reloads (the *session* is still alive, so its queue is still

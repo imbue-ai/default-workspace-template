@@ -513,15 +513,14 @@ def _assert_a3b_chip_removed_before_turn(world: _ClaudeWorld) -> None:
         world.open_turn()
     # Flush any backlog through the poll loop first so ``emitted_count`` is current; the two polls
     # below then each carry exactly the one transition under test.
-    world.watcher._discover_sessions()
-    world.watcher._poll_for_changes()
+    world.watcher._emit_cycle()
 
     text = world.new_text()
     world.ledger.accepted.append(text)
     world._append_enqueue(text, _iso_timestamp(world._tick()))
     world.parked.append(text)
     world.emissions.clear()
-    world.watcher._poll_for_changes()
+    world.watcher._emit_cycle()
     assert text in [c for kind, payload in world.emissions if kind == "chips" for c in payload], (
         "the enqueue must push a chip through the poll loop"
     )
@@ -529,7 +528,7 @@ def _assert_a3b_chip_removed_before_turn(world: _ClaudeWorld) -> None:
     world.emissions.clear()
     # Commit the parked message (its leave + user record) and drain one poll cycle.
     world.commit_one_parked()
-    world.watcher._poll_for_changes()
+    world.watcher._emit_cycle()
     kinds = [kind for kind, _payload in world.emissions]
     assert "chips" in kinds and "turn" in kinds, f"the commit cycle must emit both channels: {world.emissions}"
     assert kinds.index("chips") < kinds.index("turn"), (

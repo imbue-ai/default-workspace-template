@@ -27,7 +27,6 @@ from imbue.system_interface.harnesses.tool_labels import basename
 from imbue.system_interface.harnesses.tool_labels import parse_input_preview
 from imbue.system_interface.harnesses.tool_labels import quoted
 from imbue.system_interface.harnesses.tool_labels import shorten
-from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
 
 # A target renderer: how a tool's target argument reads in the caption.
 _BASENAME: Final[str] = "basename"
@@ -66,12 +65,6 @@ _SUBAGENT_TOOL_NAMES: Final[frozenset[str]] = frozenset({"invoke_subagent"})
 _SUBAGENT_HEADER: Final[str] = "Tool: Agent"
 _SUBAGENT_CAPTION: Final[str] = "Delegating to sub-agent…"
 
-# Tools whose args carry a file body the diff view renders whole -- never truncate them.
-_KEEPS_FULL_BODY_TOOLS: Final[frozenset[str]] = frozenset(
-    {"write_to_file", "replace_file_content", "multi_replace_file_content"}
-)
-# tk lifecycle verbs whose command must survive truncation (mirrors claude/codex): a batched
-# ``tk create --step`` plan / long ``tk close`` summary feeds the chat progress view.
 _RUN_COMMAND_TOOL_NAME: Final[str] = "run_command"
 
 
@@ -138,13 +131,3 @@ def shell_command(tool_name: str, args_json: str) -> str | None:
     if tool_name != _RUN_COMMAND_TOOL_NAME:
         return None
     return _first_string_ci(parse_input_preview(args_json), ("CommandLine",))
-
-
-def keeps_full_tool_input(tool_name: str, args_json: str) -> bool:
-    """True when a tool call's stored input must NOT be truncated for display: a file body
-    (the diff view renders it whole) or a tk lifecycle command (the step timeline reads its
-    ``--step`` titles / close summaries). Mirrors the claude/codex exemption."""
-    if tool_name in _KEEPS_FULL_BODY_TOOLS:
-        return True
-    command = shell_command(tool_name, args_json)
-    return command is not None and is_tk_lifecycle_anywhere(command)

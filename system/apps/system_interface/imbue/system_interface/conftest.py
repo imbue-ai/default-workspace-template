@@ -41,6 +41,11 @@ def _isolate_system_interface_tests(
     one. ``main`` is the sole caller of ``start``. So this fixture no longer
     needs to neuter ``start``.
 
+    The accounts root is redirected for EVERY test, including the agent_manager ones
+    below: a chat create resolves an account several calls down, so without this a test
+    run writes into the developer's own ``~/.minds`` -- which is not hypothetical, it
+    happened, and the leaked account then bound every subsequent create in the session.
+
     Skipped for ``agent_manager_test.py``: those tests deliberately exercise
     ``AgentManager.start`` / ``_start_observe`` (long-lived subprocess behavior,
     watchdog behavior, etc.) and need the real observe semantics with the
@@ -51,6 +56,7 @@ def _isolate_system_interface_tests(
     containers, so this only bites local developer runs; the fixture closes
     that gap.
     """
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path_factory.mktemp("minds-accounts") / "accounts"))
     if "agent_manager_test.py" in request.node.nodeid:
         return None
     isolated = tmp_path_factory.mktemp("mngr-host-isolation")

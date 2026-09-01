@@ -8,7 +8,7 @@ hook, so the welcome-resend check runs exactly once per successful login
 subscription fast path).
 
 The `ClaudeAuthService` (which holds the in-flight PTY auth subprocess)
-and the `WelcomeResender` are created once in `create_application` and
+is created once in `create_application` and
 stored on the app's `SystemInterfaceState`; each handler reads them via
 `get_state()` so the subprocess survives between the `/setup-token/start`
 call and the subsequent `/setup-token/poll` / `/setup-token/submit-code`
@@ -25,6 +25,9 @@ from flask import request
 from loguru import logger as _loguru_logger
 
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.accounts import AccountError
+from imbue.system_interface.harnesses.auth_flows import FlowError
+from imbue.system_interface.harnesses.auth_flows import claude_env_from_paste
 from imbue.system_interface.harnesses.claude import auth
 from imbue.system_interface.models import ClaudeAuthCredentialsRequest
 from imbue.system_interface.models import ClaudeAuthStatusResponse
@@ -34,7 +37,6 @@ from imbue.system_interface.models import ClaudeSetupTokenPollResponse
 from imbue.system_interface.models import ClaudeSetupTokenStartResponse
 from imbue.system_interface.models import ClaudeSetupTokenSubmitCodeRequest
 from imbue.system_interface.models import ErrorResponse
-from imbue.system_interface.welcome_resend import WelcomeResender
 
 logger = _loguru_logger
 
@@ -70,171 +72,63 @@ def get_status() -> Response:
     return _json_response(_status_to_response(status).model_dump())
 
 
-def start_setup_token() -> Response:
-    """POST /api/claude-auth/setup-token/start -- spawn `claude setup-token`."""
-    service: auth.ClaudeAuthService = get_state().claude_auth_service
-    try:
-        result = service.start_setup_token()
-    except auth.ClaudeAuthError as e:
-        return _error_response(str(e), status_code=500)
-    return _json_response(
-        ClaudeSetupTokenStartResponse(session_id=result.session_id, oauth_url=result.oauth_url).model_dump()
-    )
 
-
-def poll_setup_token() -> Response:
-    """POST /api/claude-auth/setup-token/poll -- check for the minted token.
-
-    The `claude setup-token` subprocess polls Anthropic itself and prints
-    the token once the user approves in the browser, so the frontend just
-    calls this periodically; completion writes the settings env block and
-    starts the background agent restart before returning.
-    """
-    state = get_state()
-    service: auth.ClaudeAuthService = state.claude_auth_service
-    welcome_resender: WelcomeResender = state.welcome_resender
-    try:
-        body = ClaudeSetupTokenPollRequest.model_validate(request.get_json())
-    except (ValueError, TypeError) as e:
-        return _error_response(f"Invalid request body: {e}")
-    try:
-        result = service.poll_setup_token(body.session_id, welcome_resender.check_and_resend_welcome)
-    except auth.ClaudeAuthError as e:
-        return _error_response(str(e), status_code=400)
-    if not result.is_complete or result.status is None:
-        return _json_response(ClaudeSetupTokenPollResponse(is_complete=False).model_dump())
-    return _json_response(
-        ClaudeSetupTokenPollResponse(is_complete=True, status=_status_to_response(result.status)).model_dump()
-    )
-
-
-def submit_setup_token_code() -> Response:
-    """POST /api/claude-auth/setup-token/submit-code -- paste-code fallback."""
-    state = get_state()
-    service: auth.ClaudeAuthService = state.claude_auth_service
-    welcome_resender: WelcomeResender = state.welcome_resender
-    try:
-        body = ClaudeSetupTokenSubmitCodeRequest.model_validate(request.get_json())
-    except (ValueError, TypeError) as e:
-        return _error_response(f"Invalid request body: {e}")
-    try:
-        status = service.submit_setup_token_code(body.session_id, body.code, welcome_resender.check_and_resend_welcome)
-    except auth.ClaudeAuthError as e:
-        return _error_response(str(e), status_code=400)
-    return _json_response(_status_to_response(status).model_dump())
 
 
 def submit_credentials() -> Response:
-    """POST /api/claude-auth/submit-credentials -- write settings env, restart agents.
+    """POST /api/claude-auth/submit-credentials -- adopt a pasted credential as an account.
 
-    The single endpoint behind the API-key field, the Imbue blob textarea,
-    and the subtle direct-token paste. The strict parse rejects unmanaged
-    keys and mixed-mode pastes with a user-facing 400 before anything is
-    written or restarted.
+    Kept as its own endpoint because it is a cross-repo contract: the Electron chrome POSTs
+    here after the user visits the Imbue keys page, and mngr's deployment test drives it.
+    What changed is the destination -- the paste now mints an account of its own instead of
+    overwriting the workspace's shared login, so the account existing is the signed-in-with-
+    Imbue flag and no running agent has to be restarted to see it.
+
+    The strict parse still rejects unmanaged keys and mixed-mode pastes with a 400 before
+    anything is written.
     """
-    state = get_state()
-    service: auth.ClaudeAuthService = state.claude_auth_service
-    welcome_resender: WelcomeResender = state.welcome_resender
     try:
         body = ClaudeAuthCredentialsRequest.model_validate(request.get_json())
     except (ValueError, TypeError) as e:
         return _error_response(f"Invalid request body: {e}")
-    if not body.credentials.get_secret_value().strip():
+    pasted = body.credentials.get_secret_value().strip()
+    if not pasted:
         return _error_response("credentials must be a non-empty string")
     try:
-        status = service.submit_credentials(
-            body.credentials.get_secret_value(), welcome_resender.check_and_resend_welcome
-        )
+        account = get_state().auth_flows.adopt_claude_credentials(pasted)
     except auth.CredentialPasteError as e:
         return _error_response(str(e), status_code=400)
-    except auth.ClaudeAuthError as e:
+    except (AccountError, FlowError) as e:
         return _error_response(str(e), status_code=500)
-    return _json_response(_status_to_response(status).model_dump())
-
-
-def start_oauth_login() -> Response:
-    """POST /api/claude-auth/oauth/start -- spawn `claude auth login --<provider>`."""
-    service: auth.ClaudeAuthService = get_state().claude_auth_service
-    try:
-        body = ClaudeOAuthLoginStartRequest.model_validate(request.get_json())
-    except (ValueError, TypeError) as e:
-        return _error_response(f"Invalid request body: {e}")
-    try:
-        provider = auth.OAuthProvider(body.provider)
-    except ValueError:
-        return _error_response(f"Unknown provider: {body.provider!r}")
-    try:
-        result = service.start_oauth_login(provider)
-    except auth.ClaudeAuthError as e:
-        return _error_response(str(e), status_code=500)
+    # `auth_mode` rides along because mngr's deployment test asserts on it: it is how the
+    # Imbue path proves the blob it sent was understood as a proxied setup and not as a
+    # plain key. Derived from what was pasted, not from a probe.
+    #
+    # Through `claude_env_from_paste`, which is the SAME function that decided what to write,
+    # so the two cannot disagree. `parse_credential_lines` is the strict env-block parser and
+    # rejects a bare key outright -- and it ran after the account was already committed and
+    # outside the try, so pasting a plain `sk-ant-...` (what the keys page hands you) minted
+    # the account, made it the MRU, and then answered 500.
     return _json_response(
-        ClaudeSetupTokenStartResponse(session_id=result.session_id, oauth_url=result.oauth_url).model_dump()
+        {
+            "account_id": account.id,
+            "display": account.display,
+            "logged_in": True,
+            "auth_mode": auth.derive_auth_mode(claude_env_from_paste(pasted)).value,
+        }
     )
 
 
-def poll_oauth_login() -> Response:
-    """POST /api/claude-auth/oauth/poll -- check for browser sign-in completion.
-
-    On completion the fast path (subscription, empty managed env) returns a
-    plain signed-in status with no restart fields; the switching cases and
-    Console return a status whose restart_* fields drive the checklist.
-    """
-    state = get_state()
-    service: auth.ClaudeAuthService = state.claude_auth_service
-    welcome_resender: WelcomeResender = state.welcome_resender
-    try:
-        body = ClaudeSetupTokenPollRequest.model_validate(request.get_json())
-    except (ValueError, TypeError) as e:
-        return _error_response(f"Invalid request body: {e}")
-    try:
-        result = service.poll_oauth_login(body.session_id, welcome_resender.check_and_resend_welcome)
-    except auth.ClaudeAuthError as e:
-        return _error_response(str(e), status_code=400)
-    if not result.is_complete or result.status is None:
-        return _json_response(ClaudeSetupTokenPollResponse(is_complete=False).model_dump())
-    return _json_response(
-        ClaudeSetupTokenPollResponse(is_complete=True, status=_status_to_response(result.status)).model_dump()
-    )
 
 
-def submit_oauth_login_code() -> Response:
-    """POST /api/claude-auth/oauth/submit-code -- paste-code path for browser sign-in."""
-    state = get_state()
-    service: auth.ClaudeAuthService = state.claude_auth_service
-    welcome_resender: WelcomeResender = state.welcome_resender
-    try:
-        body = ClaudeSetupTokenSubmitCodeRequest.model_validate(request.get_json())
-    except (ValueError, TypeError) as e:
-        return _error_response(f"Invalid request body: {e}")
-    try:
-        status = service.submit_oauth_login_code(body.session_id, body.code, welcome_resender.check_and_resend_welcome)
-    except auth.ClaudeAuthError as e:
-        return _error_response(str(e), status_code=400)
-    return _json_response(_status_to_response(status).model_dump())
-
-
-def abort_auth_flow() -> Response:
-    """POST /api/claude-auth/abort -- drop any in-flight PTY auth session (setup-token or browser sign-in)."""
-    service: auth.ClaudeAuthService = get_state().claude_auth_service
-    service.abort_auth_flow()
-    return _json_response({"status": "ok"})
 
 
 def register_routes(application: Flask) -> None:
     """Wire `/api/claude-auth/*` endpoints onto the Flask application.
 
-    The handlers read the `ClaudeAuthService` / `WelcomeResender` from the
+    The handlers read the `ClaudeAuthService` from the
     app's `SystemInterfaceState`; `create_application` is responsible for
     placing them there before the app serves requests.
     """
     application.add_url_rule("/api/claude-auth/status", view_func=get_status, methods=["GET"])
-    application.add_url_rule("/api/claude-auth/setup-token/start", view_func=start_setup_token, methods=["POST"])
-    application.add_url_rule("/api/claude-auth/setup-token/poll", view_func=poll_setup_token, methods=["POST"])
-    application.add_url_rule(
-        "/api/claude-auth/setup-token/submit-code", view_func=submit_setup_token_code, methods=["POST"]
-    )
     application.add_url_rule("/api/claude-auth/submit-credentials", view_func=submit_credentials, methods=["POST"])
-    application.add_url_rule("/api/claude-auth/oauth/start", view_func=start_oauth_login, methods=["POST"])
-    application.add_url_rule("/api/claude-auth/oauth/poll", view_func=poll_oauth_login, methods=["POST"])
-    application.add_url_rule("/api/claude-auth/oauth/submit-code", view_func=submit_oauth_login_code, methods=["POST"])
-    application.add_url_rule("/api/claude-auth/abort", view_func=abort_auth_flow, methods=["POST"])

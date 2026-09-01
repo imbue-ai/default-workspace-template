@@ -1,0 +1,3 @@
+This is the merge of `minh/auth-provider-lanes` (the provider-accounts sign-in work) into current `main`; see that branch's `minh-auth-provider-lanes.md` entry for what actually changed.
+
+Conflicts resolved here keep both branches' intent: `main`'s update-staleness meta-tag injection and `UpdateStalenessTracker` state stay, while the harness feature flags (`FEATURE_FLAG_ENABLE_*`, their meta-tag injection, and their tests) go, as the branch deleted them in favor of the provider chooser. The `WelcomeResender` import goes with the branch's removal of the welcome resend, and a stale comment naming it in `test_ratchets.py` is updated.

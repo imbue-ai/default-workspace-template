@@ -79,8 +79,8 @@ PI_STATE_RELATIVE_PATH: Path = Path(".")
 _PI_THINKING_LEVELS: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 # The per-agent pi config dir (== PI_CODING_AGENT_DIR), where the agent's auth lives.
-# Kept in sync with _PI_CONFIG_DIR_RELPATH in mngr_pi_coding's plugin.py.
-_PI_CONFIG_DIR_RELPATH: str = "plugin/pi_coding"
+# Kept in sync with PI_CONFIG_DIR_RELPATH in mngr_pi_coding's plugin.py.
+PI_CONFIG_DIR_RELPATH: str = "plugin/pi_coding"
 # How long to wait for `pi --list-models` before falling back to the whole catalog.
 _LIST_MODELS_TIMEOUT_SECONDS: float = 15.0
 
@@ -221,7 +221,7 @@ class PiModelResolver(HarnessModelResolver):
         executable = shutil.which("pi")
         if executable is None:
             return None
-        pi_config_dir = self._state_dir / _PI_CONFIG_DIR_RELPATH
+        pi_config_dir = self._state_dir / PI_CONFIG_DIR_RELPATH
         env = {**os.environ, "PI_CODING_AGENT_DIR": str(pi_config_dir)}
         try:
             finished = run_local_command_modern_version(

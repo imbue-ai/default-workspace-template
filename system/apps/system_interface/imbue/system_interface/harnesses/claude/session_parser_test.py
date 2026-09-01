@@ -5,6 +5,8 @@ from typing import Any
 
 import pytest
 
+from imbue.system_interface.harnesses.claude.session_parser import _SYNTHETIC_MODEL
+from imbue.system_interface.harnesses.claude.session_parser import parse_line_detail
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.tool_output import _MAX_PERMISSION_REQUEST_PROBES
 
@@ -112,7 +114,7 @@ def test_parse_tool_result() -> None:
     assert len(events) == 1
     assert events[0]["type"] == "tool_result"
     assert events[0]["tool_name"] == "Read"
-    assert events[0]["output"] == "file contents"
+    assert events[0]["output_chars"] == len("file contents")
 
 
 def _make_queued_command_line(
@@ -406,7 +408,7 @@ def test_events_sorted_by_timestamp() -> None:
     assert events[1]["type"] == "assistant_message"
 
 
-def test_tool_input_preview_truncation() -> None:
+def test_tool_input_stays_off_the_event() -> None:
     long_input = {"data": "x" * 300}
     lines = [
         _make_assistant_line(
@@ -417,17 +419,40 @@ def test_tool_input_preview_truncation() -> None:
         ),
     ]
     events = parse_lines(lines)
-    preview = events[0]["tool_calls"][0]["input_preview"]
-    assert len(preview) <= 203  # 200 + "..."
+    tool_call = events[0]["tool_calls"][0]
+    # Payload-free wire: no raw input on the event, just its size; the full input comes
+    # back through parse_line_detail on expand.
+    assert "input_preview" not in tool_call
+    assert tool_call["input_chars"] > 300
 
 
-def test_tool_output_truncation() -> None:
+def test_tool_output_stays_off_the_event() -> None:
     long_output = "x" * 3000
     tool_name_by_call_id: dict[str, str] = {"toolu_1": "Bash"}
     lines = [_make_tool_result_line("uuid-1", "2026-01-01T00:00:00Z", "toolu_1", long_output)]
     events = parse_lines(lines, tool_name_by_call_id=tool_name_by_call_id)
-    assert events[0]["output"].endswith("...")
-    assert len(events[0]["output"]) <= 2003
+    assert "output" not in events[0]
+    assert events[0]["output_chars"] == 3000
+
+
+def test_detail_reconstructs_full_input_and_output() -> None:
+    """parse_line_detail hands back the whole payloads the resident events omit --
+    untruncated, however large."""
+    long_input = {"data": "x" * 300}
+    assistant_line = _make_assistant_line(
+        "uuid-in",
+        "2026-01-01T00:00:00Z",
+        "test",
+        tool_calls=[{"id": "toolu_1", "name": "Read", "input": long_input}],
+    )
+    detail = parse_line_detail(assistant_line)["uuid-in-assistant"]
+    assert "x" * 300 in detail["inputs_by_tool_call_id"]["toolu_1"]
+    # Claude's thinking is encrypted and useless; it is never surfaced.
+    assert detail["thinking"] is None
+
+    result_line = _make_tool_result_line("uuid-out", "2026-01-01T00:00:00Z", "toolu_1", "y" * 3000)
+    detail = parse_line_detail(result_line)["uuid-out-tool_result-toolu_1"]
+    assert detail["output"] == "y" * 3000
 
 
 def test_agent_tool_use_exposes_description_and_subagent_type() -> None:
@@ -585,9 +610,37 @@ def test_agent_tool_result_prefers_structured_over_trailer() -> None:
     ],
 )
 def test_assistant_message_auth_error_flag(text: str, expected: bool) -> None:
-    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", text)]
+    """The flag is read off Claude Code's own framework notices, which carry `<synthetic>`."""
+    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", text, model=_SYNTHETIC_MODEL)]
     events = parse_lines(lines)
     assert events[0]["is_auth_error"] is expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "When your customer has an **invalid api key** you should help them rotate it.",
+            id="agent-explaining-invalid-api-key",
+        ),
+        pytest.param(
+            'Handle the 401 case: {"type": "authentication_error"} means the key is wrong.',
+            id="agent-quoting-an-error-body",
+        ),
+        pytest.param("Check whether the OAuth token has expired before retrying.", id="agent-prose"),
+    ],
+)
+def test_a_real_reply_that_merely_talks_about_auth_is_not_an_auth_error(text: str) -> None:
+    """An agent helping with a credential says these things in ordinary prose.
+
+    Ungated, its own reply was painted as a failed turn with a "Sign in again" button under it
+    -- the more likely reading of the words, since a coding agent discusses auth far more often
+    than it fails it. The API-error check was already gated this way; this one was not.
+    """
+    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", text)]
+    events = parse_lines(lines)
+    assert events[0]["is_auth_error"] is False
+    assert events[0]["is_api_error"] is False
 
 
 def test_user_message_with_array_content() -> None:
@@ -798,23 +851,22 @@ def test_api_error_flagged_only_on_synthetic_messages() -> None:
     assert real_event["is_provider_fault"] is False
 
 
-def test_tool_output_preserves_tk_transition_past_truncation() -> None:
-    """A tk transition line (`Updated <id> -> <status>`) that falls past the
-    output truncation limit is preserved, so the progress view never loses a
-    step transition when a tk command is batched after verbose output."""
-    output = ("x" * 5000) + "\nUpdated s1 -> closed\n"
+def test_tk_transition_is_stamped_resident() -> None:
+    """A tk transition line (`Updated <id> -> <status>`) is stamped resident however deep
+    in the output it sits, so the progress view never loses a step transition when a tk
+    command is batched after verbose output (the raw output never reaches the wire)."""
+    output = ("x" * 5000) + "\nUpdated cod-step-s1 -> closed\n"
     lines = [_make_tool_result_line("uuid-trunc", "2026-01-01T00:00:02Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert events[0]["type"] == "tool_result"
-    assert "Updated s1 -> closed" in events[0]["output"]
-    # Still truncated overall (not the full verbose output).
-    assert len(events[0]["output"]) < len(output)
+    assert "Updated cod-step-s1 -> closed" in events[0]["tk_stamp"]
+    assert "output" not in events[0]
 
 
-def test_tool_output_preserves_tk_step_decoration_past_truncation() -> None:
-    """The `tk-step <id> title|summary: ...` decoration lines that a step's
-    start/close emit are preserved past the output truncation limit, so the
-    progress view can read titles and summaries straight from the transcript."""
+def test_tk_step_decoration_is_stamped_resident() -> None:
+    """The `tk-step <id> title|summary: ...` decoration lines that a step's start/close
+    emit are stamped resident, so the progress view can read titles and summaries straight
+    off the event."""
     output = (
         ("x" * 5000)
         + "\nUpdated cod-step-abcd -> closed\n"
@@ -823,18 +875,18 @@ def test_tool_output_preserves_tk_step_decoration_past_truncation() -> None:
     )
     lines = [_make_tool_result_line("uuid-dec", "2026-01-01T00:00:02Z", "toolu_1", output)]
     events = parse_lines(lines)
-    preserved = events[0]["output"]
-    assert "Updated cod-step-abcd -> closed" in preserved
-    assert "tk-step cod-step-abcd title: Register the new theme" in preserved
-    assert "tk-step cod-step-abcd summary: Wired the theme into the toggle." in preserved
-    assert len(preserved) < len(output)
+    stamped = events[0]["tk_stamp"]
+    assert "Updated cod-step-abcd -> closed" in stamped
+    assert "tk-step cod-step-abcd title: Register the new theme" in stamped
+    assert "tk-step cod-step-abcd summary: Wired the theme into the toggle." in stamped
+    assert len(stamped) < len(output)
 
 
-def test_tk_lifecycle_input_preview_is_not_truncated() -> None:
-    """tk create/start/close inputs survive past the 200-char input-preview
-    limit so the historical input fallback can recover titles and summaries.
-    Batched `S1=$(tk create ...)` forms and long `tk close <id> "<summary>"`
-    calls both qualify; a long non-tk command is still truncated."""
+def test_tk_lifecycle_command_is_stamped_resident() -> None:
+    """tk create/start/close commands are stamped resident whole so the historical input
+    fallback can recover titles and summaries without fetching the input. Batched
+    `S1=$(tk create ...)` forms and long `tk close <id> "<summary>"` calls both qualify;
+    a non-tk command carries no stamp."""
     batched_create = "\n".join(
         f'S{i}=$(tk create --step "Step number {i} with a fairly long descriptive title here")' for i in range(1, 6)
     )
@@ -853,25 +905,17 @@ def test_tk_lifecycle_input_preview_is_not_truncated() -> None:
         ),
     ]
     events = parse_lines(lines)
-    calls = {tc["tool_call_id"]: tc["input_preview"] for tc in events[0]["tool_calls"]}
-    # tk lifecycle inputs kept in full (no truncation marker, full length).
-    assert len(calls["toolu_create"]) > 203
-    assert not calls["toolu_create"].endswith("...")
-    assert "Step number 5" in calls["toolu_create"]
-    assert len(calls["toolu_close"]) > 203
-    assert "detailed summary" in calls["toolu_close"]
-    # Non-tk input still truncated at the 200-char limit.
-    assert calls["toolu_echo"].endswith("...")
-    assert len(calls["toolu_echo"]) <= 203
+    calls = {tc["tool_call_id"]: tc for tc in events[0]["tool_calls"]}
+    assert calls["toolu_create"]["tk_command"] == batched_create
+    assert calls["toolu_close"]["tk_command"] == long_close
+    assert "tk_command" not in calls["toolu_echo"]
 
 
-def test_tk_mentioned_in_quoted_arg_is_still_truncated() -> None:
-    """A long non-tk command that merely *mentions* `tk close ...` inside a
-    quoted argument is NOT a tk lifecycle call, so its input_preview is still
-    truncated. The shared shlex parser distinguishes this from a real tk
-    invocation; the previous substring regex wrongly exempted it."""
+def test_tk_mentioned_in_quoted_arg_is_not_stamped() -> None:
+    """A command that merely *mentions* `tk close ...` inside a quoted argument is NOT a tk
+    lifecycle call, so it carries no tk_command stamp. The shared shlex parser
+    distinguishes this from a real tk invocation."""
     mentions_tk = 'echo "remember to tk close cod-step-x once ' + ("the work is fully done " * 12).strip() + '"'
-    assert len(mentions_tk) > 200
     lines = [
         _make_assistant_line(
             "uuid-mention",
@@ -881,9 +925,7 @@ def test_tk_mentioned_in_quoted_arg_is_still_truncated() -> None:
         ),
     ]
     events = parse_lines(lines)
-    preview = events[0]["tool_calls"][0]["input_preview"]
-    assert preview.endswith("...")
-    assert len(preview) <= 203
+    assert "tk_command" not in events[0]["tool_calls"][0]
 
 
 @pytest.mark.parametrize("line_type", ["assistant", "user"])
@@ -944,18 +986,9 @@ _LONG_RATIONALE = "I need to read the eng-releases channel to summarize the depl
 _REQUEST_ID = "885711ec07bf47239d71294e1534330b"
 
 
-def _preserved_request_json(output: str) -> dict[str, Any]:
-    """Read the request back the way the card's raw-output fallback does: from the
-    first `{` to the end of the string."""
-    return json.loads(output[output.index("{") :])
-
-
-def test_permission_request_survives_output_truncation() -> None:
-    """A permission-request response longer than the output limit is preserved
-    whole: the parsed request rides on the event, and the object left in `output`
-    is still complete and still readable from its first `{`. Head truncation
-    alone cut it mid-object, which is what left the chat's permission card unable
-    to name a request that was still pending."""
+def test_permission_request_rides_the_event_however_long_the_output() -> None:
+    """The parsed request rides on the event whole, however large the response -- the raw
+    output never reaches the wire, so the structured field is the card's only source."""
     output = _make_permission_request_output(_LONG_RATIONALE)
     assert len(output) > 2000
     lines = [_make_tool_result_line("uuid-perm", "2026-01-01T00:00:00Z", "toolu_1", output)]
@@ -964,69 +997,80 @@ def test_permission_request_survives_output_truncation() -> None:
     assert request["request_id"] == _REQUEST_ID
     assert request["rationale"] == _LONG_RATIONALE
     assert request["payload"]["scope"] == "slack-api"
-    assert _preserved_request_json(events[0]["output"]) == request
-    assert len(events[0]["output"]) < len(output)
+    assert "output" not in events[0]
 
 
-def test_permission_request_preserved_when_not_last_on_stdout() -> None:
-    """The object's end comes from the JSON decoder, not from an assumption that
-    it runs to the end of stdout, so a command that printed more after the
-    response still yields a complete request -- and the preserved output still
-    ends at the object, so the card's first-`{` fallback parses."""
+def test_permission_request_parsed_when_not_last_on_stdout() -> None:
+    """The object's end comes from the JSON decoder, not from an assumption that it runs to
+    the end of stdout, so a command that printed more after the response still yields a
+    complete request."""
     output = _make_permission_request_output(_LONG_RATIONALE) + "\nrequest submitted, waiting for the user\n"
     lines = [_make_tool_result_line("uuid-tail", "2026-01-01T00:00:01Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert events[0]["permission_request"]["rationale"] == _LONG_RATIONALE
-    assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
 
 
 def test_permission_request_found_past_earlier_json_in_output() -> None:
-    """Candidate `{`s are walked rather than the first one trusted, so a batched
-    command that printed other JSON before the POST still yields the request --
-    and the preserved output leads with the request, not the earlier JSON."""
+    """Candidate `{`s are walked rather than the first one trusted, so a batched command
+    that printed other JSON before the POST still yields the request."""
     output = '{"rules": []}\n' + _make_permission_request_output(_LONG_RATIONALE)
     lines = [_make_tool_result_line("uuid-pre", "2026-01-01T00:00:02Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert events[0]["permission_request"]["rationale"] == _LONG_RATIONALE
-    assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
 
 
-def test_short_permission_request_output_is_attached_and_left_intact() -> None:
-    """A response that fits under the output limit is not rewritten, but the
-    parsed request is attached just the same, so the card reads one field
-    regardless of the response's size."""
+def test_short_permission_request_output_is_attached_too() -> None:
+    """A small response attaches the parsed request just the same, so the card reads one
+    field regardless of the response's size."""
     output = (
         '{"request_id":"fs-1","rationale":"write the report","request_type":"file-sharing",'
         '"payload":{"path":"/tmp/report","access":"WRITE"}}'
     )
     lines = [_make_tool_result_line("uuid-short", "2026-01-01T00:00:03Z", "toolu_1", output)]
     events = parse_lines(lines)
-    assert events[0]["output"] == output
     assert events[0]["permission_request"]["payload"]["access"] == "WRITE"
 
 
-def test_tk_decoration_survives_alongside_preserved_permission_request() -> None:
-    """When both land in one over-long output, both survive: the tk lines are
-    emitted ahead of the request object, so the progress view keeps its step
-    transitions and the object stays last and alone for the card."""
-    output = "Updated s1 -> closed\n" + _make_permission_request_output(_LONG_RATIONALE)
+def test_tk_decoration_stamps_alongside_a_permission_request() -> None:
+    """When both land in one output, both structured facts ride the event: the tk lines in
+    the stamp and the request in its own field."""
+    output = "Updated cod-step-s1 -> closed\n" + _make_permission_request_output(_LONG_RATIONALE)
     lines = [_make_tool_result_line("uuid-both", "2026-01-01T00:00:04Z", "toolu_1", output)]
     events = parse_lines(lines)
-    assert "Updated s1 -> closed" in events[0]["output"]
-    assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
+    assert "Updated cod-step-s1 -> closed" in events[0]["tk_stamp"]
+    assert events[0]["permission_request"]["request_id"] == _REQUEST_ID
 
 
-def test_ordinary_large_output_is_unaffected_by_request_preservation() -> None:
-    """Preservation must not widen the output limit for ordinary results: a long
-    output that merely contains JSON is still head-truncated and carries no
-    permission-request field."""
+def test_ordinary_large_output_carries_no_request_or_stamp() -> None:
+    """A long output that merely contains JSON carries no permission-request field and no
+    tk stamp -- just its size."""
     output = json.dumps({"items": [{"id": index, "name": "x" * 50} for index in range(100)]})
     assert len(output) > 2000
     lines = [_make_tool_result_line("uuid-big", "2026-01-01T00:00:05Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert "permission_request" not in events[0]
-    assert events[0]["output"].endswith("...")
-    assert len(events[0]["output"]) <= 2003
+    assert "tk_stamp" not in events[0]
+    assert events[0]["output_chars"] == len(output)
+
+
+def test_error_result_stamps_a_resident_snippet() -> None:
+    """A failed call stays glanceable without a fetch: its first line rides the event."""
+    output = "FileNotFoundError: no such file /x/y.py\n" + ("trace " * 800)
+    line = json.dumps(
+        {
+            "type": "user",
+            "uuid": "uuid-err",
+            "timestamp": "2026-01-01T00:00:06Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": output, "is_error": True}],
+            },
+        }
+    )
+    events = parse_lines([line])
+    assert events[0]["is_error"] is True
+    assert events[0]["error_snippet"] == "FileNotFoundError: no such file /x/y.py"
+    assert "output" not in events[0]
 
 
 def test_unrelated_request_id_json_is_not_a_permission_request() -> None:
@@ -1037,7 +1081,7 @@ def test_unrelated_request_id_json_is_not_a_permission_request() -> None:
     lines = [_make_tool_result_line("uuid-other", "2026-01-01T00:00:06Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert "permission_request" not in events[0]
-    assert events[0]["output"].endswith("...")
+    assert "output" not in events[0]
 
 
 def test_oversized_permission_request_falls_back_to_truncation() -> None:
@@ -1048,8 +1092,7 @@ def test_oversized_permission_request_falls_back_to_truncation() -> None:
     lines = [_make_tool_result_line("uuid-huge", "2026-01-01T00:00:07Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert "permission_request" not in events[0]
-    assert events[0]["output"].endswith("...")
-    assert len(events[0]["output"]) <= 2003
+    assert "output" not in events[0]
 
 
 def test_permission_request_probe_loop_is_capped() -> None:
@@ -1063,8 +1106,7 @@ def test_permission_request_probe_loop_is_capped() -> None:
     lines = [_make_tool_result_line("uuid-wall", "2026-01-01T00:00:08Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert "permission_request" not in events[0]
-    assert events[0]["output"].endswith("...")
-    assert len(events[0]["output"]) <= 2003
+    assert "output" not in events[0]
 
 
 def test_permission_request_within_probe_cap_still_parses() -> None:
@@ -1087,7 +1129,7 @@ def test_deeply_nested_json_probe_does_not_crash_parsing() -> None:
     lines = [_make_tool_result_line("uuid-deep", "2026-01-01T00:00:10Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert "permission_request" not in events[0]
-    assert events[0]["output"].endswith("...")
+    assert "output" not in events[0]
 
 
 def test_queued_command_attachment_carries_the_render_decision() -> None:

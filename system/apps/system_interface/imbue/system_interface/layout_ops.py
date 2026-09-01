@@ -409,33 +409,6 @@ def _service_name_from_url(url: Any) -> str | None:
     return None
 
 
-def _extract_agent_terminal_name(url: str) -> str | None:
-    """If ``url`` is the per-agent terminal URL, return the bound agent name.
-
-    The frontend's chat-panel "Open agent terminal" button mints iframes
-    pointed at the terminal service's origin with dispatch args
-    (``http://terminal.host-<hex>.localhost:8421/?arg=_&arg=agent&arg=<name>``;
-    the ttyd dispatch script attaches to the named tmux session). Detecting
-    this shape lets ``_resolve_ref`` project these panels as
-    ``chat-terminal:<name>`` -- a stable, predictable ref that mirrors
-    the ``chat:<name>`` convention -- instead of the opaque
-    ``terminal:<hash>`` it would otherwise emit. Anonymous terminals
-    minted via the "New terminal" button use ``arg=workdir`` instead and
-    fall through to the ``terminal:<hash>`` branch.
-    """
-    if _service_name_from_url(url) != _TERMINAL_SERVICE_NAME:
-        return None
-    # ``parse_qs`` returns repeated-key values in the order they appear in
-    # the query string, which is what the frontend's URL builder emits:
-    # ``arg=_&arg=agent&arg=<name>``.
-    query = urllib.parse.urlsplit(url).query
-    args = urllib.parse.parse_qs(query, keep_blank_values=True).get("arg", [])
-    if len(args) != 3 or args[0] != "_" or args[1] != "agent":
-        return None
-    name = args[2]
-    return name or None
-
-
 def _service_session_suffix(url: Any) -> str:
     """Return ``?session=<id>`` for a browser-fleet iframe URL, else ``""``.
 
@@ -523,15 +496,6 @@ def _resolve_ref(
         else:
             session_suffix = _service_session_suffix(url)
             ref = f"service:{service_name}{session_suffix}"
-    elif (
-        panel_type == "iframe"
-        and isinstance(url, str)
-        and (agent_terminal_name := _extract_agent_terminal_name(url)) is not None
-    ):
-        # Per-agent terminals get the symmetric ``chat-terminal:<name>``
-        # form so they're addressable by name (parallel to ``chat:<name>``)
-        # rather than only via the opaque ``terminal:<hash>``.
-        ref = f"chat-terminal:{agent_terminal_name}"
     elif panel_type == "iframe" and _service_name_from_url(url) == _TERMINAL_SERVICE_NAME:
         ref = f"terminal:{_short_hash(panel_id)}"
     elif panel_type == "iframe":
@@ -697,10 +661,13 @@ def layout_list(
     """Enumerate everything addressable in the workspace.
 
     Each entry: ``{ref, kind, display_name, is_open, is_running}``.
-    ``kind`` is one of ``service`` / ``agent`` / ``agent-terminal``. Every
-    agent yields both a ``chat:<name>`` (``agent``) entry and its
-    separately-addressable ``chat-terminal:<name>`` (``agent-terminal``)
-    entry.
+    ``kind`` is ``service`` or ``agent``.
+
+    An agent yields ONE entry, its ``chat:<name>``. It used to yield a second,
+    ``chat-terminal:<name>``, for the terminal opened as its own panel -- that panel no longer
+    exists. An agent's terminal is the back face of its chat, reached with the Terminal toggle
+    under the composer, so it is not separately addressable and listing it would offer a ref
+    that ``layout.py`` now rejects.
     """
     open_refs = _collect_open_refs(layout_json_path, agent_name_by_id)
     entries: list[dict[str, Any]] = []
@@ -730,22 +697,6 @@ def layout_list(
                 "kind": "agent",
                 "display_name": name,
                 "is_open": ref in open_refs,
-                "is_running": is_running,
-            }
-        )
-        # The agent-attached terminal is a separately-addressable singleton
-        # (one tmux session per agent name). Its ``is_open`` reflects
-        # whether a panel pointed at the terminal service's origin with
-        # ``?arg=_&arg=agent&arg=<name>`` is currently mounted;
-        # ``is_running`` mirrors the owning agent so a stopped agent's
-        # terminal is flagged as such.
-        terminal_ref = f"chat-terminal:{name}"
-        entries.append(
-            {
-                "ref": terminal_ref,
-                "kind": "agent-terminal",
-                "display_name": f"{name} terminal",
-                "is_open": terminal_ref in open_refs,
                 "is_running": is_running,
             }
         )

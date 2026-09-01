@@ -9,7 +9,6 @@ from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedT
 from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
 from imbue.system_interface.harnesses.antigravity.testing import load_captured_step
-from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 
 _BASE_STEP = DecodedStep(
     conv_id="c1",
@@ -58,7 +57,8 @@ def test_planner_response_becomes_assistant_message_with_thinking() -> None:
     assert len(events) == 1
     assert events[0]["type"] == "assistant_message"
     assert events[0]["text"] == "Here is the answer."
-    assert events[0]["thinking"] == "reasoning"
+    assert events[0]["has_thinking"] is True
+    assert "thinking" not in events[0]
     assert events[0]["tool_calls"] == []
     assert events[0]["event_id"] == "c1:5:assistant"
 
@@ -95,7 +95,8 @@ def test_terminal_tool_step_emits_matched_call_and_result() -> None:
     assert call["caption_label"] == "Running python3 showcase.py"
     # call and result share the tool_call_id so the frontend pairs them
     assert events[1]["tool_call_id"] == call["tool_call_id"] == "c1:16:toolcall"
-    assert events[1]["output"] == "hello output"
+    assert events[1]["output_chars"] == len("hello output")
+    assert "output" not in events[1]
     assert events[1]["is_error"] is False
 
 
@@ -174,27 +175,24 @@ def test_permission_request_call_renders_as_the_card() -> None:
     assert call["display"] == "permission_request"
 
 
-def test_permission_request_survives_output_truncation() -> None:
-    """A permission-request response longer than the output limit is preserved whole: the
-    parsed request rides on the event, and the object left in ``output`` is still complete
-    and still readable from its first ``{``. Head truncation alone cut it mid-object, which
-    is what left the chat's permission card unable to name a still-pending request."""
+def test_permission_request_rides_the_event_however_long_the_output() -> None:
+    """The permission-request object is lifted whole off the full output; the output itself
+    stays off the event (the payload-free wire contract)."""
     output = _make_permission_request_output("I need to read the eng-releases channel. " * 60)
-    assert len(output) > MAX_TOOL_OUTPUT_LENGTH
     events = parse_step(_named_tool_step(name="run_command", args="{}", result=output))
     result = next(event for event in events if event["type"] == "tool_result")
     assert result["permission_request"]["request_id"] == "885711ec07bf47239d71294e1534330b"
-    recovered = json.loads(result["output"][result["output"].index("{") :])
-    assert recovered["payload"]["scope"] == "slack-api"
+    assert "output" not in result
+    assert result["output_chars"] == len(output)
 
 
-def test_tk_step_decoration_past_the_cut_is_preserved() -> None:
-    """tk decoration lines are what the step timeline reads; head truncation alone dropped
-    any that fell past the limit, silently losing a step's structure."""
-    output = ("x" * MAX_TOOL_OUTPUT_LENGTH) + "\nUpdated abc123 -> closed"
+def test_tk_step_decoration_is_stamped_resident() -> None:
+    """tk decoration lines are what the step timeline reads; they are stamped resident so
+    the view never needs the raw output."""
+    output = ("x" * 5000) + "\nUpdated abc-step-1a2b -> closed"
     events = parse_step(_named_tool_step(name="run_command", args="{}", result=output))
     result = next(event for event in events if event["type"] == "tool_result")
-    assert "Updated abc123 -> closed" in result["output"]
+    assert "Updated abc-step-1a2b -> closed" in result["tk_stamp"]
 
 
 def test_a_terminal_tool_step_always_emits_a_result_even_with_no_output() -> None:
@@ -215,10 +213,10 @@ def test_a_terminal_tool_step_always_emits_a_result_even_with_no_output() -> Non
 
 def test_a_real_conversation_yields_the_tk_lines_the_progress_view_reads() -> None:
     """End-to-end guard for the timeline: the decoration lines must survive decoding, hiding
-    and truncation all the way into the emitted event."""
+    and the resident tk stamp all the way into the emitted event."""
     step_type, status, payload = load_captured_step("tk_create")
     events = parse_step(decode_step("conv", 3, step_type, status, payload))
     result = next(event for event in events if event["type"] == "tool_result")
-    assert "Created a7-step-7dlr: Run sequential test commands" in result["output"]
+    assert "Created a7-step-7dlr: Run sequential test commands" in result["tk_stamp"]
     call = next(event for event in events if event["type"] == "assistant_message")
     assert call["tool_calls"][0]["display"] == "hidden", "a pure tk call is a structural marker"

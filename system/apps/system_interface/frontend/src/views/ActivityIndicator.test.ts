@@ -14,7 +14,7 @@ function toolUse(ts: string, toolName: string, callId: string, input: string, ca
     source: "test",
     model: "test-model",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_preview: input, caption_label: caption }],
+    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_chars: input.length, caption_label: caption }],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
@@ -32,7 +32,7 @@ function toolResult(ts: string, callId: string): TranscriptEvent {
     source: "test",
     tool_call_id: callId,
     tool_name: "test-tool",
-    output: "result",
+    output_chars: "result".length,
     is_error: false,
   };
 }
