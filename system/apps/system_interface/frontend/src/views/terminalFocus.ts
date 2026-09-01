@@ -1,5 +1,6 @@
 /**
- * Host-driven focus for embedded ttyd terminals.
+ * Host-driven focus for embedded ttyd terminals -- one of the sanctioned cross-frame
+ * messaging boundaries (see test_embed_ratchets.py).
  *
  * The patched ttyd client (mngr_ttyd's vendored web client) never takes focus on its
  * own -- an embedded pane deciding to focus itself is how a background terminal
@@ -7,6 +8,13 @@
  * several times a second. Instead, the HOST decides when the user navigated to a
  * terminal (a tab activation, the chat card flipping to its terminal face) and asks the
  * client to focus via this message.
+ *
+ * The boundary's whole contract: OUTBOUND only (no listener is ever registered here),
+ * exactly one payload-free message shape, addressed only to iframes inside a
+ * workspace-owned container element the caller passes. The target origin is "*"
+ * because the message carries nothing a third party could use and the terminal's
+ * proxied origin is not statically knowable; a pane that is not the patched ttyd
+ * client ignores the type.
  */
 
 // Posted more than once because the iframe may still be mounting or its client still
