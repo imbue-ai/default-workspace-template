@@ -18,8 +18,8 @@ It is what the user is looking at *right now*, so you always work against an
 
 ## Design system: an optional convention for the default UI
 
-The shipped **default** UI is built from a small design system, mirroring the
-minds desktop client: styling lives in the markup as Tailwind utilities, and
+The shipped **default** UI is built from a small design system: styling lives
+in the markup as Tailwind utilities, and
 `src/style.css` is a token layer (a `--c-*` value table plus an `@theme inline`
 semantic-utility layer) with a small set of escape hatches. Details are in
 `system/apps/system_interface/frontend/style_guide.md`.
@@ -35,8 +35,6 @@ extending the default look, prefer it so it stays consistent:
   or new `.feature-*` CSS, and **reuse a shared primitive** (the `Button` and
   `Modal` components, `inputClass`/`badgeClass`, the `.spinner`) rather than
   hand-rolling another per-feature copy.
-- **Regardless of styling, keep interactive elements as real `<button>`/`<a>`**
-  (not clickable `<div>`s) — that's accessibility, not taste.
 - Adopting a token or primitive may shift a value slightly (a control taking the
   primitive's size); that's fine. Make the change deliberately and review the
   diff — the goal is a consistent system, not a pixel-identical render.

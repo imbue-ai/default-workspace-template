@@ -2,8 +2,8 @@ import type m from "mithril";
 
 // Split a component's incoming attrs into the keys the component consumes
 // and the passthrough HTML attributes (id, aria-*, data-*, event handlers,
-// ...) -- mirrors apps/minds' views/components/attrs.ts. The component names
-// its own keys; everything else lands on the root element.
+// ...). The component names its own keys; everything else lands on the root
+// element.
 //
 // `class`/`className` never pass through: components spread the passthrough
 // after their computed class, so a caller's class would silently replace the
