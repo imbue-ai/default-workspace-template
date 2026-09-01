@@ -1,6 +1,6 @@
 /* DESIGN SYSTEM (optional) — how the DEFAULT UI stays coherent.
  *
- * Styling lives in the MARKUP as Tailwind utilities (mirrors apps/minds); this
+ * Styling lives in the MARKUP as Tailwind utilities; this
  * file is the token layer plus a small set of escape hatches, not a stylesheet
  * of component classes. When you extend or maintain the default look:
  *   - Style in the view: utility class strings on the m(...) markup, colours
@@ -23,12 +23,12 @@
 
 /* Why explicit sources (`source(none)` + `@source`): the utility classes live in
    the TS views' class strings, so enumerating the sources keeps the scan
-   deterministic and off the rest of the tree (mirrors apps/minds). A class name
+   deterministic and off the rest of the tree. A class name
    assembled by string concatenation is NOT detected — safelist any such case
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
-/* Colour tokens — two layers (mirrors apps/minds).
+/* Colour tokens — two layers.
  * 1. VALUE LAYER (--c-*, on :root below): the raw colour for each token. The
  *    ONLY place a value lives, so a future theme swap (or dark mode) edits one
  *    table. Hand-written CSS in this file references these directly.
@@ -38,11 +38,11 @@
  *    generated utility resolve THROUGH var(--c-*) at runtime, so re-declaring
  *    a --c-* value on a subtree reskins it live.
  * The palette itself is the system interface's own (warm neutrals + green
- * accent) — only the architecture mirrors minds, not the values. */
+ * accent). */
 :root {
   --c-bg: #fafaf8;
   --c-bg-sidebar: #f3f2ef;
-  /* State fills are translucent (like minds) rather than opaque hexes so they
+  /* State fills are translucent rather than opaque hexes so they
      stack: a control's hover tint over an already-tinted row reads one step
      deeper, which is what keeps a hover-revealed control's own hover visible.
      Alphas keep the previous rendered strength over white (was #edecea /
@@ -107,8 +107,8 @@
   --width-message-column: 740px;
 }
 
-/* The colour-utility layer: clean semantic names over the --c-* values, in
- * minds' taxonomy — text (primary/secondary/faint/on-accent), borders
+/* The colour-utility layer: clean semantic names over the --c-* values —
+ * text (primary/secondary/faint/on-accent), borders
  * (default/subtle), surfaces, fills (hover/active state tints), accent, and
  * status. Utilities generate on demand: text-primary, bg-page, bg-fill-hover,
  * border-default, bg-danger-surface, ... */
@@ -165,23 +165,20 @@
      and CSS share one source with no per-step token to define or keep in sync.
      Off-grid strays stay raw as design-system-exceptions. */
   --spacing: 0.25rem;
-  /* Radius scale -- aligned with the minds design system (apps/minds). Names
-     mirror minds; sm/md/lg equal Tailwind's own defaults, so overriding them
+  /* Radius scale. sm/md/lg equal Tailwind's own defaults, so overriding them
      leaves the rounded-* utilities in the views at their stock values (only xl
      differs from Tailwind's). md is the default control radius; lg carries
      inputs, cards and modals; xl is reserved for the largest surfaces; pills
      and circles are Tailwind's stock rounded-full. The 12px pane/chrome frame
-     keeps its own --si-pane-radius (defined later in this file), matching
-     minds' CONTENT_CORNER_RADIUS window-frame exception. */
+     keeps its own --si-pane-radius (defined later in this file). */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 16px;
-  /* Elevation -- aligned with the minds design system (apps/minds): two box-shadow
-     steps. --shadow-raised is the subtle resting lift on interactive cards;
-     --shadow-overlay is the one soft floating shadow shared by everything above
-     the page -- menus, pickers, modals, tooltips, the lightbox (Figma
-     minds-elevation-1, two 8%-black drops). */
+  /* Elevation -- two box-shadow steps. --shadow-raised is the subtle resting
+     lift on interactive cards; --shadow-overlay is the one soft floating
+     shadow shared by everything above the page -- menus, pickers, modals,
+     tooltips, the lightbox. */
   --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
   --shadow-overlay: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);
 }
@@ -198,8 +195,8 @@ body {
 }
 
 /* Typography roles.
- * The role-based type system, declared as Tailwind utilities (mirrors
- * apps/minds) so they compose with variants, sort under the prettier plugin,
+ * The role-based type system, declared as Tailwind utilities so they
+ * compose with variants, sort under the prettier plugin,
  * and work inside @apply. Each bundles font-size + weight + line-height; COLOR
  * is orthogonal — compose with text-primary / text-secondary / text-faint.
  * Prefer these (or the --font-size-* / --weight-* tokens) over hand-set
@@ -239,7 +236,7 @@ body {
   letter-spacing: 0.05em;
 }
 
-/* Default border color (mirrors apps/minds). Tailwind v4 defaults un-colored
+/* Default border color. Tailwind v4 defaults un-colored
    borders/dividers to `currentColor`; default them to the standard border token
    instead so a bare `border` / `border-t` utility is legible without each call
    site naming a color. */

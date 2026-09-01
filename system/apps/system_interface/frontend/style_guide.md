@@ -6,10 +6,8 @@ alongside the base `docs/system/style_guide.md` (which covers Python/backend
 conventions and does not cover the frontend). This file governs the CSS and the
 **design system** — the single most important convention for UI work here.
 
-The architecture deliberately mirrors the minds desktop client
-(`mngr-internal/apps/minds/frontend`): styling lives in the markup as Tailwind
-utilities; `src/style.css` is a token file plus a small set of escape hatches,
-not a stylesheet of component classes.
+Styling lives in the markup as Tailwind utilities; `src/style.css` is a token
+file plus a small set of escape hatches, not a stylesheet of component classes.
 
 ---
 
@@ -36,9 +34,8 @@ say at the call site.
   needs them (`h-[34px]`), as deliberate exceptions.
 - **Radius/elevation**: `rounded-sm/md/lg/xl` (4/6/8/16) and `shadow-raised` /
   `shadow-overlay`.
-**Shared, reusable primitives live in `src/views/components/`** (mirroring the
-minds client's `views/components/`); feature screens and feature-specific
-helpers stay directly in `src/views/`. A primitive is a generic building block
+**Shared, reusable primitives live in `src/views/components/`**; feature
+screens and feature-specific helpers stay directly in `src/views/`. A primitive is a generic building block
 with no feature knowledge (the Button and Modal components, the input/badge
 recipes, the tooltip mechanism, the icon set); when a look starts being reused
 across features, it belongs here.
@@ -107,14 +104,6 @@ and nothing like the shipped default — build exactly that. Don't hold back,
 don't "correct" it back toward tokens, and don't treat anything here as a gate.
 Nothing enforces it; there is no ratchet.
 
-Two items are about correctness, not taste, so keep them even in a custom
-redesign:
-
-- **Interactive elements are real `<button>` / `<a>`**, never clickable
-  `<div>` / `<span>` — for accessibility and consistent keyboard/focus behaviour.
-- **Every interactive element gets `:hover`, `:focus-visible`, and `:disabled`
-  states.** The primitives carry these; reuse them.
-
 ### Review what you changed
 
 Adopting a token or a shared primitive can shift a value slightly — a control
@@ -122,15 +111,3 @@ picking up the primitive's size, say. That's expected and fine; the goal is a
 consistent system, not a pixel-identical one. Just make the change deliberately:
 review the diff — and, for a visible change, the running UI — to confirm you
 changed only what you intended.
-
----
-
-## Running and testing
-
-- Build: `npm run build` (must be clean). Lint: `npm run lint`. Test:
-  `npm run test`. Format: `npm run format` (prettier sorts the utility strings
-  via prettier-plugin-tailwindcss).
-- The wider isolation / preview / reveal rules for changing the live UI are owned
-  by the `update-system-interface` skill and
-  `.agents/shared/worker/references/type-system-interface.md`. Never edit the
-  served tree directly.
