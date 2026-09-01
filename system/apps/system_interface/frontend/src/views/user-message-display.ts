@@ -61,6 +61,9 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
       }
+      if (cls.kind === UserMessageKind.StatusMessage) {
+        return m("div", { class: "message-system-status" }, cls.body);
+      }
 
       const bubbleChildren: m.Children[] = [];
       if (visibleText.length > 0) {
@@ -78,7 +81,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
  * Render a `user_message` as a top-level row, or `null` when it produces no
  * user-rail row (hidden `/welcome`, or a skill expansion folded into its Skill
  * tool block). A `SystemChip` row gets the collapsed-system class; a genuine
- * prompt gets the user-bubble class.
+ * prompt gets the user-bubble class; a status message gets the status-row class.
  */
 export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
@@ -88,7 +91,11 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
     return null;
   }
   const messageClass =
-    kind === UserMessageKind.SystemChip ? "message message-system-collapsed" : "message message-user";
+    kind === UserMessageKind.SystemChip
+      ? "message message-system-collapsed"
+      : kind === UserMessageKind.StatusMessage
+        ? "message message-system-status-row"
+        : "message message-user";
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
   return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [m(StableUserMessage, { event })]);

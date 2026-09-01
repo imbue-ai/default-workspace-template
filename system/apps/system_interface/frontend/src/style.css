@@ -1516,6 +1516,24 @@ body {
   margin-bottom: 4px;
 }
 
+/* Subtle inline status messages (e.g. "Context was compacted") */
+.message-system-status-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.message-system-status {
+  font-size: 12px;
+  color: var(--color-text-faint);
+  background: var(--color-bg-hover);
+  border-radius: 12px;
+  padding: 3px 12px;
+  text-align: center;
+  user-select: none;
+}
+
 .message-system-collapsed .tool-call-block {
   max-width: 80%;
   margin: 0;

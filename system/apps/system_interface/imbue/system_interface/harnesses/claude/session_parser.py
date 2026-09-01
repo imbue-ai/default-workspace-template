@@ -22,7 +22,9 @@ from imbue.system_interface.harnesses.claude.tool_labels import shell_command
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
 from imbue.system_interface.harnesses.error_patterns import classify_api_error
 from imbue.system_interface.harnesses.error_patterns import is_provider_fault
+from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
+
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
 from imbue.system_interface.harnesses.tool_output import error_snippet
 from imbue.system_interface.harnesses.tool_output import find_permission_request
@@ -132,6 +134,23 @@ def _normalize_slash_command(text: str) -> str:
     args_match = _COMMAND_ARGS_PATTERN.search(text)
     args = args_match.group(1).strip() if args_match is not None else ""
     return f"{command} {args}".strip()
+
+
+_COMPACTION_COMMAND_RE = re.compile(r"^\s*<command-name>\s*/compact\s*</command-name>", re.DOTALL)
+
+
+def _is_compaction_command(raw_text: str, normalized_text: str) -> bool:
+    """True if text is Claude Code's /compact slash command invocation."""
+    trimmed_norm = normalized_text.strip()
+    if trimmed_norm == "/compact" or trimmed_norm.startswith("/compact "):
+        return True
+    return bool(_COMPACTION_COMMAND_RE.search(raw_text))
+
+
+def _is_compaction_output(raw_text: str) -> bool:
+    """True if text is Claude Code's local command output acknowledging compaction."""
+    return "<local-command-stdout>" in raw_text and "Compacted" in raw_text
+
 
 
 def extract_text_content(content: str | list[dict[str, Any]] | Any) -> str:
@@ -421,11 +440,34 @@ def _parse_user_message(
 
     # Emit user text message if there is actual user text
     if not _has_tool_results_only(content):
-        event_id = _make_event_id(uuid, "user")
-        if event_id not in existing_event_ids:
-            text = _normalize_slash_command(extract_text_content(content))
-            if text and not is_interrupt_sentinel_text(text):
-                event: dict[str, Any] = {
+        raw_text = extract_text_content(content)
+        text = _normalize_slash_command(raw_text)
+
+        if raw.get("isCompactSummary"):
+            event_id = _make_event_id(uuid, "context_compacted")
+            if event_id not in existing_event_ids:
+                event = {
+                    "timestamp": timestamp,
+                    "type": "user_message",
+                    "event_id": event_id,
+                    "source": _SOURCE,
+                    "role": "system",
+                    "content": "Context was compacted",
+                    "message_uuid": uuid,
+                    "display": DisplayKind.STATUS,
+                    "non_turn_tail": True,
+                }
+                if session_id is not None:
+                    event["session_id"] = session_id
+                existing_event_ids.add(event_id)
+                new_events.append((timestamp, event))
+        elif _is_compaction_command(raw_text, text) or _is_compaction_output(raw_text):
+            # Compaction command and output plumbing are not conversational turns.
+            pass
+        elif text and not is_interrupt_sentinel_text(text):
+            event_id = _make_event_id(uuid, "user")
+            if event_id not in existing_event_ids:
+                event = {
                     "timestamp": timestamp,
                     "type": "user_message",
                     "event_id": event_id,
@@ -435,8 +477,7 @@ def _parse_user_message(
                     "message_uuid": uuid,
                 }
                 # Claude Code's own markers (``isMeta`` for framework-injected,
-                # model-only messages; ``isCompactSummary`` for the post-compaction
-                # summary record) are read HERE and become the shared render decision
+                # model-only messages) are read HERE and become the shared render decision
                 # -- the raw flags never cross the wire. Explicit detectors win over
                 # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
                 # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
@@ -444,12 +485,12 @@ def _parse_user_message(
                     event,
                     text,
                     is_meta=bool(raw.get("isMeta")),
-                    is_compact_summary=bool(raw.get("isCompactSummary")),
                 )
                 if session_id is not None:
                     event["session_id"] = session_id
                 existing_event_ids.add(event_id)
                 new_events.append((timestamp, event))
+
 
     # Emit tool result events for any tool_result blocks
     if isinstance(content, list):

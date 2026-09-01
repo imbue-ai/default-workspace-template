@@ -77,9 +77,10 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // The backend's render decision (harnesses/events.DisplayKind, stamped by every
   // harness's parser off the shared detector table): how this message renders.
   // Absent = the baseline user bubble. The raw harness markers (claude's isMeta /
-  // isCompactSummary, sentinel tags) never reach the wire -- the decision does.
-  display?: "hidden" | "chip" | "skill_expansion" | "permission_resolution";
+  // sentinel tags) never reach the wire -- the decision does.
+  display?: "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "status";
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
+
   display_label?: string;
   // The body to display when a wrapper sentinel was stripped (a fleet nudge).
   display_body?: string;
