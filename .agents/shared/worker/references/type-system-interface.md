@@ -18,26 +18,15 @@ It is what the user is looking at *right now*, so you always work against an
 
 ## Design system: an optional convention for the default UI
 
-The shipped **default** UI is built from a small design system: styling lives
-in the markup as Tailwind utilities, and
-`src/style.css` is a token layer (a `--c-*` value table plus an `@theme inline`
-semantic-utility layer) with a small set of escape hatches. Details are in
+The shipped **default** UI is built from a small design system — Tailwind
+utilities in the markup over a token layer in `src/style.css`. When extending
+the default look, follow
 `system/apps/system_interface/frontend/style_guide.md`.
 
-It is a convention, **not** a rule, and it defers to the user. If the user asks
+It is a convention, **not** a rule, and it defers to the user: if the user asks
 for their interface restyled to their own taste — including something bold and
-unlike the default — build exactly that; don't hold back or steer it back toward
-tokens. Nothing enforces the system (there is no ratchet). When you *are*
-extending the default look, prefer it so it stays consistent:
-
-- **Style in the markup with the semantic utilities** (`text-primary`,
-  `bg-fill-hover`, `border-default`, the `type-*` roles) rather than raw values
-  or new `.feature-*` CSS, and **reuse a shared primitive** (the `Button` and
-  `Modal` components, `inputClass`/`badgeClass`, the `.spinner`) rather than
-  hand-rolling another per-feature copy.
-- Adopting a token or primitive may shift a value slightly (a control taking the
-  primitive's size); that's fine. Make the change deliberately and review the
-  diff — the goal is a consistent system, not a pixel-identical render.
+unlike the default — build exactly that; don't hold back or steer it back
+toward tokens. Nothing enforces the system.
 
 ## Running and testing
 
