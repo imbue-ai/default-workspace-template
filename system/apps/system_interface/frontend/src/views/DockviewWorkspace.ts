@@ -35,6 +35,7 @@ import {
 } from "dockview-core";
 import { ChatPanel } from "./ChatPanel";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
+import { requestTerminalFocus } from "./terminalFocus";
 import { IframePanel, IFRAME_PANEL_LIVE_KEY_ATTR, reloadIframesForService } from "./IframePanel";
 import {
   BROWSER_SERVICE_NAME,
@@ -45,6 +46,7 @@ import {
   initializeLiveLayer,
   liveKeyForPanel,
   liveKeyForRef,
+  liveSurfaceElement,
   liveSurfaceParams,
   reconcileLiveSurfaces,
   rekeyLiveSurface,
@@ -1778,6 +1780,21 @@ function retireLaunchersOnFocusLeaving(activePanelId: string): void {
       dockview.removePanel(panel);
     }
   }
+}
+
+/** Grant a just-activated terminal panel focus in its embedded ttyd client.
+ *
+ *  Clicking a terminal tab is the user navigating TO that terminal, so the host asks
+ *  the client to focus -- the client never takes focus on its own (see
+ *  ``terminalFocus.ts``). Scoped to the two terminal kinds so no other pane is sent
+ *  messages it did not ask for. */
+function focusTerminalOfActivatedPanel(activePanelId: string): void {
+  const params = panelParams.get(activePanelId);
+  if (params === undefined) return;
+  const kind = liveContentKind(params);
+  if (kind !== "terminal" && kind !== "agent-terminal") return;
+  const key = liveKeyForPanel(activePanelId, params);
+  requestTerminalFocus(key === null ? null : liveSurfaceElement(key));
 }
 
 /** Keep the dock from ever being empty: the view a user emptied gets a
@@ -5180,6 +5197,7 @@ function initializeDockview(parentElement: HTMLElement): void {
     if (panel === undefined || isApplyingLayout) return;
     touchPanelLastUsed(panel.id);
     retireLaunchersOnFocusLeaving(panel.id);
+    focusTerminalOfActivatedPanel(panel.id);
   });
 
   // Every agents_updated event may carry a new name pair for an agent some tab

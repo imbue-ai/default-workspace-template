@@ -52,6 +52,7 @@ import {
   type RowDescriptor,
 } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
+import { requestTerminalFocus } from "./terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
 
@@ -754,8 +755,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                   m("div", { class: "composer-under-bar-actions" }, [
                     m(TerminalViewToggle, {
                       on: isFlipped,
-                      onToggle: () => {
+                      onToggle: (event: Event) => {
                         isFlipped = !isFlipped;
+                        // Turning the card over is the user navigating TO the terminal,
+                        // so the host grants it focus -- the embedded ttyd client never
+                        // takes focus on its own (see terminalFocus.ts). Redraw first so
+                        // a first flip has mounted the back face before the ask.
+                        if (isFlipped) {
+                          const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
+                          m.redraw.sync();
+                          requestTerminalFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
+                        }
                       },
                     }),
                   ]),
