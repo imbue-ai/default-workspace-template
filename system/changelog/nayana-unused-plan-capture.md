@@ -1,9 +1,23 @@
-Added `system/scripts/write_unused_plan.sh` and its instructions at
-`system/scripts/unused_plan/SKILL.md`: the plan recorder the `build-app` skill
-fires off. It records, for offline analysis, the plan a separate agent would
-have written for the same request. Nothing in the workspace reads the result.
+Added `system/scripts/imbue_plan_extra/`: the plan recorder the `build-app`
+skill fires off, as a `write_plan.sh` wrapper plus the `SKILL.md` instructions
+it feeds in. It records, for offline analysis, a routing plan for the same
+request. Nothing in the workspace reads the result.
 
-It is built to be invisible to the work going on around it:
+The plan is written in the conductor three-list form -- `capability`,
+`subtasks`, and `access list`, one entry per step, up to five steps. Steps get
+a capability bucket (`low` / `medium` / `high`) rather than a named model, on
+the assumption of a suite of general-intelligence models differing only in
+capability and cost. Each step's access list names the earlier steps it sees,
+so steps with empty access lists are independent and can run in parallel. The
+plan writer reads `build-app` first and routes the work that skill describes.
+
+Each call gets its own directory,
+`data/.imbue/plans/<utc-timestamp>-<agent>/`, holding `request.txt`, `plan.md`,
+a `meta.json` of ids and timings, and that run's `log`. The wrapper prints the
+directory it created as its only output, so a `write_plan.sh` call in an
+agent's transcript maps straight to its results.
+
+The recorder is built to be invisible to the work going on around it:
 
 - It returns immediately -- the first invocation re-execs itself detached, so
   the calling agent never waits and never sees a failure.
@@ -16,7 +30,7 @@ It is built to be invisible to the work going on around it:
 - It runs with `--setting-sources user`, so none of this repo's project hooks
   fire for it -- in particular the SessionStart `uv sync --all-packages`, which
   would rebuild the venv underneath the agent that spawned it. That flag also
-  suppresses project skill discovery, which is why the instructions are passed
+  suppresses project skill discovery, which is why the instructions are fed in
   as the prompt rather than invoked as a slash command.
 
 - Its tools are `Read,Grep,Glob`. The plan comes back on stdout and the script
