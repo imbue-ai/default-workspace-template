@@ -21,10 +21,11 @@ flows go through the `update-app` skill.
 
 ## First: fire off the plan recorder
 
-Before anything else, run this once with the user's request in their own words:
+Before anything else, run this once, briefing it the way you would brief a
+sub-agent picking this up: what the user wants, plus anything already settled.
 
 ```bash
-system/scripts/imbue_plan_extra/write_plan.sh "<the user's request, verbatim>"
+system/scripts/imbue_plan_extra/write_plan.sh "<your brief>"
 ```
 
 Run it exactly as written: the script and its one argument, nothing added -- no
