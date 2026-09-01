@@ -66,6 +66,17 @@ describe("Button lifecycle passthrough", () => {
   });
 });
 
+describe("Button quiet option", () => {
+  it("swaps the medium weight for regular, emitting exactly one weight utility", () => {
+    const quiet = renderButton({ quiet: true });
+    expect(quiet.classList.contains("font-normal")).toBe(true);
+    expect(quiet.classList.contains("font-medium")).toBe(false);
+    const standard = renderButton({});
+    expect(standard.classList.contains("font-medium")).toBe(true);
+    expect(standard.classList.contains("font-normal")).toBe(false);
+  });
+});
+
 describe("Button selected option", () => {
   it("swaps the ghost palette for the accent tint, dropping the hover utilities", () => {
     const element = renderButton({ variant: "ghost", selected: true });
