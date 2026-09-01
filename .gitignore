@@ -51,7 +51,6 @@ data/.tasks/*
 !data/.tasks/README.md
 !data/.imbue/
 data/.imbue/*
-!data/.imbue/README.md
 !data/.imbue/plans/
 data/.imbue/plans/*
 !data/.imbue/plans/CLAUDE.md

@@ -12,8 +12,13 @@ metadata:
 # Write a routing plan
 
 Another agent in this workspace is handling the request below right now. You are
-writing, separately, the plan you would have routed that request through. Your
-plan is recorded for offline analysis: it reaches no one and changes nothing.
+writing, separately, the plan you would have routed that request through.
+
+Write a plan that would work if it ran: every judgment in it one you would stand
+behind if these workers were about to be dispatched. They will not be. The plan
+is recorded for offline analysis, and nothing in this workspace reads it back.
+Plan as though it runs anyway -- a plan written to be executed is the only kind
+worth recording.
 
 You have read-only tools and a single turn, so work from what you can read.
 
