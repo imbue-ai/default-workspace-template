@@ -35,15 +35,16 @@ import {
   getProtoAgents,
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
-import { openAgentAuth } from "../models/AgentAuth";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { PoweredByCredit } from "./PoweredByCredit";
 import { ModelBar } from "./ModelBar";
-import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
+import { AgentTerminalPanel } from "./AgentTerminalPanel";
+import { chatFlipCard } from "./chat-flip";
+import { TerminalViewToggle } from "./TerminalViewToggle";
+import { buildAgentTerminalUrl, getTerminalUrl } from "./DockviewWorkspace";
 import {
   buildConversationRows,
   MESSAGE_LIST_CLASS,
@@ -51,6 +52,7 @@ import {
   type RowDescriptor,
 } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
+import { requestTerminalFocus } from "./terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
 import { Button } from "./components/Button";
@@ -71,14 +73,20 @@ function getAgentTerminalUrl(agentId: string): string {
   return buildAgentTerminalUrl(agent.name);
 }
 
-function openAgentTerminalTab(agentId: string): void {
-  const agent = getAgentById(agentId);
-  const title = agent?.name ? `${agent.name} terminal` : "agent terminal";
-  openIframeTabForAgent(agentId, getAgentTerminalUrl(agentId), title);
-}
-
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
+}
+
+/** Whether creation is genuinely still in flight, as opposed to merely having a proto entry.
+ *
+ *  The proto list is rebuilt from broadcasts and can still name an agent that has since been
+ *  registered -- a `proto_agent_created` for a finished creation, delivered late. Asking
+ *  `isProtoAgent` alone is therefore not the same question, and the two can disagree: the build
+ *  log stops as soon as the agent registers, while the proto entry clears later. A branch
+ *  keying on the proto entry alone shows a chat with an empty transcript and no composer in
+ *  between. Every branch asks THIS instead, so they cannot drift apart. */
+function isStillBeingCreated(agentId: string): boolean {
+  return isProtoAgent(agentId) && getAgentById(agentId) === undefined;
 }
 
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
@@ -150,6 +158,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // transcript rows; the overlay is shown while the depth is positive.
   let dragDepth = 0;
   let isFileDragActive = false;
+  // Which face of the card is showing, and whether the back one has ever been built. Per-panel
+  // rather than global: two chats open side by side turn over independently.
+  let isFlipped = false;
+  let hasEverFlipped = false;
 
   function isFileDrag(event: DragEvent): boolean {
     const types = event.dataTransfer?.types;
@@ -201,28 +213,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     event.preventDefault();
     uploadFilesToComposer(agentId, event.dataTransfer?.files);
     m.redraw();
-  }
-
-  // Snapshot-load path: SSE only carries events emitted after subscription,
-  // so an auth-error that happened before the user opened the panel (e.g.
-  // the auto-`/welcome` failing during fresh mind creation) wouldn't open
-  // the modal otherwise. Walking back to the last assistant_message means
-  // an already-recovered agent (whose history contains old auth errors
-  // but has since produced healthy replies) does not open it on reload --
-  // only an agent whose current state is broken does. The modal itself is
-  // a single app-level instance driven by global auth state (see
-  // models/ClaudeAuth.ts), so this just flips that shared flag.
-  function checkLatestAssistantForAuthError(agentId: string): void {
-    const events = getEventsForAgent(agentId);
-    for (let i = events.length - 1; i >= 0; i--) {
-      const event = events[i];
-      if (event.type === "assistant_message") {
-        if (event.is_auth_error === true) {
-          openAgentAuth(agentId);
-        }
-        return;
-      }
-    }
   }
 
   // Screen capture state (shown when agent has no conversation)
@@ -357,9 +347,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
       // snapshot replace in fetchEvents cannot drop a live event on first load.
       await loadSnapshotWithStream(agentId);
-      if (agentId === currentAgentId) {
-        checkLatestAssistantForAuthError(agentId);
-      }
     } catch (error) {
       // Where the load got to is recorded against the agent by `fetchEvents` and
       // read back in the view, so that a later attempt -- from any caller,
@@ -464,7 +451,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const isRegisteredAgent = getAgentById(agentId) !== undefined;
 
     // If this agent is still being created, show the build log
-    if (isProtoAgent(agentId) && !isRegisteredAgent) {
+    if (isStillBeingCreated(agentId)) {
       return renderBuildLog(agentId);
     }
 
@@ -523,9 +510,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // Read per-render rather than latched at load time, so the panel leaves the
     // error state as soon as any reload succeeds -- the tab's Refresh or the
     // stream's background reconnect, neither of which goes through loadAgent.
-    // Reading the phase (not just the error) is what keeps those two from
-    // falling through to "No events yet for this agent." while they are in
-    // flight, which is a lie the panel used to tell for the whole of a retry.
+    // The phase, not just the error: a load that is in flight -- including a retry -- must not
+    // fall through to "No events yet for this agent.", which claims an answer it does not have.
     const load = getConversationLoadState(agentId);
     if (hasNothingToShow && load.phase === "loading") {
       return m(
@@ -670,7 +656,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
       const content = isSlotClaimed("conversation-content") ? null : renderMessages(agentId);
 
-      const acceptsFileDrops = !isProtoAgent(agentId) && !isConversationNotFound(agentId);
+      const acceptsFileDrops = !isStillBeingCreated(agentId) && !isConversationNotFound(agentId);
+
+      // The two renderings of one conversation. `hasEverFlipped` is STICKY and separate from
+      // `isFlipped` on purpose: mithril destroys a vnode that becomes null, and destroying the
+      // back face takes its iframe out of the document -- which ends the ttyd session rather
+      // than hiding it. So the back face mounts on the first flip and stays mounted forever;
+      // only the transform changes after that.
+      if (isFlipped) hasEverFlipped = true;
 
       return m(
         "div",
@@ -704,100 +697,112 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 ),
               )
             : null,
-          // The transcript area: the scroll container (native scrolling, native
-          // scrollbar hidden), the custom overlay scrollbar, and the
-          // loading-overlay for when the viewport sits over a virtual end spacer.
-          m("div", { class: "chat-transcript-area relative flex-1 min-h-0 flex flex-col" }, [
-            m(
-              "main",
-              {
-                class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-8 py-6",
-                // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
-                // works; the engine's listeners classify the input source.
-                tabindex: 0,
-                oncreate: (mainVnode: m.VnodeDOM) => {
-                  engine.afterRender(mainVnode.dom as HTMLElement);
-                },
-                onupdate: (mainVnode: m.VnodeDOM) => {
-                  engine.afterRender(mainVnode.dom as HTMLElement);
-                },
-              },
-              content,
-            ),
-            m(TranscriptScrollbar, { engine }),
-            // While the viewport is over a virtual end spacer (e.g. the scrollbar
-            // was dragged into not-yet-loaded history), overlay a loading indicator
-            // so the user never sees a blank area. pointer-events:none so it never
-            // blocks scroll.
-            engine.isViewportInSpacer()
-              ? m(
-                  "div",
+          chatFlipCard({
+            flipped: isFlipped,
+            everFlipped: hasEverFlipped,
+            back: () =>
+              m(AgentTerminalPanel, {
+                agentId,
+                url: getAgentTerminalUrl(agentId),
+                title: `${getAgentById(agentId)?.name ?? "agent"} terminal`,
+              }),
+            front: [
+              // The transcript area: the scroll container (native scrolling, native
+              // scrollbar hidden), the custom overlay scrollbar, and the
+              // loading-overlay for when the viewport sits over a virtual end spacer.
+              m("div", { class: "chat-transcript-area relative flex-1 min-h-0 flex flex-col" }, [
+                m(
+                  "main",
                   {
-                    class:
-                      "message-list-window-loading absolute inset-0 flex items-center justify-center p-6 pointer-events-none",
+                    class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-8 py-6",
+                    // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
+                    // works; the engine's listeners classify the input source.
+                    tabindex: 0,
+                    oncreate: (mainVnode: m.VnodeDOM) => {
+                      engine.afterRender(mainVnode.dom as HTMLElement);
+                    },
+                    onupdate: (mainVnode: m.VnodeDOM) => {
+                      engine.afterRender(mainVnode.dom as HTMLElement);
+                    },
                   },
-                  m("p", { class: "text-secondary" }, "Loading messages..."),
-                )
-              : null,
-          ]),
-          // Only show message input when not in proto-agent mode
-          isProtoAgent(agentId)
+                  content,
+                ),
+                m(TranscriptScrollbar, { engine }),
+                // While the viewport is over a virtual end spacer (e.g. the scrollbar
+                // was dragged into not-yet-loaded history), overlay a loading indicator
+                // so the user never sees a blank area. pointer-events:none so it never
+                // blocks scroll.
+                engine.isViewportInSpacer()
+                  ? m(
+                      "div",
+                      {
+                        class:
+                          "message-list-window-loading absolute inset-0 flex items-center justify-center p-6 pointer-events-none",
+                      },
+                      m("p", { class: "text-secondary" }, "Loading messages..."),
+                    )
+                  : null,
+              ]),
+              // Only while the agent is genuinely still being created -- the same condition the
+              // build log uses, so the composer arrives with the transcript rather than after it.
+              isStillBeingCreated(agentId)
+                ? null
+                : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
+                    m(EmptySlot, { name: "conversation-before-input" }),
+                    isConversationNotFound(agentId)
+                      ? null
+                      : m(ActivityIndicator, {
+                          agentId,
+                          events: getEventsForAgent(agentId),
+                        }),
+                    m(MessageInput, { agentId }),
+                    // The under-bar is a sibling of the whole flip card, not part of this face: on
+                    // a face it would rotate away with the face its own switch turns, and the flip
+                    // would be one-way.
+                  ]),
+            ],
+          }),
+          // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
+          // the flip would be one-way. Everything here describes the conversation rather than
+          // either rendering of it, which is the same reason it belongs to neither face.
+          // Carries the bottom gutter the footer used to supply, so the 24px sits under the
+          // under-bar rather than between the composer and it.
+          isStillBeingCreated(agentId)
             ? null
-            : m("footer", { class: "app-footer shrink-0 bg-chat px-8 pb-6" }, [
-                m(EmptySlot, { name: "conversation-before-input" }),
-                isConversationNotFound(agentId)
-                  ? null
-                  : m(ActivityIndicator, {
-                      agentId,
-                      events: getEventsForAgent(agentId),
-                    }),
-                m(MessageInput, { agentId }),
-                // Below the chat input: the original flex row -- model bar on the left, the
-                // agent-terminal + harness-auth actions right-aligned. The "Powered by" credit is
-                // rendered last as a centered overlay (absolute, pointer-events:none) so it sits
-                // in the middle without reshaping the row. Shared font, no background of its own.
+            : m(
+                "div",
+                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-6" },
                 m(
                   "div",
                   {
                     // Same max-width as the composer card above it; relative as
-                    // the containing block for the centered credit overlay.
+                    // the containing block for centered overlays.
                     class:
                       "composer-under-bar relative mx-auto mt-1 flex w-full " +
                       "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
                   },
                   [
                     m(ModelBar, { agentId }),
-                    // `quiet`: the under-bar reads as one row of inline text
-                    // actions, so these match the model bar's regular weight.
                     m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
-                      m(
-                        Button,
-                        {
-                          variant: "ghost",
-                          sm: true,
-                          quiet: true,
-                          onclick: () => openAgentTerminalTab(agentId),
+                      m(TerminalViewToggle, {
+                        on: isFlipped,
+                        onToggle: (event: Event) => {
+                          isFlipped = !isFlipped;
+                          // Turning the card over is the user navigating TO the terminal,
+                          // so the host grants it focus -- the embedded ttyd client never
+                          // takes focus on its own (see terminalFocus.ts). Redraw first so
+                          // a first flip has mounted the back face before the ask.
+                          if (isFlipped) {
+                            const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
+                            m.redraw.sync();
+                            requestTerminalFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
+                          }
                         },
-                        "Open agent terminal",
-                      ),
-                      // Persistent entry to the sign-in modal so the user can switch
-                      // auth modes without waiting for an auth error.
-                      m(
-                        Button,
-                        {
-                          variant: "ghost",
-                          sm: true,
-                          quiet: true,
-                          onclick: () => openAgentAuth(agentId),
-                        },
-                        "Agent auth",
-                      ),
+                      }),
                     ]),
-                    // The centered harness credit (may render nothing), overlaid on the bar.
-                    m(PoweredByCredit, { agentId }),
                   ],
                 ),
-              ]),
+              ),
         ],
       );
     },

@@ -13,34 +13,9 @@ TOOL_RUNNING, which the client renders as the tool's own verb ("Running", "Web s
 labels each ``tool_call`` event already carries; plain reasoning reads THINKING.
 """
 
-from collections.abc import Sequence
-from typing import Any
-
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import is_transcript_tail_stale
-from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
-from imbue.system_interface.harnesses.events import SpecialEventKind
-
-
-@pure
-def turn_open(events: Sequence[dict[str, Any]]) -> bool:
-    """True iff the codex transcript's most recent turn boundary is an open turn.
-
-    Walks from the end for the latest turn-lifecycle marker, which codex emits as a ``special``
-    event: ``turn_started`` -> the turn is in progress (True); ``turn_completed`` / ``turn_aborted``
-    -> the turn ended (False); no marker at all -> False (not in a turn). Every other event
-    (assistant messages, tool calls/results) is skipped, so a turn that is mid-tool still reads open.
-    """
-    for event in reversed(list(events)):
-        if event.get("type") != SPECIAL_EVENT_TYPE:
-            continue
-        kind = event.get("kind")
-        if kind == SpecialEventKind.TURN_STARTED.value:
-            return True
-        if kind in (SpecialEventKind.TURN_COMPLETED.value, SpecialEventKind.TURN_ABORTED.value):
-            return False
-    return False
 
 
 @pure
@@ -53,7 +28,7 @@ def derive(
 ) -> ActivityState:
     """Derive an ``ActivityState`` for a codex agent from the transcript turn latch.
 
-    ``turn_open`` is :func:`turn_open`. ``tail_event_at`` / ``process_started_at`` feed
+    ``turn_open`` is the tracker's folded turn latch (the latest turn marker opened a turn). ``tail_event_at`` / ``process_started_at`` feed
     :func:`activity_state.is_transcript_tail_stale` (using the ``codex_process_started`` marker) so a
     turn abandoned by a prior process (a mid-turn restart that left an unclosed ``task_started``) reads
     IDLE rather than pinned "Thinking...".

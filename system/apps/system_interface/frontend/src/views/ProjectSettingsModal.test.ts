@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 // Mithril captures `requestAnimationFrame` at import time so it can schedule
 // redraws. Vitest's default (node) environment has no such global, which
 // makes the `m.redraw()` calls inside the modal's event handlers throw.
-// Provide a polyfill before any import is evaluated, as ClaudeLoginModal's
-// test does for the same reason.
+// Provide a polyfill before any import is evaluated, as other modal tests in
+// this directory do for the same reason.
 vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
@@ -37,11 +37,11 @@ type VnodeLike = {
   tag?: unknown;
 };
 
-/** Depth-first walk over a rendered Mithril vnode tree (mirrors
- *  ClaudeLoginModal.test.ts's helper, which every modal test in this
- *  directory that inspects a tree without mounting it re-implements). The
- *  modal's footer buttons ride the shared Modal shell's `actions` prop rather
- *  than its children, so the walk descends into that slot too. */
+/** Depth-first walk over a rendered Mithril vnode tree (the helper every
+ *  modal test in this directory that inspects a tree without mounting it
+ *  re-implements). The modal's footer buttons ride the shared Modal shell's
+ *  `actions` prop rather than its children, so the walk descends into that
+ *  slot too. */
 function* walk(node: unknown): Generator<VnodeLike> {
   if (Array.isArray(node)) {
     for (const child of node) yield* walk(child);

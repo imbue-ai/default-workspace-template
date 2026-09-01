@@ -37,6 +37,10 @@ const DETAILS_CLASS = "tool-call-details hidden border-t group-[.tool-call-block
 
 const PANE_CLASS = "px-3 py-2";
 
+/** A pane's deferred-payload state: events are payload-free on the wire, so a
+ *  pane may still be fetching or reference a payload the backend no longer holds. */
+export type PayloadState = "loaded" | "loading" | "unavailable";
+
 /** One monospace pane of the expanded body. Color inherits, so the error tint
  *  sits on the pane and reaches the code text. */
 function renderPane(marker: string, text: string, extra = ""): m.Vnode {
@@ -51,6 +55,24 @@ function renderPane(marker: string, text: string, extra = ""): m.Vnode {
       ),
     ),
   ]);
+}
+
+/** A pane that isn't loaded yet renders as a quiet italic note instead of code. */
+function renderPaneNote(marker: string, state: "loading" | "unavailable", extra = ""): m.Vnode {
+  return m(
+    "div",
+    {
+      class:
+        `${marker} tool-call-payload-note ${PANE_CLASS} text-(length:--font-size-helper) italic text-secondary ${extra}`.trim(),
+    },
+    state === "loading" ? "Loading…" : "No longer available",
+  );
+}
+
+/** One section of the expanded body, or nothing (loaded with no text). */
+function renderSection(marker: string, text: string, state: PayloadState, extra = ""): m.Vnode | null {
+  if (state !== "loaded") return renderPaneNote(marker, state, extra);
+  return text ? renderPane(marker, text, extra) : null;
 }
 
 /**
@@ -68,9 +90,38 @@ export function renderToolBlock(options: {
    *  open state survives the row unmounting and remounting (virtualization)
    *  or re-rendering (streaming). Omitted: open state is this-mount-only. */
   expansionKey?: string;
+  /** A failed call's stamped first line -- shown under the collapsed header so
+   *  the failure stays glanceable without expanding (or fetching) anything. */
+  errorSnippet?: string;
+  /** Deferred-payload states; default "loaded" (the text is already in hand). */
+  inputState?: PayloadState;
+  outputState?: PayloadState;
+  /** Called when the header toggles the block open -- the hook for kicking off
+   *  on-demand payload fetches. */
+  onExpand?: () => void;
 }): m.Vnode {
-  const { headerText, inputText = "", outputText = "", isError = false, extra = "", expansionKey } = options;
+  const {
+    headerText,
+    inputText = "",
+    outputText = "",
+    isError = false,
+    extra = "",
+    expansionKey,
+    errorSnippet,
+    inputState = "loaded",
+    outputState = "loaded",
+    onExpand,
+  } = options;
   const startExpanded = expansionKey !== undefined && isBlockExpanded(expansionKey);
+  const inputSection = renderSection("tool-call-input", inputText, inputState);
+  const outputSection = renderSection(
+    isError ? "tool-call-output tool-call-output--error" : "tool-call-output",
+    outputText,
+    outputState,
+    // The hairline between the panes exists exactly when both do --
+    // resolved here instead of by a sibling-combinator rule.
+    `${inputSection ? "border-t border-subtle " : ""}${isError ? "text-danger" : ""}`.trim(),
+  );
   return m("div", { class: `${BLOCK_CLASS}${startExpanded ? " tool-call-block--expanded" : ""} ${extra}`.trim() }, [
     m(
       "div",
@@ -85,22 +136,26 @@ export function renderToolBlock(options: {
             if (expansionKey !== undefined) {
               setBlockExpanded(expansionKey, isNowExpanded);
             }
+            if (isNowExpanded) {
+              onExpand?.();
+            }
           }
         },
       },
       [m("span", { class: CHEVRON_CLASS }, "▸"), m("span", headerText)],
     ),
-    m("div", { class: DETAILS_CLASS }, [
-      inputText ? renderPane("tool-call-input", inputText) : null,
-      outputText
-        ? renderPane(
-            isError ? "tool-call-output tool-call-output--error" : "tool-call-output",
-            outputText,
-            // The hairline between the panes exists exactly when both do --
-            // resolved here instead of by a sibling-combinator rule.
-            `${inputText ? "border-t border-subtle " : ""}${isError ? "text-danger" : ""}`.trim(),
-          )
-        : null,
-    ]),
+    // A failed call stays glanceable without a fetch: its stamped first line
+    // rides the event and shows under the collapsed header.
+    isError && errorSnippet
+      ? m(
+          "div",
+          {
+            class:
+              "tool-call-error-snippet border-t px-2.5 py-[3px] font-mono text-(length:--font-size-helper) text-danger",
+          },
+          errorSnippet,
+        )
+      : null,
+    inputSection || outputSection ? m("div", { class: DETAILS_CLASS }, [inputSection, outputSection]) : null,
   ]);
 }

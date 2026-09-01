@@ -35,6 +35,7 @@ import {
 } from "dockview-core";
 import { ChatPanel } from "./ChatPanel";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
+import { requestTerminalFocus } from "./terminalFocus";
 import { IframePanel, IFRAME_PANEL_LIVE_KEY_ATTR, reloadIframesForService } from "./IframePanel";
 import {
   BROWSER_SERVICE_NAME,
@@ -45,6 +46,7 @@ import {
   initializeLiveLayer,
   liveKeyForPanel,
   liveKeyForRef,
+  liveSurfaceElement,
   liveSurfaceParams,
   reconcileLiveSurfaces,
   rekeyLiveSurface,
@@ -112,7 +114,6 @@ import {
   type MemberLocationListener,
   type MemberTitleListener,
   type ProjectSyncEvent,
-  type ChatHarness,
   type ProjectSyncListener,
   type TerminalSessionInfo,
   type TerminalSessionListener,
@@ -133,6 +134,13 @@ import {
   setMemberTitle,
 } from "../models/MemberTitles";
 import { createBrowser } from "../models/Browsers";
+import {
+  areAccountsLoaded,
+  getAccounts,
+  getSelectedAccount,
+  loadAccounts,
+  openProviderChooser,
+} from "../models/Providers";
 import { appServiceDisplayName, browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
 import {
   applyMemberLastUsedChange,
@@ -248,10 +256,10 @@ export function getTerminalUrl(): string {
 /** Build the iframe URL that attaches a terminal to ``agentName``'s tmux
  *  session. The ttyd dispatch reads ``$1`` ("_") then ``$2`` ("agent")
  *  then ``$3`` (the agent name), so the args are written in that order.
- *  Used by the chat panel's "Open agent terminal" button and the
- *  agent-driven ``chat-terminal:<name>`` ref so both surfaces agree on
- *  the canonical URL (which the server's ``_extract_agent_terminal_name``
- *  parses back out when building refs from persisted layout state). */
+ *
+ *  One caller: the BACK FACE of that agent's chat. A terminal is reachable only there, because
+ *  two live ttyd clients on one tmux window keep resizing it out from under each other --
+ *  `window-size latest` means the most recent attach wins. */
 export function buildAgentTerminalUrl(agentName: string): string {
   const baseUrl = getTerminalUrl();
   const separator = baseUrl.includes("?") ? "&" : "?";
@@ -1775,6 +1783,21 @@ function retireLaunchersOnFocusLeaving(activePanelId: string): void {
   }
 }
 
+/** Grant a just-activated terminal panel focus in its embedded ttyd client.
+ *
+ *  Clicking a terminal tab is the user navigating TO that terminal, so the host asks
+ *  the client to focus -- the client never takes focus on its own (see
+ *  ``terminalFocus.ts``). Scoped to the two terminal kinds so no other pane is sent
+ *  messages it did not ask for. */
+function focusTerminalOfActivatedPanel(activePanelId: string): void {
+  const params = panelParams.get(activePanelId);
+  if (params === undefined) return;
+  const kind = liveContentKind(params);
+  if (kind !== "terminal" && kind !== "agent-terminal") return;
+  const key = liveKeyForPanel(activePanelId, params);
+  requestTerminalFocus(key === null ? null : liveSurfaceElement(key));
+}
+
 /** Keep the dock from ever being empty: the view a user emptied gets a
  *  launcher, which is the design's empty state. Suppressed while a layout is
  *  being mounted, where the teardown legitimately removes every panel. */
@@ -2483,16 +2506,16 @@ function addChatPanel(chatAgentId: string, chatAgentName: string, targetGroup?: 
 }
 
 /**
- * Open the workspace's initial (bootstrap-created) chat agent as the first
- * tab. "Initial" = the earliest non-is_primary agent we know about. In a
- * freshly-booted workspace the bootstrap creates exactly one chat agent
- * named after the host, and that's what we want here. The services agent
- * (is_primary=true) is filtered out by getAgents().
+ * Open the workspace's earliest chat as the first tab, if it has one.
  *
- * If no non-is_primary agent exists yet (e.g. the workspace just started
- * and the bootstrap's `mngr create` is still running), returns false so
- * the caller can show a "waiting" state. We re-try when an agents_updated
- * event arrives.
+ * "Earliest" = the first non-is_primary agent we know about; the services agent is filtered
+ * out by getAgents(). A workspace that has been used before opens on the chat it already had,
+ * which is what the user came back for.
+ *
+ * Returns false when there is no chat at all. That is the ordinary state of a fresh
+ * workspace, not a transient one: a chat runs on a provider account and nothing creates one
+ * at boot, so the caller opens the launcher -- where the provider chooser is -- rather than
+ * waiting for something to arrive.
  */
 function openInitialChatTab(): boolean {
   const candidates = getAgents();
@@ -2502,11 +2525,6 @@ function openInitialChatTab(): boolean {
   return true;
 }
 
-// `awaitingInitialChat` flips on when the initial mount runs against an empty
-// agent list -- a machine whose bootstrap is still creating its first chat --
-// and back off as soon as that tab opens. While true, an agents_updated
-// listener keeps retrying, and a launcher stands in until it lands.
-let awaitingInitialChat = false;
 let agentsUpdatedListener: AgentsUpdatedListener | null = null;
 
 /** Find the chat panel id to anchor an agent-initiated split against.
@@ -2855,14 +2873,13 @@ async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise
 async function openNewChat(
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
-  harness: ChatHarness = "claude",
-  isFirst: boolean = false,
+  accountId: string = "",
 ): Promise<void> {
   const viewId = mountedViewId;
   const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
   let created: CreatedChatAgent;
   try {
-    created = await createChatAgent(projectId, harness, isFirst);
+    created = await createChatAgent(projectId, accountId);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
@@ -3071,41 +3088,6 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
       title: chatDisplayName(agent),
       params,
       renderer: "always",
-      ...placement,
-    });
-    recordMembership(panelId);
-    return panelId;
-  }
-
-  if (ref.startsWith("chat-terminal:")) {
-    // Per-agent terminal singleton: dedup by URL so opening the same ref
-    // twice focuses the existing panel rather than stacking duplicates.
-    // The URL is built by ``buildAgentTerminalUrl`` so the on-disk shape
-    // matches what the server's ``_extract_agent_terminal_name`` projects
-    // back to ``chat-terminal:<name>``.
-    const agentName = ref.substring("chat-terminal:".length);
-    const agent = getAgents().find((a) => a.name === agentName);
-    if (!agent) return null;
-    const url = buildAgentTerminalUrl(agentName);
-    const existingPanelId = findIframePanelIdForUrl(url);
-    if (existingPanelId !== null) {
-      const existing = dockview.panels.find((p) => p.id === existingPanelId);
-      if (existing) dockview.setActivePanel(existing);
-      return existingPanelId;
-    }
-    const title = `${agentName} terminal`;
-    // Owning agentId is the target agent (the terminal *is* that agent's),
-    // not the requester. Matches the panel id format used by the chat
-    // panel's "Open agent terminal" button so the two creation paths
-    // produce identical bookkeeping.
-    const panelId = `iframe-agent-${agent.id}-${Date.now()}`;
-    const params: PanelParams = { panelType: "iframe", agentId: agent.id, url, title };
-    panelParams.set(panelId, params);
-    dockview.addPanel({
-      id: panelId,
-      component: "iframe",
-      title,
-      params,
       ...placement,
     });
     recordMembership(panelId);
@@ -3331,10 +3313,9 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
  * `isLauncherAwaitingCreate`), so the wait is visible rather than silent.
  */
 function openTabOfTypeInGroup(
-  // A LaunchTarget rather than the rail's QuickAddTabType: the launcher's tiles
-  // include the flag-gated harness chats, which have no rail shortcut and carry
-  // a harness the rail never names. The rail builds its plain-chat target in
-  // ``openTabOfType``.
+  // A LaunchTarget rather than the rail's QuickAddTabType: a chat target carries
+  // the account it runs on, which the rail never names. The rail builds its own
+  // chat target in ``openTabOfType``.
   target: LaunchTarget,
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
@@ -3352,16 +3333,43 @@ function openTabOfTypeInGroup(
     launchersAwaitingCreate.add(launcherPanelId);
     m.redraw();
   }
-  // Every chat tile is the same create -- the same `chat` role in the primary's
-  // work dir -- stacked on the harness the tile names, plus the `first` template
-  // when it asks for it (fast launch where the harness supports it, /welcome, the
-  // first=true label). Both ride the target's own fields, so nothing here decodes
-  // a name. No dialog either: the name is auto-minted like every other create.
+  // Every chat is the same create -- the same `chat` role in the primary's work
+  // dir -- on the harness of the account the provider picker selected. No dialog:
+  // the name is auto-minted like every other create.
   if (target.kind === "chat") {
-    return openNewChat(targetGroup, launcherPanelId, target.harness, target.first).finally(() => {
-      releaseLauncherCreate(launcherPanelId);
-      m.redraw();
-    });
+    // Nothing signed in means nothing to launch on, so send the user to the chooser
+    // rather than starting a chat that cannot take a turn. Auth lives entirely in
+    // accounts now -- the shared settings-env writer is gone and `~/.claude` is left
+    // alone -- so "no accounts" really does mean no credential.
+    const startOrDivert = (): Promise<void> | null => {
+      if (target.accountId === "" && getAccounts().length === 0) {
+        releaseLauncherCreate(launcherPanelId);
+        // They asked for a chat and had to sign in on the way, so finish what they asked for
+        // rather than leaving them back on the launcher with a provider and no chat.
+        openProviderChooser({
+          onSignedIn: (accountId) => {
+            void openNewChat(targetGroup, launcherPanelId, accountId).finally(() => m.redraw());
+          },
+        });
+        return null;
+      }
+      return openNewChat(targetGroup, launcherPanelId, target.accountId).finally(() => {
+        releaseLauncherCreate(launcherPanelId);
+        m.redraw();
+      });
+    };
+    // "No accounts" and "the boot fetch has not landed yet" both read as zero, and only one of
+    // them means "sign in first". Deferring the decision costs a click nothing -- the launcher
+    // already shows its Starting... state -- and diverting on the other one sends someone who
+    // has providers to the chooser instead of starting their chat.
+    if (!areAccountsLoaded()) {
+      return loadAccounts()
+        .catch(() => undefined)
+        .then(() => {
+          void startOrDivert();
+        });
+    }
+    return startOrDivert();
   }
   if (target.kind === "terminal") {
     return openNewTerminal(targetGroup)
@@ -3464,10 +3472,11 @@ export function getAwaitingShortcutIds(): ReadonlySet<string> {
  *  pane on the files app (see ``openShortcut``). */
 function createNewForShortcut(shortcutId: FocusableTabType): void {
   if (shortcutsAwaitingCreate.has(shortcutId)) return;
-  // The rail names no harness and no template: its "chat" is the launcher's
-  // first tile -- a plain claude chat, flags ignored.
+  // The rail's "chat" is the launcher's New chat tile: the same provider the
+  // picker has selected, so the two cannot start chats on different accounts.
+  const selected = getSelectedAccount();
   const pending = openTabOfTypeInGroup(
-    shortcutId === "chat" ? { kind: "chat", harness: "claude", first: false } : { kind: shortcutId },
+    shortcutId === "chat" ? { kind: "chat", accountId: selected?.id ?? "" } : { kind: shortcutId },
     null,
     null,
   );
@@ -3933,10 +3942,10 @@ export function displayNameForView(viewId: string, projects: readonly ProjectInf
  *
  * ``null`` -- a view with no saved content, or none that could be fetched --
  * mounts the New Tab launcher, which is what a freshly-created project opens
- * on. ``isInitialMount`` is the one exception: a machine whose starter project
- * has never been saved is a machine that has just booted, and the chat its
- * bootstrap created is what the user came for, so that one opens instead (and
- * ``awaitingInitialChat`` waits for it when the bootstrap is still running).
+ * on. ``isInitialMount`` is the one exception: a machine whose starter project has never
+ * been saved has just booted, so if it already HAS a chat that is what the user came for and
+ * it opens instead. A fresh workspace has none -- a chat needs a provider account -- and gets
+ * the launcher like any other empty view.
  * Switching to an empty project never takes that branch -- it is a project the
  * user just made, and the launcher is exactly the "pick what to start with"
  * surface the design asks for there.
@@ -3954,7 +3963,6 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
   // ``dockview`` may have been torn down while awaiting; re-check before use.
   if (!dockview) return;
   const dv = dockview;
-  awaitingInitialChat = false;
   // Teardown removes every panel one by one; the dock-never-empty rule must not
   // fire a launcher into the middle of that.
   isApplyingLayout = true;
@@ -4049,6 +4057,20 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
       }
     }
 
+    // An agent's terminal is the back face of its chat, not a tab. A layout saved while that
+    // was still possible names one, and restoring it would put a bare ttyd iframe beside the
+    // chat that now holds the same session -- two live clients on one tmux window, each
+    // resizing it out from under the other.
+    //
+    // Identified by its URL, NOT by its `iframe-agent-<id>-<ts>` panel id: that id shape is
+    // shared with every iframe an agent opens through `llm-api.openTab`, so an id test also
+    // deletes app panes and ad-hoc URLs an agent put there, on every restore. The ttyd dispatch
+    // args are the shape only an agent terminal has.
+    for (const panel of dv.panels.slice()) {
+      const url = panelParams.get(panel.id)?.url;
+      if (typeof url === "string" && rebuildAgentTerminalUrl(url) !== null) dv.removePanel(panel);
+    }
+
     // An object is a singleton with one page, so an arrangement naming the same
     // one twice would give two tabs a page to fight over. The first occurrence
     // keeps it.
@@ -4065,10 +4087,10 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
   // all services-agent chats we just stripped above.
   const isDockEmpty = dv.panels.length === 0;
   if (isDockEmpty && isInitialMount && saved === null) {
-    // A freshly-booted machine: show the chat its bootstrap created, and keep
-    // waiting when that agent has not been registered yet.
+    // A machine that has run before opens on whatever chat it has. A fresh one has none --
+    // a chat needs a provider account and nothing creates one at boot -- so it opens on the
+    // launcher, where the provider chooser is. Nothing to wait for either way.
     if (!openInitialChatTab()) {
-      awaitingInitialChat = true;
       openLauncherPanel(null);
     }
   } else if (isDockEmpty) {
@@ -4236,7 +4258,33 @@ function soleLauncherPanelId(): string | null {
  * opening only happens if that project is still the mounted one, since opening
  * it anywhere else would file it into the wrong view.
  */
+/** Open a new chat on `accountId`, wherever the user currently is.
+ *
+ * The combo card's provider rows call this: a chat binds to its account when it is CREATED
+ * and nothing rebinds it, so "switch provider" can only mean "start a chat on that one".
+ */
+export async function startChatOnAccount(accountId: string): Promise<void> {
+  // No target group and no launcher to retire: the user is in a chat, and the new one opens
+  // alongside it wherever the dock puts a new panel.
+  await openNewChat(null, null, accountId);
+  m.redraw();
+}
+
 export async function startProjectChat(projectId: string): Promise<void> {
+  // A new project's starter chat needs an account like any other, and a workspace with none
+  // would otherwise fail the create and surface it as a blocking alert on every project
+  // creation. The project itself is already made; the chat waits for a provider.
+  if (!areAccountsLoaded()) {
+    await loadAccounts().catch(() => undefined);
+  }
+  if (getAccounts().length === 0) {
+    openProviderChooser({
+      onSignedIn: () => {
+        void startProjectChat(projectId);
+      },
+    });
+    return;
+  }
   let created: CreatedChatAgent;
   try {
     // The display name ("Chat N") is minted server-side, exactly as the
@@ -4415,13 +4463,6 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
     const candidate = chatPanelId(agent.id);
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
   }
-  if (ref.startsWith("chat-terminal:")) {
-    // Resolve by URL: ``chat-terminal:<name>`` addresses the singleton
-    // iframe pointed at ``buildAgentTerminalUrl(name)``. ``findIframe
-    // PanelIdForUrl`` returns null when no such panel is currently open.
-    const agentName = ref.substring("chat-terminal:".length);
-    return findIframePanelIdForUrl(buildAgentTerminalUrl(agentName));
-  }
   if (ref.startsWith("subagent:")) {
     const sessionId = ref.substring("subagent:".length);
     for (const [panelId, p] of panelParams) {
@@ -4562,14 +4603,6 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
     handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
     return;
   }
-  if (ref.startsWith("chat-terminal:")) {
-    // Same drop-on-unknown-agent rule as ``chat:`` -- the underlying
-    // panel is the per-agent terminal iframe, addressable by name.
-    const agentName = ref.substring("chat-terminal:".length);
-    if (!getAgents().find((a) => a.name === agentName)) return;
-    handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
-    return;
-  }
   // Other ref kinds (subagent/terminal/url:<hash>) are not creatable from
   // an ``open`` op: their stable refs only exist after creation through
   // the surrounding code paths (e.g. SubagentView, "New URL" dialog).
@@ -4600,17 +4633,13 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
   const referencePanelId = await resolveRefToPanelId(relativeTo, requesterAgentId);
   if (referencePanelId === null) return;
 
-  if (
-    !ref.startsWith("service:") &&
-    !ref.startsWith("chat:") &&
-    !ref.startsWith("chat-terminal:") &&
-    !ref.startsWith("https://")
-  ) {
-    // ``split`` creates new service, chat, chat-terminal, and ad-hoc
-    // external-URL (``https://``) panels. Subagent panels and existing
-    // URL/terminal panels addressed by ``url:<hash>`` / ``terminal:<hash>``
-    // are created through other UI paths and only addressable once they
-    // exist. Fresh anonymous terminals come in as ``service:terminal``.
+  if (!ref.startsWith("service:") && !ref.startsWith("chat:") && !ref.startsWith("https://")) {
+    // ``split`` creates new service, chat, and ad-hoc external-URL (``https://``) panels.
+    // Subagent panels and existing URL/terminal panels addressed by ``url:<hash>`` /
+    // ``terminal:<hash>`` are created through other UI paths and only addressable once they
+    // exist. Fresh anonymous terminals come in as ``service:terminal``. ``chat-terminal:`` is
+    // retired -- an agent's terminal is the back face of its chat, not a panel to split off --
+    // and `layout.py` rejects it by name before it reaches here.
     return;
   }
 
@@ -5169,22 +5198,15 @@ function initializeDockview(parentElement: HTMLElement): void {
     if (panel === undefined || isApplyingLayout) return;
     touchPanelLastUsed(panel.id);
     retireLaunchersOnFocusLeaving(panel.id);
+    focusTerminalOfActivatedPanel(panel.id);
   });
 
   // Every agents_updated event may carry a new name pair for an agent some tab
   // is showing (a rename lands as a changed name + display_name label), so the
-  // strip is re-synced from the live labels. While awaitingInitialChat is true,
-  // the event is also another chance for the bootstrap-created chat to show up.
+  // strip is re-synced from the live labels.
   agentsUpdatedListener = () => {
     syncTabTitlesFromStore();
     m.redraw();
-    if (!awaitingInitialChat) return;
-    const launcherPanelId = dv.panels.find((panel) => panelParams.get(panel.id)?.panelType === "launcher")?.id ?? null;
-    if (openInitialChatTab()) {
-      awaitingInitialChat = false;
-      // The launcher was only standing in until the chat arrived.
-      retireLauncher(launcherPanelId);
-    }
   };
   addAgentsUpdatedListener(agentsUpdatedListener);
 

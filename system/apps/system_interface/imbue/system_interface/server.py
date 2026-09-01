@@ -54,6 +54,7 @@ from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface import accounts_endpoints
 from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.model import ModelIdentity
@@ -62,6 +63,7 @@ from imbue.system_interface.harnesses.registry import HARNESS_SPECS
 from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import get_catalog
 from imbue.system_interface.harnesses.registry import get_harness_spec
+from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -526,41 +528,6 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
-def _is_feature_flag_enabled(env_var: str) -> bool:
-    """Whether ``env_var`` is set to a truthy value (``1``/``true``/``yes``/``on``).
-
-    Every feature flag is off by default and read from the environment, so a host can
-    dark-launch a surface and turn it on (see system/supervisord.conf's single
-    ``environment=`` line, or system/scripts/flip_feature_flags.sh) without a rebuild.
-    """
-    return os.environ.get(env_var, "").strip().lower() in ("1", "true", "yes", "on")
-
-
-# The frontend-visible feature flags: env var -> the meta-tag name the frontend reads
-# (see frontend/src/base-path.ts). Each gates only its own new-tab menu items; support
-# for what they create is never gated, so an agent made while a flag was on keeps
-# working with it off.
-_FEATURE_FLAG_META_TAGS: Final[dict[str, str]] = {
-    # The "Codex chat" / "Pi chat" launchers. Claude is the workspace default
-    # and is never gated.
-    "FEATURE_FLAG_ENABLE_OTHER_HARNESSES": "system-interface-enable-other-harnesses",
-    # The "New introductory <harness> chat" launchers, which stack the `first` create
-    # template (fast launch where supported, /welcome, the first=true label). Separate
-    # from the flag above: the workspace's real introductory chat is made once at boot
-    # by the bootstrap, so these exist to exercise that flow on demand.
-    "FEATURE_FLAG_ENABLE_INTRODUCTORY_AGENTS_IN_OTHER_HARNESSES": "system-interface-enable-introductory-agents",
-}
-
-
-def _inject_feature_flag_meta_tags(html_content: str) -> str:
-    """Inject every frontend-visible feature flag so the frontend can gate its launchers."""
-    meta_tags = "\n".join(
-        f'<meta name="{tag_name}" content="{str(_is_feature_flag_enabled(env_var)).lower()}">'
-        for env_var, tag_name in _FEATURE_FLAG_META_TAGS.items()
-    )
-    return html_content.replace("</head>", f"{meta_tags}\n</head>")
-
-
 def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) -> str:
     """Inject the update-staleness variant so the frontend can render its banner.
 
@@ -598,7 +565,6 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
-        html_content = _inject_feature_flag_meta_tags(html_content)
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
@@ -716,6 +682,28 @@ def _find_agent(agent_id: str) -> AgentInfo | None:
 def _agent_not_found_response(agent_id: str) -> Response:
     error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
     return _json_response(error.model_dump(), status_code=404)
+
+
+def _get_event_detail(agent_id: str, event_id: str) -> Response:
+    """The full deferred payloads for one event: tool input(s), tool output, thinking.
+
+    Resident events are payload-free (the wire contract in ``harnesses/events``); this is
+    the on-demand read behind expanding a tool row or a thinking disclosure. The read is
+    stateless -- the watcher re-reads the source line (or re-queries agy's store) and
+    nothing is cached backend-side; only the frontend may cache what it fetched. When the
+    recorded byte range went stale the watcher falls back to scanning the source for the
+    event's own identity; only if that also fails does this answer 404, which the frontend
+    renders as a quiet "payload no longer available" placeholder.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    watcher = get_state().get_or_create_watcher(agent_info)
+    detail = watcher.get_event_detail(event_id)
+    if detail is None:
+        error = ErrorResponse(detail=f"Payload for event '{event_id}' is no longer available")
+        return _json_response(error.model_dump(), status_code=404)
+    return _json_response({"event_id": event_id, **detail})
 
 
 def _get_events(agent_id: str) -> Response:
@@ -839,6 +827,49 @@ def _stream_events(agent_id: str) -> Response:
     return _sse_response(_stream_filtered_events(agent_id, event_queues, event_queue, watcher.is_main_session_event))
 
 
+# A NOT_READY send's revive budget. ``start_agent`` returns once mngr has launched the
+# session WITHOUT awaiting the daemon handshake (codex readiness is only awaited on
+# create), so the daemon needs a few more seconds before the session can connect.
+_REVIVE_RETRY_INTERVAL_SECONDS: Final[float] = 0.5
+_REVIVE_RETRY_BUDGET_SECONDS: Final[float] = 15.0
+
+
+def _revive_and_retry_send(
+    agent_info: AgentInfo,
+    agent_manager: AgentManager,
+    session: AgentHarnessSession,
+    send_message_request: SendMessageRequest,
+    message_id: str,
+    sleep: Callable[[float], None] = time.sleep,
+    budget_seconds: float = _REVIVE_RETRY_BUDGET_SECONDS,
+) -> SendOutcome:
+    """Start a not-ready agent and retry the send, giving every harness the revive invariant.
+
+    The file-session harnesses auto-start a STOPPED agent inside mngr's own send
+    (``is_start_desired``) -- "sending the agent a message revives it". A live-connection
+    harness (codex) instead reports NOT_READY when its daemon is unreachable, so this
+    supplies the same behavior at the endpoint: start the agent through the exact path the
+    start endpoint and terminal-open use (a no-op when it is already running), then retry
+    while the daemon comes up. Returns the final outcome -- a daemon still unreachable at
+    the deadline keeps the honest NOT_READY -> 503, and a ``SendFailedError`` from a retry
+    propagates to the caller's handler like a first-attempt one.
+    """
+    try:
+        start_agent(agent_info.name)
+    except MngrError as e:
+        logger.warning("Could not revive agent {} for a send: {}", agent_info.name, e)
+        return SendOutcome.NOT_READY
+    # The observe stream will not see the revival for minutes (no pid to watch while the
+    # agent was stopped); reflect it now so the UI's liveness unblocks with the send.
+    agent_manager.note_agent_alive(agent_info.id)
+    deadline = time.monotonic() + budget_seconds
+    outcome = SendOutcome.NOT_READY
+    while outcome is SendOutcome.NOT_READY and time.monotonic() < deadline:
+        sleep(_REVIVE_RETRY_INTERVAL_SECONDS)
+        outcome = session.send(send_message_request.message, message_id)
+    return outcome
+
+
 def _send_message_endpoint(agent_id: str) -> Response:
     """Send a message to an agent."""
     agent_info = _find_agent(agent_id)
@@ -864,6 +895,8 @@ def _send_message_endpoint(agent_id: str) -> Response:
     session = agent_manager.get_or_create_session(agent_info)
     try:
         outcome = session.send(send_message_request.message, message_id)
+        if outcome is SendOutcome.NOT_READY:
+            outcome = _revive_and_retry_send(agent_info, agent_manager, session, send_message_request, message_id)
     except SendFailedError as send_failure:
         # The harness said why it refused, in words written for the person who has to fix it
         # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
@@ -907,11 +940,11 @@ def _get_harnesses_endpoint() -> Response:
     switch mode, picker mode, powered-by label, shoulder-tap capability); the
     frontend keys in by an agent's harness.
 
-    Every harness is always included, deliberately: ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``
-    gates only the "New <harness> agent" launchers in the new-tab menu, not harness support
-    itself. A codex or pi agent that exists some other way (``mngr create``, one made before
-    the flag was turned off) still needs its catalog for the model bar to resolve, so
-    filtering here would strand that agent's chip on an unrecognized model.
+    Every harness is always included, deliberately: what the user has signed in to
+    decides what they can LAUNCH, not what the app can render. A codex or pi agent that
+    exists some other way (``mngr create``, or one left behind after its account was
+    removed) still needs its catalog for the model bar to resolve, so narrowing this to
+    the signed-in harnesses would strand that agent's chip on an unrecognized model.
     """
     catalogs: dict[str, Any] = {}
     for harness in HARNESS_SPECS:
@@ -922,13 +955,11 @@ def _get_harnesses_endpoint() -> Response:
         except (OSError, ValueError) as e:
             logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
             continue
-        # The catalog model is the wire shape for the model bar; the popup and
-        # agent-auth declarations live on the HarnessSpec and are merged in here
-        # so one response carries everything the frontend keys by harness.
+        # The catalog model is the wire shape for the model bar; the popup declarations
+        # live on the HarnessSpec and are merged in here so one response carries
+        # everything the frontend keys by harness.
         spec = get_harness_spec(harness)
         catalog["popups"] = [popup.model_dump() for popup in spec.popups]
-        catalog["auth_modal"] = spec.auth_modal
-        catalog["auth_instructions"] = spec.auth_instructions
         catalogs[harness.value] = catalog
     return _json_response(catalogs)
 
@@ -2637,10 +2668,12 @@ def _create_chat_agent() -> Response:
         create_request = CreateChatRequest.model_validate(request_fields)
         created = agent_manager.create_chat_agent(
             create_request.name,
-            create_request.harness,
-            extra_role_templates=("first",) if create_request.first else (),
+            # The `first` create template belongs to the workspace's own first run, not to
+            # anything a client asks for -- bootstrap stacks it on its own `mngr create`.
+            extra_role_templates=(),
             project_id=project_id,
             extra_taken_names=titled_names,
+            account_id=create_request.account_id,
         )
         response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
         return _json_response(response.model_dump(), status_code=201)
@@ -2999,6 +3032,9 @@ def _start_agent(agent_id: str) -> Response:
         error = ErrorResponse(detail=f"Failed to start agent '{agent_info.name}': {e}")
         return _json_response(error.model_dump(), status_code=500)
 
+    # The observe stream will not see the revival for minutes (no pid to watch while the
+    # agent was stopped); reflect it now so the UI's liveness unblocks with the start.
+    get_state().agent_manager.note_agent_alive(agent_info.id)
     return _json_response(StartAgentResponse(status="ok").model_dump())
 
 
@@ -3427,6 +3463,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
+    application.add_url_rule(
+        "/api/agents/<agent_id>/events/<event_id>/detail", view_func=_get_event_detail, methods=["GET"]
+    )
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/message", view_func=_send_message_endpoint, methods=["POST"])
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
@@ -3550,6 +3589,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
         endpoint="_set_member_location_endpoint",
     )
     auth_endpoints.register_routes(application)
+    accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(

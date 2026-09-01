@@ -21,15 +21,16 @@ from typing import Any
 from typing import Final
 
 from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedStep
-from imbue.system_interface.harnesses.antigravity.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.antigravity.tool_labels import shell_command
 from imbue.system_interface.harnesses.antigravity.tool_labels import tool_labels
-from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
+from imbue.system_interface.harnesses.tool_output import error_snippet
 from imbue.system_interface.harnesses.tool_output import find_permission_request
 from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
-from imbue.system_interface.harnesses.tool_output import truncate_tool_output
+from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.system_interface.harnesses.tool_output import tk_stamp
 
 # "common" here means the normalized/common event *form*, matching the
 # ``<harness>/common_transcript`` label claude/codex stamp -- not an on-disk file.
@@ -55,16 +56,6 @@ def _clean_user_text(raw: str) -> str:
 
 def _event_id(step: DecodedStep, suffix: str) -> str:
     return f"{step.conv_id}:{step.idx}:{suffix}"
-
-
-def _input_preview(tool_name: str, args_json: str) -> str:
-    """The stored ``input_preview``: the raw args truncated to the shared cap -- but left
-    whole for a file body or a tk command the diff/timeline view needs entire."""
-    if keeps_full_tool_input(tool_name, args_json):
-        return args_json
-    if len(args_json) > MAX_TOOL_INPUT_PREVIEW_LENGTH:
-        return args_json[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
-    return args_json
 
 
 def _user_message(step: DecodedStep) -> list[dict[str, Any]]:
@@ -113,9 +104,10 @@ def _assistant_message(
         "api_error_kind": None,
         "is_provider_fault": False,
     }
-    # agy gives us reasoning for free (claude drops it); pass it through when present.
+    # agy records readable reasoning; only the FLAG is resident (the payload-free wire
+    # contract) -- the text itself is served by the detail endpoint's row re-query.
     if step.thinking:
-        event["thinking"] = step.thinking
+        event["has_thinking"] = True
     return event
 
 
@@ -124,10 +116,10 @@ def _tool_events(step: DecodedStep) -> list[dict[str, Any]]:
     assert call is not None
     call_event_id = _event_id(step, "toolcall")
     header_label, caption_label = tool_labels(call.name, call.args, call.tool_action)
-    tool_call = {
+    tool_call: dict[str, Any] = {
         "tool_call_id": call_event_id,
         "tool_name": call.name,
-        "input_preview": _input_preview(call.name, call.args),
+        "input_chars": len(call.args),
         "header_label": header_label,
         "caption_label": caption_label,
     }
@@ -140,14 +132,17 @@ def _tool_events(step: DecodedStep) -> list[dict[str, Any]]:
     display = classify_tool_call_display(is_pure_tk=is_pure_tk, raw_input=call.args)
     if display is not None:
         tool_call["display"] = display.value
+    # The step progress view reads step titles/summaries out of a tk lifecycle command
+    # itself, so that one command is stamped resident.
+    if command is not None and is_tk_lifecycle_anywhere(command):
+        tool_call["tk_command"] = command
     events: list[dict[str, Any]] = [_assistant_message(step, text="", tool_calls=[tool_call], suffix="toolcall")]
     # The result only exists once the step settles; withholding it while RUNNING is what
     # keeps the call unmatched (= TOOL_RUNNING) during execution.
     if step.is_terminal and step.tool_result_text is not None:
         result_event_id = _event_id(step, "toolresult")
-        # Lift the permission-request object and preserve tk step decoration BEFORE truncation
-        # (shared with the claude/codex/pi parsers -- see ``harnesses/tool_output``). Order
-        # matters: head-slicing first would destroy an object or decoration past the cut.
+        # The structured facts lifted from the full output, which itself stays off the
+        # event (the payload-free wire contract -- see ``harnesses/tool_output``).
         raw_output = step.tool_result_text
         permission_request = find_permission_request(raw_output)
         result_event: dict[str, Any] = {
@@ -157,12 +152,18 @@ def _tool_events(step: DecodedStep) -> list[dict[str, Any]]:
             "source": SOURCE,
             "tool_call_id": call_event_id,
             "tool_name": call.name,
-            "output": truncate_tool_output(raw_output, permission_request),
+            "output_chars": len(raw_output),
             "is_error": step.is_error_result,
             "message_uuid": result_event_id,
         }
         if permission_request is not None:
             result_event["permission_request"] = permission_request.details
+        snippet = error_snippet(raw_output) if step.is_error_result else ""
+        if snippet:
+            result_event["error_snippet"] = snippet
+        stamped_tk = tk_stamp(raw_output)
+        if stamped_tk:
+            result_event["tk_stamp"] = stamped_tk
         events.append(result_event)
     return events
 
@@ -195,5 +196,40 @@ def parse_step(step: DecodedStep) -> list[dict[str, Any]]:
             return []
         event = _assistant_message(step, text=step.error_text, tool_calls=[], suffix="error")
         event["is_api_error"] = True
+        # Which error it is decides what the user can do about it. An auth failure is the one
+        # they can fix, and it is what the dead-account notice keys on; everything else is
+        # just a failed turn. agy passes the provider's own words through, so the shared
+        # vocabulary reads them.
+        event["is_auth_error"] = is_auth_error_text(step.error_text)
         return [event]
     return []
+
+
+def parse_step_detail(step: DecodedStep) -> dict[str, dict[str, Any]]:
+    """Full deferred payloads by event_id for one decoded agy step.
+
+    The read half of the payload-free wire contract, fed by the watcher's row re-query
+    (agy's transcript is a SQLite store, not a byte-addressable file).
+    """
+    payloads: dict[str, dict[str, Any]] = {}
+    if step.tool_call is not None:
+        call_event_id = _event_id(step, "toolcall")
+        payloads[call_event_id] = {
+            "inputs_by_tool_call_id": {call_event_id: step.tool_call.args},
+            "output": None,
+            "thinking": step.thinking or None,
+        }
+        if step.is_terminal and step.tool_result_text is not None:
+            payloads[_event_id(step, "toolresult")] = {
+                "inputs_by_tool_call_id": {},
+                "output": step.tool_result_text,
+                "thinking": None,
+            }
+        return payloads
+    if step.thinking:
+        payloads[_event_id(step, "assistant")] = {
+            "inputs_by_tool_call_id": {},
+            "output": None,
+            "thinking": step.thinking,
+        }
+    return payloads
