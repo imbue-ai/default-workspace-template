@@ -71,9 +71,9 @@ process -- plus any children it already spawned, found via a
 never lowers, so a process already tagged higher (a Chromium process the
 browser sweep has remapped into its band) and the `PROTECTED` programs
 (earlyoom, the listener itself, and the one-shots env-converge and
-vm-exec-register) are never demoted. Because this path *raises*, a built-in missing from either
-band map is not merely left alone but actively pushed to `USER_SERVICE`, above
-every other built-in -- so
+vm-exec-register) are never demoted. Because this path *raises*, a built-in
+missing from either band map is not merely left alone but actively pushed to
+`USER_SERVICE`, above every other built-in -- so
 `oom_tag_service_test.test_every_built_in_supervisord_program_has_an_explicit_band`
 requires every program in `supervisord.conf` to name its band outright, unless
 it declares itself user-created by passing the `user` key (for those the
