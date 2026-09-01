@@ -5,11 +5,9 @@
  * the one backdrop-dismissal helper (views/modalBackdrop.ts) so every modal
  * dismisses on a primary mousedown that STARTS on the overlay.
  *
- * Escape handling and autofocus stay with each caller: some dialogs
- * (delete-confirm, share) intentionally have no Escape, and the ones that do own
- * a document-level keydown listener over their own lifecycle. Pass such wiring
- * through `overlay` (an oncreate/onremove that registers the listener), and put
- * any autofocus `oncreate` on the relevant button/input inside `actions` or the
+ * Escape handling is opt-in through `onEscape` (the shell owns the listener;
+ * a dialog that wants no Escape simply omits it). Autofocus stays with each
+ * caller: an `oncreate` on the relevant button/input inside `actions` or the
  * body children.
  *
  * Body content is passed as children: `m(Modal, { ... }, [ ...bodyNodes ])`.
@@ -53,11 +51,8 @@ export interface ModalAttrs {
   // Called when the backdrop is dismissed (a primary mousedown on the overlay).
   onDismiss: () => void;
   // Called on Escape while the modal is up. The shell owns the document
-  // listener (one stable handler, added when the modal mounts and removed when
-  // it leaves, followed by a redraw), so dialogs never hand-roll their own --
-  // that hand-copy is exactly what drifted historically (see NoticeDialog's
-  // doc). Pass the same guard you would give onDismiss, or a different one
-  // (e.g. back out an inner confirmation step first).
+  // listener -- one stable handler added on mount, removed on unmount, redraw
+  // after -- so dialogs pass a guard here rather than wiring their own.
   onEscape?: () => void;
   // Card width in px. Defaults to the primitive's 420px when omitted.
   width?: number;

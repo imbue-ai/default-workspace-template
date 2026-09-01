@@ -6,8 +6,7 @@
  *   - Style in the view: utility class strings on the m(...) markup, colours
  *     via the semantic utility layer (text-primary, bg-fill-hover, ...), text
  *     via the type-* roles, shared recipes via the component builders in
- *     views/components/ (Button, Input, Badge, Modal, menu, banner,
- *     activityDot).
+ *     views/components/.
  *   - Hand-written CSS here is only for what utilities cannot reach: vendor
  *     DOM (dockview/xterm), markdown-rendered content, keyframes and
  *     pseudo-element machines (the spinner), contextual rules over
@@ -88,8 +87,7 @@
   --font-size-heading-lg: 24px;
   --font-size-heading: 18px;
   --font-size-body: 14px;
-  /* Row text: the sidebar rail, menus, and launcher tables -- the dense
-     chrome step between body and helper. */
+  /* Row text: the dense-chrome step between body and helper. */
   --font-size-row: 13px;
   --font-size-helper: 12px;
   /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type

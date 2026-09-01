@@ -244,14 +244,12 @@ function railAction(options: {
   );
 }
 
-// Menu chrome: the shared floating-menu recipe (components/menu.ts), fixed and
-// placed by placeMenu, at the rail's own text size.
 const MENU_CARD_CLASS = `project-rail-menu ${menuCardClass(`fixed ${ROW_TEXT_CLASS} text-primary`)}`;
 // `group` so a row's own trailing controls (the switcher's edit pencil) can
 // reveal themselves on `group-hover:`, the same reveal-on-hover pattern the
 // tab list's kebab uses. tightGap (4px) matches the rail's own rows
-// (ROW_CLASS) -- it used to be the recipe's looser 8px, which is what made a
-// menu row read as less tight than the rail row sitting right above it.
+// (ROW_CLASS), so a menu row reads as tight as the rail row sitting right
+// above it.
 const MENU_ROW_CLASS = `project-rail-menu-item group ${menuRowClass({ tightGap: true })}`;
 
 // A transparent overlay rendered behind any open menu and above everything

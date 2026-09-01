@@ -246,8 +246,6 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
   // whole card also drops its green accent for neutral grey, since green reads as "active".
   const statusIndicator = isRunning
     ? m("span", {
-        // The chat activity dot's shared recipe (components/activityDot.ts), one
-        // size up for the card.
         class: `subagent-card-status-dot subagent-card-status-dot--running ${activityDotClass("h-[7px] w-[7px]")}`,
         "aria-label": "Sub-agent is working",
         ...hoverTooltipAttrs("Working"),

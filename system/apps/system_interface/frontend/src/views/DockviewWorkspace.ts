@@ -583,9 +583,8 @@ function tabIconMarkupForPanel(params: PanelParams | undefined): string {
 // the ObjectMenuActions that module asks for, and the floating-card chrome
 // that renders whatever list comes back.
 
-// Menu chrome: the shared floating-menu recipe (components/menu.ts), fixed and
-// placed by the sidebar's placeMenu so every floating menu flips and clamps by
-// one rule.
+// Fixed and placed by the sidebar's placeMenu, so every floating menu flips
+// and clamps by one rule.
 const TAB_MENU_CARD_CLASS = menuCardClass("fixed min-w-[180px] text-(length:--font-size-row)");
 const TAB_MENU_ROW_CLASS = menuRowClass();
 

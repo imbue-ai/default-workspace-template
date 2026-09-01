@@ -1,10 +1,8 @@
 import type m from "mithril";
 
-// Mithril already invokes lifecycle hooks it finds in a *component* vnode's
-// attrs (initLifecycle runs on vnode.attrs for components and elements alike),
-// so forwarding them to the inner element would run every hook twice with the
-// same vnode.dom -- e.g. hoverTooltipAttrs would attach two tooltip instances
-// and dispose only one.
+// Mithril already invokes lifecycle hooks it finds in a vnode's attrs --
+// component vnodes included -- so forwarding them to the inner element would
+// run every hook twice with the same vnode.dom.
 const MITHRIL_LIFECYCLE_KEYS = new Set([
   "oninit",
   "oncreate",
@@ -35,10 +33,10 @@ export function splitAttrs<T extends m.Attributes>(attrs: T, ownKeys: readonly (
   return passthrough;
 }
 
-// The class-only half of the splitAttrs contract, for components that accept a
-// whole attrs object to merge onto an element they style (Modal's card/overlay).
-// Lifecycle hooks stay: on an element vnode they run once and are a documented
-// use (e.g. an autofocus oncreate on a modal card).
+// The class-only half of the splitAttrs contract, for components that merge a
+// caller-supplied attrs object onto an element they style. Lifecycle hooks
+// stay: on an element vnode they run once, and passing one (e.g. an autofocus
+// oncreate) is a documented use.
 export function omitClassAttrs(source: Record<string, unknown>): Record<string, unknown> {
   const rest: Record<string, unknown> = {};
   for (const key of Object.keys(source)) {
