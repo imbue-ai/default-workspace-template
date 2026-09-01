@@ -67,6 +67,8 @@ from imbue.system_interface.harnesses.binding import BindingError
 from imbue.system_interface.harnesses.binding import create_args as binding_create_args
 from imbue.system_interface.harnesses.binding import harness_for
 from imbue.system_interface.harnesses.binding import resolve_binding
+from imbue.system_interface.harnesses.codex.live_user_turns import drop_live_user_turns
+from imbue.system_interface.harnesses.codex.live_user_turns import note_live_user_turn
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -952,8 +954,10 @@ class AgentManager:
         self._stop_app_watcher(agent_id)
         self._stop_activity_tracking(agent_id)
         self._stop_model_tracking(agent_id)
-        # The agent is positively gone, so its watcher's resident transcript goes with it.
+        # The agent is positively gone, so its watcher's resident transcript goes with it,
+        # and so does the codex live-user-turn record keyed by its id.
         self._evict_watcher(agent_id)
+        drop_live_user_turns(agent_id)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
@@ -2145,6 +2149,10 @@ class AgentManager:
         (tests) so the ledger stays independently testable."""
         if self._transcript_broadcaster is None:
             return
+        # Recorded BEFORE the broadcast, so the file watcher's conditional suppression
+        # (codex/watcher._filter_broadcast) can never race a turn the ledger is
+        # mid-broadcasting into a duplicate.
+        note_live_user_turn(agent_id, str(event.get("event_id", "")))
         self._transcript_broadcaster(agent_id, [event])
 
     def _model_options_for(self, agent_state: AgentStateItem) -> tuple[ModelOption, ...]:

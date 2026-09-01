@@ -17,6 +17,8 @@ from typing import Any
 from typing import Callable
 
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.codex.live_user_turns import drop_live_user_turns
+from imbue.system_interface.harnesses.codex.live_user_turns import note_live_user_turn
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -197,11 +199,13 @@ def test_a_read_does_not_stop_the_loop_broadcasting_those_events(tmp_path: Path)
     assert len(broadcast) == 1
 
 
-def test_live_user_turns_are_suppressed_from_the_broadcast_but_served_by_reads(tmp_path: Path) -> None:
-    """Fix 1: the subscribed ledger owns the LIVE user-turn, so the file reader must NOT broadcast
-    its own copy (that is the unordered second channel A3b forbids). The user-turn still lives in
-    the store, so the read paths -- the hydration a page load rebuilds from -- serve it; only the
-    live broadcast omits it. Agent output on the same pass is still broadcast."""
+def test_user_turns_the_ledger_already_broadcast_are_suppressed_from_the_file_broadcast(tmp_path: Path) -> None:
+    """Fix 1: the subscribed ledger owns the LIVE user-turn, so once it has broadcast a turn
+    the file reader must NOT broadcast a competing copy (the unordered second channel A3b
+    forbids). The user-turn still lives in the store, so the read paths -- the hydration a
+    page load rebuilds from -- serve it; only the live broadcast omits it. Agent output on
+    the same pass is still broadcast."""
+    drop_live_user_turns("agent-test")
     _write_rollout(
         tmp_path,
         [
@@ -210,6 +214,10 @@ def test_live_user_turns_are_suppressed_from_the_broadcast_but_served_by_reads(t
         ],
     )
     watcher, broadcast = _build_watcher(tmp_path)
+    # The ledger heard the commit and broadcast its copy first (the healthy ordering the
+    # manager guarantees by recording before its broadcast).
+    user_turn_id = watcher.get_all_events()[0]["event_id"]
+    note_live_user_turn("agent-test", user_turn_id)
     watcher._emit_cycle()
 
     # The broadcast carries the agent message but NOT the user turn.
@@ -220,6 +228,27 @@ def test_live_user_turns_are_suppressed_from_the_broadcast_but_served_by_reads(t
     # Suppressed events are still counted-as-sent: a later pass never leaks them into the broadcast.
     watcher._emit_cycle()
     assert [event["type"] for event in broadcast] == ["assistant_message"]
+
+
+def test_a_user_turn_the_ledger_never_broadcast_flows_from_the_file(tmp_path: Path) -> None:
+    """The suppression is conditional on the ledger having actually delivered the turn: a
+    ledger deaf to the commit (a connection built against a daemon still starting -- the
+    stopped-agent revive path) never broadcasts it, and an unconditionally suppressed file
+    copy would leave the turn invisible on the live stream forever, with the frontend's
+    "Sending..." bubble waiting on exactly that arrival."""
+    drop_live_user_turns("agent-test")
+    _write_rollout(
+        tmp_path,
+        [
+            _user_line("revived send", "2026-08-03T00:00:01Z"),
+            _assistant_line("m1", "reply", "2026-08-03T00:00:02Z"),
+        ],
+    )
+    watcher, broadcast = _build_watcher(tmp_path)
+    watcher._emit_cycle()
+
+    assert [event["type"] for event in broadcast] == ["user_message", "assistant_message"]
+    assert broadcast[0]["content"] == "revived send"
 
 
 def test_reads_pick_up_lines_appended_after_the_first_read(tmp_path: Path) -> None:

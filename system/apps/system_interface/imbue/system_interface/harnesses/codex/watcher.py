@@ -33,6 +33,7 @@ from loguru import logger as _loguru_logger
 from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.ledger import write_codex_model_state
+from imbue.system_interface.harnesses.codex.live_user_turns import was_live_user_turn_broadcast
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.session_parser import SOURCE as _SOURCE
 from imbue.system_interface.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
@@ -56,15 +57,24 @@ _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
 _LANE = "main"
 
 
-def _is_live_suppressed(event: dict[str, Any]) -> bool:
+def _is_live_suppressed(agent_id: str, event: dict[str, Any]) -> bool:
     """Whether a parsed event is suppressed from the LIVE broadcast (kept in the store).
 
-    Only ``user_message`` events: the subscribed ledger owns the live user-turn and emits it
-    in the A3b ordered handoff (chip out, then turn), so the file reader must not broadcast
-    a competing copy. The event stays in the store, so the read paths (page-load hydration,
-    backfill) serve it.
+    Only ``user_message`` events, and only ones the subscribed ledger has ALREADY
+    broadcast: the ledger owns the live user-turn and emits it in the A3b ordered handoff
+    (chip out, then turn), so the file reader must not broadcast a competing copy of a
+    turn the ledger delivered. But a ledger deaf to the commit -- a connection built
+    against a daemon still starting, the stopped-agent revive path -- never delivers it,
+    and an unconditionally suppressed file copy would leave the turn invisible on the
+    live stream forever (the frontend's "Sending..." bubble waits on exactly this
+    arrival). The two copies share their event id (the rollout stores the
+    clientUserMessageId the ledger keys by), so if the rare reversed race lets both
+    through, the frontend dedups. The event stays in the store either way, so the read
+    paths (page-load hydration, backfill) serve it.
     """
-    return event.get("type") == "user_message"
+    if event.get("type") != "user_message":
+        return False
+    return was_live_user_turn_broadcast(agent_id, str(event.get("event_id", "")))
 
 
 def read_marker_rollout_path(marker_path: Path) -> Path | None:
@@ -165,7 +175,7 @@ class CodexSessionWatcher(StoreBackedWatcher):
         return (self._sessions_dir.parent,)
 
     def _filter_broadcast(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [event for event in events if not _is_live_suppressed(event)]
+        return [event for event in events if not _is_live_suppressed(self._agent_id, event)]
 
     def _refresh_locked(self) -> None:
         """Bring the store up to date with the live rollout, following rotation."""
