@@ -213,7 +213,6 @@ logged and nulled rather than raised.
 
 ## Environment hygiene
 
-- `uv init --no-workspace` inside another uv project, and your own `[tool.pytest.ini_options]`.
 - run throwaway scripts from the project directory, never a shared scratch directory.
 - no orphaned workers: `shutdown()` in `finally`, never exit with futures pending; if you
   interrupt a run, kill only your own leftovers by pid; never `pkill` by pattern (other builds
