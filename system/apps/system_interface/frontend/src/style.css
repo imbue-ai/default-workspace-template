@@ -1146,7 +1146,6 @@ body {
   list-style: none;
   margin: 0;
   padding-right: 4px;
-  scrollbar-color: var(--color-border) transparent;
 }
 
 @supports (-moz-appearance: none) {
@@ -1465,24 +1464,6 @@ body {
 
 .streaming-dot-3 {
   animation-delay: 0.3s;
-}
-
-/* ── Scrollbar ── */
-.app-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.app-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.app-content::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
-}
-
-.app-content::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
 }
 
 /* ── Structured tool call blocks (non-markdown) ── */
