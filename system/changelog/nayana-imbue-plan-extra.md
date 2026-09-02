@@ -1,7 +1,9 @@
 Added `system/scripts/imbue_plan_extra/`: the plan recorder the `build-app`
-skill fires off, as a `write_plan.sh` wrapper plus the `prompt.md` instructions
-it feeds in. It records, for offline analysis, a routing plan for the same
-request. Nothing in the workspace reads the result.
+skill fires off: a shared `write_plan.sh` wrapper plus a per-flow prompt under
+`prompts/`, named by the wrapper's first argument, so a second skill can record
+its own plans by adding a prompt and one invocation line. It records, for offline
+analysis, a routing plan for the same request. Nothing in the workspace reads the
+result.
 
 The plan is written by `--model opus`, which on the pinned Claude Code (2.1.227)
 is Opus 5 -- the same model the workspace's own chat agent runs on. The alias

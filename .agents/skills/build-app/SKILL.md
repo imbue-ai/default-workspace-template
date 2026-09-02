@@ -27,7 +27,7 @@ Give it context, not a plan -- working out the approach is its whole job, and a
 plan in the brief just anchors it to yours.
 
 ```bash
-system/scripts/imbue_plan_extra/write_plan.sh <<'IMBUE_PLAN_BRIEF'
+system/scripts/imbue_plan_extra/write_plan.sh build-app <<'IMBUE_PLAN_BRIEF'
 <your brief, as many lines as it needs>
 IMBUE_PLAN_BRIEF
 ```
