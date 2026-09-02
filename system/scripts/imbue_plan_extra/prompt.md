@@ -38,7 +38,8 @@ lists you output:
 3. **access list** -- which earlier nodes it depends on, and whose handoffs it
    sees. A list of earlier node indices, or the single entry `"all"`.
 
-Position i of every list describes node i, so a three-node plan reads like this:
+Position i of every list describes node i. For "build me a to-do list", a
+three-node plan reads like this:
 
 ```
 capability = ["high", "medium", "high"]
@@ -93,15 +94,19 @@ downstream of it. Spend where the risk is.
 ### Subtasks
 
 A subtask sets scope, not mechanism. This plan routes the work at a high level.
-The agent orchestrating it supplies the implementation details -- which script,
-which port, which command, which flag -- at the moment it creates each worker,
-so leave all of that out however well you know it.
+The agent orchestrating the plan, which is not you, supplies the implementation
+details -- which script, which port, which command, which flag -- at the moment
+it creates each worker. Leave all of that out however well you know it.
 
 Spend the words on the boundary of the work instead: what this node builds, what
 it deliberately leaves alone, what it should stub rather than finish, and what
 it hands back. "Scaffold the app, build the routes over the sampled data, and
 leave the live backend stubbed rather than wiring it to anything real" is the
 level to aim at -- a worker can hold itself to that, and none of it is a command.
+
+Drawing that boundary is the whole job. It decides how much work one worker
+carries, and therefore how capable that worker has to be: the point of the plan
+is to put the right quantity of work in front of the right model.
 
 Be as rich as the scope needs. Several sentences are fine when they are all
 about what is in and out of the work; the trouble is words spent on mechanism,
@@ -181,9 +186,14 @@ there for a later one to find. A node's access list controls two things:
 
 - **Ordering.** A node waits on the nodes in its access list. Nodes that are not
   waiting on each other run in parallel.
-- **Handoffs.** A node sees the subtask and the reply of each node it lists.
-  That is how one worker learns what another decided, named, or deliberately
-  left alone -- the things the files themselves leave unsaid.
+- **Handoffs.** A node sees the subtask and the reply of each node it lists, and
+  of those only. That is how one worker learns what another decided, named, or
+  deliberately left alone -- the things the files themselves leave unsaid.
+
+Ordering carries through the chain and context does not. If node 3 lists node 2
+and node 4 lists node 3, then node 4 already runs after node 2 without naming
+it -- but it reads node 2's handoff only if it lists it. So list a node when you
+want what it says in front of you, and let the chain do the waiting.
 
 What you can write in one:
 
@@ -209,6 +219,8 @@ sign-off, no prose outside the tags. The shape below is fixed; the content is
 yours. The wrapper writes your stdout to a file verbatim under a fixed header,
 so whatever you emit is the plan.
 
+For "build me a to-do list", where everything the app needs is already here:
+
 ```
 <thinking>
 Where you cut the work and why, and why each node got the capability it got.
@@ -220,13 +232,29 @@ access list = [[], [], [0, 1], [0, 2]]
 </output>
 ```
 
-The same shape at six nodes, with three of them starting at once:
+The same shape for "build me a dashboard of my unread Slack messages", where
+connecting the account is work the first request never needed -- six nodes, three
+of them starting at once:
 
 ```
 <output>
 capability = ["high", "medium", "low", "medium", "high", "high"]
 subtasks = ["Connect the user's Slack account and pull a real sample of the messages the page will show, covering an empty case and a high-volume one. Hand back the sample and what counts as unread for this account.", "Settle the page's layout and what each row shows. Hand back a short spec; decide nothing about how the data is fetched.", "Draw the app's icon in the workspace house style and hand back where you put it.", "Scaffold the app and put a throwaway mock of the page in front of the user: hard-coded content only, no persistence and no backend, covering the states the spec names. Loop until the user confirms the look and feel, then hand back what they confirmed.", "Replace the mock with the real page, reading Slack through the connection made upstream and keeping the confirmed layout exactly. Verify it serves and surface its tab.", "Hand the finished app to crystallize-creation."]
 access list = [[], [], [], [1, 2], [0, 3], [3, 4]]
+</output>
+```
+
+One more, for "chart my running times from the CSVs I export". The boundaries
+here are different in kind: one node may read the user's files but change none
+of them, one settles a question while explicitly leaving a neighbouring question
+alone, one builds against a fixed sample with the real loading stubbed out, and
+one is told to hand a problem back rather than design around it.
+
+```
+<output>
+capability = ["medium", "high", "medium", "high", "high"]
+subtasks = ["Work out what the user's exports actually contain, from real files they already have. Read them and change none of them, and leave any file that does not parse alone rather than repairing it. Hand back a small sample covering a normal export and the messiest one you found, plus which fields are reliably present.", "Settle what the chart shows and how the page around it reads. Decide nothing about how files reach the page -- that is settled elsewhere -- and hand back a short spec of the states the page must cover, including having no data yet.", "Build the page against the sample from upstream, with the file loading left as a stub that raises rather than reading anything real. Everything the user sees should be driven by the sample, so the chart and every state in the spec are exercised without a file ever being opened. Hand back what the stub expects to be handed.", "Replace the stub with real loading of the user's exports, matching the shape the page already expects. Keep the page exactly as built; if a real export breaks an assumption the sample did not, hand that back rather than reshaping the page around it. Verify the app serves and surface its tab.", "Hand the finished app to crystallize-creation."]
+access list = [[], [], [0, 1], [0, 2], [2, 3]]
 </output>
 ```
 
