@@ -12,6 +12,23 @@ to a subcommand per cleanly-separable step plus a `run all` that chains them; ad
 surface beyond that only when a specific invariant demands it. Split into a
 *separate* skill only when the components are likely to be used independently.
 
+## Skills that ingest recurring data batches
+
+When the skill's job is to turn batches of raw records (JSON/CSV/Parquet dumps,
+periodic exports, API pulls) into a processed, queryable store -- especially
+when batches keep arriving and overlap -- build its pipeline by following the
+`data-pipeline-builder` skill (`.agents/skills/data-pipeline-builder/`). The
+pipeline is part of this skill, not a separate creation:
+
+- All of its modules (`sources.py`, `store.py`, ...) go in
+  `.agents/skills/<name>/scripts/` beside `run.py`, running from the root venv.
+  Do NOT add a nested `pyproject.toml` or per-skill dependencies.
+- The root pytest config recurses into `.agents/`, so name test files for the
+  skill -- where data-pipeline-builder says `tests/test_parse.py`, write
+  `.agents/skills/<name>/scripts/<name>_parse_test.py` instead. A generic name
+  like `test_parse.py` collides across skills.
+- Fixtures go in `.agents/skills/<name>/tests/fixtures/` as usual.
+
 ## Where a skill's behavior lives
 
 A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, in
