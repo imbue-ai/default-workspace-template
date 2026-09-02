@@ -33,23 +33,25 @@ Three things define a node, and each is that node's entry in one of the three
 lists you output:
 
 1. **capability** -- how strong a worker the node is worth.
-   One of `"low"`, `"medium"` or `"high"`.
+   One of `"low"`, `"medium"` or `"high"`, or `"interactive"` for a node the
+   orchestrating agent handles itself.
 2. **subtask** (a string) -- what that worker is asked to accomplish.
 3. **access list** -- which earlier nodes it depends on, and whose handoffs it
    sees. A list of earlier node indices, or the single entry `"all"`.
 
 Position i of every list describes node i. For "build me a to-do list", a
-four-node plan reads like this:
+seven-node plan reads like this:
 
 ```
-capability = ["high", "low", "medium", "medium"]
-subtasks = ["Settle what a to-do item holds, how adding, ticking off and deleting behave, and what the empty state shows. Hand back a short spec.", "Draw the app's icon in the workspace house style and hand back where you put it.", "Build the page and its storage to that spec, using that icon, and verify it serves.", "Hand the finished to-do app to crystallize-creation with type=app."]
-access list = [[], [], [0, 1], [2]]
+capability = ["high", "low", "medium", "interactive", "medium", "interactive", "medium"]
+subtasks = ["Settle what a to-do item holds, how adding, ticking off and deleting behave, and what the empty state shows. Hand back a short spec.", "Draw the app's icon in the workspace house style and hand back where you put it.", "Build a throwaway mock of the page to that spec, using that icon: hard-coded content only. Hand back what it shows.", "Put the mock in front of the user and ask whether the look and feel is right. Bring back what they confirmed and any change they want.", "Build the real page and its storage to that spec, keeping the confirmed look, and verify it serves.", "Put the working site in front of the user and ask whether it does what they wanted. Bring back their answer.", "Hand the finished to-do app to crystallize-creation with type=app."]
+access list = [[], [], [0, 1], [2], [0, 3], [4], [5]]
 ```
 
-Nodes 0 and 1 both start from the brief alone, so they run at once. Node 2 waits
-for both, because it lists them. Node 3 is the handoff. The full output format is
-at the end of this document.
+Nodes 0 and 1 both start from the brief alone, so they run at once. Nodes 3 and
+5 are the two `interactive` nodes, each waiting on the thing it puts in front
+of the user. Node 6 is the handoff. The full output format is at the end of this
+document.
 
 Work out the shape first: what has to happen before what, and what can happen
 side by side.
@@ -77,8 +79,7 @@ Where you traded one of these against another, say so in your reasoning.
 ### Capability
 
 The workers are general-purpose LLMs of varying strength, and the stronger ones
-cost more to run. For each node, decide how strong a worker the work needs, as
-one of three buckets:
+cost more to run. For each node, decide how strong a worker the work needs:
 
 - `low` -- mechanical, well-specified work with a clear right answer:
   reformatting, extracting, applying a decided pattern, routine scaffolding.
@@ -86,10 +87,15 @@ one of three buckets:
   already exists.
 - `high` -- genuine design judgment, ambiguous requirements, cross-cutting
   decisions, anything a wrong call is expensive to reverse.
+- `interactive` -- an interaction with the user rather than a piece of work, so
+  it goes to no worker at all: the orchestrating agent handles it. It spends no
+  tokens.
 
 The two mistakes cost differently. Over-buying on a node costs money;
 under-buying on a node that needed the capability costs that node and everything
-downstream of it. Spend where the risk is.
+downstream of it. Spend where the risk is. An `interactive` node sits outside
+that trade: it costs time rather than money, which is why what runs alongside it
+matters more than what it costs.
 
 ### Subtasks
 
@@ -156,16 +162,19 @@ starting cold on work the previous one already had in hand. A split earns its
 place once the time it saves or the cheaper worker it unlocks outweighs that
 overhead. Below that line the two pieces belong in one node.
 
-Interactive work belongs to the orchestrating agent; nodes get the
-non-interactive work. A worker gets one turn: it produces the thing, hands up
-the question that goes with it, and stops. Where build-app iterates -- the mock,
-then the working site -- the orchestrator shows the work, takes the answer and
-dispatches again, so a subtask ends at the gate instead of looping across it.
-The gates still order the graph: work behind one begins once it clears. But
-before putting a node behind a gate, ask whether it needs what the gate decides
-or only what was decided before it. A data layer built to a settled record shape
-does not need the look and feel confirmed, so it can run while that confirmation
-is still out.
+build-app has exactly two user interactions: the mock, then the working site.
+Each gets its own node, marked `interactive` -- its subtask says what to show
+and what to ask, its access list is what the user needs to see, and whatever
+needs the answer lists it. A plan carries those two and no others, and no other
+node talks to the user. Where a node meets something it would rather ask about --
+a name, a default, an ambiguity in the brief -- it decides, and hands the
+decision back with its work.
+
+A node that does not list an `interactive` node runs while the user is still
+deciding, so check whether it needs the answer or only what was settled before
+the question. How long that wait runs is unknowable -- a gate may clear on the
+first reply, or go round many times as they ask for changes -- which is why it is
+worth putting whatever can run there alongside it.
 
 ### Handing a node to a skill
 
@@ -244,9 +253,9 @@ For "build me a to-do list", where everything the app needs is already here:
 Where you cut the work and why, and why each node got the capability it got.
 </thinking>
 <output>
-capability = ["high", "medium", "medium", "medium", "high", "medium"]
-subtasks = ["Settle what a to-do item holds, how adding, ticking off and deleting behave, and what the empty state shows. Hand back a short spec and the contract the page reads through.", "Pre-flight and scaffold the app, serving its placeholder page. Build no routes and no UI beyond scaffolding. Hand back the app name, lib path and URL segment.", "Build a throwaway mock of the page to that spec inside the scaffolded service: hard-coded content only, covering every state the spec names. Stop at the mock and hand back what it shows.", "Build the storage and routes to that spec, behind the contract settled upstream. Leave the page alone. Hand back the routes and what each returns.", "Replace the mock with the real page on those routes, keeping the confirmed look exactly. Verify it serves, surface its tab, and leave hardening to the handoff.", "Hand the finished to-do app to crystallize-creation with type=app."]
-access list = [[], [], [0, 1], [0], [2, 3], [4]]
+capability = ["high", "medium", "medium", "interactive", "medium", "high", "interactive", "medium"]
+subtasks = ["Settle what a to-do item holds, how adding, ticking off and deleting behave, and what the empty state shows. Hand back a short spec and the contract the page reads through.", "Pre-flight and scaffold the app, serving its placeholder page. Build no routes and no UI beyond scaffolding. Hand back the app name, lib path and URL segment.", "Build a throwaway mock of the page to that spec inside the scaffolded service: hard-coded content only, covering every state the spec names. Hand back what it shows.", "Put the mock in front of the user and ask whether the look and feel is right. Bring back what they confirmed and any change they want.", "Build the storage and routes to that spec, behind the contract settled upstream. Leave the page alone. Hand back the routes and what each returns.", "Replace the mock with the real page on those routes, keeping the confirmed look exactly. Verify it serves, surface its tab, and leave hardening to the handoff.", "Put the working site in front of the user and ask whether it does what they wanted. Bring back their answer.", "Hand the finished to-do app to crystallize-creation with type=app."]
+access list = [[], [], [0, 1], [2], [0], [3, 4], [5], [6]]
 </output>
 ```
 
@@ -256,9 +265,9 @@ of them starting at once:
 
 ```
 <output>
-capability = ["high", "low", "medium", "medium", "medium", "high", "medium", "high"]
-subtasks = ["Settle the record shape, what a refresh does to what is already stored, and the contract the page reads through. Hand back a short spec and that contract; decide nothing about layout.", "Draw the app's icon in the workspace house style and hand back where you put it.", "Prove how this app will call the classification model from a long-running service, using the throwaway scripts the sample came from. Touch no app code. Hand back the call contract and what one batch costs.", "Pre-flight and scaffold the app with that icon, serving its placeholder page. Build no routes, no data layer and no UI beyond scaffolding. Hand back the app name, lib path, URL segment and port.", "Build a throwaway mock of the page to the spec inside the scaffolded service, rendering the confirmed sample so the user judges it against real content. Hard-coded only: no fetching, no persistence, no backend. Stop at the mock and hand back what it shows.", "Build the data layer and routes to the spec, reading and writing through the contract settled upstream and driving refreshes with the call contract from the model-call node. Leave the page alone; another node wires it. Hand back the routes and what each returns.", "Replace the mock with the real page on those routes, keeping the confirmed look exactly. Verify the app serves and renders, and surface its tab. Leave hardening and thorough tests to the handoff.", "Hand the finished app to crystallize-creation with type=app."]
-access list = [[], [], [], [0, 1], [0, 3], [0, 2], [4, 5], [6]]
+capability = ["high", "low", "medium", "medium", "medium", "interactive", "high", "medium", "interactive", "high"]
+subtasks = ["Settle the record shape, what a refresh does to what is already stored, and the contract the page reads through. Hand back a short spec and that contract; decide nothing about layout.", "Draw the app's icon in the workspace house style and hand back where you put it.", "Prove how this app will call the classification model from a long-running service, using the throwaway scripts the sample came from. Touch no app code. Hand back the call contract and what one batch costs.", "Pre-flight and scaffold the app with that icon, serving its placeholder page. Build no routes, no data layer and no UI beyond scaffolding. Hand back the app name, lib path, URL segment and port.", "Build a throwaway mock of the page to the spec inside the scaffolded service, rendering the confirmed sample so the user judges it against real content. Hard-coded only: no fetching, no persistence, no backend. Hand back what it shows.", "Put the mock in front of the user and ask whether the look and feel is right. Bring back what they confirmed and any change they want.", "Build the data layer and routes to the spec, reading and writing through the contract settled upstream and driving refreshes with the call contract from the model-call node. Leave the page alone; another node wires it. Hand back the routes and what each returns.", "Replace the mock with the real page on those routes, keeping the confirmed look exactly. Verify the app serves and renders, and surface its tab. Leave hardening and thorough tests to the handoff.", "Put the working site in front of the user and ask whether it does what they wanted. Bring back their answer.", "Hand the finished app to crystallize-creation with type=app."]
+access list = [[], [], [], [0, 1], [0, 3], [4], [0, 2], [5, 6], [7], [8]]
 </output>
 ```
 
@@ -270,9 +279,9 @@ one is told to hand a problem back rather than design around it.
 
 ```
 <output>
-capability = ["medium", "high", "medium", "high", "medium", "medium"]
-subtasks = ["Work out what the user's exports actually contain, from real files they already have. Read them and change none of them, and leave any file that does not parse alone rather than repairing it. Hand back a small sample covering a normal export and the messiest one you found, and the shape a loader should hand the page.", "Settle what the chart shows and how the page around it reads, and hand back a short spec of the states it must cover, including having no data yet. Decide nothing about how files reach the page beyond the shape settled upstream.", "Build the page against the sample, driving every state in the spec from it, with loading left as a stub that raises rather than reading anything real. Hand back the page and what the stub expects to be handed.", "Build the real loading of the user's exports to the shape settled upstream, behind the same contract the stub stands in for. Do not touch the page. If a real export breaks an assumption the sample did not, hand that back rather than widening the shape to absorb it.", "Swap the stub for the real loader, verify the app serves and renders against real exports, and surface its tab. Keep the page as built; if the swap surfaces a mismatch, hand it back rather than reshaping the page around it.", "Hand the finished app to crystallize-creation with type=app."]
-access list = [[], [], [0, 1], [0, 1], [2, 3], [4]]
+capability = ["medium", "high", "medium", "high", "interactive", "medium", "interactive", "medium"]
+subtasks = ["Work out what the user's exports actually contain, from real files they already have. Read them and change none of them, and leave any file that does not parse alone rather than repairing it. Hand back a small sample covering a normal export and the messiest one you found, and the shape a loader should hand the page.", "Settle what the chart shows and how the page around it reads, and hand back a short spec of the states it must cover, including having no data yet. Decide nothing about how files reach the page beyond the shape settled upstream.", "Build the page against the sample, driving every state in the spec from it, with loading left as a stub that raises rather than reading anything real. Hand back the page and what the stub expects to be handed.", "Build the real loading of the user's exports to the shape settled upstream, behind the same contract the stub stands in for. Do not touch the page. If a real export breaks an assumption the sample did not, hand that back rather than widening the shape to absorb it.", "Put the mock in front of the user and ask whether the look and feel is right. Bring back what they confirmed and any change they want.", "Swap the stub for the real loader, verify the app serves and renders against real exports, and surface its tab. Keep the confirmed look; if the swap surfaces a mismatch, hand it back rather than reshaping the page around it.", "Put the working site in front of the user and ask whether it does what they wanted. Bring back their answer.", "Hand the finished app to crystallize-creation with type=app."]
+access list = [[], [], [0, 1], [0, 1], [2], [3, 4], [5], [6]]
 </output>
 ```
 
