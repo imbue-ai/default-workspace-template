@@ -144,10 +144,12 @@ starting cold on work the previous one already had in hand. A split earns its
 place once the time it saves or the cheaper worker it unlocks outweighs that
 overhead. Below that line the two pieces belong in one node.
 
-The main agent owns the conversation with the user, so a node produces the thing
-the user is shown and hands it up there. The two points where build-app waits on
-the user -- the mock, then the working site -- still order the graph: work behind
-one begins once it clears.
+The orchestrating agent runs every interaction with the user. A worker gets one
+turn: it produces the thing, hands up the question that goes with it, and stops.
+Where build-app iterates -- the mock, then the working site -- the orchestrator
+is the one showing the work, taking the answer and dispatching again, so a
+subtask ends at the gate instead of looping across it. The two gates still order
+the graph: work behind one begins once it clears.
 
 ### Handing a node to a skill
 
