@@ -57,7 +57,8 @@ from imbue.minds_admin.bake.pool_bake import ephemeral_bake_namespace
 from imbue.minds_admin.bake.pool_bake import finalize_baked_pool_host
 from imbue.minds_admin.bake.pool_bake import sweep_stale_bake_namespaces
 from imbue.minds_admin.bake.pool_bake import sync_mngr_into_template
-from imbue.minds_admin.bake.pool_bake import wait_for_deferred_install
+from imbue.minds_admin.bake.pool_bake import verify_only_primary_agents_baked
+from imbue.minds_admin.bake.pool_bake import wait_for_env_converge
 from imbue.minds_admin.cli._tier_secrets import DATABASE_URL_HELP
 from imbue.minds_admin.cli._tier_secrets import resolve_boxes_collector_install_config_or_none
 from imbue.minds_admin.cli._tier_secrets import resolve_ovh_config
@@ -1048,7 +1049,7 @@ def _bake_one_slice(
     database_url: str,
     port_range_start: int,
     port_range_end: int,
-    is_deferred_install_wait_skipped: bool,
+    is_env_converge_wait_skipped: bool,
     default_workspace_template_cache_tag: str | None,
     # The invocation's ephemeral bake namespace overrides (MNGR_HOST_DIR / MNGR_PREFIX),
     # so the inner ``mngr create`` never touches the operator's own mngr data root.
@@ -1100,18 +1101,20 @@ def _bake_one_slice(
                     f"container={baked.ssh_port})"
                 )
             finalize_baked_pool_host(_slice_run_in_container, baked, host_name=host_name)
-            # Let the DEFAULT_WORKSPACE_TEMPLATE deferred-install (heavy apt + browser download) finish before we stop the
-            # services agent: stopping mid-apt corrupts dpkg (see wait_for_deferred_install). Dev
-            # bakes may skip this wait to save the few minutes; the tradeoff is the baked container's
-            # deferred-install can be left incomplete/corrupt (acceptable for slow-path dev bakes,
-            # whose container is rebuilt on lease anyway).
-            if is_deferred_install_wait_skipped:
+            # Let the DEFAULT_WORKSPACE_TEMPLATE env-converge slow phase (heavy apt + browser
+            # download, record capture, rootfs stamp) finish before we stop the services agent:
+            # the stop kills it mid-run, shipping an image without apt.json / the rootfs stamp,
+            # and stopping mid-apt corrupts dpkg (see wait_for_env_converge). Dev bakes may skip
+            # this wait to save the few minutes; the tradeoff is the baked container's converge
+            # can be left incomplete/corrupt (acceptable for slow-path dev bakes, whose container
+            # is rebuilt on lease anyway).
+            if is_env_converge_wait_skipped:
                 logger.warning(
-                    "Skipping deferred-install wait for slice {} (dev bake); its baked deferred-install may be incomplete",
+                    "Skipping env-converge wait for slice {} (dev bake); its baked converge may be incomplete",
                     host_name,
                 )
             else:
-                wait_for_deferred_install(_slice_run_in_container, baked, host_name=host_name)
+                wait_for_env_converge(_slice_run_in_container, baked, host_name=host_name)
             # Stop the services agent so it lands in the pool STOPPED.
             # The fast-path lease then *starts* the adopted agent, which re-runs the
             # DEFAULT_WORKSPACE_TEMPLATE bootstrap (it runs on every start, e.g.
@@ -1130,6 +1133,12 @@ def _bake_one_slice(
                 raise BareMetalProvisioningError(
                     f"stopping the services agent on slice {host_name} failed (exit {stop_rc}): {stop_err.strip()}"
                 )
+            # Last gate before the pool-row insert: the parked container must hold only the
+            # primary services agent. Runs after the stop so nothing (the bootstrap included)
+            # can create an agent once the check has passed; a failure here rolls the VM back
+            # instead of shipping a host with a leaked agent (and thereby refuses old
+            # default-workspace-template tags whose bootstrap creates a boot chat).
+            verify_only_primary_agents_baked(_slice_run_in_container, baked, host_name=host_name)
             host_id_obj = HostId(baked.host_id)
             if not baked.outer_host_public_key or not baked.container_host_public_key:
                 raise BareMetalProvisioningError(
@@ -1905,7 +1914,7 @@ def allocate_slices(
     database_url: str,
     pool_private_key_pem: str,
     is_dry_run: bool,
-    is_deferred_install_wait_skipped: bool,
+    is_env_converge_wait_skipped: bool,
     max_concurrency: int,
 ) -> None:
     """Bake ``count`` slices onto the explicitly chosen bare-metal server and insert their pool rows.
@@ -2083,7 +2092,7 @@ def allocate_slices(
                 database_url=database_url,
                 port_range_start=DEFAULT_SLICE_PORT_RANGE_START,
                 port_range_end=DEFAULT_SLICE_PORT_RANGE_END,
-                is_deferred_install_wait_skipped=is_deferred_install_wait_skipped,
+                is_env_converge_wait_skipped=is_env_converge_wait_skipped,
                 default_workspace_template_cache_tag=default_workspace_template_cache_tag,
                 extra_create_env=bake_namespace.to_subprocess_env(),
             )

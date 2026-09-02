@@ -4,11 +4,11 @@ This is the single place that knows how to turn a *provisioned host* (an OVH VPS
 or a lima "slice" on a bare-metal box) into a ready-to-lease pool host: run
 ``mngr create`` against it with the DEFAULT_WORKSPACE_TEMPLATE bake templates, stop the services agent,
 harden the container sshd, and clear the baked-in git identity. It is
-deliberately **provider-agnostic and OVH-free**: the only provider name it sees
-is the opaque string on the ``mngr create`` address, and any provider-specific
-steps (OVH ufw / management-key install; the slice carve) are injected by the
-caller (``cli/admin.py`` for OVH, ``cli/server.py`` for slices) -- so OVH
-ordering logic and DEFAULT_WORKSPACE_TEMPLATE bake logic never mix in one module.
+deliberately **provider-agnostic**: the only provider name it sees is the
+opaque string on the ``mngr create`` address, and any provider-specific steps
+(e.g. the slice carve) are injected by the caller (``cli/server.py`` for
+slices; historically also an OVH VPS path) -- so provider ordering logic and
+DEFAULT_WORKSPACE_TEMPLATE bake logic never mix in one module.
 
 The bake resolves every host detail it returns from ``mngr create --format
 json`` (agent id, host id, the agent SSH endpoint + on-disk key, and -- when the
@@ -85,14 +85,18 @@ _GITIGNORE_RSYNC_FILTER: Final[str] = ":- .gitignore"
 # Exit code GNU ``timeout`` returns when it kills the wrapped command on timeout.
 _COMMAND_TIMEOUT_EXIT_CODE: Final[int] = 124
 
-# The DEFAULT_WORKSPACE_TEMPLATE env-converge browser unit is satisfied once the
-# Fortress engine binary is in place (there are no marker files anymore); the
-# bake waits on that condition (see ``wait_for_deferred_install``) before
-# stopping the services agent.
-_DEFERRED_INSTALL_SATISFIED_TEST: Final[str] = "test -x /opt/fortress/tilion-fortress/tilion"
-# Cap on how long the bake blocks for the deferred install (heavy apt + browser
-# download) to finish; on timeout the bake proceeds and the install retries on lease.
-_DEFERRED_INSTALL_WAIT_TIMEOUT_SECONDS: Final[int] = 900
+# The DEFAULT_WORKSPACE_TEMPLATE env-converge slow phase stamps the container
+# rootfs as its final step -- after the env.d units (the Fortress/Chromium
+# install among them) have run and the environment record files (apt.json, ...)
+# are captured -- so the stamp's presence means the converge completed on this
+# rootfs. The bake waits on it (see ``wait_for_env_converge``) before stopping
+# the services agent.
+_ENV_CONVERGE_STAMPED_TEST: Final[str] = "test -e /var/lib/minds/env-converge/rootfs-id"
+# Cap on how long the bake blocks for the env-converge slow phase (heavy apt +
+# browser download); on timeout the bake proceeds and the converge retries on lease.
+_ENV_CONVERGE_WAIT_TIMEOUT_SECONDS: Final[int] = 900
+# How long the in-container ``mngr list`` of the post-park verification may take.
+_VERIFY_AGENTS_TIMEOUT_SECONDS: Final[int] = 120
 
 # The MNGR_PREFIX every inner bake ``mngr`` subprocess runs under. Deliberately
 # NOT an extension of any user-facing prefix (e.g. ``minds-``), so no consumer
@@ -355,23 +359,33 @@ def build_pool_create_command(
     return command
 
 
-def parse_baked_host(stdout: str, *, host_name: str) -> BakedPoolHost:
-    """Parse the ``mngr create --format json`` object from a bake's stdout.
+def _parse_last_json_object_line(stdout: str, *, description: str) -> Any:
+    """Extract and parse the one single-line JSON object from a bake command's stdout.
 
-    ``--format json`` writes exactly one JSON object to stdout (logs go to
-    stderr), so the last ``{...}`` line is the result. A malformed candidate or a
-    payload missing the guaranteed ``host_id`` raises ``PoolBakeError`` (never
-    silently swallowed).
+    Every bake ``mngr ... --format json`` command writes exactly one JSON object
+    to stdout (logs go to stderr), so the last ``{...}`` line is the result.
+    Raises :class:`PoolBakeError` (never silently swallowed) when no object is
+    present or it is malformed; ``description`` names the command and context
+    for those messages. Callers validate the parsed object's shape themselves.
     """
     candidates = [
         line.strip() for line in stdout.splitlines() if line.strip().startswith("{") and line.strip().endswith("}")
     ]
     if not candidates:
-        raise PoolBakeError(f"no `mngr create --format json` object found in bake output: {stdout[-500:]!r}")
+        raise PoolBakeError(f"no JSON object found in {description} output: {stdout[-500:]!r}")
     try:
-        parsed = json.loads(candidates[-1])
+        return json.loads(candidates[-1])
     except json.JSONDecodeError as exc:
-        raise PoolBakeError(f"`mngr create --format json` output was not valid JSON: {candidates[-1]!r}") from exc
+        raise PoolBakeError(f"{description} output was not valid JSON: {candidates[-1]!r}") from exc
+
+
+def parse_baked_host(stdout: str, *, host_name: str) -> BakedPoolHost:
+    """Parse the ``mngr create --format json`` object from a bake's stdout.
+
+    A missing/malformed object or a payload missing the guaranteed ``host_id``
+    raises ``PoolBakeError``.
+    """
+    parsed = _parse_last_json_object_line(stdout, description="`mngr create --format json` bake")
     if not isinstance(parsed, dict) or "host_id" not in parsed:
         raise PoolBakeError(f"`mngr create --format json` output missing host_id: {parsed!r}")
     ssh_port = parsed.get("ssh_port")
@@ -452,48 +466,62 @@ def bake_pool_host(
     return baked
 
 
-def wait_for_deferred_install(
+def wait_for_env_converge(
     run_in_container: ContainerCommandRunner,
     baked: BakedPoolHost,
     *,
     host_name: str,
-    timeout_seconds: int = _DEFERRED_INSTALL_WAIT_TIMEOUT_SECONDS,
+    timeout_seconds: int = _ENV_CONVERGE_WAIT_TIMEOUT_SECONDS,
 ) -> None:
-    """Wait for the DEFAULT_WORKSPACE_TEMPLATE env-converge browser unit to finish before the caller stops the services agent.
+    """Wait for the DEFAULT_WORKSPACE_TEMPLATE env-converge slow phase to finish before the caller stops the services agent.
 
-    The env-converge browser unit kicks off a heavy apt + Fortress/Chromium install at agent boot.
-    Stopping the services agent mid-apt kills it, leaving dpkg half-unpacked (reinst-required) -- so the
-    install only completes after a repair on the post-lease retry. Calling this right before the stop
-    avoids that interruption. Both backends must call it before their respective ``mngr stop`` (OVH stops
-    before ``finalize_baked_pool_host``, slices after, so this is a standalone step rather than part of
-    finalize). Runs inside the container via the caller-supplied transport.
+    The slow phase is a supervisord one-shot (``env-converge run --phase slow``) that runs the
+    heavy env.d units (the Fortress/Chromium apt install among them), replays the environment
+    record, captures the record files (apt.json, ...), and stamps the rootfs as its final step.
+    The bake's park (``mngr stop``) kills the whole services-agent tree, supervisord included, so
+    stopping mid-run ships a baked image without the record files or the rootfs stamp -- and
+    stopping mid-apt can leave dpkg half-unpacked. Waiting on any single sub-step is not enough:
+    the Fortress binary can already be present from a cached image while the rest of the phase is
+    still running, which is exactly how baked slices used to ship without ``apt.json``. So this
+    waits on the phase's own completion signals, inside the container via the caller-supplied
+    transport, right before the stop.
 
-    Blocks until either the unit's satisfied condition holds (the Fortress engine binary is in
-    place) OR the unit's process is no longer running -- the latter so a not-yet-started or
-    already-finished/failed install does not block us (env-converge re-runs the idempotent unit
-    cleanly post-lease). Best-effort with a cap: on timeout we log and proceed.
+    Blocks until either the rootfs stamp exists (written after the record files, so their
+    presence is implied) OR supervisord reports the one-shot as done (EXITED/FATAL) or unknown --
+    the latter so a crashed converge, or a template without the program, does not block the bake
+    (the converge re-runs idempotently on lease). A supervisord that is not up yet keeps the poll
+    waiting: its socket error matches neither condition. Best-effort with a cap: on timeout we
+    log and proceed.
     """
-    # The bracket in '[1]000-playwright-fortress' is the classic self-match guard: the regex still
-    # matches the real "bash system/scripts/env.d/1000-playwright-fortress.sh" unit process, but this wait
-    # command's own command line contains the bracketed spelling, so pgrep does not match itself into
-    # an infinite loop.
     poll = (
-        f"until {_DEFERRED_INSTALL_SATISFIED_TEST} || "
-        f"! pgrep -f '[1]000-playwright-fortress' >/dev/null 2>&1; do sleep 5; done"
+        f"until {_ENV_CONVERGE_STAMPED_TEST} || "
+        "supervisorctl status env-converge 2>/dev/null | grep -qE 'EXITED|FATAL|no such process'; "
+        "do sleep 5; done"
     )
-    wait_command = f"timeout {int(timeout_seconds)} bash -c {shlex.quote(poll)}"
-    rc, _out, err = run_in_container(baked, "deferred-install-wait", wait_command, float(timeout_seconds + 60))
+    # `&&` (not `;`) so a timeout's exit 124 is preserved; on a completed poll the trailing
+    # group reports whether the phase actually stamped or merely stopped running.
+    wait_command = (
+        f"timeout {int(timeout_seconds)} bash -c {shlex.quote(poll)}"
+        f" && ({_ENV_CONVERGE_STAMPED_TEST} && echo converged || echo exited-without-stamp)"
+    )
+    rc, out, err = run_in_container(baked, "env-converge-wait", wait_command, float(timeout_seconds + 60))
     if rc == 0:
-        # The install finished (or had not started / had already exited); safe to stop.
-        pass
+        if "exited-without-stamp" in out:
+            logger.warning(
+                "env-converge on {} finished without stamping the rootfs; proceeding (it retries on first lease)",
+                host_name,
+            )
+        else:
+            # The slow phase completed and stamped the rootfs; safe to stop.
+            pass
     elif rc == _COMMAND_TIMEOUT_EXIT_CODE:
         logger.warning(
-            "deferred-install on {} did not finish within {}s; proceeding (it retries on first lease)",
+            "env-converge on {} did not finish within {}s; proceeding (it retries on first lease)",
             host_name,
             timeout_seconds,
         )
     else:
-        logger.warning("Could not wait for deferred-install on {} (exit {}): {}", host_name, rc, err.strip())
+        logger.warning("Could not wait for env-converge on {} (exit {}): {}", host_name, rc, err.strip())
 
 
 def finalize_baked_pool_host(
@@ -551,4 +579,79 @@ def finalize_baked_pool_host(
     # chat at boot. A chat binds to a provider account when it is CREATED and nothing rebinds
     # it, so a boot-time chat -- made before anyone has signed in -- could never take a turn.
     # An adopted workspace opens on its new-tab screen, and its first chat is whichever one the
-    # user starts, on the account they picked.
+    # user starts, on the account they picked. That end state is enforced by
+    # ``verify_only_primary_agents_baked`` after the park.
+
+
+def _parse_agent_listing(stdout: str, *, host_name: str) -> list[dict[str, Any]]:
+    """Parse the agents from an in-container ``mngr list --format json`` stdout.
+
+    ``--format json`` emits one ``{"agents": [...], "errors": [...]}`` object. Raises
+    :class:`PoolBakeError` on a missing/malformed object, a malformed agent entry, or a
+    non-empty ``errors`` channel -- a listing that cannot be trusted must never pass the
+    verification.
+    """
+    parsed = _parse_last_json_object_line(stdout, description=f"`mngr list --format json` on {host_name}")
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("agents"), list):
+        raise PoolBakeError(f"`mngr list --format json` output on {host_name} missing the agents list: {parsed!r}")
+    errors = parsed.get("errors") or []
+    if errors:
+        raise PoolBakeError(
+            f"`mngr list` on {host_name} reported discovery errors, so its agent listing cannot be "
+            f"trusted for verification: {errors!r}"
+        )
+    agents = parsed["agents"]
+    for agent in agents:
+        if not isinstance(agent, dict):
+            raise PoolBakeError(f"`mngr list` on {host_name} returned a malformed agent entry: {agent!r}")
+    return agents
+
+
+def verify_only_primary_agents_baked(
+    run_in_container: ContainerCommandRunner,
+    baked: BakedPoolHost,
+    *,
+    host_name: str,
+) -> None:
+    """Fail the bake unless the parked container holds only the primary services agent.
+
+    Shipping a pool host with extra agents has bitten us before: the historical bootstrap-created
+    boot chat ran credential-less from bake until lease and collided with the adopting user's own
+    chat creates, and the teardown that was supposed to prevent it targeted a stale name whose
+    lookup miss ``mngr destroy --force`` silently turned into success. So instead of trusting any
+    teardown, this asserts the end state. It must run *after* the park (``mngr stop``): with
+    supervisord and the bootstrap dead nothing can create an agent later, so a pass here is the
+    shipped state.
+
+    Old default-workspace-template tags whose bootstrap still creates a boot chat are deliberately
+    refused by this check (``pool create --from-tag`` on such a tag fails its bake loudly here);
+    bake a tag without a boot chat instead.
+
+    Raises :class:`PoolBakeError` on any non-primary agent, on a listing that cannot be trusted
+    (command failure, unparseable output, discovery errors), or on an empty listing -- the parked
+    services agent must still be visible, so an empty result means the listing itself is broken.
+    """
+    list_command = f"cd {BAKED_SERVICES_CHECKOUT_PATH} && uv run mngr list --format json"
+    rc, out, err = run_in_container(baked, "verify-agents", list_command, float(_VERIFY_AGENTS_TIMEOUT_SECONDS))
+    if rc != 0:
+        raise PoolBakeError(
+            f"could not list agents on baked pool host {host_name} for verification (exit {rc}): {err.strip()}"
+        )
+    agents = _parse_agent_listing(out, host_name=host_name)
+    if not agents:
+        raise PoolBakeError(
+            f"`mngr list` on baked pool host {host_name} returned no agents, but the parked "
+            f"{BAKED_SERVICES_AGENT_NAME} agent must be visible -- the listing is broken, refusing to ship"
+        )
+    non_primary_names = sorted(
+        str(agent.get("name", agent.get("id", "<unnamed>")))
+        for agent in agents
+        if not isinstance(agent.get("labels"), dict) or agent["labels"].get("is_primary") != "true"
+    )
+    if non_primary_names:
+        raise PoolBakeError(
+            f"baked pool host {host_name} holds non-primary agent(s) {non_primary_names}; refusing to ship "
+            "it. The bake's template created extra agents -- old default-workspace-template tags create a "
+            "boot chat at first boot and are not bakeable; use a tag without a boot chat."
+        )
+    logger.info("  Verified baked pool host {}: only primary agent(s) present ({} total)", host_name, len(agents))

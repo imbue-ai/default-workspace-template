@@ -15,7 +15,8 @@ from imbue.minds_admin.bake.pool_bake import ephemeral_bake_namespace
 from imbue.minds_admin.bake.pool_bake import finalize_baked_pool_host
 from imbue.minds_admin.bake.pool_bake import parse_baked_host
 from imbue.minds_admin.bake.pool_bake import sweep_stale_bake_namespaces
-from imbue.minds_admin.bake.pool_bake import wait_for_deferred_install
+from imbue.minds_admin.bake.pool_bake import verify_only_primary_agents_baked
+from imbue.minds_admin.bake.pool_bake import wait_for_env_converge
 
 
 class _ScriptedRunner:
@@ -86,27 +87,117 @@ def test_finalize_sshd_harden_failure_is_best_effort() -> None:
     assert "git-identity-reset" in [label for label, _cmd in runner.calls]
 
 
-def test_wait_for_deferred_install_polls_for_marker_or_finished_process() -> None:
-    runner = _ScriptedRunner({})
-    wait_for_deferred_install(runner, _baked(), host_name="slice-x", timeout_seconds=5)
-    assert [label for label, _cmd in runner.calls] == ["deferred-install-wait"]
+def test_wait_for_env_converge_polls_for_rootfs_stamp_or_finished_oneshot() -> None:
+    runner = _ScriptedRunner({"env-converge-wait": (0, "converged", "")})
+    wait_for_env_converge(runner, _baked(), host_name="slice-x", timeout_seconds=5)
+    assert [label for label, _cmd in runner.calls] == ["env-converge-wait"]
     command = runner.calls[0][1]
-    # The poll checks the unit's satisfied condition (the Fortress engine binary)
-    # and uses a bracketed pgrep pattern (self-match guard).
-    assert "test -x /opt/fortress/tilion-fortress/tilion" in command
-    assert "[1]000-playwright-fortress" in command
+    # The poll's success condition is the slow phase's own final step (the rootfs stamp,
+    # written after the record files), so waiting on it covers the whole phase -- not just
+    # the Fortress binary, which a cached image can carry while apt is still running.
+    assert "test -e /var/lib/minds/env-converge/rootfs-id" in command
+    # The bail-early condition asks supervisord about the one-shot itself: EXITED/FATAL
+    # (crashed or finished) and an unknown program both stop the wait, while a supervisord
+    # that is not up yet (socket error, matching neither) keeps it polling.
+    assert "supervisorctl status env-converge" in command
+    assert "EXITED|FATAL|no such process" in command
     assert "timeout 5" in command
 
 
-def test_wait_for_deferred_install_is_best_effort_on_timeout() -> None:
+def test_wait_for_env_converge_is_best_effort_when_oneshot_exited_without_stamp() -> None:
+    # A converge that crashed before stamping must not fail the bake; it retries on lease.
+    runner = _ScriptedRunner({"env-converge-wait": (0, "exited-without-stamp", "")})
+    wait_for_env_converge(runner, _baked(), host_name="slice-x", timeout_seconds=5)
+
+
+def test_wait_for_env_converge_is_best_effort_on_timeout() -> None:
     # Hitting the cap (timeout exit 124) must not fail the bake; it retries on lease.
-    runner = _ScriptedRunner({"deferred-install-wait": (124, "", "")})
-    wait_for_deferred_install(runner, _baked(), host_name="slice-x", timeout_seconds=5)
+    runner = _ScriptedRunner({"env-converge-wait": (124, "", "")})
+    wait_for_env_converge(runner, _baked(), host_name="slice-x", timeout_seconds=5)
 
 
-def test_wait_for_deferred_install_is_best_effort_on_transport_error() -> None:
-    runner = _ScriptedRunner({"deferred-install-wait": (255, "", "ssh: connect failed")})
-    wait_for_deferred_install(runner, _baked(), host_name="slice-x", timeout_seconds=5)
+def test_wait_for_env_converge_is_best_effort_on_transport_error() -> None:
+    runner = _ScriptedRunner({"env-converge-wait": (255, "", "ssh: connect failed")})
+    wait_for_env_converge(runner, _baked(), host_name="slice-x", timeout_seconds=5)
+
+
+def _agent_listing_json(agents: list[dict[str, object]], errors: list[dict[str, object]] | None = None) -> str:
+    return json.dumps({"agents": agents, "errors": errors or []})
+
+
+def test_verify_only_primary_agents_baked_passes_with_only_the_primary_agent() -> None:
+    listing = _agent_listing_json(
+        [{"id": "agent-1", "name": "system-services", "labels": {"is_primary": "true", "user_created": "true"}}]
+    )
+    runner = _ScriptedRunner({"verify-agents": (0, listing, "")})
+    verify_only_primary_agents_baked(runner, _baked(), host_name="slice-x")
+    assert [label for label, _cmd in runner.calls] == ["verify-agents"]
+    # The check reads the end state through the vendored mngr, from the workspace checkout.
+    command = runner.calls[0][1]
+    assert "cd /home/user/workspace" in command
+    assert "uv run mngr list --format json" in command
+
+
+def test_verify_only_primary_agents_baked_fails_the_bake_on_a_leaked_chat_agent() -> None:
+    # The historical leak: an old-tag bootstrap created a boot chat, and the teardown's
+    # wrong-name `mngr destroy --force` silently missed it. The end-state check must fail
+    # the bake loudly instead (this is also what refuses old-tag bakes).
+    listing = _agent_listing_json(
+        [
+            {"id": "agent-1", "name": "system-services", "labels": {"is_primary": "true"}},
+            {"id": "agent-2", "name": "Chat-1", "labels": {"display_name": "Chat 1"}},
+        ]
+    )
+    runner = _ScriptedRunner({"verify-agents": (0, listing, "")})
+    with pytest.raises(PoolBakeError, match="Chat-1"):
+        verify_only_primary_agents_baked(runner, _baked(), host_name="slice-x")
+
+
+def test_verify_only_primary_agents_baked_fails_when_the_listing_command_fails() -> None:
+    runner = _ScriptedRunner({"verify-agents": (1, "", "boom")})
+    with pytest.raises(PoolBakeError, match="could not list agents"):
+        verify_only_primary_agents_baked(runner, _baked(), host_name="slice-x")
+
+
+def test_verify_only_primary_agents_baked_fails_on_unparseable_output() -> None:
+    runner = _ScriptedRunner({"verify-agents": (0, "not json at all", "")})
+    with pytest.raises(PoolBakeError):
+        verify_only_primary_agents_baked(runner, _baked(), host_name="slice-x")
+
+
+def test_verify_only_primary_agents_baked_fails_on_a_malformed_agent_entry() -> None:
+    # A non-dict agent entry means the listing cannot be trusted; it must raise
+    # PoolBakeError (so the caller's rollback catches it), not crash with AttributeError.
+    runner = _ScriptedRunner({"verify-agents": (0, '{"agents": ["garbage"], "errors": []}', "")})
+    with pytest.raises(PoolBakeError, match="malformed agent entry"):
+        verify_only_primary_agents_baked(runner, _baked(), host_name="slice-x")
+
+
+def test_verify_only_primary_agents_baked_fails_on_discovery_errors() -> None:
+    # A listing with discovery errors may be missing agents, so it can never prove the
+    # host is clean.
+    listing = _agent_listing_json(
+        [{"id": "agent-1", "name": "system-services", "labels": {"is_primary": "true"}}],
+        errors=[{"message": "provider unreachable"}],
+    )
+    runner = _ScriptedRunner({"verify-agents": (0, listing, "")})
+    with pytest.raises(PoolBakeError, match="discovery errors"):
+        verify_only_primary_agents_baked(runner, _baked(), host_name="slice-x")
+
+
+def test_verify_only_primary_agents_baked_fails_on_an_empty_listing() -> None:
+    # The parked services agent must still be visible; zero agents means the listing
+    # itself is broken (e.g. mngr resolved the wrong host dir), not a clean host.
+    runner = _ScriptedRunner({"verify-agents": (0, _agent_listing_json([]), "")})
+    with pytest.raises(PoolBakeError, match="no agents"):
+        verify_only_primary_agents_baked(runner, _baked(), host_name="slice-x")
+
+
+def test_verify_only_primary_agents_baked_treats_a_missing_labels_dict_as_non_primary() -> None:
+    listing = _agent_listing_json([{"id": "agent-2", "name": "mystery"}])
+    runner = _ScriptedRunner({"verify-agents": (0, listing, "")})
+    with pytest.raises(PoolBakeError, match="mystery"):
+        verify_only_primary_agents_baked(runner, _baked(), host_name="slice-x")
 
 
 def test_build_pool_create_command_targets_the_given_provider_with_default_workspace_templates() -> None:
