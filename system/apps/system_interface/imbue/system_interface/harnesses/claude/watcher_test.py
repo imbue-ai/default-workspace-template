@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 
 
@@ -242,7 +244,6 @@ def test_poll_does_not_lose_record_split_mid_line(tmp_path: Path) -> None:
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     collected: list[dict[str, Any]] = []
     watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
-    watcher._discover_sessions()
 
     line1 = (json.dumps(_user_event(0)) + "\n").encode("utf-8")
     line2 = (json.dumps(_user_event(1)) + "\n").encode("utf-8")
@@ -251,7 +252,7 @@ def test_poll_does_not_lose_record_split_mid_line(tmp_path: Path) -> None:
     with open(session_file, "ab") as f:
         f.write(line1)
         f.write(line2[: len(line2) // 2])
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
 
     # Only the complete record is emitted; the partial line is retained, not lost.
     assert [e["event_id"] for e in collected] == ["uuid-0-user"]
@@ -259,7 +260,7 @@ def test_poll_does_not_lose_record_split_mid_line(tmp_path: Path) -> None:
     # Flush the rest of line2; the previously-partial record must now appear.
     with open(session_file, "ab") as f:
         f.write(line2[len(line2) // 2 :])
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
 
     assert [e["event_id"] for e in collected] == ["uuid-0-user", "uuid-1-user"]
     assert collected[1]["content"] == "Message 1"
@@ -270,7 +271,6 @@ def test_poll_does_not_corrupt_split_multibyte_utf8(tmp_path: Path) -> None:
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     collected: list[dict[str, Any]] = []
     watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
-    watcher._discover_sessions()
 
     # Content ends with a 4-byte emoji whose UTF-8 sequence we deliberately split.
     content = "café\U0001f389"
@@ -281,13 +281,13 @@ def test_poll_does_not_corrupt_split_multibyte_utf8(tmp_path: Path) -> None:
 
     with open(session_file, "ab") as f:
         f.write(line_bytes[:split])
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     # The split multi-byte sequence is not yet complete: nothing emitted, no crash.
     assert collected == []
 
     with open(session_file, "ab") as f:
         f.write(line_bytes[split:])
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
 
     assert len(collected) == 1
     assert collected[0]["content"] == content
@@ -298,12 +298,11 @@ def test_poll_emits_final_record_without_trailing_newline(tmp_path: Path) -> Non
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     collected: list[dict[str, Any]] = []
     watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
-    watcher._discover_sessions()
 
     with open(session_file, "ab") as f:
         # Deliberately omit the trailing newline.
         f.write(json.dumps(_user_event(0)).encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
 
     assert [e["event_id"] for e in collected] == ["uuid-0-user"]
 
@@ -313,19 +312,18 @@ def test_poll_handles_truncation(tmp_path: Path) -> None:
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     collected: list[dict[str, Any]] = []
     watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
-    watcher._discover_sessions()
 
     with open(session_file, "ab") as f:
         f.write((json.dumps(_user_event(5)) + "\n").encode("utf-8"))
         f.write((json.dumps(_user_event(6)) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert [e["event_id"] for e in collected] == ["uuid-5-user", "uuid-6-user"]
 
     # Truncate and rewrite with a shorter, different content. The new file is
     # smaller than the consumed offset; without truncation handling this would
     # be silently ignored.
     session_file.write_bytes((json.dumps(_user_event(1)) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
 
     assert "uuid-1-user" in [e["event_id"] for e in collected]
 
@@ -341,24 +339,22 @@ def test_poll_re_reads_truncated_file_with_recurring_event_ids(tmp_path: Path) -
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     collected: list[dict[str, Any]] = []
     watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
-    watcher._discover_sessions()
 
     original = (json.dumps(_user_event(0)) + "\n").encode("utf-8") + (json.dumps(_user_event(1)) + "\n").encode(
         "utf-8"
     )
     session_file.write_bytes(original)
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert [e["event_id"] for e in collected] == ["uuid-0-user", "uuid-1-user"]
 
     # Rewrite the file shorter but reusing event 0's ID, then growing again to
     # the same two records. The first record's ID recurs and must reappear.
     session_file.write_bytes((json.dumps(_user_event(0)) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     session_file.write_bytes(original)
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
 
-    final_state = watcher._session_states["test-session"]
-    assert [loc.event_id for loc in final_state.locators] == ["uuid-0-user", "uuid-1-user"]
+    assert [e["event_id"] for e in watcher.get_all_events()] == ["uuid-0-user", "uuid-1-user"]
 
 
 def test_poll_still_emits_events_parsed_by_a_concurrent_get_all_events(tmp_path: Path) -> None:
@@ -374,7 +370,6 @@ def test_poll_still_emits_events_parsed_by_a_concurrent_get_all_events(tmp_path:
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     collected: list[dict[str, Any]] = []
     watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
-    watcher._discover_sessions()
 
     with open(session_file, "ab") as f:
         f.write((json.dumps(_user_event(0)) + "\n").encode("utf-8"))
@@ -383,11 +378,11 @@ def test_poll_still_emits_events_parsed_by_a_concurrent_get_all_events(tmp_path:
     # the poll loop gets to it.
     watcher.get_all_events()
 
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert [e["event_id"] for e in collected] == ["uuid-0-user"]
 
     # A second poll with no new bytes must not re-emit the same event.
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert [e["event_id"] for e in collected] == ["uuid-0-user"]
 
 
@@ -434,6 +429,7 @@ def test_get_all_events_parses_only_new_tail(tmp_path: Path) -> None:
         assert a is b
 
 
+@pytest.mark.timeout(60)
 def test_concurrent_reads_and_discovery_do_not_raise(tmp_path: Path) -> None:
     """Concurrent get_all_events + session discovery must not raise (issue C).
 
@@ -461,6 +457,12 @@ def test_concurrent_reads_and_discovery_do_not_raise(tmp_path: Path) -> None:
             except RuntimeError as e:
                 # "dictionary changed size during iteration" is the unlocked failure.
                 errors.append(e)
+            # Yield between reads: Python locks are not fair, and a reader that
+            # re-acquires the store lock back-to-back can starve the discoverer on a
+            # loaded machine, stretching the test past its timeout. Waiting on the
+            # stop event for 1ms still leaves hundreds of reads overlapping the 60
+            # discovery rounds, and wakes immediately when the discoverer finishes.
+            stop.wait(0.001)
 
     def discoverer() -> None:
         try:
@@ -469,7 +471,7 @@ def test_concurrent_reads_and_discovery_do_not_raise(tmp_path: Path) -> None:
                 _write_session_file(projects_dir, session_id, [_user_event(i)])
                 with open(history_file, "a") as f:
                     f.write(f"{session_id}\n")
-                watcher._discover_sessions()
+                watcher._emit_cycle()
         finally:
             stop.set()
 
@@ -483,16 +485,10 @@ def test_concurrent_reads_and_discovery_do_not_raise(tmp_path: Path) -> None:
     assert errors == [], f"Concurrent access raised: {errors!r}"
 
 
-def test_prime_caches_marks_backlog_emitted_atomically(tmp_path: Path) -> None:
-    """Priming must mark the existing backlog emitted in the same lock hold that
-    fills the cache, so the poll loop never re-broadcasts the backlog while still
-    emitting events appended after start.
-
-    The cache fill and the emitted-count mark used to span two separate lock
-    acquisitions; a get_all_events landing in the gap could append events that
-    then got marked emitted and never reached SSE clients. Priming now marks
-    atomically. This asserts the resulting invariant: the whole primed backlog
-    is emitted (poll emits nothing for it) and a later append is still emitted.
+def test_prime_marks_backlog_emitted(tmp_path: Path) -> None:
+    """Priming parses the whole backlog and marks it emitted in one lock hold, so
+    the poll loop never re-broadcasts the backlog while still emitting events
+    appended after start (the backlog reaches clients via the REST tail path).
     """
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     with open(session_file, "ab") as f:
@@ -501,21 +497,18 @@ def test_prime_caches_marks_backlog_emitted_atomically(tmp_path: Path) -> None:
 
     collected: list[dict[str, Any]] = []
     watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
-    state = watcher._session_states["test-session"]
-    # The whole backlog is indexed and marked emitted, so the poll loop has
+    # The whole backlog is resident and marked emitted, so the poll loop has
     # nothing to broadcast for it.
-    assert [loc.event_id for loc in state.locators] == ["uuid-0-user", "uuid-1-user"]
-    assert state.emitted_count == len(state.locators)
-    watcher._poll_for_changes()
+    assert [e["event_id"] for e in watcher.get_all_events()] == ["uuid-0-user", "uuid-1-user"]
+    watcher._emit_cycle()
     assert collected == []
 
     # An event appended after priming is still emitted exactly once.
     with open(session_file, "ab") as f:
         f.write((json.dumps(_user_event(2)) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert [e["event_id"] for e in collected] == ["uuid-2-user"]
 
 
@@ -782,14 +775,13 @@ def test_late_subagent_discovery_rebroadcasts_enriched_parent(tmp_path: Path) ->
         on_events=lambda aid, evts: collected.append((aid, evts)),
     )
 
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     # The main agent writes the assistant message containing the Agent tool_call.
     with open(parent_session_file, "a") as f:
         f.write(json.dumps(parent_event) + "\n")
 
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     broadcast_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
     assert broadcast_tc is not None, "parent assistant message should have been broadcast"
     assert "subagent_metadata" not in broadcast_tc, "no metadata before the subagent exists"
@@ -806,8 +798,7 @@ def test_late_subagent_discovery_rebroadcasts_enriched_parent(tmp_path: Path) ->
         description="explore late",
     )
 
-    watcher._discover_sessions()
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
 
     assert len(collected) == emissions_before + 1, "parent should be re-broadcast once linkage lands"
     relinked_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
@@ -817,7 +808,7 @@ def test_late_subagent_discovery_rebroadcasts_enriched_parent(tmp_path: Path) ->
 
     # Idempotent: a fully-linked parent is not re-broadcast again.
     emissions_after_relink = len(collected)
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
     assert len(collected) == emissions_after_relink
 
 
@@ -845,8 +836,7 @@ def test_inorder_subagent_discovery_does_not_rebroadcast(tmp_path: Path) -> None
         on_events=lambda aid, evts: collected.append((aid, evts)),
     )
 
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     # Subagent linkage is known before the parent line is read.
     _write_subagent_session(
@@ -857,18 +847,18 @@ def test_inorder_subagent_discovery_does_not_rebroadcast(tmp_path: Path) -> None
         agent_type="Explore",
         description="explore inorder",
     )
-    watcher._discover_sessions()
+    watcher._emit_cycle()
 
     with open(parent_session_file, "a") as f:
         f.write(json.dumps(parent_event) + "\n")
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
 
     broadcast_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
     assert broadcast_tc is not None
     assert "subagent_metadata" in broadcast_tc, "metadata present on first broadcast"
 
     emissions_before = len(collected)
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
     assert len(collected) == emissions_before, "nothing left to re-broadcast"
 
 
@@ -910,8 +900,7 @@ def test_tool_result_in_later_poll_relinks_cached_parent(tmp_path: Path) -> None
         on_events=lambda aid, evts: collected.append((aid, evts)),
     )
 
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     # The subagent's meta.json was discovered (so its agent_type/description are known) but
     # carries no toolUseId on this version (older Claude Code), so only the tool_result
@@ -925,8 +914,8 @@ def test_tool_result_in_later_poll_relinks_cached_parent(tmp_path: Path) -> None
     # Cycle A: the parent assistant message arrives and is broadcast without metadata.
     with open(parent_session_file, "a") as f:
         f.write(json.dumps(parent_event) + "\n")
-    watcher._poll_for_changes()
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
+    watcher._emit_cycle()
     broadcast_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
     assert broadcast_tc is not None
     assert "subagent_metadata" not in broadcast_tc, "no metadata while the subagent is still running"
@@ -936,8 +925,8 @@ def test_tool_result_in_later_poll_relinks_cached_parent(tmp_path: Path) -> None
     # Cycle B (later): the subagent finishes and its tool_result lands in a separate batch.
     with open(parent_session_file, "a") as f:
         f.write(json.dumps(tool_result_line) + "\n")
-    watcher._poll_for_changes()
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
+    watcher._emit_cycle()
 
     assert len(collected) > emissions_before, "parent should be re-broadcast once the tool_result lands"
     relinked_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
@@ -975,12 +964,11 @@ def test_parent_already_on_disk_at_start_upgrades_card_when_subagent_links(tmp_p
         on_events=lambda aid, evts: collected.append((aid, evts)),
     )
 
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     # Priming does not broadcast the backlog, and a poll re-surfaces nothing (it was marked
     # emitted), so without the prime-time seed there would be nothing left to upgrade.
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id) is None
 
     # The subagent appears while still running (meta.json present, no tool_result yet).
@@ -992,8 +980,7 @@ def test_parent_already_on_disk_at_start_upgrades_card_when_subagent_links(tmp_p
         agent_type="general-purpose",
         description="explore midrun",
     )
-    watcher._discover_sessions()
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
 
     upgraded = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
     assert upgraded is not None
@@ -1037,14 +1024,13 @@ def test_tool_result_before_meta_discovery_does_not_strand_card(tmp_path: Path) 
         on_events=lambda aid, evts: collected.append((aid, evts)),
     )
 
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     # Cycle A: the parent is broadcast before any linkage exists, and cached.
     with open(parent_session_file, "a") as f:
         f.write(json.dumps(parent_event) + "\n")
-    watcher._poll_for_changes()
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
+    watcher._emit_cycle()
     cycle_a_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
     assert cycle_a_tc is not None
     assert "subagent_metadata" not in cycle_a_tc
@@ -1053,9 +1039,9 @@ def test_tool_result_before_meta_discovery_does_not_strand_card(tmp_path: Path) 
     # been discovered yet. The parent must remain cached, NOT be evicted on bare linkage.
     with open(parent_session_file, "a") as f:
         f.write(json.dumps(tool_result_line) + "\n")
-    watcher._poll_for_changes()
-    watcher._rebroadcast_relinked_parents()
-    assert parent_assistant_uuid in watcher._unlinked_agent_parent_events
+    watcher._emit_cycle()
+    watcher._emit_cycle()
+    assert f"{parent_assistant_uuid}-assistant" in watcher._pending_enrichment_ids
     cycle_b_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
     assert cycle_b_tc is not None
     assert "subagent_metadata" not in cycle_b_tc
@@ -1069,8 +1055,7 @@ def test_tool_result_before_meta_discovery_does_not_strand_card(tmp_path: Path) 
         agent_type="general-purpose",
         description="explore race",
     )
-    watcher._discover_sessions()
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
     upgraded = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
     assert upgraded is not None
     assert upgraded["subagent_metadata"]["session_id"] == "agent-racesubid"
@@ -1103,8 +1088,7 @@ def test_subagent_discovered_after_history_file_disappears(tmp_path: Path) -> No
     )
 
     # The main session is discovered and primed while the history file still exists.
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     # The agent is rotated/replaced: its history file disappears, but the main session file
     # stays on disk and watched.
@@ -1121,8 +1105,7 @@ def test_subagent_discovered_after_history_file_disappears(tmp_path: Path) -> No
     )
 
     # Discovery must still pick it up despite the missing history file, and the card links.
-    watcher._discover_sessions()
-    watcher._rebroadcast_relinked_parents()
+    watcher._emit_cycle()
     upgraded = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
     assert upgraded is not None
     assert upgraded["subagent_metadata"]["session_id"] == "agent-rotsubid"
@@ -1185,8 +1168,7 @@ def test_dead_session_dangling_enqueues_do_not_replay_alongside_a_newer_session(
     (agent_state_dir / "claude_session_id_history").write_text("session-1\nsession-2\n")
 
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     assert watcher.get_queued_messages() == []
 
@@ -1218,8 +1200,7 @@ def test_latest_session_parked_enqueues_replay_on_a_fresh_start(tmp_path: Path) 
     (agent_state_dir / "claude_session_id_history").write_text("session-1\nsession-2\n")
 
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     assert _queued_contents(watcher) == ["parked mid-turn"]
 
@@ -1232,11 +1213,10 @@ def test_new_latest_session_registered_mid_watch_purges_residue(tmp_path: Path) 
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
     snapshots: list[list[dict[str, Any]]] = []
     watcher.set_queue_snapshot_callback(snapshots.append)
-    watcher._discover_sessions()
 
     with open(session_file, "ab") as f:
         f.write((json.dumps(_queue_enqueue_record("live for now", "test-session")) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert _queued_contents(watcher) == ["live for now"]
     assert [entry["content"] for entry in snapshots[-1]] == ["live for now"]
 
@@ -1246,9 +1226,9 @@ def test_new_latest_session_registered_mid_watch_purges_residue(tmp_path: Path) 
     with open(agent_state_dir / "claude_session_id_history", "a") as f:
         f.write("session-next\n")
 
-    watcher._discover_sessions()
+    watcher.get_all_events()
     assert watcher.get_queued_messages() == []
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert snapshots[-1] == []
 
 
@@ -1257,18 +1237,18 @@ def test_truncated_latest_session_re_derives_queue_from_scratch(tmp_path: Path) 
     from the rewritten contents instead of double-feeding the same enqueues."""
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
-    watcher._discover_sessions()
+    watcher.get_all_events()
 
     with open(session_file, "ab") as f:
         f.write((json.dumps(_queue_enqueue_record("first", "test-session")) + "\n").encode("utf-8"))
         f.write((json.dumps(_queue_enqueue_record("second", "test-session")) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert _queued_contents(watcher) == ["first", "second"]
 
     # Rewritten shorter: only the first enqueue survives. Without the truncation
     # reset the replay would append a duplicate onto the stale entries.
     session_file.write_bytes((json.dumps(_queue_enqueue_record("first", "test-session")) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert _queued_contents(watcher) == ["first"]
 
 
@@ -1289,12 +1269,11 @@ def test_queued_to_delivered_emits_chip_removal_before_the_transcript_turn(tmp_p
     watcher.set_queue_snapshot_callback(
         lambda snapshot: order_log.append(f"queue:{[entry['content'] for entry in snapshot]}")
     )
-    watcher._discover_sessions()
 
     # The message is queued first: a chip appears (a pure-enqueue cycle emits no transcript turn).
     with open(session_file, "ab") as f:
         f.write((json.dumps(_queue_enqueue_record("do the thing", "test-session")) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert _queued_contents(watcher) == ["do the thing"]
     assert order_log == ["queue:['do the thing']"]
 
@@ -1304,7 +1283,7 @@ def test_queued_to_delivered_emits_chip_removal_before_the_transcript_turn(tmp_p
     with open(session_file, "ab") as f:
         f.write((json.dumps(_queue_dequeue_record("test-session")) + "\n").encode("utf-8"))
         f.write((json.dumps(_user_event(1, "do the thing")) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
 
     assert watcher.get_queued_messages() == []
     # The chip-removal (empty snapshot) is emitted BEFORE the transcript turn -- never the turn
@@ -1346,8 +1325,7 @@ def test_reprime_after_backend_restart_excludes_dead_epoch_enqueues(tmp_path: Pa
 
     # A fresh watcher primes over the whole backlog, as a restarted backend does.
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
-    watcher._discover_sessions()
-    watcher._prime_caches()
+    watcher._prime()
 
     assert _queued_contents(watcher) == ["parked in the live process"]
 
@@ -1359,7 +1337,7 @@ def test_truncation_reset_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     _touch_process_started_marker(agent_state_dir, "2026-01-01T00:00:30Z")
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
-    watcher._discover_sessions()
+    watcher.get_all_events()
 
     live_content = "a long live-epoch message that outsizes the rewritten file"
     with open(session_file, "ab") as f:
@@ -1369,7 +1347,7 @@ def test_truncation_reset_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
                 + "\n"
             ).encode("utf-8")
         )
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert _queued_contents(watcher) == [live_content]
 
     # An atomic save-rewrite shrinks the file to a single dead-epoch enqueue: the
@@ -1379,7 +1357,7 @@ def test_truncation_reset_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
             json.dumps(_queue_enqueue_record("ghost", "test-session", timestamp="2026-01-01T00:00:05.000Z")) + "\n"
         ).encode("utf-8")
     )
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert _queued_contents(watcher) == []
 
 
@@ -1425,7 +1403,7 @@ def test_late_found_session_is_inserted_in_history_order(tmp_path: Path) -> None
     _write_session_file(projects_dir, "session-2", [_user_event(5)])
 
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
-    watcher._discover_sessions()
+    watcher.get_all_events()
     assert watcher._main_session_ids == ["session-2"]
 
     # The latest session's ledger feeds the queue tracker while session-1's file
@@ -1433,12 +1411,12 @@ def test_late_found_session_is_inserted_in_history_order(tmp_path: Path) -> None
     session_2_file = projects_dir / "hash123" / "session-2.jsonl"
     with open(session_2_file, "ab") as f:
         f.write((json.dumps(_queue_enqueue_record("parked in the live session", "session-2")) + "\n").encode("utf-8"))
-    watcher._poll_for_changes()
+    watcher._emit_cycle()
     assert _queued_contents(watcher) == ["parked in the live session"]
 
     # The older session's file lands late; it must register at its history position.
     _write_session_file(projects_dir, "session-1", [_user_event(0)])
-    watcher._discover_sessions()
+    watcher.get_all_events()
 
     assert watcher._main_session_ids == ["session-1", "session-2"]
     latest = watcher.get_latest_main_session_file()
@@ -1459,7 +1437,7 @@ def test_is_main_session_event_excludes_subagent_sessions(tmp_path: Path) -> Non
         claude_config_dir=claude_config_dir,
         on_events=lambda aid, evts: None,
     )
-    watcher._discover_sessions()
+    watcher.get_all_events()
 
     assert watcher.is_main_session_event({"session_id": session_id})
     assert not watcher.is_main_session_event({"session_id": "agent-some-subagent"})
@@ -1487,7 +1465,7 @@ def test_watcher_handles_missing_session_file(tmp_path: Path) -> None:
     assert len(result) == 0
 
 
-# --- Two-tier evicting cache + bounded tail/backfill ---
+# --- Bounded tail/backfill/offset paging over the resident store ---
 
 
 def _ts(index: int) -> str:
@@ -1559,13 +1537,12 @@ def _build_two_file_agent(tmp_path: Path, file1_lines: int, file2_lines: int) ->
     return agent_state_dir, claude_config_dir
 
 
-def _make_oracle_watcher(agent_state_dir: Path, claude_config_dir: Path, capacity: int) -> ClaudeSessionWatcher:
+def _make_oracle_watcher(agent_state_dir: Path, claude_config_dir: Path) -> ClaudeSessionWatcher:
     return ClaudeSessionWatcher(
         agent_id="test-agent",
         agent_state_dir=agent_state_dir,
         claude_config_dir=claude_config_dir,
         on_events=lambda _aid, _evts: None,
-        body_cache_capacity=capacity,
     )
 
 
@@ -1576,7 +1553,7 @@ def _ids(events: list[dict[str, Any]]) -> list[str]:
 def test_tail_and_backfill_match_oracle_across_files(tmp_path: Path) -> None:
     """get_tail_events / get_backfill_events equal the full-transcript oracle slices."""
     agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=120, file2_lines=80)
-    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10_000)
+    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir)
 
     oracle = watcher.get_all_events()
     oracle_ids = _ids(oracle)
@@ -1603,7 +1580,7 @@ def test_get_event_offset_reflects_position(tmp_path: Path) -> None:
     endpoint returns it so the client can place the loaded window and derive
     whether more history exists above (offset > 0) and below (offset + len < total)."""
     agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=40, file2_lines=40)
-    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10_000)
+    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir)
     oracle_ids = _ids(watcher.get_all_events())
 
     assert watcher.get_event_offset(oracle_ids[0]) == 0
@@ -1617,7 +1594,7 @@ def test_offset_and_forward_fetch_match_oracle(tmp_path: Path) -> None:
     """get_events_at_offset (jump) and get_forward_events (page newer) equal the
     oracle slices, including across the file-1/file-2 boundary."""
     agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=120, file2_lines=80)
-    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10)
+    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir)
     oracle_ids = _ids(watcher.get_all_events())
 
     # Jump to an arbitrary offset that straddles the file boundary.
@@ -1639,7 +1616,7 @@ def test_get_total_event_count_spans_all_files_and_is_window_independent(tmp_pat
     not change with which tail/backfill window has been read -- the client relies
     on it to size the scrollbar for the full conversation, not the loaded slice."""
     agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=120, file2_lines=80)
-    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10)
+    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir)
     total = len(watcher.get_all_events())
 
     assert watcher.get_total_event_count() == total
@@ -1649,110 +1626,45 @@ def test_get_total_event_count_spans_all_files_and_is_window_independent(tmp_pat
     assert watcher.get_total_event_count() == total
 
 
-def test_backfill_of_evicted_history_is_correct(tmp_path: Path) -> None:
-    """Backfilling history that has been evicted re-reads it from disk correctly."""
+def test_backfill_deep_in_history_returns_correct_bodies(tmp_path: Path) -> None:
+    """A backfill page deep in history returns the same events a fresh full parse does."""
     agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=120, file2_lines=80)
-    oracle = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10_000)
+    oracle = _make_oracle_watcher(agent_state_dir, claude_config_dir)
     oracle_events = oracle.get_all_events()
     oracle_ids = _ids(oracle_events)
     body_by_id = {e["event_id"]: e for e in oracle_events}
 
-    # Tiny cache: anything but the most recent handful is evicted.
-    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=16)
-    # Prime locators; the tiny cache now holds only the tail.
+    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir)
     watcher.get_tail_events(16)
 
-    # Backfill a window deep in (evicted) history near the start.
+    # Backfill a window deep in history near the start.
     page = watcher.get_backfill_events(oracle_ids[60], limit=20)
     assert _ids(page) == oracle_ids[40:60]
-    # Reconstructed bodies match the oracle, not just the ids. Separate ifs
-    # (not an if/elif chain) keep the comparison exhaustive per type.
+    # The bodies match the oracle, not just the ids. Separate ifs (not an
+    # if/elif chain) keep the comparison exhaustive per type.
     for event in page:
         oracle_event = body_by_id[event["event_id"]]
         assert event["type"] == oracle_event["type"]
         if event["type"] == "tool_result":
-            assert event["output"] == oracle_event["output"]
+            assert event["output_chars"] == oracle_event["output_chars"]
         if event["type"] == "assistant_message":
             assert event["text"] == oracle_event["text"]
 
 
-class _CountingWatcher(ClaudeSessionWatcher):
-    """Counts line re-reads so a test can assert backfill disk work is bounded."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.reparse_count = 0
-
-    def _reparse_line_locked(self, state: Any, locator: Any) -> list[dict[str, Any]]:
-        self.reparse_count += 1
-        return super()._reparse_line_locked(state, locator)
-
-
-def _count_backfill_reparses(tmp_path: Path, subdir: str, total_lines: int, limit: int) -> int:
-    agent_state_dir = tmp_path / subdir / "agent_state"
-    agent_state_dir.mkdir(parents=True)
-    claude_config_dir = tmp_path / subdir / "claude_config"
-    # Assistant-only lines: one event per line, so the page touches exactly
-    # `limit` distinct lines -- making the re-read count deterministic.
-    _write_session_file(claude_config_dir / "projects", "session-1", [_assistant_line(i) for i in range(total_lines)])
-    (agent_state_dir / "claude_session_id_history").write_text("session-1\n")
-
-    watcher = _CountingWatcher(
-        agent_id="test-agent",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-        on_events=lambda _aid, _evts: None,
-        body_cache_capacity=16,
-    )
-    # Prime; resolves only the tail.
-    ids = _ids(watcher.get_tail_events(16))
-    assert ids
-    # Page deep in evicted history; this is the operation under measurement.
-    watcher.reparse_count = 0
-    page = watcher.get_backfill_events(f"a{50:07d}-assistant", limit=limit)
-    assert len(page) == limit
-    return watcher.reparse_count
-
-
-def test_backfill_disk_reads_are_bounded_independent_of_transcript_length(tmp_path: Path) -> None:
-    """A backfill page re-reads O(limit) lines, regardless of total transcript size.
-
-    A full-file re-read (the pre-PR-4 behavior) would scale the work with the
-    transcript length; this asserts the work is identical for a small and a
-    large transcript and never exceeds the page size.
-    """
-    limit = 10
-    small = _count_backfill_reparses(tmp_path, "small", total_lines=500, limit=limit)
-    large = _count_backfill_reparses(tmp_path, "large", total_lines=4000, limit=limit)
-
-    assert small == large
-    assert small <= limit
-
-
-def test_body_cache_capacity_respected_while_paging_full_history(tmp_path: Path) -> None:
-    """Paging backward through the whole transcript keeps resident bodies bounded."""
+def test_paging_backward_recovers_the_entire_transcript_in_order(tmp_path: Path) -> None:
+    """Backfill paging from the tail walks the whole transcript without gaps or overlaps."""
     agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=150, file2_lines=150)
-    capacity = 16
-    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=capacity)
+    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir)
 
-    oracle_ids = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10_000).get_all_events()
-    all_ids = _ids(oracle_ids)
+    all_ids = _ids(_make_oracle_watcher(agent_state_dir, claude_config_dir).get_all_events())
 
     page_size = 10
-    tail = watcher.get_tail_events(page_size)
-    seen = _ids(tail)
-    assert len(watcher._body_cache) <= capacity
-
+    seen = _ids(watcher.get_tail_events(page_size))
     page = watcher.get_backfill_events(seen[0], limit=page_size)
-    # Body cache never exceeds capacity at any point during paging (checked after
-    # every call, including the final one that returns an empty page).
-    assert len(watcher._body_cache) <= capacity
     while page:
         seen = _ids(page) + seen
         page = watcher.get_backfill_events(seen[0], limit=page_size)
-        assert len(watcher._body_cache) <= capacity
 
-    # Despite eviction, paging recovered the entire transcript in order.
     assert seen == all_ids
 
 
@@ -1795,3 +1707,97 @@ def test_get_latest_main_session_file_none_without_history(tmp_path: Path) -> No
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
     assert watcher.get_latest_main_session_file() is None
+
+
+# --- On-demand payload detail ---
+
+
+def _make_bash_result_line(uuid: str, timestamp: str, call_id: str, output: str) -> str:
+    return json.dumps(
+        {
+            "type": "user",
+            "uuid": uuid,
+            "timestamp": timestamp,
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": call_id, "content": output}],
+            },
+        }
+    )
+
+
+def test_get_event_detail_serves_the_full_payloads_from_disk(tmp_path: Path) -> None:
+    """Resident events are payload-free; the detail read reconstructs the whole input and
+    output from the recorded source byte ranges."""
+    big_input = {"command": "echo " + "x" * 5000}
+    events = [
+        {
+            "type": "assistant",
+            "uuid": "uuid-a",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-test",
+                "content": [{"type": "tool_use", "id": "toolu_big", "name": "Bash", "input": big_input}],
+            },
+        },
+    ]
+    agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, events)
+    session_file = claude_config_dir / "projects" / "hash123" / f"{session_id}.jsonl"
+    with open(session_file, "a") as f:
+        f.write(_make_bash_result_line("uuid-r", "2026-01-01T00:00:02Z", "toolu_big", "y" * 9000) + "\n")
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    parsed = watcher.get_all_events()
+    assistant = next(e for e in parsed if e["type"] == "assistant_message")
+    result = next(e for e in parsed if e["type"] == "tool_result")
+    assert "input_preview" not in assistant["tool_calls"][0]
+    assert "output" not in result
+
+    detail = watcher.get_event_detail(assistant["event_id"])
+    assert detail is not None
+    assert "x" * 5000 in detail["inputs_by_tool_call_id"]["toolu_big"]
+    # Claude's thinking is encrypted and useless; never surfaced.
+    assert detail["thinking"] is None
+
+    detail = watcher.get_event_detail(result["event_id"])
+    assert detail is not None
+    assert detail["output"] == "y" * 9000
+
+
+def test_get_event_detail_falls_back_to_a_scan_when_the_range_is_stale(tmp_path: Path) -> None:
+    """A rewrite that shifts byte offsets under the recorded range still resolves: the
+    watcher scans the session file for the event's own identity before giving up."""
+    result_line = _make_bash_result_line("uuid-r", "2026-01-01T00:00:02Z", "toolu_1", "the real output")
+    agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, [_user_event(0)])
+    session_file = claude_config_dir / "projects" / "hash123" / f"{session_id}.jsonl"
+    with open(session_file, "a") as f:
+        f.write(result_line + "\n")
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    result = next(e for e in watcher.get_all_events() if e["type"] == "tool_result")
+
+    # Shift the file contents under the recorded range WITHOUT shrinking it (a shrink
+    # would trigger the truncation reset and re-derive fresh ranges): pad ahead of the
+    # recorded offset so the recorded range now reads garbage.
+    padding = json.dumps({"type": "noise", "uuid": "zz", "timestamp": "t", "message": None})
+    session_file.write_text(padding + "\n" + session_file.read_text())
+
+    detail = watcher.get_event_detail(result["event_id"])
+    assert detail is not None
+    assert detail["output"] == "the real output"
+
+
+def test_get_event_detail_answers_none_when_the_source_is_gone(tmp_path: Path) -> None:
+    agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, [_user_event(0)])
+    session_file = claude_config_dir / "projects" / "hash123" / f"{session_id}.jsonl"
+    with open(session_file, "a") as f:
+        f.write(_make_bash_result_line("uuid-r", "2026-01-01T00:00:02Z", "toolu_1", "soon gone") + "\n")
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    result = next(e for e in watcher.get_all_events() if e["type"] == "tool_result")
+
+    # The file is rewritten without the result line (same length class does not matter:
+    # the range no longer parses AND the scan finds nothing).
+    session_file.write_text(json.dumps(_user_event(7)) + "\n")
+    assert watcher.get_event_detail(result["event_id"]) is None
+    assert watcher.get_event_detail("unknown-event") is None

@@ -9,7 +9,10 @@ Two different LLM consumers run during a trial and they must not be conflated:
   nothing has to be collected out of the workspace before it is destroyed -- the driver's own
   transcript is an account that is always available. Under ``--ak proxy=true`` the in-box proxy's
   per-request log is a second account, and ``resolve_workspace_usage`` decides which one a trial
-  reports.
+  reports. Two record vintages arrive on the transcript stream and both are read: the watcher's
+  ``assistant_message`` records, and the ATIF-shaped ``step`` records (``source: "agent"``, token
+  counts under ATIF's ``metrics`` names) that mngr's own emitters write. The one reconciliation
+  that matters is the input bucket -- see ``_atif_token_snapshot``.
 - the **decider**, the harness's simulated-user model. It is a cost of running the eval, not a
   property of the thing being measured, so it is reported separately as metadata.
 
@@ -65,12 +68,20 @@ from imbue.mngr_usage.pricing import compute_cost
 _ANTHROPIC_PREFIX: Final[str] = "anthropic/"
 _CLAUDE_MODEL_PREFIX: Final[str] = "claude"
 
-# The workspace transcript's usage keys, which the common_transcript converter renames from
-# Anthropic's wire names (cache_creation_input_tokens -> cache_write_tokens, and so on).
+# The legacy workspace transcript's usage keys, which its converter renames from Anthropic's wire
+# names (cache_creation_input_tokens -> cache_write_tokens, and so on).
 _INPUT_KEY: Final[str] = "input_tokens"
 _OUTPUT_KEY: Final[str] = "output_tokens"
 _CACHE_READ_KEY: Final[str] = "cache_read_tokens"
 _CACHE_WRITE_KEY: Final[str] = "cache_write_tokens"
+
+# The ATIF-shaped records' equivalents. ATIF has no field for cache *writes*, so emitters park that
+# counter under ``metrics.extra`` beside Anthropic's own name for it.
+_PROMPT_TOKENS_KEY: Final[str] = "prompt_tokens"
+_COMPLETION_TOKENS_KEY: Final[str] = "completion_tokens"
+_CACHED_TOKENS_KEY: Final[str] = "cached_tokens"
+_METRICS_EXTRA_KEY: Final[str] = "extra"
+_CACHE_CREATION_KEY: Final[str] = "cache_creation_input_tokens"
 
 # Claude Code's delegation tool. Current versions name it "Agent"; "Task" is the older name, kept so
 # a transcript captured against an older pinned CLI is still recognized.
@@ -104,14 +115,65 @@ def canonical_model_key(model: str) -> str | None:
 
 
 @pure
-def _token_snapshot(raw_usage: Mapping[str, Any]) -> TokenSnapshot:
-    """One message's usage block as a TokenSnapshot, treating absent counters as zero."""
+def _legacy_token_snapshot(raw_usage: Mapping[str, Any]) -> TokenSnapshot:
+    """One legacy message's usage block as a TokenSnapshot, treating absent counters as zero.
+
+    Its four counters already follow TokenSnapshot's non-overlapping convention, so they map across
+    one for one.
+    """
     return TokenSnapshot(
         input=int(raw_usage.get(_INPUT_KEY) or 0),
         output=int(raw_usage.get(_OUTPUT_KEY) or 0),
         cache_read=int(raw_usage.get(_CACHE_READ_KEY) or 0),
         cache_creation=int(raw_usage.get(_CACHE_WRITE_KEY) or 0),
     )
+
+
+@pure
+def _atif_token_snapshot(raw_metrics: Mapping[str, Any]) -> TokenSnapshot:
+    """One ATIF step's ``metrics`` block as a TokenSnapshot.
+
+    ATIF's ``prompt_tokens`` is cache-*inclusive* -- every input token, cached or not -- where
+    TokenSnapshot's ``input`` is cache-*exclusive*. The cache buckets are therefore subtracted back
+    out of it rather than added alongside it: adding them would count each cached token twice and
+    price the duplicate at the full input rate, which is 10x what a cache read actually costs.
+
+    A stream reporting a prompt total smaller than its own cache counters is contradicting itself;
+    the bucket is floored at zero rather than turned into a negative cost.
+    """
+    prompt_tokens = int(raw_metrics.get(_PROMPT_TOKENS_KEY) or 0)
+    cached_tokens = int(raw_metrics.get(_CACHED_TOKENS_KEY) or 0)
+    raw_extra = raw_metrics.get(_METRICS_EXTRA_KEY)
+    cache_creation = int(raw_extra.get(_CACHE_CREATION_KEY) or 0) if isinstance(raw_extra, Mapping) else 0
+    return TokenSnapshot(
+        input=max(prompt_tokens - cached_tokens - cache_creation, 0),
+        output=int(raw_metrics.get(_COMPLETION_TOKENS_KEY) or 0),
+        cache_read=cached_tokens,
+        cache_creation=cache_creation,
+    )
+
+
+@pure
+def _agent_turn_or_none(event: Mapping[str, Any]) -> tuple[str, TokenSnapshot | None] | None:
+    """The (model, token buckets) of one agent turn, or None when the event is not one.
+
+    Accepts both stream vintages. The buckets are None when the turn reported no usage at all,
+    which is not the same as reporting zeros: a converter that predates usage reporting must yield
+    an empty summary rather than a confident zero.
+    """
+    if event.get("type") == "assistant_message":
+        model = str(event.get("model") or "")
+        raw_usage = event.get("usage")
+        if not isinstance(raw_usage, Mapping) or not raw_usage:
+            return model, None
+        return model, _legacy_token_snapshot(raw_usage)
+    if event.get("type") == "step" and event.get("source") == "agent":
+        model = str(event.get("model_name") or "")
+        raw_metrics = event.get("metrics")
+        if not isinstance(raw_metrics, Mapping) or not raw_metrics:
+            return model, None
+        return model, _atif_token_snapshot(raw_metrics)
+    return None
 
 
 @pure
@@ -248,8 +310,23 @@ def _tiered_cost(pricing_key: str | None, standard_tokens: TokenSnapshot, fast_t
 
 
 @pure
+def _tool_call_argument_text(tool_call: Mapping[str, Any]) -> str:
+    """The text the worker-launch markers are matched against.
+
+    ATIF carries the complete ``arguments`` object; the legacy records carried a truncated JSON
+    preview of it. Serializing the object matches the shape the markers were written against, so a
+    launch command that only appears past a legacy preview's cut-off is still caught on ATIF
+    streams.
+    """
+    arguments = tool_call.get("arguments")
+    if isinstance(arguments, Mapping):
+        return json.dumps(dict(arguments), sort_keys=True, default=str)
+    return str(tool_call.get("input_preview") or "")
+
+
+@pure
 def _count_delegations(raw_tool_calls: Any) -> tuple[int, int]:
-    """(subagent calls, worker launches) in one message's tool calls."""
+    """(subagent calls, worker launches) in one turn's tool calls, in either stream vintage."""
     if not isinstance(raw_tool_calls, Sequence) or isinstance(raw_tool_calls, (str, bytes)):
         return 0, 0
     delegated = 0
@@ -257,12 +334,12 @@ def _count_delegations(raw_tool_calls: Any) -> tuple[int, int]:
     for tool_call in raw_tool_calls:
         if not isinstance(tool_call, Mapping):
             continue
-        tool_name = str(tool_call.get("tool_name") or "")
+        # ATIF names the tool `function_name`; the legacy records named it `tool_name`.
+        tool_name = str(tool_call.get("tool_name") or tool_call.get("function_name") or "")
         if tool_name in _DELEGATION_TOOL_NAMES:
             delegated += 1
             continue
-        preview = str(tool_call.get("input_preview") or "")
-        if any(marker in preview for marker in _WORKER_LAUNCH_MARKERS):
+        if any(marker in _tool_call_argument_text(tool_call) for marker in _WORKER_LAUNCH_MARKERS):
             launched += 1
     return delegated, launched
 
@@ -270,6 +347,9 @@ def _count_delegations(raw_tool_calls: Any) -> tuple[int, int]:
 @pure
 def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage:
     """Aggregate the workspace agent's usage out of the raw chat event stream.
+
+    Reads both stream vintages -- legacy ``assistant_message`` records and ATIF-shaped agent
+    ``step`` records -- normalizing each into TokenSnapshot's non-overlapping buckets as it goes.
 
     Agent messages without a usage block are skipped rather than counted as zero, so a transcript
     whose converter predates usage reporting yields an empty summary instead of a confident zero.
@@ -283,22 +363,25 @@ def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage
     delegated_call_count = 0
     worker_launch_count = 0
     previous_usage: tuple[str, int, int, int, int] | None = None
+    # One stream is written by exactly one emitter vintage, so the two branches below never both
+    # match within a run -- each event answers to one of them or to neither.
     for event in events:
-        if event.get("type") != "assistant_message":
+        turn = _agent_turn_or_none(event)
+        if turn is None:
             continue
         delegated, launched = _count_delegations(event.get("tool_calls"))
         delegated_call_count += delegated
         worker_launch_count += launched
-        raw_usage = event.get("usage")
-        if not isinstance(raw_usage, Mapping) or not raw_usage:
+        model, tokens = turn
+        if tokens is None:
             continue
-        tokens = _token_snapshot(raw_usage)
+        # This collapse is for the legacy fan-out vintage only; an ATIF stream emits one step per
+        # inference, so nothing consecutive shares a usage block and the check never fires.
         # One API response becomes several transcript messages -- one per content block -- and each
         # carries a copy of the response's usage, so summing them all counts the same tokens two or
         # three times. Consecutive messages reporting identical usage are those blocks. Verified
         # against a proxy metering the same trial: collapsing them reproduces the billed cost
         # exactly, while summing every message overstated it by nearly a factor of two.
-        model = str(event.get("model") or "")
         # The model is part of the identity: blocks of one response always share it, so two
         # different models reporting the same counts are two responses, not one.
         signature = (

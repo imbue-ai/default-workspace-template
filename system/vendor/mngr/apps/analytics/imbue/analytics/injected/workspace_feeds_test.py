@@ -76,12 +76,15 @@ def test_transcript_feed_annotates_agent_ids_and_advances_cursors(tmp_path: Path
         [
             _event("evt-1", "user_message", "claude", content="hello"),
             _event("evt-2", "assistant_message", "claude", text="hi"),
+            # The annotation is purely additive, so it applies unchanged to the
+            # ATIF-shaped records (which carry no top-level "source" at all).
+            {"type": "header", "event_id": "header", "emitter": "claude/common_transcript"},
         ],
     )
 
     first_output = read_transcript_feed(host_dir, cursor={}, budget_bytes=10_000)
 
-    assert [record["event_id"] for record in first_output.records] == ["evt-1", "evt-2"]
+    assert [record["event_id"] for record in first_output.records] == ["evt-1", "evt-2", "header"]
     assert {record["agent_id"] for record in first_output.records} == {"agent-abc"}
     assert first_output.read_bytes > 0
 

@@ -35,6 +35,7 @@ from imbue.minds_evals.errors import InstructionParseError
 from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
 from imbue.minds_evals.mock_environment_test import ConversationModel
+from imbue.minds_evals.mock_environment_test import MOCK_ACCOUNT_ID
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
 from imbue.minds_evals.mock_environment_test import ScriptedExecRule
 from imbue.minds_evals.mock_environment_test import failed_result
@@ -143,6 +144,21 @@ def test_new_agent_reply_texts_only_counts_replies_after_the_baseline() -> None:
     assert _new_agent_reply_texts(events, 1) == ["new reply"]
     # Baseline past the reply: nothing new.
     assert _new_agent_reply_texts(events, 5) == []
+
+
+def test_new_agent_reply_texts_reads_atif_agent_steps() -> None:
+    """mngr's emitters write ATIF-shaped steps; the reply detector must see those turns too."""
+    events = [
+        {"type": "step", "source": "agent", "message": "old reply"},
+        {"type": "step", "source": "user", "message": "our turn"},
+        {"type": "step", "source": "agent", "message": ""},
+        {"type": "observation", "results": [{"source_call_id": "c1", "content": "tool output"}]},
+        {"type": "step", "source": "system", "message": "framework noise"},
+        {"type": "step", "source": "agent", "message": "new reply"},
+    ]
+
+    assert _new_agent_reply_texts(events, 1) == ["new reply"]
+    assert _new_agent_reply_texts(events, 6) == []
 
 
 def _git_output(repo_dir: Path, *args: str) -> str:
@@ -377,6 +393,26 @@ def _reply_events(reply_text: str, usage: dict | None = None) -> list[dict]:
     ]
 
 
+def _one_turn_conversation(
+    reply_text: str = "Building it now.",
+    is_first_create_answer_lost: bool = False,
+    welcome_delay_polls: int = 0,
+) -> ConversationModel:
+    """A workspace whose chat answers a single turn: the shape tests take when the conversation is
+    not what they are about. ``reply_text`` is flavour that keeps a trial readable -- no test that
+    takes this shape asserts on it.
+
+    Returns a fresh instance per call, since those tests go on to set the one attribute they *are*
+    about (the chat's state, a refused create, a downed auth endpoint, the auth mode reported back).
+    """
+    return ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[_reply_events(reply_text)],
+        is_first_create_answer_lost=is_first_create_answer_lost,
+        welcome_delay_polls=welcome_delay_polls,
+    )
+
+
 def _proxy_rules(usage_log: str) -> list[ScriptedExecRule]:
     """What a box with a healthy in-box proxy answers: the liveness probe, the workspace's SSH
     endpoint for the reverse tunnel, the tunnel's readiness marker, and the metering log itself."""
@@ -432,8 +468,6 @@ def _run_driver(
 def test_driver_completes_a_multi_turn_conversation(tmp_path: Path) -> None:
     conversation = ConversationModel(
         chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[{"type": "user_message", "content": "/welcome"}, {"type": "assistant_message", "text": "Hi!"}],
         turn_reply_events=[
             _reply_events("Building it now; I'll let you know when it's ready."),
             _reply_events("All done. Open the preview to try it out."),
@@ -491,12 +525,7 @@ def test_driver_completes_a_multi_turn_conversation(tmp_path: Path) -> None:
 
 
 def test_driver_signs_the_workspace_in_before_the_first_turn(tmp_path: Path) -> None:
-    conversation = ConversationModel(
-        chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
-        turn_reply_events=[_reply_events("Building it now.")],
-    )
+    conversation = _one_turn_conversation()
     _driver, environment, _context = _run_driver(
         tmp_path,
         ("Build it",),
@@ -515,13 +544,130 @@ def test_driver_signs_the_workspace_in_before_the_first_turn(tmp_path: Path) -> 
     assert "MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR" not in backend_env
 
 
-def test_driver_marks_timed_out_when_the_workspace_cannot_be_signed_in(tmp_path: Path) -> None:
-    conversation = ConversationModel(
-        chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
-        turn_reply_events=[_reply_events("Building it now.")],
+def test_driver_creates_the_chat_only_after_the_workspace_is_signed_in(tmp_path: Path) -> None:
+    # A workspace boots with no chat, and a chat binds to a provider account when it is created --
+    # so a create issued before sign-in is refused for want of an account, and the trial never gets
+    # a chat to drive. The sign-in has to come first.
+    conversation = _one_turn_conversation()
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__chat1",
+        timeout_seconds=1800.0,
     )
+
+    sign_in_index = next(
+        index for index, command in enumerate(environment.exec_commands) if "submit-credentials" in command
+    )
+    create_index = next(index for index, command in enumerate(environment.exec_commands) if "create-chat" in command)
+    assert sign_in_index < create_index
+    # The chat is named after the workspace host and bound to the account the sign-in minted.
+    assert len(conversation.create_chat_commands) == 1
+    assert '"name": "EVAL-todo-app-chat1-' in conversation.create_chat_commands[0]
+    assert conversation.chat_account_id == MOCK_ACCOUNT_ID
+    # And the trial ran to the end on it.
+    assert context.metadata is not None
+    assert context.metadata["test_state"] == "finished"
+
+
+def test_driver_drives_the_chat_it_already_created_when_a_retry_collides(tmp_path: Path) -> None:
+    # A create whose answer is lost still made the chat, so the retry collides with it. The chat is
+    # the one the trial should drive, so the collision is resolved from the agents listing rather
+    # than failing a workspace that is perfectly usable.
+    conversation = _one_turn_conversation(is_first_create_answer_lost=True)
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__chat2",
+        timeout_seconds=1800.0,
+    )
+
+    assert len(conversation.create_chat_commands) == 2
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "finished"
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 1
+
+
+def test_driver_waits_out_the_welcome_before_sending_the_first_turn(tmp_path: Path) -> None:
+    # A freshly created chat is listed as WAITING before the workspace has typed its `/welcome` in,
+    # and that window is wide (the workspace waits for the agent's TUI first). A driver that took
+    # the first WAITING for "ready" would send turn 1 into it and then read the welcome greeting --
+    # the next agent message to arrive -- as the answer to turn 1.
+    conversation = _one_turn_conversation(welcome_delay_polls=4)
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__chat5",
+        timeout_seconds=1800.0,
+    )
+
+    # The reply graded for turn 1 is the turn's own reply, with no trace of the greeting in it.
+    conversation_lines = environment.uploaded_content_by_target["/logs/agent/conversation.jsonl"].splitlines()
+    parsed = [json.loads(line) for line in conversation_lines]
+    assert [(event.get("type"), event.get("content") or event.get("text")) for event in parsed] == [
+        ("user_message", "Build it"),
+        ("assistant_message", "Building it now."),
+    ]
+    # Which is because nothing was sent until the welcome had been waited out.
+    send_index = next(index for index, command in enumerate(environment.exec_commands) if "/message" in command)
+    welcome_polls_before_send = len(
+        [command for command in environment.exec_commands[:send_index] if "/events?offset=0&limit=1" in command]
+    )
+    assert welcome_polls_before_send > 4
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 1
+
+
+def test_driver_marks_timed_out_when_the_created_chat_never_becomes_ready(tmp_path: Path) -> None:
+    # A chat that never reaches WAITING is one no turn can be sent to, so the trial stops at the
+    # gate rather than sending into a chat that is not listening and grading the silence.
+    conversation = _one_turn_conversation()
+    conversation.chat_state = "STARTING"
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__chat4",
+        # This test asserts the trial got as far as creating the chat, so the whole bring-up has to
+        # fit inside the deadline rather than merely being allowed to. The chat is pinned to
+        # STARTING, so the deadline still ends it.
+        timeout_seconds=2.0,
+    )
+
+    assert conversation.is_chat_created
+    assert not any("/message" in command for command in environment.exec_commands)
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 0
+
+
+def test_driver_marks_timed_out_when_the_chat_cannot_be_created(tmp_path: Path) -> None:
+    # A refused create is the workspace's own answer, not a workspace still coming up: the trial
+    # stops there rather than spending its budget on a chat that will never exist.
+    conversation = _one_turn_conversation()
+    conversation.create_chat_refusal_detail = "no provider accounts exist yet"
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__chat3",
+        timeout_seconds=1800.0,
+    )
+
+    assert len(conversation.create_chat_commands) == 1
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 0
+
+
+def test_driver_marks_timed_out_when_the_workspace_cannot_be_signed_in(tmp_path: Path) -> None:
+    conversation = _one_turn_conversation()
     conversation.is_auth_endpoint_up = False
     _driver, environment, context = _run_driver(
         tmp_path,
@@ -543,8 +689,6 @@ def test_driver_marks_timed_out_when_the_workspace_cannot_be_signed_in(tmp_path:
 def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separate(tmp_path: Path) -> None:
     conversation = ConversationModel(
         chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
         turn_reply_events=[
             _reply_events(
                 "Building it now.",
@@ -599,8 +743,6 @@ def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separat
 def test_driver_reports_the_proxys_account_everywhere_when_a_proxy_metered_the_trial(tmp_path: Path) -> None:
     conversation = ConversationModel(
         chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
         turn_reply_events=[
             _reply_events(
                 "Delegating the build.",
@@ -670,12 +812,7 @@ def test_driver_reports_the_proxys_account_everywhere_when_a_proxy_metered_the_t
 
 
 def test_driver_leaves_usage_unset_when_the_transcript_carries_none(tmp_path: Path) -> None:
-    conversation = ConversationModel(
-        chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
-        turn_reply_events=[_reply_events("Building it now.")],
-    )
+    conversation = _one_turn_conversation()
     _driver, _environment, context = _run_driver(
         tmp_path,
         ("Build it",),
@@ -695,8 +832,6 @@ def test_driver_marks_timed_out_when_no_reply_arrives(tmp_path: Path) -> None:
     # The agent echoes the user message but never produces a reply, so the tiny budget expires.
     conversation = ConversationModel(
         chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
         turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
     )
     _driver, environment, context = _run_driver(
@@ -712,6 +847,9 @@ def test_driver_marks_timed_out_when_no_reply_arrives(tmp_path: Path) -> None:
     assert state["timed_out"] is True
     assert context.metadata is not None
     assert context.metadata["timed_out"] is True
+    # It is the reply that is missing, not the bring-up: state.json records no reason for a
+    # timeout, so without this the assertions above would pass for a trial that never got a chat.
+    assert any("/message" in command for command in environment.exec_commands)
     # Cleanup still ran.
     assert any("mngr destroy - --force" in command for command in environment.exec_commands)
 
@@ -720,12 +858,7 @@ def test_driver_fails_when_the_workspace_reports_the_wrong_auth_mode(tmp_path: P
     # The sign-in endpoint runs no credential probe, so it accepts a bad key and reports the mode it
     # ended up in. Without checking that, the trial would run on an unauthenticated workspace and
     # the judge would grade the agent's "not logged in" replies as if they were its own behaviour.
-    conversation = ConversationModel(
-        chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
-        turn_reply_events=[_reply_events("Building it now.")],
-    )
+    conversation = _one_turn_conversation()
     conversation.expected_auth_mode = "none"
     _driver, environment, context = _run_driver(
         tmp_path,
@@ -742,12 +875,7 @@ def test_driver_fails_when_the_workspace_reports_the_wrong_auth_mode(tmp_path: P
 
 
 def test_driver_collects_outcome_evidence_before_the_workspace_is_torn_down(tmp_path: Path) -> None:
-    conversation = ConversationModel(
-        chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
-        turn_reply_events=[_reply_events("All done; open the preview.")],
-    )
+    conversation = _one_turn_conversation(reply_text="All done; open the preview.")
     expectations = parse_expectations(
         {"outcome": "A working to-do web app.", "deliverable": {"kind": "minds-app"}}, "todo-app"
     )
@@ -805,12 +933,7 @@ def test_driver_leaves_the_delivered_apps_unmeasured_when_the_boot_snapshot_fail
     # every check that depends on the distinction is recorded as unmeasured -- never as a failure
     # that charges the agent for the template's own apps, and never as an empty set that would
     # credit the agent with them.
-    conversation = ConversationModel(
-        chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
-        turn_reply_events=[_reply_events("All done; open the preview.")],
-    )
+    conversation = _one_turn_conversation(reply_text="All done; open the preview.")
     expectations = parse_expectations(
         {"outcome": "A working to-do web app.", "deliverable": {"kind": "minds-app"}}, "todo-app"
     )
@@ -849,8 +972,6 @@ def test_driver_leaves_the_delivered_apps_unmeasured_when_the_boot_snapshot_fail
 def test_driver_skips_the_expectation_probes_on_a_timed_out_trial(tmp_path: Path) -> None:
     conversation = ConversationModel(
         chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
         turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
     )
     expectations = parse_expectations(
@@ -873,12 +994,7 @@ def test_driver_skips_the_expectation_probes_on_a_timed_out_trial(tmp_path: Path
 
 
 def test_driver_collects_workspace_state_even_without_expectations(tmp_path: Path) -> None:
-    conversation = ConversationModel(
-        chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
-        turn_reply_events=[_reply_events("Here is what I can do.")],
-    )
+    conversation = _one_turn_conversation(reply_text="Here is what I can do.")
 
     _driver, environment, _context = _run_driver(
         tmp_path,
@@ -1000,8 +1116,6 @@ def test_driver_captures_work_the_agent_does_after_it_reports_waiting(tmp_path: 
     # messages behind part of it.
     conversation = ConversationModel(
         chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
         turn_reply_events=[
             _reply_events(
                 "All done.",
@@ -1072,12 +1186,7 @@ def test_driver_builds_no_verification_agent_without_a_key(tmp_path: Path) -> No
 
 
 def test_driver_reports_the_verification_agents_spend_separately_from_the_agent_under_test(tmp_path: Path) -> None:
-    conversation = ConversationModel(
-        chat_agent_id="chat-1",
-        chat_agent_name="eval-todo-app",
-        pre_events=[],
-        turn_reply_events=[_reply_events("All done; open the preview.")],
-    )
+    conversation = _one_turn_conversation(reply_text="All done; open the preview.")
     expectations = parse_expectations(
         {"outcome": "A working to-do web app.", "deliverable": {"kind": "minds-app"}}, "todo-app"
     )

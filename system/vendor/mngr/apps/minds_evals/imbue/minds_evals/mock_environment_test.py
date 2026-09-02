@@ -1,11 +1,13 @@
 """A concrete scripted BaseEnvironment implementation for driver/bridge unit tests: commands are
 matched against ordered substring rules, each yielding a sequence of canned ExecResults (the last
 one repeats). An optional ConversationModel additionally serves the workspace system_interface's
-stateful message/events/agents endpoints so the driver's turn loop can be exercised end to end."""
+stateful sign-in, chat-creation, message, events, and agents endpoints, so the driver's whole
+bring-up and turn loop can be exercised end to end."""
 
 import json
 import re
 from pathlib import Path
+from typing import Final
 
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.base import ExecResult
@@ -41,25 +43,54 @@ def mngr_exec_json(stdout: str) -> str:
     return json.dumps({"results": [{"agent": "ws-1", "stdout": stdout, "stderr": "", "success": True}]})
 
 
-class ConversationModel:
-    """A stateful model of the workspace chat agent for the bridged system_interface calls.
+def curl_stdout(body: str, status: int = 200) -> str:
+    """What `curl -w '\\n%{http_code}'` prints for one workspace call, wrapped in the mngr exec
+    envelope the bridge parses."""
+    return mngr_exec_json("{}\n{}".format(body, status))
 
-    Starts with ``pre_events`` (e.g. a /welcome exchange) already present; each POST to
-    ``/message`` appends that turn's ``turn_reply_events`` (the events the agent produces in
-    response), so the incremental events poll first sees the new reply only after the send. The
-    agent state is always WAITING (the driver polls the reply itself, not the state edge)."""
+
+# The account the mock workspace's sign-in endpoint mints; a chat created against anything else is
+# bound to an account that does not exist.
+MOCK_ACCOUNT_ID: Final[str] = "acct-mock-1"
+
+# The exchange the workspace's first chat is given on creation. Every first chat gets it, so it is
+# not a per-test choice: the `first` create template carries `/welcome` as the chat's initial
+# message, and the workspace types it in once the agent is up.
+WELCOME_EXCHANGE: Final[tuple[dict, ...]] = (
+    {"type": "user_message", "content": "/welcome"},
+    {"type": "assistant_message", "text": "Hi! Tell me what you would like to build."},
+)
+
+
+class ConversationModel:
+    """A stateful model of the workspace's chat surface for the bridged system_interface calls.
+
+    A workspace boots with no chat: the agents listing carries only ``system-services`` until a
+    ``create-chat`` call makes one. That chat is listed, and reports WAITING, before its
+    ``WELCOME_EXCHANGE`` has been delivered -- the workspace types `/welcome` in only once the agent
+    is up, so ``welcome_delay_polls`` polls of the events endpoint see a chat that is WAITING and
+    carries no messages at all. Each POST to ``/message`` appends that turn's
+    ``turn_reply_events``, so the incremental events poll sees a new reply only after the send.
+
+    A chat binds to a provider account at creation and only the sign-in endpoint mints one, so a
+    create issued before sign-in is refused for want of an account -- the product behaviour that
+    makes the driver's ordering load-bearing.
+    """
 
     def __init__(
         self,
         chat_agent_id: str,
-        chat_agent_name: str,
-        pre_events: list[dict],
         turn_reply_events: list[list[dict]],
         trailing_events: list[dict] | None = None,
+        is_first_create_answer_lost: bool = False,
+        welcome_delay_polls: int = 0,
     ) -> None:
         self.chat_agent_id = chat_agent_id
-        self.chat_agent_name = chat_agent_name
-        self.events: list[dict] = list(pre_events)
+        # The name the chat is listed under, which it only has once a create has given it one.
+        self.chat_agent_name = ""
+        self.events: list[dict] = []
+        self._welcome_delay_polls = welcome_delay_polls
+        self._is_welcome_delivered = False
         self._turn_reply_events = turn_reply_events
         self._turn_index = 0
         # Work the agent does *after* reporting WAITING on the final turn -- the workspace's own
@@ -73,41 +104,113 @@ class ConversationModel:
         # What the workspace reports after a submit; a mode other than the one the driver asked for
         # is how a bad credential shows up, since the endpoint itself never validates.
         self.expected_auth_mode = "api_key"
+        self.signed_in_account_ids: list[str] = []
+        # The chat, once one exists: the create-chat calls made, and the account it bound to.
+        self.create_chat_commands: list[str] = []
+        self.chat_account_id: str = ""
+        self.is_chat_created = False
+        # A create whose answer never came back, though the chat was made: the caller sees nothing
+        # and asks again, and the second ask collides with the chat the first one left behind.
+        self._is_first_create_answer_lost = is_first_create_answer_lost
+        # Set to make every create refused, the way a workspace refuses one it cannot satisfy.
+        self.create_chat_refusal_detail = ""
+        # The state the created chat reports; a chat that never reaches WAITING is one the driver
+        # can never send a turn to.
+        self.chat_state = "WAITING"
+
+    def _deliver_welcome_if_due(self) -> None:
+        """The welcome the workspace gives its first chat, once it is due."""
+        if self._is_welcome_delivered or not self.is_chat_created:
+            return
+        if self._welcome_delay_polls > 0:
+            self._welcome_delay_polls -= 1
+            return
+        self.events.extend(WELCOME_EXCHANGE)
+        self._is_welcome_delivered = True
+
+    def _agents_listing(self) -> list[dict]:
+        # The listing carries the canonical name and the state, and no labels: labels reach clients
+        # over the workspace's WebSocket, which this bridge has no way to read.
+        agents: list[dict] = [{"id": "sys-1", "name": "system-services", "state": "WAITING"}]
+        if self.is_chat_created:
+            agents.append({"id": self.chat_agent_id, "name": self.chat_agent_name, "state": self.chat_state})
+        return agents
+
+    def _handle_create_chat(self, command: str) -> str:
+        self.create_chat_commands.append(command)
+        # The create body, picked out of a command that also carries curl's own `%{http_code}`.
+        body_match = re.search(r'\{"name"[^{}]*\}', command)
+        assert body_match is not None, "a create-chat call carries a JSON body naming the chat"
+        payload = json.loads(body_match.group(0))
+        requested_name = str(payload.get("name") or "")
+        if self.create_chat_refusal_detail:
+            return curl_stdout(json.dumps({"detail": self.create_chat_refusal_detail}), status=400)
+        if self.is_chat_created:
+            return curl_stdout(
+                json.dumps({"detail": "A chat named '{}' already exists".format(requested_name)}), status=409
+            )
+        requested_account_id = str(payload.get("account_id") or "")
+        # A chat runs on the account it binds to, and only the sign-in endpoint mints one: with no
+        # account to bind to, the workspace refuses the create rather than making a chat that could
+        # never take a turn.
+        if requested_account_id and requested_account_id not in self.signed_in_account_ids:
+            return curl_stdout(json.dumps({"detail": "no account {}".format(requested_account_id)}), status=400)
+        if not requested_account_id and not self.signed_in_account_ids:
+            return curl_stdout(json.dumps({"detail": "no provider accounts exist yet"}), status=400)
+        self.chat_account_id = requested_account_id or self.signed_in_account_ids[-1]
+        # The workspace lists a chat under the true name it derives from the requested one.
+        self.chat_agent_name = requested_name.replace(" ", "-")
+        self.is_chat_created = True
+        if self._is_first_create_answer_lost:
+            self._is_first_create_answer_lost = False
+            return mngr_exec_json("")
+        created = {"agent_id": self.chat_agent_id, "name": self.chat_agent_name, "display_name": requested_name}
+        return curl_stdout(json.dumps(created), status=201)
 
     def handle(self, command: str) -> str | None:
         """Return the curl-body stdout for a system_interface call, or None if this command is not
         one (so the caller falls back to scripted rules)."""
         if "/api/claude-auth/submit-credentials" in command:
             self.submitted_credential_commands.append(command)
-            return mngr_exec_json(json.dumps({"logged_in": True, "auth_mode": self.expected_auth_mode}))
+            # An account exists only where the workspace really ended up in an authenticated mode.
+            if self.expected_auth_mode != "none":
+                self.signed_in_account_ids.append(MOCK_ACCOUNT_ID)
+            signed_in = {
+                "account_id": MOCK_ACCOUNT_ID,
+                "display": "eval",
+                "logged_in": True,
+                "auth_mode": self.expected_auth_mode,
+            }
+            return curl_stdout(json.dumps(signed_in))
         if "/api/claude-auth/status" in command:
             if not self.is_auth_endpoint_up:
-                # An unparseable body is what the bridge sees while the endpoint is still coming up.
+                # No status line at all is what the bridge sees while the endpoint is still coming up.
                 return mngr_exec_json("")
-            return mngr_exec_json(json.dumps({"logged_in": False, "auth_mode": "none"}))
+            return curl_stdout(json.dumps({"logged_in": False, "auth_mode": "none"}))
+        if "/api/agents/create-chat" in command:
+            return self._handle_create_chat(command)
         if "/api/agents/{}/message".format(self.chat_agent_id) in command:
+            # The welcome turn is queued ahead of anything sent afterwards, so a send that beats it
+            # is answered behind it rather than instead of it.
+            self._welcome_delay_polls = 0
+            self._deliver_welcome_if_due()
             if self._turn_index < len(self._turn_reply_events):
                 self.events.extend(self._turn_reply_events[self._turn_index])
                 self._turn_index += 1
-            return mngr_exec_json(json.dumps({"ok": True}))
+            return curl_stdout(json.dumps({"ok": True}))
         events_match = re.search(
             r"/api/agents/{}/events\?offset=(\d+)&limit=(\d+)".format(re.escape(self.chat_agent_id)), command
         )
         if events_match:
+            self._deliver_welcome_if_due()
             offset, limit = int(events_match.group(1)), int(events_match.group(2))
             body = {"total": len(self.events), "events": self.events[offset : offset + limit]}
-            return mngr_exec_json(json.dumps(body))
+            return curl_stdout(json.dumps(body))
         if "/api/agents" in command and "curl" in command:
             if self._trailing_events and self._turn_index >= len(self._turn_reply_events):
                 self.events.extend(self._trailing_events)
                 self._trailing_events = []
-            body = {
-                "agents": [
-                    {"id": "sys-1", "name": "system-services", "state": "WAITING"},
-                    {"id": self.chat_agent_id, "name": self.chat_agent_name, "state": "WAITING"},
-                ]
-            }
-            return mngr_exec_json(json.dumps(body))
+            return curl_stdout(json.dumps({"agents": self._agents_listing()}))
         return None
 
 

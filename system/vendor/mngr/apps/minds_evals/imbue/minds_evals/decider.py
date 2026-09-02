@@ -1,4 +1,4 @@
-"""The DECIDE_FROM_PERSONA role-play call, ported from the dwt eval worker's decider module.
+"""The DECIDE_FROM_PERSONA role-play call: the simulated user's side of a persona conversation.
 
 Renders the persona plus the transcript so far into the role-play prompt, asks the decider model for
 the client's single next casual line, and falls back to the literal "Sounds good." on any error so a
@@ -22,7 +22,10 @@ FALLBACK_MESSAGE: Final[str] = "Sounds good."
 
 @pure
 def render_client_conversation(transcript: Transcript) -> str:
-    """The user-facing conversation so far: user_message.content / non-empty assistant_message.text."""
+    """The user-facing conversation so far: user_message.content / non-empty assistant_message.text.
+
+    The transcript here is the driver's own rendered conversation (``_conversation_events``), not the
+    raw workspace event stream, so it carries these shapes whatever vintage the agent emitted."""
     lines: list[str] = []
     for event in transcript.events:
         if event.get("type") == "assistant_message":

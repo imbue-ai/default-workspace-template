@@ -3,8 +3,7 @@
 Harbor-based Minds persona evals. Each persona case in an eval config becomes one
 [harbor](https://github.com/harbor-framework/harbor) task; a run drives real multi-turn
 conversations against real Minds workspaces on Modal and grades the transcripts with a rewardkit
-verifier. It supersedes the bespoke `apps/mngr_minds_eval` harness and reads that harness's
-eval-config schema unchanged.
+verifier. It replaces a bespoke pre-harbor harness, whose eval-config schema it kept unchanged.
 
 ## How a trial works
 
@@ -19,19 +18,31 @@ eval-config schema unchanged.
    credentials to the workspace's own `/api/claude-auth/submit-credentials` once
    `/api/claude-auth/status` answers. A workspace boots unauthenticated -- the product's create path
    supplies no AI credentials -- so this keeps the graded agent in the same shared config-dir regime
-   real workspaces run in. The endpoint restarts the claude agents, so the driver waits for WAITING
-   again before turn 1.
-4. It then drives the case's turns: wait until the workspace chat agent is WAITING, send the turn
+   real workspaces run in. The paste mints a **provider account**, whose id the response carries.
+4. It then **creates the workspace's chat** through `/api/agents/create-chat`, named after the
+   workspace host and bound to that account, and waits for it to reach WAITING. A workspace boots
+   with no chat at all -- a chat binds to an account when it is created, and a fresh workspace has
+   none -- which is why the sign-in has to come first: a create issued before it is refused for want
+   of an account. A create whose answer is lost is retried, and the collision that retry hits is
+   resolved back to the chat the first attempt left behind.
+   Being the workspace's first chat, it is the one that gets `/welcome`. `conversation.jsonl` --
+   the eval's own turns, which the gates and the wordiness check read -- carries no trace of it;
+   the judged transcript drops the `/welcome` trigger but keeps the greeting it draws, as its first
+   agent message. Either way the driver waits for that welcome to be *answered* before turn 1. A
+   new chat reports WAITING as soon as its agent is up, which is before the workspace has
+   typed `/welcome` in; sending into that window would race the delivery and leave the greeting
+   landing where turn 1's reply is read from.
+5. It then drives the case's turns: wait until the workspace chat agent is WAITING, send the turn
    (literal, or role-played by the decider model on `DECIDE_FROM_PERSONA`), wait for the reply,
    snapshot the workspace if the cadence calls for it (the run recipe's `final` snapshots only after
    the last turn), and keep `/logs/agent/full_transcript.jsonl` + `state.json` current in the box.
-5. Once the last turn is done and while the workspace is still alive, the driver runs an
+6. Once the last turn is done and while the workspace is still alive, the driver runs an
    **evidence-collection** phase: it records what was actually delivered (the app registry,
    supervisord's view of it, a file inventory, HTTP probes, declared test commands, UI flows, and
    the delivered repo as a git bundle) into `/logs/agent/verification/`. It has to happen here,
    because the verifier runs after the workspace is destroyed. See
    [Outcome verification](#outcome-verification).
-6. The **verifier** (pure rewardkit, separate container) scores the recorded transcript and
+7. The **verifier** (pure rewardkit, separate container) scores the recorded transcript and
    evidence. See [Scoring](#scoring).
 
 ## Setup
@@ -74,7 +85,7 @@ only way harbor gets the dependencies it declares. Practical consequences:
 
 ```bash
 # 1. Generate a dataset (one harbor task per persona case) from an eval config
-just minds-evals-generate apps/mngr_minds_eval/eval-config-small.json /tmp/minds-evals/datasets/small
+just minds-evals-generate apps/minds_evals/configs/eval-config-small.json /tmp/minds-evals/datasets/small
 
 # 2. Sanity-check the dataset end-to-end with the oracle (canned transcript; no Minds boot)
 uv run --project apps/minds_evals harbor run -p /tmp/minds-evals/datasets/small -a oracle -e modal -y -o apps/minds_evals/jobs
@@ -97,23 +108,29 @@ not a per-PR gate**. Handy knobs:
 
 - `-m/--model` selects the decider (simulated-user) model; default `claude-opus-4-8`.
 - `--ak snapshot_mode=per-turn|final|off` controls workspace snapshot cadence; the run recipe
-  passes `final`, and a later `--ak` wins. Extra harbor args are the recipe's *fifth* parameter, so
-  supply `push_r2` explicitly or they bind to it:
-  `just minds-evals-run <dataset> <job> <concurrency> false --ak snapshot_mode=per-turn`.
+  passes `final`, and a later `--ak` wins. Extra harbor args are the recipe's *fourth* parameter, so
+  `concurrency` must be given explicitly or they bind to it:
+  `just minds-evals-run <dataset> <job> <concurrency> --ak snapshot_mode=per-turn`.
 - `--ak verifier_model=<model>` runs the UI-flow verification agent on a different model from the
   decider (default: the decider's). Flow driving is mechanical, so a cheaper tier may do -- measure
   flow stability before changing the default.
 - `--ak proxy=true` routes the workspace's model calls through an in-box LiteLLM proxy; see
   [Token and cost accounting](#token-and-cost-accounting).
 - `-k/--n-attempts N` runs each case N times (judge scores are statistical; use means).
-- `just minds-evals-run <dataset> <job> <concurrency> true` (or `MINDS_EVALS_PUSH_R2=1`) syncs the
-  job dir to R2 after the run; it defaults to off everywhere.
 
 Results land in `apps/minds_evals/jobs/<job>/<trial>/`: harbor's `result.json` and
 `verifier/reward-details.json` at the trial root, and everything the driver collects under `agent/`
--- `full_transcript.jsonl`, `state.json`, `snapshots/`, `usage.json`, and `verification/`.
+-- `full_transcript.jsonl`, `state.json`, `snapshots/`, `usage.json`, and `verification/`. They stay
+there; the recipe uploads nothing. Archiving belongs to whatever runs the eval on a schedule, which
+supplies its own credentials rather than reading a developer's.
 
 ## Eval config
+
+The checked-in configs live in `configs/`: `eval-config.json` (nine cases) and
+`eval-config-small.json` (three, two of them carrying `expectations`) for quick end-to-end runs.
+Both pin `mngr_branch: main`. A config naming a branch that no longer exists fails at generation
+time, when the branch is resolved to a SHA -- so a config pinned to a feature branch is worth
+keeping only while that branch is.
 
 ```json
 {

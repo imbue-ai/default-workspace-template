@@ -80,6 +80,51 @@ def test_render_omits_framework_noise_tools_and_decider_events() -> None:
     assert rendered.count("[AGENT · message") == 3
 
 
+def _atif_sample_events() -> list[dict[str, Any]]:
+    """The same conversation as ``_sample_events``, in the ATIF-shaped records mngr emits."""
+    return [
+        {"type": "header", "event_id": "header", "emitter": "claude/common_transcript"},
+        {"type": "step", "source": "user", "message": "/welcome"},
+        # Framework-injected text is a system step in this vintage, not an is_meta user message.
+        {"type": "step", "source": "system", "message": "WELCOME SKILL BODY -- 1738 chars"},
+        {"type": "step", "source": "user", "message": "hi what can you do"},
+        {"type": "step", "source": "agent", "message": ""},
+        {"type": "step", "source": "agent", "message": "Hey! I can build you small web apps you open as a tab."},
+        {
+            "type": "step",
+            "source": "agent",
+            "message": "",
+            "tool_calls": [{"tool_call_id": "c1", "function_name": "Skill", "arguments": {"skill": "build-app"}}],
+        },
+        {
+            "type": "observation",
+            "results": [{"source_call_id": "c1", "content": "Launching skill: build-app"}],
+        },
+        {"type": "step", "source": "system", "message": "BUILD-APP SKILL BODY -- 24585 chars"},
+        {"type": "step", "source": "agent", "message": "Here's my plan: a simple task tracker, just for you."},
+        {"type": "step", "source": "user", "message": "Looks good, go for it."},
+        {"type": "step", "source": "agent", "message": "Building it now."},
+        {"type": "decider_message", "turn": 2, "text": "SIMULATED CLIENT MESSAGE", "is_fallback": False},
+    ]
+
+
+def test_render_of_atif_records_matches_the_legacy_rendering() -> None:
+    assert _RENDERER.render_judge_transcript(_atif_sample_events()) == _RENDERER.render_judge_transcript(
+        _sample_events()
+    )
+
+
+def test_render_of_atif_records_omits_system_steps_observations_and_the_header() -> None:
+    rendered = _RENDERER.render_judge_transcript(_atif_sample_events())
+
+    assert "/welcome" not in rendered
+    assert "SKILL BODY" not in rendered
+    assert "Launching skill" not in rendered
+    assert "SIMULATED CLIENT MESSAGE" not in rendered
+    assert "common_transcript" not in rendered
+    assert rendered.count("[AGENT · message") == 3
+
+
 def test_render_of_empty_stream_is_empty() -> None:
     assert _RENDERER.render_judge_transcript([]) == ""
 

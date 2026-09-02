@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from imbue.system_interface.harnesses.antigravity.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.antigravity.tool_labels import shell_command
 from imbue.system_interface.harnesses.antigravity.tool_labels import tool_labels
 
@@ -80,17 +79,6 @@ def test_no_target_and_no_native_caption_uses_bare_verb() -> None:
 def test_malformed_args_falls_back_to_native_caption() -> None:
     header, caption = tool_labels("run_command", "{not json", "Running something")
     assert caption == "Running something"
-
-
-def test_keeps_full_input_for_file_bodies() -> None:
-    assert keeps_full_tool_input("write_to_file", '{"CodeContent":"..."}') is True
-    assert keeps_full_tool_input("multi_replace_file_content", "{}") is True
-    assert keeps_full_tool_input("view_file", '{"AbsolutePath":"/x"}') is False
-
-
-def test_keeps_full_input_for_tk_command() -> None:
-    assert keeps_full_tool_input("run_command", '{"CommandLine":"tk create --step \\"plan\\""}') is True
-    assert keeps_full_tool_input("run_command", '{"CommandLine":"ls -la"}') is False
 
 
 def test_shell_command_reads_agys_command_key_and_ignores_other_tools() -> None:

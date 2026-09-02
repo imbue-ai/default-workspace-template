@@ -1651,8 +1651,8 @@ def _adopt_workspace_on_container(
 
     The connector-side port of the plugin's fast-path adopt (see
     ``mngr_imbue_cloud.providers.instance`` / ``hosts.host``): rewrite the
-    host record's placeholder ``host_name`` (the dwt bootstrap reads it to
-    name the initial chat agent), stamp the minds labels on the pre-baked
+    host record's placeholder ``host_name`` (the dwt system_interface reads
+    it as the workspace's name), stamp the minds labels on the pre-baked
     services agent, and write the connector URL into the host env file so
     everything on the host can reach this tier's connector. All writes go
     through SFTP (no shell quoting of user-controlled names).

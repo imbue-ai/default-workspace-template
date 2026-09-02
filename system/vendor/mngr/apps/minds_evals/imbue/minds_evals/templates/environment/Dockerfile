@@ -1,12 +1,13 @@
-# Minds box: a full Minds computer for an exact mngr SHA, adapted from the old
-# apps/mngr_minds_eval box image. One image per mngr SHA; harbor's Modal
-# provider builds it on Modal's builders and layer-caches it, so every task in
-# a dataset (byte-identical environment/) reuses the same build.
+# Minds box: a full Minds computer for an exact mngr SHA. One image per mngr
+# SHA; harbor's Modal provider builds it on Modal's builders and layer-caches
+# it, so every task in a dataset (byte-identical environment/) reuses the same
+# build.
 #
-# Differences from the old box image:
-#   - no eval-app overlay (the driver is host-side; no harness code runs in-box)
-#   - no ENTRYPOINT: harbor supplies its own keepalive, and the driver's
-#     setup() starts entrypoint.sh explicitly with the per-trial env
+# The image carries no eval application: the conversation driver runs host-side
+# and reaches into the box over the system interface, so the only harness code
+# baked in is the entrypoint and the port probe the driver invokes. There is
+# deliberately no ENTRYPOINT either -- harbor supplies its own keepalive, and
+# the driver's setup() starts entrypoint.sh explicitly with the per-trial env.
 FROM node:24.15.0-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.5 /uv /usr/local/bin/uv

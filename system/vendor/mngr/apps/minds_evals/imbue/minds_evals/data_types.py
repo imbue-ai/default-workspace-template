@@ -19,8 +19,9 @@ DEFAULT_DWT_BRANCH: Final[str] = "main"
 
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 3600.0
 
-# Seed value for the wordiness guard until PR2 measures real old-harness batch
-# averages; overridable per eval config via "avg_word_count_baseline".
+# Seed value for the wordiness guard: a guess, not a measurement. To ground it,
+# take the mean over a batch of real runs and set "avg_word_count_baseline" in
+# the eval config, which overrides this per config.
 DEFAULT_AVG_WORD_COUNT_BASELINE: Final[float] = 120.0
 
 # Wall-clock the driver's evidence-collection phase gets after the conversation

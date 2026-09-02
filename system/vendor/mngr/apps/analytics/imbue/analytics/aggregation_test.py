@@ -524,6 +524,102 @@ def test_transcript_daily_derives_turns_tool_mix_and_errors_deduped() -> None:
     assert tool_rows == snapshot([("Bash", 1, 1), ("Read", 1, 0)])
 
 
+def test_transcript_daily_counts_the_atif_record_shapes_alongside_the_legacy_ones() -> None:
+    """A workspace can hold agents of either stream vintage, so both must reach the same counters."""
+    session = build_fixture_analytics_session()
+    # One pre-cutover agent: a legacy user message and its tool result.
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:00:00+00",
+        "evt-legacy-u1",
+        "user_message",
+        "transcripts",
+        "user-a",
+        '{"content": "[redacted]", "agent_id": "agent-legacy"}',
+    )
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:01:00+00",
+        "evt-legacy-r1",
+        "tool_result",
+        "transcripts",
+        "user-a",
+        '{"tool_name": "Bash", "is_error": false, "agent_id": "agent-legacy"}',
+    )
+    # One post-cutover agent: a user step, an agent step, and one observation
+    # record carrying two results (where the legacy stream had two records).
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:02:00+00",
+        "evt-step-u1",
+        "step",
+        "transcripts",
+        "user-a",
+        '{"source": "user", "message": "[redacted]", "agent_id": "agent-atif"}',
+    )
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:03:00+00",
+        "evt-step-a1",
+        "step",
+        "transcripts",
+        "user-a",
+        '{"source": "agent", "message": "on it", "agent_id": "agent-atif"}',
+    )
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:04:00+00",
+        "evt-obs-1",
+        "observation",
+        "transcripts",
+        "user-a",
+        '{"results": ['
+        '{"source_call_id": "c1", "content_byte_count": 3, "extra": {"is_error": true, "tool_name": "Read"}},'
+        '{"source_call_id": "c2", "content_byte_count": 4, "extra": {"is_error": false, "tool_name": "Bash"}}'
+        '], "agent_id": "agent-atif"}',
+    )
+    # A system step's inline observation is not a tool result and must not be counted.
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:05:00+00",
+        "evt-step-s1",
+        "step",
+        "transcripts",
+        "user-a",
+        '{"source": "system", "message": "", "agent_id": "agent-atif",'
+        ' "observation": {"results": [{"source_call_id": "", "content_byte_count": 9,'
+        ' "extra": {"is_error": false, "tool_name": "compact"}}]}}',
+    )
+
+    run_aggregation(session, _WINDOW_START)
+
+    daily_rows = session.execute(
+        "SELECT user_message_count, assistant_message_count, tool_result_count,"
+        " tool_error_count, distinct_tool_count, active_agent_count"
+        " FROM metrics.gold.transcript_daily"
+    ).fetchall()
+    # Two user turns (one per vintage), one agent turn, three tool results
+    # (one legacy record plus the observation's two), one of them failing.
+    assert daily_rows == snapshot([(2, 1, 3, 1, 2, 2)])
+
+    tool_rows = session.execute(
+        "SELECT tool_name, tool_result_count, tool_error_count FROM metrics.gold.transcript_tools_daily"
+        " ORDER BY tool_name"
+    ).fetchall()
+    assert tool_rows == snapshot([("Bash", 2, 0), ("Read", 1, 1)])
+
+    activity_rows = session.execute(
+        "SELECT signal_count FROM metrics.gold.activity WHERE signal_type = 'workspace_user_message'"
+    ).fetchall()
+    assert activity_rows == snapshot([(2,)])
+
+
 def test_collection_health_tracks_staleness_and_consecutive_failures() -> None:
     session = build_fixture_analytics_session()
     session.execute(

@@ -337,17 +337,19 @@ minds-test-electron-menu *args:
 # per dataset.
 [group("minds evals")]
 minds-evals-generate config output="/tmp/minds-evals/datasets/generated":
-    uv run --project apps/minds_evals minds-evals-harbor generate --config "{{config}}" --output "{{output}}"
+    uv run --project apps/minds_evals minds-evals generate --config "{{config}}" --output "{{output}}"
 
 # Run a generated dataset on Modal with the persona driver. Requires
 # ANTHROPIC_API_KEY (decider + judge) and ~/.modal.toml. Each trial boots its
 # own 6-CPU/16-GB box, so this is a scheduled/nightly regression job, not a
 # per-PR gate. `concurrency` bounds simultaneous boxes -- set it to the case
-# count so all cases run in one wave (cost = concurrency * box size). push_r2
-# defaults false everywhere, including CI. Extra harbor args pass through last;
-# --ak snapshot_mode=per-turn overrides the default of final.
+# count so all cases run in one wave (cost = concurrency * box size). Extra
+# harbor args pass through last; --ak snapshot_mode=per-turn overrides the
+# default of final. Results stay in the local job dir: archival belongs to
+# whatever runs the eval on a schedule, which needs its own credentials rather
+# than a developer's.
 [group("minds evals")]
-minds-evals-run dataset job_name concurrency="4" push_r2="false" *harbor_args="":
+minds-evals-run dataset job_name concurrency="4" *harbor_args="":
     #!/usr/bin/env bash
     set -euo pipefail
     : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY -- the decider and judge call the Anthropic API}"
@@ -368,15 +370,6 @@ minds-evals-run dataset job_name concurrency="4" push_r2="false" *harbor_args=""
         {{harbor_args}})
     echo ">> ${cmd[*]}"
     "${cmd[@]}"
-    if [ "{{push_r2}}" = "true" ] || [ "${MINDS_EVALS_PUSH_R2:-0}" = "1" ]; then
-        # Reuse the old harness's scoped R2 creds file when present.
-        if [ -f "$HOME/.minds-eval/r2.env" ]; then set -a; . "$HOME/.minds-eval/r2.env"; set +a; fi
-        : "${MINDS_EVAL_BUCKET:?R2 push needs MINDS_EVAL_BUCKET (see apps/minds_evals/README.md)}"
-        : "${MINDS_EVAL_S3_ENDPOINT:?R2 push needs MINDS_EVAL_S3_ENDPOINT}"
-        aws s3 sync "apps/minds_evals/jobs/{{job_name}}" \
-            "s3://${MINDS_EVAL_BUCKET}/harbor-jobs/{{job_name}}" \
-            --endpoint-url "${MINDS_EVAL_S3_ENDPOINT}"
-    fi
 
 # Create an independent default-workspace-template checkout nested in the
 # current mngr checkout at .external_worktrees/default-workspace-template -- the
