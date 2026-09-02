@@ -30,6 +30,16 @@ const ALIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_A
 // Activity states that mean the agent is mid-turn (see ActivityIndicator).
 const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING"]);
 
+/** True iff ``state`` POSITIVELY says the agent process is dead.
+
+ * Narrower than ``livenessCategoryForState``'s "dormant": UNKNOWN means the observer
+ * could not look (non-evidence, the agent may be running fine), so it is dormant for
+ * the dot but never "dead" for anything that acts on death -- the same carve-out the
+ * backend's ``is_lifecycle_dead`` makes. */
+export function isAgentProcessDead(state: string): boolean {
+  return !ALIVE_STATES.has(state) && state !== "UNKNOWN";
+}
+
 export function livenessCategoryForState(state: string): AgentLivenessCategory {
   if (ACTIVE_STATES.has(state)) {
     return "active";

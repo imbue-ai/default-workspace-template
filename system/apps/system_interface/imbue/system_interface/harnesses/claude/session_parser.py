@@ -17,18 +17,18 @@ from pydantic import Field
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
-from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
-from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
-from imbue.system_interface.harnesses.claude.tool_labels import keeps_full_tool_input
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
 from imbue.system_interface.harnesses.claude.tool_labels import shell_command
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
-from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
+from imbue.system_interface.harnesses.tool_output import error_snippet
 from imbue.system_interface.harnesses.tool_output import find_permission_request
 from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
-from imbue.system_interface.harnesses.tool_output import truncate_tool_output
+from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.system_interface.harnesses.tool_output import tk_stamp
 
 logger = _loguru_logger
 
@@ -295,7 +295,7 @@ def _parse_assistant_message(
     usage_raw: dict[str, Any] = message.get("usage", {})
 
     text_parts: list[str] = []
-    tool_calls: list[dict[str, str]] = []
+    tool_calls: list[dict[str, Any]] = []
     for block in content_blocks:
         if not isinstance(block, dict):
             continue
@@ -309,31 +309,33 @@ def _parse_assistant_message(
             tool_name: str = block.get("name", "")
             tool_input = block.get("input", {})
             raw_input = json.dumps(tool_input, separators=(",", ":"))
-            input_preview = raw_input
-            if len(input_preview) > MAX_TOOL_INPUT_PREVIEW_LENGTH and not keeps_full_tool_input(tool_name, raw_input):
-                input_preview = input_preview[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
             command = shell_command(tool_name, raw_input)
             is_hidden_tk = command is not None and is_pure_tk_lifecycle_command(command)
 
             if call_id and tool_name:
                 tool_name_by_call_id[call_id] = tool_name
 
-            # Labelled here, where the harness is known, so the frontend renders a
-            # string rather than deciding what a claude tool call should read as.
-            header_label, caption_label = tool_labels(tool_name, input_preview)
-            tool_call: dict[str, str] = {
+            # Labelled here, where the harness is known, and from the FULL input. The raw input
+            # itself stays off the event (payload-free wire); ``input_chars`` tells the
+            # frontend whether an expand has anything to fetch.
+            header_label, caption_label = tool_labels(tool_name, raw_input)
+            tool_call: dict[str, Any] = {
                 "tool_call_id": call_id,
                 "tool_name": tool_name,
-                "input_preview": input_preview,
+                "input_chars": len(raw_input),
                 "header_label": header_label,
                 "caption_label": caption_label,
             }
             # The render decision ships with the call (a hidden tk marker, or the
-            # permission card), recognised from the UNTRUNCATED input backend-side; the
+            # permission card), recognised from the full input backend-side; the
             # frontend never re-derives it from the command text.
             display = classify_tool_call_display(is_pure_tk=is_hidden_tk, raw_input=raw_input)
             if display is not None:
                 tool_call["display"] = display.value
+            # The step progress view reads step titles/summaries out of a tk lifecycle
+            # command itself, so that one command is stamped resident.
+            if command is not None and is_tk_lifecycle_anywhere(command):
+                tool_call["tk_command"] = command
             # For Agent tool calls, surface the description and subagent_type from the
             # tool input directly. These let the frontend render the rich subagent card
             # (label + agent-type badge) the instant the call appears, before the subagent
@@ -363,9 +365,13 @@ def _parse_assistant_message(
     # provider-side failure (5xx / overloaded), add a "not Minds' fault" note. Gated on
     # the synthetic model: only Claude Code's own framework-generated notices carry these
     # forms, so a REAL assistant message that merely quotes "API Error: 500" or an error
-    # JSON (routine in a coding chat) is not mistaken for an outage. Auth failures are
-    # flagged separately (is_auth_error) and are not reclassified here.
-    api_error_kind = classify_api_error(joined_text) if model == _SYNTHETIC_MODEL else None
+    # JSON (routine in a coding chat) is not mistaken for an outage.
+    #
+    # The auth check carries the same gate for the same reason, and needs it more: an agent
+    # helping with a credential says "invalid API key" in ordinary prose, and ungated that
+    # painted its own reply as a failure with a "Sign in again" button under it.
+    is_framework_notice = model == _SYNTHETIC_MODEL
+    api_error_kind = classify_api_error(joined_text) if is_framework_notice else None
     event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "assistant_message",
@@ -378,7 +384,7 @@ def _parse_assistant_message(
         "stop_reason": stop_reason,
         "usage": usage,
         "message_uuid": uuid,
-        "is_auth_error": is_auth_error_text(joined_text),
+        "is_auth_error": is_framework_notice and is_auth_error_text(joined_text),
         "is_api_error": api_error_kind is not None,
         "api_error_kind": api_error_kind,
         "is_provider_fault": is_provider_fault(api_error_kind),
@@ -475,20 +481,15 @@ def _parse_user_message(
 
             tool_name = tool_name_by_call_id.get(tool_call_id, "unknown")
 
-            # Extract subagent ID BEFORE truncation (the trailer may be at the end).
+            # The structured facts lifted from the full output (which itself stays off
+            # the event): the subagent linkage trailer and the permission-request object
+            # the card renders from.
             extracted_subagent_id: str | None = None
             if tool_name == "Agent":
                 extracted_subagent_id = _extract_subagent_id(structured_agent_id, result_content)
-
-            # Likewise BEFORE truncation: a permission-request response is
-            # routinely longer than the output limit, so the object is located
-            # and parsed while it is still intact. The card then reads the
-            # request off the event instead of re-parsing a string that
-            # truncation may have cut mid-object.
             permission_request = find_permission_request(result_content)
 
-            result_content = truncate_tool_output(result_content, permission_request)
-
+            is_error = bool(block.get("is_error", False))
             event = {
                 "timestamp": timestamp,
                 "type": "tool_result",
@@ -496,10 +497,18 @@ def _parse_user_message(
                 "source": _SOURCE,
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "output": result_content,
-                "is_error": bool(block.get("is_error", False)),
+                "output_chars": len(result_content),
+                "is_error": is_error,
                 "message_uuid": uuid,
             }
+            # The resident stamps: what the default render reads out of the output
+            # without fetching it (the payload-free wire contract in harnesses/events).
+            snippet = error_snippet(result_content) if is_error else ""
+            if snippet:
+                event["error_snippet"] = snippet
+            stamped_tk = tk_stamp(result_content)
+            if stamped_tk:
+                event["tk_stamp"] = stamped_tk
             if session_id is not None:
                 event["session_id"] = session_id
 
@@ -564,6 +573,82 @@ def _parse_queued_command_attachment(
         event["session_id"] = session_id
     existing_event_ids.add(event_id)
     new_events.append((timestamp, event))
+
+
+# --- On-demand payload reconstruction (the detail endpoint's parse half) ---
+
+
+def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
+    """Full deferred payloads by event_id for one raw claude session line.
+
+    The read half of the payload-free wire contract: the resident events carry no tool
+    inputs or outputs, so an expand re-reads the source line and reconstructs them here,
+    whole and untruncated. Claude's thinking blocks are deliberately NOT surfaced: they are
+    encrypted and useless to the user, so no claude event ever stamps ``has_thinking`` and
+    nothing loads them. Returns {} for a line that yields no payload-bearing events.
+    """
+    try:
+        raw = json.loads(raw_line.strip())
+    except json.JSONDecodeError as e:
+        # The caller hands over a line it believes complete (a recorded byte range or a
+        # fallback-scan line), so a decode failure is a stale range or real corruption --
+        # rare either way, and worth surfacing.
+        logger.warning("Skipping an undecodable session line during a payload read: {}", e)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    uuid = raw.get("uuid", "")
+    if not isinstance(uuid, str) or not uuid:
+        return {}
+    message = raw.get("message")
+    if not isinstance(message, dict):
+        return {}
+    payloads: dict[str, dict[str, Any]] = {}
+    content = message.get("content")
+
+    if raw.get("type") == "assistant" and isinstance(content, list):
+        inputs_by_tool_call_id: dict[str, str] = {}
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
+                inputs_by_tool_call_id[str(block["id"])] = json.dumps(block.get("input", {}), indent=2)
+        if inputs_by_tool_call_id:
+            payloads[_make_event_id(uuid, "assistant")] = {
+                "inputs_by_tool_call_id": inputs_by_tool_call_id,
+                "output": None,
+                "thinking": None,
+            }
+        return payloads
+
+    if raw.get("type") == "user" and isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            tool_call_id = block.get("tool_use_id", "")
+            if not tool_call_id:
+                continue
+            result_content = block.get("content", "")
+            if isinstance(result_content, list):
+                parts: list[str] = []
+                for item in result_content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        parts.append(item.get("text", ""))
+                    elif isinstance(item, str):
+                        parts.append(item)
+                    else:
+                        # Other item shapes carry no text.
+                        pass
+                result_content = "\n".join(parts)
+            elif not isinstance(result_content, str):
+                result_content = str(result_content)
+            else:
+                # Already the plain string form.
+                pass
+            payloads[_make_event_id(uuid, f"tool_result-{tool_call_id}")] = {
+                "inputs_by_tool_call_id": {},
+                "output": result_content,
+                "thinking": None,
+            }
+    return payloads
 
 
 # Queued-message ledger parsing (conservation-law model). Claude Code records the

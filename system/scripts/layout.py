@@ -108,12 +108,17 @@ _REGISTRATION_POLL_INTERVAL_SECONDS = 0.25
 
 # Set of accepted ref prefixes.
 #
-# ``chat-terminal:<name>`` addresses the singleton terminal panel attached
-# to the named agent's tmux session (URL pattern ``http://terminal.
-# <workspace-host>/?arg=_&arg=agent&arg=<name>``). Listed before ``chat:``
-# because the ``_normalize_ref`` prefix scan returns on the first match -- if
-# ``chat:`` came first the longer prefix would never be recognized and
-# ``chat-terminal:foo`` would degrade to a bare service-name fallback.
+# ``chat-terminal:<name>`` is RETIRED but deliberately still listed. An agent's
+# terminal is no longer a panel of its own: it is the back face of that agent's
+# chat, reached with the Terminal toggle under the composer, so there is nothing
+# for the ref to address. It stays here so ``_validate_ref`` can reject it BY
+# NAME -- delisting it instead would make ``_normalize_ref`` fall through to the
+# bare-service-name branch below, turning ``chat-terminal:foo`` into
+# ``service:chat-terminal:foo``, which fails five seconds later complaining that
+# a service nobody named is not registered.
+#
+# It is listed before ``chat:`` because the ``_normalize_ref`` prefix scan
+# returns on the first match, and ``chat:`` is a prefix of it.
 _REF_PREFIXES = (
     "service:",
     "chat-terminal:",
@@ -125,6 +130,9 @@ _REF_PREFIXES = (
 # Set of accepted directions for split/move. ``within`` is the synthetic
 # direction that means "tab into the anchor's own group" -- the four
 # cardinal values all describe *adjacent* groups.
+# The one prefix that parses and is then refused; see _REF_PREFIXES.
+_RETIRED_TERMINAL_PREFIX = "chat-terminal:"
+
 _WITHIN_DIRECTION = "within"
 _CARDINAL_DIRECTIONS = ("left", "right", "above", "below")
 _DIRECTIONS = (*_CARDINAL_DIRECTIONS, _WITHIN_DIRECTION)
@@ -237,6 +245,14 @@ def _validate_ref(ref: str) -> None:
         return
     if ref.startswith("https://"):
         return
+    if ref.startswith(_RETIRED_TERMINAL_PREFIX):
+        sys.stderr.write(
+            f"error: ref {ref!r} is no longer a thing that can be opened. An agent's terminal "
+            f"is the back face of its chat, not a panel: address the chat with "
+            f"{'chat:' + ref[len(_RETIRED_TERMINAL_PREFIX):]!r} and turn it over with the "
+            f"Terminal toggle under the composer.\n"
+        )
+        raise SystemExit(EXIT_ERROR)
     if not any(ref.startswith(p) for p in _REF_PREFIXES):
         sys.stderr.write(
             f"error: ref {ref!r} must start with one of {_REF_PREFIXES}, "
