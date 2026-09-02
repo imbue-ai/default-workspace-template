@@ -57,7 +57,6 @@ which also preserves Docker layer-cache hits on re-bakes.
 | `sync_mngr_into_template` | `apps/minds_admin/.../bake/pool_bake.py` | working tree | `minds-admin pool create --mngr-source ...` |
 | `propagate_changes` | `apps/minds/scripts/propagate_changes` | working tree | each dev-loop iteration into a running container |
 | `_vendor_mngr_into_default_workspace_template` | `apps/minds/imbue/minds/desktop_client/default_workspace_template_worktree.py` | at a ref (`HEAD`) | workspace-creation tests (snapshot bake, create+chat, full flow) |
-| `_vendor_mngr` | `apps/mngr_minds_eval/.../launch.py` | working tree | eval batch launch |
 
 Adding a new one means calling `scripts/public_subset.py`; do not hand-roll a filter.
 
