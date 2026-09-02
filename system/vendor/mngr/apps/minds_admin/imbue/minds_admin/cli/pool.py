@@ -154,14 +154,15 @@ def pool() -> None:
 )
 @click.option(
     "--skip-deferred-install-wait",
-    "is_deferred_install_wait_skipped",
+    "is_env_converge_wait_skipped",
     is_flag=True,
     default=False,
     help=(
-        "[dev only] Don't wait for the DEFAULT_WORKSPACE_TEMPLATE deferred-install (heavy apt + Playwright/Chromium) to "
-        "finish before stopping the baked services agent. Saves a few minutes per bake, but the baked "
-        "container's deferred-install may be left incomplete (stopping mid-apt can corrupt dpkg). Safe "
-        "for dev/throwaway bakes; NEVER use for production pool hosts."
+        "[dev only] Don't wait for the DEFAULT_WORKSPACE_TEMPLATE env-converge slow phase (heavy apt + "
+        "Fortress/Chromium install, environment-record capture, rootfs stamp) to finish before stopping "
+        "the baked services agent. Saves a few minutes per bake, but the baked container's converge may be "
+        "left incomplete (no apt.json/rootfs stamp; stopping mid-apt can corrupt dpkg). Safe for "
+        "dev/throwaway bakes; NEVER use for production pool hosts."
     ),
 )
 @click.option(
@@ -189,7 +190,7 @@ def pool_create(
     server_id: str | None,
     is_dry_run: bool,
     max_concurrency: int,
-    is_deferred_install_wait_skipped: bool,
+    is_env_converge_wait_skipped: bool,
     is_content_addressed_cache: bool,
 ) -> None:
     """Create pre-provisioned bare-metal slice pool hosts for the activated minds env.
@@ -276,7 +277,7 @@ def pool_create(
                 database_url=resolved_database_url,
                 pool_private_key_pem=pool_private_key_pem,
                 is_dry_run=is_dry_run,
-                is_deferred_install_wait_skipped=is_deferred_install_wait_skipped,
+                is_env_converge_wait_skipped=is_env_converge_wait_skipped,
                 max_concurrency=max_concurrency,
             )
     except (BakeSourceError, RepoIdentityError) as exc:
