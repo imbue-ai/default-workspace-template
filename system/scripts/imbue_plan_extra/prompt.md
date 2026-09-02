@@ -42,7 +42,7 @@ Position i of every list describes node i, so a three-node plan reads like this:
 
 ```
 capability = ["high", "medium", "high"]
-subtasks = ["Decide the data model and hand back a spec.", "Build the page against that spec.", "Hand the app to crystallize-creation with type=app."]
+subtasks = ["Settle what a to-do item holds, how adding, ticking off and deleting behave, and what the empty state shows. Hand back a short spec.", "Build the page and its storage to that spec, covering every state it names. Leave anything the spec did not settle rather than inventing it, and verify the app serves before handing back its name and where it lives.", "Hand the finished to-do app to crystallize-creation."]
 access list = [[], [0], [0, 1]]
 ```
 
@@ -92,11 +92,20 @@ downstream of it. Spend where the risk is.
 
 ### Subtasks
 
-Write a subtask as an objective: one or two sentences naming what to accomplish
-and what to hand back. Add detail where it is a constraint the worker could not
-have reached on its own -- a format a later node needs, a convention specific to
-this workspace, a decision already made upstream. The rest is the worker's to
-work out.
+A subtask sets scope, not mechanism. This plan routes the work at a high level.
+The agent orchestrating it supplies the implementation details -- which script,
+which port, which command, which flag -- at the moment it creates each worker,
+so leave all of that out however well you know it.
+
+Spend the words on the boundary of the work instead: what this node builds, what
+it deliberately leaves alone, what it should stub rather than finish, and what
+it hands back. "Scaffold the app, build the routes over the sampled data, and
+leave the live backend stubbed rather than wiring it to anything real" is the
+level to aim at -- a worker can hold itself to that, and none of it is a command.
+
+Be as rich as the scope needs. Several sentences are fine when they are all
+about what is in and out of the work; the trouble is words spent on mechanism,
+not words as such.
 
 Most of the planning happens inside the workers. The pool you route to reaches
 up to frontier models, so a worker takes an objective and does its own
@@ -206,7 +215,7 @@ Where you cut the work and why, and why each node got the capability it got.
 </thinking>
 <output>
 capability = ["high", "low", "medium", "high"]
-subtasks = ["Decide the data model and hand back a spec.", "Draw the app's icon.", "Build the page against the spec, using that icon.", "Hand the app to crystallize-creation with type=app."]
+subtasks = ["Settle what a to-do item holds, how adding, ticking off and deleting behave, and what the empty state shows. Hand back a short spec.", "Draw the app's icon in the workspace house style and hand back where you put it.", "Build the page and its storage to that spec, using that icon, covering every state the spec names. Verify it serves, surface its tab, and leave hardening and tests to the handoff.", "Hand the finished to-do app to crystallize-creation."]
 access list = [[], [], [0, 1], [0, 2]]
 </output>
 ```
@@ -215,8 +224,8 @@ The same shape at six nodes, with three of them starting at once:
 
 ```
 <output>
-capability = ["high", "low", "low", "medium", "high", "high"]
-subtasks = ["Connect the account the app reads from and hand back a sample of its real records.", "Pick the app's name and a free port.", "Draw the app's icon.", "Scaffold the app and serve a throwaway mock of the page.", "Replace the mock with the real page and the data layer behind it.", "Hand the app to crystallize-creation with type=app."]
+capability = ["high", "medium", "low", "medium", "high", "high"]
+subtasks = ["Connect the user's Slack account and pull a real sample of the messages the page will show, covering an empty case and a high-volume one. Hand back the sample and what counts as unread for this account.", "Settle the page's layout and what each row shows. Hand back a short spec; decide nothing about how the data is fetched.", "Draw the app's icon in the workspace house style and hand back where you put it.", "Scaffold the app and put a throwaway mock of the page in front of the user: hard-coded content only, no persistence and no backend, covering the states the spec names. Loop until the user confirms the look and feel, then hand back what they confirmed.", "Replace the mock with the real page, reading Slack through the connection made upstream and keeping the confirmed layout exactly. Verify it serves and surface its tab.", "Hand the finished app to crystallize-creation."]
 access list = [[], [], [], [1, 2], [0, 3], [3, 4]]
 </output>
 ```
