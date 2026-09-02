@@ -24,7 +24,6 @@ from imbue.system_interface.harnesses.error_patterns import classify_api_error
 from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
-
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
 from imbue.system_interface.harnesses.tool_output import error_snippet
 from imbue.system_interface.harnesses.tool_output import find_permission_request
@@ -150,7 +149,6 @@ def _is_compaction_command(raw_text: str, normalized_text: str) -> bool:
 def _is_compaction_output(raw_text: str) -> bool:
     """True if text is Claude Code's local command output acknowledging compaction."""
     return "<local-command-stdout>" in raw_text and "Compacted" in raw_text
-
 
 
 def extract_text_content(content: str | list[dict[str, Any]] | Any) -> str:
@@ -461,36 +459,34 @@ def _parse_user_message(
                     event["session_id"] = session_id
                 existing_event_ids.add(event_id)
                 new_events.append((timestamp, event))
-        elif _is_compaction_command(raw_text, text) or _is_compaction_output(raw_text):
-            # Compaction command and output plumbing are not conversational turns.
-            pass
-        elif text and not is_interrupt_sentinel_text(text):
-            event_id = _make_event_id(uuid, "user")
-            if event_id not in existing_event_ids:
-                event = {
-                    "timestamp": timestamp,
-                    "type": "user_message",
-                    "event_id": event_id,
-                    "source": _SOURCE,
-                    "role": "user",
-                    "content": text,
-                    "message_uuid": uuid,
-                }
-                # Claude Code's own markers (``isMeta`` for framework-injected,
-                # model-only messages) are read HERE and become the shared render decision
-                # -- the raw flags never cross the wire. Explicit detectors win over
-                # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
-                # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
-                stamp_user_message_display(
-                    event,
-                    text,
-                    is_meta=bool(raw.get("isMeta")),
-                )
-                if session_id is not None:
-                    event["session_id"] = session_id
-                existing_event_ids.add(event_id)
-                new_events.append((timestamp, event))
-
+        else:
+            is_compaction = _is_compaction_command(raw_text, text) or _is_compaction_output(raw_text)
+            if not is_compaction and text and not is_interrupt_sentinel_text(text):
+                event_id = _make_event_id(uuid, "user")
+                if event_id not in existing_event_ids:
+                    event = {
+                        "timestamp": timestamp,
+                        "type": "user_message",
+                        "event_id": event_id,
+                        "source": _SOURCE,
+                        "role": "user",
+                        "content": text,
+                        "message_uuid": uuid,
+                    }
+                    # Claude Code's own markers (``isMeta`` for framework-injected,
+                    # model-only messages) are read HERE and become the shared render decision
+                    # -- the raw flags never cross the wire. Explicit detectors win over
+                    # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
+                    # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
+                    stamp_user_message_display(
+                        event,
+                        text,
+                        is_meta=bool(raw.get("isMeta")),
+                    )
+                    if session_id is not None:
+                        event["session_id"] = session_id
+                    existing_event_ids.add(event_id)
+                    new_events.append((timestamp, event))
 
     # Emit tool result events for any tool_result blocks
     if isinstance(content, list):
