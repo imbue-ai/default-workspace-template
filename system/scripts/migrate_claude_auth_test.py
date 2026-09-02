@@ -1,9 +1,8 @@
-"""Tests for the host-env -> settings.json Claude auth migration script.
+"""Tests for the host-env -> account Claude auth migration script.
 
-The script's file-move phase is exercised directly (via importlib, the same
-pattern as claude_oom_launch_test.py); the detached restart phase is covered
-by the restart tests in system/apps/system_interface/.../harnesses/claude/auth_test.py, which
-test the same `ClaudeAuthService.restart_all_claude_agents` the script calls.
+Exercised via importlib, the same pattern as claude_oom_launch_test.py. There is no
+restart phase to cover any more: an account is read when a chat is created, not frozen
+into a running process's environment, so nothing has to be torn down to see it.
 """
 
 from __future__ import annotations
@@ -14,6 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from imbue.system_interface.accounts import account_dir
+from imbue.system_interface.accounts import read_index
+
 _SCRIPT = Path(__file__).parent / "migrate_claude_auth.py"
 _spec = importlib.util.spec_from_file_location("migrate_claude_auth", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
@@ -22,31 +24,34 @@ _spec.loader.exec_module(migration)
 
 
 @pytest.fixture
-def workspace_dirs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[Path, Path]:
-    host_dir = tmp_path / "host"
-    host_dir.mkdir()
-    config_dir = tmp_path / "claude-config"
-    config_dir.mkdir()
-    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-    return host_dir, config_dir
+def host_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A workspace whose host env file and accounts store are both throwaway."""
+    host = tmp_path / "host"
+    host.mkdir()
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host))
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
+    return host
 
 
-def test_migrate_moves_keys_into_settings_and_scrubs_host_env(
-    workspace_dirs: tuple[Path, Path],
-) -> None:
-    host_dir, config_dir = workspace_dirs
+def _only_account_env() -> dict[str, str]:
+    accounts = read_index().accounts
+    assert len(accounts) == 1, f"expected exactly one migrated account, got {accounts}"
+    settings = json.loads((account_dir(accounts[0].id) / "settings.json").read_text())
+    return dict(settings["env"])
+
+
+def test_migrate_moves_keys_into_an_account_and_scrubs_host_env(host_dir: Path) -> None:
     (host_dir / "env").write_text(
-        "CLAUDE_CONFIG_DIR=/home/user/.mngr/claude\nANTHROPIC_API_KEY=sk-old-key\nANTHROPIC_BASE_URL=https://litellm.example\n"
+        "CLAUDE_CONFIG_DIR=/home/user/.mngr/claude\n"
+        "ANTHROPIC_API_KEY=sk-old-key\n"
+        "ANTHROPIC_BASE_URL=https://litellm.example\n"
     )
 
-    changed = migration._migrate_env_files()
+    assert migration.migrate() is True
 
-    assert changed is True
-    settings = json.loads((config_dir / "settings.json").read_text())
-    assert settings["env"] == {
+    # Both keys: the base URL is the whole point of a proxied setup, and dropping it
+    # would silently route the migrated account to Anthropic instead.
+    assert _only_account_env() == {
         "ANTHROPIC_API_KEY": "sk-old-key",
         "ANTHROPIC_BASE_URL": "https://litellm.example",
     }
@@ -57,43 +62,26 @@ def test_migrate_moves_keys_into_settings_and_scrubs_host_env(
     assert "CLAUDE_CONFIG_DIR=/home/user/.mngr/claude" in host_env_text
 
 
-def test_migrate_is_noop_when_host_env_holds_no_auth_keys(
-    workspace_dirs: tuple[Path, Path],
-) -> None:
-    host_dir, config_dir = workspace_dirs
+def test_migrate_is_noop_when_host_env_holds_no_auth_keys(host_dir: Path) -> None:
     (host_dir / "env").write_text("CLAUDE_CONFIG_DIR=/home/user/.mngr/claude\n")
 
-    changed = migration._migrate_env_files()
-
-    assert changed is False
-    assert not (config_dir / "settings.json").exists()
+    assert migration.migrate() is False
+    assert read_index().accounts == ()
 
 
-def test_migrate_rerun_after_success_is_noop(workspace_dirs: tuple[Path, Path]) -> None:
-    host_dir, _config_dir = workspace_dirs
+def test_migrate_rerun_after_success_mints_only_one_account(host_dir: Path) -> None:
+    """The scrub is what makes it idempotent -- a second run finds nothing to move."""
     (host_dir / "env").write_text("ANTHROPIC_API_KEY=sk-old-key\n")
 
-    assert migration._migrate_env_files() is True
-    assert migration._migrate_env_files() is False
+    assert migration.migrate() is True
+    assert migration.migrate() is False
+    assert len(read_index().accounts) == 1
 
 
-def test_migrate_keeps_existing_settings_credentials_over_host_env(
-    workspace_dirs: tuple[Path, Path],
-) -> None:
-    """A modal-written credential outranks the stale host-env one.
+def test_migrate_carries_a_token_rather_than_a_key(host_dir: Path) -> None:
+    """A subscription workspace that was given a long-lived token still migrates."""
+    (host_dir / "env").write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-example\n")
 
-    The stale host key is still scrubbed (that is the point of the
-    migration), but the settings env block keeps what the modal wrote.
-    """
-    host_dir, config_dir = workspace_dirs
-    (host_dir / "env").write_text("ANTHROPIC_API_KEY=sk-stale\n")
-    (config_dir / "settings.json").write_text(
-        json.dumps({"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-modal"}})
-    )
+    assert migration.migrate() is True
 
-    changed = migration._migrate_env_files()
-
-    assert changed is True
-    settings = json.loads((config_dir / "settings.json").read_text())
-    assert settings["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-modal"}
-    assert "sk-stale" not in (host_dir / "env").read_text()
+    assert _only_account_env() == {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-example"}

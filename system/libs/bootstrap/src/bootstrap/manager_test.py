@@ -2,24 +2,19 @@
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import subprocess
 from collections.abc import Callable
-from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
-from imbue.mngr.api.address_parsers import parse_new_agent_location
-from imbue.mngr.cli.output_helpers import write_json_line
 from loguru import logger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
     _DRI_WAKE_TIMEOUT_SECONDS,
     _UPDATE_RECOVER_TIMEOUT_SECONDS,
-    INITIAL_CHAT_AGENT_ID_FILENAME,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
@@ -27,17 +22,13 @@ from bootstrap.manager import (
     WORKSPACE_ROOT_DIR,
     TimezoneFetchError,
     _apply_container_timezone,
-    _build_create_chat_command,
     _configure_git_global,
+    _ensure_git_identity,
     _fetch_user_timezone,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
-    _maybe_create_initial_chat,
-    _parse_created_agent_id,
     _parse_timezone_response,
-    _persist_initial_chat_agent_id,
     _read_host_name,
-    _read_main_agent_labels,
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
     _wake_update_dri_agent,
@@ -113,224 +104,7 @@ def test_read_host_name_returns_none_when_field_missing(
     assert _read_host_name() is None
 
 
-# --- _read_main_agent_labels ---
-
-
-def test_read_main_agent_labels_returns_label_dict(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-1")
-    agent_dir = tmp_path / "agents" / "agent-1"
-    agent_dir.mkdir(parents=True)
-    (agent_dir / "data.json").write_text(
-        json.dumps({"labels": {"workspace": "my-ws", "is_primary": "true"}})
-    )
-    assert _read_main_agent_labels() == {"workspace": "my-ws", "is_primary": "true"}
-
-
-def test_read_main_agent_labels_returns_empty_when_env_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
-    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
-    assert _read_main_agent_labels() == {}
-
-
-def test_read_main_agent_labels_returns_empty_when_data_json_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-1")
-    assert _read_main_agent_labels() == {}
-
-
-def test_read_main_agent_labels_returns_empty_when_labels_field_absent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-1")
-    agent_dir = tmp_path / "agents" / "agent-1"
-    agent_dir.mkdir(parents=True)
-    (agent_dir / "data.json").write_text(json.dumps({"other": "value"}))
-    assert _read_main_agent_labels() == {}
-
-
-# --- _build_create_chat_command ---
-
-
-def test_build_create_chat_command_stacks_first_and_chat_templates() -> None:
-    cmd = _build_create_chat_command({"workspace": "my-workspace"})
-    # `NAME@HOST`: the first chat is created as the human-readable "Chat 1" *on*
-    # the workspace's host, not under the host's own name.
-    assert cmd[:3] == ["mngr", "create", "Chat-1"]
-    # The harness rides `--type claude`; the roles ride the template stack. The
-    # `first` template owns everything unique to the opening chat (/welcome,
-    # the first=true label, fast-mode launch settings), so the argv itself must
-    # carry none of them.
-    assert cmd[cmd.index("--type") + 1] == "claude"
-    templates = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--template"]
-    assert templates == ["first", "chat"]
-    assert "--message" not in cmd
-    assert "-S" not in cmd
-    assert "--no-connect" in cmd
-
-
-def test_build_create_chat_command_leaves_transfer_to_the_chat_role() -> None:
-    """The chat role template owns `transfer = none`, so the create must not pass
-    it on the command line -- a CLI value would win over the template and the two
-    could silently drift apart.
-
-    It matters that the value ends up `none`: it makes mngr skip the per-agent
-    worktree so the chat reuses the services agent's work_dir. Without it, mngr
-    collides with the services agent's existing `mngr/<host>` branch.
-    """
-    cmd = _build_create_chat_command({"workspace": "my-workspace"})
-    assert "--transfer" not in cmd
-
-
-def test_build_create_chat_command_carries_no_workspace_label() -> None:
-    cmd = _build_create_chat_command({"workspace": "my-workspace"})
-    # The chat agent belongs to its workspace by sharing the host; it carries no
-    # workspace label (the label was removed from the naming model).
-    labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert all(not label.startswith("workspace=") for label in labels)
-
-
-def test_build_create_chat_command_tags_user_created() -> None:
-    """The initial chat agent is tagged ``user_created=true`` so the OOM
-    agent-tagging hook places it in the protected user-agent band (shed only as a
-    last resort)."""
-    cmd = _build_create_chat_command({"workspace": "my-workspace"})
-    labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert "user_created=true" in labels
-
-
-def test_build_create_chat_command_files_the_chat_in_the_starter_project() -> None:
-    """The first chat is filed in the workspace's starter project, never in the
-    services agent's inherited ``project`` label.
-
-    That label is mngr's own -- the repo the agent works on, e.g.
-    ``default-workspace-template`` -- and names no view. Inheriting it left the
-    first chat belonging to no project, so work it started landed in whichever
-    view the user happened to be looking at.
-    """
-    cmd = _build_create_chat_command({"workspace": "ws", "project": "default-workspace-template"})
-    labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-
-    assert "project=project-1" in labels
-    assert "project=default-workspace-template" not in labels
-
-
-def test_build_create_chat_command_files_the_chat_even_with_no_inherited_label() -> None:
-    cmd = _build_create_chat_command({"workspace": "ws"})
-    labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert "project=project-1" in labels
-
-
-def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
-    """Confront the emitted argv with the live ``imbue.mngr.main.cli`` tree, so
-    a system/vendor/mngr rename of ``create``/its flags fails here at merge time rather
-    than only at host boot. A ``workspace`` label is supplied so the builder's
-    label resolution short-circuits without reading host files."""
-    argv = _build_create_chat_command({"workspace": "ws", "project": "proj"})
-    assert_mngr_argv_valid(argv)
-
-
-def test_build_create_chat_command_positional_is_the_agent_name_not_a_host() -> None:
-    """The CLI contract check above is shape-only -- click sees the positional as
-    an opaque string. This runs it through mngr's own address parser to pin
-    what the positional MEANS: the new agent's name, with no host part. The
-    host is implicit (the bootstrap runs inside it); naming one here asks mngr
-    to look up a host by that name and fails with "Could not find host", which
-    leaves a booting workspace with no chat at all.
-
-    The positional also carries the CANONICAL name, with the human one riding
-    as a label, so any vendored mngr parses it -- including one predating
-    free-form names.
-    """
-    argv = _build_create_chat_command({"workspace": "ws"})
-    location = parse_new_agent_location(argv[2])
-
-    assert location.name == "Chat-1"
-    assert location.host_name is None
-
-
-def test_build_create_chat_command_labels_the_chats_human_readable_name() -> None:
-    """The name the user sees rides as the ``display_name`` label, whose
-    canonical form is the agent name above -- the invariant newer mngr enforces."""
-    cmd = _build_create_chat_command({"workspace": "ws"})
-    labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-
-    assert "display_name=Chat 1" in labels
-
-
-def test_build_create_chat_command_requests_json_output() -> None:
-    """`--format json` lets the create step read back the new agent's id."""
-    cmd = _build_create_chat_command({"workspace": "ws"})
-    assert "--format" in cmd
-    assert cmd[cmd.index("--format") + 1] == "json"
-
-
-def test_build_create_chat_command_never_pins_claude_config_dir() -> None:
-    """Every claude in the workspace must resolve claude's own default
-    ~/.claude, so the create argv must not export CLAUDE_CONFIG_DIR (the old
-    services-agent-owned shared dir was removed in the ~/.claude cutover)."""
-    cmd = _build_create_chat_command({"workspace": "ws"})
-    assert all("CLAUDE_CONFIG_DIR" not in arg for arg in cmd)
-
-
-# --- _parse_created_agent_id ---
-
-
-def test_parse_created_agent_id_reads_agent_id_from_json_object() -> None:
-    stdout = '{"agent_id": "agent-abc", "host_id": "host-1", "host_name": "ws"}\n'
-    assert _parse_created_agent_id(stdout) == "agent-abc"
-
-
-def test_parse_created_agent_id_returns_none_when_absent() -> None:
-    assert _parse_created_agent_id('{"host_id": "host-1"}') is None
-    assert _parse_created_agent_id("not json at all") is None
-    assert _parse_created_agent_id("") is None
-
-
-def test_parse_created_agent_id_reads_live_mngr_json_output() -> None:
-    """Confront the parser with mngr's real `--format json` serializer, so a
-    system/vendor/mngr switch to pretty-printed or JSONL create output fails here at
-    merge time rather than only at host boot. `write_json_line` is exactly what
-    `mngr create`'s JSON branch calls (one compact object on stdout)."""
-    result_data = {
-        "agent_id": "agent-0123456789abcdef0123456789abcdef",
-        "host_id": "host-1",
-        "host_name": "my-workspace",
-    }
-    buffer = io.StringIO()
-    with redirect_stdout(buffer):
-        write_json_line(result_data)
-    assert _parse_created_agent_id(buffer.getvalue()) == result_data["agent_id"]
-
-
-# --- _persist_initial_chat_agent_id ---
-
-
-def test_persist_initial_chat_agent_id_writes_sidecar(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    _persist_initial_chat_agent_id("agent-abc")
-    assert (tmp_path / INITIAL_CHAT_AGENT_ID_FILENAME).read_text() == "agent-abc"
-
-
-def test_persist_initial_chat_agent_id_skips_when_host_dir_unset(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    _persist_initial_chat_agent_id("agent-abc")
-    assert not (tmp_path / INITIAL_CHAT_AGENT_ID_FILENAME).exists()
-
-
-# --- the shared subprocess double (chat creation, the recovery path, the DRI wake)
+# --- the shared subprocess double (the recovery path, the DRI wake)
 
 
 class _StubSubprocess:
@@ -364,102 +138,6 @@ class _StubSubprocess:
         )
 
 
-@pytest.fixture
-def _bootstrap_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Common setup: MNGR_HOST_DIR rooted in tmp_path, a workspace in data.json,
-    a chdir into tmp_path so the signal file lands somewhere ephemeral.
-
-    Explicitly unsets MNGR_AGENT_WORK_DIR so `_initialize_workspace_main_branch`
-    short-circuits in tests that don't care about the git initialization path;
-    tests that DO want that path can monkeypatch MNGR_AGENT_WORK_DIR back in.
-    """
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-1")
-    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
-    (tmp_path / "data.json").write_text(json.dumps({"host_name": "my-workspace"}))
-    agent_dir = tmp_path / "agents" / "agent-1"
-    agent_dir.mkdir(parents=True)
-    (agent_dir / "data.json").write_text(
-        json.dumps({"labels": {"workspace": "my-workspace", "is_primary": "true"}})
-    )
-    return tmp_path
-
-
-# --- _maybe_create_initial_chat ---
-
-
-def test_maybe_create_initial_chat_creates_and_writes_signal(
-    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
-) -> None:
-    stub = _StubSubprocess(returncode=0)
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    _maybe_create_initial_chat()
-    assert len(stub.calls) == 1
-    assert (_bootstrap_env / "data" / ".state" / "initial_chat_created").exists()
-
-
-def test_maybe_create_initial_chat_writes_no_host_env_file(
-    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
-) -> None:
-    """The bootstrap must not touch $MNGR_HOST_DIR/env at all: since the
-    ~/.claude cutover there is no CLAUDE_CONFIG_DIR (or anything else) for it
-    to export, and a stray env write would silently pin every future agent."""
-    stub = _StubSubprocess(returncode=0)
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    _maybe_create_initial_chat()
-    assert not (_bootstrap_env / "env").exists()
-
-
-def test_maybe_create_initial_chat_persists_created_agent_id(
-    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
-) -> None:
-    """A successful create writes the parsed agent id to the welcome-resend sidecar."""
-    stub = _StubSubprocess(returncode=0, stdout='{"agent_id": "agent-created"}\n')
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    _maybe_create_initial_chat()
-    assert (
-        _bootstrap_env / INITIAL_CHAT_AGENT_ID_FILENAME
-    ).read_text() == "agent-created"
-
-
-def test_maybe_create_initial_chat_skips_when_signal_present(
-    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
-) -> None:
-    runtime = _bootstrap_env / "data" / ".state"
-    runtime.mkdir(parents=True, exist_ok=True)
-    (runtime / "initial_chat_created").write_text("")
-    stub = _StubSubprocess(returncode=0)
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    _maybe_create_initial_chat()
-    assert stub.calls == []
-
-
-def test_maybe_create_initial_chat_skips_signal_on_failure(
-    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
-) -> None:
-    stub = _StubSubprocess(returncode=1)
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    _maybe_create_initial_chat()
-    assert len(stub.calls) == 1
-    assert not (_bootstrap_env / "data" / ".state" / "initial_chat_created").exists()
-
-
-def test_maybe_create_initial_chat_skips_when_host_name_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-1")
-    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
-    # No data.json at all -> host_name resolution fails.
-    stub = _StubSubprocess(returncode=0)
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    _maybe_create_initial_chat()
-    assert stub.calls == []
-    assert not (tmp_path / "data" / ".state" / "initial_chat_created").exists()
-
-
 # --- _initialize_workspace_main_branch ---
 
 
@@ -475,6 +153,7 @@ def test_initialize_workspace_main_branch_commits_and_renames(
 ) -> None:
     """End-to-end: a real git repo on `mngr/foo` with uncommitted changes ends
     up on `main` with the working tree committed."""
+    monkeypatch.chdir(tmp_path)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     _git_in(work_dir, "init", "--initial-branch=main", "-q")
@@ -501,9 +180,10 @@ def test_initialize_workspace_main_branch_commits_and_renames(
 
 
 def test_initialize_workspace_main_branch_skips_when_work_dir_unset(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """If MNGR_AGENT_WORK_DIR isn't set, no git invocations happen."""
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
     stub = _StubSubprocess(returncode=0)
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
@@ -516,6 +196,7 @@ def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
 ) -> None:
     """Second invocation on an already-clean `main` branch is a no-op for
     the user (we make an empty allow-empty commit, but it's harmless)."""
+    monkeypatch.chdir(tmp_path)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     _git_in(work_dir, "init", "--initial-branch=main", "-q")
@@ -528,6 +209,87 @@ def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
     _initialize_workspace_main_branch()
     branch = _git_in(work_dir, "branch", "--show-current").stdout.strip()
     assert branch == "main"
+
+
+def test_initialize_workspace_main_branch_runs_once_per_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`git add -A` + commit is a once-ever operation: on a later boot it would sweep up
+    whatever the user happened to have in flight. Its own signal, separate from the chat's."""
+    monkeypatch.chdir(tmp_path)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    _git_in(work_dir, "config", "user.email", "seed@test.local")
+    _git_in(work_dir, "config", "user.name", "seed")
+    (work_dir / "README.md").write_text("seed\n")
+    _git_in(work_dir, "add", "-A")
+    _git_in(work_dir, "commit", "-qm", "seed")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+    _initialize_workspace_main_branch()
+    assert (tmp_path / "data" / ".state" / "workspace_main_branch_initialized").exists()
+
+    # The user's work-in-progress, on a later boot.
+    (work_dir / "wip.txt").write_text("half-finished\n")
+    _initialize_workspace_main_branch()
+
+    assert _git_in(work_dir, "status", "--porcelain").stdout.strip() != "", (
+        "a second boot committed the user's working tree"
+    )
+
+
+# --- _ensure_git_identity ---
+
+
+def test_ensure_git_identity_sets_one_when_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workspace's only committer identity. `pool_bake` unsets it on finalize expecting
+    bootstrap to put it back, so this runs every boot rather than once."""
+    # Isolate the global git config so a developer machine's own identity does
+    # not satisfy the only-if-unset check the test is about.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+
+    _ensure_git_identity()
+
+    assert _git_in(work_dir, "config", "user.email").stdout.strip() == "bootstrap@minds.local"
+
+
+def test_ensure_git_identity_never_overwrites_the_users_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    _git_in(work_dir, "config", "user.email", "me@example.com")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+
+    _ensure_git_identity()
+
+    assert _git_in(work_dir, "config", "user.email").stdout.strip() == "me@example.com"
+
+
+def test_initialize_workspace_main_branch_no_longer_sets_an_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It moved to `_ensure_git_identity`. Leaving it here tied the workspace's only identity
+    to a one-shot signal, which is what broke an adopted pool workspace."""
+    monkeypatch.chdir(tmp_path)
+    # Isolate the global git config so a developer machine's own identity does
+    # not leak into the "no identity was set" assertion below.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+
+    _initialize_workspace_main_branch()
+
+    assert _git_in(work_dir, "config", "user.email").returncode != 0
 
 
 # --- _install_runtime_cron_entries ---
@@ -987,12 +749,17 @@ def test_a_partial_restore_at_boot_is_an_error_that_still_wakes_the_dri_agent(
 
 
 def test_main_rolls_back_before_the_venv_sync_and_wakes_the_agent_after_it(
-    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # The two orderings the boot path is built around: the rollback must run
     # before the venv converge (which has to converge against the restored
     # tree, not the half-applied one), and the DRI agent must be woken only
     # after it (a live agent's `uv run` would race the venv rewrite).
+    # chdir into tmp_path so the marker and signal files land somewhere
+    # ephemeral; MNGR_AGENT_WORK_DIR is unset so the git-identity and
+    # main-branch steps short-circuit.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
     _write_apply_marker("agent-omega")
     stub = _StubSubprocess()
     stub.on_command = _clear_marker_on_recover

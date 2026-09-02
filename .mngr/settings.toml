@@ -144,6 +144,18 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # scroll out of view, so what mngr captures at send time is what is actually holding the
 # input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
 # the workspace terminal panel keeps its scrollback either way.
+# model = "opus[1m]" is the ONE model pin left in this file, and it is claude-only on
+# purpose. Two things make it safe here and unsafe everywhere else: every Anthropic account
+# that can reach Claude Code has Opus, so the slug cannot be rejected the way a codex slug
+# can (see agent_types.codex); and the `first` create template turns fast mode on for the
+# introductory agent, which needs a model that actually supports it -- so the model and the
+# fast-mode default have to be chosen together rather than left to whatever the account
+# happens to default to.
+#
+# Do NOT copy this to another harness. codex, pi, opencode and antigravity all pin nothing:
+# their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
+# so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
+# an empty model bar.
 settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
@@ -209,13 +221,17 @@ command = "sleep infinity"
 # (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- do not
 # reinstall/verify at provision.
 #
-# model / effort are the lateral of agent_types.claude's opus[1m] + effortLevel="high".
-# gpt-5.6-sol is the account's default slug (so no ChatGPT-account slug rejection),
-# pinned for reproducibility. model_reasoning_effort="medium": Opus-high and Sol-medium
-# are each their vendor's balanced *default* (both with tiers of headroom above), and
-# Sol is unusually capable at lower effort -- so medium is the honest match for
-# opus-high, and avoids xhigh's latency / rate-limit blowout. Bump to "high" only if
-# this agent routinely takes on unusually hard, long-horizon work.
+# NO model or effort is pinned, deliberately -- and claude is now the only agent type that
+# pins one. A codex slug is not a property of the workspace, it is a property of the ACCOUNT:
+# which models a ChatGPT plan may use varies by tier, so a slug that is one account's default
+# is another account's hard 400 ("The 'gpt-5.6-sol' model is not supported when using Codex
+# with a ChatGPT account"). That failure is doubly bad because it is not just a refused turn:
+# the model bar matches the live model against the account's own list, so an unusable pin
+# also shows as a shrug and hides every model the account CAN use.
+#
+# Leaving it unset lets codex pick its account's default, which the model bar then reads back
+# from model_state.json like every other harness. Claude keeps its pin because its auth is
+# single-account and its slugs do not vary by plan in the same way.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
 # sandboxes exec via bubblewrap, but the bundled bwrap cannot set up its network
@@ -234,8 +250,6 @@ command = "sleep infinity"
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py codex"
 auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
-model = "gpt-5.6-sol"
-model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 check_installation = false
 # config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
@@ -345,7 +359,7 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
 # provision.
 #
-# No model is pinned (unlike agent_types.codex's gpt-5.6-sol). OpenCode is a
+# No model is pinned -- as with every agent type but claude now. OpenCode is a
 # many-provider, many-auth harness: its model is a `provider/model` slug that comes
 # from the user's own opencode.json (synced from ~/.config/opencode by the plugin)
 # or the authenticated provider's default -- forcing a slug here could name a
@@ -373,7 +387,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
 # plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
-# version-locked system/scripts/agy_install-1.1.16.sh), so check_installation is off.
+# version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
 # auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
 # matching agent_types.codex (auto_allow adds agy's --dangerously-skip-permissions;
 # auto_dismiss silently trusts the source repo). update_policy = NEVER freezes the baked
