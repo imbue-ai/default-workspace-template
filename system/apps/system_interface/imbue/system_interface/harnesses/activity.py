@@ -45,11 +45,9 @@ from typing import ClassVar
 
 from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.activity_state import has_unmatched_tool_use
 from imbue.system_interface.activity_state import is_lifecycle_dead
+from imbue.system_interface.activity_state import is_non_turn_tail_event
 from imbue.system_interface.activity_state import is_transcript_tail_stale
-from imbue.system_interface.activity_state import last_event_timestamp
-from imbue.system_interface.activity_state import last_event_type
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 
 
@@ -80,6 +78,14 @@ class HarnessActivityTracker(ABC):
     _last_event_timestamp: str | None
     # Extra per-harness cached signals (codex's turn latch); () for the rest.
     _extra: tuple[Any, ...]
+    # Incremental fold state: the id-keyed tool pairing (order-independent, so
+    # re-delivered events cannot corrupt it) and the timestamp-guarded tail markers.
+    _pending_tool_call_ids: set[str]
+    _matched_tool_call_ids: set[str]
+    _folded_last_type: str | None
+    _folded_last_timestamp: str | None
+    _last_turn_type_at: float | None
+    _last_event_at: float | None
 
     @classmethod
     def build(cls) -> "HarnessActivityTracker":
@@ -100,6 +106,13 @@ class HarnessActivityTracker(ABC):
         self._last_event_type = None
         self._last_event_timestamp = None
         self._extra = ()
+        self._pending_tool_call_ids = set()
+        self._matched_tool_call_ids = set()
+        self._folded_last_type = None
+        self._folded_last_timestamp = None
+        self._last_turn_type_at = None
+        self._last_event_at = None
+        self._reset_extra()
 
     @property
     def _tail_event_at(self) -> float | None:
@@ -107,17 +120,28 @@ class HarnessActivityTracker(ABC):
         return parse_iso_timestamp_to_epoch(self._last_event_timestamp)
 
     def observe(self, events: Sequence[dict[str, Any]]) -> bool:
-        """Refresh cached signals from the agent's full event list.
+        """Fold a batch of events into the cached signals.
 
-        Returns True iff a signal that affects derivation changed -- callers use
-        that to skip an otherwise-pointless recompute (and its marker ``stat``)
-        for streamed events that move nothing. The tail timestamp refreshes
-        inside the change guard deliberately: an event that moves no derived
-        signal leaves it alone and skips the recompute.
+        Incremental on purpose: the watcher hands over exactly the events it just parsed
+        (or the whole backlog once, at seeding), never the full transcript per event -- the
+        old full-list rescan was O(N) per event and re-materialised the transcript each
+        time. A batch can also carry RE-BROADCAST events (a supersession or a late subagent
+        enrichment of an OLD event), so every tail signal advances only for events whose
+        timestamp is at or past the signal's current position -- an old event re-delivered
+        cannot drag the tail backwards. The pending/matched tool-call sets are id-keyed and
+        order-independent, so re-delivery cannot corrupt them either.
+
+        Returns True iff a signal that affects derivation changed -- callers use that to
+        skip an otherwise-pointless recompute (and its marker ``stat``) for streamed events
+        that move nothing.
         """
-        new_pending = has_unmatched_tool_use(events)
-        new_last_type = last_event_type(events)
-        new_extra = self._observe_extra(events)
+        for event in events:
+            event_at = parse_iso_timestamp_to_epoch(event.get("timestamp"))
+            self._fold_common(event, event_at)
+            self._fold_extra_event(event, event_at)
+        new_pending = bool(self._pending_tool_call_ids - self._matched_tool_call_ids)
+        new_last_type = self._folded_last_type
+        new_extra = self._current_extra()
         if (
             new_pending == self._has_pending_tool_use
             and new_last_type == self._last_event_type
@@ -127,12 +151,50 @@ class HarnessActivityTracker(ABC):
         self._has_pending_tool_use = new_pending
         self._last_event_type = new_last_type
         self._extra = new_extra
-        self._last_event_timestamp = last_event_timestamp(events)
+        self._last_event_timestamp = self._folded_last_timestamp
         return True
 
-    def _observe_extra(self, events: Sequence[dict[str, Any]]) -> tuple[Any, ...]:
-        """Extra cached signals this harness's derivation needs. Empty by default."""
+    def _fold_common(self, event: dict[str, Any], event_at: float | None) -> None:
+        """Fold one event into the shared signals (tool pairing, tail type/timestamp)."""
+        event_type = event.get("type")
+        if event_type == "assistant_message":
+            for tool_call in event.get("tool_calls") or ():
+                tool_call_id = tool_call.get("tool_call_id")
+                if tool_call_id:
+                    self._pending_tool_call_ids.add(tool_call_id)
+        elif event_type == "tool_result":
+            tool_call_id = event.get("tool_call_id")
+            if tool_call_id:
+                self._matched_tool_call_ids.add(tool_call_id)
+        else:
+            # user_message and markers carry no tool pairing.
+            pass
+        # The tail type skips non-turn events (a bar-sent /model and its confirmation must
+        # not pin "Thinking..."); the tail timestamp tracks every event. Both advance only
+        # forward in time so a re-broadcast old event cannot regress them; an unparseable
+        # timestamp advances.
+        if self._advances(event_at, self._last_turn_type_at) and not is_non_turn_tail_event(event):
+            self._folded_last_type = event_type if isinstance(event_type, str) else None
+            self._last_turn_type_at = event_at if event_at is not None else self._last_turn_type_at
+        if self._advances(event_at, self._last_event_at):
+            timestamp = event.get("timestamp")
+            self._folded_last_timestamp = timestamp if isinstance(timestamp, str) and timestamp else None
+            self._last_event_at = event_at if event_at is not None else self._last_event_at
+
+    @staticmethod
+    def _advances(event_at: float | None, current_at: float | None) -> bool:
+        """Whether an event at ``event_at`` may advance a tail signal at ``current_at``."""
+        return event_at is None or current_at is None or event_at >= current_at
+
+    def _fold_extra_event(self, event: dict[str, Any], event_at: float | None) -> None:
+        """Fold one event into this harness's extra signals. No-op by default."""
+
+    def _current_extra(self) -> tuple[Any, ...]:
+        """This harness's extra cached signals, as folded so far. Empty by default."""
         return ()
+
+    def _reset_extra(self) -> None:
+        """Clear this harness's extra folded state. No-op by default."""
 
     def derive(
         self, *, lifecycle_state: str, is_active_marker_present: bool, process_started_at: float | None

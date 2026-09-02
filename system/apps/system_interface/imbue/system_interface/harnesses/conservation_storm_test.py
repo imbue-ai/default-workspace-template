@@ -873,7 +873,13 @@ class _AgyWorld:
         self.queue = AntigravityQueueTracker.build(self.dir / "agy_outbox.jsonl", "storm-session")
         self._counter = 0
         self._is_turn_open = False
-        self._turn_started_at = time.time() - 1.0
+        # 2s, not 1s: the release condition subtracts a 1.0s timestamp-granularity
+        # allowance (turn_state._TIMESTAMP_GRANULARITY_SECONDS) from the cancel stamp, so a
+        # tail exactly 1.0s old leaves a sub-millisecond margin decided by the ISO
+        # timestamp's millisecond rounding -- a real intermittent failure on fast runs. A 2s
+        # tail keeps the margin at a full second while staying "recent" for the open-tail
+        # rung.
+        self._turn_started_at = time.time() - 2.0
         self._committed_user_turns: list[str] = []
         drop_turn_state(self.dir.name)
         self.turn_state = get_turn_state(self.dir.name)
@@ -889,7 +895,7 @@ class _AgyWorld:
         # The tail row is stamped when the turn's work happened, NOT when we later look at it.
         # A cancelled tool row predates the ctrl+c that abandoned it, which is exactly what
         # lets our cancel stamp release the hold.
-        self._turn_started_at = time.time() - 1.0
+        self._turn_started_at = time.time() - 2.0
         self.marker.write_text("")
         self._republish()
 
