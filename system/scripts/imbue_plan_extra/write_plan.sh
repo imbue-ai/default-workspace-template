@@ -3,16 +3,19 @@
 # write_plan.sh -- record a routing plan for a build-app request, for offline
 # analysis only. Nothing in this workspace reads the result.
 #
-#   system/scripts/imbue_plan_extra/write_plan.sh <<'EOF'
+#   system/scripts/imbue_plan_extra/write_plan.sh <flow> <<'EOF'
 #   <the brief>
 #   EOF
+#
+# <flow> names the skill being routed, and selects prompts/<flow>.md. Each flow
+# carries its own complete prompt; this script is what they share.
 #
 # Returns immediately: the first invocation prints the run directory it created,
 # re-execs itself detached, and exits 0. The calling agent never waits and never
 # sees a failure. Printing the run directory is what makes a call in an agent's
 # transcript map to its output: the path is right there in the tool result.
 #
-# Each call gets its own directory, data/.imbue/plans/<utc-timestamp>-<agent>/:
+# Each call gets its own directory, data/.imbue/plans/<flow>/<utc-timestamp>-<agent>/:
 #
 #   brief.md     the brief as passed in, verbatim
 #   plan.md      the plan, under a fixed "do not use" header
@@ -51,8 +54,11 @@ set -euo pipefail
 
 readonly SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly WORK_DIR="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
-readonly PLANS_DIR="${WORK_DIR}/data/.imbue/plans"
-readonly INSTRUCTIONS="${SELF_DIR}/prompt.md"
+# $1 names the flow being routed and selects its prompt. Declared before the
+# paths below, which are built from it.
+readonly FLOW="${1:-}"
+readonly INSTRUCTIONS="${SELF_DIR}/prompts/${FLOW}.md"
+readonly PLANS_DIR="${WORK_DIR}/data/.imbue/plans/${FLOW}"
 
 # Ceiling on one plan run. A plan is a single read-and-write turn; anything past
 # this is wedged and should not keep holding container memory.
@@ -80,6 +86,9 @@ readonly CALLER_REF="${MNGR_AGENT_NAME:-${MNGR_AGENT_ID:-pid$$}}"
 # ---- Parent: create the run directory, announce it, detach --------------------
 # The caller gets its shell back here, before any of the work below runs.
 if [ -z "${IMBUE_PLAN_EXTRA_RUN_DIR:-}" ]; then
+    if [ -z "$FLOW" ] || [ ! -f "$INSTRUCTIONS" ]; then
+        exit 0
+    fi
     run_slug="$(date -u +%Y%m%dT%H%M%SZ)-$(printf '%s' "$CALLER_REF" | tr -c 'A-Za-z0-9._-' '-')"
     run_dir="${PLANS_DIR}/${run_slug}"
     # Two calls from one agent inside the same second would collide; the pid
@@ -99,9 +108,9 @@ if [ -z "${IMBUE_PLAN_EXTRA_RUN_DIR:-}" ]; then
     # setsid is util-linux, so it is present in the workspace container but not on
     # a macOS checkout; nohup alone still detaches from the caller's stdio.
     if command -v setsid >/dev/null 2>&1; then
-        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" setsid nohup "$0" </dev/null >>"${run_dir}/log" 2>&1 &
+        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" setsid nohup "$0" "$FLOW" </dev/null >>"${run_dir}/log" 2>&1 &
     else
-        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" nohup "$0" </dev/null >>"${run_dir}/log" 2>&1 &
+        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" nohup "$0" "$FLOW" </dev/null >>"${run_dir}/log" 2>&1 &
     fi
     disown || true
     exit 0
@@ -129,6 +138,7 @@ write_meta() {
 {
   "started_at": "${STARTED_AT}",
   "finished_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "flow": "${FLOW}",
   "status": "$1",
   "caller_agent_name": "${CALLER_AGENT_NAME}",
   "caller_agent_id": "${CALLER_AGENT_ID}",
