@@ -195,6 +195,12 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
   // Every poll then 404s and the modal says the sign-in was replaced, while a live flow exists.
   startGeneration += 1;
   const attempt = startGeneration;
+  // There is no live flow until the new one lands: the server drops the old one the moment
+  // this POST arrives. Held across the await, it stays submittable from a screen belonging to
+  // the method the user just left -- and a paste screen renders BEFORE its own flow exists,
+  // so its Save button would read a flow that cannot take a key.
+  flow = null;
+  m.redraw();
   const started = await m.request<FlowStart>({
     method: "POST",
     url: apiUrl("/api/accounts"),
