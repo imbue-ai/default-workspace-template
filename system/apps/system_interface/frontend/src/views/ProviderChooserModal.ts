@@ -552,11 +552,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const choices = current.key_providers;
     const selected = choices.find((candidate) => candidate.provider_id === keyProvider) ?? null;
     const withPicker = choices.length > 1;
-    // `getFlow() !== null` too: a paste screen renders BEFORE its flow exists -- there is
-    // nothing to wait for, so `begin` shows the form and lets the mint land behind it -- and
-    // submitting without one returns silently, so the field would do nothing at all with no
-    // spinner and no error to say why. Read at submit time, and shared by the button and the
-    // Enter key so both refuse exactly the same submits.
     const canSubmit = (): boolean =>
       !busy && getFlow() !== null && keyInput.trim() !== "" && !(withPicker && keyProvider === null);
     const keyField = m("div", { class: css.FIELD_ROW }, [
