@@ -136,8 +136,7 @@ these. With many small files, reading dominates: per-file latency.
   parallelize both the per-file latency and the CPU; threads do not help. Workers read + parse
   + project and return **only the projected rows**, in chunks of a few hundred files; bound
   the chunks in flight (2-3x workers); one pool reused across batches, created before any
-  database connection, shut down in `finally`. JSON inputs: use `orjson` (the one dependency;
-  15-25% CPU). Do not A/B the parser or the chunk size.
+  database connection, shut down in `finally`. Do not A/B the parser or the chunk size.
 - remote sources (network FS, object storage, HTTP): threads or async.
 - the parent is the **single writer**: one transaction per batch, WAL + `synchronous=NORMAL`,
   `page_size` before WAL, secondary indexes after bulk loads.
@@ -148,7 +147,7 @@ The serial write caps the speedup; accept it. No sweeps, searches, floors, A/B o
 
 One package; flat modules (`sources`, `store`, `ingest`, `export`, `cli`); about 600 and never
 more than ~800 non-blank non-comment package lines (tests, `verify/` and documentation are not
-budgeted; keep `verify/` under ~150 lines); at most one light runtime dependency; the per-source
+budgeted; keep `verify/` under ~150 lines); stdlib only; the per-source
 abstraction is one record `(name, columns, parse, version_key)`; no base class with one
 subclass; no config layers; no materialized roll-ups unless the task requires them. Tunables
 (workers, chunk size, inline threshold) are constants at the top of one module, overridable
