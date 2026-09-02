@@ -11,7 +11,7 @@ rather than an exact id, so the recorder follows the workspace's Opus instead of
 being held on one model after the workspace moves.
 
 The plan is written in the conductor three-list form -- `capability`,
-`subtasks`, and `access list`, one entry per node, three to ten nodes. Nodes get
+`subtasks`, and `access list`, one entry per node, three to fifteen nodes. Nodes get
 a capability bucket (`low` / `medium` / `high`) rather than a named model, on
 the assumption of a spectrum of general-purpose models with a cost tradeoff.
 Each node's access list names the earlier nodes it depends on, so nodes with
