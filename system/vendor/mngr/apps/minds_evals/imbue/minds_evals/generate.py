@@ -13,6 +13,7 @@ import string
 import subprocess
 import tempfile
 from collections.abc import Mapping
+from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -21,10 +22,12 @@ from typing import Final
 
 import click
 from loguru import logger
+from pydantic import ValidationError
 
 from imbue.imbue_common.logging import setup_logging
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import evidence_collection
+from imbue.minds_evals import trajectory
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
@@ -33,11 +36,19 @@ from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.data_types import DEFAULT_TIMEOUT_SECONDS
 from imbue.minds_evals.data_types import DEFAULT_VERIFICATION_TIMEOUT_SECONDS
 from imbue.minds_evals.data_types import EvalConfig
+from imbue.minds_evals.data_types import GoalEntry
 from imbue.minds_evals.data_types import PersonaCase
+from imbue.minds_evals.data_types import PromptEntry
+from imbue.minds_evals.data_types import TrajectoryProvenance
+from imbue.minds_evals.data_types import TurnEntryKind
+from imbue.minds_evals.data_types import TurnOutcome
+from imbue.minds_evals.data_types import UsageSource
+from imbue.minds_evals.data_types import entry_exchange_budget
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
 from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
+from imbue.minds_evals.usage import summarize_workspace_usage
 
 MNGR_REPO: Final[str] = "https://github.com/imbue-ai/mngr-internal.git"
 
@@ -55,6 +66,11 @@ _ORACLE_FINAL_REPLY: Final[str] = (
     "All done. Everything you asked for is in place and working. Tell me if you'd like anything adjusted."
 )
 _ORACLE_DECIDE_MESSAGE: Final[str] = "Sounds good."
+# How the oracle's trajectory names its author, and the fixed timestamp that keeps solve.sh byte-stable
+# across generations (the state it writes is pinned to the epoch the same way).
+_ORACLE_DRIVER_NAME: Final[str] = "minds-evals-oracle"
+_ORACLE_DRIVER_VERSION: Final[str] = "0.1.0"
+_ORACLE_TIMESTAMP: Final[str] = "1970-01-01T00:00:00+00:00"
 
 # The driver's own deadline is the case's timeout_seconds; harbor's agent
 # timeout gets this much grace on top so that after the driver hits its deadline
@@ -72,10 +88,10 @@ AGENT_TIMEOUT_GRACE_SECONDS: Final[float] = 300.0
 OUTCOME_JUDGE_WEIGHT: Final[float] = 1.0
 
 # What the outcome judge reads: the case's ground truth (rendered at grade time), the evidence index,
-# the conversation -- which is there so a deliverable the client visibly steered away from the
-# scripted expectations is graded against the evolved ask -- and the flattened UI-flow evidence.
+# the rendered conversation -- which is there so a deliverable the client visibly steered away from
+# the scripted expectations is graded against the evolved ask -- and the flattened UI-flow evidence.
 #
-# The last two entries are produced by a grade-time pre-step and always exist, empty or not. That is
+# The last three entries are produced by grade-time pre-steps and always exist, empty or not. That is
 # deliberate: rewardkit renders a listed path it cannot find as a literal "[not found]" block, so a
 # conditional artifact would put noise in the prompt of every flow-less trial (every oracle run, and
 # every case that declares no flows). An empty listed DIRECTORY, by contrast, renders nothing at all
@@ -83,7 +99,7 @@ OUTCOME_JUDGE_WEIGHT: Final[float] = 1.0
 OUTCOME_JUDGE_FILES: Final[tuple[str, ...]] = (
     "/logs/agent/expectations.md",
     "/logs/agent/{}/{}".format(evidence_collection.VERIFICATION_DIRNAME, evidence_collection.MANIFEST_FILENAME),
-    "/logs/agent/conversation.jsonl",
+    "/logs/agent/judge_transcript.txt",
     "/logs/agent/judge_flows_digest.txt",
     "/logs/agent/judge_screenshots",
 )
@@ -97,6 +113,86 @@ def derive_case_id(raw_case: Mapping[str, Any], index: int) -> str:
 
 
 @pure
+def _describe_validation_error(exc: ValidationError) -> str:
+    """A pydantic error report flattened to one line of `field: message` pairs, for a config author
+    who is reading a CLI error rather than a stack trace."""
+    return "; ".join(
+        "{}: {}".format(".".join(str(part) for part in error["loc"]) or "entry", error["msg"])
+        for error in exc.errors()
+    )
+
+
+@pure
+def parse_goal_entry(raw_entry: Mapping[str, Any], case_id: str, index: int) -> GoalEntry:
+    """One `{goal, max_exchanges}` prompts entry, as the model that the driver re-validates at trial
+    time defines it: unknown keys refused, the budget defaulted and bounded.
+
+    Only the surrounding context is added here -- which case and which prompt -- so a config author
+    is told where the bad entry is. The budget bound matters at generation time because a budget is
+    a cost commitment: each exchange is a full agent turn in a real workspace, so an implausible
+    budget must fail generation rather than surface as a trial that runs for hours.
+    """
+    raw_goal = raw_entry.get("goal")
+    # Type-checked rather than coerced with str(): a JSON number, bool, list, or object would become
+    # the literal text the client is told to hold out for ("123", "['a', 'b']"), so the authoring
+    # mistake would steer a real conversation instead of failing generation.
+    if not isinstance(raw_goal, str) or not raw_goal.strip():
+        raise EvalConfigError(
+            "case {!r} prompt {}: a goal entry needs a non-empty 'goal' string".format(case_id, index + 1)
+        )
+    try:
+        return GoalEntry.model_validate({**dict(raw_entry), "goal": raw_goal.strip()})
+    except ValidationError as exc:
+        raise EvalConfigError(
+            "case {!r} prompt {}: {}".format(case_id, index + 1, _describe_validation_error(exc))
+        ) from exc
+
+
+@pure
+def _normalize_prompts(raw_prompts: object, case_id: str) -> tuple[PromptEntry, ...]:
+    if not isinstance(raw_prompts, list) or not raw_prompts:
+        raise EvalConfigError("case {!r} must have a non-empty 'prompts' list".format(case_id))
+    prompts: list[PromptEntry] = []
+    for index, raw_prompt in enumerate(raw_prompts):
+        if isinstance(raw_prompt, dict):
+            prompts.append(parse_goal_entry({str(key): value for key, value in raw_prompt.items()}, case_id, index))
+        elif isinstance(raw_prompt, str):
+            text = raw_prompt.strip()
+            if not text:
+                raise EvalConfigError("case {!r} prompt {}: a prompt must not be empty".format(case_id, index + 1))
+            prompts.append(text)
+        else:
+            # Not coerced with str(): a JSON null or number would become the literal client message
+            # "None" or "123" and be sent to a real agent, so the authoring mistake would surface as
+            # a wasted trial rather than as a failed generation.
+            raise EvalConfigError(
+                "case {!r} prompt {}: a prompt must be a message string or a goal object, not {}".format(
+                    case_id, index + 1, type(raw_prompt).__name__
+                )
+            )
+    # The opening ask is what commissions the work, and it is the one entry every reader of the
+    # dataset (and the oracle) can take verbatim. Both non-literal forms are refused here rather
+    # than only the sentinel: a goal entry could state its own opening ask, but allowing it would
+    # make the first message of a case non-deterministic.
+    first = prompts[0]
+    if isinstance(first, GoalEntry):
+        raise EvalConfigError(
+            "case {!r}: the first prompt must be a literal message, not a goal entry".format(case_id)
+        )
+    if first == DECIDE_SENTINEL:
+        raise EvalConfigError(
+            "case {!r}: the first prompt cannot be {} (nothing to decide from yet)".format(case_id, DECIDE_SENTINEL)
+        )
+    return tuple(prompts)
+
+
+@pure
+def worst_case_exchange_count(prompts: Sequence[PromptEntry]) -> int:
+    """The most client messages a case can send: every goal entry spending its whole budget."""
+    return sum(entry_exchange_budget(entry) for entry in prompts)
+
+
+@pure
 def _normalize_cases(personas: object) -> tuple[PersonaCase, ...]:
     if not isinstance(personas, list) or not personas:
         raise EvalConfigError("'personas' must be a non-empty list")
@@ -106,18 +202,7 @@ def _normalize_cases(personas: object) -> tuple[PersonaCase, ...]:
             raise EvalConfigError("each persona case must be an object")
         raw_case: dict[str, Any] = {str(key): value for key, value in raw_entry.items()}
         case_id = derive_case_id(raw_case, index)
-        raw_prompts = raw_case.get("prompts")
-        if not isinstance(raw_prompts, list) or not raw_prompts:
-            raise EvalConfigError("case {!r} must have a non-empty 'prompts' list".format(case_id))
-        prompts = tuple(str(prompt).strip() for prompt in raw_prompts)
-        if any(not prompt for prompt in prompts):
-            raise EvalConfigError("case {!r} has an empty prompt".format(case_id))
-        if prompts[0] == DECIDE_SENTINEL:
-            raise EvalConfigError(
-                "case {!r}: the first prompt cannot be {} (nothing to decide from yet)".format(
-                    case_id, DECIDE_SENTINEL
-                )
-            )
+        prompts = _normalize_prompts(raw_case.get("prompts"), case_id)
         raw_expectations = raw_case.get("expectations")
         cases.append(
             PersonaCase(
@@ -245,10 +330,21 @@ def render_task_toml(template_text: str, case_config: CaseConfig) -> str:
 
 
 @pure
+def render_prompt_entry_prose(entry: PromptEntry) -> str:
+    """One prompts entry as a human reads it in instruction.md.
+
+    A goal entry is rendered as what it is -- a stretch of conversation with a budget -- rather than
+    as a message, so a reader never mistakes the goal text for something sent verbatim.
+    """
+    if isinstance(entry, GoalEntry):
+        return "(goal, up to {} exchange(s)) Keep talking until satisfied: {}".format(entry.max_exchanges, entry.goal)
+    return "`{}`".format(entry) if entry == DECIDE_SENTINEL else entry
+
+
+@pure
 def render_instruction(template_text: str, case_config: CaseConfig) -> str:
     prompts_prose = "\n".join(
-        "{}. {}".format(index + 1, "`{}`".format(prompt) if prompt == DECIDE_SENTINEL else prompt)
-        for index, prompt in enumerate(case_config.prompts)
+        "{}. {}".format(index + 1, render_prompt_entry_prose(entry)) for index, entry in enumerate(case_config.prompts)
     )
     return _substitute_template(
         template_text,
@@ -262,20 +358,83 @@ def render_instruction(template_text: str, case_config: CaseConfig) -> str:
 
 
 @pure
-def _oracle_events(case_config: CaseConfig) -> list[dict[str, str]]:
-    events: list[dict[str, str]] = []
+def _oracle_user_message(entry: PromptEntry) -> str:
+    """What the oracle sends for one entry.
+
+    A goal entry becomes ONE literal message stating the goal: the oracle fabricates a plausible
+    max-reward transcript and does not simulate a client's persistence, so an entry whose real
+    client would have pushed several times contributes a single turn here.
+    """
+    if isinstance(entry, GoalEntry):
+        return entry.goal
+    return _ORACLE_DECIDE_MESSAGE if entry == DECIDE_SENTINEL else entry
+
+
+@pure
+def _oracle_entry_kind(entry: PromptEntry) -> TurnEntryKind:
+    if isinstance(entry, GoalEntry):
+        return TurnEntryKind.GOAL
+    return TurnEntryKind.PERSONA if entry == DECIDE_SENTINEL else TurnEntryKind.LITERAL
+
+
+@pure
+def oracle_entry_records(case_config: CaseConfig) -> list[dict[str, Any]]:
+    """The per-entry outcomes the oracle's state.json carries, one exchange each, so the structural
+    gates see a conversation that reconciles with its message count.
+
+    Every key an `EntryRecord` has, including the empty `detail`: the oracle is the reference a real
+    trial is compared against, so its records are shaped exactly like the ones the driver writes.
+    """
+    return [
+        {
+            "index": index,
+            "kind": _oracle_entry_kind(entry).value,
+            "exchange_count": 1,
+            "outcome": (TurnOutcome.SATISFIED if isinstance(entry, GoalEntry) else TurnOutcome.COMPLETED).value,
+            "detail": "",
+        }
+        for index, entry in enumerate(case_config.prompts)
+    ]
+
+
+@pure
+def _oracle_conversation(case_config: CaseConfig) -> list[dict[str, str]]:
+    """The oracle's canned exchange in the driver's clean-conversation shape: one client turn per
+    entry, each answered by a short, self-directed reply."""
+    conversation: list[dict[str, str]] = []
     final_turn_idx = len(case_config.prompts) - 1
     for index, prompt in enumerate(case_config.prompts):
-        user_message = _ORACLE_DECIDE_MESSAGE if prompt == DECIDE_SENTINEL else prompt
-        events.append({"type": "user_message", "content": user_message})
+        conversation.append({"role": "user", "text": _oracle_user_message(prompt)})
         if index == 0:
             reply = _ORACLE_OPENING_REPLY
         elif index == final_turn_idx:
             reply = _ORACLE_FINAL_REPLY
         else:
             reply = _ORACLE_MIDDLE_REPLY
-        events.append({"type": "assistant_message", "text": reply})
-    return events
+        conversation.append({"role": "agent", "text": reply})
+    return conversation
+
+
+@pure
+def render_oracle_trajectory_json(case_config: CaseConfig) -> str:
+    """The oracle's trajectory.json: the canned conversation in the hand-built ATIF shape the driver
+    writes, so `-a oracle` grades through exactly the verifier path a real trial does."""
+    oracle_trajectory = trajectory.build_hand_built_trajectory(
+        conversation=_oracle_conversation(case_config),
+        provenance=TrajectoryProvenance(
+            driver_name=_ORACLE_DRIVER_NAME,
+            driver_version=_ORACLE_DRIVER_VERSION,
+            decider_model="",
+            decider_turns=(),
+            harbor_session_id=None,
+            case_id=case_config.case_id,
+            usage_source=UsageSource.TRANSCRIPT,
+        ),
+        workspace_usage=summarize_workspace_usage(()),
+        timestamp=_ORACLE_TIMESTAMP,
+    )
+    assert oracle_trajectory is not None, "an eval case always has at least one prompt"
+    return json.dumps(oracle_trajectory.to_json_dict(), indent=2)
 
 
 @pure
@@ -327,25 +486,25 @@ def _slug_for_heredoc(relative_name: str) -> str:
 
 @pure
 def render_solve_script(template_text: str, case_config: CaseConfig) -> str:
-    turn_count = len(case_config.prompts)
+    entry_count = len(case_config.prompts)
     state = {
         "eval_name": "oracle",
         "case_name": case_config.case_id,
         "mngr_sha": case_config.mngr_sha,
         "dwt_sha": case_config.dwt_sha,
-        "waits_done": turn_count,
-        "num_turns": turn_count,
+        "waits_done": entry_count,
+        "num_turns": entry_count,
+        "entries": oracle_entry_records(case_config),
         "test_state": "finished",
         "timed_out": False,
-        "started_at": "1970-01-01T00:00:00+00:00",
+        "started_at": _ORACLE_TIMESTAMP,
         "elapsed_seconds": 0.0,
         "timeout_seconds": case_config.timeout_seconds,
     }
-    transcript_jsonl = "\n".join(json.dumps(event) for event in _oracle_events(case_config))
     return _substitute_template(
         template_text,
         {
-            "transcript_jsonl": transcript_jsonl,
+            "trajectory_json": render_oracle_trajectory_json(case_config),
             "state_json": json.dumps(state, indent=2),
             "verification_evidence_sh": render_oracle_evidence_shell(case_config),
         },
@@ -401,9 +560,45 @@ def write_task_dir(task_dir: Path, case_config: CaseConfig, mngr_source: Path) -
     solve_path.chmod(0o755)
 
 
+# A rough floor for one client message plus the agent turn it draws, from observed runs. Used only
+# to warn that a case's worst case cannot fit its budget, never to reject one: how long a turn takes
+# is a property of the agent under test, not of the config.
+TYPICAL_EXCHANGE_SECONDS: Final[float] = 180.0
+
+
+@pure
+def is_exchange_budget_implausible(prompts: Sequence[PromptEntry], timeout_seconds: float) -> bool:
+    """Whether a case's worst-case exchange count cannot plausibly fit the given wall-clock budget."""
+    return worst_case_exchange_count(prompts) * TYPICAL_EXCHANGE_SECONDS > timeout_seconds
+
+
+def _warn_if_timeout_is_implausible(case: PersonaCase, timeout_seconds: float) -> None:
+    """Warn when a case's worst-case exchange count cannot plausibly fit its configured budget.
+
+    Authors set `timeout_seconds` themselves, and a goal entry multiplies what a case can spend, so
+    a budget sized for the old one-message-per-entry semantics silently becomes a timed-out trial.
+    """
+    if not is_exchange_budget_implausible(case.prompts, timeout_seconds):
+        return
+    worst_case_count = worst_case_exchange_count(case.prompts)
+    logger.warning(
+        "Case {} can send up to {} client message(s), which needs roughly {:.0f}s at {:.0f}s per "
+        "exchange, but timeout_seconds is {:.0f}; trials that use the whole budget will time out",
+        case.case_id,
+        worst_case_count,
+        worst_case_count * TYPICAL_EXCHANGE_SECONDS,
+        TYPICAL_EXCHANGE_SECONDS,
+        timeout_seconds,
+    )
+
+
 def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> list[Path]:
     """Generate one harbor task directory per persona case; returns the task directories."""
     config = load_eval_config(config_path)
+    # Warned before any network work, since the config alone decides it: an author with a
+    # mis-sized budget should not first wait through two ls-remotes and a clone.
+    for case in config.cases:
+        _warn_if_timeout_is_implausible(case, config.timeout_seconds)
     mngr_sha = resolve_remote_tip(mngr_repo, config.mngr_branch)
     logger.info("Resolved mngr {}@{}", config.mngr_branch, mngr_sha[:12])
     # The workspace template is pinned the same way as mngr: the dataset records the
