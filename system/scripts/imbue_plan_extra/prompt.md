@@ -102,20 +102,15 @@ Spend the words on the boundary of the work instead: what this node builds, what
 it deliberately leaves alone, what it should stub rather than finish, and what
 it hands back. "Scaffold the app, build the routes over the sampled data, and
 leave the live backend stubbed rather than wiring it to anything real" is the
-level to aim at -- a worker can hold itself to that, and none of it is a command.
+level to aim at.
 
-Drawing that boundary is the whole job. It decides how much work one worker
-carries, and therefore how capable that worker has to be: the point of the plan
-is to put the right quantity of work in front of the right model.
+Where you draw it decides how much one worker carries, and so how capable that
+worker must be: the plan's job is the right quantity of work in front of the
+right model.
 
-Be as rich as the scope needs. Several sentences are fine when they are all
-about what is in and out of the work; the trouble is words spent on mechanism,
-not words as such.
-
-Most of the planning happens inside the workers. The pool you route to reaches
-up to frontier models, so a worker takes an objective and does its own
-decomposition, research and design before it acts. Your plan decides what work
-exists and who does it; each worker decides how its own piece gets done.
+Most of the planning happens inside the workers: the pool reaches up to frontier
+models, so a worker takes an objective and does its own decomposition and
+design. Your plan decides what work exists and who does it.
 
 A subtask can ask a worker to do the work from scratch, refine what an earlier
 node produced, criticise it, or do something else that makes a later node
@@ -123,9 +118,8 @@ easier.
 
 Nodes take many shapes, and which ones appear follows from the request. A
 dashboard over someone's Slack account needs that account connected and its data
-shape confirmed; a self-contained tool over data already here needs neither. So
-read the following as a sample of the space rather than a checklist, and let the
-request decide.
+shape confirmed. So read the following as a sample of the space rather than a
+checklist, and let the request decide.
 
 Most of it comes from build-app itself: settling the defaults and the small
 plan, the pre-flight of naming the app and finding it a port, drawing its icon,
@@ -138,8 +132,7 @@ handoff. The rest comes from whatever a given request drags in: connecting an
 account the app needs, fetching real data and confirming its shape, formatting
 output into the form the next node needs.
 
-Nodes routinely combine several of these -- one node deciding, building and
-verifying is an ordinary node, not an overloaded one. The range is wide enough
+Nodes routinely combine several of these. The range is wide enough
 that the count should fall out of the work rather than being aimed at: cut where
 the work genuinely changes hands, and let that decide how many you end up with.
 
