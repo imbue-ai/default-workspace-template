@@ -64,6 +64,12 @@ The shell never stores instances.
 Its inventory is the union of every app's list, refreshed when an app nudges it and on a slow reconciliation sweep.
 Layouts and project tab sets hold addresses only, and an address whose instance is no longer listed is dropped by observation.
 
+An app also declares how long its instances live.
+With `instance_lifetime = "explicit"` (the default) an instance exists until something calls Delete; a closed chat or terminal keeps existing.
+With `instance_lifetime = "referenced"` an instance exists only while something references it: when the last reference goes, from every project's tab set and every client's layout, the shell calls the app's Delete.
+The shell can decide this alone because it holds every reference on the server, and a failed Delete simply leaves the instance listed, so no second accounting is needed.
+The files app declares `referenced`, so closing the last tab of a file browser ends it the way closing a browser tab does.
+
 ### 3.3 Views, layouts, and clients
 
 A project's tab set is shared truth: adding an instance to a project is visible to every client at once.
@@ -114,6 +120,7 @@ name = "files"                 # required; the registered name, DNS-safe
 display_name = "File Viewer"   # required; what users see
 icon = "icon.svg"              # required unless internal = true; relative to the manifest
 instances = true               # default false: a single implicit instance
+instance_lifetime = "referenced"  # default "explicit"; "referenced" deletes an instance once nothing references it (3.2)
 critical = false               # default false; true routes updates through snapshot-and-rollback
 priority = "user"              # default "user"; a built-in band name or "user" (see 8.2)
 program = "files"              # default: name; the supervisord program that runs the app
@@ -135,7 +142,7 @@ create = true                  # POST /_instances, then open the returned URL
 
 ### 4.2 Registry rows
 
-The registry row keeps its current keys (`name`, `url`, `label`, `icon`, `internal`, `program`) and gains `display_name`, `instances`, `actions`, `critical`, and `priority`, all copied from the manifest at registration.
+The registry row keeps its current keys (`name`, `url`, `label`, `icon`, `internal`, `program`) and gains `display_name`, `instances`, `instance_lifetime`, `actions`, `critical`, and `priority`, all copied from the manifest at registration.
 The `label` suffix keeps its one job, an unguessable origin, and is never used as an identifier.
 Liveness (`is_running`) stays derived from supervisord and is never stored.
 The minds side of the registry, the `service_registered` and `service_deregistered` events the app watcher writes, is unchanged.
@@ -244,8 +251,8 @@ The tab menu and the rail row build from one definition keyed by capabilities, n
 - Refresh: reload the iframe.
 - Rename: shown when the instance reports `renameable`; calls the app.
 - Add to project, Remove from project: shell, shared.
-- Close: undock in this client.
-- Delete: shown for instances of `instances = true` apps; calls the app. The tab disappears when the app's list no longer carries the instance.
+- Close: undock in this client. When this was the last reference to an instance of a `referenced`-lifetime app, the shell also calls the app's Delete.
+- Delete: shown for instances of `instances = true` apps with `explicit` lifetime; calls the app. The tab disappears when the app's list no longer carries the instance.
 - Stop and Start the app: shown for apps with a `program` that are not `critical`; supervisord via the shell.
 
 A stopped app's tabs render the existing placeholder with a Start button; instances of a stopped app show `stopped`.
@@ -265,6 +272,18 @@ The old spellings (`chat:`, `terminal:`, `service:`, `url:`, `chat-terminal:`) a
 The shell remains the bare-origin entry and the recovery surface.
 The not-built placeholder embeds the terminal app when one is registered and otherwise shows its prose alone.
 Nothing in the shell depends on any other app being up.
+
+### 6.7 The switcher index and deep links
+
+The minds chrome will eventually carry a fast switcher that jumps to any workspace, view, app, action, or instance, and can attach a client to another client's layout.
+The switcher is not built in this arc, but the shell must expose everything it needs, as two requirements:
+
+- `GET /api/inventory` returns one document: every project (id, name, color, glyph), the Everything view, every app (name, display name, icon, running state, actions) with its instances (address, title, status, last-active), and every known client (id, device kind, active view, last seen).
+  It is the same data the WebSocket already carries, served once for a caller that holds no socket.
+- A deep link the shell honors on load for the requesting client: `/?view=<view-id>` switches that client to the view, `&open=<address>` docks (or focuses) that instance in it, `&action=<app>:<action-id>` runs an action, and `&follow=<client-id>` attaches the client to another client's layout once follow mode exists.
+  Unknown or stale targets fall back to the view's current state with no error page, since a switcher entry can outlive what it points at.
+
+Every target the switcher can name is therefore an existing identity: a workspace id (minds), a view id, an address, an `(app, action)` pair, or a `(view, client)` pair.
 
 ## 7. The built-in apps
 
@@ -287,7 +306,7 @@ An instance's URL is `/?session=<name>`.
 The files app becomes a thin server, `system/apps/files`, built on the instances library's proxying front over dufs, which keeps listening on a private port.
 Each instance lives under `/i/<key>/`, the patched dufs frontend reports its path there, and the app records it, so a file browser reopens at the folder it was showing.
 Keys and paths from the old layouts-derived instances are imported by the migration (section 9).
-There is no garbage collection: a file browser instance nobody shows lingers in Everything until deleted, which is accepted over any second accounting of who still holds it.
+Its manifest declares `instance_lifetime = "referenced"`, so an instance is deleted by the shell once no project and no client refers to it, and nothing lingers in Everything.
 
 ### 7.4 Chat
 
@@ -355,7 +374,7 @@ Tests follow the code: the instances library and each app backend get unit tests
 4. **Files app.** The dufs front, per-instance paths, and the beacon patch. Verify: two file browsers on different folders reopen where they were after a reload.
 5. **Browser app.** The instances adapter and status. Verify: a fleet browser shows `working` while an agent drives it.
 6. **Shell core.** Addresses, the app-agnostic inventory, the verb definition, the browser-side contract module, the embedder relay, shortcuts as data, the New Tab page as the only empty state, and deletion of the per-kind code and side stores. Chat still renders in-process here, behind a transitional in-process instance source that speaks the same list shape and is deleted in phase 9, so the shell has no other special case. Verify: every verb on every kind from both the tab and the rail.
-7. **Client-scoped layouts.** Server-side layouts by client, seeds, pruning, client-tagged broadcasts, per-client active view, `layout.py` and skill rewrites. Verify: two browsers on one workspace arrange independently and share projects.
+7. **Client-scoped layouts.** Server-side layouts by client, seeds, pruning, client-tagged broadcasts, per-client active view, referenced-lifetime deletion, the inventory endpoint and deep links (6.7), `layout.py` and skill rewrites. Verify: two browsers on one workspace arrange independently and share projects; closing the last file-browser tab everywhere removes the instance; a deep link lands on the named view and instance.
 8. **Migration.** The script, its marker, and its wiring into bootstrap and the apply. Verify: a workspace created before this arc upgrades with its projects, tabs, and folder paths intact.
 9. **Chat app.** The move to `system/apps/chat`, the instances API over mngr, accounts, the first-chat claim, the manifest, the supervisord program, and the shell's mngr-free invariant landing as an import contract and a ratchet. Verify: chats create, rename, delete, stop, and show status; permission cards reach the minds inbox through the relay; a fresh workspace lands on New Tab.
 10. **Updates, sharing, and cleanup.** The apply changes, the sharing note in the share-gateway docs, the service-to-app rename across shell code and docs, deletion of the old stores, README and skill rewrites, and changelog entries.
@@ -367,6 +386,7 @@ After phase 10, an existing workspace is upgraded through update-self and exerci
 - Stable app ids and app renaming; the home for an id, if ever needed, is the manifest.
 - Protocol and intent handlers; only the reserved `handles` table exists.
 - Follow mode between clients; the client-tagged layout broadcasts are its prerequisite.
+- The fast switcher in the minds chrome; the inventory endpoint and deep links (6.7) are its prerequisites.
 - Minimum terminal size across viewers.
 - Read-only sharing of one chat.
 - Chat-internal cleanups from the old plan (per-chat channel consolidation, chooser refactoring, proto-agent broadcasts), which are invisible to the shell once chat is an app.
