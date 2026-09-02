@@ -12,12 +12,10 @@ new batches keep landing (incremental) and history gets loaded newest-first (bac
 Priorities, in order: correct, simple, fast, ergonomic. Follow the steps in order.
 
 **Budget.** This procedure should cost about 10% more than writing the tool directly, not
-double. The minutes in the step headings cap your own time on that step (they are not script
-runtimes); when one is spent, ship what you have and say what you skipped. Build in three
-writes after step 1: (1) the parse tests and `sources.py`; (2) `store`, `ingest`, `export`
+double. Build in three writes after step 1: (1) the parse tests and `sources.py`; (2) `store`, `ingest`, `export`
 and `cli` in one message; (3) the tests of step 8 and the README. No benchmarks, timings,
 sweeps or parameter searches: the tool must be fast by construction (step 5), and nobody is
-asked to measure it.
+asked to measure it. Additional improvements will happen OUTSIDE this skill.
 
 **NEVER run a full-data inspection or benchmark.** The step-1 script, every check and every
 test run on a sample: the smallest batch, at most one more adjacent to it, or 100 records; never a
@@ -190,6 +188,25 @@ through one sink, `problem(batch, where, field, reason)`, and:
 The point is one pass: run the load once, read the log, fix the parser for every reason it
 lists, re-run with `--force`. One parse test asserts that a record failing a coercion is
 logged and nulled rather than raised.
+
+## 7c. Retention: bound what the tool grows (~2 minutes)
+
+Everything the tool appends to grows without limit across runs: the store, the batch ledger,
+and `<store>.ingest.jsonl`. Give each a bound and enforce it inside `load`, in the same run
+that writes -- never as a separate cleanup chore someone must remember:
+
+- store and ledger: pick the bound from the consumer's needs (records whose version date is
+  within N months, or the newest M batches); prune a record's rows and its ledger entries in
+  the same transaction so `status` never reports a batch whose rows are gone. "Keep
+  everything" is valid only when the task says the dataset is finite -- state that in the
+  README either way.
+- ingestion log: on each load, drop the lines belonging to batches the ledger no longer
+  retains (their counts survive in the ledger rows while those remain).
+- one test in `tests/test_pipeline.py` loads past the bound and asserts the oldest entries
+  are gone and the retained ones intact.
+
+The raw input batches are the archive, not the tool's to delete; the pruned store stays
+rebuildable from them.
 
 ## 8. Verify (~4 minutes), then write it down
 
