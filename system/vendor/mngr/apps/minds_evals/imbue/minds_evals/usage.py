@@ -19,11 +19,14 @@ Two different LLM consumers run during a trial and they must not be conflated:
 **What the transcript does not see: delegated work.** The events endpoint serves main-session events
 only -- a subagent's turns are deliberately routed to a separate per-subagent stream so they do not
 render inline in the parent thread -- and work handed to a freshly created mngr worker agent belongs
-to that agent's stream entirely. Neither one's tokens reach the transcript's sum, so an agent that
-delegates looks cheaper than one that does the same work inline, which would make cost gameable. The
-proxy is the account that includes that work, because every call in the workspace crosses it. When
-only the transcript is available, delegation is at least *detected*: any trial that delegates is
-marked ``is_cost_complete = False`` rather than quietly reporting a clean total.
+to that agent's stream entirely. An agent that delegates would therefore look cheaper than one that
+does the same work inline, which would make cost gameable. The evidence phase captures the stream of
+every worker the chat agent launched, and ``resolve_workspace_usage`` sums those streams into the
+transcript account (``combine_trial_usages``); subagent turns and workers whose stream was not
+captured are what that account still cannot see. The proxy is the account that includes all of it,
+because every call in the workspace crosses it. Either way delegation is at least *detected*: a trial
+with a subagent call or an uncaptured worker is marked ``is_cost_complete = False`` rather than
+quietly reporting a clean total.
 
 Both are priced with ``mngr_usage``'s table rather than a local copy, so these numbers and the
 in-box proxy's own are computed from one set of rates -- ``proxy_config`` builds the proxy's config
@@ -222,7 +225,12 @@ class TrialUsage(FrozenModel):
     unpriced_models: tuple[str, ...] = Field(description="Models seen with no entry in the pricing table")
     delegated_call_count: int = Field(description="Subagent (Agent tool) calls, whose usage this total excludes")
     worker_launch_count: int = Field(
-        description="Bash commands that look like a worker-agent launch, whose usage this total also excludes"
+        description="Bash commands that look like a worker-agent launch; each one's usage is in this total only if captured"
+    )
+    worker_captured_count: int = Field(
+        default=0,
+        description="Of worker_launch_count, the workers this total holds whole: their stream is summed into it "
+        "and they had settled by capture time",
     )
     is_speed_observed: bool = Field(
         default=False,
@@ -253,12 +261,12 @@ class TrialUsage(FrozenModel):
     def is_cost_complete(self) -> bool:
         """Whether the total accounts for all the work the agent caused.
 
-        False once the agent delegates: subagent turns are served on a separate stream and a worker
-        agent has a stream of its own, so neither's tokens are in this sum. A trial that delegates
-        therefore looks cheaper than one doing the same work inline -- consumers must not compare the
-        two as if both were complete.
+        False once the agent delegates to a subagent, whose turns are served on a separate stream this
+        sum never sees, or launches a worker whose stream was not captured. A trial in that state looks
+        cheaper than one doing the same work inline -- consumers must not compare the two as if both
+        were complete.
         """
-        return self.delegated_call_count == 0 and self.worker_launch_count == 0
+        return self.delegated_call_count == 0 and self.worker_launch_count == self.worker_captured_count
 
     @property
     def n_input_tokens(self) -> int:
@@ -344,6 +352,34 @@ def _count_delegations(raw_tool_calls: Any) -> tuple[int, int]:
     return delegated, launched
 
 
+class _PerModelTotals(FrozenModel):
+    """What every account derives from its per-model rows the same way."""
+
+    tokens: TokenSnapshot = Field(description="Every model's tokens summed")
+    fast_tokens: TokenSnapshot = Field(description="Every model's fast-mode tokens summed")
+    unpriced_models: tuple[str, ...] = Field(description="Models whose cost is unknown")
+    cost_usd: float | None = Field(description="USD across all models, or None when any is unpriced or there are none")
+
+
+@pure
+def _per_model_totals(per_model: Sequence[ModelUsage]) -> _PerModelTotals:
+    total_tokens = TokenSnapshot()
+    total_fast_tokens = TokenSnapshot()
+    for entry in per_model:
+        total_tokens = _add(total_tokens, entry.tokens)
+        total_fast_tokens = _add(total_fast_tokens, entry.fast_tokens)
+    unpriced = tuple(entry.model for entry in per_model if entry.cost_usd is None)
+    return _PerModelTotals(
+        tokens=total_tokens,
+        fast_tokens=total_fast_tokens,
+        unpriced_models=unpriced,
+        # None rather than 0.0 in both unknown cases: summing only the priced models would report a
+        # total that looks complete and is not, and a trial with no usage at all did not cost zero --
+        # we simply do not know what it cost.
+        cost_usd=None if (unpriced or not per_model) else sum(entry.cost_usd or 0.0 for entry in per_model),
+    )
+
+
 @pure
 def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage:
     """Aggregate the workspace agent's usage out of the raw chat event stream.
@@ -416,19 +452,13 @@ def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage
             )
         )
 
-    total_tokens = TokenSnapshot()
-    for entry in per_model:
-        total_tokens = _add(total_tokens, entry.tokens)
-    unpriced = tuple(entry.model for entry in per_model if entry.cost_usd is None)
+    totals = _per_model_totals(per_model)
     return TrialUsage(
         per_model=tuple(per_model),
-        tokens=total_tokens,
-        # None rather than 0.0 in both unknown cases: summing only the priced models would report a
-        # total that looks complete and is not, and a trial with no usage at all did not cost zero --
-        # we simply do not know what it cost.
-        cost_usd=None if (unpriced or not per_model) else sum(entry.cost_usd or 0.0 for entry in per_model),
+        tokens=totals.tokens,
+        cost_usd=totals.cost_usd,
         message_count=sum(messages_by_model.values()),
-        unpriced_models=unpriced,
+        unpriced_models=totals.unpriced_models,
         delegated_call_count=delegated_call_count,
         worker_launch_count=worker_launch_count,
     )
@@ -436,8 +466,10 @@ def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage
 
 @pure
 def summarize_decider_usage(results: Sequence[DeciderResult], model: str) -> DeciderUsage:
-    """Aggregate the decider's own calls. ``model`` is the configured decider model, used when a
-    result carries none of its own (a fallback records no model)."""
+    """Aggregate the decider's own calls. Every result in the bucket came from ``model``, the
+    configured decider model, so that is what the whole bucket is labelled and priced against; a
+    result's own ``model`` is for the per-call audit events. A fallback contributes its tokens like
+    any other result -- a model that answered unusably was still billed for answering."""
     input_token_count = sum(result.input_token_count for result in results)
     output_token_count = sum(result.output_token_count for result in results)
     pricing_key = canonical_model_key(model)
@@ -475,6 +507,7 @@ def workspace_usage_metadata(usage: TrialUsage) -> dict[str, Any]:
         "is_cost_complete": usage.is_cost_complete,
         "delegated_call_count": usage.delegated_call_count,
         "worker_launch_count": usage.worker_launch_count,
+        "worker_captured_count": usage.worker_captured_count,
         # Which speed tier served the traffic, and therefore whether cost_usd is priced at the rate
         # it was billed at -- see TrialUsage.is_cost_rate_certain. The transcript carries no speed
         # information, so these stay false/zero unless the trial ran with the proxy.
@@ -570,18 +603,13 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
                 fast_tokens=fast_tokens,
             )
         )
-    total_tokens = TokenSnapshot()
-    total_fast_tokens = TokenSnapshot()
-    for entry in per_model:
-        total_tokens = _add(total_tokens, entry.tokens)
-        total_fast_tokens = _add(total_fast_tokens, entry.fast_tokens)
-    unpriced = tuple(entry.model for entry in per_model if entry.cost_usd is None)
+    totals = _per_model_totals(per_model)
     return TrialUsage(
         per_model=tuple(per_model),
-        tokens=total_tokens,
-        cost_usd=None if (unpriced or not per_model) else sum(entry.cost_usd or 0.0 for entry in per_model),
+        tokens=totals.tokens,
+        cost_usd=totals.cost_usd,
         message_count=sum(requests_by_model.values()),
-        unpriced_models=unpriced,
+        unpriced_models=totals.unpriced_models,
         # Nothing is missing from this source: it is the boundary every call crosses, so delegated
         # work is already included rather than merely detected.
         delegated_call_count=0,
@@ -591,7 +619,49 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
         # does, and only the key's presence separates the two.
         is_speed_observed=bool(records) and all(_SPEED_KEY in record for record in records),
         fast_message_count=sum(entry.fast_message_count for entry in per_model),
-        fast_tokens=total_fast_tokens,
+        fast_tokens=totals.fast_tokens,
+    )
+
+
+@pure
+def _add_model_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:
+    return ModelUsage(
+        model=left.model,
+        pricing_key=left.pricing_key,
+        message_count=left.message_count + right.message_count,
+        tokens=_add(left.tokens, right.tokens),
+        cost_usd=None if left.cost_usd is None or right.cost_usd is None else left.cost_usd + right.cost_usd,
+        fast_message_count=left.fast_message_count + right.fast_message_count,
+        fast_tokens=_add(left.fast_tokens, right.fast_tokens),
+    )
+
+
+@pure
+def combine_trial_usages(
+    usages: Sequence[TrialUsage], worker_launch_count: int, worker_captured_count: int
+) -> TrialUsage:
+    """One account over several streams of the same trial: the chat agent's and each captured worker's,
+    summed per model. The worker counts are the launch scan's, not the streams' own, because only the
+    scan knows how many launches the captured streams answer for."""
+    usage_by_model: dict[str, ModelUsage] = {}
+    for usage in usages:
+        for entry in usage.per_model:
+            existing = usage_by_model.get(entry.model)
+            usage_by_model[entry.model] = entry if existing is None else _add_model_usage(existing, entry)
+    per_model = tuple(usage_by_model.values())
+    totals = _per_model_totals(per_model)
+    return TrialUsage(
+        per_model=per_model,
+        tokens=totals.tokens,
+        cost_usd=totals.cost_usd,
+        message_count=sum(usage.message_count for usage in usages),
+        unpriced_models=totals.unpriced_models,
+        delegated_call_count=sum(usage.delegated_call_count for usage in usages),
+        worker_launch_count=worker_launch_count,
+        worker_captured_count=worker_captured_count,
+        is_speed_observed=bool(usages) and all(usage.is_speed_observed for usage in usages),
+        fast_message_count=sum(entry.fast_message_count for entry in per_model),
+        fast_tokens=totals.fast_tokens,
     )
 
 
@@ -606,18 +676,33 @@ class ResolvedWorkspaceUsage(FrozenModel):
 
 @pure
 def resolve_workspace_usage(
-    events: Sequence[Mapping[str, Any]], proxy_records: Sequence[Mapping[str, Any]]
+    events: Sequence[Mapping[str, Any]],
+    proxy_records: Sequence[Mapping[str, Any]],
+    # The captured workers' streams, each priced like the chat agent's own; how many launches the
+    # captured transcripts showed (None when no transcript was captured, in which case the polled
+    # feed's own launch heuristic stands); and how many of those workers were captured settled, since
+    # a worker still running at capture time has a stream that is spend so far, not its whole spend.
+    worker_streams: Sequence[Sequence[Mapping[str, Any]]],
+    worker_launch_count: int | None,
+    worker_captured_count: int,
 ) -> ResolvedWorkspaceUsage:
     """Decide which account of the workspace agent's spend a trial reports, from both sources.
 
     The proxy is the complete account whenever one metered the trial: it is the boundary every call
     crosses, so it includes delegated work the transcript never sees. On a delegating case the two
-    differ by that work, so preferring the transcript would publish the understated figure.
+    differ by that work, so preferring the transcript would publish the understated figure. The
+    transcript account folds in the workers whose streams were captured, so the two agree again on a
+    trial whose only delegation was to workers captured after they had settled.
 
     Every consumer must go through this, so a trial's several reports of its own cost cannot
     disagree.
     """
-    transcript_usage = summarize_workspace_usage(events)
+    chat_usage = summarize_workspace_usage(events)
+    transcript_usage = combine_trial_usages(
+        [chat_usage, *(summarize_workspace_usage(stream) for stream in worker_streams)],
+        worker_launch_count=chat_usage.worker_launch_count if worker_launch_count is None else worker_launch_count,
+        worker_captured_count=worker_captured_count,
+    )
     if not proxy_records:
         return ResolvedWorkspaceUsage(reported=transcript_usage, transcript=transcript_usage, is_from_proxy=False)
     return ResolvedWorkspaceUsage(
