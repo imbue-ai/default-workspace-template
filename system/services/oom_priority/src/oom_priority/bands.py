@@ -311,16 +311,13 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
 # SERVICE_BANDS key, for the backstop listener (system/services/oom_priority/bin/oom_tag_backstop.py).
 # The OOM machinery itself (earlyoom, the listener) must stay PROTECTED -- it is
 # what keeps every other band meaningful. The one-shot programs stay PROTECTED
-# too: both run with ``autorestart=false``, so shedding one mid-run leaves its
-# work half-done with nothing to finish it, and neither is holding the memory
-# that shedding it would free -- env-converge's cost is a half-provisioned
-# rootfs, and eval-worker's memory lives in the agent and browser processes it
-# spawns, which carry far higher bands and are shed long before it.
+# too: they run with ``autorestart=false``, so shedding one mid-run leaves its
+# work half-done with nothing to finish it, and none is holding the memory that
+# shedding it would free -- env-converge's cost is a half-provisioned rootfs.
 _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     "earlyoom": PROTECTED,
     "oom-tag-backstop": PROTECTED,
     "env-converge": PROTECTED,
-    "eval-worker": PROTECTED,
     # A one-shot (autorestart=false) that registers the VM-resident owner-exec
     # service origin and exits; shedding it mid-run would leave the registration
     # half-done, and it holds no memory worth reclaiming.
