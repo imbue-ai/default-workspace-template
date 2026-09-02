@@ -5,6 +5,7 @@ It replaces the earlier `split-chat-apart` plan that lived in the mngr repo, whi
 It is written for the people and agents implementing the arc, and it is the reference the implementation is judged against.
 Implementation happens in this repository, in one pull request built as the ordered phases at the end of this document.
 Its glossary and model are the vocabulary the per-phase specs beside it use.
+The exact schemas, routes, messages, and file formats live in [contracts.md](contracts.md); the per-phase files `phase_01_*.md` to `phase_11_*.md` name the files, tests, and manual checks of each commit; [mngr_side_changes.md](mngr_side_changes.md) covers the paired mngr branch.
 
 ## 1. Purpose and principles
 
@@ -55,11 +56,11 @@ The app owns its origin (`<name>-<suffix>.<workspace coordinate>`), its icon, it
 The registered `name` is the developer-facing identifier: the supervisord program, the entry point, the origin label prefix, the share-grant key, and the key minds routes by.
 It is not renameable in this arc; `display_name` is what users see and may change freely.
 
-Every Python app and every Python service runs from its own uv tool environment, installed from the program's own `pyproject.toml` (which resolves its workspace-member dependencies as the shell's tool install does today).
-The root venv belongs to agents, skills, and scripts, so an agent that breaks it can no longer take down any app, and one app's dependency pins never constrain another's.
-The build installs one tool per Python program directory, the update apply refreshes only the tool environments whose program changed, and the `build-app` scaffold installs a tool for a user-built app.
-A supervisord program line runs the tool's own entry point rather than `uv run`.
-Apps with no Python of their own (ttyd behind the terminal app, dufs behind the files app) have no environment to install.
+Every Python app, built-in or user-built, runs from its own uv tool environment, installed from the app's own `pyproject.toml` (which names its path dependencies itself), as the shell's tool install does today.
+The root venv belongs to the background services, agents, skills, and scripts, so an agent that breaks it can no longer take down any app, and one app's dependency pins never constrain another's.
+The build installs one tool per Python app directory, the update apply refreshes only the tool environments whose app changed, and the `build-app` scaffold installs a tool for a user-built app.
+An app's supervisord program line runs the tool's own entry point rather than `uv run`; services keep `uv run`.
+The terminal and files apps are small Python launchers around ttyd and dufs, so they are tools too.
 
 ### 3.2 Instances
 
@@ -73,11 +74,14 @@ The shell never stores instances.
 Its inventory is the union of every app's list, refreshed when an app nudges it and on a slow reconciliation sweep.
 Layouts and project tab sets hold addresses only, and an address whose instance is no longer listed is dropped by observation.
 
-An app also declares how long its instances live.
-With `instance_lifetime = "explicit"` (the default) an instance exists until something calls Delete; a closed chat or terminal keeps existing.
-With `instance_lifetime = "referenced"` an instance exists only while something references it: when the last reference goes, from every project's tab set and every client's layout, the shell calls the app's Delete.
+Each instance also says how long it lives, in its `lifetime` field.
+An `explicit` instance exists until something calls Delete; a closed chat or terminal keeps existing.
+A `referenced` instance exists only while something references it: when the last reference goes, from every project's tab set and every client's layout, the shell calls the app's Delete.
 The shell can decide this alone because it holds every reference on the server, and a failed Delete simply leaves the instance listed, so no second accounting is needed.
-The files app declares `referenced`, so closing the last tab of a file browser ends it the way closing a browser tab does.
+File-browser instances are `referenced`, so closing the last tab of one ends it the way closing a browser tab does; a chat's provisional new-chat page and its subagent views are `referenced` while the chat itself is `explicit`.
+
+An instance's URL may carry one `{tab}` placeholder, which the shell replaces with an id it mints per tab.
+An app that learns from its own backend that a tab now shows a different instance (the terminal, when a tmux client switches sessions or a session is renamed) tells the shell through one generic route, and the shell re-addresses that tab.
 
 ### 3.3 Views, layouts, and clients
 
@@ -130,12 +134,15 @@ name = "files"                 # required; the registered name, DNS-safe
 display_name = "File Viewer"   # required; what users see
 icon = "icon.svg"              # required unless internal = true; relative to the manifest
 instances = true               # default false: a single implicit instance
-instance_lifetime = "referenced"  # default "explicit"; "referenced" deletes an instance once nothing references it (3.2)
 critical = false               # default false; true routes updates through snapshot-and-rollback
 priority = "user"              # default "user"; a built-in band name or "user" (see 8.2)
 program = "files"              # default: name; the supervisord program that runs the app
 internal = false               # default false; true hides the app from every open surface
 instances_url = "http://localhost:8301"  # optional; where the shell reaches the instances API when it is not the app URL (5.1)
+
+[default_shortcut]             # optional; the rail row a new project is seeded with (6.3)
+action = "new"
+mode = "focus"
 
 [[actions]]
 id = "new"                     # the id shortcuts and layout.py refer to
@@ -144,13 +151,14 @@ label = "New File Viewer"      # every action is a create: POST /_instances with
 [handles]                      # reserved for protocol and intent handlers; must be absent or empty in this arc
 ```
 
-`forward_port.py` gains `--manifest <path>` and reads every static field from it, keeping `--name` and `--url` for the runtime facts and `--remove` for teardown.
+An app with `instances = false` declares no actions; the shell synthesizes its one action, `open`, which focuses the app's tab.
+`forward_port.py` gains `--manifest <path>` and reads every static field from it, keeping `--name` and `--url` for the runtime facts and `--remove` for teardown; it becomes stdlib-only so registration never depends on the root venv.
 `--icon-file` and `--program` are removed in the cleanup phase once every app carries a manifest; `build-app` scaffolds a manifest and the manifest-driven registration line.
 `--internal` and `--no-icon` stay for registrations that have no app directory: owner-exec, the VM exec service, preview instances, and isolated test servers.
 
 ### 4.2 Registry rows
 
-The registry row keeps its current keys (`name`, `url`, `label`, `icon`, `internal`, `program`) and gains `display_name`, `instances`, `instances_url`, `instance_lifetime`, `actions`, `critical`, and `priority`, all copied from the manifest at registration.
+The registry row keeps its current keys (`name`, `url`, `label`, `icon`, `internal`, `program`) and gains `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, and `priority`, all copied from the manifest at registration.
 The `label` suffix keeps its one job, an unguessable origin, and is never used as an identifier.
 Liveness (`is_running`) stays derived from supervisord and is never stored.
 The minds side of the registry, the `service_registered` and `service_deregistered` events the app watcher writes, is unchanged.
@@ -163,7 +171,7 @@ An app with `instances = true` serves these routes, which only the shell calls, 
 
 | Route | Meaning |
 |---|---|
-| `GET /_instances` | `{"instances": [{"key", "url", "title", "status", "last_active", "renameable"}]}`; `url` is a path under the app origin |
+| `GET /_instances` | `{"instances": [{"key", "url", "title", "status", "lifetime", "last_active", "renameable"}]}`; `url` is a path under the app origin, optionally carrying `{tab}` |
 | `POST /_instances` | Create one. Body `{"action": "<id>", "params": {}}`. Returns `{"key", "url"}`. |
 | `DELETE /_instances/<key>` | Destroy the instance and whatever it owns. Idempotent. |
 | `POST /_instances/<key>/rename` | Body `{"title"}`. 400 when the app does not support renaming. |
@@ -171,6 +179,8 @@ An app with `instances = true` serves these routes, which only the shell calls, 
 
 The API may live on a different port from the app's pages because a wrapped third-party server cannot serve it: the files app runs dufs unchanged at the app URL and a small sidecar at `instances_url`.
 Nothing is proxied and no path is rewritten.
+Browsers never call this API; the shell relays every instance verb (`POST /api/apps/<name>/instances`, and `.../instances/<key>/delete`, `rename`, `location`) so one code path serves the UI, `layout.py`, and the location relay.
+An app that learns from its own backend which instance a tab now shows calls `POST <shell>/api/tabs/<tab-id>/instance {app, key}`, and the shell re-addresses that tab in the owning client's layout.
 
 Status values are exactly `working`, `idle`, `attention`, `stopped`, and `error`.
 There is no badge count and no detail line.
@@ -193,7 +203,7 @@ Shell to app:
 
 | Type | Payload | Meaning |
 |---|---|---|
-| `shell:handshake` | `{clientId, deviceKind, viewId, address}` | Sent on every load of the frame. `address` is the tab's address, so a page that wants to know which instance it is can read it. |
+| `shell:handshake` | `{clientId, deviceKind, viewId, address, tabId}` | Sent on every load of the frame. `address` is the tab's address, so a page that wants to know which instance it is can read it. |
 | `shell:shown` / `shell:hidden` | `{}` | The tab became visible or stopped being visible in this client. Chat feeds its memory-shedding engine from this; the terminal will feed its sizing from it. |
 | `shell:close-request` | `{}` | The close chord fired while this tab was active. |
 
@@ -235,9 +245,10 @@ A wrapped server that carries no beacon still works, with every instance opening
 All shell state lives under `data/.state/system_interface/`:
 
 - `projects.json`: `{version, last_active_view, projects: [{id, name, color, glyph, tabs: [address], shortcuts: [{app, action, mode}]}]}`.
-- `layouts/<view-id>/<client-id>.json`: `{dockview, tabs: {panel_id: {address, last_focused_ms}}, device_kind, updated_at}`.
+- `layouts/<view-id>/<client-id>.json`: `{dockview, tabs: {panel_id: {address, tab_id, last_focused_ms}}, device_kind, updated_at}`.
 - `layouts/<view-id>/seed.<device-kind>.json`: the seed a new client of that device kind starts from; rewritten from the most recently saved layout of that kind.
-- `clients.json`: `{client_id: {device_kind, last_seen}}`; layouts of clients unseen for ninety days are pruned.
+- `clients.json`: `{client_id: {device_kind, active_view, last_seen}}`; layouts of clients unseen for ninety days are pruned.
+- `migrated.json`: the migration's marker (section 9).
 
 Removed: the machine-wide title, last-used, and location stores, the app-instances allocator, the auto-open ledger, the client-activity log in the agent state dir, and everything under the primary agent's `workspace_layout/`.
 Client activity attribution for `layout.py context` moves to `POST /api/client-activity`, which the chat app calls when a message is sent and the shell calls when a view switches.
@@ -254,7 +265,8 @@ A new project, and a new workspace's first landing, shows the New Tab page and n
 
 A shortcut is `(app, action)` with a per-project mode, `focus` or `new`.
 Focus goes to the most recently focused tab of that app in this client's layout and runs the action only when there is none; new always runs the action.
-The built-in rail rows are seeded from configuration as ordinary shortcuts (chat `new`, files `new`, browser `new`, terminal `new`) and carry no code of their own.
+A new project's shortcut list is seeded from every registered app whose manifest declares a `default_shortcut`, in registry order, so the built-in rows (chat `new` in new mode; terminal, files, and browser `new` in focus mode) carry no shell code, and a user-built app pins itself to no project unless its manifest says so.
+Everything's rail shows a fixed row for every registered app that declares an action, as today.
 The New Tab page offers every action of every registered app, then the view's instances, then everything else on the machine, ordered by app-reported last-active.
 
 ### 6.4 Verbs
@@ -262,10 +274,11 @@ The New Tab page offers every action of every registered app, then the view's in
 The tab menu and the rail row build from one definition keyed by capabilities, not by kind:
 
 - Refresh: reload the iframe.
+- Share the app: as today, through the minds chrome.
 - Rename: shown when the instance reports `renameable`; calls the app.
 - Add to project, Remove from project: shell, shared.
-- Close: undock in this client. When this was the last reference to an instance of a `referenced`-lifetime app, the shell also calls the app's Delete.
-- Delete: shown for instances of `instances = true` apps with `explicit` lifetime; calls the app. The tab disappears when the app's list no longer carries the instance.
+- Close: undock in this client. When this was the last reference to a `referenced` instance, the shell also calls the app's Delete.
+- Delete: shown for `explicit` instances of `instances = true` apps; calls the app. The tab disappears when the app's list no longer carries the instance.
 - Stop and Start the app: shown for apps with a `program` that are not `critical`; supervisord via the shell.
 
 A stopped app's tabs render the existing placeholder with a Start button; instances of a stopped app show `stopped`.
@@ -277,6 +290,7 @@ Every op targets one client, the requester by default or `--client <id>`; `--vie
 `open app:<name>` runs the app's default action (the first one its manifest declares) in focus mode; `open app:<name> --action <id>` runs a named action; `open app:<name>?instance=<key>` docks an existing instance.
 `list` prints apps and instances with status from the inventory.
 `rename` and `delete` gain instance forms that call through to the app.
+`replace-url <address> <path-or-url>` navigates an instance through the app's location route, the same fact a page reports for itself; the shell reloads a docked frame only when the instance's listed URL differs from what that frame last reported, so a page's own reports never reload it and an agent's navigation does.
 `context` and `views` are unchanged in spirit and read the client records.
 The old spellings (`chat:`, `terminal:`, `service:`, `url:`, `chat-terminal:`) are removed, and every skill that used them is rewritten in the same change.
 
@@ -302,9 +316,9 @@ Every target the switcher can name is therefore an existing identity: a workspac
 
 ### 7.1 Terminal
 
-The terminal becomes a small Python package, `system/apps/terminal`, that owns ttyd.
+The terminal becomes a small Python package, `system/apps/terminal`, that runs ttyd as its child and serves the instances API beside it, keeping today's mechanism whole.
 Instances are tmux sessions named `terminal-<N>`; create allocates the lowest free number, delete kills the session, rename renames it, and the tmux hooks that today notify the shell notify the terminal app instead.
-An instance's URL is `/?arg=session&arg=<name>`.
+An instance's URL is `/?arg=session&arg=<name>&arg={tab}`, so the app keeps mapping each ttyd client's pty to the tab it serves; when a client switches sessions inside tmux or a session is renamed, the app re-points the affected tabs through the shell's tab route, exactly as the shell re-pointed them itself before.
 Status is `idle`; distinguishing a running foreground command is deferred.
 The ttyd dispatch directory moves from the mngr agent state dir to `data/.state/terminal/commands/`, and any app may install a dispatch script there; the chat app installs `agent.sh` for its terminal back face.
 Taking the minimum size across viewers of a session is deferred, and the `shell:shown` and `shell:hidden` signals are what it will read.
@@ -320,16 +334,16 @@ The files app becomes `system/apps/files`, the instances library's sidecar launc
 An instance is a key and the path it was last at; its URL is that path under the dufs origin.
 The dufs frontend keeps its existing one-line location beacon (now the `shell:location` message), the shell relays it to the sidecar with the tab's key, and the sidecar records it, so a file browser reopens at the folder it was showing.
 Keys and paths from the old layouts-derived instances are imported by the migration (section 9).
-Its manifest declares `instance_lifetime = "referenced"`, so an instance is deleted by the shell once no project and no client refers to it, and nothing lingers in Everything.
+Every file-browser instance is `referenced`, so it is deleted by the shell once no project and no client refers to it, and nothing lingers in Everything.
 
 ### 7.4 Chat
 
 The chat app moves wholesale to `system/apps/chat/`: the harness watchers, transcripts, sends, queue and interrupt handling, model choice, provider accounts and sign-in, uploads, the latchkey catalog proxy, memory-shedding retagging of chat agents, and its own frontend bundle.
 It runs from its own uv tool environment (3.1), installed with the mngr harness plugins the way the shell's tool is today, so the plugin table in `system/config/mngr_plugins.toml` names `chat` instead of `system-interface`; the `system-interface` tool no longer needs any mngr plugin.
 Its instances are the workspace's chat agents, listed from `mngr observe`, excluding the primary services agent; keys are agent ids, URLs are `/<agent-id>`, titles are display names, rename goes through `mngr rename`, delete through `mngr destroy`, and status maps thinking and tool-running to `working`, a pending permission to `attention`, and a stopped agent to `stopped`.
-Its `new` action creates a provisional instance: the chat backend already mints the agent id before it runs `mngr create`, so the instance is keyed by that future id, its page at `/<agent-id>` holds the account chooser and the creation log until the agent exists and the transcript afterwards, and the tab never changes address.
-A provisional instance whose agent was never created is reaped by the chat app after a timeout and can be deleted like any other.
-A subagent view is a chat instance too, keyed `<agent-id>.<session-id>`, created by the chat backend when a transcript reveals a subagent and docked with `shell:open` from the parent chat's page; agents and sub-agents are just chats.
+Its `new` action creates a provisional instance: the chat backend already mints the agent id before it runs `mngr create`, so the instance is keyed by that future id, its page at `/<agent-id>` shows the creation log (creation starts at once on the most recently used account, as today) or the account chooser when nothing is signed in, then the transcript, and the tab never changes address.
+A provisional instance is `referenced`, so one whose tab is closed before the agent exists is deleted by the shell like any other unreferenced instance.
+A subagent view is a chat instance too, keyed `<agent-id>.<session-id>`, `referenced`, created on demand by the `subagent` action when the user opens one from the parent chat's page, which then docks it with `shell:open`; agents and sub-agents are just chats.
 Provider accounts stay where they are, under `~/.minds/accounts`: existing chats bind to them by absolute paths in their env files and credential symlinks, and the store is chat-owned state whatever its path.
 The chat app keeps every `/api/agents/...` route it serves today, verbatim, at its own origin; the shell gains a plain `/api/health` for the probes that used the agents route.
 The first-chat claim and `/welcome` are the chat app's; the shell creates nothing.
@@ -394,9 +408,9 @@ Tests follow the code: the instances library and each app backend get unit tests
 3. **Terminal app.** The Python package, tmux-backed instances, hook notifications, and the dispatch directory move. Verify: two terminals, rename, delete, reload survives.
 4. **Files app.** The sidecar around dufs, per-instance paths in the store, and the beacon's rename to the contract message. Verify: two file browsers on different folders reopen where they were after a reload.
 5. **Browser app.** The instances adapter and status. Verify: a fleet browser shows `working` while an agent drives it.
-6. **Chat as a document.** The chat pages and their bundle become a separate document served by the system-interface process at a registered `chat` origin whose registry URL is the shell's own port, with the instances API implemented over the existing agent manager. Nothing moves between packages yet. Verify: every chat opens as an iframe at the chat origin and behaves as before; the shell's own bundle carries no chat views.
-7. **Shell core.** Addresses, the app-agnostic inventory, the verb definition, the browser-side contract module, the location relay, the embedder relay, shortcuts as data, the New Tab page as the only empty state, and deletion of the per-kind code and side stores; chat is already an ordinary iframe app, so the shell has no special case. Verify: every verb on every app from both the tab and the rail.
-8. **Client-scoped layouts.** Server-side layouts by client, seeds, pruning, client-tagged broadcasts, per-client active view, referenced-lifetime deletion, the inventory endpoint and deep links (6.7), `layout.py` and skill rewrites. Verify: two browsers on one workspace arrange independently and share projects; two windows of one browser mirror each other; closing the last file-browser tab everywhere removes the instance; a deep link lands on the named view and instance.
+6. **Chat as a document.** The chat pages and their bundle become a separate document served by the system-interface process at a registered `chat` origin whose registry URL is the shell's own port (requests dispatched by Host label and by the `/_instances` path), with the instances API implemented over the existing agent manager, the browser-side contract module, and the embedder relay (permission cards live in chat pages, which are child frames from here on). Nothing moves between packages yet. Verify: every chat opens as an iframe at the chat origin and behaves as before; the shell's own bundle carries no chat views; a permission card reaches the minds inbox.
+7. **Shell core.** Addresses, the app-agnostic inventory, the verb definition, the location relay, shortcuts as data, the New Tab page as the only empty state, the state files of 6.1, and deletion of the per-kind code and side stores; chat is already an ordinary iframe app, so the shell has no special case. Verify: every verb on every app from both the tab and the rail.
+8. **Client-scoped layouts.** Client-tagged broadcasts with save ids, per-client active view across a client's windows, the tab route, pruning, referenced-lifetime deletion, the inventory endpoint and deep links (6.7), `layout.py` and skill rewrites. Verify: two browsers on one workspace arrange independently and share projects; two windows of one browser mirror each other; closing the last file-browser tab everywhere removes the instance; a deep link lands on the named view and instance.
 9. **Migration.** The script, its marker, and its wiring into bootstrap and the apply. Verify: a workspace created before this arc upgrades with its projects, tabs, and folder paths intact.
 10. **Chat app.** The move of the chat package and process to `system/apps/chat` with its own tool environment, program, manifest, and registry row, the provisional-instance create flow, subagent instances, the first-chat claim, and the shell's mngr-free invariant landing as an import contract and a ratchet. Verify: chats create, rename, delete, stop, and show status; permission cards reach the minds inbox through the relay; a fresh workspace lands on New Tab.
 11. **Updates, sharing, and cleanup.** The apply changes, the external-caller retargeting (8.4), the sharing note in the share-gateway docs, the service-to-app rename across shell code and docs, deletion of the old stores, README and skill rewrites, and changelog entries.
@@ -417,5 +431,6 @@ After phase 11, an existing workspace is upgraded through update-self and exerci
 
 ## 12. Open questions
 
-None at this level.
-The implementer-level details (schemas, route signatures, package shapes, tests, and the migration fixture) are settled in the per-phase specs beside this document.
+None.
+The implementer-level details are settled in [contracts.md](contracts.md) and the per-phase specs beside this document.
+Two decisions taken while writing them stand out because they preserve today's behaviour over the model's first draft: the terminal keeps its per-tab id and hook mechanism (7.1), and owner gating of verbs for shared-workspace visitors stays as it is today (deferred).
