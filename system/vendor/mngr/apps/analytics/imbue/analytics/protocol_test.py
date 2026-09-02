@@ -104,6 +104,64 @@ def test_parse_rejects_records_with_missing_or_oversized_envelope_fields() -> No
     assert parsed.dropped_line_count == 2
 
 
+def test_parse_takes_the_emitter_as_the_source_of_an_atif_transcript_record() -> None:
+    """ATIF records renamed the envelope's emitting source to ``emitter``; ``source`` is now the
+    step originator, so only ``emitter`` belongs in the record_source column."""
+    observation = json.dumps(
+        {
+            "source": "transcripts",
+            "record": {
+                "type": "observation",
+                "event_id": "evt-obs",
+                "emitter": "claude/common_transcript",
+                "timestamp": "2026-08-18T12:00:00.000000000Z",
+                "results": [{"source_call_id": "call-1", "content_byte_count": 3}],
+            },
+        }
+    )
+    step = json.dumps(
+        {
+            "source": "transcripts",
+            "record": {
+                "type": "step",
+                "event_id": "evt-step",
+                "emitter": "claude/common_transcript",
+                "timestamp": "2026-08-18T12:00:01.000000000Z",
+                "source": "agent",
+                "message": "hi",
+            },
+        }
+    )
+
+    parsed = parse_collection_output("\n".join([observation, step]))
+
+    assert [record.event_id for record in parsed.transcript_records] == ["evt-obs", "evt-step"]
+    assert {record.record_source for record in parsed.transcript_records} == {"claude/common_transcript"}
+    assert parsed.dropped_line_count == 0
+
+
+def test_parse_skips_the_atif_stream_header_without_counting_it_as_dropped() -> None:
+    """The header describes the stream, not an event in it: no timestamp, and the same event id on
+    every agent's stream, so it must not become a row -- but it is framing rather than corruption,
+    so it must not inflate the dropped-line count either."""
+    header = json.dumps(
+        {
+            "source": "transcripts",
+            "record": {
+                "type": "header",
+                "event_id": "header",
+                "emitter": "claude/common_transcript",
+                "schema_version": "ATIF-v1.7",
+            },
+        }
+    )
+
+    parsed = parse_collection_output(header)
+
+    assert parsed.transcript_records == ()
+    assert parsed.dropped_line_count == 0
+
+
 def test_summary_drops_cursor_values_that_are_not_json_object_strings() -> None:
     """The runner persists cursor values verbatim, so only known-source JSON-object strings may survive."""
     summary = json.dumps(

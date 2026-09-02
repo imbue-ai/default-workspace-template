@@ -60,15 +60,32 @@ jobs:
       # the offload jobs below: a bare `--unshallow` pulls every branch). The
       # merge-base with the base branch is an ancestor of HEAD, so deepening
       # HEAD plus fetching the base tip is enough for a three-dot diff.
+      #
+      # Check out the PR head, not the default merge ref: the gate diffs the
+      # PR's own commits against its live base, and for PRs in a native GitHub
+      # stack the merge ref merges with the trunk (the payload base), so any
+      # trunk drift since the stack's base point would show up as files this
+      # PR touches.
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Fetch base branch and deepen HEAD for the changelog diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
             git fetch --no-tags --unshallow origin "$(git rev-parse HEAD)"
           fi
+          # For PRs in a native GitHub stack the webhook payload (and hence
+          # GITHUB_BASE_REF) reports the trunk as base even when the PR is
+          # stacked on a sibling branch, which would make the gate diff the
+          # whole stack. Resolve the live base from the API instead.
+          BASE_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -q .base.ref || echo "${GITHUB_BASE_REF}")"
+          echo "CHANGELOG_DIFF_BASE_REF=${BASE_REF}" >> "$GITHUB_ENV"
           git fetch --no-tags origin \
-            "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+            "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -786,7 +803,10 @@ jobs:
         # Electron e2e coverage also lives in that snapshot stage now (it
         # carries `minds_snapshot_resume`), reusing the snapshot image's warm
         # Electron/Playwright/Xvfb toolchain instead of a dedicated cold job.
-        run: PYTEST_MAX_DURATION_SECONDS=600 uv run pytest -n 0 --timeout 300 --no-cov --cov-fail-under=0 -v --tb=short -m '(docker or docker_sdk) and not release and not minds_snapshot_resume'
+        # The suite-level budget carries headroom over the ~600s the suite
+        # legitimately takes on a good runner; per-test hangs are still
+        # caught by --timeout 300.
+        run: PYTEST_MAX_DURATION_SECONDS=900 uv run pytest -n 0 --timeout 300 --no-cov --cov-fail-under=0 -v --tb=short -m '(docker or docker_sdk) and not release and not minds_snapshot_resume'
 
   # Bundled-git acceptance test on a GitHub-hosted macOS runner: offload
   # proves the linux-x64 payload from a networkless sandbox; this job proves
@@ -1445,6 +1465,32 @@ jobs:
             minds/ci/runs/${{ steps.sync_e2e_env.outputs.env_name }}/shared-default/MINDS_ADMIN_KEY
             minds/ci/paid-accounts/CI_TEST_USER_EMAIL
             minds/ci/paid-accounts/CI_TEST_USER_PASSWORD
+      # The realistic-signup test (test_account_signup_e2e.py) drives a real
+      # verification email through a throwaway mail.tm mailbox. The env-build
+      # job cannot hand one over (it runs on a separate runner), so mint one
+      # here and export its address + JWT for the pytest step below; the
+      # signup_email fixture skips cleanly when they are absent. The mailbox is
+      # deleted right after the run, and the JWT is masked so the -v pytest echo
+      # never leaks it. The env config was downloaded to .minds/ above.
+      # continue-on-error: a mail.tm outage should not fail the whole services
+      # suite -- the step goes visibly yellow, the two mailbox-free tests still
+      # run, and the verification test skips (shown as SKIPPED in the -rs
+      # summary) rather than erroring.
+      - name: Provision a per-run mail.tm mailbox for the signup tests
+        continue-on-error: true
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.run_minds_release_tests }}
+        run: |
+          set -euo pipefail
+          uv run python apps/minds_admin/scripts/test_deployments.py mailtm-up \
+            --envs-json "$PWD/.minds/iterate-default.json" \
+            --out "$PWD/.minds/mailtm.json"
+          ADDRESS=$(jq -er '.address' "$PWD/.minds/mailtm.json")
+          JWT=$(jq -er '.jwt' "$PWD/.minds/mailtm.json")
+          echo "::add-mask::$JWT"
+          {
+            echo "MAILTM_ACCOUNT_ADDRESS=${ADDRESS}"
+            echo "MAILTM_ACCOUNT_JWT=${JWT}"
+          } >> "$GITHUB_ENV"
       - name: Run minds_services tests against the per-run ci env
         id: services_tests
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.run_minds_release_tests }}
@@ -1466,6 +1512,17 @@ jobs:
           fi
           MINDS_DEPLOYMENT_TEST_ENVS_JSON="$PWD/.minds/iterate-default.json" \
             uv run pytest -m minds_services "${FILTER_ARGS[@]}" apps/minds/deployment_tests/ --no-cov -p no:xdist -v -rs
+
+      # Delete the mail.tm mailbox minted above, whether the tests passed or
+      # failed. `mailtm-down` no-ops when the state file is absent (mailbox
+      # never minted), and a delete failure is non-fatal -- the mailbox is a
+      # disposable public inbox that mail.tm expires on its own.
+      - name: Delete the per-run mail.tm mailbox
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.run_minds_release_tests }}
+        run: |
+          set -euo pipefail
+          uv run python apps/minds_admin/scripts/test_deployments.py mailtm-down \
+            --state "$PWD/.minds/mailtm.json" || echo "mail.tm teardown failed (non-fatal)"
 
       - name: Report test results
         if: always()

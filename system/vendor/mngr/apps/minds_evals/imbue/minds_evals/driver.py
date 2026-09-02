@@ -16,6 +16,7 @@ import time
 import uuid
 from abc import ABC
 from abc import abstractmethod
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -344,16 +345,26 @@ def resolve_turn_sources(case: CaseConfig, decider_model: str, api_key: str) -> 
 
 
 @pure
+def _agent_reply_text(event: Mapping[str, Any]) -> str:
+    """One raw event's agent-facing reply text, or "" when it is not an agent turn.
+
+    Reads both common-transcript vintages: the ATIF-shaped ``step`` record with ``source: "agent"``
+    (whose text is ``message``) that mngr's emitters write, and the legacy ``assistant_message``
+    record the workspace system_interface still produces."""
+    if event.get("type") == "step" and event.get("source") == "agent":
+        return str(event.get("message") or "").strip()
+    if event.get("type") == "assistant_message":
+        return str(event.get("text") or "").strip()
+    return ""
+
+
+@pure
 def _new_agent_reply_texts(events: list[dict[str, Any]], baseline_event_count: int) -> list[str]:
     """The non-empty agent reply texts at or after ``baseline_event_count`` (the event count captured
     just before the turn was sent). Anchoring on the send-time index -- rather than "after the last
-    user_message" -- avoids being fooled by framework-injected user messages (the /welcome skill
+    user turn" -- avoids being fooled by framework-injected user messages (the /welcome skill
     body, queued prompts, is_meta events) that can land after the agent's reply."""
-    return [
-        (event.get("text") or "").strip()
-        for event in events[baseline_event_count:]
-        if event.get("type") == "assistant_message" and (event.get("text") or "").strip()
-    ]
+    return [text for event in events[baseline_event_count:] if (text := _agent_reply_text(event))]
 
 
 @pure
@@ -635,14 +646,6 @@ class MindsPersonaDriver(BaseAgent):
         )
         logger.info("Workspace is up (agent {})", self._workspace_agent_id)
 
-        chat_agent_id = await minds_bridge.fetch_chat_agent_id(
-            environment, self._box_env, self._workspace_agent_id, workspace_host_name, deadline, self._poll_seconds
-        )
-        if chat_agent_id is None:
-            await self._mark_timed_out(environment, "could not resolve the workspace chat agent id")
-            return
-        self._chat_agent_id = chat_agent_id
-
         if self._is_proxy_probe_enabled:
             await self._probe_reverse_tunnel(environment)
         if self._is_proxy_enabled:
@@ -651,9 +654,52 @@ class MindsPersonaDriver(BaseAgent):
                 await self._mark_timed_out(environment, "the in-box LLM proxy did not come up")
                 return
 
-        is_authenticated = await self._authenticate_workspace(environment, deadline)
-        if not is_authenticated:
+        sign_in = await self._authenticate_workspace(environment, deadline)
+        if not sign_in.is_signed_in:
             await self._mark_timed_out(environment, "could not authenticate the workspace")
+            return
+
+        # A workspace boots with no chat, and a chat binds to the account it is created against, so
+        # this can only happen once the sign-in above has minted one.
+        chat_agent_id = await minds_bridge.create_chat_agent(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            workspace_host_name,
+            sign_in.account_id,
+            deadline,
+            self._poll_seconds,
+        )
+        if chat_agent_id is None:
+            await self._mark_timed_out(environment, "could not create the workspace chat agent")
+            return
+        self._chat_agent_id = chat_agent_id
+
+        is_chat_ready = await minds_bridge.wait_for_chat_state(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            self._chat_agent_id,
+            is_waiting_desired=True,
+            deadline=deadline,
+            poll_seconds=self._poll_seconds,
+        )
+        if not is_chat_ready:
+            await self._mark_timed_out(environment, "the workspace chat agent never reached WAITING")
+            return
+
+        # WAITING alone does not mean the chat is done being set up. The workspace's first chat is
+        # created with `/welcome` as its initial message and types it in only once the agent reports
+        # ready, so the chat is listed as WAITING -- carrying no messages at all -- for as long as
+        # that delivery takes. Turn 1 must not be sent into that window: it would race the welcome's
+        # own keystrokes, and the greeting would land past turn 1's baseline, where it would be
+        # recorded and graded as the answer to turn 1. Waiting for the greeting itself is what
+        # separates the two; polling for a RUNNING edge would miss a welcome that finished between
+        # two polls.
+        # The baseline is the whole stream: this chat is new, so every event in it is the welcome's.
+        is_welcomed = await self._wait_for_reply(environment, deadline, baseline_event_count=0)
+        if not is_welcomed:
+            await self._mark_timed_out(environment, "the workspace chat never answered its welcome")
             return
 
         await self._capture_preexisting_registrations(environment)
@@ -865,13 +911,15 @@ class MindsPersonaDriver(BaseAgent):
         (self.logs_dir / PROXY_USAGE_FILENAME).write_text(contents + "\n")
         self._proxy_usage_records = usage_accounting.parse_proxy_usage_log(contents)
 
-    async def _authenticate_workspace(self, environment: BaseEnvironment, deadline: float) -> bool:
-        """Sign the workspace in after create, the way a user does.
+    async def _authenticate_workspace(
+        self, environment: BaseEnvironment, deadline: float
+    ) -> minds_bridge.WorkspaceSignIn:
+        """Sign the workspace in after create, the way a user does; reports the account it minted.
 
         A workspace boots unauthenticated -- the product's create path supplies no AI credentials --
-        so without this the chat agent can never take a turn. Doing it through the sign-in endpoint
-        rather than the create-time host env is what keeps the graded agent in production's shared
-        config-dir regime.
+        so without this there is no account for a chat to bind to, and the workspace refuses to
+        create one. Doing it through the sign-in endpoint rather than the create-time host env is
+        what keeps the graded agent in production's shared config-dir regime.
         """
         assert self._box_env is not None
         # Behind the proxy the workspace gets the trial's own key, never the upstream one: it is
@@ -879,33 +927,20 @@ class MindsPersonaDriver(BaseAgent):
         api_key = self._proxy_key or self._get_env("ANTHROPIC_API_KEY") or ""
         if not api_key:
             logger.error("No ANTHROPIC_API_KEY to sign the workspace in with")
-            return False
+            return minds_bridge.NOT_SIGNED_IN
         is_endpoint_ready = await minds_bridge.wait_for_auth_endpoint(
             environment, self._box_env, self._workspace_agent_id, deadline, self._poll_seconds
         )
         if not is_endpoint_ready:
             logger.error("The workspace's claude-auth endpoint never came up")
-            return False
+            return minds_bridge.NOT_SIGNED_IN
         logger.info("Signing the workspace in through the claude-auth endpoint")
-        is_submitted = await minds_bridge.authenticate_workspace(
+        return await minds_bridge.authenticate_workspace(
             environment,
             self._box_env,
             self._workspace_agent_id,
             api_key,
             self._proxy_base_url or self._get_env("ANTHROPIC_BASE_URL") or "",
-        )
-        if not is_submitted:
-            return False
-        # Submitting restarts the claude agents, so the chat agent is briefly gone; the turn loop's
-        # own WAITING gate covers the rest.
-        return await minds_bridge.wait_for_chat_state(
-            environment,
-            self._box_env,
-            self._workspace_agent_id,
-            self._chat_agent_id,
-            is_waiting_desired=True,
-            deadline=deadline,
-            poll_seconds=self._poll_seconds,
         )
 
     async def _wait_for_reply(self, environment: BaseEnvironment, deadline: float, baseline_event_count: int) -> bool:
@@ -970,8 +1005,7 @@ class MindsPersonaDriver(BaseAgent):
 
     async def _prepare_workspace_clone(self, case: CaseConfig, environment: BaseEnvironment) -> None:
         """Clone the workspace template at its pinned SHA in the box and overwrite its vendored mngr
-        with the box's /work/mngr (ported from the old harness's launch clone prep, minus the retired
-        eval worker's metadata file)."""
+        with the box's /work/mngr, leaving a committed clone the workspace can be created from."""
         assert self._box_env is not None
         # Paths and config-derived values travel unquoted and are shell-quoted where each command
         # builder interpolates them. The case id and the dwt repo/branch/sha come from an
@@ -1033,9 +1067,10 @@ class MindsPersonaDriver(BaseAgent):
     async def _capture_preexisting_registrations(self, environment: BaseEnvironment) -> None:
         """Snapshot what the workspace already serves, before the first turn can change it.
 
-        This is the last moment the workspace is purely the template's doing: it has booted and been
-        signed in, and the agent has not been asked for anything yet. Recording it here is what lets
-        the evidence phase attribute a registry row to the agent rather than guessing from names.
+        This is the last moment the workspace is purely the template's doing: it has finished its
+        own setup -- booted, signed in, chat created and welcomed -- and the eval has not sent a
+        turn yet. Recording it here is what lets the evidence phase attribute a registry row to the
+        agent rather than guessing from names.
 
         A probe that comes back failed, or a registry that is not there yet, leaves the set unknown,
         which the collector records as unmeasured -- never as "the workspace served nothing", which

@@ -136,7 +136,6 @@ addopts = [
   "--cov=imbue.mngr_ovh",
   "--cov=imbue.mngr_gcp",
   "--cov=imbue.mngr_azure",
-  "--cov=imbue.mngr_minds_eval",
   "--cov=imbue.analytics",
   # NOTE: apps/minds_evals is deliberately absent from this list -- it is a
   # standalone project (see [tool.uv.workspace].exclude) and is excluded from

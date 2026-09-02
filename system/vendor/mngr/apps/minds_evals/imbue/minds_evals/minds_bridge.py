@@ -8,9 +8,11 @@ harbor's environment API is async; this module and driver.py are the only async 
 
 import asyncio
 import json
+import re
 import shlex
 import time
 import tomllib
+from http import HTTPStatus
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -19,7 +21,9 @@ from typing import Final
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.base import ExecResult
 from loguru import logger
+from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import WorkspaceCreateError
@@ -46,8 +50,8 @@ PROXY_LOG_FILENAME: Final[str] = "proxy.log"
 # Read by the uploaded hooks; named here so the two sides cannot drift apart.
 PROXY_KEY_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_KEY"
 PROXY_USAGE_LOG_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_USAGE_LOG"
-# The workspace-local system_interface the old in-workspace eval worker polled
-# (unauthenticated loopback inside the workspace sandbox).
+# The workspace's own system_interface. Loopback, so it is reachable only from
+# inside the workspace sandbox, which is why it needs no authentication.
 WORKSPACE_SYSTEM_INTERFACE: Final[str] = "http://127.0.0.1:8000"
 
 # The workspace's own claude sign-in API -- the endpoints the product's in-UI login modal posts to.
@@ -55,6 +59,10 @@ WORKSPACE_SYSTEM_INTERFACE: Final[str] = "http://127.0.0.1:8000"
 # the same shared-config regime real workspaces run in.
 CLAUDE_AUTH_STATUS_PATH: Final[str] = "/api/claude-auth/status"
 CLAUDE_AUTH_SUBMIT_PATH: Final[str] = "/api/claude-auth/submit-credentials"
+# The endpoint the product's new-tab screen posts to when a user starts a chat. A workspace boots
+# with no chat at all, so the driver's own chat is made here.
+CREATE_CHAT_PATH: Final[str] = "/api/agents/create-chat"
+AGENTS_PATH: Final[str] = "/api/agents"
 ANTHROPIC_API_KEY_ENV_VAR: Final[str] = "ANTHROPIC_API_KEY"
 ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
 # The auth mode the workspace derives from which credential keys it was given: a key on its own is
@@ -259,17 +267,12 @@ async def _box_curl_json(
     output = (result.stdout or "").strip()
     if result.return_code != 0:
         return 0, {"error": (result.stderr or output or "curl failed").strip()[:400]}
-    head, _, status_line = output.rpartition("\n")
-    if not status_line.strip().isdigit():
-        return 0, {"error": output[:400]}
-    status = int(status_line.strip())
-    if not head.strip():
-        return status, {}
-    try:
-        parsed = json.loads(head)
-    except ValueError:
-        return status, {"error": head[:400]}
-    return status, parsed if isinstance(parsed, dict) else {"error": head[:400]}
+    response = parse_curl_response(output)
+    if isinstance(response.body, dict):
+        return response.status, response.body
+    # A body this caller cannot read is reported through the "error" key its callers already
+    # inspect; a capture that never carried a status reads back as status 0, which they poll on.
+    return response.status, {"error": response.text[:400]} if response.text else {}
 
 
 @pure
@@ -370,6 +373,68 @@ async def run_in_workspace(
     return bool(first.get("success")), str(first.get("stdout") or "")
 
 
+class WorkspaceResponse(FrozenModel):
+    """One bridged HTTP call to the workspace's system_interface."""
+
+    # Status 0 is the one callers may retry -- the bridged exec failed, or the system_interface is
+    # not listening yet. Every other status is the endpoint's own answer, refusals included.
+    status: int = Field(description="The response status; 0 when the call never reached the endpoint")
+    body: Any = Field(default=None, description="The parsed JSON body; None when there was none or it did not parse")
+    # A body that did not parse came from somewhere other than the endpoint, whose own error shapes
+    # are all JSON -- an unhandled traceback page, or something in front of the system_interface.
+    # That is when a failed trial most needs the text, so it is kept rather than dropped.
+    text: str = Field(default="", description="The raw body as captured, whether or not it parsed")
+
+    @property
+    def is_ok(self) -> bool:
+        """Whether the endpoint answered yes. The whole 2xx range counts -- a create answers 201
+        where a send answers 200 -- and everything else is the endpoint refusing, or, at 0, not
+        having answered at all."""
+        return 200 <= self.status < 300
+
+
+@pure
+def parse_curl_response(output: str) -> WorkspaceResponse:
+    """Split what `curl -w '\\n%{http_code}'` printed into the status and the parsed JSON body."""
+    head, _, status_line = output.strip().rpartition("\n")
+    if not status_line.strip().isdigit():
+        return WorkspaceResponse(status=0, text=output.strip())
+    # curl prints 000 when it never got a response, which reads back as the same 0 a failed bridge
+    # exec gives: both mean the call was never answered.
+    status = int(status_line.strip())
+    if not head.strip():
+        return WorkspaceResponse(status=status)
+    try:
+        return WorkspaceResponse(status=status, body=json.loads(head), text=head)
+    except ValueError:
+        return WorkspaceResponse(status=status, text=head)
+
+
+async def workspace_curl(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    url_path: str,
+    body_json: str | None,
+) -> WorkspaceResponse:
+    """HTTP against the workspace-local system_interface, bridged through mngr exec, keeping the
+    status: an endpoint that answers 4xx has to be told apart from one that is not up yet."""
+    parts = ["curl", "-s", "--max-time", "30", "-w", "\\n%{http_code}"]
+    if body_json is not None:
+        parts += ["-X", "POST", "-H", "Content-Type: application/json", "-d", body_json]
+    parts.append("{}{}".format(WORKSPACE_SYSTEM_INTERFACE, url_path))
+    inner_command = " ".join(shlex.quote(part) for part in parts)
+    is_success, stdout = await run_in_workspace(environment, env, workspace_agent_id, inner_command, 60)
+    if not is_success:
+        # Whatever the failed exec left behind: mngr's own failure detail when the bridge could not
+        # run the command at all, or -- when curl ran and could not reach the endpoint -- curl's
+        # write-out on its own, which reduces to no text. Never a status, since a curl that exited
+        # non-zero may have printed one (a `--max-time` cut off mid-response) without the body that
+        # goes with it.
+        return WorkspaceResponse(status=0, text=parse_curl_response(stdout).text)
+    return parse_curl_response(stdout)
+
+
 async def workspace_curl_json(
     environment: BaseEnvironment,
     env: dict[str, str],
@@ -377,43 +442,44 @@ async def workspace_curl_json(
     url_path: str,
     body_json: str | None,
 ) -> Any | None:
-    """HTTP against the workspace-local system_interface, bridged through mngr exec; returns the
-    parsed JSON body, or None on any failure (callers poll)."""
-    parts = ["curl", "-s", "--max-time", "30"]
-    if body_json is not None:
-        parts += ["-X", "POST", "-H", "Content-Type: application/json", "-d", body_json]
-    parts.append("{}{}".format(WORKSPACE_SYSTEM_INTERFACE, url_path))
-    inner_command = " ".join(shlex.quote(part) for part in parts)
-    is_success, stdout = await run_in_workspace(environment, env, workspace_agent_id, inner_command, 60)
-    if not is_success or not stdout.strip():
-        return None
-    try:
-        return json.loads(stdout)
-    except ValueError:
-        return None
+    """The parsed JSON body of a bridged system_interface call, or None when there was none -- what
+    the pollers read, which treat any answer alike."""
+    response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
+    return response.body
 
 
-_SYSTEM_SERVICES_AGENT_NAME: Final[str] = "system-services"
+# A chat wears two names: the display name it was created under ("Chat 2") and the canonical true
+# name the workspace lists it as ("Chat-2"). The agents listing carries the canonical one only --
+# labels, which is where the display name lives, reach clients over the workspace's WebSocket and
+# not over this endpoint -- so a chat is matched on the key below rather than on either name.
+_CANONICAL_STRIP_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-zA-Z0-9 _-]+")
+_CANONICAL_SPACES_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s+")
 
 
 @pure
-def _resolve_chat_agent_id(agents: list[Any], workspace_host_name: str) -> str | None:
-    named_matches = [
-        agent
-        for agent in agents
-        if isinstance(agent, dict)
-        and agent.get("id")
-        and str(agent.get("name") or "").lower() == workspace_host_name.lower()
-    ]
-    if named_matches:
-        return str(named_matches[0]["id"])
-    non_system_agents = [
-        agent
-        for agent in agents
-        if isinstance(agent, dict) and agent.get("id") and agent.get("name") != _SYSTEM_SERVICES_AGENT_NAME
-    ]
-    if len(non_system_agents) == 1:
-        return str(non_system_agents[0]["id"])
+def _chat_name_key(name: str) -> str:
+    """The key a workspace compares two chat names on, and the rule it refuses a colliding create
+    on: everything but a safe-name character or a space is dropped, each run of spaces becomes one
+    dash, the ends are stripped of dashes and underscores, and case is ignored.
+
+    This mirrors the template's own ``_canonical_name_key`` (``canonical_agent_name`` plus the
+    casefold); the two have to be changed together. It is not the name a chat is listed under --
+    the true name is the canonical form alone, which keeps the case it was created with.
+    """
+    stripped = _CANONICAL_STRIP_PATTERN.sub("", name.strip())
+    return _CANONICAL_SPACES_PATTERN.sub("-", stripped).strip("-_").casefold()
+
+
+@pure
+def resolve_chat_agent_id(agents: list[Any], display_name: str) -> str | None:
+    """The id of the chat created under ``display_name`` in an `/api/agents` listing, or None when
+    the listing carries no such chat yet."""
+    wanted_key = _chat_name_key(display_name)
+    for agent in agents:
+        if not isinstance(agent, dict) or not agent.get("id"):
+            continue
+        if _chat_name_key(str(agent.get("name") or "")) == wanted_key:
+            return str(agent["id"])
     return None
 
 
@@ -421,22 +487,99 @@ async def fetch_chat_agent_id(
     environment: BaseEnvironment,
     env: dict[str, str],
     workspace_agent_id: str,
-    workspace_host_name: str,
+    display_name: str,
     deadline: float,
     poll_seconds: float,
 ) -> str | None:
-    """The workspace's chat (primary) agent id, resolved from the workspace system_interface's
-    agents listing: the agent named after the workspace host, else the single non-system-services
-    agent. (The dwt worker read the manager's initial_chat_agent_id file instead, but that file is
-    written lazily and proved unreliable over the bridge.)"""
+    """Poll the workspace's agents listing until it carries the chat created under ``display_name``.
+
+    Only a workspace that already has that chat has one to find, and a create it is still working on
+    is not listed yet, which is why this polls rather than reading once. A workspace that boots with
+    no chat at all gets its chat from ``create_chat_agent``.
+    """
     while time.time() < deadline:
-        body = await workspace_curl_json(environment, env, workspace_agent_id, "/api/agents", None)
+        body = await workspace_curl_json(environment, env, workspace_agent_id, AGENTS_PATH, None)
         agents = body.get("agents") if isinstance(body, dict) else None
         if isinstance(agents, list):
-            chat_agent_id = _resolve_chat_agent_id(agents, workspace_host_name)
+            chat_agent_id = resolve_chat_agent_id(agents, display_name)
             if chat_agent_id is not None:
                 return chat_agent_id
         await asyncio.sleep(poll_seconds)
+    return None
+
+
+async def create_chat_agent(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    display_name: str,
+    account_id: str,
+    deadline: float,
+    poll_seconds: float,
+) -> str | None:
+    """Create the workspace's chat through the endpoint the product's new-tab screen posts to;
+    returns its agent id.
+
+    The screen sends no name and lets the workspace mint the next free "Chat N"; this names the
+    chat itself, because the name is the only handle a create whose answer was lost can be
+    recovered by -- see the collision branch below.
+
+    A chat runs on the provider account it binds to at creation, so the workspace must already be
+    signed in: with no account to bind to, the workspace refuses the create rather than making a
+    chat that could never take a turn. An empty ``account_id`` leaves the choice to the workspace,
+    which takes the account it used most recently, or its oldest one when that is no longer usable.
+
+    Only a call that never reached the endpoint is retried, since that is the system_interface still
+    coming up. A refusal is final -- except a name collision, which says a chat under that name is
+    already there and is answered by resolving it from the listing.
+    """
+    # The account is left out rather than sent empty: absent and empty mean the same thing to the
+    # endpoint, and a request carries no field it has no value for.
+    request_body = {"name": display_name}
+    if account_id:
+        request_body["account_id"] = account_id
+    payload = json.dumps(request_body)
+    unanswered_detail = ""
+    while time.time() < deadline:
+        response = await workspace_curl(environment, env, workspace_agent_id, CREATE_CHAT_PATH, payload)
+        body = response.body if isinstance(response.body, dict) else {}
+        if response.status == 0:
+            # An attempt that says nothing at all (curl's own 000 carries no body) must not erase
+            # what an earlier one said, since that is the only account of why the call keeps
+            # failing.
+            unanswered_detail = response.text or unanswered_detail
+            await asyncio.sleep(poll_seconds)
+            continue
+        if response.is_ok:
+            agent_id = body.get("agent_id")
+            if isinstance(agent_id, str) and agent_id:
+                logger.info("Created the workspace chat {!r} (agent {})", display_name, agent_id)
+                return agent_id
+            logger.error("The workspace created a chat but named no agent id: {}", response.text[:300])
+            return None
+        # A conflict is the name being held already -- by an agent, or by a create still in flight.
+        if response.status == HTTPStatus.CONFLICT:
+            logger.info(
+                "The workspace already has a chat named {!r} ({}); resolving it from the agents listing",
+                display_name,
+                str(body.get("detail") or "")[:200],
+            )
+            resolved_agent_id = await fetch_chat_agent_id(
+                environment, env, workspace_agent_id, display_name, deadline, poll_seconds
+            )
+            if resolved_agent_id is None:
+                logger.error(
+                    "The workspace refused a chat named {!r} as taken, then never listed one under that name",
+                    display_name,
+                )
+            return resolved_agent_id
+        logger.error(
+            "The workspace refused to create a chat (HTTP {}): {}",
+            response.status,
+            str(body.get("detail") or response.text)[:300],
+        )
+        return None
+    logger.error("The workspace's create-chat endpoint never answered ({})", unanswered_detail[:300])
     return None
 
 
@@ -451,6 +594,22 @@ def build_credential_lines(anthropic_api_key: str, anthropic_base_url: str) -> s
     return "\n".join(lines) + "\n"
 
 
+_REDACTION: Final[str] = "<redacted>"
+
+
+@pure
+def redact_secret(text: str, secret: str) -> str:
+    """``text`` with every occurrence of ``secret`` masked.
+
+    Whatever answers a sign-in can quote the request that carried the credential paste: the
+    endpoint reports an unreadable body by rendering the validation error, which carries the input
+    it could not read, and a bridged command that fails can be echoed back with its own ``-d``
+    payload in it. Trial logs are kept and shared long after the run, so mask before logging --
+    and mask before truncating, since a slice of an unmasked key is still a leak.
+    """
+    return text.replace(secret, _REDACTION) if secret else text
+
+
 async def wait_for_auth_endpoint(
     environment: BaseEnvironment,
     env: dict[str, str],
@@ -461,13 +620,33 @@ async def wait_for_auth_endpoint(
     """Block until the workspace's claude-auth endpoint answers, so credentials are not posted at a
     system_interface that is still coming up. This is a real readiness gate for auth, which the
     turn loop otherwise lacks -- without it a failure surfaces only as an agent that replies with
-    'not logged in' text."""
+    'not logged in' text.
+
+    Readiness is a 2xx, not merely a body. Being signed out is a 200 here, so the endpoint's own
+    error shapes -- which are JSON like everything else -- all mean it cannot report the state at
+    all, and posting credentials at a harness that just said so only moves the failure somewhere
+    less legible.
+    """
     while time.time() < deadline:
-        body = await workspace_curl_json(environment, env, workspace_agent_id, CLAUDE_AUTH_STATUS_PATH, None)
-        if isinstance(body, dict):
+        response = await workspace_curl(environment, env, workspace_agent_id, CLAUDE_AUTH_STATUS_PATH, None)
+        if response.is_ok and isinstance(response.body, dict):
             return True
         await asyncio.sleep(poll_seconds)
     return False
+
+
+class WorkspaceSignIn(FrozenModel):
+    """What the workspace reported when it was signed in through its own credential endpoint."""
+
+    is_signed_in: bool = Field(description="Whether the workspace came back signed in, in the mode asked for")
+    # A chat binds to an account when it is created, so this is what the driver's own chat is made
+    # against. Empty when the workspace named no account, which leaves the choice to the workspace.
+    account_id: str = Field(default="", description="The provider account the credentials minted")
+
+
+# What every path that leaves the workspace unauthenticated reports, whether the workspace refused
+# the credentials or was never asked for them at all.
+NOT_SIGNED_IN: Final[WorkspaceSignIn] = WorkspaceSignIn(is_signed_in=False)
 
 
 async def authenticate_workspace(
@@ -476,21 +655,40 @@ async def authenticate_workspace(
     workspace_agent_id: str,
     anthropic_api_key: str,
     anthropic_base_url: str,
-) -> bool:
+) -> WorkspaceSignIn:
     """Sign the workspace in the way a user does, via the product's own credential endpoint.
 
-    The endpoint writes the credentials into the shared claude settings env block, records the key's
-    approval so claude never challenges it, and restarts the claude agents -- so callers must wait
-    for the chat agent to reach WAITING again afterwards.
+    The endpoint mints the provider account it answers with, writes the credentials into that
+    account rather than over the workspace's shared login, and records the key's approval so claude
+    never challenges it. That account is what a chat is then created against, so signing in has to
+    come before the chat.
     """
     payload = json.dumps({"credentials": build_credential_lines(anthropic_api_key, anthropic_base_url)})
-    body = await workspace_curl_json(environment, env, workspace_agent_id, CLAUDE_AUTH_SUBMIT_PATH, body_json=payload)
+    response = await workspace_curl(environment, env, workspace_agent_id, CLAUDE_AUTH_SUBMIT_PATH, body_json=payload)
+    body = response.body
     if not isinstance(body, dict):
-        return False
-    # A rejected paste answers with an error detail rather than an auth status.
-    if body.get("detail"):
-        logger.warning("The workspace rejected the submitted credentials: {}", body["detail"])
-        return False
+        # The endpoint's own answers are all JSON, so anything else came from somewhere else -- an
+        # unhandled traceback page, or something in front of the system_interface. It is the only
+        # account of the failure a trial log would otherwise get, so it is reported verbatim.
+        logger.error(
+            "The workspace's sign-in endpoint answered nothing readable (HTTP {}): {}",
+            response.status,
+            redact_secret(response.text, anthropic_api_key)[:300],
+        )
+        return NOT_SIGNED_IN
+    # Read on the status, not on the body alone: a signed-in answer is a 2xx, and anything else is a
+    # refusal whose body may still parse and may still carry an auth status shaped like a success.
+    # Every refusal names a detail, and which one it is decides whether the trial's credentials or
+    # the workspace itself is at fault -- a paste the endpoint could not read against an account it
+    # could not write -- so the status and the detail are reported together. A detail alongside a
+    # 2xx is not a shape the endpoint has, but it is not a sign-in either.
+    if not response.is_ok or body.get("detail"):
+        logger.error(
+            "The workspace refused the sign-in (HTTP {}): {}",
+            response.status,
+            redact_secret(str(body.get("detail") or response.text), anthropic_api_key)[:300],
+        )
+        return NOT_SIGNED_IN
     # The endpoint deliberately runs no credential probe, so a wrong key or base URL is accepted
     # here and surfaces only later, as the agent replying that it is not logged in -- which the
     # judge would then grade as if it were the agent's own behaviour. Check what the workspace
@@ -504,8 +702,15 @@ async def authenticate_workspace(
             actual_mode,
             expected_mode,
         )
-        return False
-    return True
+        return NOT_SIGNED_IN
+    account_id = body.get("account_id")
+    if not isinstance(account_id, str) or not account_id:
+        logger.warning(
+            "The workspace signed in but named no account; its chat will be created against whichever "
+            "account the workspace picks for itself"
+        )
+        return WorkspaceSignIn(is_signed_in=True)
+    return WorkspaceSignIn(is_signed_in=True, account_id=account_id)
 
 
 @pure
@@ -693,7 +898,7 @@ async def fetch_chat_agent_state(
     workspace_agent_id: str,
     chat_agent_id: str,
 ) -> str | None:
-    body = await workspace_curl_json(environment, env, workspace_agent_id, "/api/agents", None)
+    body = await workspace_curl_json(environment, env, workspace_agent_id, AGENTS_PATH, None)
     if not isinstance(body, dict):
         return None
     for agent in body.get("agents") or []:
@@ -731,15 +936,42 @@ async def send_chat_message(
     deadline: float,
     poll_seconds: float,
 ) -> bool:
-    """Send a chat message the way the UI chat box does, retrying transient failures until the
-    deadline."""
+    """Send a chat message the way the UI chat box does, retrying anything short of a 2xx until the
+    deadline.
+
+    Only a 2xx means the harness took the message; the endpoint refuses in JSON, so a body on its
+    own proves nothing. A chat listed as WAITING can still answer 404 here -- the listing is a live
+    mngr discovery, while this endpoint resolves against the workspace's own agent map, which a
+    create fills later -- and a harness whose daemon is still starting answers 503. Reading either
+    as sent leaves the turn loop waiting out its budget for a reply to a message that never
+    arrived, and blaming the agent for the silence.
+
+    A refusal that will never clear is waited out along with them, unlike ``create_chat_agent``,
+    where one is final. The endpoint does not separate the two: the same 500 covers a harness still
+    settling and one that is wedged. Giving up on the first refusal would throw away a trial that a
+    second attempt would have run, while waiting one out costs a trial that was already lost.
+    """
     body_json = json.dumps({"message": message})
     url_path = "/api/agents/{}/message".format(chat_agent_id)
+    refusal_detail = ""
     while time.time() < deadline:
-        body = await workspace_curl_json(environment, env, workspace_agent_id, url_path, body_json)
-        if body is not None:
+        response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
+        if response.is_ok:
             return True
+        if response.status:
+            body = response.body if isinstance(response.body, dict) else {}
+            detail = "HTTP {}: {}".format(response.status, str(body.get("detail") or response.text)[:200])
+        else:
+            detail = response.text
+        if detail and detail != refusal_detail:
+            # Each refusal as it first appears, and then silence while it repeats: a send being
+            # waited out can hold the whole remaining case budget, and an unannounced one is
+            # indistinguishable in the log from an agent that is merely slow.
+            logger.warning("The workspace has not taken the message yet ({})", detail)
+        # An attempt that says nothing must not erase what an earlier one said.
+        refusal_detail = detail or refusal_detail
         await asyncio.sleep(poll_seconds)
+    logger.error("The workspace never took the message ({})", refusal_detail or "it never answered")
     return False
 
 
@@ -786,8 +1018,9 @@ async def fetch_events_window(
     return events if isinstance(events, list) else None
 
 
-# Match the dwt eval worker's restic exclude set (deps are reinstallable from
-# lockfiles), so snapshots stay lean and comparable to the old harness's.
+# Left out of a snapshot because they are all reinstallable from the lockfiles
+# and sources that are in it, and they dominate the tree's size -- which is what
+# keeps a per-turn tarball small enough to ship as a trial artifact.
 SNAPSHOT_EXCLUDES: Final[tuple[str, ...]] = (
     ".venv",
     "node_modules",
@@ -800,8 +1033,8 @@ SNAPSHOT_EXCLUDES: Final[tuple[str, ...]] = (
     ".next",
     ".cache",
 )
-# The tree the dwt eval worker snapshotted: the workspace home tree that
-# contains the mngr host dir (code, agent state, and data).
+# The workspace home tree, which contains the mngr host dir -- code, agent
+# state, and data -- so snapshotting it captures everything a trial produced.
 WORKSPACE_BACKUP_ROOT: Final[str] = "/home/user"
 
 
@@ -811,7 +1044,7 @@ async def snapshot_workspace(
     workspace_agent_id: str,
     tag: str,
 ) -> bool:
-    """Tar the workspace home tree (with the dwt worker's exclude set) and pull it into the box's
+    """Tar the workspace home tree (minus SNAPSHOT_EXCLUDES) and pull it into the box's
     /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts."""
     exclude_flags = " ".join("--exclude={}".format(shlex.quote(pattern)) for pattern in SNAPSHOT_EXCLUDES)
     # Name the workspace-side tarball after the tag and pull it INTO the

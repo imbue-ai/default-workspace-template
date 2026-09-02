@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-minds-evals-harbor = "imbue.minds_evals.generate:main"
+minds-evals = "imbue.minds_evals.generate:main"
 
 # This project is deliberately NOT a member of the monorepo's uv workspace (the
 # root pyproject.toml excludes it) and resolves against its own uv.lock. harbor

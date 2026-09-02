@@ -1,0 +1,1 @@
+The checked-in eval configs now live in `apps/minds_evals/configs/`, so this app owns the case files it grades: `eval-config.json` (nine cases), `eval-config-small.json` (three, two of them carrying `expectations`), and the two `-byo` variants. Generate a dataset with `just minds-evals-generate apps/minds_evals/configs/eval-config-small.json <output>`.

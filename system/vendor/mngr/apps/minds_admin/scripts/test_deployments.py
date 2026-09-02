@@ -1002,6 +1002,74 @@ def up(role: str) -> None:
     write_stdout_line("Tear down with: just minds-test-deployment-down")
 
 
+@cli.command(name="mailtm-up")
+@click.option(
+    "--envs-json",
+    "envs_json",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to the run's deployment_envs.json; its run_id ties the mailbox to the run. "
+    "When omitted a fresh run_id is minted.",
+)
+@click.option(
+    "--out",
+    "out_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Where to write the mailbox state JSON (address, account_id, jwt, run_id).",
+)
+def mailtm_up(envs_json: Path | None, out_path: Path) -> None:
+    """Mint a per-run mail.tm mailbox and write its state to disk for the signup e2e tests.
+
+    The full ``run`` / ``services-against`` flows already mint their own mailbox
+    inline; this standalone pair exists for CI, where the env is built in a
+    separate job from the one that runs pytest, so a Python ``_MailtmAccount``
+    cannot be threaded across steps. The CI job reads the state file to export
+    ``MAILTM_ACCOUNT_ADDRESS`` / ``MAILTM_ACCOUNT_JWT`` into the pytest step, and
+    ``mailtm-down`` reads the same file to delete the mailbox afterwards.
+    """
+    run_id = (
+        DeploymentEnvsConfig.model_validate_json(envs_json.read_text()).run_id
+        if envs_json is not None
+        else _mint_run_id()
+    )
+    account = _create_mailtm_account(run_id=run_id)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(
+            {
+                "address": str(account.address),
+                "account_id": str(account.account_id),
+                "jwt": account.jwt.get_secret_value(),
+                "run_id": str(run_id),
+            }
+        )
+    )
+    write_stdout_line(f"mail.tm mailbox {account.address} written to {out_path}")
+
+
+@cli.command(name="mailtm-down")
+@click.option(
+    "--state",
+    "state_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Path to the mailbox state JSON written by `mailtm-up`.",
+)
+def mailtm_down(state_path: Path) -> None:
+    """Delete the mail.tm mailbox recorded in a ``mailtm-up`` state file. Idempotent."""
+    if not state_path.is_file():
+        write_stdout_line(f"No mail.tm state at {state_path}; nothing to delete.")
+        return
+    state = json.loads(state_path.read_text())
+    _delete_mailtm_account(
+        NonEmptyStr(state["account_id"]),
+        SecretStr(state["jwt"]),
+        run_id=RunId(state["run_id"]),
+    )
+    write_stdout_line(f"Deleted mail.tm mailbox {state.get('address', state['account_id'])}.")
+
+
 @cli.command(name="bake-pool")
 @click.option(
     "--state-file",

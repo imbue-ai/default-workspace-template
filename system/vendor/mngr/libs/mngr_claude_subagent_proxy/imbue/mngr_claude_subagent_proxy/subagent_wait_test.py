@@ -279,8 +279,36 @@ def test_result_truncation() -> None:
     assert len(tiny_result) == 13
 
 
-def test_destroyed_fallback_from_preserved_sessions(tmp_path: Path) -> None:
-    """resolve_destroyed_result returns the last assistant_message text from preserved events."""
+# The two stream vintages a preserved transcript can be in: the ATIF-shaped records mngr's
+# emitters write, and the legacy ones on streams preserved before the cutover.
+_PRESERVED_STREAM_CASES: tuple[tuple[str, tuple[dict[str, Any], ...]], ...] = (
+    (
+        "atif",
+        (
+            {"type": "step", "emitter": "claude/common_transcript", "source": "agent", "message": "first"},
+            {"type": "step", "emitter": "claude/common_transcript", "source": "user", "message": "ignored"},
+            {"type": "observation", "results": [{"source_call_id": "c1", "content": "ignored too"}]},
+            {"type": "step", "emitter": "claude/common_transcript", "source": "agent", "message": "last answer"},
+        ),
+    ),
+    (
+        "legacy",
+        (
+            {"type": "assistant_message", "text": "first"},
+            {"type": "user_message", "content": "ignored"},
+            {"type": "assistant_message", "text": "last answer"},
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "records",
+    [case[1] for case in _PRESERVED_STREAM_CASES],
+    ids=[case[0] for case in _PRESERVED_STREAM_CASES],
+)
+def test_destroyed_fallback_from_preserved_sessions(tmp_path: Path, records: tuple[dict[str, Any], ...]) -> None:
+    """resolve_destroyed_result returns the last agent turn's text from a preserved stream."""
     host_dir = tmp_path / "fake_host_dir"
     host_dir.mkdir()
     work_dir = tmp_path / "work"
@@ -293,14 +321,9 @@ def test_destroyed_fallback_from_preserved_sessions(tmp_path: Path) -> None:
         get_preserved_agent_dir(host_dir, AgentName(target_name), agent_id) / "events" / "claude" / "common_transcript"
     )
     events_dir.mkdir(parents=True)
-    events_path = events_dir / "events.jsonl"
-    lines = [
-        json.dumps({"type": "assistant_message", "text": "first"}),
-        json.dumps({"type": "user_message", "text": "ignored"}),
-        json.dumps({"type": "assistant_message", "text": "last answer"}),
-        "this is not valid json",
-    ]
-    events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # The malformed trailing line must not stop the scan.
+    lines = [*(json.dumps(record) for record in records), "this is not valid json"]
+    (events_dir / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     assert (
         resolve_destroyed_result(target_name, location)
