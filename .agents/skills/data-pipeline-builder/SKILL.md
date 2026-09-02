@@ -160,7 +160,7 @@ from the CLI. No optimization without a stated reason in a one-line comment.
   line each in the README's usage.
 - `status` prints the ledger, counts, date ranges and the ingestion-problem totals: the resume
   point and the freshness banner. Human-readable by default, `--json` for the same fields as
-  one object, so the consumer's app and scripts read it without parsing text.
+  one object, so the consumer's app and scripts read it without parsing text. If there are retention limits, `status` states them.
 - consumers read the store in-process: document tables/columns and two query examples.
 - messy values become null only where the contract allows it; never crash, never silently
   "repair", never normalize a group-by value in the store (that is the rendering layer's
@@ -204,6 +204,7 @@ that writes -- never as a separate cleanup chore someone must remember:
   retains (their counts survive in the ledger rows while those remain).
 - one test in `tests/test_pipeline.py` loads past the bound and asserts the oldest entries
   are gone and the retained ones intact.
+- `status` states the bounds so limits are never secret.
 
 The raw input batches are the archive, not the tool's to delete; the pruned store stays
 rebuildable from them.
