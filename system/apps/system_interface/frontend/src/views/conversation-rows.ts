@@ -57,7 +57,8 @@ export interface RowDescriptor {
 /** A run of consecutive rows to render, `[startIndex, endIndex)`, or a spacer
  *  standing in for everything a run omits (including the virtual end spacers). */
 export type WindowSegment =
-  { kind: "rows"; startIndex: number; endIndex: number } | { kind: "spacer"; height: number };
+  | { kind: "rows"; startIndex: number; endIndex: number }
+  | { kind: "spacer"; height: number };
 
 /**
  * Render the ordered window segments (from the scroll engine's render plan) into
