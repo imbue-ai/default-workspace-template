@@ -1,3 +1,7 @@
+// @vitest-environment jsdom
+//
+// A terminal sign-in polls on `window.setInterval`, which the sign-in tests below drive.
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Capture mithril's request so the test drives the backend without a real network
@@ -7,7 +11,7 @@ vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 
 import { RECONNECT_BASE_MS } from "./backoff";
-import { areAccountsLoaded, getAccounts, loadAccountsWithRetry } from "./Providers";
+import { areAccountsLoaded, getAccounts, getFlow, loadAccountsWithRetry, startFlow } from "./Providers";
 
 const ACCOUNTS_BODY = {
   accounts: [{ id: "acct-1", lane: "claude", harness: "claude", provider: "Anthropic", name: "" }],
@@ -56,5 +60,45 @@ describe("loadAccountsWithRetry", () => {
     expect(mockRequest).toHaveBeenCalledTimes(3);
     expect(settled).toHaveBeenCalled();
     expect(getAccounts().map((account) => account.id)).toEqual(["acct-1"]);
+  });
+});
+
+describe("startFlow", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockRequest.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("holds no flow while the next sign-in is being started", async () => {
+    // Picking a method under "Other ways to sign in" starts a second flow, and the paste
+    // screen renders before that flow exists. A flow held across the window belongs to the
+    // method just left -- the server has already dropped it, and it took a code, not a key --
+    // so anything submitted there is refused.
+    mockRequest.mockResolvedValueOnce({
+      flow_id: "flow-subscription",
+      shape: "code_then_wait",
+      url: "https://example.invalid/login",
+      code: "ABCD-1234",
+    });
+    await startFlow("anthropic", "subscription");
+    expect(getFlow()?.flow_id).toBe("flow-subscription");
+
+    let arrive: (value: unknown) => void = () => {};
+    mockRequest.mockReturnValueOnce(
+      new Promise((resolve) => {
+        arrive = resolve;
+      }),
+    );
+    const started = startFlow("anthropic", "api_key");
+
+    expect(getFlow()).toBeNull();
+
+    arrive({ flow_id: "flow-api-key", shape: "paste", url: null, code: null });
+    await started;
+    expect(getFlow()?.flow_id).toBe("flow-api-key");
   });
 });
