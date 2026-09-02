@@ -1,1 +1,0 @@
-When a subagent is destroyed before it finishes, the proxy's final-message recovery now reads the ATIF-shaped records the claude emitter writes (a `step` with `source: "agent"`) as well as the legacy `assistant_message` records preserved by pre-cutover streams.

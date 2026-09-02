@@ -5,8 +5,9 @@ acceptance test, the full-flow harness) build their Docker workspace from a DEFA
 working tree. To let a coordinated mngr+DEFAULT_WORKSPACE_TEMPLATE change be tested together, this
 module reproduces the ``just minds-start`` debug state ahead of time: it clones
 the *paired* DEFAULT_WORKSPACE_TEMPLATE branch (the default-workspace-template-remote branch whose name matches the current
-mngr branch, else DEFAULT_WORKSPACE_TEMPLATE ``main``) and vendors this mngr checkout's HEAD into the
-tree's ``system/vendor/mngr`` so the workspace container runs the mngr code under test.
+mngr branch, else DEFAULT_WORKSPACE_TEMPLATE ``main``) and vendors the public subset of this
+mngr checkout's HEAD into the tree's ``system/vendor/mngr`` so the workspace container
+runs the mngr code under test, in the same shape a user's workspace gets it.
 
 The materialize step runs where git works -- the CI runner (before the snapshot
 image is staged) or a local machine -- never inside the crippled snapshot
@@ -19,8 +20,8 @@ script can import it on the runner without pulling in the Electron toolchain.
 """
 
 import os
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -135,28 +136,39 @@ def _write_pytest_config_opt_in(settings_path: Path) -> None:
 
 
 def _vendor_mngr_into_default_workspace_template(default_workspace_template_dir: Path) -> None:
-    """Replace ``default_workspace_template_dir/system/vendor/mngr`` with an archive of this mngr checkout's HEAD.
+    """Replace ``default_workspace_template_dir/system/vendor/mngr`` with this checkout's public subset.
 
-    Mirrors ``just sync-vendor-mngr``: ``git archive HEAD`` of the mngr repo into
-    ``system/vendor/mngr`` so the workspace container runs the mngr under test rather
-    than whatever mngr the DEFAULT_WORKSPACE_TEMPLATE ref vendored. Requires the mngr checkout's git to
-    work, so it runs only on the runner / a local machine, never in the sandbox.
+    Mirrors ``just sync-vendor-mngr``: default-workspace-template is a public repo, so
+    it may only ever carry the public subset of mngr -- the tree the Copybara mirror
+    exports -- and testing against anything wider would test a tree no user ever gets.
+    Requires the mngr checkout's git and ``scripts/`` to be present, so it runs only on
+    the runner / a local machine, never in the sandbox.
     """
     vendor = default_workspace_template_dir / "system" / "vendor" / "mngr"
     if not vendor.parent.is_dir():
         raise DefaultWorkspaceTemplateWorktreeError(
             f"DEFAULT_WORKSPACE_TEMPLATE clone at {default_workspace_template_dir} has no system/vendor/ directory to sync mngr into"
         )
-    archive = subprocess.run(
-        ["git", "-C", str(_REPO_ROOT), "archive", "--format=tar", "HEAD"],
+    materializer = _REPO_ROOT / "scripts" / "public_subset.py"
+    if not materializer.is_file():
+        raise DefaultWorkspaceTemplateWorktreeError(
+            f"no {materializer}: this runs only from a full mngr checkout, never from a vendored tree"
+        )
+    subprocess.run(
+        [
+            sys.executable,
+            str(materializer),
+            str(vendor),
+            "--repo-root",
+            str(_REPO_ROOT),
+            "--ref",
+            "HEAD",
+            "--replace",
+            "--quiet",
+        ],
         check=True,
-        stdout=subprocess.PIPE,
         timeout=180,
     )
-    if vendor.exists():
-        shutil.rmtree(vendor)
-    vendor.mkdir(parents=True)
-    subprocess.run(["tar", "-x", "-C", str(vendor)], input=archive.stdout, check=True, timeout=180)
 
 
 def materialize_paired_default_workspace_template_worktree(

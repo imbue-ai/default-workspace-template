@@ -1,3 +1,5 @@
+# Public-mirror variant of the root pyproject: identical to the private one
+# minus coverage flags for packages that do not sync.
 [project]
 name = "imbue"
 version = "0.1.0"
@@ -22,7 +24,7 @@ exclude-newer = "2026-07-20T00:00:00Z"
 # opt-in for Modal's V2 Sandbox backend, so it postdates the global cutoff -- but
 # it has been public well past the 2-week cooldown window. Override just this
 # package rather than advancing the global cutoff, which would adopt every dep's
-# newer releases at once.
+# newer releases at once. Mirrors the same override in the private root pyproject.
 exclude-newer-package = { modal = "2026-08-13T00:00:00Z" }
 
 [tool.uv.sources]
@@ -31,14 +33,6 @@ overlay = { workspace = true }
 
 [tool.uv.workspace]
 members = ["libs/*", "apps/*"]
-# apps/minds_evals is a standalone uv project with its own pyproject.toml and
-# uv.lock, not a workspace member. It depends on harbor, whose rich>=14.1.0
-# floor cannot co-resolve with this workspace's litellm[proxy] (rich<14) -- uv
-# enforces one version per package across a workspace, so the only way harbor
-# gets its declared dependencies is a separate lock. It is built, tested, and
-# type-checked by the `test-minds-evals` CI job (see justfile's test-minds-evals);
-# nothing here installs or collects it.
-exclude = ["apps/minds_evals"]
 
 [dependency-groups]
 dev = [
@@ -56,7 +50,6 @@ dev = [
     "tomlkit>=0.12.0",
     "imbue-common[dev]",
     "shellcheck-py>=0.10.0",
-    "pyyaml>=6.0",
     # In-memory AWS service mocks for unit tests (S3 state-bucket round-trips).
     "moto[s3]>=5.0",
     # Validates the generated /api/schema OpenAPI document in minds tests.
@@ -91,7 +84,6 @@ addopts = [
   "--cov=imbue.resource_guards",
   "--cov=imbue.overlay",
   "--cov=imbue.mngr_claude",
-  "--cov=imbue.mngr_claude_subagent_proxy",
   "--cov=imbue.mngr_opencode",
   "--cov=imbue.mngr_antigravity",
   "--cov=imbue.mngr_codex",
@@ -113,21 +105,10 @@ addopts = [
   "--cov=imbue.mngr_forward",
   "--cov=imbue.mngr_imbue_cloud",
   "--cov=imbue.mngr_lima",
-  "--cov=imbue.mngr_tmr",
-  "--cov=imbue.mngr_mapreduce",
-  "--cov=imbue.mngr_behaviors",
   "--cov=imbue.skitwright",
   "--cov=imbue.minds",
-  "--cov=imbue.minds_admin",
-  "--cov=imbue.slack_exporter",
-  "--cov=imbue.remote_service_connector",
-  "--cov=imbue.oauth_redirector",
-  "--cov=imbue.apt_mirror",
-  "--cov=imbue.share_relay",
-  "--cov=imbue.observability",
   "--cov=imbue.concurrency_group",
   "--cov=imbue.modal_proxy",
-  "--cov=imbue.modal_app_kit",
   "--cov=imbue.mngr_wait",
   "--cov=imbue.mngr_robinhood",
   "--cov=imbue.mngr_vps",
@@ -136,10 +117,6 @@ addopts = [
   "--cov=imbue.mngr_ovh",
   "--cov=imbue.mngr_gcp",
   "--cov=imbue.mngr_azure",
-  "--cov=imbue.analytics",
-  # NOTE: apps/minds_evals is deliberately absent from this list -- it is a
-  # standalone project (see [tool.uv.workspace].exclude) and is excluded from
-  # collection by collect_ignore_glob in the root conftest.py, not from here.
   # NOTE: no --cov-report/--coverage-to-file here. Per-run coverage reports
   # are expensive to generate (they walk every measured file) and are only
   # useful interactively, so the local recipes that want them
@@ -160,9 +137,6 @@ exclude = [
     "**/__snapshots__/**",
     "scripts/style_guide.py",
     "frpc_test",
-    # Vendored upstream bugsink settings template (star-import style is
-    # upstream's; kept byte-similar for the re-diff-on-bump workflow).
-    "apps/observability/imbue/observability/deploy_assets/bugsink_conf.py",
 ]
 
 [tool.ruff.lint]
@@ -200,37 +174,7 @@ default-flags-ide=["report"]
 format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 [tool.ty.src]
-# apps/minds/hatch_build.py imports hatchling, which exists only inside
-# hatchling's isolated build environment, never in the dev venv.
-# apps/minds_evals is a standalone uv project (see [tool.uv.workspace].exclude),
-# so harbor and the project's own package are absent from this venv and its
-# modules are type-checked against their own environment by `test-minds-evals`.
-# The exception is imbue/minds_evals/resources/, which is deliberately NOT
-# excluded here: those files are shipped as source into the eval box and run
-# against the monorepo venv, so this workspace is the environment they actually
-# execute in, and the standalone project (which has no mngr_forward) cannot
-# resolve them. Do NOT collapse the entries below into a plain
-# "apps/minds_evals/": that excludes resources/ too, and since the standalone
-# project excludes it as well, it leaves those files type-checked nowhere
-# (test_meta_ratchets.py probes ty for exactly that). The cost of naming the
-# package's own modules instead is that a new subpackage importing harbor fails
-# here until it is added -- loudly, which is the point.
-exclude = [
-    "scripts/style_guide.py",
-    "contrib/",
-    "apps/minds/scripts/",
-    "apps/minds/hatch_build.py",
-    "apps/minds_evals/*.py",
-    "apps/minds_evals/imbue/minds_evals/*.py",
-    # templates/ run in the verifier container, where rewardkit arrives via uvx;
-    # unresolvable in this venv. The standalone minds_evals project checks them
-    # instead -- it installs harbor-rewardkit as a dev dependency for exactly that.
-    "apps/minds_evals/imbue/minds_evals/templates/",
-    # Vendored upstream bugsink settings template; the bugsink package is
-    # installed only on the error-tracker VPS (never in the dev venv), so its
-    # imports are unresolvable here.
-    "apps/observability/imbue/observability/deploy_assets/bugsink_conf.py",
-]
+exclude = ["scripts/style_guide.py", "contrib/", "apps/minds/scripts/"]
 
 [tool.ty.environment]
 extra-paths = ["scripts"]
@@ -251,9 +195,6 @@ omit = [
     "test_*.py",
     "*/tests/*",
     "*/conftest.py",
-    # Vendored upstream bugsink settings template (a deploy asset shipped to
-    # the error-tracker VPS); never importable in the test process.
-    "*/bugsink_conf.py",
     # Test utility modules contain helpers only used by tests
     "*/testing.py",
     "*/utils/plugin_testing.py",
@@ -266,9 +207,6 @@ omit = [
     "*/imbue_common/sentry/*",
     # Modal provider plugin requires network access for testing
     "libs/mngr_modal/imbue/mngr_modal/*",
-    # Manual frp verification harness (real frps binaries, live sockets); run
-    # by hand on frp version bumps, never in CI
-    "apps/share_relay/imbue/share_relay/frp_verification.py",
     # Docker provider requires a Docker daemon for testing
     "libs/mngr/imbue/mngr/providers/docker/instance.py",
     "libs/mngr/imbue/mngr/providers/docker/volume.py",
@@ -314,36 +252,7 @@ source = [
 root_packages = [
     "imbue.mngr",
     "imbue.minds",
-    "imbue.minds_admin",
     "imbue.mngr_imbue_cloud",
-    "imbue.apt_mirror",
-    "imbue.remote_service_connector",
-]
-include_external_packages = true
-
-# The minds bootstrap layer must be importable before mngr: mngr reads
-# MNGR_HOST_DIR/MNGR_PREFIX and the profile settings.toml during its own
-# module-level initialization, so minds.bootstrap and minds.mngr_settings run
-# first (see imbue/minds/main.py) and must never pull mngr in themselves.
-[[tool.importlinter.contracts]]
-name = "minds bootstrap layer stays mngr-free and import-cheap"
-type = "forbidden"
-source_modules = ["imbue.minds.bootstrap"]
-forbidden_modules = [
-    "imbue.mngr",
-    "imbue.mngr_imbue_cloud",
-    "pydantic",
-    "click",
-]
-
-[[tool.importlinter.contracts]]
-name = "minds mngr_settings stays mngr-free"
-type = "forbidden"
-source_modules = ["imbue.minds.mngr_settings"]
-forbidden_modules = [
-    "imbue.mngr",
-    "imbue.mngr_imbue_cloud",
-    "click",
 ]
 
 [[tool.importlinter.contracts]]
@@ -380,21 +289,6 @@ layers = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "apt_mirror layers contract"
-type = "layers"
-layers = [
-    "imbue.apt_mirror.cli",
-    "imbue.apt_mirror.service",
-    "imbue.apt_mirror.storage",
-    "imbue.apt_mirror.fetcher",
-    "imbue.apt_mirror.interfaces",
-    "imbue.apt_mirror.parsing",
-    "imbue.apt_mirror.package_lists",
-    "imbue.apt_mirror.data_types",
-    "imbue.apt_mirror.errors",
-]
-
-[[tool.importlinter.contracts]]
 name = "mngr_imbue_cloud layers contract"
 type = "layers"
 layers = [
@@ -405,44 +299,7 @@ layers = [
     "imbue.mngr_imbue_cloud.slices",
     "imbue.mngr_imbue_cloud.connector",
     "imbue.mngr_imbue_cloud.config",
-    "imbue.mngr_imbue_cloud.interfaces",
     "imbue.mngr_imbue_cloud.data_types",
     "imbue.mngr_imbue_cloud.errors",
     "imbue.mngr_imbue_cloud.primitives",
-]
-
-[[tool.importlinter.contracts]]
-name = "minds_admin layers contract"
-type = "layers"
-layers = [
-    "imbue.minds_admin.main",
-    "imbue.minds_admin.cli",
-    "imbue.minds_admin.envs",
-    "imbue.minds_admin.bake",
-    "imbue.minds_admin.slices",
-]
-
-# The connector's shipped modules form a DAG: the Modal entrypoint (app) on
-# top of the FastAPI assembly (web), feature routers above the auth /
-# entitlements foundation, everything above errors. app.py itself is
-# excluded from the container's source mount, so nothing below it may import
-# it (also enforced by test_project_ratchets.py).
-[[tool.importlinter.contracts]]
-name = "remote_service_connector layers contract"
-type = "layers"
-exhaustive = false
-layers = [
-    "imbue.remote_service_connector.app",
-    "imbue.remote_service_connector.web",
-    "imbue.remote_service_connector.retention",
-    "imbue.remote_service_connector.accounts",
-    "imbue.remote_service_connector.llm_keys | imbue.remote_service_connector.r2.grants | imbue.remote_service_connector.share_certs | imbue.remote_service_connector.share_broker",
-    "imbue.remote_service_connector.accounts_web",
-    "imbue.remote_service_connector.r2.sweep",
-    "imbue.remote_service_connector.r2.buckets",
-    "imbue.remote_service_connector.hosts | imbue.remote_service_connector.sync | imbue.remote_service_connector.auth_proxy | imbue.remote_service_connector.shares | imbue.remote_service_connector.r2.stores | imbue.remote_service_connector.r2.naming",
-    "imbue.remote_service_connector.entitlements | imbue.remote_service_connector.litellm_client",
-    "imbue.remote_service_connector.auth",
-    "imbue.remote_service_connector.cloudflare | imbue.remote_service_connector.db | imbue.remote_service_connector.http_api",
-    "imbue.remote_service_connector.errors",
 ]

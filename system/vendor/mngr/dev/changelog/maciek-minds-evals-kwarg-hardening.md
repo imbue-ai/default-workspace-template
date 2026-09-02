@@ -1,5 +1,0 @@
-Corrected two claims in `specs/minds-eval-harbor/improvements.md` that recorded eval trials contradict.
-
-Pricing an unproxied default workspace at the standard rate was described as giving half the real figure. Measured, tier-blindness alone gives 68% -- less of an understatement than the 2x rate suggests, because only the chat agent runs fast while its delegates do not. An unproxied trial also cannot see delegated spend, and the two compound to 26% and 32% on the trials that recorded both.
-
-The backlog also said controlling the speed tier was implemented in the per-model override work. It is not, and cannot be from the per-case clone: the workspace template's `first` create template passes `-S agent_types.claude.settings_overrides.fastMode=true` when it creates the starting chat, and a `--setting` outranks any settings file the eval places in the clone. Pinning the tier means creating the graded agent rather than talking to the one the workspace starts. Until then a model arm carries whatever tier its model can serve, so an Opus arm bills at roughly twice a Haiku arm's rate for reasons that are not about the model.

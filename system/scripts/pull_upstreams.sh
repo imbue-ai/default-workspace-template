@@ -119,8 +119,18 @@ if ! git clone --depth 1 --single-branch --branch "$MNGR_BRANCH" "$MNGR_URL" "$T
 fi
 UPSTREAM_SHA="$(git -C "$TMP/repo" rev-parse HEAD)"
 
+# mngr-internal is private and this repo is public, so only mngr's public subset may be
+# vendored. Materialize it from the clone and treat THAT as upstream from here on: a raw
+# rsync would re-add excluded files landing in an already-vendored directory, and would
+# restore the unstripped content of files carrying internal blocks.
+echo "    materializing mngr's public subset..."
+if ! python3 "$TMP/repo/scripts/public_subset.py" "$TMP/subset" --repo-root "$TMP/repo" --ref HEAD --quiet; then
+    echo "    error: could not materialize the public subset of ${MNGR_BRANCH}." >&2
+    exit 1
+fi
+
 git ls-files "$PREFIX" | sed "s|^$PREFIX/||" | sort > "$TMP/vendored.txt"
-( cd "$TMP/repo" && git ls-files ) | sort > "$TMP/upstream.txt"
+( cd "$TMP/subset" && find . \( -type f -o -type l \) | sed 's|^\./||' ) | sort > "$TMP/upstream.txt"
 comm -23 "$TMP/upstream.txt" "$TMP/vendored.txt" > "$TMP/upstream_only.txt"   # new upstream
 comm -13 "$TMP/upstream.txt" "$TMP/vendored.txt" > "$TMP/vendored_only.txt"   # gone upstream -> deleted
 
@@ -146,14 +156,14 @@ done < "$TMP/upstream_only.txt"
 # all-new mtimes don't flag identical files. git ignores mtime, so this changes nothing real.
 RSYNC_FLAGS=(-rlpgoD --checksum --existing --exclude='.git/')
 if [ "$DRY_RUN" -eq 1 ]; then
-    rsync -in "${RSYNC_FLAGS[@]}" "$TMP/repo/" "$PREFIX/" > "$TMP/changes.txt" || true
+    rsync -in "${RSYNC_FLAGS[@]}" "$TMP/subset/" "$PREFIX/" > "$TMP/changes.txt" || true
     if [ -s "$TMP/changes.txt" ]; then
         echo "    would update:"; sed 's/^/      /' "$TMP/changes.txt"
     else
         echo "    (no vendored files differ from ${MNGR_BRANCH})"
     fi
 else
-    rsync "${RSYNC_FLAGS[@]}" "$TMP/repo/" "$PREFIX/"
+    rsync "${RSYNC_FLAGS[@]}" "$TMP/subset/" "$PREFIX/"
     git --no-pager diff --stat -- "$PREFIX" > "$TMP/diffstat.txt" || true
     if [ -s "$TMP/diffstat.txt" ]; then
         echo "    updated (in your working tree, unstaged):"; sed 's/^/      /' "$TMP/diffstat.txt"
@@ -169,7 +179,7 @@ if [ -s "$TMP/to_add.txt" ]; then
     else
         while IFS= read -r rel; do
             mkdir -p "$PREFIX/${rel%/*}"
-            cp -p "$TMP/repo/$rel" "$PREFIX/$rel"
+            cp -p "$TMP/subset/$rel" "$PREFIX/$rel"
         done < "$TMP/to_add.txt"
         git add -- "$PREFIX" >/dev/null 2>&1 || true
         echo "    added -- $(wc -l < "$TMP/to_add.txt") new upstream file(s) in already-vendored directories:"

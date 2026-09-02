@@ -1,8 +1,0 @@
-# Generated harbor task datasets. These default OUTSIDE the repo (see the
-# minds-evals-generate recipe) because each embeds a full mngr-internal clone;
-# this ignore is a safety net for anyone who points --output back in-tree.
-datasets/
-# Local harbor job results (the run recipe points -o here).
-jobs/
-# Per-user local secrets (ANTHROPIC_API_KEY etc.), sourced by dev runs only.
-.env.local
