@@ -62,9 +62,10 @@ def test_built_in_manifest_validates_and_matches_its_program(manifest_path: Path
         match.group(1).strip('"') for source in registration_sources for match in _MANIFEST_FLAG.finditer(source)
     ]
     expected_relative = str(manifest_path.relative_to(_REPO_ROOT))
+    # run_ttyd.sh passes the manifest as "$REPO_ROOT/<relative path>", so an
+    # absolute-looking flag counts when it ends with the repo-relative path.
     assert any(
-        flag == expected_relative or (flag.endswith(f"/{MANIFEST_FILENAME}") and manifest_path.parent.name in flag)
-        for flag in manifest_flags
+        flag == expected_relative or flag.endswith(f"/{expected_relative}") for flag in manifest_flags
     ), f"program {manifest.program!r} does not register with --manifest {expected_relative}: {manifest_flags}"
 
 
