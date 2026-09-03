@@ -160,7 +160,8 @@ def install_dispatch_scripts(paths: TerminalPaths) -> None:
     """Write the three dispatch scripts into the commands directory.
 
     ``agent.sh`` and ``session.sh`` are rewritten on every start so an existing workspace picks
-    up logic changes; ``workdir.sh`` is written only when absent, as it always was.
+    up logic changes; ``workdir.sh`` is written only when absent, so a copy a workspace
+    customised survives a restart.
     """
     paths.commands_dir.mkdir(parents=True, exist_ok=True)
     _write_executable(paths.commands_dir / AGENT_SCRIPT_FILENAME, render_agent_script())
