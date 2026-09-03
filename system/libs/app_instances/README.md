@@ -77,7 +77,8 @@ The shell is the only caller of the API, over loopback, at the registry row's
   app)` is the context manager it serves through (bind, daemon thread, shut
   down on exit), which tests reuse for scratch servers.
 - `app_instances.testing`: `StubInstanceSource` (in-memory, records every
-  call), `RecordingNudger`, `free_port`, `wait_until`, and
+  call), `RecordingNudger`, `free_port`, `wait_until`, `serve_recording_shell()`
+  (a fake shell that records every request and answers `404`), and
   `run_stub_app(port)` for the shell's tests in later phases; as a module it
   serves the stub app (`python -m app_instances.testing stub --port <port>`) or
   runs the sidecar over a JSON store (`... sidecar --manifest ... --app-url ...

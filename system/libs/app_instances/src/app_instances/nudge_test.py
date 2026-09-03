@@ -1,14 +1,13 @@
 import pytest
 from app_manifest.primitives import AppName
 
-from app_instances.conftest import RecordedShellRequests
 from app_instances.nudge import (
     DEFAULT_SHELL_URL,
     ENV_SHELL_URL,
     ShellNudger,
     shell_base_url,
 )
-from app_instances.testing import LOOPBACK_HOST, free_port
+from app_instances.testing import LOOPBACK_HOST, RecordedShellRequests, free_port
 
 
 def test_nudge_posts_the_changed_route_for_the_app_and_tolerates_a_refusing_shell(
