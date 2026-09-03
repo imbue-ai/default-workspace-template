@@ -65,8 +65,10 @@ from `~/.tmux.conf`, which the main create template writes. Its hooks call
 (`hooks.py`) when a client switches sessions or a session is renamed. The route
 maps the client's pty to its tab through `commands/clients/`, re-points the tab
 through the shell's `POST /api/tabs/<tab_id>/instance` (contracts section 5;
-the shell answers 404 until phase 7 of the model), and for a rename nudges the
-shell. Until phase 7 it also forwards each event to the shell's
+the shell answers 404 until phase 7 of the model), and nudges the shell, since
+either event may have changed the instance list (a switch may be the attach
+that created the session; a rename re-keys one). Until phase 7 it also
+forwards each event to the shell's
 `/api/terminals/notify`, with the resolved `terminal_id`, so today's
 `terminal_session` broadcast keeps tab titles live.
 
