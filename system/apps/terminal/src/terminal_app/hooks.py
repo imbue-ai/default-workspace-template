@@ -1,4 +1,5 @@
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
@@ -49,7 +50,7 @@ class HttpShellPoster(ShellPosterInterface):
         frozen=True, description="The shell's base URL, without a trailing slash"
     )
 
-    def post_json(self, path: str, body: dict[str, Any]) -> None:
+    def post_json(self, path: str, body: Mapping[str, Any]) -> None:
         url = f"{self.shell_url}{path}"
         started_at = time.monotonic()
         try:
