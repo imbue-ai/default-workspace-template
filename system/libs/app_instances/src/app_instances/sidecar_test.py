@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 from app_manifest.primitives import AppName, AppUrl, InstancesUrl
-from app_manifest.registry import ENV_APPS_FILE, read_registry
+from app_manifest.registry import read_registry
 
 from app_instances.errors import SidecarError
 from app_instances.sidecar import (
@@ -16,14 +16,12 @@ from app_instances.sidecar import (
 )
 from app_instances.testing import (
     LOOPBACK_HOST,
+    SidecarEnvironment,
     StubInstanceSource,
     free_port,
     is_port_accepting,
     write_sidecar_manifest,
 )
-
-# system/libs/app_instances/src/app_instances/sidecar_test.py -> the repository root.
-_REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 def _unique_app_name() -> AppName:
@@ -133,18 +131,17 @@ def test_run_sidecar_refuses_to_run_off_the_main_thread(tmp_path: Path) -> None:
 
 
 def test_register_app_writes_the_manifest_row_with_its_instances_url(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    sidecar_environment: SidecarEnvironment,
 ) -> None:
-    monkeypatch.chdir(_REPO_ROOT)
-    registry_path = tmp_path / "apps.toml"
-    monkeypatch.setenv(ENV_APPS_FILE, str(registry_path))
     app_name = _unique_app_name()
     instances_url = InstancesUrl("http://127.0.0.1:8301")
-    manifest_path = write_sidecar_manifest(tmp_path, app_name, instances_url)
+    manifest_path = write_sidecar_manifest(
+        sidecar_environment.scratch_dir, app_name, instances_url
+    )
 
     register_app(manifest_path, AppUrl("http://localhost:8300"))
 
-    rows = read_registry(registry_path)
+    rows = read_registry(sidecar_environment.registry_path)
     assert [row.name for row in rows] == [app_name]
     assert rows[0].url == "http://localhost:8300"
     assert rows[0].instances is True
@@ -153,11 +150,9 @@ def test_register_app_writes_the_manifest_row_with_its_instances_url(
 
 
 def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    sidecar_environment: SidecarEnvironment,
 ) -> None:
-    monkeypatch.chdir(_REPO_ROOT)
-    monkeypatch.setenv(ENV_APPS_FILE, str(tmp_path / "apps.toml"))
-    manifest_path = tmp_path / "app.toml"
+    manifest_path = sidecar_environment.scratch_dir / "app.toml"
     manifest_path.write_text('name = "Not A Name"\n')
 
     with pytest.raises(SidecarError, match="invalid app name"):
