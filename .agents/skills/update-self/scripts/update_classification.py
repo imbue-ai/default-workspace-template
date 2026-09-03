@@ -306,9 +306,10 @@ class AppTool(NamedTuple):
     """A Python app under ``system/apps/`` and the uv tool environment it runs from.
 
     ``directory`` is repo-relative; ``tool_name`` is the pyproject's project
-    name (what ``uv tool`` calls the environment); ``executable`` is the console
-    script the app's program runs, which is how the installation actually on
-    PATH is located; ``plugin_key`` is the manifest name the plugin table keys
+    name (what ``uv tool`` calls the environment); ``executable`` is the first
+    console script the pyproject declares, which is how the installation
+    actually on PATH is located (every script of a tool shares its environment,
+    so any one of them resolves it); ``plugin_key`` is the manifest name the plugin table keys
     the app's mngr plugins by (``None`` for an app without a manifest);
     ``is_critical`` is the manifest's ``critical``, which makes the tool
     environment a snapshot-and-rollback target.
