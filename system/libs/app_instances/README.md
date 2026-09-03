@@ -24,7 +24,9 @@ The shell is the only caller of the API, over loopback, at the registry row's
   `400`; `UnknownInstanceError` is `404`; `InstanceConflictError` is `409`;
   `NotReadyError` is `503`; any other library error is `500`. Every error body
   is `{"detail": "<message>"}`. Bodies are read with `force=True`, so a caller
-  need not send a JSON content type.
+  need not send a JSON content type. `build_instances_app(source, nudger)` is a
+  Flask app that serves nothing but the blueprint, which is what the sidecar and
+  the stub app run.
 - `app_instances.interfaces`: `InstanceSourceInterface` (`list_instances`,
   `create_instance(action, params)`, `delete_instance(key)`,
   `rename_instance(key, title)`, `set_location(key, path)`; implementations
@@ -70,7 +72,7 @@ The shell is the only caller of the API, over loopback, at the registry row's
   supervisord runs). The manifest must declare `instances = true` with an
   `instances_url` equal to the one served.
 - `app_instances.testing`: `StubInstanceSource` (in-memory, records every
-  call), `RecordingNudger`, `build_stub_app`, `free_port`, `wait_until`, and
+  call), `RecordingNudger`, `free_port`, `wait_until`, and
   `run_stub_app(port)` for the shell's tests in later phases; as a module it
   serves the stub app (`python -m app_instances.testing stub --port <port>`) or
   runs the sidecar over a JSON store (`... sidecar --manifest ... --app-url ...
