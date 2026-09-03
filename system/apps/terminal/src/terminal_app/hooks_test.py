@@ -39,7 +39,7 @@ def test_resolve_tab_id_finds_the_file_holding_the_pty(
     )
 
 
-def test_session_changed_repoints_the_tab_and_forwards_with_the_resolved_id(
+def test_session_changed_repoints_the_tab_forwards_with_the_resolved_id_and_nudges(
     hook_client: FlaskClient,
     terminal_paths: TerminalPaths,
     recording_shell: RecordedShellRequests,
@@ -75,12 +75,15 @@ def test_session_changed_repoints_the_tab_and_forwards_with_the_resolved_id(
             },
         ),
     ]
-    assert recording_nudger.nudge_count == 0
+    assert recording_nudger.nudge_count == 1
 
 
 @pytest.mark.parametrize("client_tty", ["/dev/pts/9", ""])
-def test_session_changed_from_a_pty_no_tab_recorded_or_from_no_pty_posts_nothing(
-    hook_client: FlaskClient, recording_shell: RecordedShellRequests, client_tty: str
+def test_session_changed_from_a_pty_no_tab_recorded_or_from_no_pty_only_nudges(
+    hook_client: FlaskClient,
+    recording_shell: RecordedShellRequests,
+    recording_nudger: RecordingNudger,
+    client_tty: str,
 ) -> None:
     response = hook_client.post(
         "/tmux-hook",
@@ -94,6 +97,8 @@ def test_session_changed_from_a_pty_no_tab_recorded_or_from_no_pty_posts_nothing
 
     assert response.status_code == 204
     assert recording_shell.requests == []
+    # The switch may still be the attach that created the session, so the list is refetched.
+    assert recording_nudger.nudge_count == 1
 
 
 def test_session_changed_to_a_session_that_cannot_be_a_key_only_forwards(
@@ -165,7 +170,9 @@ def test_session_renamed_repoints_every_attached_tab_forwards_once_and_nudges(
 
 
 def test_hook_rejects_non_loopback_callers_and_malformed_bodies(
-    hook_client: FlaskClient, recording_shell: RecordedShellRequests
+    hook_client: FlaskClient,
+    recording_shell: RecordedShellRequests,
+    recording_nudger: RecordingNudger,
 ) -> None:
     forbidden = hook_client.post(
         "/tmux-hook",
@@ -192,6 +199,7 @@ def test_hook_rejects_non_loopback_callers_and_malformed_bodies(
     assert "kind" in wrong_shape.get_json()["detail"]
 
     assert recording_shell.requests == []
+    assert recording_nudger.nudge_count == 0
 
 
 def test_a_tmux_failure_on_the_hook_route_answers_500_with_a_detail_body(

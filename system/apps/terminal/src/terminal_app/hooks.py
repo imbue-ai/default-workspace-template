@@ -85,8 +85,9 @@ def build_tmux_hook_blueprint(
     """``POST /tmux-hook``, which the tmux hooks call when a client switches sessions or a session is renamed.
 
     A session switch re-points the switching client's tab at the session it now shows; a rename
-    re-points every tab attached to the renamed session, then nudges the shell because the
-    instance list changed (the key is the name).
+    re-points every tab attached to the renamed session. Either way the shell is nudged, because
+    the instance list may have changed: a switch may be the attach that created the session,
+    and a rename re-keys one (the key is the name).
     """
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
@@ -149,7 +150,6 @@ def build_tmux_hook_blueprint(
             if tab_id is not None:
                 rebind_tab(tab_id, event.session_name)
         forward_to_shell(event, None)
-        nudger.nudge()
 
     @blueprint.post(TMUX_HOOK_PATH)
     def receive_tmux_hook() -> ResponseReturnValue:
@@ -165,6 +165,7 @@ def build_tmux_hook_blueprint(
                 handle_session_renamed(event)
             case _ as unreachable:
                 assert_never(unreachable)
+        nudger.nudge()
         return "", HTTP_NO_CONTENT
 
     # The app's errors subclass the library's, so a tmux failure on this route answers the same
