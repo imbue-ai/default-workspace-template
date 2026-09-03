@@ -18,7 +18,9 @@ def test_the_fixed_wiring_agrees_with_the_manifest() -> None:
     assert ttyd_port(APP_URL) == 7681
 
 
-def test_ttyd_port_needs_a_port_in_the_app_url() -> None:
+def test_ttyd_port_needs_a_numeric_port_in_the_app_url() -> None:
     assert ttyd_port(AppUrl("http://localhost:8080")) == 8080
     with pytest.raises(TerminalAppError, match="names no port"):
         ttyd_port(AppUrl("http://localhost"))
+    with pytest.raises(TerminalAppError, match="names no usable port"):
+        ttyd_port(AppUrl("http://localhost:seven"))
