@@ -756,13 +756,16 @@ def parse_apps_registry(toml_text: str) -> list[AppPort]:
             for url_key in ("url", "instances_url"):
                 url = entry.get(url_key, "")
                 match = re.search(r":(\d+)", url)
-                if match is None or (name, int(match.group(1))) in seen:
+                if match is None:
                     continue
-                seen.add((name, int(match.group(1))))
+                port = int(match.group(1))
+                if (name, port) in seen:
+                    continue
+                seen.add((name, port))
                 ports.append(
                     AppPort(
                         name=name,
-                        port=int(match.group(1)),
+                        port=port,
                         url=url,
                         found_in=f"registry [[{key}]] {url_key}",
                     )
