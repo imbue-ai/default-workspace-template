@@ -82,7 +82,7 @@ def _notify_session_changed(client_tty: str) -> None:
 
 def _notify_session_renamed() -> None:
     # Renames are rare and carry no client context, so enumerate every session
-    # and let the frontend match the affected tab by session id.
+    # and let the hook route match the affected tabs by session id.
     output = _run_tmux(["list-sessions", "-F", "#{session_id}\t#{session_name}"])
     if output is None:
         return
