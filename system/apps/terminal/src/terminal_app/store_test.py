@@ -33,22 +33,26 @@ def test_store_starts_empty_and_keeps_records_in_creation_order(
     }
 
 
-def test_save_record_replaces_the_record_with_the_same_name(
+def test_save_record_replaces_the_record_with_the_same_name_in_its_place(
     session_store: JsonTerminalSessionStore,
 ) -> None:
     session_store.save_record(
         make_terminal_record(name="terminal-1", title=None, workdir=None)
     )
     session_store.save_record(
+        make_terminal_record(name="terminal-2", title=None, workdir=None)
+    )
+    session_store.save_record(
         make_terminal_record(name="terminal-1", title="Build", workdir=None)
     )
 
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Build", workdir=None)
+        make_terminal_record(name="terminal-1", title="Build", workdir=None),
+        make_terminal_record(name="terminal-2", title=None, workdir=None),
     ]
 
 
-def test_replace_record_swaps_a_renamed_terminal_in_one_write(
+def test_replace_record_swaps_a_renamed_terminal_in_one_write_keeping_its_place(
     session_store: JsonTerminalSessionStore,
 ) -> None:
     session_store.save_record(
@@ -63,9 +67,9 @@ def test_replace_record_swaps_a_renamed_terminal_in_one_write(
         make_terminal_record(name="build", title="Build", workdir="/srv"),
     )
 
-    assert [record.name for record in session_store.list_records()] == [
-        "terminal-2",
-        "build",
+    assert session_store.list_records() == [
+        make_terminal_record(name="build", title="Build", workdir="/srv"),
+        make_terminal_record(name="terminal-2", title=None, workdir=None),
     ]
 
 
