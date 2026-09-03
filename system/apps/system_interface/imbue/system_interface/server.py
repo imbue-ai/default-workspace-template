@@ -380,9 +380,10 @@ _BROWSER_SERVICE_NAME = "browser"
 _SHELL_SERVICE_NAME = "system_interface"
 
 # The services the stop/start endpoints refuse outright: the shell that serves
-# the UI, and the terminal service whose ttyd carries every terminal tab.
-# Neither registers a ``program`` (see system/supervisord.conf), so this is
-# defense in depth for hand-edited registries. Everything else with a
+# the UI, and the terminal service whose ttyd carries every terminal tab. Both
+# rows carry a ``program`` (their manifests default it to the app name), so
+# this name check is what keeps them un-stoppable until the shell reads the
+# manifest's ``critical`` flag off the row. Everything else with a
 # ``program`` -- the browser fleet daemon included -- is stoppable.
 _ESSENTIAL_SERVICE_NAMES = frozenset({_SHELL_SERVICE_NAME, "terminal"})
 
