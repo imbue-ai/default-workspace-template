@@ -87,6 +87,20 @@ def test_run_sidecar_refuses_a_single_instance_manifest(tmp_path: Path) -> None:
         )
 
 
+def test_run_sidecar_refuses_an_empty_child_command(tmp_path: Path) -> None:
+    instances_url = InstancesUrl("http://127.0.0.1:8301")
+    manifest_path = write_sidecar_manifest(tmp_path, _unique_app_name(), instances_url)
+
+    with pytest.raises(SidecarError, match="no command given"):
+        run_sidecar(
+            manifest_path=manifest_path,
+            app_url=AppUrl("http://localhost:8300"),
+            instances_url=instances_url,
+            child_argv=[],
+            source=StubInstanceSource(),
+        )
+
+
 def test_run_sidecar_releases_its_port_when_registration_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

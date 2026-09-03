@@ -175,6 +175,8 @@ def run_sidecar(
         raise SidecarError(
             "run_sidecar must run on the main thread so it can forward signals"
         )
+    if not child_argv:
+        raise SidecarError("cannot start the wrapped server: no command given")
     manifest = _load_sidecar_manifest(manifest_path, instances_url)
     nudger = ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
     host, port = split_instances_url(instances_url)
