@@ -7,15 +7,18 @@ import pytest
 from app_manifest.primitives import AppName, AppUrl, InstancesUrl
 from app_manifest.registry import read_registry
 
+from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
 from app_instances.sidecar import (
     child_exit_code,
     register_app,
     run_sidecar,
+    serve_in_background,
     split_instances_url,
 )
 from app_instances.testing import (
     LOOPBACK_HOST,
+    RecordingNudger,
     SidecarEnvironment,
     StubInstanceSource,
     free_port,
@@ -157,3 +160,18 @@ def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
 
     with pytest.raises(SidecarError, match="invalid app name"):
         register_app(manifest_path, AppUrl("http://localhost:8300"))
+
+
+def test_serve_in_background_accepts_while_entered_and_releases_the_port_on_exit() -> (
+    None
+):
+    port = free_port()
+    app = build_instances_app(StubInstanceSource(), RecordingNudger())
+
+    with serve_in_background(LOOPBACK_HOST, port, app):
+        assert is_port_accepting(port)
+        with pytest.raises(SidecarError, match="cannot bind"):
+            with serve_in_background(LOOPBACK_HOST, port, app):
+                pass
+
+    assert not is_port_accepting(port)

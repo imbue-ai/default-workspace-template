@@ -1,10 +1,12 @@
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
 from typing import Final
@@ -16,7 +18,7 @@ from flask import Flask
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
 from loguru import logger
-from werkzeug.serving import BaseWSGIServer, make_server
+from werkzeug.serving import LISTEN_QUEUE, BaseWSGIServer, make_server
 
 from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
@@ -111,27 +113,38 @@ def _load_sidecar_manifest(
     return manifest
 
 
-def _start_server(
-    host: str, port: int, app: Flask
-) -> tuple[BaseWSGIServer, threading.Thread]:
-    """Bind the instances API and serve it on a daemon thread; the socket accepts connections once this returns."""
+def _bind_listening_socket(host: str, port: int) -> socket.socket:
+    """A bound, listening TCP socket at ``host:port``; raises SidecarError when the address cannot be bound."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        server = make_server(host, port, app, threaded=True)
+        listener.bind((host, port))
     except OSError as e:
-        raise SidecarError(
-            f"cannot bind the instances API to {host}:{port}: {e}"
-        ) from e
-    server_thread = threading.Thread(
-        target=server.serve_forever, name="instances-api", daemon=True
-    )
-    server_thread.start()
-    return server, server_thread
+        listener.close()
+        raise SidecarError(f"cannot bind {host}:{port}: {e}") from e
+    listener.listen(LISTEN_QUEUE)
+    return listener
 
 
-def _stop_server(server: BaseWSGIServer, server_thread: threading.Thread) -> None:
-    server.shutdown()
-    server.server_close()
-    server_thread.join(timeout=SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+@contextmanager
+def serve_in_background(host: str, port: int, app: Flask) -> Iterator[BaseWSGIServer]:
+    """Serve ``app`` at ``host:port`` on a daemon thread for the block; the socket accepts connections once the block is entered and is closed when it ends."""
+    with log_span("Starting a server at {}:{}", host, port):
+        # The socket is bound here rather than by make_server: werkzeug answers a bind failure
+        # with a message on stderr and sys.exit(1), never an exception. Given a descriptor it
+        # duplicates it and skips its own bind, so this handle can close once the server has its own.
+        with _bind_listening_socket(host, port) as listener:
+            server = make_server(host, port, app, threaded=True, fd=listener.fileno())
+        server_thread = threading.Thread(
+            target=server.serve_forever, name=f"serve-{host}:{port}", daemon=True
+        )
+        server_thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=SERVER_SHUTDOWN_TIMEOUT_SECONDS)
 
 
 def _forward_signals_to(child: subprocess.Popen[bytes]) -> None:
@@ -165,13 +178,7 @@ def run_sidecar(
     manifest = _load_sidecar_manifest(manifest_path, instances_url)
     nudger = ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
     host, port = split_instances_url(instances_url)
-    with log_span(
-        "Starting the instances API of {} at {}", manifest.name, instances_url
-    ):
-        server, server_thread = _start_server(
-            host, port, build_instances_app(source, nudger)
-        )
-    try:
+    with serve_in_background(host, port, build_instances_app(source, nudger)):
         with log_span("Registering {} at {}", manifest.name, app_url):
             register_app(manifest_path, app_url)
         with log_span(
@@ -180,8 +187,6 @@ def run_sidecar(
             child = _spawn_child(child_argv)
         _forward_signals_to(child)
         returncode = child.wait()
-    finally:
-        _stop_server(server, server_thread)
     logger.debug(
         "Wrapped server of {} exited with return code {}", manifest.name, returncode
     )

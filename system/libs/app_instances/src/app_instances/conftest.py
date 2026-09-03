@@ -1,16 +1,15 @@
-import threading
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from flask import Flask, request
 from flask.testing import FlaskClient
-from werkzeug.serving import make_server
 
 from app_instances.blueprint import build_instances_app
 from app_instances.data_types import InstanceLifetime
 from app_instances.json_store import JsonStoreInstanceSource
 from app_instances.primitives import InstanceKeyPrefix, TitleTemplate
+from app_instances.sidecar import serve_in_background
 from app_instances.testing import (
     LOOPBACK_HOST,
     RecordingNudger,
@@ -81,12 +80,5 @@ def recording_shell() -> Iterator[RecordedShellRequests]:
         recorded.requests.append((request.method, request.path))
         return "", 404
 
-    server = make_server(LOOPBACK_HOST, port, app, threaded=True)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    try:
+    with serve_in_background(LOOPBACK_HOST, port, app):
         yield recorded
-    finally:
-        server.shutdown()
-        server.server_close()
-        server_thread.join(timeout=5)

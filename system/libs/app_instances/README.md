@@ -70,7 +70,9 @@ The shell is the only caller of the API, over loopback, at the registry row's
   signal killed it. It must run on the main thread and from the repo root
   (the registration script and the registry are cwd-relative, like everything
   supervisord runs). The manifest must declare `instances = true` with an
-  `instances_url` equal to the one served.
+  `instances_url` equal to the one served. `serve_in_background(host, port,
+  app)` is the context manager it serves through (bind, daemon thread, shut
+  down on exit), which tests reuse for scratch servers.
 - `app_instances.testing`: `StubInstanceSource` (in-memory, records every
   call), `RecordingNudger`, `free_port`, `wait_until`, and
   `run_stub_app(port)` for the shell's tests in later phases; as a module it
