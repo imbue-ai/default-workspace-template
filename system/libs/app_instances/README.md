@@ -62,9 +62,10 @@ The shell is the only caller of the API, over loopback, at the registry row's
   default `http://127.0.0.1:8000`).
 - `app_instances.sidecar`: `run_sidecar(manifest_path, app_url, instances_url,
   child_argv, source)` starts the blueprint at `instances_url` on a daemon
-  thread (werkzeug's threaded server), registers the app through
-  `python3 system/scripts/forward_port.py --manifest <path> --url <app_url>`
-  (after the listener is up, so the shell's first fetch succeeds), spawns the
+  thread (werkzeug's threaded server), registers the app by running
+  `system/scripts/forward_port.py --manifest <path> --url <app_url>` under its
+  own interpreter (after the listener is up, so the shell's first fetch
+  succeeds), spawns the
   child, forwards `SIGTERM` and `SIGINT` to it, and returns the exit status to
   end the program with: the child's code, or 128 plus the signal number when a
   signal killed it. It must run on the main thread and from the repo root
