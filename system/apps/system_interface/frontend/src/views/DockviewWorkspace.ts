@@ -72,7 +72,7 @@ import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
 import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "./components/hoverTooltip";
-import { menuCardClass, menuRowClass } from "./components/menu";
+import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
@@ -652,7 +652,7 @@ function openTabMenuAt(
   for (const entry of entries) {
     if (entry === OBJECT_MENU_DIVIDER) {
       const divider = document.createElement("div");
-      divider.className = "my-1 border-t border-default";
+      divider.className = menuDividerClass();
       element.appendChild(divider);
       continue;
     }

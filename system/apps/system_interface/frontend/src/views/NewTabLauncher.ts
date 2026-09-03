@@ -41,7 +41,7 @@ import { Portal } from "./portal";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
 import { hoverTooltipAttrs } from "./components/hoverTooltip";
-import { menuCardClass, menuRowClass } from "./components/menu";
+import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
 import { icon } from "./components/icons";
 import { buttonClass } from "./components/Button";
 import { SHORTCUT_TOOLTIPS } from "./Sidebar";
@@ -632,7 +632,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       },
       [
         kindsInRows(section.rows).map((kind) => filterMenuRow(section, kind)),
-        m("div", { class: "my-1 border-t border-default" }),
+        m("div", { class: menuDividerClass() }),
         // Muted like a secondary action either way; only clickable (and only
         // wearing the rows' hover) while a filter is actually on.
         m(

@@ -1063,7 +1063,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 6px 2px 0;
+  /* The flyout card pads only vertically, so the field carries its own side inset. */
+  margin: 6px 6px 0;
   padding: 0 8px;
   height: 30px;
   border: 1px solid var(--c-border);

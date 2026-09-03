@@ -146,7 +146,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
   // the name has the full width to be typed in, and so nothing destructive sits under a
   // pointer that is there to click into text.
   if (renaming) {
-    return m("div", { key: row.id, class: css.ROW_WRAP }, renameField(opts));
+    return m("div", { key: row.id, class: css.ROW_RENAME_WRAP }, renameField(opts));
   }
 
   return m("div", { key: row.id, class: css.ROW_WRAP }, [

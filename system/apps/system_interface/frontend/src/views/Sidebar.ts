@@ -52,7 +52,7 @@ import type { UnpinnedShortcutRow } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./components/appIcon";
 import { Button, buttonClass } from "./components/Button";
 import { hoverTooltipAttrs } from "./components/hoverTooltip";
-import { menuCardClass, menuRowClass } from "./components/menu";
+import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
 import type { TooltipPlacement } from "./components/hoverTooltip";
 import { icon } from "./components/icons";
 import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
@@ -1835,7 +1835,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           },
         }),
         menuError === null ? null : m("div", { class: "px-3 py-1 text-[12px] text-danger" }, menuError),
-        m("div", { class: "my-1 border-t border-default" }),
+        m("div", { class: menuDividerClass() }),
         // Everything sits below the divider because it is not one of the
         // projects -- it is the unfiltered view they all live inside -- but it
         // is picked exactly like one, and has a dock of its own.
@@ -1897,7 +1897,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       children: [
         ...entries.map((entry) =>
           entry === OBJECT_MENU_DIVIDER
-            ? m("div", { class: "my-1 border-t border-default" })
+            ? m("div", { class: menuDividerClass() })
             : menuRow({
                 iconMarkup: icon(entry.iconName, { size: ACTION_ICON_SIZE }),
                 label: entry.label,
@@ -1905,7 +1905,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 onclick: () => pick(entry.run),
               }),
         ),
-        ...(shortcutEntries.length === 0 ? [] : [m("div", { class: "my-1 border-t border-default" })]),
+        ...(shortcutEntries.length === 0 ? [] : [m("div", { class: menuDividerClass() })]),
         ...shortcutEntries.map((entry) =>
           menuRow({
             iconMarkup: null,
