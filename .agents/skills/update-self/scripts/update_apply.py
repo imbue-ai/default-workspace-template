@@ -24,7 +24,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Callable, NamedTuple, Sequence
+from typing import Callable, Collection, NamedTuple, Sequence
 
 from update_apply_contract import (
     ENV_DRI_AGENT,
@@ -377,6 +377,31 @@ class RecoveryOutcome(NamedTuple):
 _NOT_RECOVERED = RecoveryOutcome(is_recovered=False, is_frontend_confirmed=False)
 
 
+def _app_tools_to_rebuild(
+    app_tools: Sequence[AppTool], restored: Collection[str], repo_root: Path
+) -> tuple[AppTool, ...]:
+    """The app tools a rollback re-resolves from the restored tree.
+
+    An app tool with no copy to put back (a non-critical app, or a copy that
+    could not be taken) is re-resolved. An app the merge added has no directory
+    in the restored tree to resolve from, so its environment is left as the
+    failed apply built it, with a note saying so.
+    """
+    rebuildable: list[AppTool] = []
+    for app in app_tools:
+        if tool_snapshot_name(app.tool_name) in restored:
+            continue
+        if (repo_root / app.directory / "pyproject.toml").is_file():
+            rebuildable.append(app)
+        else:
+            sys.stderr.write(
+                f"recovery: the app at {app.directory} is not in the restored tree, so "
+                f"its tool environment ('{app.tool_name}') is left as the failed apply "
+                f"built it; `uv tool uninstall {app.tool_name}` removes it.\n"
+            )
+    return tuple(rebuildable)
+
+
 def _recover_running_state(
     plan: ApplyPlan,
     repo_root: Path,
@@ -436,22 +461,7 @@ def _recover_running_state(
             _assert_bundle_built(repo_root, None, live_service_restarted=False)
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(repo_root, runner, keep_protected)
-        # An app tool with no copy to put back (a non-critical app, or a copy
-        # that could not be taken) is re-resolved from the restored tree. An
-        # app the merge added has no directory there to resolve from, so its
-        # environment is left as the failed apply built it.
-        rebuildable_app_tools: list[AppTool] = []
-        for app in plan.app_tools:
-            if tool_snapshot_name(app.tool_name) in restored:
-                continue
-            if (repo_root / app.directory / "pyproject.toml").is_file():
-                rebuildable_app_tools.append(app)
-            else:
-                sys.stderr.write(
-                    f"recovery: the app at {app.directory} is not in the restored tree, so "
-                    f"its tool environment ('{app.tool_name}') is left as the failed apply "
-                    f"built it; `uv tool uninstall {app.tool_name}` removes it.\n"
-                )
+        rebuildable_app_tools = _app_tools_to_rebuild(plan.app_tools, restored, repo_root)
         if rebuildable_app_tools:
             refresh_app_tools(rebuildable_app_tools, repo_root, runner, keep_protected)
         if live_service_restarted:
