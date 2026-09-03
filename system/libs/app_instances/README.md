@@ -96,7 +96,9 @@ The shell is the only caller of the API, over loopback, at the registry row's
   call), `RecordingNudger`, `free_port`, `is_port_accepting`, `wait_until`,
   `write_sidecar_manifest` (a valid multi-instance `app.toml` plus its icon),
   `SidecarEnvironment` (the scratch directory and registry a sidecar test runs
-  against), `serve_recording_shell()` (a fake shell that records every request's
+  against) and `prepare_sidecar_environment(tmp_path, monkeypatch, repo_root)`,
+  which builds one for a fixture (cwd at the repo root, the registry and an
+  unreachable shell in the environment), `serve_recording_shell()` (a fake shell that records every request's
   method, path, and JSON body
   and answers `404`), and `run_stub_app(port)` for the shell's tests in later
   phases; as a module it
