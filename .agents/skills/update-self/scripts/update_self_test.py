@@ -1737,12 +1737,18 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
     unreadable.mkdir()
     (unreadable / "pyproject.toml").write_text("[project\n")
     (unreadable / update_layout.MANIFEST_FILENAME).write_text('name = "unreadable"\n')
+    nameless = repo_root / update_layout.APPS_DIR / "nameless"
+    nameless.mkdir()
+    (nameless / "pyproject.toml").write_text(
+        '[project]\nname = "nameless"\n\n[project.scripts]\nnameless = "nameless.runner:main"\n'
+    )
+    (nameless / update_layout.MANIFEST_FILENAME).write_text('display_name = "Nameless"\n')
 
     tools = update_classification.read_app_tools(repo_root)
 
     assert {app.tool_name for app in tools} == {"system-interface", "browser"}
     err = capsys.readouterr().err
-    assert "broken" in err and "unreadable" in err
+    assert "broken" in err and "unreadable" in err and "nameless" in err
 
 
 @pytest.mark.parametrize(
@@ -4465,7 +4471,7 @@ def test_recovery_rebuilds_only_the_app_tools_with_no_copy_and_a_directory(
     repo_root = _make_apply_repo(tmp_path)
     by_name = {app.tool_name: app for app in update_classification.read_app_tools(repo_root)}
     added = update_classification.AppTool(
-        directory="system/apps/gone", tool_name="gone", executable="gone", plugin_key=None, is_critical=False
+        directory="system/apps/gone", tool_name="gone", executable="gone", plugin_key="gone", is_critical=False
     )
     restored = {update_environment.tool_snapshot_name("system-interface")}
 

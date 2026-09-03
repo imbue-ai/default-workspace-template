@@ -341,12 +341,11 @@ def _tool_extras(
     return extras
 
 
-def _manifest_extras(plugin_key: str | None, repo_root: Path) -> list[str]:
+def _manifest_extras(plugin_key: str, repo_root: Path) -> list[str]:
     """The ``--with-editable`` args ``PLUGIN_MANIFEST_PATH`` assigns to ``plugin_key``.
 
     ``plugin_key`` is how the plugin table names the tool: ``mngr`` for the mngr
-    tool, an app's manifest name for the app's tool, and ``None`` for an app
-    with no manifest (nothing can be assigned to it). Empty for a tree that
+    tool and an app's manifest name for the app's tool. Empty for a tree that
     predates the manifest (a rollback re-refreshes the restored tree, and the
     receipt alone was that tree's whole answer).
 
@@ -358,7 +357,7 @@ def _manifest_extras(plugin_key: str | None, repo_root: Path) -> list[str]:
     unrestored environment and no emergency record.
     """
     manifest_path = repo_root / PLUGIN_MANIFEST_PATH
-    if plugin_key is None or not manifest_path.is_file():
+    if not manifest_path.is_file():
         return []
     try:
         manifest = tomllib.loads(manifest_path.read_text())
@@ -426,7 +425,7 @@ def _reinstall_tool(
     tool_name: str,
     executable: str,
     source_dir: str,
-    plugin_key: str | None,
+    plugin_key: str,
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
