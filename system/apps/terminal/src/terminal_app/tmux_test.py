@@ -42,9 +42,7 @@ def test_parse_tmux_clients_reads_tty_name_and_id_and_skips_a_client_with_no_pty
     ]
 
 
-def test_list_sessions_is_empty_when_no_server_runs(
-    tmp_path, fake_tmux: FakeTmux
-) -> None:
+def test_list_sessions_is_empty_when_no_server_runs(fake_tmux: FakeTmux) -> None:
     (fake_tmux.state_dir / "sessions.tsv").unlink()
 
     assert SubprocessTmux().list_sessions() == []
