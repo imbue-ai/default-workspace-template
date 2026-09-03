@@ -4405,6 +4405,39 @@ def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     assert "could not locate the uv tool environment behind 'system-interface'" in err
 
 
+def test_a_rollback_leaves_the_tool_of_an_app_the_merge_added_alone(
+    apply_repo: Path, capsys
+) -> None:
+    # The plan's apps are read off the merged tree. One the merge added has no
+    # directory once the tree is rolled back, so recovery has nothing to
+    # reinstall it from: it must skip that tool (with a note) rather than run
+    # `uv tool install` against a missing directory and report the otherwise
+    # clean rollback as a failed recovery.
+    _write_app(apply_repo, "newapp", "newapp", "newapp", False)
+    new_app_dir = apply_repo / update_layout.APPS_DIR / "newapp"
+    runner = _apply_runner("A\tsystem/apps/newapp/pyproject.toml\n", apply_repo)
+
+    def remove_on_restore(argv: list[str]) -> None:
+        if argv[:2] == ["git", "rm"] and argv[-1].startswith("system/apps/newapp/"):
+            shutil.rmtree(new_app_dir)
+
+    runner.on_command = remove_on_restore
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    installs = [c for c in runner.calls if c[:3] == ["uv", "tool", "install"]]
+    # The forward install ran (wrapped expendable); recovery did not repeat it.
+    assert [c[4] for c in installs] == ["system/apps/newapp"]
+    assert "system/apps/newapp is not in the restored tree" in capsys.readouterr().err
+
+
 def test_a_rollback_survives_a_plugin_manifest_it_cannot_read(
     apply_repo: Path, capsys
 ) -> None:
