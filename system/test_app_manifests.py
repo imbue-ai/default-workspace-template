@@ -7,8 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
-from app_manifest.manifest import MANIFEST_FILENAME
-from app_manifest.manifest import load_manifest
+from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from oom_priority import bands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
