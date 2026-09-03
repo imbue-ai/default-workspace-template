@@ -107,7 +107,7 @@ def allocate_key(
     return allocated_key(prefix, allocate_instance_number(prefix, taken_keys))
 
 
-def current_utc_time() -> datetime:
+def _current_utc_time() -> datetime:
     return datetime.now(timezone.utc)
 
 
@@ -168,7 +168,7 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
                 title=render_title_template(self.title_template, number),
                 status=InstanceStatus.IDLE,
                 lifetime=self.lifetime,
-                last_active=current_utc_time(),
+                last_active=_current_utc_time(),
                 renameable=self.is_renameable,
             )
             self._write_records(records + (record,))
@@ -207,7 +207,7 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
             record = _find_record(records, key)
             relocated = record.model_copy_update(
                 to_update(record.field_ref().url, InstanceUrl(path)),
-                to_update(record.field_ref().last_active, current_utc_time()),
+                to_update(record.field_ref().last_active, _current_utc_time()),
             )
             self._write_records(_replace_record(records, relocated))
         return relocated
