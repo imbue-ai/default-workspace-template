@@ -391,11 +391,11 @@ _SERVICE_REF_PREFIX = "service:"
 # ``system/scripts/forward_port.py`` owns the app registry at
 # ``data/.state/apps.toml`` -- its lock file and its atomic replace -- so
 # deregistering an app shells out to the script rather than growing a second
-# writer of the same file here. The script imports tomlkit, a workspace-venv
-# dependency that this app does not declare, so it runs under ``uv run`` from
-# the workspace root, exactly as ``.agents/shared/scripts/serve_isolated_instance.py``
-# invokes it. The root is this package's own location walked back out of
-# ``system/apps/system_interface/imbue/system_interface``.
+# writer of the same file here. The script is standard-library only, so it
+# runs under the same plain ``python3`` every supervisord program line and
+# ``.agents/shared/scripts/serve_isolated_instance.py`` invoke it with, from
+# the workspace root. The root is this package's own location walked back out
+# of ``system/apps/system_interface/imbue/system_interface``.
 _FORWARD_PORT_SCRIPT = WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
 
 # Generous: the registration script runs under ``uv run``, which may have to
@@ -2464,7 +2464,7 @@ def _run_forward_port_removal(name: str) -> str | None:
     and report what it said when it refused.
     """
     result = run_local_command_modern_version(
-        command=["uv", "run", "python3", str(_FORWARD_PORT_SCRIPT), "--remove", "--name", name],
+        command=["python3", str(_FORWARD_PORT_SCRIPT), "--remove", "--name", name],
         cwd=WORKSPACE_ROOT_DIRECTORY,
         is_checked=False,
         timeout=_FORWARD_PORT_TIMEOUT_SECONDS,
