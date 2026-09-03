@@ -12,6 +12,7 @@ from app_instances.primitives import (
     InstanceUrl,
     LocationPath,
     TitleTemplate,
+    render_title_template,
 )
 
 
@@ -123,3 +124,10 @@ def test_title_template_requires_the_number_placeholder() -> None:
     assert TitleTemplate("File Viewer {n}") == "File Viewer {n}"
     with pytest.raises(InvalidInstanceValueError, match="must contain"):
         TitleTemplate("File Viewer")
+
+
+def test_render_title_template_fills_in_the_number_as_a_title() -> None:
+    rendered = render_title_template(TitleTemplate("File Viewer {n}"), 12)
+
+    assert rendered == "File Viewer 12"
+    assert isinstance(rendered, InstanceTitle)

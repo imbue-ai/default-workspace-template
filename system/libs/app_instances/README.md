@@ -41,7 +41,8 @@ The shell is the only caller of the API, over loopback, at the registry row's
   `InstanceKeyPrefix`, `InstanceUrl` (rooted with a single slash, at most 2048
   characters, no control characters, `{tab}` at most once), `LocationPath` (the
   same without the placeholder), `InstanceTitle` (non-blank, trimmed, at most
-  256 characters), and `TitleTemplate` (must contain `{n}`).
+  256 characters), `TitleTemplate` (must contain `{n}`), and
+  `render_title_template(template, number)`, which fills the placeholder in.
 - `app_instances.json_store`: `JsonStoreInstanceSource` keeps records in one
   `instances.json` (`{"version": 1, "instances": [record, ...]}`), rewritten
   atomically (temp file plus rename) under a process-wide lock, so the owning
@@ -52,8 +53,9 @@ The shell is the only caller of the API, over loopback, at the registry row's
   `last_active`. `key_prefix`, `title_template`, `lifetime`, `is_renameable`,
   and `is_location_tracked` are constructor fields. `app_store_path(name)` is
   the conventional `data/.apps/<name>/instances.json`; `allocate_key(prefix,
-  taken_keys)` and `instance_number(prefix, key)` are the allocator, for sources
-  that keep their own record of keys.
+  taken_keys)` (or `allocate_instance_number` plus `allocated_key`, when the
+  number itself is wanted) and `instance_number(prefix, key)` are the
+  allocator, for sources that keep their own record of keys.
 - `app_instances.nudge`: `ShellNudger(app_name, shell_url)` posts
   `POST <shell>/api/apps/<name>/changed` with a two-second timeout and logs an
   unreachable or refusing shell at debug level (until phase 7 of the model the

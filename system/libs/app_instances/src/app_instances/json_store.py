@@ -34,6 +34,7 @@ from app_instances.primitives import (
     InstanceUrl,
     LocationPath,
     TitleTemplate,
+    render_title_template,
 )
 
 # Where an app keeps its stored data (the workspace layout described in CLAUDE.md), relative
@@ -76,10 +77,16 @@ def instance_number(prefix: InstanceKeyPrefix, key: str) -> int | None:
 
 
 @pure
-def allocate_key(
+def allocated_key(prefix: InstanceKeyPrefix, number: int) -> InstanceKey:
+    """The key the allocator spells for ``number``: ``<prefix>-<N>``."""
+    return InstanceKey(f"{prefix}-{number}")
+
+
+@pure
+def allocate_instance_number(
     prefix: InstanceKeyPrefix, taken_keys: AbstractSet[str]
-) -> InstanceKey:
-    """Mint the lowest free ``<prefix>-<N>`` (from 1), filling any gap a deletion left."""
+) -> int:
+    """The lowest free ``N`` of ``<prefix>-<N>`` (from 1), filling any gap a deletion left."""
     taken_numbers = {
         number
         for number in (instance_number(prefix, key) for key in taken_keys)
@@ -88,7 +95,15 @@ def allocate_key(
     number = 1
     while number in taken_numbers:
         number += 1
-    return InstanceKey(f"{prefix}-{number}")
+    return number
+
+
+@pure
+def allocate_key(
+    prefix: InstanceKeyPrefix, taken_keys: AbstractSet[str]
+) -> InstanceKey:
+    """Mint the lowest free ``<prefix>-<N>`` (from 1), filling any gap a deletion left."""
+    return allocated_key(prefix, allocate_instance_number(prefix, taken_keys))
 
 
 def current_utc_time() -> datetime:
@@ -139,15 +154,13 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
         path = LocationPath(params.get(PATH_PARAM, DEFAULT_PATH))
         with self._lock:
             records = self._read_records()
-            key = allocate_key(self.key_prefix, {record.key for record in records})
+            number = allocate_instance_number(
+                self.key_prefix, {record.key for record in records}
+            )
             record = InstanceRecord(
-                key=key,
+                key=allocated_key(self.key_prefix, number),
                 url=InstanceUrl(path),
-                title=InstanceTitle(
-                    self.title_template.replace(
-                        "{n}", str(instance_number(self.key_prefix, key))
-                    )
-                ),
+                title=render_title_template(self.title_template, number),
                 status=InstanceStatus.IDLE,
                 lifetime=self.lifetime,
                 last_active=current_utc_time(),
