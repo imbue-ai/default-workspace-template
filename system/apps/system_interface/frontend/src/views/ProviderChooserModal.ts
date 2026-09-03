@@ -33,6 +33,7 @@
 import m from "mithril";
 
 import { icon, loginSpinnerIcon, warningIcon } from "./components/icons";
+import { MODAL_OVERLAY_CLASS } from "./components/Modal";
 import { backdropDismissAttrs } from "./components/modalBackdrop";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
@@ -840,12 +841,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       const size = css.panelSize(screen);
 
       return m(
-        "div.claude-login-overlay",
+        "div",
+        // The standard modal scrim, stacked at --z-overlay like every other dialog.
         // Dismissal keys off mouse DOWN, via the shared helper, because a click fires
         // wherever the press ENDED: selecting the device code or the several-hundred
         // character sign-in URL and releasing past the dialog's edge would otherwise read
         // as "close this" and abort the flow the code was being copied out of.
-        backdropDismissAttrs(onClose),
+        { class: MODAL_OVERLAY_CLASS, ...backdropDismissAttrs(onClose) },
         [
           current !== null && mode === "apiKey" ? keyProviderMenu(current) : null,
           m(

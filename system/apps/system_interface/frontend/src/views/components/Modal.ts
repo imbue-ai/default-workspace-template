@@ -26,7 +26,10 @@ import { TEXT_BODY_SIZE } from "./typography";
  * live in style.css. `.modal-card` also anchors contextual stylesheet rules
  * (the glyph-picker pressed-state feedback). */
 
-const MODAL_OVERLAY_CLASS =
+// Exported for the one dialog that owns its own card DOM (the provider
+// chooser's resizing multi-screen panel) but must still scrim and stack like
+// every other modal.
+export const MODAL_OVERLAY_CLASS =
   "modal-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-black/40 " +
   "animate-[modal-overlay-in_150ms_ease-out]";
 
