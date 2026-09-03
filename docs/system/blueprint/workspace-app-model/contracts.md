@@ -99,13 +99,14 @@ JSON in and out; every error body is `{"detail": "<message>"}`.
 }
 ```
 
-- `url` is a path under the app's origin, starting with `/`, at most 2048 characters.
+- `url` is a path under the app's origin, starting with a single `/` (never `//`, which a browser would read as another host), at most 2048 characters, with no control characters.
   It may contain the literal `{tab}` once; the shell replaces it with the tab id of the tab that opens it.
   Every other character is emitted as the app wrote it.
 - `status` is one of `working`, `idle`, `attention`, `stopped`, `error`.
 - `lifetime` is `explicit` (exists until deleted) or `referenced` (the shell deletes it when no project tab set and no client layout references its address).
 - `last_active` is an RFC 3339 UTC timestamp or `null`.
 - `renameable` says whether `POST /_instances/<key>/rename` is accepted.
+- `title` is non-blank after trimming surrounding whitespace and at most 256 characters; a rename body that breaks this is a bad title.
 
 ### 4.2 Routes
 
@@ -117,8 +118,11 @@ JSON in and out; every error body is `{"detail": "<message>"}`.
 | `POST /_instances/<key>/rename` | `{"title": "<text>"}` | `200 {"instance": record}` | `400` not renameable or bad title, `404` unknown key, `409` title collision |
 | `POST /_instances/<key>/location` | `{"path": "<path>"}` | `200 {"instance": record}` | `400` bad path or the app does not track location, `404` unknown key |
 
-`path` obeys the same rule as `url`, minus the placeholder: rooted, at most 2048 characters.
+`path` obeys the same rule as `url`, minus the placeholder: rooted with a single slash, at most 2048 characters, no control characters.
 An app that accepts a location stores it as the instance's `url` (with the `{tab}` placeholder re-added if the app uses one) and nudges.
+A `<key>` that fails the key rule of section 1 is `400` on every keyed route, `DELETE` included, before the app is consulted; the shell only ever sends keys it listed, so this names a caller bug rather than an absent instance.
+A body that is not a JSON object, or not the route's shape, is `400`; the instances API reads bodies regardless of the request's content type.
+Every mutating route, `DELETE` of an unknown key included, nudges the shell; the shell coalesces, so a spurious nudge costs one refetch at most.
 
 ### 4.3 Per-app behaviour
 

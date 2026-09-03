@@ -1,0 +1,22 @@
+[project]
+name = "app-instances"
+version = "0.1.0"
+description = "The instances API every multi-instance workspace app serves: the Flask blueprint, the JSON store, the nudge to the shell, and the sidecar launcher for wrapped third-party servers"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "app-manifest",
+    "flask>=3.0",
+    "httpx>=0.27",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "werkzeug>=3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app_instances"]

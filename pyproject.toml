@@ -94,6 +94,7 @@ mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
+app-instances = { workspace = true }
 imbue-common = { path = "system/vendor/mngr/libs/imbue_common", editable = true }
 imbue-mngr = { path = "system/vendor/mngr/libs/mngr", editable = true }
 imbue-mngr-claude = { path = "system/vendor/mngr/libs/mngr_claude", editable = true }
