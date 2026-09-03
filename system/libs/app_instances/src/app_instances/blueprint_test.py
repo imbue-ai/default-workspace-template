@@ -31,6 +31,17 @@ def _create(source: StubInstanceSource, path: str) -> InstanceRecord:
     return source.create_instance(ActionId("new"), {"path": path})
 
 
+def test_the_instances_app_serves_only_the_contract_routes() -> None:
+    app = build_instances_app(StubInstanceSource(), RecordingNudger())
+
+    assert {rule.rule for rule in app.url_map.iter_rules()} == {
+        "/_instances",
+        "/_instances/<key>",
+        "/_instances/<key>/rename",
+        "/_instances/<key>/location",
+    }
+
+
 def test_list_answers_every_record_in_the_wire_shape_without_nudging(
     instances_client: FlaskClient,
     stub_source: StubInstanceSource,
