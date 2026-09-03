@@ -96,6 +96,7 @@ def test_program_defaults_to_the_name_but_an_explicit_program_wins() -> None:
         "localhost",
         "auth",
         "a" * 33,
+        "news\n",
     ],
 )
 def test_invalid_names_are_rejected(name: str) -> None:
@@ -156,6 +157,7 @@ def test_icon_must_be_a_relative_svg_path(icon: str) -> None:
         "127.0.0.1:8301",
         "http://127.0.0.1:0",
         "http://127.0.0.1:70000",
+        "http://127.0.0.1:8301\n",
     ],
 )
 def test_instances_url_must_be_a_bare_loopback_origin_with_a_usable_port(
@@ -213,7 +215,7 @@ def test_duplicate_action_ids_are_rejected() -> None:
         )
 
 
-@pytest.mark.parametrize("action_id", ["New", "-new", "", "a" * 33, "new tab"])
+@pytest.mark.parametrize("action_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"])
 def test_action_ids_follow_the_id_rule(action_id: str) -> None:
     with pytest.raises(ValidationError, match="invalid action id"):
         AppManifest.model_validate(

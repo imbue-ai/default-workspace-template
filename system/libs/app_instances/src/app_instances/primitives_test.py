@@ -43,6 +43,7 @@ def test_instance_key_accepts_url_safe_keys(value: str) -> None:
         "slash/x",
         "percent%20",
         "café",
+        "trailing-newline\n",
     ],
 )
 def test_instance_key_rejects_keys_outside_the_rule(value: str) -> None:
@@ -58,7 +59,8 @@ def test_instance_key_prefix_accepts_the_key_alphabet(value: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "value", ["", "-x", "with space", "x" * (MAX_INSTANCE_KEY_PREFIX_LENGTH + 1)]
+    "value",
+    ["", "-x", "with space", "files\n", "x" * (MAX_INSTANCE_KEY_PREFIX_LENGTH + 1)],
 )
 def test_instance_key_prefix_rejects_prefixes_that_cannot_head_a_key(
     value: str,

@@ -63,7 +63,7 @@ class InstanceKey(str):
     """An app-scoped instance identifier: URL-safe, one to 128 characters, fixed for the instance's life."""
 
     def __new__(cls, value: str) -> Self:
-        if not INSTANCE_KEY_PATTERN.match(value):
+        if not INSTANCE_KEY_PATTERN.fullmatch(value):
             raise InvalidInstanceValueError(
                 f"invalid instance key {_preview(value)}: keys match {INSTANCE_KEY_PATTERN.pattern}"
             )
@@ -82,7 +82,7 @@ class InstanceKeyPrefix(str):
     """The prefix of allocated keys (``<prefix>-<N>``): the key alphabet, with room left for the number."""
 
     def __new__(cls, value: str) -> Self:
-        if not INSTANCE_KEY_PREFIX_PATTERN.match(value):
+        if not INSTANCE_KEY_PREFIX_PATTERN.fullmatch(value):
             raise InvalidInstanceValueError(
                 f"invalid key prefix {_preview(value)}: prefixes match {INSTANCE_KEY_PREFIX_PATTERN.pattern}"
             )

@@ -295,7 +295,7 @@ def validate_service_name(name: str) -> str | None:
     bad name fails loudly instead of silently registering an unroutable (or
     unremovable) entry.
     """
-    if not NAME_PATTERN.match(name):
+    if not NAME_PATTERN.fullmatch(name):
         return (
             f"invalid app name {name!r}: names must be lowercase "
             "alphanumeric/underscore runs separated by single hyphens (no "

@@ -530,6 +530,7 @@ def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:
         "",
         "a" * 32,
         "a" * 33,
+        "web\n",
     )
     for name in names:
         is_script_accepted = forward_port.validate_service_name(name) is None
