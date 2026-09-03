@@ -6,7 +6,7 @@ from app_instances.primitives import InstanceTitle
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import AwareDatetime, Field, computed_field
 
-from terminal_app.primitives import TmuxSessionName, Workdir
+from terminal_app.primitives import ClientTty, TmuxSessionName, Workdir
 
 
 class TmuxHookKind(StrEnum):
@@ -44,7 +44,7 @@ class TmuxSession(FrozenModel):
 class TmuxClient(FrozenModel):
     """One client attached to the default tmux server, as ``tmux list-clients`` reports it."""
 
-    client_tty: str = Field(description="The pty the client is attached through")
+    client_tty: ClientTty = Field(description="The pty the client is attached through")
     session_name: str = Field(description="The session the client currently shows")
     session_id: str = Field(description="That session's immutable tmux id")
 

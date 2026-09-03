@@ -15,7 +15,7 @@ from pydantic import Field, ValidationError
 from terminal_app.data_types import TerminalPaths, TmuxHookEvent, TmuxHookKind
 from terminal_app.errors import InvalidTerminalValueError
 from terminal_app.interfaces import ShellPosterInterface, TmuxInterface
-from terminal_app.primitives import TerminalTabId, TmuxSessionName
+from terminal_app.primitives import ClientTty, TerminalTabId, TmuxSessionName
 
 TMUX_HOOK_PATH: Final[str] = "/tmux-hook"
 BLUEPRINT_NAME: Final[str] = "tmux_hooks"
@@ -48,9 +48,11 @@ class HttpShellPoster(ShellPosterInterface):
         post_to_shell(f"{self.shell_url}{path}", body)
 
 
-def resolve_tab_id_for_tty(clients_dir: Path, client_tty: str) -> TerminalTabId | None:
+def resolve_tab_id_for_tty(
+    clients_dir: Path, client_tty: ClientTty
+) -> TerminalTabId | None:
     """The tab whose attach recorded ``client_tty``: the file under ``clients_dir`` holding that pty, named by tab id."""
-    if not client_tty or not clients_dir.is_dir():
+    if not clients_dir.is_dir():
         return None
     for entry in clients_dir.iterdir():
         if not entry.is_file():
@@ -116,7 +118,15 @@ def build_tmux_hook_blueprint(
         )
 
     def handle_session_changed(event: TmuxHookEvent) -> None:
-        tab_id = resolve_tab_id_for_tty(paths.clients_dir, event.client_tty)
+        try:
+            client_tty = ClientTty(event.client_tty)
+        except InvalidTerminalValueError:
+            logger.debug(
+                "Ignored a session switch on {!r}: that is no client pty",
+                event.client_tty,
+            )
+            return
+        tab_id = resolve_tab_id_for_tty(paths.clients_dir, client_tty)
         if tab_id is None:
             # An mngr agent's own client, or a tab that has not recorded its pty: no tab to re-point.
             logger.debug(
