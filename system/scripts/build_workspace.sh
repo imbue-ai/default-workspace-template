@@ -44,13 +44,16 @@ git config --global --add safe.directory "$REPO_ROOT"
 ( cd "$REPO_ROOT/system/apps/system_interface/frontend" && npm run build )
 
 # Install mngr as a tool, then every Python app (each system/apps/<package>/
-# with a pyproject.toml) as its own tool from its own pyproject, so no app runs
-# from the root venv and one app's pins never constrain another's. An app's
+# with both a pyproject.toml and an app.toml manifest) as its own tool from its
+# own pyproject, so no app runs from the root venv and one app's pins never
+# constrain another's. The manifest is the discriminator: an app with a
+# pyproject but no manifest was scaffolded before manifests existed, still runs
+# `uv run <name>` from the root venv, and is left to the migration. An app's
 # tool also gets the mngr plugins system/config/mngr_plugins.toml assigns to
-# its manifest name (system/apps/<package>/app.toml), as editable extras, so it
-# can parse plugin-specific config; the update-self apply reads the same table,
-# so a release adding a plugin registers it in existing workspaces as well as
-# here. mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
+# its manifest name, as editable extras, so it can parse plugin-specific
+# config; the update-self apply reads the same table, so a release adding a
+# plugin registers it in existing workspaces as well as here. mngr_modal is
+# intentionally not registered (providers.modal.is_enabled=false).
 MNGR_PLUGIN_ARGS=()
 while IFS= read -r plugin_path; do
     MNGR_PLUGIN_ARGS+=(--path "$plugin_path")
@@ -59,14 +62,12 @@ done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --
 uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
-    [ -f "$app_dir/pyproject.toml" ] || continue
+    [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
+    app_name="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "$app_dir/app.toml")"
     APP_PLUGIN_ARGS=()
-    if [ -f "$app_dir/app.toml" ]; then
-        app_name="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "$app_dir/app.toml")"
-        while IFS= read -r plugin_path; do
-            APP_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
-        done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
-    fi
+    while IFS= read -r plugin_path; do
+        APP_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
+    done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
     uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
 done
 

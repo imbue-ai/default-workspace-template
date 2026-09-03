@@ -330,7 +330,13 @@ def _warn_app_skipped(directory: Path, why: str) -> None:
 
 
 def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
-    """Every Python app in the tree at ``repo_root``, in directory order.
+    """Every Python app that runs from its own tool in the tree at ``repo_root``, in directory order.
+
+    The manifest is the discriminator: an app with both a ``pyproject.toml``
+    and an ``app.toml`` runs from its own uv tool environment (the build, the
+    scaffold, and this apply all install it that way), while an app scaffolded
+    before manifests existed has no ``app.toml``, still runs ``uv run <name>``
+    from the root venv, and is left alone until the migration rewrites it.
 
     Read off the tree being applied (the merged tree, or the restored one on
     rollback), so an app a release adds is refreshed as it ships. An app whose
@@ -344,7 +350,8 @@ def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
     tools: list[AppTool] = []
     for directory in sorted(apps_dir.iterdir()):
         pyproject_path = directory / "pyproject.toml"
-        if not pyproject_path.is_file():
+        manifest_path = directory / MANIFEST_FILENAME
+        if not pyproject_path.is_file() or not manifest_path.is_file():
             continue
         try:
             pyproject = tomllib.loads(pyproject_path.read_text())
@@ -360,18 +367,14 @@ def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
         if not isinstance(scripts, dict) or not scripts:
             _warn_app_skipped(directory, "its pyproject.toml declares no console script")
             continue
-        plugin_key: str | None = None
-        is_critical = False
-        manifest_path = directory / MANIFEST_FILENAME
-        if manifest_path.is_file():
-            try:
-                manifest = tomllib.loads(manifest_path.read_text())
-            except (OSError, tomllib.TOMLDecodeError) as exc:
-                _warn_app_skipped(directory, f"its {MANIFEST_FILENAME} could not be read: {exc}")
-                continue
-            name = manifest.get("name")
-            plugin_key = name if isinstance(name, str) and name else None
-            is_critical = manifest.get("critical") is True
+        try:
+            manifest = tomllib.loads(manifest_path.read_text())
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            _warn_app_skipped(directory, f"its {MANIFEST_FILENAME} could not be read: {exc}")
+            continue
+        name = manifest.get("name")
+        plugin_key = name if isinstance(name, str) and name else None
+        is_critical = manifest.get("critical") is True
         tools.append(
             AppTool(
                 directory=f"{APPS_DIR}/{directory.name}",

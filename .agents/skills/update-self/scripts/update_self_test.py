@@ -1709,14 +1709,34 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
     assert "terminal" not in {app.directory.rsplit("/", 1)[1] for app in _APP_TOOLS}
 
 
+def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(tmp_path: Path, capsys) -> None:
+    # An app scaffolded before manifests existed has a pyproject but no
+    # app.toml; it still runs `uv run <name>` from the root venv, so the apply
+    # must neither install nor reinstall a tool for it (that is the
+    # migration's job), and its absence is expected rather than a note.
+    repo_root = _make_apply_repo(tmp_path)
+    legacy = repo_root / update_layout.APPS_DIR / "legacy_dashboard"
+    legacy.mkdir()
+    (legacy / "pyproject.toml").write_text(
+        '[project]\nname = "legacy-dashboard"\n\n[project.scripts]\nlegacy-dashboard = "legacy_dashboard.runner:main"\n'
+    )
+
+    tools = update_classification.read_app_tools(repo_root)
+
+    assert {app.tool_name for app in tools} == {"system-interface", "browser"}
+    assert "legacy" not in capsys.readouterr().err
+
+
 def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) -> None:
     repo_root = _make_apply_repo(tmp_path)
     broken = repo_root / update_layout.APPS_DIR / "broken"
     broken.mkdir()
     (broken / "pyproject.toml").write_text('[project]\nname = "broken"\n')  # no console script
+    (broken / update_layout.MANIFEST_FILENAME).write_text('name = "broken"\n')
     unreadable = repo_root / update_layout.APPS_DIR / "unreadable"
     unreadable.mkdir()
     (unreadable / "pyproject.toml").write_text("[project\n")
+    (unreadable / update_layout.MANIFEST_FILENAME).write_text('name = "unreadable"\n')
 
     tools = update_classification.read_app_tools(repo_root)
 
