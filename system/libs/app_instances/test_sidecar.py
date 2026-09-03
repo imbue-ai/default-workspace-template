@@ -18,7 +18,7 @@ from app_instances.testing import (
     wait_until,
     write_sidecar_manifest,
 )
-from app_manifest.primitives import AppName, InstancesUrl
+from app_manifest.primitives import AppName, AppUrl, InstancesUrl
 from app_manifest.registry import read_registry
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import Field
@@ -36,7 +36,7 @@ class _SidecarUnderTest(FrozenModel):
     )
     instances_port: int = Field(description="The port the instances API is served on")
     instances_url: InstancesUrl = Field(description="Where the instances API is served")
-    app_url: str = Field(description="The URL the app is registered at")
+    app_url: AppUrl = Field(description="The URL the app is registered at")
     registry_path: Path = Field(description="The apps.toml the registration lands in")
     store_path: Path = Field(
         description="The JSON store the sidecar keeps instances in"
@@ -53,7 +53,7 @@ def _prepare_sidecar(
     child_port = free_port()
     instances_port = free_port()
     instances_url = InstancesUrl(f"http://{LOOPBACK_HOST}:{instances_port}")
-    app_url = f"http://localhost:{child_port}"
+    app_url = AppUrl(f"http://localhost:{child_port}")
     store_path = environment.scratch_dir / "instances.json"
     manifest_path = write_sidecar_manifest(
         environment.scratch_dir, app_name, instances_url
