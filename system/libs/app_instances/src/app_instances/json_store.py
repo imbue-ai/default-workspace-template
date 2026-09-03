@@ -71,7 +71,7 @@ def app_store_path(app_name: AppName) -> Path:
 @pure
 def instance_number(prefix: InstanceKeyPrefix, key: str) -> int | None:
     """The ``N`` of an allocated ``<prefix>-<N>`` key, or None for a key the allocator did not mint."""
-    match = _KEY_NUMBER_PATTERN.match(key)
+    match = _KEY_NUMBER_PATTERN.fullmatch(key)
     if match is None or match.group("prefix") != prefix:
         return None
     return int(match.group("number"))

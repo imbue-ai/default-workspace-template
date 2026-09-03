@@ -38,7 +38,7 @@ ICON_SUFFIX: Final[str] = ".svg"
 @pure
 def describe_app_name_problem(name: str) -> str | None:
     """Return why ``name`` cannot be an app name, or None when it can."""
-    if not APP_NAME_PATTERN.match(name):
+    if not APP_NAME_PATTERN.fullmatch(name):
         return (
             f"invalid app name {name!r}: names must be lowercase alphanumeric/underscore runs "
             "separated by single hyphens"
@@ -96,7 +96,7 @@ class ActionId(str):
     """The id of an action an app declares: lowercase, starts alphanumeric, at most 32 characters."""
 
     def __new__(cls, value: str) -> Self:
-        if not ACTION_ID_PATTERN.match(value):
+        if not ACTION_ID_PATTERN.fullmatch(value):
             raise InvalidManifestValueError(
                 f"invalid action id {value!r}: ids match ^[a-z0-9][a-z0-9-]{{0,31}}$ (lowercase, no leading hyphen)"
             )
@@ -115,7 +115,7 @@ class InstancesUrl(str):
     """Where the shell reaches an app's instances API: a loopback origin with a port."""
 
     def __new__(cls, value: str) -> Self:
-        match = INSTANCES_URL_PATTERN.match(value)
+        match = INSTANCES_URL_PATTERN.fullmatch(value)
         if match is None:
             raise InvalidManifestValueError(
                 f"invalid instances_url {value!r}: expected http://127.0.0.1:<port> or http://localhost:<port>"
@@ -139,7 +139,7 @@ class PriorityName(str):
     """A memory-shedding band name: a key of ``oom_priority.bands.SERVICE_BANDS`` (``user`` by default)."""
 
     def __new__(cls, value: str) -> Self:
-        if not PRIORITY_NAME_PATTERN.match(value):
+        if not PRIORITY_NAME_PATTERN.fullmatch(value):
             raise InvalidManifestValueError(
                 f"invalid priority {value!r}: expected a band name such as 'user'"
             )
