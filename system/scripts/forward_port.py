@@ -657,10 +657,9 @@ def main() -> None:
         name = str(manifest_fields["name"])
     else:
         name = args.name
-
-    name_error = validate_service_name(name)
-    if name_error is not None:
-        parser.error(name_error)
+        name_error = validate_service_name(name)
+        if name_error is not None:
+            parser.error(name_error)
 
     icon: str | None = None
     icon_error: str | None = None
