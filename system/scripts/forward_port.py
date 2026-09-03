@@ -169,6 +169,18 @@ _TOML_SHORT_ESCAPES = {
 }
 
 
+class RegistryError(Exception):
+    """Base error for the registry this script maintains."""
+
+
+class UnsupportedRegistryValueError(RegistryError, TypeError):
+    """A value the registry's flat ``[[apps]]`` shape cannot hold."""
+
+
+class MalformedRegistryError(RegistryError, ValueError):
+    """A registry file whose top-level shape is not ``[[apps]]`` tables."""
+
+
 def _local_name(tag: str) -> str:
     """Strip ElementTree's ``{namespace}`` prefix from a tag or attribute name."""
     if tag.startswith("{"):
@@ -338,7 +350,9 @@ def _toml_scalar(value: object) -> str:
         return "true" if value else "false"
     if isinstance(value, str):
         return _toml_string(value)
-    raise TypeError(f"the registry cannot hold a value of type {type(value).__name__}: {value!r}")
+    raise UnsupportedRegistryValueError(
+        f"the registry cannot hold a value of type {type(value).__name__}: {value!r}"
+    )
 
 
 def _toml_value(value: object) -> str:
@@ -373,7 +387,7 @@ def _load_apps(path: Path) -> list[dict[str, object]]:
         doc = tomllib.load(f)
     apps = doc.get("apps", [])
     if not isinstance(apps, list):
-        raise ValueError(f"registry {path} has an 'apps' key that is not an array of tables")
+        raise MalformedRegistryError(f"registry {path} has an 'apps' key that is not an array of tables")
     return [dict(app) for app in apps]
 
 
