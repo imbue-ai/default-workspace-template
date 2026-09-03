@@ -37,13 +37,13 @@ class TerminalSessionStoreInterface(MutableModel, ABC):
 
     @abstractmethod
     def save_record(self, record: TerminalSessionRecord) -> None:
-        """Remember a terminal, replacing any record with the same name."""
+        """Remember a terminal, replacing any record with the same name in its place."""
 
     @abstractmethod
     def replace_record(
         self, name: TmuxSessionName, record: TerminalSessionRecord
     ) -> None:
-        """Forget ``name`` and remember ``record`` in one write (a rename)."""
+        """Swap ``record`` in for ``name`` in one write, keeping its place in the order (a rename)."""
 
     @abstractmethod
     def remove_record(self, name: TmuxSessionName) -> None:

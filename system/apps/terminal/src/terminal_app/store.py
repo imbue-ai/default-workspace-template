@@ -4,6 +4,7 @@ from typing import Final
 
 from app_instances.errors import InstanceStoreError
 from app_instances.json_store import read_json_document, write_json_document
+from imbue.imbue_common.pure import pure
 from pydantic import Field, PrivateAttr
 
 from terminal_app.data_types import TerminalSessionRecord, TerminalStoreDocument
@@ -28,22 +29,13 @@ class JsonTerminalSessionStore(TerminalSessionStoreInterface):
             return list(self._read())
 
     def save_record(self, record: TerminalSessionRecord) -> None:
-        with self._lock:
-            others = tuple(
-                existing for existing in self._read() if existing.name != record.name
-            )
-            self._write(others + (record,))
+        self.replace_record(record.name, record)
 
     def replace_record(
         self, name: TmuxSessionName, record: TerminalSessionRecord
     ) -> None:
         with self._lock:
-            others = tuple(
-                existing
-                for existing in self._read()
-                if existing.name not in (name, record.name)
-            )
-            self._write(others + (record,))
+            self._write(_with_record(self._read(), name, record))
 
     def remove_record(self, name: TmuxSessionName) -> None:
         with self._lock:
@@ -67,3 +59,29 @@ class JsonTerminalSessionStore(TerminalSessionStoreInterface):
             self.store_path,
             TerminalStoreDocument(version=STORE_VERSION, sessions=records),
         )
+
+
+@pure
+def _with_record(
+    records: tuple[TerminalSessionRecord, ...],
+    name: TmuxSessionName,
+    record: TerminalSessionRecord,
+) -> tuple[TerminalSessionRecord, ...]:
+    """``records`` with the one named ``name`` replaced in place by ``record`` (appended when there is none).
+
+    Any other record already holding ``record.name`` is dropped; the source refuses such a
+    rename before it reaches the store.
+    """
+    updated: list[TerminalSessionRecord] = []
+    is_replaced = False
+    for existing in records:
+        if existing.name == name:
+            updated.append(record)
+            is_replaced = True
+        elif existing.name == record.name:
+            continue
+        else:
+            updated.append(existing)
+    if not is_replaced:
+        updated.append(record)
+    return tuple(updated)
