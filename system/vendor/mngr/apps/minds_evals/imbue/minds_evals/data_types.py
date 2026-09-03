@@ -480,15 +480,174 @@ class EntryRecord(FrozenModel):
     detail: str = Field(default="", description="The source's reason for stopping; empty when it gave none")
 
 
+# What a step name may be: it names a task subdirectory, a harbor step, and a verifier container
+# session, so it is restricted to what all three accept.
+STEP_NAME_PATTERN: Final[str] = r"^[a-z0-9][a-z0-9-]*$"
+
+# What an upload id may be: it names a directory under the workspace's data/uploads/ and a directory
+# in the box, and it is quoted into prompts as a path, so it stays to path-safe characters. Minds
+# mints these as bare hex, but an author-written id may be readable as long as it is a plain name.
+UPLOAD_ID_PATTERN: Final[str] = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
+# Where a Minds workspace keeps the files its user uploaded. The template ignores this tree, so a
+# step's files land untracked, exactly as a real upload does.
+WORKSPACE_UPLOADS_DIR: Final[str] = "/home/user/workspace/data/uploads"
+
+# Where a step's uploads wait in the box between harbor putting them there and the driver copying
+# them into the workspace. Deliberately outside the box's working directory, which is the mngr
+# checkout the workspace's vendored copy is taken from and must stay exactly what the image shipped.
+BOX_STEP_FILES_DIR: Final[str] = "/work/step_files"
+
+
+# The eval-config key that selects a stepped case's reward strategy, named so the parser and its
+# error messages cannot drift from each other.
+REWARD_STRATEGY_KEY: Final[str] = "reward_strategy"
+
+
+class RewardStrategy(LowerCaseStrEnum):
+    """How a stepped case's trial reward is derived from its per-step rewards.
+
+    Spelled exactly as harbor's own `multi_step_reward_strategy`, which this is rendered into.
+    FINAL scores the trial by the last step that ran, which after an abort is the step that failed;
+    MEAN averages every step that produced a reward. Both are legitimate because every step is
+    graded by the same verifier on the same scale.
+    """
+
+    FINAL = auto()
+    MEAN = auto()
+
+
+class StepFile(FrozenModel):
+    """One upload a step introduces into the workspace, exactly as the eval author wrote it."""
+
+    source: str = Field(description="File or directory to ship, relative to the eval config file")
+    upload_id: str = Field(description="The directory name it appears under in the workspace's data/uploads/")
+
+
+class StepBoxFile(FrozenModel):
+    """Where one step's upload waits in the box, and the id it takes in the workspace.
+
+    Harbor puts a step's workdir into the box before the step runs, so by the time the driver reads
+    this the files are already there; all the driver does is copy them into the running workspace.
+    """
+
+    upload_id: str = Field(description="The directory name it takes under the workspace's data/uploads/")
+    box_path: str = Field(description="The box directory holding this upload's contents")
+
+
+class RewardDimension(LowerCaseStrEnum):
+    """A key of the verifier's reward.json that a step's `min_reward` may gate on.
+
+    GATES, QUALITY and OUTCOME are the dimensions rewardkit scores; REWARD is the composed, gated
+    score finalize.py writes, and is what harbor compares a bare numeric `min_reward` against.
+    """
+
+    GATES = auto()
+    QUALITY = auto()
+    OUTCOME = auto()
+    REWARD = auto()
+
+
+class RewardFloor(FrozenModel):
+    """One dimension's threshold within a step's `min_reward` mapping."""
+
+    dimension: RewardDimension = Field(description="Which reward.json key this threshold applies to")
+    floor: float = Field(description="The value that key must reach for the trial to go on")
+
+
+class ComposedRewardFloor(FrozenModel):
+    """A step's `min_reward` authored as a bare number: a floor on the composed `reward` key."""
+
+    floor: float = Field(description="The value the composed reward must reach for the trial to go on")
+
+
+class PerDimensionRewardFloors(FrozenModel):
+    """A step's `min_reward` authored as a mapping: one floor per named reward dimension.
+
+    A dimension the mapping leaves out is not gated at all, since harbor reads a missing key as
+    -inf. At least one floor is required: an empty mapping renders as `min_reward = { }`, which
+    harbor reads as a gate that can never fail, so the step would declare a threshold it does not
+    have and the trial would run to the end looking fine.
+    """
+
+    floors: tuple[RewardFloor, ...] = Field(
+        min_length=1, description="The per-dimension floors, in the order the config named them"
+    )
+
+
+# The reward a step must reach for the trial to continue, in the two forms harbor accepts. They are
+# separate types rather than one model with two optional fields so that "exactly one of them" is a
+# property of the type: neither and both are the shapes that render TOML saying something the eval
+# config did not.
+StepMinReward = ComposedRewardFloor | PerDimensionRewardFloors
+
+
+class CaseStep(FrozenModel):
+    """One named stretch of a stepped case: its own turns, the uploads it introduces, what it is
+    graded against, and the reward it must reach for the trial to go on."""
+
+    name: str = Field(description="Stable step name; names the step directory and the harbor step")
+    prompts: tuple[PromptEntry, ...] = Field(description="One entry per turn, exactly as a flat case's prompts")
+    files: tuple[StepFile, ...] = Field(description="What the client 'uploaded' for this step")
+    expectations: Expectations | None = Field(
+        description="What this step is graded against; None grades it on gates and quality alone"
+    )
+    min_reward: StepMinReward | None = Field(
+        description="The reward floor below which harbor aborts the remaining steps; None never aborts"
+    )
+
+
+class StepPosition(FrozenModel):
+    """Where one instruction sits in its multi-step task.
+
+    Carried in the per-step case config because a harbor agent is invoked once per step with only
+    that step's instruction, and the driver has to know which invocation is the last one: the
+    evidence phase runs at the end of every step, but the workspace may only be destroyed once no
+    later step can still use it.
+    """
+
+    name: str = Field(description="The step's name")
+    index: int = Field(description="The step's 0-based position in the task's step list")
+    total: int = Field(description="How many steps the task declares")
+    # `timeout_seconds` on the config beside this one is only THIS step's share. Anything that has to
+    # outlive the step it was started in -- the reverse tunnel the workspace reaches the proxy on --
+    # must be sized against this instead, or it closes under a later step. It is not the sum of the
+    # steps' conversation shares: between two conversations the trial also spends a step's evidence
+    # phase, its cleanup grace and its verifier container, and the tunnel has to span all of that.
+    trial_lifetime_seconds: float = Field(
+        description="How long something started on the first step must live to still serve the last"
+    )
+    # The conversation and its per-entry records are cumulative, while the config beside this one
+    # holds only this step's turns, so the structural gates need this to know how many entries the
+    # trial owes by the end of this step.
+    entries_before: int = Field(description="How many prompts entries the earlier steps configured")
+    files: tuple[StepBoxFile, ...] = Field(description="This step's uploads, and where the box holds them")
+
+
+@pure
+def is_final_step(step: StepPosition | None) -> bool:
+    """Whether this instruction is the last one the trial will run. A case with no steps is a
+    single-step task, whose one run() is by definition the last."""
+    return step is None or step.index == step.total - 1
+
+
 class PersonaCase(FrozenModel):
     """One persona case from an eval config: an id, an optional persona, and its prompts entries."""
 
     case_id: str = Field(description="Stable case id; names the task directory and the trial")
     persona: str = Field(description="Client persona role-played on DECIDE_FROM_PERSONA turns (may be empty)")
+    # The flat view of the whole case, whether or not it declares steps: the oracle, the timeout
+    # warning, and the verifier's structural gates all reason about the case's turns as one list.
     prompts: tuple[PromptEntry, ...] = Field(
         description="The conversation's entries in order: a literal message, the sentinel, or a goal"
     )
+    steps: tuple[CaseStep, ...] | None = Field(
+        description="The named steps whose prompts `prompts` flattens; None for a single-step case"
+    )
+    # None for a stepped case, where every step states its own instead, so that a reader of a step's
+    # instruction sees exactly what that step is graded on.
     expectations: Expectations | None = Field(description="What the delivered artifact must be, if the case says")
+    reward_strategy: RewardStrategy = Field(description="How a stepped case's per-step rewards become the trial's")
 
 
 class EvalConfig(FrozenModel):
@@ -521,6 +680,18 @@ class CaseConfig(FrozenModel):
     # along so a reader of instruction.md or case.json can see what the config actually said.
     expectations: ExpandedExpectations | None = Field(description="The expanded expectations, if the case has any")
     authored_expectations: Expectations | None = Field(description="The expectations exactly as authored")
+    # None in the task-level tests/case.json (which describes the whole case) and in every
+    # single-step task; set only in a step's own instruction, where `prompts` holds that step's turns
+    # rather than the case's.
+    step: StepPosition | None = Field(description="Which step of a multi-step task this config drives")
+
+
+@pure
+def cross_step_lifetime_seconds(case: CaseConfig) -> float:
+    """How long something started on the first step must live to still serve the last one, whichever
+    step's config is in hand. A single-step case's is just its conversation budget, since nothing
+    outlives the one run() call."""
+    return case.timeout_seconds if case.step is None else case.step.trial_lifetime_seconds
 
 
 class Transcript(FrozenModel):

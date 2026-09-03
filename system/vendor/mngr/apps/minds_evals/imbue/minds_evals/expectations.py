@@ -214,18 +214,13 @@ def parse_expectations(raw_entry: object, case_id: str) -> Expectations:
         raise EvalConfigError(
             "case {!r}: expectations needs a non-empty 'outcome' (the prose the judge grades against)".format(case_id)
         )
+    # A block with no deliverable commissions nothing probeable, so its outcome dimension holds
+    # nothing but the judge and is graded from the conversation and the always-on capture alone.
+    # That composition is deliberately different from a deliverable case's even split between the
+    # judge and the programmatic checks, so the two are not comparable score for score; it is the
+    # shape a stepped case's early phases need, where the exit criterion is what the client and the
+    # agent agreed on rather than what is running.
     raw_deliverable = raw.get("deliverable")
-    if raw_deliverable is None:
-        # An expectations block with no deliverable expands to zero check classes, so its outcome
-        # dimension would hold nothing but the judge: rewardkit pools programmatic criteria into a
-        # reward only when some exist, so the judge would silently carry the entire dimension rather
-        # than the half it carries everywhere else, and this case's reward would not be comparable
-        # with any other's. Rejected until a degenerate composition is deliberately specified.
-        raise EvalConfigError(
-            "case {!r}: expectations needs a 'deliverable' -- with none, nothing is checked "
-            "programmatically and the outcome score would be the judge alone, which is not "
-            "comparable with cases that carry checks".format(case_id)
-        )
     raw_flows = _require_sequence(raw.get("ui_flows") or [], case_id, "expectations.ui_flows")
     raw_commands = _require_sequence(raw.get("test_commands") or [], case_id, "expectations.test_commands")
     test_commands = tuple(str(command).strip() for command in raw_commands)
@@ -255,7 +250,7 @@ def parse_expectations(raw_entry: object, case_id: str) -> Expectations:
         )
     return Expectations(
         outcome=outcome,
-        deliverable=_parse_deliverable(raw_deliverable, case_id),
+        deliverable=_parse_deliverable(raw_deliverable, case_id) if raw_deliverable is not None else None,
         ui_flows=ui_flows,
         test_commands=test_commands,
         is_fresh_env_enabled=raw_fresh_env,
@@ -336,17 +331,22 @@ def _expand_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
 
 @pure
 def expand_expectations(expectations: Expectations) -> ExpandedExpectations:
-    """Expand `deliverable.kind` into the explicit per-class check list both consumers act on."""
-    # Guaranteed by parse_expectations, which rejects a block that would expand to no checks at all.
-    assert expectations.deliverable is not None, "expectations must commission a deliverable"
-    app_checks, http_checks, files_checks = _expand_deliverable(expectations.deliverable)
+    """Expand `deliverable.kind` into the explicit per-class check list both consumers act on.
+
+    Expectations that commission nothing expand to no checks and no bundle: there is no artifact to
+    probe or to capture, so the collector records only its always-on capture and the outcome judge
+    grades the prose against the conversation.
+    """
+    app_checks, http_checks, files_checks = (
+        _expand_deliverable(expectations.deliverable) if expectations.deliverable is not None else ((), (), ())
+    )
     return ExpandedExpectations(
         outcome=expectations.outcome,
         app_checks=app_checks,
         http_checks=http_checks,
         files_checks=files_checks,
         test_commands=expectations.test_commands,
-        is_deliverable_bundle_required=True,
+        is_deliverable_bundle_required=expectations.deliverable is not None,
         ui_flow_checks=_expand_ui_flows(expectations.ui_flows),
         is_fresh_env_enabled=expectations.is_fresh_env_enabled,
     )

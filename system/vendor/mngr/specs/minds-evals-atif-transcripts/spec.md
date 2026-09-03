@@ -12,7 +12,7 @@ Related:
 
 - [`../atif-transcript-alignment/spec.md`](../atif-transcript-alignment/spec.md): the stream format, the doc-builder, and `mngr transcript --format atif`.
 - `apps/minds_evals/README.md`: user-facing description of the trial artifacts and the evidence bundle.
-- `apps/minds_evals/imbue/minds_evals/driver.py`, `evidence_collection.py`, `trajectory.py`, `generate.py`, and the verifier scripts under `templates/tests/`.
+- `apps/minds_evals/imbue/minds_evals/driver.py`, `evidence_collection.py`, `trajectory.py`, `generate.py`, and the verifier scripts under `templates/tests/verifier/`.
 
 ## Contents
 
@@ -77,9 +77,9 @@ A verifier that reads anything else cannot be shared with them.
 | `driver._new_agent_reply_texts` (reply detection) | the in-memory events the driver polled | agent reply texts after the send-time baseline |
 | `usage.summarize_workspace_usage` | the in-memory events the driver polled | per-message model and tokens |
 | word-count metadata (`average_words_per_turn`, `average_words_per_message`) | the reply texts the driver polled | per-message and per-turn word counts |
-| `templates/tests/render_judge_transcript.py` (verifier) | `/logs/agent/trajectory.json` | one `[USER]` block per `user` step, one `[AGENT · message N]` block per `agent` step with a non-empty `message` |
-| `templates/tests/gates/checks.py` (verifier) | `trajectory.json`, `state.json` | at least one non-empty agent message after the first `user` step; distinct, non-stub agent messages; the turn and timeout state |
-| `templates/tests/quality/wordiness.py` (verifier) | `trajectory.json` | words per agent turn, one turn being the agent messages between consecutive `user` steps (nothing before the first) |
+| `templates/tests/verifier/render_judge_transcript.py` (verifier) | `/logs/agent/trajectory.json` | one `[USER]` block per `user` step, one `[AGENT · message N]` block per `agent` step with a non-empty `message` |
+| `templates/tests/verifier/gates/checks.py` (verifier) | `trajectory.json`, `state.json` | at least one non-empty agent message after the first `user` step; distinct, non-stub agent messages; the turn and timeout state |
+| `templates/tests/verifier/quality/wordiness.py` (verifier) | `trajectory.json` | words per agent turn, one turn being the agent messages between consecutive `user` steps (nothing before the first) |
 | the quality and outcome judges (verifier) | `judge_transcript.txt` | the rendered conversation |
 | `harbor view` | `agent/trajectory.json` | a valid ATIF document |
 | harbor's `agent_result` fields | `context.n_input_tokens` etc. | the resolved workspace usage (proxy when metered) |
@@ -246,7 +246,7 @@ Unit tests in the existing `_test.py` files, driven through the scripted `MockBo
 - `evidence_collection_test.py`: the capture command's shape; a healthy workspace captures both halves into the bundle and the collector reports the host paths; a workspace with no `mngr` records `transcript_command_failed` for both halves with the stderr tail as detail and writes no manifest entry; a pre-ATIF workspace keeps the stream and records only the document as `transcript_command_failed`; a failed pull and a failed download are recorded per half; the phase is timed and traced.
 - `trajectory_test.py`: the workspace document gets the resolved usage as `final_metrics` and the `extra.minds_evals` block while its steps, ids, agent, and embedded subagents survive; the document's own sums are kept when the usage is empty; the hand-built fallback carries the same block; an invalid document is rejected rather than written.
 - `driver_test.py`: end to end against the mock box, `trajectory.json` is in the box after every turn as the hand-built document; a captured document replaces it (host and box) with the reconciled workspace document and the metadata says `workspace`; a failed capture, an unusable captured document, and a failed final upload each leave the hand-built document and say `hand_built`; no `conversation.jsonl` or `full_transcript.jsonl` is written.
-- `render_judge_transcript_test.py` and `verifier_criteria_test.py`: the renderer, the gates' reply extraction, and the wordiness per-turn counts, each loaded by file path from `templates/tests/`, over the workspace-shaped and the hand-built-shaped document.
+- `render_judge_transcript_test.py` and `verifier_criteria_test.py`: the renderer, the gates' reply extraction, and the wordiness per-turn counts, each loaded by file path from `templates/tests/verifier/`, over the workspace-shaped and the hand-built-shaped document.
 - `generate_test.py`: the task declares the three artifacts, the outcome judge lists `judge_transcript.txt`, and the oracle's `solve.sh` writes a `trajectory.json` with one step per prompt and reply.
 
 No libs/mngr change, so `just test-minds-evals` covers everything.

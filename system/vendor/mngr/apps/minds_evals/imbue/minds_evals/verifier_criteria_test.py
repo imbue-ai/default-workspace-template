@@ -1,6 +1,6 @@
 """Unit tests for the verifier's structural gates and wordiness guard, which read the conversation
 from the trial's ATIF trajectory. Both ship as self-contained verifier-container scripts under
-templates/tests/ (stdlib + rewardkit, not package modules), so the `gate_checks` and
+templates/tests/verifier/ (stdlib + rewardkit, not package modules), so the `gate_checks` and
 `wordiness_guard` fixtures load them by file path."""
 
 import json

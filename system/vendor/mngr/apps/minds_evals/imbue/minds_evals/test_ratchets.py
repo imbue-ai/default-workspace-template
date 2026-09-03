@@ -37,6 +37,9 @@ def test_prevent_global_keyword() -> None:
     rc.check_global_keyword(_DIR, snapshot(0))
 
 
+# Every hit is inside `templates/`, which runs as standalone scripts in the verifier container:
+# stdout and stderr are the only channel a grading failure has to a harbor log, and loguru is not
+# installed there.
 def test_prevent_bare_print() -> None:
     rc.check_bare_print(_DIR, snapshot(7))
 
@@ -48,8 +51,12 @@ def test_prevent_bare_except() -> None:
     rc.check_bare_except(_DIR, snapshot(0))
 
 
+# Every hit is a best-effort guard around work whose failure must not discard an already-completed
+# or already-failed trial: evidence collection, workspace teardown, the decider's degradation to its
+# fallback line, and the timeout diagnostics. Each one records what went wrong and carries on; none
+# of them swallows a failure of the thing being measured.
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(4))
+    rc.check_broad_exception_catch(_DIR, snapshot(6))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -95,7 +102,7 @@ def test_prevent_setattr() -> None:
 
 
 def test_prevent_asyncio_import() -> None:
-    rc.check_asyncio_import(_DIR, snapshot(6))
+    rc.check_asyncio_import(_DIR, snapshot(7))
 
 
 def test_prevent_pandas_import() -> None:
@@ -127,9 +134,13 @@ def test_prevent_exit_stack() -> None:
 # cannot be made synchronous here; keep new async surface to what those interfaces force. The one
 # await that is not forced by those interfaces is the `asyncio.to_thread` around the simulated
 # client's model call: harbor runs every concurrent trial on one event loop, so a blocking HTTP
-# call left inline would stall every other trial's polling and deadlines.
+# call left inline would stall every other trial's polling and deadlines. Most of the count is the
+# tests, which drive that same async agent and so cannot be synchronous either; a test that drives
+# one more trial moves this by several without adding any async surface to the driver. A stepped
+# case calls that same async agent once per step, so its per-step file placement and its per-step
+# evidence and trajectory publication are more of the same forced surface, not new.
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(304))
+    rc.check_async_await(_DIR, snapshot(360))
 
 
 # --- Hardcoded paths ---
@@ -151,7 +162,7 @@ def test_prevent_hardcoded_guarded_binary() -> None:
 # captured before per-entry records, and `num_retries` in litellm's proxy config. Neither name is a
 # naming choice available here.
 def test_prevent_num_prefix() -> None:
-    rc.check_num_prefix(_DIR, snapshot(9))
+    rc.check_num_prefix(_DIR, snapshot(11))
 
 
 # --- Documentation ---
