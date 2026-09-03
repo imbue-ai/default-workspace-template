@@ -210,7 +210,7 @@ def run_sidecar_app(
     """
     if threading.current_thread() is not threading.main_thread():
         raise SidecarError(
-            "run_sidecar must run on the main thread so it can forward signals"
+            "the sidecar must run on the main thread so it can forward signals"
         )
     if not child_argv:
         raise SidecarError("cannot start the wrapped server: no command given")
