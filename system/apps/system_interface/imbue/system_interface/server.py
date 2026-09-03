@@ -2336,12 +2336,13 @@ def _resolve_terminal_id_for_tty(client_tty: str) -> str | None:
 
 
 def _terminal_notify_endpoint() -> Response:
-    """Loopback endpoint the tmux hooks call when a terminal's session changes.
+    """Loopback endpoint the terminal app forwards each tmux hook event to (until phase 7).
 
-    Body: ``{kind, client_tty, session_name, session_id}``. For a session
-    switch we resolve the affected dockview tab from ``client_tty``; for a
-    rename the frontend matches by ``session_id`` so ``terminal_id`` stays None.
-    Either way we re-broadcast as a ``terminal_session`` WS event.
+    Body: ``{kind, client_tty, session_name, session_id, terminal_id?}``. For a
+    session switch the affected dockview tab is the ``terminal_id`` the terminal
+    app resolved, else the one ``client_tty`` maps to here; for a rename the
+    frontend matches by ``session_id`` so ``terminal_id`` stays None. Either way
+    we re-broadcast as a ``terminal_session`` WS event.
     """
     client_host = request.remote_addr or ""
     if client_host not in _LOOPBACK_CLIENT_HOSTS:
