@@ -690,6 +690,9 @@ def test_the_writer_refuses_a_value_type_the_registry_never_holds() -> None:
     with pytest.raises(TypeError, match="cannot hold") as excinfo:
         forward_port.dump_registry([{"name": "web", "port": 8000}])
     assert isinstance(excinfo.value, forward_port.RegistryError)
+    # An array holds inline tables only; a bare string in one is refused the same way.
+    with pytest.raises(TypeError, match="cannot hold an array element"):
+        forward_port.dump_registry([{"name": "web", "actions": ["new"]}])
 
 
 def test_a_legacy_registry_written_by_tomlkit_is_read_and_rewritten_intact(tmp_path: Path) -> None:

@@ -360,6 +360,11 @@ def _toml_value(value: object) -> str:
     if isinstance(value, dict):
         return _toml_inline_table(value)
     if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                raise UnsupportedRegistryValueError(
+                    f"the registry cannot hold an array element of type {type(item).__name__}: {item!r}"
+                )
         return "[" + ", ".join(_toml_inline_table(item) for item in value) + "]"
     return _toml_scalar(value)
 
