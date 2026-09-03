@@ -355,6 +355,9 @@ def _lib_readme(name: str, description: str) -> str:
     return f"# {name}\n\n{description}\n"
 
 
+# The app_manifest library's limit (app_manifest.primitives.MAX_DISPLAY_NAME_LENGTH).
+# This script runs in its own PEP 723 environment and cannot import the library;
+# a drift test in scaffold_flask_lib_test.py keeps the two equal.
 MAX_DISPLAY_NAME_LENGTH = 64
 
 
@@ -463,6 +466,18 @@ def _run_checked(argv: list[str], repo_root: Path, description: str) -> None:
         sys.exit(f"error: `{description}` failed (exit {result.returncode})")
 
 
+def _validate_manifest(repo_root: Path, package: str) -> None:
+    # The written manifest is checked against the app_manifest library's rules
+    # (from the root venv, where the library is a workspace member) so a
+    # scaffolded app never registers a manifest its readers would skip.
+    manifest_path = f"system/apps/{package}/app.toml"
+    _run_checked(
+        ["uv", "run", "app-manifest", "validate-manifest", manifest_path],
+        repo_root,
+        f"uv run app-manifest validate-manifest {manifest_path}",
+    )
+
+
 def _install_app_tool(repo_root: Path, package: str) -> None:
     # Every Python app runs from its own uv tool environment, built from its own
     # pyproject (see system/scripts/build_workspace.sh, which does the same for
@@ -521,7 +536,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-uv-sync",
         action="store_true",
-        help="skip the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
+        help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
     )
     args = parser.parse_args()
 
@@ -542,6 +557,7 @@ def main() -> None:
     _update_supervisord_conf(repo_root, args.name, package, port)
 
     if not args.skip_uv_sync:
+        _validate_manifest(repo_root, package)
         _install_app_tool(repo_root, package)
         _run_uv_sync(repo_root)
 
