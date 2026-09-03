@@ -748,6 +748,10 @@ def test_compaction_summary_user_message_emitted_as_status() -> None:
     assert events[0]["type"] == "user_message"
     assert events[0]["display"] == "status"
     assert events[0]["content"] == "Context was compacted"
+    assert (
+        events[0]["display_body"]
+        == "This session is being continued from a previous conversation that ran out of context."
+    )
     assert events[0]["role"] == "system"
     assert events[0]["non_turn_tail"] is True
     assert "is_meta" not in events[0] and "is_compact_summary" not in events[0]

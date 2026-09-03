@@ -55,7 +55,7 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
     case "status":
       return {
         kind: UserMessageKind.StatusMessage,
-        label: event.display_label ?? null,
+        label: event.display_label ?? (event.display_body !== undefined ? content : null),
         body: event.display_body ?? content,
       };
     default:

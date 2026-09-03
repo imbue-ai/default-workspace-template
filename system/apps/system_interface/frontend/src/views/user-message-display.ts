@@ -40,6 +40,54 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
   ]);
 }
 
+/**
+ * Render a status message (e.g. "Context was compacted").
+ * When body text is present, renders an expandable toggle on the status pill
+ * to show/hide the summary contents.
+ */
+function renderStatusMessage(label: string, body: string, expansionKey: string): m.Vnode {
+  if (!body) {
+    return m("div", { class: "message-system-status" }, label);
+  }
+  const expanded = isBlockExpanded(expansionKey);
+  return m(
+    "div",
+    {
+      class: `message-system-status-container${expanded ? " message-system-status-container--expanded" : ""}`,
+    },
+    [
+      m(
+        "div",
+        {
+          class: "message-system-status message-system-status--toggleable",
+          role: "button",
+          tabindex: 0,
+          onclick(e: Event) {
+            const container = (e.currentTarget as HTMLElement).parentElement;
+            if (container) {
+              setBlockExpanded(expansionKey, container.classList.toggle("message-system-status-container--expanded"));
+            }
+          },
+          onkeydown(e: KeyboardEvent) {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              const container = (e.currentTarget as HTMLElement).parentElement;
+              if (container) {
+                setBlockExpanded(
+                  expansionKey,
+                  container.classList.toggle("message-system-status-container--expanded"),
+                );
+              }
+            }
+          },
+        },
+        [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
+      ),
+      m("div", { class: "message-system-status-details" }, [m("div", { class: "message-system-status-body" }, body)]),
+    ],
+  );
+}
+
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
   return {
@@ -62,7 +110,9 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
       }
       if (cls.kind === UserMessageKind.StatusMessage) {
-        return m("div", { class: "message-system-status" }, cls.body);
+        const label = cls.label ?? (cls.body || "Context was compacted");
+        const body = cls.body && cls.body !== label ? cls.body : "";
+        return renderStatusMessage(label, body, `status:${event.event_id}`);
       }
 
       const bubbleChildren: m.Children[] = [];
