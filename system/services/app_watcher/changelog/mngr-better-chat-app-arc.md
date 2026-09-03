@@ -1,0 +1,1 @@
+README wording only (phase 3 of the workspace app model): the note distinguishing this service's `events/services` stream from the terminal's hand-written `server_registered` event names the terminal app rather than the deleted `run_ttyd.sh`. No behaviour change.
