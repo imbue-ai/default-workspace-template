@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
@@ -53,7 +54,7 @@ class _TerminalAppUnderTest(FrozenModel):
     ttyd_record_dir: Path = Field(description="Where the fake ttyd records its argv")
     log_path: Path = Field(description="Where the app's stderr is captured")
     command: tuple[str, ...] = Field(description="The full command line")
-    environment: dict[str, str] = Field(
+    environment: Mapping[str, str] = Field(
         description="The environment the process runs with"
     )
 
