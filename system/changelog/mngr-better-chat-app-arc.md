@@ -13,3 +13,9 @@ Phase 1 of that model, "manifest, registry, and environments" (nothing user-visi
 - New `system/test_app_manifests.py`: every built-in manifest validates, names a real supervisord program that registers with it, and declares a `priority` that is a memory band.
 
 - The new `app_manifest` library (`system/libs/app_manifest`), the `chat` memory band and the registry-driven backstop in `oom_priority`, and the READMEs (`system/apps`, `system/libs`, `system/services/oom_priority`, `docs/system/workspace-internals.md`) describe the model.
+
+Phase 2 of that model, "the instances library" (nothing user-visible changes: nothing mounts the blueprint yet):
+
+- New `system/libs/app_instances` (see its own changelog): the instances API blueprint, the JSON store, the shell nudge, and the sidecar launcher for wrapped third-party servers; `system/libs/README.md` lists it.
+
+- `contracts.md` section 4 gained the rules the library enforces: an instance URL or path is rooted with a single slash and carries no control characters, a title is non-blank and at most 256 characters, and a key that fails the key rule answers `400` on every keyed route (including `DELETE`, which otherwise answers `204` for any key).
