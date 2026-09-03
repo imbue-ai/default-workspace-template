@@ -2,12 +2,19 @@ from pathlib import Path
 
 import pytest
 from app_instances.testing import RecordedShellRequests, RecordingNudger
+from app_manifest.primitives import AppName
+from flask import Flask
 from flask.testing import FlaskClient
 
 from terminal_app.data_types import TerminalPaths, TmuxClient
-from terminal_app.hooks import resolve_tab_id_for_tty
+from terminal_app.hooks import (
+    HttpShellPoster,
+    build_tmux_hook_blueprint,
+    resolve_tab_id_for_tty,
+)
 from terminal_app.primitives import ClientTty
 from terminal_app.testing import FakeTmux
+from terminal_app.tmux import SubprocessTmux
 
 
 def _record_tab(paths: TerminalPaths, tab_id: str, tty: str) -> None:
@@ -185,3 +192,35 @@ def test_hook_rejects_non_loopback_callers_and_malformed_bodies(
     assert "kind" in wrong_shape.get_json()["detail"]
 
     assert recording_shell.requests == []
+
+
+def test_a_tmux_failure_on_the_hook_route_answers_500_with_a_detail_body(
+    terminal_paths: TerminalPaths,
+    recording_shell: RecordedShellRequests,
+    recording_nudger: RecordingNudger,
+) -> None:
+    app = Flask(__name__, static_folder=None)
+    app.register_blueprint(
+        build_tmux_hook_blueprint(
+            tmux=SubprocessTmux(tmux_executable="/nonexistent/tmux-binary"),
+            paths=terminal_paths,
+            shell=HttpShellPoster(shell_url=recording_shell.base_url),
+            nudger=recording_nudger,
+            app_name=AppName("terminal"),
+        )
+    )
+
+    response = app.test_client().post(
+        "/tmux-hook",
+        json={
+            "kind": "session-renamed",
+            "client_tty": "",
+            "session_name": "deploy",
+            "session_id": "$4",
+        },
+    )
+
+    assert response.status_code == 500
+    assert "cannot run /nonexistent/tmux-binary" in response.get_json()["detail"]
+    assert recording_shell.requests == []
+    assert recording_nudger.nudge_count == 0

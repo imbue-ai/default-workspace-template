@@ -24,9 +24,14 @@ The shell is the only caller of the API, over loopback, at the registry row's
   `400`; `UnknownInstanceError` is `404`; `InstanceConflictError` is `409`;
   `NotReadyError` is `503`; any other library error is `500`. Every error body
   is `{"detail": "<message>"}`. Bodies are read with `force=True`, so a caller
-  need not send a JSON content type. `build_instances_app(source, nudger)` is a
-  Flask app that serves nothing but the blueprint, which is what the sidecar and
-  the stub app run.
+  need not send a JSON content type. The two halves of that are public for an
+  app that serves routes of its own beside the blueprint (the terminal's hook
+  route): `parse_request_body(model)` reads the current request's body as
+  `model` (raising `MalformedRequestError`, a `400`), and `answer_typed_error`
+  is the `AppInstancesError` handler to register on the app's own blueprint, so
+  its routes answer the app's errors (subclasses of the library's) the same
+  way. `build_instances_app(source, nudger)` is a Flask app that serves
+  nothing but the blueprint, which is what the sidecar and the stub app run.
 - `app_instances.interfaces`: `InstanceSourceInterface` (`list_instances`,
   `create_instance(action, params)`, `delete_instance(key)`,
   `rename_instance(key, title)`, `set_location(key, path)`; implementations
@@ -98,13 +103,12 @@ The shell is the only caller of the API, over loopback, at the registry row's
   `SidecarEnvironment` (the scratch directory and registry a sidecar test runs
   against) and `prepare_sidecar_environment(tmp_path, monkeypatch, repo_root)`,
   which builds one for a fixture (cwd at the repo root, the registry and an
-  unreachable shell in the environment), `serve_recording_shell()` (a fake shell that records every request's
-  method, path, and JSON body
-  and answers `404`), and `run_stub_app(port)` for the shell's tests in later
-  phases; as a module it
-  serves the stub app (`python -m app_instances.testing stub --port <port>`) or
-  runs the sidecar over a JSON store (`... sidecar --manifest ... --app-url ...
-  --instances-url ... --store ... -- <child argv>`).
+  unreachable shell in the environment), `serve_recording_shell()` (a fake
+  shell that records every request's method, path, and JSON body and answers
+  `404`), and `run_stub_app(port)` for the shell's tests in later phases; as a
+  module it serves the stub app (`python -m app_instances.testing stub --port
+  <port>`) or runs the sidecar over a JSON store (`... sidecar --manifest ...
+  --app-url ... --instances-url ... --store ... -- <child argv>`).
 
 The terminal app (`system/apps/terminal`, phase 3) is its first user; phase 4
 (files) and phase 5 (browser) of the model follow.

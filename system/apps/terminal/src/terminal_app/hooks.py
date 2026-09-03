@@ -2,15 +2,19 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final, assert_never
 
-from app_instances.blueprint import HTTP_BAD_REQUEST, HTTP_NO_CONTENT
+from app_instances.blueprint import (
+    HTTP_NO_CONTENT,
+    answer_typed_error,
+    parse_request_body,
+)
+from app_instances.errors import AppInstancesError
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.nudge import post_to_shell
-from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from flask import Blueprint, jsonify, request
 from flask.typing import ResponseReturnValue
 from loguru import logger
-from pydantic import Field, ValidationError
+from pydantic import Field
 
 from terminal_app.data_types import TerminalPaths, TmuxHookEvent, TmuxHookKind
 from terminal_app.errors import InvalidTerminalValueError
@@ -153,15 +157,7 @@ def build_tmux_hook_blueprint(
             return jsonify(
                 {"detail": "the tmux hook is only callable from loopback"}
             ), HTTP_FORBIDDEN
-        body = request.get_json(force=True, silent=True)
-        if not isinstance(body, dict):
-            return jsonify(
-                {"detail": "the request body must be a JSON object"}
-            ), HTTP_BAD_REQUEST
-        try:
-            event = TmuxHookEvent.model_validate(body)
-        except ValidationError as e:
-            return jsonify({"detail": describe_validation_error(e)}), HTTP_BAD_REQUEST
+        event = parse_request_body(TmuxHookEvent)
         match event.kind:
             case TmuxHookKind.SESSION_CHANGED:
                 handle_session_changed(event)
@@ -171,4 +167,7 @@ def build_tmux_hook_blueprint(
                 assert_never(unreachable)
         return "", HTTP_NO_CONTENT
 
+    # The app's errors subclass the library's, so a tmux failure on this route answers the same
+    # detail body (and 500) the instances routes give.
+    blueprint.register_error_handler(AppInstancesError, answer_typed_error)
     return blueprint

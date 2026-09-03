@@ -6,6 +6,10 @@ class InvalidInstanceValueError(AppInstancesError, ValueError):
     """An instance key, URL, path, title, or key prefix does not satisfy its rule."""
 
 
+class MalformedRequestError(AppInstancesError):
+    """The request body is not JSON, not an object, or not the route's shape (answered 400)."""
+
+
 class UnknownActionError(AppInstancesError):
     """A create named an action the app does not declare (answered 400)."""
 

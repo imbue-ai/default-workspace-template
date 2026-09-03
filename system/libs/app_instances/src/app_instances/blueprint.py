@@ -20,6 +20,7 @@ from app_instances.errors import (
     InvalidInstanceValueError,
     InvalidParamsError,
     LocationNotTrackedError,
+    MalformedRequestError,
     NotReadyError,
     NotRenameableError,
     UnknownActionError,
@@ -44,16 +45,12 @@ HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 _RequestModel = TypeVar("_RequestModel", bound=FrozenModel)
 
 
-class _MalformedRequestError(AppInstancesError):
-    """The request body is not JSON, not an object, or not the route's shape (answered 400)."""
-
-
 @pure
 def status_code_for_error(error: AppInstancesError) -> int:
     """The HTTP status of contracts.md section 4.2 for each typed error; an unmapped library error is 500."""
     match error:
         case (
-            _MalformedRequestError()
+            MalformedRequestError()
             | InvalidInstanceValueError()
             | UnknownActionError()
             | InvalidParamsError()
@@ -81,16 +78,32 @@ def _parse_key(raw_key: str) -> InstanceKey:
     return InstanceKey(raw_key)
 
 
-def _parse_body(model: type[_RequestModel]) -> _RequestModel:
-    """The request body as the route's model; a body that is not a JSON object or not the shape is a 400."""
+def parse_request_body(model: type[_RequestModel]) -> _RequestModel:
+    """The current request's body as ``model``; a body that is not a JSON object or not the shape raises MalformedRequestError (a 400).
+
+    Every route an app serves beside the blueprint reads its body through here too, so one
+    parse and one error shape cover the whole app.
+    """
     # force=True: the shell and curl alike may post without a JSON content type.
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict):
-        raise _MalformedRequestError("the request body must be a JSON object")
+        raise MalformedRequestError("the request body must be a JSON object")
     try:
         return model.model_validate(body)
     except ValidationError as e:
-        raise _MalformedRequestError(describe_validation_error(e)) from e
+        raise MalformedRequestError(describe_validation_error(e)) from e
+
+
+def answer_typed_error(error: AppInstancesError) -> ResponseReturnValue:
+    """The error handler for every library error: the status of contracts.md section 4.2 with a ``{"detail"}`` body.
+
+    Registered on the blueprint for ``AppInstancesError``; an app's own blueprint registers it
+    too, so its routes answer the app's errors (subclasses of the library's) the same way.
+    """
+    status_code = status_code_for_error(error)
+    if status_code == HTTP_INTERNAL_ERROR:
+        logger.opt(exception=error).error("Failed to serve an instances request")
+    return jsonify({"detail": str(error)}), status_code
 
 
 def build_instances_blueprint(
@@ -110,7 +123,7 @@ def build_instances_blueprint(
 
     @blueprint.post(INSTANCES_PATH)
     def create_instance() -> ResponseReturnValue:
-        create_request = _parse_body(CreateRequest)
+        create_request = parse_request_body(CreateRequest)
         record = source.create_instance(create_request.action, create_request.params)
         nudger.nudge()
         return jsonify({"instance": _record_json(record)}), HTTP_CREATED
@@ -124,7 +137,7 @@ def build_instances_blueprint(
     @blueprint.post(f"{INSTANCES_PATH}/<key>/rename")
     def rename_instance(key: str) -> ResponseReturnValue:
         instance_key = _parse_key(key)
-        rename_request = _parse_body(RenameRequest)
+        rename_request = parse_request_body(RenameRequest)
         record = source.rename_instance(instance_key, rename_request.title)
         nudger.nudge()
         return jsonify({"instance": _record_json(record)}), HTTP_OK
@@ -132,18 +145,12 @@ def build_instances_blueprint(
     @blueprint.post(f"{INSTANCES_PATH}/<key>/location")
     def set_location(key: str) -> ResponseReturnValue:
         instance_key = _parse_key(key)
-        location_request = _parse_body(LocationRequest)
+        location_request = parse_request_body(LocationRequest)
         record = source.set_location(instance_key, location_request.path)
         nudger.nudge()
         return jsonify({"instance": _record_json(record)}), HTTP_OK
 
-    @blueprint.errorhandler(AppInstancesError)
-    def answer_typed_error(error: AppInstancesError) -> ResponseReturnValue:
-        status_code = status_code_for_error(error)
-        if status_code == HTTP_INTERNAL_ERROR:
-            logger.opt(exception=error).error("Failed to serve an instances request")
-        return jsonify({"detail": str(error)}), status_code
-
+    blueprint.register_error_handler(AppInstancesError, answer_typed_error)
     return blueprint
 
 
