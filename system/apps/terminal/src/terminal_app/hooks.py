@@ -57,7 +57,8 @@ def resolve_tab_id_for_tty(clients_dir: Path, client_tty: str) -> TerminalTabId 
             continue
         try:
             recorded_tty = entry.read_text().strip()
-        except OSError:
+        except OSError as e:
+            logger.debug("Skipped the pty record {}: {}", entry, e)
             continue
         if recorded_tty != client_tty:
             continue
