@@ -6,7 +6,8 @@ from app_instances.nudge import ENV_SHELL_URL
 from app_instances.testing import LOOPBACK_HOST, SidecarEnvironment, free_port
 from app_manifest.registry import ENV_APPS_FILE
 
-# system/libs/app_instances/conftest.py -> the repository root, where forward_port.py lives.
+# system/libs/app_instances/conftest.py -> the repository root, the cwd the sidecar resolves
+# system/scripts/forward_port.py against.
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 
 
