@@ -151,6 +151,7 @@ def build_instances_app(
     source: InstanceSourceInterface, nudger: InstanceNudgerInterface
 ) -> Flask:
     """A Flask app that serves nothing but the instances blueprint (what the sidecar and the stub app run)."""
-    app = Flask(__name__)
+    # No static folder: Flask would otherwise add a /static/<path> route beside the contract's routes.
+    app = Flask(__name__, static_folder=None)
     app.register_blueprint(build_instances_blueprint(source, nudger))
     return app
