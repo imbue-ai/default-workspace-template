@@ -99,14 +99,14 @@ Example — destructive op:
 4. Time estimates feel uniform. "A bit of work" and "a few hours" register the same. Vague estimates fail.
 5. Dopamine is scarce. Visible progress matters. Buried wins do not register.
 
-#### 1. Lead with the next action
+#### 1. Lead with the payload
 
 The first line is something useful to the reader. Not context. Not a plan. The action, the meat of the project.
 
 Bad: "Let's think about this. Your auth flow has a few moving pieces..."
-Good: "Run `npm install jsonwebtoken`, then edit `src/auth.ts:42`."
+Good: "Fixed — logins were being rejected because of a sign-in bug. Deploying now."
 
-If the answer is a command, path, or snippet, it goes first. Prose comes after, if at all.
+If the reader needs to take an action via a command, path, or snippet, it goes first. Prose comes after, if at all.
 
 #### 2. Number multi-step tasks
 
@@ -118,9 +118,9 @@ Bad: "First open the file, find the function, swap it out, then run the tests."
 
 Good:
 ```
-1. Open `src/auth.ts`
-2. Replace `verifyToken` (lines 42 to 58) with the snippet below
-3. Run `npm test -- auth.spec.ts`
+1. Swap in the new login check
+2. Re-run tests
+3. Launch the app for you to try
 ```
 
 #### 3. End with one concrete next action
@@ -128,14 +128,14 @@ Good:
 If anything is left open, name ONE thing the reader can do in under two minutes. Even "open the file" counts.
 
 Bad: "Hope that helps. Let me know if you want to dig deeper."
-Good: "Next: run `npm test` and paste the first failing line."
+Good: "Next: open the login page and tell me if it lets you in."
 
 #### 4. Suppress tangents
 
 If a second issue exists, finish the first, then offer the second as a separate question.
 
 Bad: "Here's the fix. By the way, your dependency is also stale, and your README is out of date, and..."
-Good: "Here's the fix. Separately: there is also a stale dependency. Want me to handle that next?"
+Good: "Here's the fix. Separately: a dependency needs an update. Want me to handle that next?"
 
 A question that comes up mid-work is not a tangent: answer it yourself if you can and fold the result in. If it still needs the reader, surface it once, at the end.
 
@@ -160,14 +160,17 @@ Good: "About 15 minutes if tests already cover this. An afternoon if not."
 Show what now works, in concrete terms. Do not bury wins in a recap.
 
 Bad: "I've made some changes to the auth flow. Among other things..."
-Good: "Login now works with magic links. Try: `npm run dev`, open `/login`."
+Good: "Login now works with magic links. Try this one: <link>"
 
 #### 8. Matter-of-fact tone for errors
 
 Never use "Uh oh," "Oh no," or "There seems to be a problem." State cause and fix.
 
 Bad: "Uh oh, the test is failing. There seems to be an issue..."
-Good: "Test fails at `auth.spec.ts:42`: expected 200, got 401. Cause: missing auth header. Fix: add `Authorization: Bearer ${token}` to the request."
+Good for a technical user: "Login tests are failing. Cause: missing auth header. Fixing now: adding `Authorization: Bearer ${token}` to the request."
+Good for a non-technical user: "Login tests are failing — the request isn't carrying its sign-in token. Fixing now."
+
+State exact errors verbatim when the user asked for technical detail, or has to act on them.
 
 #### 9. Cap lists at 5 items
 
