@@ -172,22 +172,22 @@ describe("wakeUpSpinnerDeadline — the beat between the verdict and the agent",
     expect(wakeUpSpinnerDeadline(events, NOW)).toBeNull();
   });
 
-  it("holds the dot for 10s once the shell reports a verdict this agent is waiting on", () => {
+  it("holds the strip for 20s once the shell reports a verdict this agent is waiting on", () => {
     const events = [permissionRequestResult("2026-04-28T01:00:00Z", "req-1")];
     resolve("req-1");
-    expect(wakeUpSpinnerDeadline(events, NOW)).toBe(NOW + 10_000);
+    expect(wakeUpSpinnerDeadline(events, NOW)).toBe(NOW + 20_000);
   });
 
-  it("drops the dot once the window has run out", () => {
+  it("drops the strip once the window has run out", () => {
     const events = [permissionRequestResult("2026-04-28T01:00:00Z", "req-1")];
     resolve("req-1");
-    expect(wakeUpSpinnerDeadline(events, NOW + 9_999)).toBe(NOW + 10_000);
-    expect(wakeUpSpinnerDeadline(events, NOW + 10_000)).toBeNull();
+    expect(wakeUpSpinnerDeadline(events, NOW + 19_999)).toBe(NOW + 20_000);
+    expect(wakeUpSpinnerDeadline(events, NOW + 20_000)).toBeNull();
   });
 
-  it("drops the dot as soon as the agent has actually been told", () => {
+  it("drops the strip as soon as the agent has actually been told", () => {
     // The notice landing in the transcript IS the agent hearing the verdict --
-    // this is the ordinary way the dot ends, well inside the window.
+    // this is the ordinary way the strip ends, well inside the window.
     resolve("req-1");
     const events = [
       permissionRequestResult("2026-04-28T01:00:00Z", "req-1"),
@@ -220,7 +220,7 @@ describe("wakeUpSpinnerDeadline — the beat between the verdict and the agent",
     resolve("req-1");
     vi.spyOn(Date, "now").mockReturnValue(NOW + 8_000);
     resolve("req-1");
-    expect(wakeUpSpinnerDeadline(events, NOW + 8_000)).toBe(NOW + 10_000);
+    expect(wakeUpSpinnerDeadline(events, NOW + 8_000)).toBe(NOW + 20_000);
   });
 
   it("extends to the later deadline when a second request is resolved during the window", () => {
@@ -231,7 +231,7 @@ describe("wakeUpSpinnerDeadline — the beat between the verdict and the agent",
     resolve("req-1");
     vi.spyOn(Date, "now").mockReturnValue(NOW + 4_000);
     resolve("req-2");
-    expect(wakeUpSpinnerDeadline(events, NOW + 4_000)).toBe(NOW + 14_000);
+    expect(wakeUpSpinnerDeadline(events, NOW + 4_000)).toBe(NOW + 24_000);
   });
 });
 
@@ -258,6 +258,14 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     >[0]) as m.Vnode | null;
   };
 
+  /** The strip's caption, dug out of mithril's text vnode. */
+  const labelTextOf = (strip: m.Vnode | null): string | null => {
+    const children = (strip?.children ?? []) as m.Vnode[];
+    const text = (children[1]?.children ?? []) as m.Vnode[];
+    const content = text[0]?.children;
+    return typeof content === "string" ? content : null;
+  };
+
   const resolveReq1 = (): void => {
     notePermissionResolutions({
       type: "minds:permission-resolutions",
@@ -270,21 +278,16 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(render()).toBeNull();
   });
 
-  it("renders a captionless dot while the idle agent has yet to hear the verdict", () => {
+  it("names the permission change while the idle agent has yet to hear the verdict", () => {
     agentState.activity_state = "IDLE";
     resolveReq1();
     const strip = render();
     expect(strip).not.toBeNull();
-    const attrs = strip?.attrs as Record<string, unknown>;
-    expect(attrs["data-state"]).toBe("WAKING");
-    // The dot, and nothing that reads as a caption.
-    const children = (strip?.children ?? []) as (m.Vnode | null)[];
-    expect(children.filter((child) => child !== null)).toHaveLength(1);
-    // Invisible to the eye, available to a screen reader and on hover.
-    expect(attrs["aria-label"]).toBe("Passing your decision to the agent");
+    expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("WAKING");
+    expect(labelTextOf(strip)).toBe("Confirming permission changes…");
   });
 
-  it("lets a real turn outrank the wake-up dot", () => {
+  it("lets a real turn outrank the wake-up caption", () => {
     // The verdict landed AND the agent is already working: the honest caption
     // wins, so the dot never competes with real activity.
     agentState.activity_state = "THINKING";
