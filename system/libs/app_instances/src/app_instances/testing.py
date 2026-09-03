@@ -7,6 +7,7 @@ runs the sidecar over a JSON store, which is how the integration test drives it 
 
 import socket
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -21,7 +22,7 @@ from flask import Flask, request
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 from werkzeug.serving import make_server
 
 from app_instances.blueprint import build_instances_app
@@ -63,7 +64,11 @@ _POLL_INTERVAL_SECONDS: Final[float] = 0.05
 
 
 class StubInstanceSource(InstanceSourceInterface):
-    """An in-memory source that records every call, with knobs for each error the API maps."""
+    """An in-memory source that records every call, with knobs for each error the API maps.
+
+    Every method holds one lock, so the stub is safe under the threaded server ``run_stub_app``
+    serves it through, as the interface requires.
+    """
 
     records: list[InstanceRecord] = Field(
         default_factory=list, description="The current instances"
@@ -82,64 +87,74 @@ class StubInstanceSource(InstanceSourceInterface):
         default=None,
         description="When set, create raises InstanceConflictError with this detail",
     )
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def list_instances(self) -> list[InstanceRecord]:
-        self.calls.append("list")
-        self._require_ready()
-        return list(self.records)
+        with self._lock:
+            self.calls.append("list")
+            self._require_ready()
+            return list(self.records)
 
     def create_instance(
         self, action: ActionId, params: Mapping[str, str]
     ) -> InstanceRecord:
-        self.calls.append(f"create:{action}:{dict(params)}")
-        self._require_ready()
-        if action != STUB_ACTION_ID:
-            raise UnknownActionError(f"unknown action {action!r}")
-        if self.create_refusal is not None:
-            raise InstanceConflictError(self.create_refusal)
-        number = allocate_instance_number(
-            STUB_KEY_PREFIX, {record.key for record in self.records}
-        )
-        record = InstanceRecord(
-            key=allocated_key(STUB_KEY_PREFIX, number),
-            url=InstanceUrl(params.get(PATH_PARAM, DEFAULT_PATH)),
-            title=InstanceTitle(f"Stub {number}"),
-            status=InstanceStatus.IDLE,
-            lifetime=InstanceLifetime.EXPLICIT,
-            last_active=datetime.now(timezone.utc),
-            renameable=self.is_renameable,
-        )
-        self.records.append(record)
-        return record
+        with self._lock:
+            self.calls.append(f"create:{action}:{dict(params)}")
+            self._require_ready()
+            if action != STUB_ACTION_ID:
+                raise UnknownActionError(f"unknown action {action!r}")
+            if self.create_refusal is not None:
+                raise InstanceConflictError(self.create_refusal)
+            number = allocate_instance_number(
+                STUB_KEY_PREFIX, {record.key for record in self.records}
+            )
+            record = InstanceRecord(
+                key=allocated_key(STUB_KEY_PREFIX, number),
+                url=InstanceUrl(params.get(PATH_PARAM, DEFAULT_PATH)),
+                title=InstanceTitle(f"Stub {number}"),
+                status=InstanceStatus.IDLE,
+                lifetime=InstanceLifetime.EXPLICIT,
+                last_active=datetime.now(timezone.utc),
+                renameable=self.is_renameable,
+            )
+            self.records.append(record)
+            return record
 
     def delete_instance(self, key: InstanceKey) -> None:
-        self.calls.append(f"delete:{key}")
-        self._require_ready()
-        self.records = [record for record in self.records if record.key != key]
+        with self._lock:
+            self.calls.append(f"delete:{key}")
+            self._require_ready()
+            self.records = [record for record in self.records if record.key != key]
 
     def rename_instance(self, key: InstanceKey, title: InstanceTitle) -> InstanceRecord:
-        self.calls.append(f"rename:{key}:{title}")
-        self._require_ready()
-        if not self.is_renameable:
-            raise NotRenameableError("stub instances cannot be renamed")
-        record = self._find(key)
-        if any(other.key != key and other.title == title for other in self.records):
-            raise InstanceConflictError(f"another instance is already titled {title!r}")
-        renamed = record.model_copy_update(to_update(record.field_ref().title, title))
-        self._replace(renamed)
-        return renamed
+        with self._lock:
+            self.calls.append(f"rename:{key}:{title}")
+            self._require_ready()
+            if not self.is_renameable:
+                raise NotRenameableError("stub instances cannot be renamed")
+            record = self._find(key)
+            if any(other.key != key and other.title == title for other in self.records):
+                raise InstanceConflictError(
+                    f"another instance is already titled {title!r}"
+                )
+            renamed = record.model_copy_update(
+                to_update(record.field_ref().title, title)
+            )
+            self._replace(renamed)
+            return renamed
 
     def set_location(self, key: InstanceKey, path: LocationPath) -> InstanceRecord:
-        self.calls.append(f"location:{key}:{path}")
-        self._require_ready()
-        if not self.is_location_tracked:
-            raise LocationNotTrackedError("the stub does not track locations")
-        record = self._find(key)
-        relocated = record.model_copy_update(
-            to_update(record.field_ref().url, InstanceUrl(path))
-        )
-        self._replace(relocated)
-        return relocated
+        with self._lock:
+            self.calls.append(f"location:{key}:{path}")
+            self._require_ready()
+            if not self.is_location_tracked:
+                raise LocationNotTrackedError("the stub does not track locations")
+            record = self._find(key)
+            relocated = record.model_copy_update(
+                to_update(record.field_ref().url, InstanceUrl(path))
+            )
+            self._replace(relocated)
+            return relocated
 
     def _require_ready(self) -> None:
         if not self.is_ready:
