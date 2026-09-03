@@ -72,7 +72,7 @@ def status_code_for_error(error: AppInstancesError) -> int:
 
 
 @pure
-def record_json(record: InstanceRecord) -> dict[str, Any]:
+def _record_json(record: InstanceRecord) -> dict[str, Any]:
     return record.model_dump(mode="json")
 
 
@@ -106,14 +106,14 @@ def build_instances_blueprint(
     @blueprint.get(INSTANCES_PATH)
     def list_instances() -> ResponseReturnValue:
         records = source.list_instances()
-        return jsonify({"instances": [record_json(record) for record in records]})
+        return jsonify({"instances": [_record_json(record) for record in records]})
 
     @blueprint.post(INSTANCES_PATH)
     def create_instance() -> ResponseReturnValue:
         create_request = _parse_body(CreateRequest)
         record = source.create_instance(create_request.action, create_request.params)
         nudger.nudge()
-        return jsonify({"instance": record_json(record)}), HTTP_CREATED
+        return jsonify({"instance": _record_json(record)}), HTTP_CREATED
 
     @blueprint.delete(f"{INSTANCES_PATH}/<key>")
     def delete_instance(key: str) -> ResponseReturnValue:
@@ -127,7 +127,7 @@ def build_instances_blueprint(
         rename_request = _parse_body(RenameRequest)
         record = source.rename_instance(instance_key, rename_request.title)
         nudger.nudge()
-        return jsonify({"instance": record_json(record)}), HTTP_OK
+        return jsonify({"instance": _record_json(record)}), HTTP_OK
 
     @blueprint.post(f"{INSTANCES_PATH}/<key>/location")
     def set_location(key: str) -> ResponseReturnValue:
@@ -135,7 +135,7 @@ def build_instances_blueprint(
         location_request = _parse_body(LocationRequest)
         record = source.set_location(instance_key, location_request.path)
         nudger.nudge()
-        return jsonify({"instance": record_json(record)}), HTTP_OK
+        return jsonify({"instance": _record_json(record)}), HTTP_OK
 
     @blueprint.errorhandler(AppInstancesError)
     def answer_typed_error(error: AppInstancesError) -> ResponseReturnValue:
