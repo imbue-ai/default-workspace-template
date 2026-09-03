@@ -1729,7 +1729,6 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
     ("path", "tool_names"),
     [
         ("system/apps/system_interface/imbue/system_interface/server.py", {"system-interface"}),
-        ("system/apps/system_interface/pyproject.toml", {"system-interface"}),
         ("system/apps/system_interface/app.toml", {"system-interface"}),
         ("system/apps/browser/src/browser/runner.py", {"browser"}),
         ("system/apps/browser/pyproject.toml", {"browser"}),
@@ -1737,7 +1736,13 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         ("system/apps/system_interface/frontend/src/App.ts", set()),
         ("system/apps/browser/src/browser/static/app.js", set()),
         ("system/apps/terminal/run_ttyd.sh", set()),
-        ("system/vendor/mngr/libs/mngr/pyproject.toml", set()),
+        # A shared backend manifest is part of every app tool's closure: the
+        # vendored packages an app depends on editable, and the plugin table
+        # that assigns plugins to its tool.
+        ("system/apps/system_interface/pyproject.toml", {"system-interface", "browser"}),
+        ("system/vendor/mngr/libs/mngr/pyproject.toml", {"system-interface", "browser"}),
+        (update_layout.PLUGIN_MANIFEST_PATH, {"system-interface", "browser"}),
+        ("uv.lock", {"system-interface", "browser"}),
     ],
 )
 def test_plan_apply_refreshes_the_tool_of_every_changed_app_directory(path: str, tool_names: set[str]) -> None:
@@ -1928,16 +1933,21 @@ def test_apply_settings_change_restarts_without_a_provisioner_run(
     assert runner.ran(*_RESTART)
 
 
-def test_apply_backend_manifest_refreshes_all_three_environments(
-    apply_repo: Path,
-) -> None:
+def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) -> None:
+    # A backend manifest moves every environment's closure: the vendored mngr
+    # tool, the root venv, and each app's own tool (the vendored packages and
+    # the plugin table are part of what those resolve).
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
     installs = runner.argvs_starting("uv", "tool", "install")
-    assert len(installs) == 2  # the vendored mngr tool and the shell's own tool
+    assert [argv[4] for argv in installs] == [
+        update_layout.MNGR_DIR,
+        "system/apps/browser",
+        update_layout.SYSTEM_INTERFACE_DIR,
+    ]
     assert runner.ran("uv", "sync", "--all-packages", "--frozen")
     assert runner.ran(*_RESTART)
 
@@ -3664,7 +3674,7 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
     # on the forward pass too, so it cannot stand in for the recovery refresh.
     recovery_installs = [c for c in unwrapped if c[:3] == ["uv", "tool", "install"]]
     recovery_syncs = [c for c in unwrapped if c[:2] == ["uv", "sync"]]
-    assert len(recovery_installs) == 2, "recovery should reinstall both tools untagged"
+    assert len(recovery_installs) == 3, "recovery should reinstall every tool untagged"
     assert recovery_syncs, "recovery should re-sync the venv untagged"
 
 
@@ -4090,13 +4100,13 @@ def test_the_refresh_targets_the_installation_actually_on_path(
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     # No readable receipt means the tool is not installed (or predates
     # receipts); the refresh must still run as the plain install it would
-    # otherwise be, for both tools.
+    # otherwise be, for every tool.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     runner.respond(("uv", "tool", "dir"), _Result(returncode=1))
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 3
 
 
 def test_the_refresh_survives_a_uv_that_cannot_be_run_at_all(
@@ -4111,7 +4121,7 @@ def test_the_refresh_survives_a_uv_that_cannot_be_run_at_all(
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 3
     assert "could not be run" in capsys.readouterr().err
 
 
@@ -4366,11 +4376,12 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
 def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     apply_repo: Path, capsys
 ) -> None:
-    # The venv copy alone is not the environment: the two uv tools are
-    # recorded (and restored) separately, and one that could not be located at
-    # snapshot time has no copy to put back. A rollback that keyed the rebuild
-    # on the venv alone reported success with both tools still built from the
-    # rolled-back-away tree -- the ModuleNotFoundError-on-mngr state.
+    # The venv copy alone is not the environment: the uv tools are recorded
+    # (and restored) separately, and one that could not be located at snapshot
+    # time has no copy to put back. A rollback that keyed the rebuild on the
+    # venv alone reported success with the tools still built from the
+    # rolled-back-away tree -- the ModuleNotFoundError-on-mngr state. The
+    # browser's tool is never copied aside (not critical), so it is rebuilt too.
     (apply_repo / ".venv").mkdir()
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
     spawner = _FakeSpawner(output="ImportError: boom", exited=True)
@@ -4388,7 +4399,7 @@ def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     recovery_installs = [
         c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]
     ]
-    assert len(recovery_installs) == 2
+    assert len(recovery_installs) == 3
     err = capsys.readouterr().err
     assert "could not locate the uv tool environment behind 'mngr'" in err
     assert "could not locate the uv tool environment behind 'system-interface'" in err
@@ -4420,7 +4431,7 @@ def test_a_rollback_survives_a_plugin_manifest_it_cannot_read(
     assert code == 2
     assert update_apply_contract.read_marker(apply_repo) is None
     # The reinstalls still happened, from the receipt alone.
-    assert len([c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]]) == 2
+    assert len([c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]]) == 3
     assert "skipping the plugin manifest" in capsys.readouterr().err
 
 

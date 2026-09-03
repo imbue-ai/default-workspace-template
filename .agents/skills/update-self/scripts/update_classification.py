@@ -419,8 +419,11 @@ class ApplyPlan(NamedTuple):
     is finer than :func:`classify_path`'s single ``system_interface`` class
     because those four need different work; ``provisioner`` is the
     pinned-toolchain re-run, keyed on the files the provisioner reads;
-    ``app_tools`` are the apps whose own tool environment the diff touched
-    (:func:`app_tools_touched_by`), each reinstalled from the merged tree.
+    ``app_tools`` are the apps whose tool environment the diff can have moved,
+    each reinstalled from the merged tree: the apps whose own directory changed
+    (:func:`app_tools_touched_by`), or every app when a shared backend manifest
+    did, since the vendored packages and the plugin table those name are part
+    of every app tool's closure.
     """
 
     frontend_src: bool
@@ -483,5 +486,5 @@ def plan_apply(
         backend_src=backend_src,
         backend_manifest=backend_manifest,
         provisioner=provisioner,
-        app_tools=app_tools_touched_by(paths, app_tools),
+        app_tools=tuple(app_tools) if backend_manifest else app_tools_touched_by(paths, app_tools),
     )
