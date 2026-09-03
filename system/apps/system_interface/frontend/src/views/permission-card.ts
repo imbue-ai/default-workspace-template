@@ -144,10 +144,39 @@ export function openPermissionRequest(requestId: string): void {
 // exists).
 const shellResolutions = new Map<string, PermissionResolution>();
 
+// When THIS page first learned each verdict. The shell's verdict lands well
+// before the agent does -- the desktop client flips the card from its own
+// record and only then starts trying to deliver the resolution message into
+// the agent's session, which is a multi-step, retried delivery (see
+// `MngrMessageSender` in the mngr repo). The gap is the window in which the
+// user has decided and nothing is visibly happening, so the activity strip
+// spins a bare dot through it (see `wakeUpSpinnerDeadline`). Recorded only on
+// first sight of a request id, so the load-time snapshot's idempotent re-push
+// cannot restart the clock. Times are page-local: this map dies with the page,
+// exactly like `shellResolutions` above.
+const shellResolutionArrivals = new Map<string, number>();
+
 /** The shell-reported verdict for a request, or null if the shell hasn't
  *  reported one. */
 export function shellPermissionResolutionFor(requestId: string): PermissionResolution | null {
   return shellResolutions.get(requestId) ?? null;
+}
+
+/** When this page first learned a shell-reported verdict for `requestId`
+ *  (`Date.now()` at the time), or null if it never has. */
+export function shellResolutionArrivalFor(requestId: string): number | null {
+  return shellResolutionArrivals.get(requestId) ?? null;
+}
+
+/** Whether any shell-reported verdict landed after `since`. A cheap pre-check
+ *  (the map holds one entry per request this page has seen resolved) so the
+ *  activity strip can skip its transcript scan on the overwhelmingly common
+ *  redraw where nothing was just resolved. */
+export function hasShellResolutionSince(since: number): boolean {
+  for (const arrival of shellResolutionArrivals.values()) {
+    if (arrival > since) return true;
+  }
+  return false;
 }
 
 /** Record every verdict a `minds:permission-resolutions` message carries --
@@ -161,6 +190,10 @@ export function notePermissionResolutions(message: ContractMessage): void {
     const { requestId, resolution } = entry as ContractMessage;
     if (typeof requestId !== "string" || requestId === "") continue;
     if (resolution !== "granted" && resolution !== "denied") continue;
+    // First sight only: the snapshot is pushed up to three times per page load
+    // and re-pushed on every reload, and a re-notification of a verdict this
+    // page already knows is not a fresh decision to wait on.
+    if (!shellResolutionArrivals.has(requestId)) shellResolutionArrivals.set(requestId, Date.now());
     shellResolutions.set(requestId, resolution);
     isAnyRecorded = true;
   }
@@ -170,6 +203,7 @@ export function notePermissionResolutions(message: ContractMessage): void {
 /** Drop the verdict cache so the next test starts from a quiet page. */
 export function resetShellPermissionResolutionsForTesting(): void {
   shellResolutions.clear();
+  shellResolutionArrivals.clear();
 }
 
 /** Subscribe the cards to the shell's verdicts. Called once at app bootstrap. */

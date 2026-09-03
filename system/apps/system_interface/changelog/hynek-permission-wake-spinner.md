@@ -1,0 +1,7 @@
+# The chat no longer looks dead between approving a permission and the agent resuming
+
+Approving a permission request flips the in-chat card to Approved immediately, because the desktop client pushes the verdict straight into the page over the embed contract (`minds:permission-resolutions`) the moment the user clicks. Telling the *agent* is a much slower, separate path: the desktop client hands the resolution notice to a retried `mngr message` delivery, which has to discover the agent's host and then paste-and-confirm the notice into its TUI. Until that lands the agent is genuinely idle, so the activity strip showed nothing and the chat read as though the approval had gone nowhere.
+
+The activity strip now covers that beat with a bare, captionless pulsing dot -- the same dot the strip already uses, with no label, because until the agent has the notice there is nothing truthful to say about what it is doing. It appears only when the agent is otherwise idle (any real turn outranks it), and it stops at whichever comes first: the agent starting work, the resolution notice landing in the transcript, or a 10-second cap so a delivery that never arrives leaves the chat honestly quiet rather than spinning forever.
+
+It is scoped to the request's own agent and to verdicts this page has not already seen resolved in its transcript, so a sibling panel does not spin for another agent's request and a reloaded page does not spin over verdicts the agent heard about long ago.
