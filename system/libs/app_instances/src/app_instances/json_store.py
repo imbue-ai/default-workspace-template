@@ -117,7 +117,8 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
     Each instance is a key and the path its page was last at. ``new`` allocates the lowest free
     ``<key_prefix>-<N>`` and stores ``params.path`` (default ``/``) as the URL; a location report
     replaces the URL and refreshes ``last_active``. The file is rewritten atomically (temp file
-    plus rename) under a process-wide lock, so this process must be the file's only writer.
+    plus rename) under the source's own lock, so one source per process must be the file's only
+    writer.
     """
 
     store_path: Path = Field(frozen=True, description="The instances.json file")

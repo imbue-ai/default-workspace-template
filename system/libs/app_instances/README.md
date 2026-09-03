@@ -45,9 +45,9 @@ The shell is the only caller of the API, over loopback, at the registry row's
   `render_title_template(template, number)`, which fills the placeholder in.
 - `app_instances.json_store`: `JsonStoreInstanceSource` keeps records in one
   `instances.json` (`{"version": 1, "instances": [record, ...]}`), rewritten
-  atomically (temp file plus rename) under a process-wide lock, so the owning
-  process must be the file's only writer; a stray temp file from a crashed write
-  is ignored. Its one action is `new`, which mints the lowest free
+  atomically (temp file plus rename) under the source's own lock, so one source
+  per process must be the file's only writer; a stray temp file from a crashed
+  write is ignored. Its one action is `new`, which mints the lowest free
   `<key_prefix>-<N>` (a deleted number is reused) and stores `params.path`
   (default `/`) as the URL; a location report replaces the URL and refreshes
   `last_active`. `key_prefix`, `title_template`, `lifetime`, `is_renameable`,
