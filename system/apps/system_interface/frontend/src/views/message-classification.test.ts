@@ -77,6 +77,17 @@ describe("classifyUserMessage", () => {
     expect(c.body).toBe("Context was compacted");
     expect(c.label).toBeNull();
   });
+
+  it("maps display: status with display_body to StatusMessage with label and summary body", () => {
+    const c = classifyUserMessage({
+      content: "Context was compacted",
+      display: "status",
+      display_body: "Summary of earlier conversation",
+    });
+    expect(c.kind).toBe(UserMessageKind.StatusMessage);
+    expect(c.label).toBe("Context was compacted");
+    expect(c.body).toBe("Summary of earlier conversation");
+  });
 });
 
 describe("semantic helpers", () => {

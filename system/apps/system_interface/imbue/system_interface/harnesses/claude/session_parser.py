@@ -455,6 +455,8 @@ def _parse_user_message(
                     "display": DisplayKind.STATUS,
                     "non_turn_tail": True,
                 }
+                if text:
+                    event["display_body"] = text
                 if session_id is not None:
                     event["session_id"] = session_id
                 existing_event_ids.add(event_id)
