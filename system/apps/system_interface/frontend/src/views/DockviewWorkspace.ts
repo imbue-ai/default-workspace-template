@@ -426,11 +426,11 @@ function reloadIframeForKey(key: LiveKey): void {
  *  A terminal has no serviceName (see addTerminalPanel), so it falls to the
  *  generic "any other iframe reloads just itself" case below -- which, for a
  *  terminal, is exactly the reattach Refresh means for it: the pane's URL
- *  already points at ``run_ttyd.sh``'s per-session dispatch, and that script's
- *  own ``tmux new-session -A -s <name>`` attaches to the existing session
- *  rather than killing and recreating it, so a plain iframe reload reconnects
- *  the ttyd client without touching the session or its scrollback (the same
- *  path a tab reopen or a ttyd restart already takes). */
+ *  already points at the terminal app's per-session dispatch (``session.sh``),
+ *  and that script's own ``tmux new-session -A -s <name>`` attaches to the
+ *  existing session rather than killing and recreating it, so a plain iframe
+ *  reload reconnects the ttyd client without touching the session or its
+ *  scrollback (the same path a tab reopen or a ttyd restart already takes). */
 function refreshPanelContent(panelId: string): void {
   const params = panelParams.get(panelId);
   if (params === undefined) return;
