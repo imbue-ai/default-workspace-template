@@ -117,8 +117,9 @@ out and make it yourself. Invoke autofix so it *applies* its fixes but leaves
 the keep/revert judgment to you:
 
     /autofix Run fully unattended: never call AskUserQuestion. Run the fix
-    loop, leave every fix commit applied, and report the fix commits (hash +
-    full message). Do not revert anything yourself -- the caller will decide.
+    loop a single time, not 10 times. Leave every fix commit applied, and 
+    report the fix commits (hash + full message). Do not revert anything yourself 
+    -- the caller will decide. 
 
 Then review those fix commits against what this branch is meant to do. You hold
 the task context the fix subagents run without, so you are the right judge of
