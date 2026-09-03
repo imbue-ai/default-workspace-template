@@ -121,8 +121,8 @@ def snapshot_targets(
     Every entry is a directory restored by a plain copy: the built bundle and
     ``node_modules`` (the build and ``npm ci`` both delete before they
     produce), the root venv (``uv sync`` rewrites it), the mngr tool
-    environment, and the tool environment of every *critical* app the diff
-    touched (``uv tool install --reinstall`` rebuilds them from scratch). A
+    environment, and the tool environment of every *critical* app the plan
+    reinstalls (``uv tool install --reinstall`` rebuilds them from scratch). A
     non-critical app's tool is not copied aside: a rollback reinstalls it from
     the restored tree instead.
     """
