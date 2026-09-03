@@ -16,8 +16,10 @@ from pathlib import Path
 from typing import Any, Final
 
 import click
+import pytest
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import ActionId, AppName, AppUrl, InstancesUrl
+from app_manifest.registry import ENV_APPS_FILE
 from flask import Flask, request
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -43,7 +45,7 @@ from app_instances.json_store import (
     allocate_instance_number,
     allocated_key,
 )
-from app_instances.nudge import ShellNudger, shell_base_url
+from app_instances.nudge import ENV_SHELL_URL, ShellNudger, shell_base_url
 from app_instances.primitives import (
     InstanceKey,
     InstanceKeyPrefix,
@@ -189,6 +191,17 @@ class SidecarEnvironment(FrozenModel):
         description="The test's own directory for manifests, stores, and logs"
     )
     registry_path: Path = Field(description="The apps.toml registrations land in")
+
+
+def prepare_sidecar_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo_root: Path
+) -> SidecarEnvironment:
+    """What a fixture builds for a registration or sidecar under test: cwd at ``repo_root`` (the registration script is cwd-relative), a scratch registry, and a shell URL nothing listens on."""
+    monkeypatch.chdir(repo_root)
+    registry_path = tmp_path / "apps.toml"
+    monkeypatch.setenv(ENV_APPS_FILE, str(registry_path))
+    monkeypatch.setenv(ENV_SHELL_URL, f"http://{LOOPBACK_HOST}:{free_port()}")
+    return SidecarEnvironment(scratch_dir=tmp_path, registry_path=registry_path)
 
 
 def free_port() -> int:
