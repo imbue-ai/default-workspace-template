@@ -16,6 +16,7 @@ from typing import Final
 import click
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import ActionId, AppName, AppUrl, InstancesUrl
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from pydantic import Field
 from werkzeug.serving import make_server
@@ -157,6 +158,15 @@ class RecordingNudger(InstanceNudgerInterface):
 
     def nudge(self) -> None:
         self.nudge_count += 1
+
+
+class SidecarEnvironment(FrozenModel):
+    """Where a registration or sidecar under test keeps its files, and the registry it registers in."""
+
+    scratch_dir: Path = Field(
+        description="The test's own directory for manifests, stores, and logs"
+    )
+    registry_path: Path = Field(description="The apps.toml registrations land in")
 
 
 def free_port() -> int:

@@ -3,25 +3,20 @@
 import signal
 import subprocess
 import sys
-from collections.abc import Iterator
-from pathlib import Path
 from uuid import uuid4
 
 import httpx
 import pytest
-from app_instances.nudge import ENV_SHELL_URL
 from app_instances.testing import (
     LOOPBACK_HOST,
+    SidecarEnvironment,
     free_port,
     is_port_accepting,
     wait_until,
     write_sidecar_manifest,
 )
 from app_manifest.primitives import AppName, InstancesUrl
-from app_manifest.registry import ENV_APPS_FILE, read_registry
-
-# system/libs/app_instances/test_sidecar.py -> the repository root, where forward_port.py lives.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+from app_manifest.registry import read_registry
 
 _STARTUP_TIMEOUT_SECONDS = 20.0
 _EXIT_TIMEOUT_SECONDS = 10.0
@@ -30,7 +25,7 @@ _EXIT_TIMEOUT_SECONDS = 10.0
 class _SidecarUnderTest:
     """One sidecar process, the ports and files it was given, and its captured stderr."""
 
-    def __init__(self, tmp_path: Path, child_argv: list[str]) -> None:
+    def __init__(self, environment: SidecarEnvironment, child_argv: list[str]) -> None:
         self.app_name = AppName(f"sidecar-{uuid4().hex[:8]}")
         self.child_port = free_port()
         self.instances_port = free_port()
@@ -38,11 +33,11 @@ class _SidecarUnderTest:
             f"http://{LOOPBACK_HOST}:{self.instances_port}"
         )
         self.app_url = f"http://localhost:{self.child_port}"
-        self.registry_path = tmp_path / "apps.toml"
-        self.store_path = tmp_path / "instances.json"
-        self.log_path = tmp_path / "sidecar.log"
+        self.registry_path = environment.registry_path
+        self.store_path = environment.scratch_dir / "instances.json"
+        self.log_path = environment.scratch_dir / "sidecar.log"
         manifest_path = write_sidecar_manifest(
-            tmp_path, self.app_name, self.instances_url
+            environment.scratch_dir, self.app_name, self.instances_url
         )
         self.child_argv = [
             argument.replace("{port}", str(self.child_port)) for argument in child_argv
@@ -68,17 +63,6 @@ class _SidecarUnderTest:
         return self.log_path.read_text() if self.log_path.exists() else ""
 
 
-@pytest.fixture
-def sidecar_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[Path]:
-    """The cwd, registry, and (unreachable) shell every sidecar process in this file runs against."""
-    monkeypatch.chdir(_REPO_ROOT)
-    monkeypatch.setenv(ENV_APPS_FILE, str(tmp_path / "apps.toml"))
-    monkeypatch.setenv(ENV_SHELL_URL, f"http://{LOOPBACK_HOST}:{free_port()}")
-    yield tmp_path
-
-
 def _spawn(sidecar: _SidecarUnderTest) -> subprocess.Popen[bytes]:
     with sidecar.log_path.open("wb") as log_file:
         return subprocess.Popen(
@@ -88,9 +72,9 @@ def _spawn(sidecar: _SidecarUnderTest) -> subprocess.Popen[bytes]:
 
 @pytest.mark.timeout(60)
 def test_sidecar_registers_serves_instances_and_forwards_sigterm_to_the_child(
-    sidecar_environment: Path,
+    sidecar_environment: SidecarEnvironment,
 ) -> None:
-    served_dir = sidecar_environment / "served"
+    served_dir = sidecar_environment.scratch_dir / "served"
     served_dir.mkdir()
     (served_dir / "hello.txt").write_text("hello from the wrapped server")
     sidecar = _SidecarUnderTest(
@@ -153,7 +137,9 @@ def test_sidecar_registers_serves_instances_and_forwards_sigterm_to_the_child(
 
 
 @pytest.mark.timeout(60)
-def test_sidecar_exits_with_the_childs_own_exit_code(sidecar_environment: Path) -> None:
+def test_sidecar_exits_with_the_childs_own_exit_code(
+    sidecar_environment: SidecarEnvironment,
+) -> None:
     sidecar = _SidecarUnderTest(
         sidecar_environment, [sys.executable, "-c", "import sys; sys.exit(3)"]
     )
