@@ -8,6 +8,7 @@ from app_instances.blueprint import (
     HTTP_INTERNAL_ERROR,
     HTTP_NOT_FOUND,
     HTTP_SERVICE_UNAVAILABLE,
+    build_instances_app,
     status_code_for_error,
 )
 from app_instances.data_types import InstanceRecord
@@ -23,7 +24,7 @@ from app_instances.errors import (
     UnknownActionError,
     UnknownInstanceError,
 )
-from app_instances.testing import RecordingNudger, StubInstanceSource, build_stub_app
+from app_instances.testing import RecordingNudger, StubInstanceSource
 
 
 def _create(source: StubInstanceSource, path: str) -> InstanceRecord:
@@ -258,7 +259,7 @@ class _BrokenSource(StubInstanceSource):
 
 
 def test_an_unmapped_library_error_answers_500_with_a_detail_body() -> None:
-    client = build_stub_app(_BrokenSource(), RecordingNudger()).test_client()
+    client = build_instances_app(_BrokenSource(), RecordingNudger()).test_client()
 
     response = client.get("/_instances")
 

@@ -18,9 +18,9 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from werkzeug.serving import BaseWSGIServer, make_server
 
-from app_instances.blueprint import build_instances_blueprint
+from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
-from app_instances.interfaces import InstanceNudgerInterface, InstanceSourceInterface
+from app_instances.interfaces import InstanceSourceInterface
 from app_instances.nudge import ShellNudger, shell_base_url
 
 # The registration script, relative to the repo root every supervised program runs from.
@@ -54,15 +54,6 @@ def split_instances_url(instances_url: InstancesUrl) -> tuple[str, int]:
     if parts.hostname is None or parts.port is None:
         raise SidecarError(f"instances URL {instances_url!r} names no host and port")
     return parts.hostname, parts.port
-
-
-def build_sidecar_app(
-    source: InstanceSourceInterface, nudger: InstanceNudgerInterface
-) -> Flask:
-    """A Flask app that serves nothing but the instances blueprint."""
-    app = Flask(__name__)
-    app.register_blueprint(build_instances_blueprint(source, nudger))
-    return app
 
 
 def register_app(manifest_path: Path, app_url: AppUrl) -> None:
@@ -178,7 +169,7 @@ def run_sidecar(
         "Starting the instances API of {} at {}", manifest.name, instances_url
     ):
         server, server_thread = _start_server(
-            host, port, build_sidecar_app(source, nudger)
+            host, port, build_instances_app(source, nudger)
         )
     try:
         with log_span("Registering {} at {}", manifest.name, app_url):

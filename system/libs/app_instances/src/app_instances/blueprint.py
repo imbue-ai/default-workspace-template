@@ -1,7 +1,7 @@
 from typing import Any, Final, TypeVar
 
 from app_manifest.manifest import describe_validation_error
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Flask, jsonify, request
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -147,3 +147,12 @@ def build_instances_blueprint(
         return jsonify({"detail": str(error)}), status_code
 
     return blueprint
+
+
+def build_instances_app(
+    source: InstanceSourceInterface, nudger: InstanceNudgerInterface
+) -> Flask:
+    """A Flask app that serves nothing but the instances blueprint (what the sidecar and the stub app run)."""
+    app = Flask(__name__)
+    app.register_blueprint(build_instances_blueprint(source, nudger))
+    return app

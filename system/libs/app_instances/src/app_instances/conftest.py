@@ -7,6 +7,7 @@ from flask import Flask, request
 from flask.testing import FlaskClient
 from werkzeug.serving import make_server
 
+from app_instances.blueprint import build_instances_app
 from app_instances.data_types import InstanceLifetime
 from app_instances.json_store import JsonStoreInstanceSource
 from app_instances.primitives import InstanceKeyPrefix, TitleTemplate
@@ -14,7 +15,6 @@ from app_instances.testing import (
     LOOPBACK_HOST,
     RecordingNudger,
     StubInstanceSource,
-    build_stub_app,
     free_port,
 )
 
@@ -33,7 +33,7 @@ def recording_nudger() -> RecordingNudger:
 def instances_client(
     stub_source: StubInstanceSource, recording_nudger: RecordingNudger
 ) -> FlaskClient:
-    return build_stub_app(stub_source, recording_nudger).test_client()
+    return build_instances_app(stub_source, recording_nudger).test_client()
 
 
 @pytest.fixture

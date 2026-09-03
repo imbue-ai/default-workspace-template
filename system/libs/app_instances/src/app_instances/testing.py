@@ -16,12 +16,11 @@ from typing import Final
 
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import ActionId, AppName, AppUrl, InstancesUrl
-from flask import Flask
 from imbue.imbue_common.model_update import to_update
 from pydantic import Field
 from werkzeug.serving import make_server
 
-from app_instances.blueprint import build_instances_blueprint
+from app_instances.blueprint import build_instances_app
 from app_instances.data_types import InstanceLifetime, InstanceRecord, InstanceStatus
 from app_instances.errors import (
     InstanceConflictError,
@@ -160,14 +159,6 @@ class RecordingNudger(InstanceNudgerInterface):
         self.nudge_count += 1
 
 
-def build_stub_app(
-    source: InstanceSourceInterface, nudger: InstanceNudgerInterface
-) -> Flask:
-    app = Flask(__name__)
-    app.register_blueprint(build_instances_blueprint(source, nudger))
-    return app
-
-
 def free_port() -> int:
     """A loopback port nothing is listening on right now."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -222,7 +213,10 @@ def run_stub_app(port: int) -> None:
     """Serve the stub app on the loopback port, nudging the real shell, until the process is interrupted."""
     nudger = ShellNudger(app_name=STUB_APP_NAME, shell_url=shell_base_url())
     server = make_server(
-        LOOPBACK_HOST, port, build_stub_app(StubInstanceSource(), nudger), threaded=True
+        LOOPBACK_HOST,
+        port,
+        build_instances_app(StubInstanceSource(), nudger),
+        threaded=True,
     )
     server.serve_forever()
 
