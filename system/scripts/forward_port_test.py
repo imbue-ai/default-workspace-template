@@ -695,6 +695,17 @@ def test_the_writer_refuses_a_value_type_the_registry_never_holds() -> None:
         forward_port.dump_registry([{"name": "web", "actions": ["new"]}])
 
 
+def test_a_registry_whose_apps_are_not_tables_is_refused_by_name(tmp_path: Path) -> None:
+    forward_port = _load_module("_forward_port_reader_shape_check", _SCRIPT)
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text("apps = [1]\n")
+
+    with pytest.raises(ValueError, match="element that is not a table") as excinfo:
+        forward_port._load_apps(apps_file)
+    assert isinstance(excinfo.value, forward_port.MalformedRegistryError)
+    assert str(apps_file) in str(excinfo.value)
+
+
 def test_a_legacy_registry_written_by_tomlkit_is_read_and_rewritten_intact(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     apps_file.write_text(
