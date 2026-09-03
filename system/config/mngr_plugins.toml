@@ -1,10 +1,11 @@
 # The mngr plugins this workspace registers, and which tool environment each
 # one goes into: ``mngr`` is the vendored mngr CLI's tool; any other entry is an
 # app's manifest name (``system/apps/<package>/app.toml``), whose own tool
-# environment gets the plugin as an editable extra. Read at image build by system/scripts/build_workspace.sh and
-# again by the update-self apply after a merge, so a release that ships a new
-# plugin registers it in the workspace being updated rather than only in
-# freshly built images. Paths are relative to the workspace root.
+# environment gets the plugin as an editable extra. Read at image build by
+# system/scripts/build_workspace.sh and again by the update-self apply after a
+# merge, so a release that ships a new plugin registers it in the workspace
+# being updated rather than only in freshly built images. Paths are relative
+# to the workspace root.
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_claude"
