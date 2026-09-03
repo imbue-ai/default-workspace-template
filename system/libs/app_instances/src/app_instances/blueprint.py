@@ -51,26 +51,24 @@ class _MalformedRequestError(AppInstancesError):
 @pure
 def status_code_for_error(error: AppInstancesError) -> int:
     """The HTTP status of contracts.md section 4.2 for each typed error; an unmapped library error is 500."""
-    if isinstance(
-        error,
-        (
-            _MalformedRequestError,
-            InvalidInstanceValueError,
-            UnknownActionError,
-            InvalidParamsError,
-            NotRenameableError,
-            LocationNotTrackedError,
-        ),
-    ):
-        return HTTP_BAD_REQUEST
-    elif isinstance(error, UnknownInstanceError):
-        return HTTP_NOT_FOUND
-    elif isinstance(error, InstanceConflictError):
-        return HTTP_CONFLICT
-    elif isinstance(error, NotReadyError):
-        return HTTP_SERVICE_UNAVAILABLE
-    else:
-        return HTTP_INTERNAL_ERROR
+    match error:
+        case (
+            _MalformedRequestError()
+            | InvalidInstanceValueError()
+            | UnknownActionError()
+            | InvalidParamsError()
+            | NotRenameableError()
+            | LocationNotTrackedError()
+        ):
+            return HTTP_BAD_REQUEST
+        case UnknownInstanceError():
+            return HTTP_NOT_FOUND
+        case InstanceConflictError():
+            return HTTP_CONFLICT
+        case NotReadyError():
+            return HTTP_SERVICE_UNAVAILABLE
+        case _:
+            return HTTP_INTERNAL_ERROR
 
 
 @pure
