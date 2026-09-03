@@ -167,14 +167,21 @@ def test_install_ttyd_web_client_falls_back_when_the_asset_is_missing_or_broken(
     tmp_path: Path,
 ) -> None:
     destination = tmp_path / "index.html"
+    good = gzip.compress(b"<html>patched client</html>" * 100)
+    broken_archives = {
+        "not-gzip.gz": b"not gzip at all",
+        "truncated.gz": good[: len(good) // 2],
+        "corrupt.gz": good[:20] + b"xx" + good[22:],
+    }
 
     assert install_ttyd_web_client(tmp_path / "absent.gz", destination) is False
     assert not destination.exists()
 
-    broken = tmp_path / "broken.gz"
-    broken.write_bytes(b"not gzip at all")
-    assert install_ttyd_web_client(broken, destination) is False
-    assert not destination.exists()
+    for name, contents in broken_archives.items():
+        broken = tmp_path / name
+        broken.write_bytes(contents)
+        assert install_ttyd_web_client(broken, destination) is False, name
+        assert not destination.exists(), name
 
 
 def test_ttyd_argv_is_todays_command_line() -> None:
