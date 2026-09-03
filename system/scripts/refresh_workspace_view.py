@@ -58,7 +58,8 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from typing import Callable, Sequence
+from typing import Callable
+from typing import Sequence
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"

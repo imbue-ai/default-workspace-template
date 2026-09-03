@@ -9,7 +9,9 @@ keepalive and the incremental flush of the streamed ``task``/``hold`` responses.
 """
 
 from flask import Flask
-from werkzeug.serving import BaseWSGIServer, WSGIRequestHandler, make_server
+from werkzeug.serving import BaseWSGIServer
+from werkzeug.serving import WSGIRequestHandler
+from werkzeug.serving import make_server
 
 
 class Http11RequestHandler(WSGIRequestHandler):

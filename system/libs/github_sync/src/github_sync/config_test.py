@@ -6,14 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from github_sync.config import (
-    GithubSyncConfigError,
-    get_gateway_password,
-    get_gateway_url,
-    load_repo_url,
-    parse_owner_and_name,
-    proxied_url,
-)
+from github_sync.config import GithubSyncConfigError
+from github_sync.config import get_gateway_password
+from github_sync.config import get_gateway_url
+from github_sync.config import load_repo_url
+from github_sync.config import parse_owner_and_name
+from github_sync.config import proxied_url
 
 
 def _config_path_in(workspace: Path) -> Path:

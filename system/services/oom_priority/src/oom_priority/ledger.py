@@ -21,7 +21,8 @@ under a plain ``python3``.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Final
 

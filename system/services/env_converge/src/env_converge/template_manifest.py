@@ -49,7 +49,10 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import ValidationError
 
 # The three files a template publishes at its repo root. No slug in any of
 # them: one template per repo, overriding rather than accumulating.

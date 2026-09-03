@@ -19,7 +19,8 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
-from imbue.system_interface.testing import RecordingMngrMessenger, build_test_state
+from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 

@@ -19,14 +19,15 @@ import contextlib
 import json
 import os
 import socket
-import urllib.request
 import threading
 import time
+import urllib.request
 from typing import Any
 
 import pytest
 import simple_websocket
-from browser import manifest, runner
+from browser import manifest
+from browser import runner
 from browser import session as bsession
 from browser.cdp_proxy import ProxyServer
 from browser.wsgi import make_threaded_server

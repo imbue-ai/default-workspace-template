@@ -35,7 +35,8 @@ Self-contained beyond the stdlib-only ``oom_priority`` package (imported via a
 """
 
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
+from collections.abc import Iterable
 from pathlib import Path
 
 sys.path.insert(

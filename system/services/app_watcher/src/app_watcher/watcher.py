@@ -11,17 +11,16 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from uuid import uuid4
 
-from imbue.imbue_common.event_envelope import (
-    EventEnvelope,
-    EventId,
-    EventSource,
-    EventType,
-    IsoTimestamp,
-)
+from imbue.imbue_common.event_envelope import EventEnvelope
+from imbue.imbue_common.event_envelope import EventId
+from imbue.imbue_common.event_envelope import EventSource
+from imbue.imbue_common.event_envelope import EventType
+from imbue.imbue_common.event_envelope import IsoTimestamp
 
 try:
     import tomllib

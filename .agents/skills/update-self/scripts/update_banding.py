@@ -7,7 +7,8 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
+from typing import Sequence
 
 # The ``oom_priority`` bands module, when the tree carries it. Loaded lazily
 # from the target repo root (this script may run as a staged copy far from any

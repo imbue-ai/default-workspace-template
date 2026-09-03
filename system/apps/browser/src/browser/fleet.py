@@ -47,9 +47,11 @@ import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
+from typing import Iterator
 
-from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
+from imbue.mngr.cli.output_helpers import write_human_line
+from imbue.mngr.cli.output_helpers import write_stderr_line
 
 _DEFAULT_URL = "http://127.0.0.1:8081"
 _ENV_URL = "MINDS_BROWSER_SERVICE_URL"

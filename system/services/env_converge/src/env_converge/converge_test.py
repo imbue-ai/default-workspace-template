@@ -1,41 +1,37 @@
 import json
-from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
+from collections.abc import Callable
+from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
 
-from env_converge.converge import (
-    OverlayEntryError,
-    _install_missing,
-    _merge_missing_recorded_apt,
-    _merge_missing_recorded_cargo,
-    _merge_missing_recorded_npm,
-    _merge_missing_recorded_uv,
-    apply_overlay_entry,
-    capture_unless_fresh_rootfs,
-    read_overlay_paths,
-    read_pinned_snapshot_timestamp,
-)
-from env_converge.data_types import (
-    AptState,
-    BaseIdentity,
-    CargoState,
-    NpmGlobalState,
-    UvToolState,
-)
+from env_converge.converge import OverlayEntryError
+from env_converge.converge import _install_missing
+from env_converge.converge import _merge_missing_recorded_apt
+from env_converge.converge import _merge_missing_recorded_cargo
+from env_converge.converge import _merge_missing_recorded_npm
+from env_converge.converge import _merge_missing_recorded_uv
+from env_converge.converge import apply_overlay_entry
+from env_converge.converge import capture_unless_fresh_rootfs
+from env_converge.converge import read_overlay_paths
+from env_converge.converge import read_pinned_snapshot_timestamp
+from env_converge.data_types import AptState
+from env_converge.data_types import BaseIdentity
+from env_converge.data_types import CargoState
+from env_converge.data_types import NpmGlobalState
+from env_converge.data_types import UvToolState
 from env_converge.events import default_events_path
-from env_converge.record import (
-    is_rootfs_stamped,
-    read_apt_state,
-    read_base_identity,
-    read_cargo_state,
-    read_record_snapshot,
-    stamp_rootfs,
-    write_apt_state,
-    write_base_identity,
-    write_cargo_state,
-)
+from env_converge.record import is_rootfs_stamped
+from env_converge.record import read_apt_state
+from env_converge.record import read_base_identity
+from env_converge.record import read_cargo_state
+from env_converge.record import read_record_snapshot
+from env_converge.record import stamp_rootfs
+from env_converge.record import write_apt_state
+from env_converge.record import write_base_identity
+from env_converge.record import write_cargo_state
 from env_converge.upgrade import compute_version_deltas
 
 

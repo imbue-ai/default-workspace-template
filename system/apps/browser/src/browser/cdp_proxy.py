@@ -23,7 +23,9 @@ CLI actually sends rather than for a hostile client.
 import asyncio
 import json
 import urllib.request
-from typing import Any, Awaitable, Callable
+from typing import Any
+from typing import Awaitable
+from typing import Callable
 
 import websockets
 from loguru import logger

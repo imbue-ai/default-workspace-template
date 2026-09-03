@@ -12,20 +12,21 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
 import pytest
 
-from github_sync.runner import (
-    VISIBILITY_CHECK_INTERVAL_SECONDS,
-    _do_tick,
-    _refresh_visibility,
-    _SyncState,
-    status_file_path,
-)
+from github_sync.runner import VISIBILITY_CHECK_INTERVAL_SECONDS
+from github_sync.runner import _do_tick
+from github_sync.runner import _refresh_visibility
+from github_sync.runner import _SyncState
+from github_sync.runner import status_file_path
 from github_sync.testing import install_fake_latchkey
-from github_sync.visibility import VISIBILITY_PRIVATE, VISIBILITY_PUBLIC
+from github_sync.visibility import VISIBILITY_PRIVATE
+from github_sync.visibility import VISIBILITY_PUBLIC
 
 _REPO_URL = "https://github.com/some-user/my-workspace"
 

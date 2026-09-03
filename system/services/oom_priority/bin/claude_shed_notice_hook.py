@@ -21,11 +21,9 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "src")
 )
 
-from oom_priority.ledger import (
-    append_notice_delivered,
-    pending_shed_timestamps,
-    read_records,
-)
+from oom_priority.ledger import append_notice_delivered
+from oom_priority.ledger import pending_shed_timestamps
+from oom_priority.ledger import read_records
 
 
 def main() -> None:

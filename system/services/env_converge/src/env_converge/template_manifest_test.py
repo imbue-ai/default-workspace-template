@@ -6,22 +6,20 @@ from pathlib import Path
 import pytest
 
 from env_converge import template_manifest
-from env_converge.template_manifest import (
-    CURRENT_MANIFEST_FORMAT,
-    MANIFEST_MARKDOWN_NAME,
-    MANIFEST_THUMBNAIL_NAME,
-    MANIFEST_TOML_NAME,
-    Requirements,
-    TemplateManifest,
-    TemplateManifestNotFoundError,
-    TemplateManifestParseError,
-    check_env_d_units,
-    check_markdown_agreement,
-    check_unfinished_placeholders,
-    find_manifest_path,
-    load_template_manifest,
-    validate_template_tree,
-)
+from env_converge.template_manifest import CURRENT_MANIFEST_FORMAT
+from env_converge.template_manifest import MANIFEST_MARKDOWN_NAME
+from env_converge.template_manifest import MANIFEST_THUMBNAIL_NAME
+from env_converge.template_manifest import MANIFEST_TOML_NAME
+from env_converge.template_manifest import Requirements
+from env_converge.template_manifest import TemplateManifest
+from env_converge.template_manifest import TemplateManifestNotFoundError
+from env_converge.template_manifest import TemplateManifestParseError
+from env_converge.template_manifest import check_env_d_units
+from env_converge.template_manifest import check_markdown_agreement
+from env_converge.template_manifest import check_unfinished_placeholders
+from env_converge.template_manifest import find_manifest_path
+from env_converge.template_manifest import load_template_manifest
+from env_converge.template_manifest import validate_template_tree
 
 _MINIMAL_TOML = """
 format = "v2"

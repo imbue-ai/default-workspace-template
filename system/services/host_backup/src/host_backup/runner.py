@@ -9,46 +9,46 @@ import re
 import subprocess
 import time
 import traceback
-from collections.abc import Callable, Mapping
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
+from collections.abc import Mapping
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
 from loguru import logger
 
-from host_backup.capabilities import BackupCapabilities, detect_backup_capabilities
-from host_backup.config import (
-    BACKUP_TOML_PATH,
-    PRUNE_TIMESTAMP_PATH,
-    RESTIC_ENV_PATH,
-    BackupConfig,
-    get_events_dir,
-    load_backup_config,
-    load_restic_env,
-    missing_required_restic_keys,
-    publish_service_events_dir,
-)
-from host_backup.events import BackupEventType, make_event, write_event
-from host_backup.restic import (
-    RESTORE_MARKER_TAGS,
-    extract_snapshot_id_from_backup_output,
-    is_repo_locked_error,
-)
+from host_backup.capabilities import BackupCapabilities
+from host_backup.capabilities import detect_backup_capabilities
+from host_backup.config import BACKUP_TOML_PATH
+from host_backup.config import PRUNE_TIMESTAMP_PATH
+from host_backup.config import RESTIC_ENV_PATH
+from host_backup.config import BackupConfig
+from host_backup.config import get_events_dir
+from host_backup.config import load_backup_config
+from host_backup.config import load_restic_env
+from host_backup.config import missing_required_restic_keys
+from host_backup.config import publish_service_events_dir
+from host_backup.events import BackupEventType
+from host_backup.events import make_event
+from host_backup.events import write_event
+from host_backup.restic import RESTORE_MARKER_TAGS
 from host_backup.restic import backup as restic_backup
+from host_backup.restic import extract_snapshot_id_from_backup_output
 from host_backup.restic import forget as restic_forget
 from host_backup.restic import forget_snapshot_ids as restic_forget_snapshot_ids
+from host_backup.restic import is_repo_locked_error
 from host_backup.restic import (
     list_snapshots_with_any_tag as restic_list_snapshots_with_any_tag,
 )
 from host_backup.restic import prune as restic_prune
 from host_backup.restic import unlock as restic_unlock
-from host_backup.snapshot import (
-    SnapshotCleanupError,
-    SnapshotError,
-    SnapshotResult,
-    make_snapshot_taker,
-)
+from host_backup.snapshot import SnapshotCleanupError
+from host_backup.snapshot import SnapshotError
+from host_backup.snapshot import SnapshotResult
+from host_backup.snapshot import make_snapshot_taker
 
 LOG_FILE = Path("/tmp/host-backup.log")
 

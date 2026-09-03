@@ -17,25 +17,20 @@ import shutil
 from pathlib import Path
 
 import pytest
-from host_backup.capabilities import BackupCapabilities, SnapshotMethod
-from host_backup.config import BackupConfig, RetentionSettings
-from host_backup.restic import (
-    backup as restic_backup,
-)
-from host_backup.restic import (
-    extract_snapshot_id_from_backup_output,
-    init_repo,
-    is_repo_missing_error,
-    probe_repo,
-    run_restic,
-)
-from host_backup.restic import (
-    forget as restic_forget,
-)
-from host_backup.restic import (
-    prune as restic_prune,
-)
-from host_backup.runner import _age_out_restore_markers, _LoopState
+from host_backup.capabilities import BackupCapabilities
+from host_backup.capabilities import SnapshotMethod
+from host_backup.config import BackupConfig
+from host_backup.config import RetentionSettings
+from host_backup.restic import backup as restic_backup
+from host_backup.restic import extract_snapshot_id_from_backup_output
+from host_backup.restic import forget as restic_forget
+from host_backup.restic import init_repo
+from host_backup.restic import is_repo_missing_error
+from host_backup.restic import probe_repo
+from host_backup.restic import prune as restic_prune
+from host_backup.restic import run_restic
+from host_backup.runner import _age_out_restore_markers
+from host_backup.runner import _LoopState
 
 
 def _restic_available() -> bool:

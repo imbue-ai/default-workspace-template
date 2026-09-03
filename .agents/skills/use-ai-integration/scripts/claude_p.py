@@ -61,10 +61,14 @@ import json
 import os
 import subprocess
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import ValidationError
 
 _MAIN_CLAUDE_SESSION_ID = "MAIN_CLAUDE_SESSION_ID"
 # mngr identity vars its own subagent proxy strips; dropping them is defense in

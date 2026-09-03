@@ -1,7 +1,8 @@
 """Unit tests for the window guardian's browser-wide close signal. The X-driven methods
 (_tick/_repin/_close/_is_browser_window/run) need a live Xvfb and are exercised end-to-end."""
 
-from browser.window_guardian import signal_extra_closed, take_extra_closed
+from browser.window_guardian import signal_extra_closed
+from browser.window_guardian import take_extra_closed
 
 
 def test_extra_closed_signal_is_edge_triggered() -> None:

@@ -12,11 +12,9 @@ from collections.abc import Callable
 
 import pytest
 
-from mngr_cli_contract.contract import (
-    MngrArgvContractError,
-    MngrSettingContractError,
-    assert_mngr_argv_valid,
-)
+from mngr_cli_contract.contract import MngrArgvContractError
+from mngr_cli_contract.contract import MngrSettingContractError
+from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 
 @pytest.mark.parametrize(

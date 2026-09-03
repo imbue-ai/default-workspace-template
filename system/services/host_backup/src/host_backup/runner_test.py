@@ -5,28 +5,29 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
 
-from host_backup.capabilities import BackupCapabilities, SnapshotMethod
-from host_backup.config import BackupConfig, RetentionSettings
+from host_backup.capabilities import BackupCapabilities
+from host_backup.capabilities import SnapshotMethod
+from host_backup.config import BackupConfig
+from host_backup.config import RetentionSettings
 from host_backup.events import TICK_TERMINAL_EVENT_TYPES
-from host_backup.runner import (
-    CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
-    ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
-    _age_out_restore_markers,
-    _check_secrets_present,
-    _emit_tick_error,
-    _load_config_if_changed,
-    _LoopState,
-    _parse_restic_timestamp,
-    _refresh_environment_record,
-    _run_restic_backup,
-    _should_tick_now,
-    _take_snapshot,
-)
+from host_backup.runner import CONSECUTIVE_FAILURE_ALARM_THRESHOLD
+from host_backup.runner import ENV_RECORD_CAPTURE_TIMEOUT_SECONDS
+from host_backup.runner import _age_out_restore_markers
+from host_backup.runner import _check_secrets_present
+from host_backup.runner import _emit_tick_error
+from host_backup.runner import _load_config_if_changed
+from host_backup.runner import _LoopState
+from host_backup.runner import _parse_restic_timestamp
+from host_backup.runner import _refresh_environment_record
+from host_backup.runner import _run_restic_backup
+from host_backup.runner import _should_tick_now
+from host_backup.runner import _take_snapshot
 from host_backup.snapshot import SnapshotResult
 
 

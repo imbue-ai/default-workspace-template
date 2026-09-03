@@ -71,7 +71,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
+from typing import Sequence
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and

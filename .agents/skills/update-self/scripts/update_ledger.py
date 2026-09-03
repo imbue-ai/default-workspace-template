@@ -5,7 +5,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from update_runtime import ApplyError, Runner, git_out
+from update_runtime import ApplyError
+from update_runtime import Runner
+from update_runtime import git_out
 
 _VERSION_HISTORY_REL = "docs/VERSION_HISTORY.md"
 

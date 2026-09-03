@@ -23,7 +23,6 @@ archive into a way around the scan, so the scan always happens first.
 """
 
 import base64
-from datetime import datetime
 import glob
 import io
 import json
@@ -36,6 +35,7 @@ import tempfile
 import time
 import zipfile
 from collections.abc import Sequence
+from datetime import datetime
 
 WORKSPACE_DIR = "/home/user/workspace"
 # The workspace's own service definitions, read for the supervisorctl status in
