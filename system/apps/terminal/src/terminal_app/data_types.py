@@ -4,8 +4,9 @@ from pathlib import Path
 
 from app_instances.primitives import InstanceTitle
 from imbue.imbue_common.frozen_model import FrozenModel
-from pydantic import AwareDatetime, Field, computed_field
+from pydantic import AwareDatetime, Field, computed_field, field_validator
 
+from terminal_app.errors import InvalidTerminalValueError
 from terminal_app.primitives import ClientTty, TmuxSessionName, Workdir
 
 
@@ -78,6 +79,15 @@ class TerminalPaths(FrozenModel):
     state_dir: Path = Field(
         description="The app's state directory (data/.state/terminal under the repo root), absolute so the dispatch scripts can embed it"
     )
+
+    @field_validator("state_dir")
+    @classmethod
+    def _require_an_absolute_state_dir(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise InvalidTerminalValueError(
+                f"invalid state directory {str(value)!r}: it must be absolute, since the dispatch scripts embed it"
+            )
+        return value
 
     @computed_field
     @cached_property
