@@ -17,8 +17,15 @@ _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
 _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 
 
+# The apps the template ships. Only these are checked: a workspace built from the
+# template may carry user-built apps (with a manifest whose priority is ``user``,
+# or scaffolded before manifests existed and not yet migrated), and this suite
+# runs there too.
+_BUILT_IN_APP_PACKAGES = ("browser", "files", "system_interface", "terminal")
+
+
 def _built_in_manifest_paths() -> list[Path]:
-    return sorted(_APPS_DIR.glob(f"*/{MANIFEST_FILENAME}"))
+    return [_APPS_DIR / package / MANIFEST_FILENAME for package in _BUILT_IN_APP_PACKAGES]
 
 
 def _command_by_program() -> dict[str, str]:
@@ -32,14 +39,10 @@ def _command_by_program() -> dict[str, str]:
 
 
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
-    # The terminal and files apps have no Python yet, but they have manifests;
-    # any directory under system/apps/ is an app and must describe itself.
-    missing = sorted(
-        child.name
-        for child in _APPS_DIR.iterdir()
-        if child.is_dir() and not (child / MANIFEST_FILENAME).is_file()
-    )
-    assert missing == [], f"app directories without an {MANIFEST_FILENAME}: {missing}"
+    # The terminal and files apps have no Python yet, but they have manifests:
+    # every built-in app describes itself.
+    missing = [str(path.relative_to(_REPO_ROOT)) for path in _built_in_manifest_paths() if not path.is_file()]
+    assert missing == [], f"built-in apps without an {MANIFEST_FILENAME}: {missing}"
 
 
 @pytest.mark.parametrize("manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name)
