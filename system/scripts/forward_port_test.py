@@ -687,8 +687,9 @@ def test_the_writer_escapes_control_characters(tmp_path: Path) -> None:
 
 def test_the_writer_refuses_a_value_type_the_registry_never_holds() -> None:
     forward_port = _load_module("_forward_port_writer_type_check", _SCRIPT)
-    with pytest.raises(TypeError, match="cannot hold"):
+    with pytest.raises(TypeError, match="cannot hold") as excinfo:
         forward_port.dump_registry([{"name": "web", "port": 8000}])
+    assert isinstance(excinfo.value, forward_port.RegistryError)
 
 
 def test_a_legacy_registry_written_by_tomlkit_is_read_and_rewritten_intact(tmp_path: Path) -> None:
