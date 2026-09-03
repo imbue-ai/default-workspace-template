@@ -145,6 +145,13 @@ def serve_in_background(host: str, port: int, app: Flask) -> Iterator[BaseWSGISe
         server.shutdown()
         server.server_close()
         server_thread.join(timeout=SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+        if server_thread.is_alive():
+            logger.warning(
+                "Stopped the server at {}:{} but its thread is still running {}s later",
+                host,
+                port,
+                SERVER_SHUTDOWN_TIMEOUT_SECONDS,
+            )
 
 
 def _forward_signals_to(child: subprocess.Popen[bytes]) -> None:
