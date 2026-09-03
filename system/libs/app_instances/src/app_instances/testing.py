@@ -34,8 +34,8 @@ from app_instances.errors import (
 from app_instances.interfaces import InstanceNudgerInterface, InstanceSourceInterface
 from app_instances.json_store import (
     JsonStoreInstanceSource,
-    allocate_key,
-    instance_number,
+    allocate_instance_number,
+    allocated_key,
 )
 from app_instances.nudge import ShellNudger, shell_base_url
 from app_instances.primitives import (
@@ -92,11 +92,13 @@ class StubInstanceSource(InstanceSourceInterface):
             raise UnknownActionError(f"unknown action {action!r}")
         if self.create_refusal is not None:
             raise InstanceConflictError(self.create_refusal)
-        key = allocate_key(STUB_KEY_PREFIX, {record.key for record in self.records})
+        number = allocate_instance_number(
+            STUB_KEY_PREFIX, {record.key for record in self.records}
+        )
         record = InstanceRecord(
-            key=key,
+            key=allocated_key(STUB_KEY_PREFIX, number),
             url=InstanceUrl(params.get("path", "/")),
-            title=InstanceTitle(f"Stub {instance_number(STUB_KEY_PREFIX, key)}"),
+            title=InstanceTitle(f"Stub {number}"),
             status=InstanceStatus.IDLE,
             lifetime=InstanceLifetime.EXPLICIT,
             last_active=datetime.now(timezone.utc),

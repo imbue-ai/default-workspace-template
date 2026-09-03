@@ -168,3 +168,9 @@ class TitleTemplate(str):
         return core_schema.no_info_after_validator_function(
             cls, core_schema.str_schema()
         )
+
+
+@pure
+def render_title_template(template: TitleTemplate, number: int) -> InstanceTitle:
+    """The title of the instance numbered ``number``: the template with its placeholder filled in."""
+    return InstanceTitle(template.replace(TITLE_NUMBER_PLACEHOLDER, str(number)))

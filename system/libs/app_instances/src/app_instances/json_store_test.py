@@ -19,7 +19,9 @@ from app_instances.errors import (
 )
 from app_instances.json_store import (
     JsonStoreInstanceSource,
+    allocate_instance_number,
     allocate_key,
+    allocated_key,
     app_store_path,
     instance_number,
 )
@@ -48,6 +50,18 @@ def test_allocate_key_mints_the_lowest_free_number_ignoring_foreign_keys(
     taken: set[str], expected: str
 ) -> None:
     assert allocate_key(_FILES, taken) == expected
+
+
+def test_allocate_instance_number_and_allocated_key_agree_with_allocate_key() -> None:
+    taken = {"files-1", "files-2", "files-4"}
+
+    number = allocate_instance_number(_FILES, taken)
+    key = allocated_key(_FILES, number)
+
+    assert number == 3
+    assert key == "files-3"
+    assert key == allocate_key(_FILES, taken)
+    assert instance_number(_FILES, key) == number
 
 
 def test_instance_number_reads_only_keys_the_allocator_minted() -> None:
