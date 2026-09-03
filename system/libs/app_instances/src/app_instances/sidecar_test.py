@@ -51,62 +51,52 @@ def test_split_instances_url_names_the_loopback_host_and_port() -> None:
     )
 
 
-def test_run_sidecar_refuses_a_manifest_whose_instances_url_differs(
-    tmp_path: Path,
-) -> None:
-    manifest_path = write_sidecar_manifest(
-        tmp_path, _unique_app_name(), InstancesUrl("http://127.0.0.1:8301")
-    )
-
-    with pytest.raises(
-        SidecarError, match="declares instances_url 'http://127.0.0.1:8301'"
-    ):
-        run_sidecar(
-            manifest_path=manifest_path,
-            app_url=AppUrl("http://localhost:8300"),
-            instances_url=InstancesUrl("http://127.0.0.1:8302"),
-            child_argv=[sys.executable, "-c", "pass"],
-            source=StubInstanceSource(),
-        )
-
-
-def test_run_sidecar_refuses_a_manifest_without_an_instances_url(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
-    manifest_path = tmp_path / "app.toml"
+def _write_manifest(directory: Path, manifest_tail: str) -> Path:
+    """Write a manifest with the common name, display name, and icon, ending in ``manifest_tail``."""
+    (directory / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+    manifest_path = directory / "app.toml"
     manifest_path.write_text(
-        f'name = "{_unique_app_name()}"\ndisplay_name = "Bare"\nicon = "icon.svg"\n'
-        "instances = true\n"
+        f'name = "{_unique_app_name()}"\ndisplay_name = "Sidecar"\nicon = "icon.svg"\n'
+        + manifest_tail
+    )
+    return manifest_path
+
+
+def _run_sidecar_around_a_noop_child(
+    manifest_path: Path, instances_url: InstancesUrl
+) -> int:
+    """Run the sidecar over a stub source around a child that exits at once."""
+    return run_sidecar(
+        manifest_path=manifest_path,
+        app_url=AppUrl("http://localhost:8300"),
+        instances_url=instances_url,
+        child_argv=[sys.executable, "-c", "pass"],
+        source=StubInstanceSource(),
     )
 
-    with pytest.raises(
-        SidecarError,
-        match="declares no instances_url; a sidecar needs instances_url = 'http://127.0.0.1:8301'",
-    ):
-        run_sidecar(
-            manifest_path=manifest_path,
-            app_url=AppUrl("http://localhost:8300"),
-            instances_url=InstancesUrl("http://127.0.0.1:8301"),
-            child_argv=[sys.executable, "-c", "pass"],
-            source=StubInstanceSource(),
-        )
 
+@pytest.mark.parametrize(
+    ("manifest_tail", "expected_problem"),
+    [
+        (
+            'instances = true\ninstances_url = "http://127.0.0.1:8301"\n',
+            "declares instances_url 'http://127.0.0.1:8301'",
+        ),
+        (
+            "instances = true\n",
+            "declares no instances_url; a sidecar needs instances_url = 'http://127.0.0.1:8302'",
+        ),
+        ("", "does not declare instances = true"),
+    ],
+)
+def test_run_sidecar_refuses_a_manifest_that_does_not_fit_the_served_url(
+    tmp_path: Path, manifest_tail: str, expected_problem: str
+) -> None:
+    manifest_path = _write_manifest(tmp_path, manifest_tail)
 
-def test_run_sidecar_refuses_a_single_instance_manifest(tmp_path: Path) -> None:
-    (tmp_path / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
-    manifest_path = tmp_path / "app.toml"
-    manifest_path.write_text(
-        f'name = "{_unique_app_name()}"\ndisplay_name = "Single"\nicon = "icon.svg"\n'
-    )
-
-    with pytest.raises(SidecarError, match="does not declare instances = true"):
-        run_sidecar(
-            manifest_path=manifest_path,
-            app_url=AppUrl("http://localhost:8300"),
-            instances_url=InstancesUrl("http://127.0.0.1:8301"),
-            child_argv=[sys.executable, "-c", "pass"],
-            source=StubInstanceSource(),
+    with pytest.raises(SidecarError, match=expected_problem):
+        _run_sidecar_around_a_noop_child(
+            manifest_path, InstancesUrl("http://127.0.0.1:8302")
         )
 
 
@@ -134,13 +124,7 @@ def test_run_sidecar_releases_its_port_when_registration_fails(
     manifest_path = write_sidecar_manifest(tmp_path, _unique_app_name(), instances_url)
 
     with pytest.raises(SidecarError, match="registration script"):
-        run_sidecar(
-            manifest_path=manifest_path,
-            app_url=AppUrl("http://localhost:8300"),
-            instances_url=instances_url,
-            child_argv=[sys.executable, "-c", "pass"],
-            source=StubInstanceSource(),
-        )
+        _run_sidecar_around_a_noop_child(manifest_path, instances_url)
 
     assert not is_port_accepting(port)
 
@@ -152,13 +136,7 @@ def test_run_sidecar_refuses_to_run_off_the_main_thread(tmp_path: Path) -> None:
 
     def run_in_thread() -> None:
         try:
-            run_sidecar(
-                manifest_path=manifest_path,
-                app_url=AppUrl("http://localhost:8300"),
-                instances_url=instances_url,
-                child_argv=[sys.executable, "-c", "pass"],
-                source=StubInstanceSource(),
-            )
+            _run_sidecar_around_a_noop_child(manifest_path, instances_url)
         except SidecarError as e:
             raised.append(e)
 
