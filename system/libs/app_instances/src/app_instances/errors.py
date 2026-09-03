@@ -39,4 +39,4 @@ class InstanceStoreError(AppInstancesError):
 
 
 class SidecarError(AppInstancesError):
-    """The sidecar launcher cannot start: a manifest that does not fit, a port it cannot bind, or a failed registration."""
+    """The sidecar launcher cannot start: a manifest that does not fit, an empty child command, a port it cannot bind, or a failed registration."""
