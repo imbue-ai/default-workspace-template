@@ -9,7 +9,8 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import NamedTuple
+from typing import Sequence
 
 # A released minds version tag, e.g. ``minds-v0.3.7`` (stable) or
 # ``minds-v0.3.7-rc1`` (a release candidate -- a prerelease we never default to).

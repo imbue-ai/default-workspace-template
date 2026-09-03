@@ -8,10 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from bootstrap.claude_state_migration import (
-    REPLACED_CLAUDE_JSON_NAME,
-    migrate_legacy_claude_state,
-)
+from bootstrap.claude_state_migration import REPLACED_CLAUDE_JSON_NAME
+from bootstrap.claude_state_migration import migrate_legacy_claude_state
 
 
 def _make_stranded_legacy_home(legacy_home: Path) -> None:

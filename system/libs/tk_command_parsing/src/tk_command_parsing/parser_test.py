@@ -12,7 +12,9 @@ argument, and the ``--flag=value`` form -- are covered explicitly.
 
 from __future__ import annotations
 
-from tk_command_parsing.parser import extract_create_titles, flag_values, parse_command
+from tk_command_parsing.parser import extract_create_titles
+from tk_command_parsing.parser import flag_values
+from tk_command_parsing.parser import parse_command
 
 
 def _verbs(command: str) -> list[str | None]:

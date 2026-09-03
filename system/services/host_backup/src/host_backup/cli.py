@@ -23,12 +23,11 @@ from typing import Final
 import click
 from loguru import logger
 
-from host_backup.config import BACKUP_TOML_PATH, resolve_service_events_dir
-from host_backup.events import (
-    BACKUP_EVENT_SOURCE,
-    TICK_TERMINAL_EVENT_TYPES,
-    BackupEventType,
-)
+from host_backup.config import BACKUP_TOML_PATH
+from host_backup.config import resolve_service_events_dir
+from host_backup.events import BACKUP_EVENT_SOURCE
+from host_backup.events import TICK_TERMINAL_EVENT_TYPES
+from host_backup.events import BackupEventType
 
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # 30 minutes
 _POLL_INTERVAL_SECONDS = 0.5

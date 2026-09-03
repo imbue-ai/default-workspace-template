@@ -16,13 +16,11 @@ import subprocess
 
 from loguru import logger
 
-from github_sync.config import (
-    GITHUB_URL_PREFIX,
-    get_gateway_password,
-    get_gateway_permissions_override,
-    get_gateway_url,
-    proxied_url,
-)
+from github_sync.config import GITHUB_URL_PREFIX
+from github_sync.config import get_gateway_password
+from github_sync.config import get_gateway_permissions_override
+from github_sync.config import get_gateway_url
+from github_sync.config import proxied_url
 
 HOOKS_PATH = "/home/user/workspace/system/libs/github_sync/git_hooks"
 PASSWORD_HEADER = "X-Latchkey-Gateway-Password"

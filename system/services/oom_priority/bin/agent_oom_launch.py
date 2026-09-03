@@ -71,7 +71,9 @@ sys.path.insert(
 )
 
 from oom_priority import bands
-from oom_priority.agent_identity import is_chat_agent, is_primary_agent, is_worker_agent
+from oom_priority.agent_identity import is_chat_agent
+from oom_priority.agent_identity import is_primary_agent
+from oom_priority.agent_identity import is_worker_agent
 from oom_priority.registry import record_agent_pid
 
 

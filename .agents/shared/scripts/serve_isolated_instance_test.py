@@ -17,9 +17,11 @@ import importlib.util
 import json
 import signal
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
+from typing import Sequence
 
 import pytest
 

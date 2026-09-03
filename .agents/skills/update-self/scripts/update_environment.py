@@ -13,25 +13,26 @@ import tomllib
 from pathlib import Path
 from typing import Sequence
 
-from update_apply_contract import SnapshotRecord, snapshots_root
+from update_apply_contract import SnapshotRecord
+from update_apply_contract import snapshots_root
 from update_banding import ExpendWrapper
 from update_classification import ApplyPlan
-from update_layout import (
-    FRONTEND_DIR,
-    MANIFEST_TOOL_NAMES,
-    MNGR_DIR,
-    MNGR_EXECUTABLE,
-    MNGR_TOOL_NAME,
-    PLUGIN_MANIFEST_PATH,
-    PROVISIONER_HOME,
-    PROVISIONER_PATH,
-    PROVISIONER_SCRIPT,
-    RECEIPT,
-    STATIC_DIR,
-    SYSTEM_INTERFACE_DIR,
-    TOOL_NAME,
-)
-from update_runtime import Runner, run_checked, tail
+from update_layout import FRONTEND_DIR
+from update_layout import MANIFEST_TOOL_NAMES
+from update_layout import MNGR_DIR
+from update_layout import MNGR_EXECUTABLE
+from update_layout import MNGR_TOOL_NAME
+from update_layout import PLUGIN_MANIFEST_PATH
+from update_layout import PROVISIONER_HOME
+from update_layout import PROVISIONER_PATH
+from update_layout import PROVISIONER_SCRIPT
+from update_layout import RECEIPT
+from update_layout import STATIC_DIR
+from update_layout import SYSTEM_INTERFACE_DIR
+from update_layout import TOOL_NAME
+from update_runtime import Runner
+from update_runtime import run_checked
+from update_runtime import tail
 
 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 1200.0
 

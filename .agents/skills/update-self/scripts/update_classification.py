@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Collection, NamedTuple, Sequence
+from typing import Collection
+from typing import NamedTuple
+from typing import Sequence
 
-from update_layout import (
-    FRONTEND_DIR,
-    MNGR_VENDOR_DIR,
-    PLUGIN_MANIFEST_PATH,
-    PROVISIONER_SCRIPT,
-    SYSTEM_INTERFACE_DIR,
-)
+from update_layout import FRONTEND_DIR
+from update_layout import MNGR_VENDOR_DIR
+from update_layout import PLUGIN_MANIFEST_PATH
+from update_layout import PROVISIONER_SCRIPT
+from update_layout import SYSTEM_INTERFACE_DIR
 
 CLASS_SYSTEM_INTERFACE = "system_interface"
 

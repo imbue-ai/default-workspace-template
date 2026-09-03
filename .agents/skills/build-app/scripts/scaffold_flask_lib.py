@@ -31,7 +31,8 @@ from typing import Iterable
 
 import tomlkit
 from tomlkit import TOMLDocument
-from tomlkit.items import Array, Table
+from tomlkit.items import Array
+from tomlkit.items import Table
 
 # Both kebab and snake forms are reserved so a kebab name that converts to
 # a snake-cased existing app or service name is also rejected.

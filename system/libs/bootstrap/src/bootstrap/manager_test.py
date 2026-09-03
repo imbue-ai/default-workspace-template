@@ -12,29 +12,27 @@ import pytest
 from loguru import logger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
-from bootstrap.manager import (
-    _DRI_WAKE_TIMEOUT_SECONDS,
-    _UPDATE_RECOVER_TIMEOUT_SECONDS,
-    UPDATE_APPLY_MARKER,
-    UPDATE_APPLY_SCRIPT,
-    UPDATE_RECOVER_CRON_NAME,
-    UPDATE_RECOVER_EXIT_EMERGENCY,
-    WORKSPACE_ROOT_DIR,
-    TimezoneFetchError,
-    _apply_container_timezone,
-    _configure_git_global,
-    _ensure_git_identity,
-    _fetch_user_timezone,
-    _initialize_workspace_main_branch,
-    _install_runtime_cron_entries,
-    _parse_timezone_response,
-    _read_host_name,
-    _read_update_marker_dri_agent,
-    _recover_interrupted_update,
-    _wake_update_dri_agent,
-    _write_update_recovery_cron_entry,
-    main,
-)
+from bootstrap.manager import _DRI_WAKE_TIMEOUT_SECONDS
+from bootstrap.manager import _UPDATE_RECOVER_TIMEOUT_SECONDS
+from bootstrap.manager import UPDATE_APPLY_MARKER
+from bootstrap.manager import UPDATE_APPLY_SCRIPT
+from bootstrap.manager import UPDATE_RECOVER_CRON_NAME
+from bootstrap.manager import UPDATE_RECOVER_EXIT_EMERGENCY
+from bootstrap.manager import WORKSPACE_ROOT_DIR
+from bootstrap.manager import TimezoneFetchError
+from bootstrap.manager import _apply_container_timezone
+from bootstrap.manager import _configure_git_global
+from bootstrap.manager import _ensure_git_identity
+from bootstrap.manager import _fetch_user_timezone
+from bootstrap.manager import _initialize_workspace_main_branch
+from bootstrap.manager import _install_runtime_cron_entries
+from bootstrap.manager import _parse_timezone_response
+from bootstrap.manager import _read_host_name
+from bootstrap.manager import _read_update_marker_dri_agent
+from bootstrap.manager import _recover_interrupted_update
+from bootstrap.manager import _wake_update_dri_agent
+from bootstrap.manager import _write_update_recovery_cron_entry
+from bootstrap.manager import main
 
 # --- _configure_git_global ---
 

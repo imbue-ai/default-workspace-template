@@ -7,20 +7,18 @@ from pathlib import Path
 import pytest
 
 from host_backup.capabilities import SnapshotMethod
-from host_backup.config import (
-    BackupConfig,
-    SnapshotSettings,
-    get_events_dir,
-    load_backup_config,
-    load_restic_env,
-    merge_snapshot_into_existing_toml,
-    missing_required_restic_keys,
-    parse_restic_env_file,
-    publish_service_events_dir,
-    render_default_backup_toml,
-    resolve_service_events_dir,
-    write_default_restic_env_template,
-)
+from host_backup.config import BackupConfig
+from host_backup.config import SnapshotSettings
+from host_backup.config import get_events_dir
+from host_backup.config import load_backup_config
+from host_backup.config import load_restic_env
+from host_backup.config import merge_snapshot_into_existing_toml
+from host_backup.config import missing_required_restic_keys
+from host_backup.config import parse_restic_env_file
+from host_backup.config import publish_service_events_dir
+from host_backup.config import render_default_backup_toml
+from host_backup.config import resolve_service_events_dir
+from host_backup.config import write_default_restic_env_template
 
 # --- parse_restic_env_file ---
 

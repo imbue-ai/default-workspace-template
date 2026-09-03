@@ -37,7 +37,8 @@ import tomlkit
 from imbue.mngr.agents.agent_registry import load_agents_from_plugins
 from imbue.mngr.agents.default_plugins.command_agent import CommandAgent
 from imbue.mngr.config.agent_config_registry import resolve_agent_type
-from imbue.mngr.config.data_types import AgentTypeConfig, MngrConfig
+from imbue.mngr.config.data_types import AgentTypeConfig
+from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr_claude.plugin import ClaudeAgentConfig

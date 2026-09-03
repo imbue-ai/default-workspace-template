@@ -14,13 +14,13 @@ from pathlib import Path
 from loguru import logger
 
 from env_converge.capture import parse_dpkg_versions
-from env_converge.converge import (
-    capture_all,
-    read_pinned_snapshot_timestamp,
-    run_unit_scripts,
-)
-from env_converge.events import EnvConvergeEventType, emit_event
-from env_converge.record import EnvConvergeError, read_apt_state
+from env_converge.converge import capture_all
+from env_converge.converge import read_pinned_snapshot_timestamp
+from env_converge.converge import run_unit_scripts
+from env_converge.events import EnvConvergeEventType
+from env_converge.events import emit_event
+from env_converge.record import EnvConvergeError
+from env_converge.record import read_apt_state
 
 _APT_TIMEOUT_SECONDS = 1800.0
 

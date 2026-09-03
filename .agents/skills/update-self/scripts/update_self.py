@@ -132,30 +132,31 @@ import sys
 import tarfile
 import time
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
+from typing import Sequence
 
-from update_apply import apply_update, recover
-from update_apply_contract import (
-    DEFAULT_RECOVER_GRACE_SECONDS,
-    ENV_DRI_AGENT,
-    RUN_VERDICTS,
-    RunStatus,
-    read_run_status,
-    run_status_path,
-    write_run_status,
-)
+from update_apply import apply_update
+from update_apply import recover
+from update_apply_contract import DEFAULT_RECOVER_GRACE_SECONDS
+from update_apply_contract import ENV_DRI_AGENT
+from update_apply_contract import RUN_VERDICTS
+from update_apply_contract import RunStatus
+from update_apply_contract import read_run_status
+from update_apply_contract import run_status_path
+from update_apply_contract import write_run_status
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
-from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
-from update_target import (
-    CeilingUnavailableError,
-    NoUpdateTargetError,
-    already_current_message,
-    fetch_app_template_ref,
-    is_held_back_by_ceiling,
-    pick_latest_stable_tag,
-    resolve_target,
-)
+from update_runtime import ApplyPreconditionError
+from update_runtime import HttpClient
+from update_runtime import Runner
+from update_runtime import Spawner
+from update_target import CeilingUnavailableError
+from update_target import NoUpdateTargetError
+from update_target import already_current_message
+from update_target import fetch_app_template_ref
+from update_target import is_held_back_by_ceiling
+from update_target import pick_latest_stable_tag
+from update_target import resolve_target
 
 # The repo-relative directory holding the update-self skill (SKILL.md,
 # references/, scripts/). Used by ``bootstrap-skill`` to extract the target
