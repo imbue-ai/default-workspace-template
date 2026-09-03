@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any
 
 from imbue.imbue_common.mutable_model import MutableModel
@@ -53,5 +54,5 @@ class ShellPosterInterface(MutableModel, ABC):
     """Posts to the shell's loopback routes on the terminal app's behalf."""
 
     @abstractmethod
-    def post_json(self, path: str, body: dict[str, Any]) -> None:
+    def post_json(self, path: str, body: Mapping[str, Any]) -> None:
         """POST ``body`` to the shell route at ``path``; must never raise for an unreachable or refusing shell."""
