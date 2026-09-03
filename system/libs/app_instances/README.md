@@ -57,9 +57,10 @@ The shell is the only caller of the API, over loopback, at the registry row's
   number itself is wanted) and `instance_number(prefix, key)` are the
   allocator, for sources that keep their own record of keys.
 - `app_instances.nudge`: `ShellNudger(app_name, shell_url)` posts
-  `POST <shell>/api/apps/<name>/changed` with a two-second timeout and logs an
+  `POST <shell>/api/apps/<name>/changed` with a two-second timeout, logs an
   unreachable or refusing shell at debug level (until phase 7 of the model the
-  shell answers `404`, which is expected); `shell_base_url()` resolves the shell
+  shell answers `404`, which is expected), and warns when a nudge took over
+  half a second; `shell_base_url()` resolves the shell
   exactly as `system/scripts/layout.py` does (`MINDS_WORKSPACE_SERVER_URL`,
   default `http://127.0.0.1:8000`).
 - `app_instances.sidecar`: `run_sidecar(manifest_path, app_url, instances_url,
