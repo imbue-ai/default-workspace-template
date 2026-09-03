@@ -4,7 +4,7 @@ Contracts: [contracts.md](contracts.md) sections 1, 7, and 16.
 
 ## Goal
 
-Carry a pre-arc workspace's projects, arrangements, titles, recency, and file-browser locations into the new state files, once, deterministically.
+Carry a pre-arc workspace's projects, arrangements, titles, recency, and file-browser locations into the new state files, once, deterministically; and rewrite every pre-manifest user app to the manifest form so that, from here on, every Python app runs from its own tool and apps leave the root uv workspace.
 
 ## Files
 
@@ -12,12 +12,14 @@ Created:
 
 - `system/scripts/migrate_workspace_layouts.py`: stdlib-only, like the other scripts; it writes the files store's JSON shape directly, and a test in `app_instances` pins that shape against the store's reader; subcommands `run` (default) and `plan --json` (prints what it would write without writing).
 - `system/scripts/migrate_workspace_layouts_test.py`: over a fixture directory built in the test from today's writers' shapes (the registry, two projects, desktop and mobile arrangements with chat, terminal, browser, files, url, and subagent panels, titles, recency, locations).
+- `system/scripts/migrate_workspace_apps.py` and its test: for every `system/apps/<package>/` with a `pyproject.toml` and no `app.toml` (a pre-manifest app, contracts section 14), writes the `app.toml` the build-app scaffold would write today (`name` and `program` from the `[program:*]` block that runs `uv run <name>`, `display_name` from the pyproject description or the name, `icon = "icon.svg"` when the file exists, `instances = false`, `priority = "user"`), rewrites that program's command to `forward_port.py --manifest ... --url ... && <name>`, drops the app's entries from the root `pyproject.toml`'s `[project.dependencies]` and `[tool.uv.sources]`, and installs the tool (`uv tool install -e system/apps/<package>`). Idempotent (an app with a manifest is skipped) and committed as one change on the workspace branch, since the apply runs it inside its rollback scope.
 
 Modified:
 
 - `system/libs/bootstrap/src/bootstrap/manager.py`: calls the script (best-effort, logged) after `_recover_interrupted_update` and before `_exec_supervisord`.
 - `.agents/skills/update-self/scripts/update_apply.py`: runs the script after the merge lands and before the services restart, inside the rollback scope.
 - `docs/system/README.md` and the shell README: a section on the marker and how to re-run.
+- `pyproject.toml` (root): `system/apps/*` leaves the workspace member glob and the terminal and files `exclude` entries go with it, since after this phase every app is a tool and no pre-manifest app remains; each app's own `pyproject.toml` gains a `[tool.uv.sources]` table naming its path dependencies as editable so it resolves standalone (verify first that `uv tool install -e system/apps/<package>` resolves a project outside the enclosing workspace). `uv.lock` is re-locked and `uv sync --all-packages` no longer installs any app into the root venv.
 
 ## Inputs
 
@@ -51,10 +53,12 @@ The primary agent id comes from `MNGR_AGENT_ID` as today.
 - Never destructive: the old directory is untouched; a later release deletes it.
 - A missing old directory writes the marker and nothing else, so a fresh workspace is not "unmigrated" forever.
 - Errors in one view are logged and skip that view; the marker is still written, and `plan` shows what was skipped.
+- The app migration runs before the environment refresh in the apply (its rewritten root pyproject is what `uv sync --all-packages --frozen` then resolves) and is all-or-nothing per app: a tool install that fails leaves that app's files as they were and reports it, so the app keeps running from the root venv.
 
 ## Tests
 
 - Every mapping row, the pruning of dropped panels including a group that empties, the shortcut derivation for each override shape, the files store output, idempotency, `--force`, a missing directory, a corrupt file in one view.
+- The app migration: a scaffolded pre-manifest app gains the expected manifest, program line, and root-pyproject edits; an app with a manifest is untouched; a failed tool install leaves the app as it was.
 - Bootstrap and apply wiring tests assert the call site and its error handling.
 
 ## Manual verification

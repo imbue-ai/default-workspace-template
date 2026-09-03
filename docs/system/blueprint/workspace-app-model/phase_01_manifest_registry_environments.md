@@ -5,7 +5,7 @@ Nothing user-visible changes in this phase; every app registers with the same na
 
 ## Goal
 
-Give every built-in app a manifest, teach the registration script to read it, extend the registry rows, install every Python app as its own tool environment, and switch the memory backstop to the registry's `priority`.
+Give every built-in app a manifest, teach the registration script to read it, extend the registry rows, install every manifest app as its own tool environment (the manifest is the discriminator; a pre-manifest user app keeps `uv run` until phase 9), and switch the memory backstop to the registry's `priority`.
 
 ## Files
 
@@ -26,9 +26,7 @@ Modified:
 - `system/scripts/build_workspace.sh`: replaces the single `system-interface` tool install with the loop of contracts section 14 and reads each app's plugin list from the plugin table by app name.
 - `system/config/mngr_plugins.toml`: the `tools` lists name apps by manifest name; `system-interface` keeps its five harness plugins until phase 10 moves them to `chat`.
 - `system/scripts/list_mngr_plugins.py`: `--tool` accepts any name in the table.
-- `pyproject.toml` (root): `system/apps/*` leaves the workspace member glob (apps are tools, not members); `system/libs/*` and `system/services/*` stay; `browser` leaves `[project.dependencies]`.
-  Each app's own `pyproject.toml` gains a `[tool.uv.sources]` table naming its path dependencies (`../../libs/app_manifest`, `../../libs/app_instances`, `../../services/oom_priority`, the vendored mngr packages) as editable, so the app resolves standalone.
-  **Verify first:** that `uv tool install -e system/apps/<package>` resolves a project excluded from the enclosing workspace; if uv refuses, the fallback is to keep the apps as workspace members (accepting that `uv sync --all-packages` also installs them into the root venv) and note it in the README.
+- `pyproject.toml` (root): `browser` leaves `[project.dependencies]`; `app-manifest` joins `[tool.uv.sources]`. `system/apps/*` stays in the workspace member glob for now (contracts section 14): an existing workspace's root pyproject names its scaffolded apps as `{ workspace = true }` sources, so removing the glob before those apps are migrated would break its next `uv sync --all-packages --frozen` and roll the update back. Phase 9 removes the glob together with the pre-manifest apps.
 - `.agents/skills/update-self/scripts/update_environment.py` and `update_classification.py`: the environment refresh reinstalls the tool of every changed app directory and snapshots the tool directories of `critical` apps; the classification treats `system/apps/<package>/**` outside `frontend/` and `static/` as that app's environment.
 - `.agents/skills/build-app/scripts/scaffold_flask_lib.py` and `SKILL.md`, `.agents/skills/update-app/SKILL.md`, `.agents/shared/references/service-processes.md`: the scaffold writes an `app.toml`, installs the new app as a tool, and writes the manifest-driven registration line; the update-app live loop reinstalls the tool after a dependency change.
 - `system/services/oom_priority/src/oom_priority/bands.py`: adds `"chat": 25`; `supervisord_program_band` takes the registry rows as an argument and resolves through `priority`.
@@ -40,7 +38,8 @@ Deleted: nothing.
 ## Behaviour
 
 - Registration with `--manifest` is authoritative for every manifest field on every call, like `--internal` today; a manifest-less registration leaves the new keys absent.
-- The shell reads rows through `app_manifest.registry`; a row that fails validation is skipped with a warning naming the file and the field, and the app is absent from every surface until fixed.
+- The shell keeps its own registry reader in this phase (phase 7 replaces it with `app_manifest.registry`, where a row that fails validation is skipped with a warning naming the file and the field, and the app is absent from every surface until fixed).
+- The build script, the scaffold, and the apply treat an app as a tool only when its directory has both a `pyproject.toml` and an `app.toml`; a pre-manifest user app is left exactly as it is.
 - The backstop's lookup is by `program`; every built-in row carries its program, so the existing `test_every_built_in_supervisord_program_has_an_explicit_band` requirement becomes "every built-in manifest declares a `priority` that is a band key".
 - `uv tool install` runs from the repository root so uv discovers the workspace and resolves the path dependencies (`app_manifest`, `oom-priority`, `imbue-common`, the vendored mngr packages) editable.
 

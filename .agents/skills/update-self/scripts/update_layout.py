@@ -48,10 +48,12 @@ PLUGIN_MANIFEST_PATH = "system/config/mngr_plugins.toml"
 
 MNGR_PLUGIN_KEY = "mngr"
 
-# Every ``system/apps/<package>/`` with a ``pyproject.toml`` is a Python app
-# that runs from its own uv tool environment (see build_workspace.sh); its
-# ``app.toml`` manifest names it and says whether it is critical (a
-# snapshot-and-rollback target in the apply).
+# Every ``system/apps/<package>/`` with both a ``pyproject.toml`` and an
+# ``app.toml`` manifest is a Python app that runs from its own uv tool
+# environment (see build_workspace.sh); the manifest names it and says whether
+# it is critical (a snapshot-and-rollback target in the apply). An app with a
+# pyproject but no manifest was scaffolded before manifests existed and still
+# runs ``uv run <name>`` from the root venv until the migration rewrites it.
 APPS_DIR = "system/apps"
 
 MANIFEST_FILENAME = "app.toml"

@@ -59,8 +59,10 @@ in that app's folder and is named `<app>-<role>`.
 - `system/apps/` - Everything tab-openable: `system_interface/` (the workspace
   web UI -- the special app that hosts the other tabs), `terminal/`, `files/`,
   `browser/`, and every user-built app, each with an `app.toml` manifest; every
-  Python app is installed as its own uv tool (and is also a member of the uv
-  workspace via the `system/apps/*` glob)
+  Python app with a manifest is installed as its own uv tool (and, for now, is
+  also a member of the uv workspace via the `system/apps/*` glob; an app
+  scaffolded before manifests existed keeps running from the root venv until
+  the migration rewrites it)
 - `system/services/` - Standalone background services (`app_watcher/`,
   `caretaker/`, `share_gateway/`, `host_backup/`, `env_converge/`,
   `oom_priority/`)

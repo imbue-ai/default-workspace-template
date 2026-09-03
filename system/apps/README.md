@@ -24,15 +24,19 @@ in `system/supervisord.conf`) whose command registers the manifest and the
 app's port via `system/scripts/forward_port.py --manifest` and then runs the
 app.
 
-Every Python app here runs from its own uv tool environment, installed from
-its own `pyproject.toml` (`uv tool install -e system/apps/<package>`, done by
-`system/scripts/build_workspace.sh` at image build, by the build-app scaffold
-for a new app, and by the update-self apply when an app's directory changes),
-so its program line runs the tool's entry point rather than `uv run`. The
-root venv is for the background services, agents, skills, and scripts. Python
-packages here are still picked up by the workspace's `system/apps/*` uv member
-glob, so one lockfile covers the whole tree; nothing in the root
-`pyproject.toml` needs editing for a new app.
+Every Python app with a manifest runs from its own uv tool environment,
+installed from its own `pyproject.toml` (`uv tool install -e
+system/apps/<package>`, done by `system/scripts/build_workspace.sh` at image
+build, by the build-app scaffold for a new app, and by the update-self apply
+when an app's directory changes), so its program line runs the tool's entry
+point rather than `uv run`. The root venv is for the background services,
+agents, skills, and scripts. The manifest is the discriminator: an app
+scaffolded before manifests existed has no `app.toml`, still runs `uv run
+<name>` from the root venv, and is left as it is until the workspace app
+model's migration rewrites it to the manifest form. Python packages here are
+still picked up by the workspace's `system/apps/*` uv member glob for now, so
+one lockfile covers the whole tree; nothing in the root `pyproject.toml` needs
+editing for a new app.
 
 An app that needs a continuously running background component keeps that
 service's code in its own folder here, named `<app>-<role>` in supervisord;
