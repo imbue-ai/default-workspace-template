@@ -18,6 +18,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from app_manifest.primitives import describe_app_name_problem
 
 _SCRIPT = Path(__file__).parent / "forward_port.py"
 
@@ -388,6 +389,39 @@ def _load_module(module_name: str, path: Path) -> ModuleType:
     return module
 
 
+def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:
+    """Drift guard: the app_manifest library validates names on read with its
+    own copy of this script's rule (the script is stdlib-only and cannot import
+    the library). The two must accept and reject exactly the same names."""
+    forward_port = _load_module("_forward_port_manifest_drift_check", _SCRIPT)
+    names = (
+        "web",
+        "my-app2",
+        "a",
+        "app2",
+        "openvscode-server-4",
+        "x9-y",
+        "system_interface",
+        "under_score",
+        "double--hyphen",
+        "host-foo",
+        "agent-foo",
+        "localhost",
+        "auth",
+        "-lead",
+        "trail-",
+        "UPPER",
+        "dot.name",
+        "",
+        "a" * 32,
+        "a" * 33,
+    )
+    for name in names:
+        is_script_accepted = forward_port.validate_service_name(name) is None
+        is_library_accepted = describe_app_name_problem(name) is None
+        assert is_script_accepted == is_library_accepted, name
+
+
 def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
     """Drift guard: the build-app scaffold's name validation must stay a
     subset of this script's, or the scaffold could mint an app whose
@@ -434,3 +468,255 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
         )
         if is_scaffold_accepted:
             assert forward_port.validate_service_name(name) is None, name
+
+
+# --- manifests -----------------------------------------------------------------
+
+
+def _write_manifest(tmp_path: Path, body: str, icon: str | None = _ICON) -> Path:
+    app_dir = tmp_path / "app"
+    app_dir.mkdir(exist_ok=True)
+    if icon is not None:
+        (app_dir / "icon.svg").write_text(icon)
+    manifest = app_dir / "app.toml"
+    manifest.write_text(body)
+    return manifest
+
+
+_FULL_MANIFEST = """
+name = "files"
+display_name = "File Viewer"
+icon = "icon.svg"
+instances = true
+instances_url = "http://127.0.0.1:8301"
+critical = false
+priority = "files"
+
+[default_shortcut]
+action = "new"
+mode = "focus"
+
+[[actions]]
+id = "new"
+label = "New File Viewer"
+params = [{name = "path", label = "Path", required = false}]
+"""
+
+
+def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["name"] == "files"
+    assert row["url"] == "http://localhost:8300"
+    assert _LABEL_RE.match(row["label"])
+    assert row["icon"] == _ICON
+    assert row["display_name"] == "File Viewer"
+    assert row["instances"] is True
+    assert row["instances_url"] == "http://127.0.0.1:8301"
+    assert row["critical"] is False
+    assert row["priority"] == "files"
+    assert row["program"] == "files"
+    assert "internal" not in row
+    assert row["default_shortcut"] == {"action": "new", "mode": "focus"}
+    # ``params`` is documentation for the manifest's readers; the row carries id and label only.
+    assert row["actions"] == [{"id": "new", "label": "New File Viewer"}]
+
+
+def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
+    assert result.returncode == 0, result.stderr
+    label_after_create = _read_apps(apps_file)[0]["label"]
+
+    # A changed manifest: fewer fields, a different display name, a different program.
+    manifest.write_text('name = "files"\ndisplay_name = "Files"\nicon = "icon.svg"\nprogram = "files-sidecar"\ncritical = true\n')
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8301"], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["label"] == label_after_create
+    assert row["url"] == "http://localhost:8301"
+    assert row["display_name"] == "Files"
+    assert row["program"] == "files-sidecar"
+    assert row["critical"] is True
+    for stale_key in ("instances", "instances_url", "default_shortcut", "actions"):
+        assert stale_key not in row, stale_key
+    assert "priority" not in row
+
+
+def test_manifest_registration_with_a_matching_name_flag_is_accepted(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+
+    result = _run(["--manifest", str(manifest), "--name", "files", "--url", "http://localhost:8300"], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["name"] == "files"
+
+
+def test_manifest_whose_name_differs_from_the_name_flag_is_refused(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+
+    result = _run(["--manifest", str(manifest), "--name", "other", "--url", "http://localhost:8300"], apps_file)
+
+    assert result.returncode != 0
+    assert "does not match the manifest's name" in result.stderr
+    assert not apps_file.exists()
+
+
+def test_an_internal_manifest_needs_no_icon_and_marks_the_row_internal(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path,
+        'name = "system_interface"\ndisplay_name = "Workspace"\ninternal = true\ncritical = true\npriority = "system_interface"\n',
+        icon=None,
+    )
+
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8000"], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    row = _read_apps(apps_file)[0]
+    assert row["internal"] is True
+    assert row["program"] == "system_interface"
+    assert "icon" not in row
+
+
+def test_a_manifest_with_an_invalid_name_is_refused(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, 'name = "Bad Name"\ndisplay_name = "X"\nicon = "icon.svg"\n')
+
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
+
+    assert result.returncode != 0
+    assert "invalid app name" in result.stderr
+    assert not apps_file.exists()
+
+
+def test_a_manifest_with_a_wrongly_typed_field_is_refused(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, 'name = "web"\ndisplay_name = "Web"\nicon = "icon.svg"\ninstances = "yes"\n')
+
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
+
+    assert result.returncode != 0
+    assert "instances must be a boolean" in result.stderr
+
+
+def test_a_manifest_registration_cannot_combine_the_per_flag_forms(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300", "--program", "files"], apps_file)
+
+    assert result.returncode != 0
+    assert "--manifest cannot be combined" in result.stderr
+
+
+def test_a_manifest_less_registration_writes_exactly_the_keys_it_always_has(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", *_icon_file_args(tmp_path, _ICON), "--program", "web"],
+        apps_file,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert set(_read_apps(apps_file)[0]) == {"name", "url", "label", "icon", "program"}
+
+
+def test_a_manifest_missing_its_icon_file_does_not_brick_an_existing_apps_restart(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(tmp_path, _FULL_MANIFEST)
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
+    assert result.returncode == 0, result.stderr
+
+    (manifest.parent / "icon.svg").unlink()
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8301"], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    assert "warning" in result.stderr
+    row = _read_apps(apps_file)[0]
+    assert row["url"] == "http://localhost:8301"
+    assert row["icon"] == _ICON
+
+
+# --- the stdlib writer ------------------------------------------------------------
+
+
+def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_icon(tmp_path: Path) -> None:
+    forward_port = _load_module("_forward_port_writer_check", _SCRIPT)
+    real_icon = (Path(__file__).parents[2] / "system" / "apps" / "files" / "icon.svg").read_text().strip()
+    awkward_icon = '<svg xmlns="http://www.w3.org/2000/svg"\n  viewBox="0 0 24 24">\n\t<path d="M2 2h20"/>\\\n</svg>'
+    apps = [
+        {"name": "files", "url": "http://localhost:8300", "label": "files-abcd1234", "icon": real_icon, "instances": True},
+        {
+            "name": "web",
+            "url": "http://localhost:8000",
+            "label": "web-abcd1234",
+            "icon": awkward_icon,
+            "internal": True,
+            "default_shortcut": {"action": "new", "mode": "focus"},
+            "actions": [{"id": "new", "label": 'Say "hi"'}, {"id": "other", "label": "Other"}],
+        },
+    ]
+
+    rendered = forward_port.dump_registry(apps)
+
+    assert tomllib.loads(rendered)["apps"] == apps
+
+
+def test_the_writer_escapes_control_characters(tmp_path: Path) -> None:
+    forward_port = _load_module("_forward_port_writer_escape_check", _SCRIPT)
+    apps = [{"name": "web", "url": "http://localhost:8000", "label": "bell\x07 and \x7f"}]
+
+    rendered = forward_port.dump_registry(apps)
+
+    assert "\\u0007" in rendered and "\\u007F" in rendered
+    assert tomllib.loads(rendered)["apps"] == apps
+
+
+def test_the_writer_refuses_a_value_type_the_registry_never_holds() -> None:
+    forward_port = _load_module("_forward_port_writer_type_check", _SCRIPT)
+    with pytest.raises(TypeError, match="cannot hold"):
+        forward_port.dump_registry([{"name": "web", "port": 8000}])
+
+
+def test_a_legacy_registry_written_by_tomlkit_is_read_and_rewritten_intact(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text(
+        '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n\n'
+        '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\nlabel = "files-abcd1234"\n'
+        'icon = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\n<path d="M2 2h20v20H2z"/></svg>"""\n'
+        'program = "files"\n'
+    )
+
+    result = _run(["--name", "web", "--url", "http://localhost:8000", "--no-icon"], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert [row["name"] for row in rows] == ["terminal", "files", "web"]
+    assert rows[1]["icon"] == '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\n<path d="M2 2h20v20H2z"/></svg>'
+    assert rows[1]["label"] == "files-abcd1234"
+
+
+def test_the_script_imports_under_an_isolated_stdlib_only_interpreter() -> None:
+    # Every supervisord program line runs this script under a plain python3
+    # before its own command, so registration must never depend on the venv.
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", f"import importlib.util, sys; spec = importlib.util.spec_from_file_location('fp', {str(_SCRIPT)!r}); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); print(m.DEFAULT_APPS_FILE)"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "data/.state/apps.toml"

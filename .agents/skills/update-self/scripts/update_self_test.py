@@ -1267,9 +1267,30 @@ def _installed_stamp(repo_root: Path) -> str | None:
     return update_apply._read_bundle_stamp(repo_root / update_layout.STATIC_DIR)
 
 
+# The Python apps a workspace tree carries, as the apply discovers them
+# (``read_app_tools``): the shell (critical) and the browser daemon (not).
+_APP_FIXTURES = (
+    ("system_interface", "system-interface", "system-interface", True),
+    ("browser", "browser", "browser-service", False),
+)
+
+
+def _write_app(repo_root: Path, package: str, tool_name: str, executable: str, is_critical: bool) -> None:
+    app_dir = repo_root / update_layout.APPS_DIR / package
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "pyproject.toml").write_text(
+        f'[project]\nname = "{tool_name}"\nversion = "0.1.0"\n\n[project.scripts]\n{executable} = "{package}.main:main"\n'
+    )
+    (app_dir / update_layout.MANIFEST_FILENAME).write_text(
+        f'name = "{package}"\ndisplay_name = "{package}"\ninternal = true\ncritical = {str(is_critical).lower()}\n'
+    )
+
+
 def _make_apply_repo(tmp_path: Path) -> Path:
     repo_root = tmp_path / "repo"
     (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
+    for package, tool_name, executable, is_critical in _APP_FIXTURES:
+        _write_app(repo_root, package, tool_name, executable, is_critical)
     return repo_root
 
 
@@ -1659,8 +1680,68 @@ _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 _PROVISIONER_INPUTS = update_classification.read_provisioner_inputs(_WORKSPACE_ROOT)
 
 
+# The real tree's Python apps, so the plan tests see the apps the template ships.
+_APP_TOOLS = update_classification.read_app_tools(_WORKSPACE_ROOT)
+
+
 def _plan(paths: list[str]) -> update_classification.ApplyPlan:
-    return update_classification.plan_apply(paths, _PROVISIONER_INPUTS)
+    return update_classification.plan_apply(paths, _PROVISIONER_INPUTS, _APP_TOOLS)
+
+
+def _app_tool(tool_name: str) -> update_classification.AppTool:
+    return next(app for app in _APP_TOOLS if app.tool_name == tool_name)
+
+
+def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
+    by_name = {app.tool_name: app for app in _APP_TOOLS}
+
+    shell = by_name["system-interface"]
+    assert shell.directory == update_layout.SYSTEM_INTERFACE_DIR
+    assert shell.executable == update_layout.TOOL_NAME
+    assert shell.plugin_key == "system_interface"
+    assert shell.is_critical is True
+    browser = by_name["browser"]
+    assert browser.directory == "system/apps/browser"
+    assert browser.executable == "browser-service"
+    assert browser.plugin_key == "browser"
+    assert browser.is_critical is False
+    # Directories without a pyproject (the terminal and files apps) are not tools.
+    assert "terminal" not in {app.directory.rsplit("/", 1)[1] for app in _APP_TOOLS}
+
+
+def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) -> None:
+    repo_root = _make_apply_repo(tmp_path)
+    broken = repo_root / update_layout.APPS_DIR / "broken"
+    broken.mkdir()
+    (broken / "pyproject.toml").write_text('[project]\nname = "broken"\n')  # no console script
+    unreadable = repo_root / update_layout.APPS_DIR / "unreadable"
+    unreadable.mkdir()
+    (unreadable / "pyproject.toml").write_text("[project\n")
+
+    tools = update_classification.read_app_tools(repo_root)
+
+    assert {app.tool_name for app in tools} == {"system-interface", "browser"}
+    err = capsys.readouterr().err
+    assert "broken" in err and "unreadable" in err
+
+
+@pytest.mark.parametrize(
+    ("path", "tool_names"),
+    [
+        ("system/apps/system_interface/imbue/system_interface/server.py", {"system-interface"}),
+        ("system/apps/system_interface/pyproject.toml", {"system-interface"}),
+        ("system/apps/system_interface/app.toml", {"system-interface"}),
+        ("system/apps/browser/src/browser/runner.py", {"browser"}),
+        ("system/apps/browser/pyproject.toml", {"browser"}),
+        # The frontend bundle and served assets never change what the tool resolves to.
+        ("system/apps/system_interface/frontend/src/App.ts", set()),
+        ("system/apps/browser/src/browser/static/app.js", set()),
+        ("system/apps/terminal/run_ttyd.sh", set()),
+        ("system/vendor/mngr/libs/mngr/pyproject.toml", set()),
+    ],
+)
+def test_plan_apply_refreshes_the_tool_of_every_changed_app_directory(path: str, tool_names: set[str]) -> None:
+    assert {app.tool_name for app in _plan([path]).app_tools} == tool_names
 
 
 def test_plan_apply_maps_each_change_class() -> None:
@@ -1856,9 +1937,44 @@ def test_apply_backend_manifest_refreshes_all_three_environments(
 
     assert code == 0
     installs = runner.argvs_starting("uv", "tool", "install")
-    assert len(installs) == 2  # the vendored mngr tool and the app tool
+    assert len(installs) == 2  # the vendored mngr tool and the shell's own tool
     assert runner.ran("uv", "sync", "--all-packages", "--frozen")
     assert runner.ran(*_RESTART)
+
+
+def test_apply_backend_source_change_reinstalls_only_the_apps_own_tool(apply_repo: Path) -> None:
+    # A change inside an app's directory re-resolves that app's tool (its
+    # entry points and manifest live there), but the shared environments --
+    # the mngr tool and the root venv -- are untouched.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    installs = runner.argvs_starting("uv", "tool", "install")
+    assert [argv[4] for argv in installs] == [update_layout.SYSTEM_INTERFACE_DIR]
+    assert not runner.ran("uv", "sync")
+    assert runner.ran(*_RESTART)
+
+
+def test_apply_browser_change_reinstalls_the_browser_tool_alone(apply_repo: Path) -> None:
+    runner = _apply_runner("M\tsystem/apps/browser/src/browser/runner.py\n", apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    installs = runner.argvs_starting("uv", "tool", "install")
+    assert [argv[4] for argv in installs] == ["system/apps/browser"]
+    assert not runner.ran("uv", "sync")
+
+
+def test_apply_frontend_only_change_reinstalls_no_tool(apply_repo: Path) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not runner.ran("uv", "tool", "install")
 
 
 def test_apply_docs_only_still_preflights_restarts_and_probes(apply_repo: Path) -> None:
@@ -3866,11 +3982,11 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
         """
         [[plugins]]
         path = "system/vendor/mngr/libs/mngr_claude"
-        tools = ["mngr", "system-interface"]
+        tools = ["mngr", "system_interface"]
 
         [[plugins]]
         path = "system/vendor/mngr/libs/mngr_opencode"
-        tools = ["mngr", "system-interface"]
+        tools = ["mngr", "system_interface"]
 
         [[plugins]]
         path = "system/vendor/mngr/libs/mngr_wait"
@@ -4130,6 +4246,37 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     assert (
         repo_root / update_layout.FRONTEND_DIR / "node_modules" / "left-pad.js"
     ).read_text() == "old"
+
+
+def _tool_on_path(tmp_path: Path, runner: _RecordingRunner, tool_name: str, executable: str) -> Path:
+    """Install a fake uv tool ``tool_name`` behind console script ``executable``; return its tool dir."""
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    (tools / tool_name).mkdir(parents=True, exist_ok=True)
+    (tools / tool_name / update_layout.RECEIPT).write_text("[tool]\nrequirements = []\n")
+    (bin_dir / executable).write_text(f"#!{tools}/{tool_name}/bin/python3\nimport sys\n")
+    runner.executables[executable] = str(bin_dir / executable)
+    return tools / tool_name
+
+
+def test_snapshots_copy_aside_the_tool_of_a_critical_app_but_not_of_another(tmp_path: Path) -> None:
+    # The shell is critical (its manifest says so), so an apply that touches
+    # it copies its tool environment aside for the rollback; the browser is
+    # not, so a rollback reinstalls its tool from the restored tree instead.
+    repo_root = _make_apply_repo(tmp_path)
+    runner = _RecordingRunner()
+    shell_tool = _tool_on_path(tmp_path, runner, "system-interface", update_layout.TOOL_NAME)
+    _tool_on_path(tmp_path, runner, "browser", "browser-service")
+    plan = update_classification.plan_apply(
+        [_BACKEND_DIFF.split("\t")[1].strip(), "system/apps/browser/src/browser/runner.py"],
+        _PROVISIONER_INPUTS,
+        update_classification.read_app_tools(repo_root),
+    )
+
+    targets = update_environment.snapshot_targets(plan, repo_root, runner)
+
+    assert targets == [("tool-system-interface", shell_tool)]
 
 
 def test_existing_snapshot_copies_are_reused_not_overwritten(tmp_path: Path) -> None:

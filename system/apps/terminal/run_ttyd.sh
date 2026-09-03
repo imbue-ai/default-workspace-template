@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Wrapper script for ttyd that:
 # 1. Runs ttyd on a fixed, known-by-convention port (7681)
-# 2. Registers the port via forward_port.py before starting ttyd
+# 2. Registers the app (system/apps/terminal/app.toml) and its port via
+#    forward_port.py before starting ttyd
 # 3. Writes server events for discovery
 #
 # Runs as the supervisord `terminal` program (started by supervisord, which
@@ -146,8 +147,9 @@ if [ -n "${MNGR_AGENT_STATE_DIR:-}" ] && [ -f "$TTYD_CLIENT_GZ" ]; then
     fi
 fi
 
-# Register the terminal port before starting ttyd (port is known ahead of time)
-uv run python3 "$REPO_ROOT/system/scripts/forward_port.py" --name terminal --url "http://localhost:$TTYD_PORT" --no-icon
+# Register the terminal app (its manifest and this fixed port) before starting
+# ttyd. forward_port.py is stdlib-only, so a plain python3 suffices.
+python3 "$REPO_ROOT/system/scripts/forward_port.py" --manifest "$REPO_ROOT/system/apps/terminal/app.toml" --url "http://localhost:$TTYD_PORT"
 
 # Write server events for discovery. The "agent" sub-URL is intentionally not
 # registered as its own application: the chat UI exposes it via an inline link

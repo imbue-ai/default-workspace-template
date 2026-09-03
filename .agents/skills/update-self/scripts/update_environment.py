@@ -1,6 +1,7 @@
-"""The served environment the apply rebuilds and protects: the two uv tool
-environments, the root venv, ``node_modules``, the provisioner run, and the
-pre-apply snapshots a rollback restores from.
+"""The served environment the apply rebuilds and protects: the mngr tool
+environment, one tool environment per Python app, the root venv,
+``node_modules``, the provisioner run, and the pre-apply snapshots a rollback
+restores from.
 """
 
 from __future__ import annotations
@@ -15,12 +16,12 @@ from typing import Sequence
 
 from update_apply_contract import SnapshotRecord, snapshots_root
 from update_banding import ExpendWrapper
-from update_classification import ApplyPlan
+from update_classification import ApplyPlan, AppTool
 from update_layout import (
     FRONTEND_DIR,
-    MANIFEST_TOOL_NAMES,
     MNGR_DIR,
     MNGR_EXECUTABLE,
+    MNGR_PLUGIN_KEY,
     MNGR_TOOL_NAME,
     PLUGIN_MANIFEST_PATH,
     PROVISIONER_HOME,
@@ -28,8 +29,6 @@ from update_layout import (
     PROVISIONER_SCRIPT,
     RECEIPT,
     STATIC_DIR,
-    SYSTEM_INTERFACE_DIR,
-    TOOL_NAME,
 )
 from update_runtime import Runner, run_checked, tail
 
@@ -121,41 +120,47 @@ def snapshot_targets(
 
     Every entry is a directory restored by a plain copy: the built bundle and
     ``node_modules`` (the build and ``npm ci`` both delete before they
-    produce), the root venv (``uv sync`` rewrites it), and the two uv tool
-    environments (``uv tool install --reinstall`` rebuilds them from scratch).
+    produce), the root venv (``uv sync`` rewrites it), the mngr tool
+    environment, and the tool environment of every *critical* app the diff
+    touched (``uv tool install --reinstall`` rebuilds them from scratch). A
+    non-critical app's tool is not copied aside: a rollback reinstalls it from
+    the restored tree instead.
     """
     targets: list[tuple[str, Path]] = []
     if plan.frontend:
         targets.append(("bundle", repo_root / STATIC_DIR))
     if plan.frontend_manifest:
         targets.append(("node_modules", repo_root / FRONTEND_DIR / "node_modules"))
+    tools: list[tuple[str, str]] = []
     if plan.backend_manifest:
         targets.append(("venv", repo_root / ".venv"))
-        for tool_name, executable in (
-            (MNGR_TOOL_NAME, MNGR_EXECUTABLE),
-            (TOOL_NAME, TOOL_NAME),
-        ):
-            tool_dir = _tool_environment_dir(executable, tool_name, runner)
-            if tool_dir is None:
-                sys.stderr.write(
-                    f"note: could not locate the uv tool environment behind "
-                    f"'{executable}' (not a uv tool on PATH), so it will not be "
-                    "copied aside; a failed apply will have to rebuild it to recover.\n"
-                )
-                continue
-            targets.append((f"tool-{tool_name}", tool_dir))
+        tools.append((MNGR_TOOL_NAME, MNGR_EXECUTABLE))
+    tools.extend((app.tool_name, app.executable) for app in plan.app_tools if app.is_critical)
+    for tool_name, executable in tools:
+        tool_dir = _tool_environment_dir(executable, tool_name, runner)
+        if tool_dir is None:
+            sys.stderr.write(
+                f"note: could not locate the uv tool environment behind "
+                f"'{executable}' (not a uv tool on PATH), so it will not be "
+                "copied aside; a failed apply will have to rebuild it to recover.\n"
+            )
+            continue
+        targets.append((tool_snapshot_name(tool_name), tool_dir))
     return targets
 
 
+def tool_snapshot_name(tool_name: str) -> str:
+    return f"tool-{tool_name}"
+
+
 # The snapshot names that together cover the backend environments a manifest
-# change rebuilds. A rollback that could not put every one of them back has to
-# re-resolve all three from the restored tree: a restored venv over a tool
+# change rebuilds. A rollback that could not put both of them back has to
+# re-resolve both from the restored tree: a restored venv over a tool
 # environment still built from the rolled-back-away tree is the
 # ModuleNotFoundError-on-``mngr`` state that reads as recovered while nothing
-# works.
-ENVIRONMENT_SNAPSHOT_NAMES = frozenset(
-    {"venv", f"tool-{MNGR_TOOL_NAME}", f"tool-{TOOL_NAME}"}
-)
+# works. An app's tool environment stands on its own (it resolves from the
+# app's pyproject, not the venv), so each is judged by its own snapshot name.
+BACKEND_SNAPSHOT_NAMES = frozenset({"venv", tool_snapshot_name(MNGR_TOOL_NAME)})
 
 
 def take_snapshots(
@@ -336,11 +341,14 @@ def _tool_extras(
     return extras
 
 
-def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
-    """The ``--with-editable`` args ``PLUGIN_MANIFEST_PATH`` assigns to ``tool_name``.
+def _manifest_extras(plugin_key: str | None, repo_root: Path) -> list[str]:
+    """The ``--with-editable`` args ``PLUGIN_MANIFEST_PATH`` assigns to ``plugin_key``.
 
-    Empty for a tree that predates the manifest (a rollback re-refreshes the
-    restored tree, and the receipt alone was that tree's whole answer).
+    ``plugin_key`` is how the plugin table names the tool: ``mngr`` for the mngr
+    tool, an app's manifest name for the app's tool, and ``None`` for an app
+    with no manifest (nothing can be assigned to it). Empty for a tree that
+    predates the manifest (a rollback re-refreshes the restored tree, and the
+    receipt alone was that tree's whole answer).
 
     A manifest that will not parse, or an entry that is not a table naming a
     ``path``, degrades to a warning rather than raising: this also runs on the
@@ -350,7 +358,7 @@ def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
     unrestored environment and no emergency record.
     """
     manifest_path = repo_root / PLUGIN_MANIFEST_PATH
-    if not manifest_path.is_file():
+    if plugin_key is None or not manifest_path.is_file():
         return []
     try:
         manifest = tomllib.loads(manifest_path.read_text())
@@ -363,13 +371,12 @@ def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
             manifest_path, "its 'plugins' key is not a list of tables"
         )
         return []
-    tool = MANIFEST_TOOL_NAMES.get(tool_name, tool_name)
     extras: list[str] = []
     for entry in entries:
         if not isinstance(entry, dict) or not entry.get("path"):
             _warn_manifest_unread(manifest_path, "it lists a plugin with no path")
             continue
-        if tool in entry.get("tools", []):
+        if plugin_key in entry.get("tools", []):
             extras.extend(["--with-editable", str(repo_root / str(entry["path"]))])
     return extras
 
@@ -419,6 +426,7 @@ def _reinstall_tool(
     tool_name: str,
     executable: str,
     source_dir: str,
+    plugin_key: str | None,
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
@@ -426,7 +434,7 @@ def _reinstall_tool(
 ) -> None:
     """Re-resolve the installed ``executable``'s tool from its in-tree source,
     keeping the extras it was installed with and adding the merged tree's own
-    plugin manifest.
+    plugin manifest (the plugins it assigns to ``plugin_key``).
 
     ``expend`` gates the expendable tag: a forward install may be shed (the
     rollback restores the tool-environment snapshot), a recovery install must
@@ -441,7 +449,7 @@ def _reinstall_tool(
         source_dir,
         *_merge_extras(
             _tool_extras(tool_name, repo_root, runner, env),
-            _manifest_extras(tool_name, repo_root),
+            _manifest_extras(plugin_key, repo_root),
         ),
         "--reinstall",
     ]
@@ -461,16 +469,19 @@ def refresh_backend_dependencies(
     expend: ExpendWrapper,
     timeout: float | None = None,
 ) -> None:
-    """Re-resolve the three backend environments from the current tree,
-    mirroring ``build_workspace.sh``: the vendored ``mngr`` tool, the
-    ``system-interface`` tool, and the workspace venv (``uv sync``).
-    ``timeout`` bounds each of the three (the forward apply's budget; recovery
-    passes none)."""
+    """Re-resolve the two shared backend environments from the current tree,
+    mirroring ``build_workspace.sh``: the vendored ``mngr`` tool and the
+    workspace venv (``uv sync``). ``timeout`` bounds each (the forward apply's
+    budget; recovery passes none)."""
     _reinstall_tool(
-        MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner, expend, timeout
-    )
-    _reinstall_tool(
-        TOOL_NAME, TOOL_NAME, SYSTEM_INTERFACE_DIR, repo_root, runner, expend, timeout
+        MNGR_TOOL_NAME,
+        MNGR_EXECUTABLE,
+        MNGR_DIR,
+        MNGR_PLUGIN_KEY,
+        repo_root,
+        runner,
+        expend,
+        timeout,
     )
     run_checked(
         runner,
@@ -479,3 +490,26 @@ def refresh_backend_dependencies(
         "uv sync --all-packages --frozen",
         timeout=timeout,
     )
+
+
+def refresh_app_tools(
+    app_tools: Sequence[AppTool],
+    repo_root: Path,
+    runner: Runner,
+    expend: ExpendWrapper,
+    timeout: float | None = None,
+) -> None:
+    """Reinstall each app's own tool environment from its directory in the
+    current tree, with the mngr plugins the plugin table assigns to it, as
+    ``build_workspace.sh`` installs them. ``timeout`` bounds each install."""
+    for app in app_tools:
+        _reinstall_tool(
+            app.tool_name,
+            app.executable,
+            app.directory,
+            app.plugin_key,
+            repo_root,
+            runner,
+            expend,
+            timeout,
+        )

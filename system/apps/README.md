@@ -12,15 +12,28 @@ Built-in apps:
   workspace chrome. Do not use it as a template for new apps.
 - `terminal/` - The terminal tab (ttyd over the web), including its named
   persistent sessions.
+- `files/` - The file viewer tab (dufs over `data/`).
 - `browser/` - The live browser tab: a headless Chromium streamed to the UI.
 
-Python packages in this folder are picked up automatically by the workspace's
-`system/apps/*` uv member glob -- no central registration needed beyond the
-root `pyproject.toml` dependency the scaffolder adds.
+Every app describes itself in an `app.toml` manifest beside its code: its
+registered name, the display name users see, its icon, whether it serves
+instances, its memory-shedding `priority`, whether it is `critical`, and the
+supervisord `program` that runs it (the schema is the `app_manifest` library
+in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
+in `system/supervisord.conf`) whose command registers the manifest and the
+app's port via `system/scripts/forward_port.py --manifest` and then runs the
+app.
 
-An app usually runs as a supervised service (a `[program:*]` entry in
-`system/supervisord.conf`) and registers its port via
-`system/scripts/forward_port.py`. An app that needs a continuously running
-background component keeps that service's code in its own folder here, named
-`<app>-<role>` in supervisord; standalone background services live in
-`system/services/` instead.
+Every Python app here runs from its own uv tool environment, installed from
+its own `pyproject.toml` (`uv tool install -e system/apps/<package>`, done by
+`system/scripts/build_workspace.sh` at image build, by the build-app scaffold
+for a new app, and by the update-self apply when an app's directory changes),
+so its program line runs the tool's entry point rather than `uv run`. The
+root venv is for the background services, agents, skills, and scripts. Python
+packages here are still picked up by the workspace's `system/apps/*` uv member
+glob, so one lockfile covers the whole tree; nothing in the root
+`pyproject.toml` needs editing for a new app.
+
+An app that needs a continuously running background component keeps that
+service's code in its own folder here, named `<app>-<role>` in supervisord;
+standalone background services live in `system/services/` instead.

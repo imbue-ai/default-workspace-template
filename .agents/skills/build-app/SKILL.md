@@ -101,7 +101,9 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   `browser`, etc. are reserved by the scaffolder).
 - **Draw the app's icon** -- an `.svg` glyph specific to what *this*
   app does, in the house style (see the CLI reference below);
-  `forward_port.py` refuses a brand-new registration without one.
+  `forward_port.py` refuses a brand-new registration without one. The
+  scaffold copies it beside the app's manifest (`app.toml`), which names
+  it.
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
   `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
@@ -122,6 +124,7 @@ uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \
+    [--display-name "<what users see>"] \
     [--port <int>] \
     [--extra-dep <pkg>] [--extra-dep <pkg>] ...
 ```
@@ -132,23 +135,34 @@ Required:
   hostname label.
 - `--description`: becomes the lib `pyproject.toml` description.
 - `--icon-file`: the icon you drew in pre-flight (`.svg` only); copied
-  to `system/apps/<package>/icon.svg` and registered on every start.
+  to `system/apps/<package>/icon.svg`, named by the manifest, and
+  registered on every start.
 
 Optional:
+- `--display-name`: what users see for the app (the manifest's
+  `display_name`, at most 64 characters). Defaults to the description,
+  so pass it when the description is long.
 - `--port`: explicit port; auto-picked if omitted.
 - `--extra-dep`: repeatable. Add libraries beyond `flask`/`flask-sock`
   (e.g. `--extra-dep "jinja2>=3.1" --extra-dep "anthropic>=0.40"`).
-- `--skip-uv-sync`: skip the final `uv sync --all-packages` (for fast
-  iteration / dry runs).
+- `--skip-uv-sync`: skip the final tool install and
+  `uv sync --all-packages` (for fast iteration / dry runs).
 
 The scaffolder fails non-zero with a clear stderr message if the lib
 already exists, the name is reserved or invalid, the requested port
-is taken, or `uv sync` fails.
+is taken, or the tool install or `uv sync` fails.
 
 What gets generated:
 
+- `system/apps/<package>/app.toml` -- the app's manifest: its registered
+  `name`, `display_name`, `icon`, `instances = false` (one tab),
+  `priority = "user"` (shed before any built-in under memory pressure),
+  and `program` (its supervisord program). `forward_port.py --manifest`
+  reads it on every start; `uv run app-manifest validate-manifest
+  system/apps/<package>/app.toml` checks it.
 - `system/apps/<package>/pyproject.toml` -- declares
-  `[project.scripts] <name> = "<package>.runner:main"`.
+  `[project.scripts] <name> = "<package>.runner:main"`, the entry point
+  the app's own tool environment exposes.
 - `system/apps/<package>/src/<package>/__init__.py` -- empty.
 - `system/apps/<package>/src/<package>/runner.py` -- sync Flask starter.
   Builds a `Flask` app and serves it with
@@ -173,17 +187,13 @@ What gets generated:
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
 
-What gets updated:
+What gets updated and installed:
 
-- Root `pyproject.toml` -- adds `<service-name>` to
-  `[project].dependencies` and `<service-name> = { workspace = true }` to
-  `[tool.uv.sources]` (the `system/apps/*` member glob picks the package up
-  without a members edit).
 - `system/supervisord.conf` -- appends a program block:
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --icon-file system/apps/<package>/icon.svg --program <name> && uv run <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -200,6 +210,15 @@ What gets updated:
   `oom_tag_service.py user` prefix tags this user-created app so it is
   shed before any built-in service under memory pressure (see
   `system/services/oom_priority/README.md`).
+- The app's own uv tool environment: the scaffold runs
+  `uv tool install -e system/apps/<package>`, which is what puts the
+  `<name>` entry point the program line runs on PATH. Every Python app
+  runs from its own tool rather than the root venv (the root venv is for
+  background services, agents, skills, and scripts), so a dependency you
+  add later needs `uv tool install -e system/apps/<package> --reinstall`
+  (see `update-app`). The root `pyproject.toml` is not edited: the
+  `system/apps/*` member glob already covers the package, and the final
+  `uv sync --all-packages` keeps the root lockfile current for it.
 
 supervisord does not watch the config, so tell it to pick up the new
 program, then confirm it is running:
@@ -436,18 +455,29 @@ calling the work done.
 ## Escape hatch: wrap an existing server
 
 For pre-existing third-party tools, do not scaffold a lib. Save your
-icon as `system/apps/<name>/icon.svg` (like the `files` app), then add a
-`[program:<name>]` block to `system/supervisord.conf` that runs
-`forward_port.py` and then your existing start command. supervisord runs
-commands directly (no shell), so wrap any command that chains with `&&`
-in `bash -c "..."`, and prefix the whole thing with
+icon as `system/apps/<name>/icon.svg` and write the app's manifest beside
+it as `system/apps/<name>/app.toml` (like the `files` app):
+
+```toml
+name = "<name>"
+display_name = "<What users see>"
+icon = "icon.svg"
+instances = false
+priority = "user"
+program = "<name>"
+```
+
+Then add a `[program:<name>]` block to `system/supervisord.conf` that runs
+`forward_port.py --manifest` and then your existing start command.
+supervisord runs commands directly (no shell), so wrap any command that
+chains with `&&` in `bash -c "..."`, and prefix the whole thing with
 `python3 system/services/oom_priority/bin/oom_tag_service.py user` so this user-created app is
 shed before any built-in service under memory pressure (see
 `system/services/oom_priority/README.md`):
 
 ```ini
 [program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --icon-file system/apps/<name>/icon.svg --program <name> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -459,7 +489,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name docs-viewer --icon-file system/apps/docs-viewer/icon.svg --program docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -471,7 +501,7 @@ Two valid shapes:
   # system/scripts/run_<name>.sh
   #!/usr/bin/env bash
   set -euo pipefail
-  python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --icon-file system/apps/<name>/icon.svg --program <name>
+  python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port>
   exec <existing_start_command>
   ```
 
@@ -501,12 +531,25 @@ Used by both paths (the scaffolder generates the call; the escape
 hatch has you write it directly).
 
 ```
+python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url URL
 python3 system/scripts/forward_port.py --name NAME --url URL --icon-file PATH
 python3 system/scripts/forward_port.py --name NAME --remove
 ```
 
+The script is standard-library only and runs under a plain `python3`, so
+registration never depends on the root venv.
+
 Flags:
 
+- `--manifest`: the app's `app.toml`. Its `name` (validated like
+  `--name` below), the icon file it names (validated like `--icon-file`),
+  and its static fields (`display_name`, `instances`, `instances_url`,
+  `critical`, `priority`, `program`, `internal`, `default_shortcut`,
+  `actions`) are copied onto the registry row on every call, so a changed
+  manifest updates the row on the next start. This is the form every app
+  with a directory uses; `--name`, `--icon-file`, `--program`, `--internal`
+  and `--no-icon` are for registrations with no app directory (previews,
+  isolated test servers) and cannot be combined with it.
 - `--name`: app name. It becomes the service's hostname label (the
   tab renders at `http://<name>.<workspace-host>/`), so it is
   validated: lowercase letters/digits/underscores with single hyphens,

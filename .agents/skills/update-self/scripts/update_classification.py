@@ -6,11 +6,15 @@ merged diff.
 from __future__ import annotations
 
 import re
+import sys
+import tomllib
 from pathlib import Path
 from typing import Collection, NamedTuple, Sequence
 
 from update_layout import (
+    APPS_DIR,
     FRONTEND_DIR,
+    MANIFEST_FILENAME,
     MNGR_VENDOR_DIR,
     PLUGIN_MANIFEST_PATH,
     PROVISIONER_SCRIPT,
@@ -298,6 +302,114 @@ def _is_backend_manifest(path: str) -> bool:
     )
 
 
+class AppTool(NamedTuple):
+    """A Python app under ``system/apps/`` and the uv tool environment it runs from.
+
+    ``directory`` is repo-relative; ``tool_name`` is the pyproject's project
+    name (what ``uv tool`` calls the environment); ``executable`` is the console
+    script the app's program runs, which is how the installation actually on
+    PATH is located; ``plugin_key`` is the manifest name the plugin table keys
+    the app's mngr plugins by (``None`` for an app without a manifest);
+    ``is_critical`` is the manifest's ``critical``, which makes the tool
+    environment a snapshot-and-rollback target.
+    """
+
+    directory: str
+    tool_name: str
+    executable: str
+    plugin_key: str | None
+    is_critical: bool
+
+
+def _warn_app_skipped(directory: Path, why: str) -> None:
+    sys.stderr.write(
+        f"note: skipping the app at {directory} for the environment refresh ({why}); "
+        "its tool environment will not be reinstalled by this apply.\n"
+    )
+
+
+def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
+    """Every Python app in the tree at ``repo_root``, in directory order.
+
+    Read off the tree being applied (the merged tree, or the restored one on
+    rollback), so an app a release adds is refreshed as it ships. An app whose
+    pyproject or manifest will not parse, or that declares no console script,
+    is skipped with a note rather than raising: this runs on the rollback path
+    too, where an exception would escape the apply's last line of defense.
+    """
+    apps_dir = repo_root / APPS_DIR
+    if not apps_dir.is_dir():
+        return ()
+    tools: list[AppTool] = []
+    for directory in sorted(apps_dir.iterdir()):
+        pyproject_path = directory / "pyproject.toml"
+        if not pyproject_path.is_file():
+            continue
+        try:
+            pyproject = tomllib.loads(pyproject_path.read_text())
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            _warn_app_skipped(directory, f"its pyproject.toml could not be read: {exc}")
+            continue
+        project = pyproject.get("project", {})
+        tool_name = project.get("name") if isinstance(project, dict) else None
+        scripts = project.get("scripts", {}) if isinstance(project, dict) else {}
+        if not isinstance(tool_name, str) or not tool_name:
+            _warn_app_skipped(directory, "its pyproject.toml names no project")
+            continue
+        if not isinstance(scripts, dict) or not scripts:
+            _warn_app_skipped(directory, "its pyproject.toml declares no console script")
+            continue
+        plugin_key: str | None = None
+        is_critical = False
+        manifest_path = directory / MANIFEST_FILENAME
+        if manifest_path.is_file():
+            try:
+                manifest = tomllib.loads(manifest_path.read_text())
+            except (OSError, tomllib.TOMLDecodeError) as exc:
+                _warn_app_skipped(directory, f"its {MANIFEST_FILENAME} could not be read: {exc}")
+                continue
+            name = manifest.get("name")
+            plugin_key = name if isinstance(name, str) and name else None
+            is_critical = manifest.get("critical") is True
+        tools.append(
+            AppTool(
+                directory=f"{APPS_DIR}/{directory.name}",
+                tool_name=tool_name,
+                executable=next(iter(scripts)),
+                plugin_key=plugin_key,
+                is_critical=is_critical,
+            )
+        )
+    return tuple(tools)
+
+
+# The parts of an app directory that never change what its tool environment
+# resolves to: the frontend bundle's sources and any served static assets.
+_APP_ENVIRONMENT_EXCLUDED_PARTS = frozenset({"frontend", "static"})
+
+
+def _is_app_environment_path(path: str, app: AppTool) -> bool:
+    prefix = f"{app.directory}/"
+    if not path.startswith(prefix):
+        return False
+    directory_parts = path[len(prefix) :].split("/")[:-1]
+    return not _APP_ENVIRONMENT_EXCLUDED_PARTS.intersection(directory_parts)
+
+
+def app_tools_touched_by(paths: Sequence[str], app_tools: Sequence[AppTool]) -> tuple[AppTool, ...]:
+    """The apps whose tool environment the changed ``paths`` mean must be reinstalled.
+
+    Any change under an app's directory counts, except under its ``frontend/``
+    or a ``static/`` directory: an editable install picks source edits up on
+    its own, but an entry point, a dependency, or a manifest change does not
+    reach the installed environment without a reinstall, and telling those
+    apart per file is not worth a wrong guess.
+    """
+    return tuple(
+        app for app in app_tools if any(_is_app_environment_path(path, app) for path in paths)
+    )
+
+
 class ApplyPlan(NamedTuple):
     """What one apply must do beyond the restart, derived from the merged diff.
 
@@ -306,7 +418,9 @@ class ApplyPlan(NamedTuple):
     that. The system-interface split (frontend vs backend, source vs manifest)
     is finer than :func:`classify_path`'s single ``system_interface`` class
     because those four need different work; ``provisioner`` is the
-    pinned-toolchain re-run, keyed on the files the provisioner reads.
+    pinned-toolchain re-run, keyed on the files the provisioner reads;
+    ``app_tools`` are the apps whose own tool environment the diff touched
+    (:func:`app_tools_touched_by`), each reinstalled from the merged tree.
     """
 
     frontend_src: bool
@@ -314,6 +428,7 @@ class ApplyPlan(NamedTuple):
     backend_src: bool
     backend_manifest: bool
     provisioner: bool
+    app_tools: tuple[AppTool, ...] = ()
 
     @property
     def frontend(self) -> bool:
@@ -324,13 +439,17 @@ class ApplyPlan(NamedTuple):
         return self.backend_src or self.backend_manifest
 
 
-def plan_apply(paths: Sequence[str], provisioner_inputs: Collection[str]) -> ApplyPlan:
+def plan_apply(
+    paths: Sequence[str],
+    provisioner_inputs: Collection[str],
+    app_tools: Sequence[AppTool] = (),
+) -> ApplyPlan:
     """Classify the merged diff's ``paths`` into an :class:`ApplyPlan`.
 
-    ``provisioner_inputs`` is :func:`read_provisioner_inputs` for the tree
-    being applied. The frontend build output (``static/``) and
-    ``node_modules`` are gitignored and never appear in a diff; they are
-    covered by snapshots, not the plan.
+    ``provisioner_inputs`` is :func:`read_provisioner_inputs` and ``app_tools``
+    :func:`read_app_tools`, both for the tree being applied. The frontend build
+    output (``static/``) and ``node_modules`` are gitignored and never appear
+    in a diff; they are covered by snapshots, not the plan.
     """
     frontend_src = False
     frontend_manifest = False
@@ -364,4 +483,5 @@ def plan_apply(paths: Sequence[str], provisioner_inputs: Collection[str]) -> App
         backend_src=backend_src,
         backend_manifest=backend_manifest,
         provisioner=provisioner,
+        app_tools=app_tools_touched_by(paths, app_tools),
     )
