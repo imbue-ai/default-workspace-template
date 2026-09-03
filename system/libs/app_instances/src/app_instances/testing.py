@@ -36,6 +36,8 @@ from app_instances.errors import (
 )
 from app_instances.interfaces import InstanceNudgerInterface, InstanceSourceInterface
 from app_instances.json_store import (
+    DEFAULT_PATH,
+    PATH_PARAM,
     JsonStoreInstanceSource,
     allocate_instance_number,
     allocated_key,
@@ -100,7 +102,7 @@ class StubInstanceSource(InstanceSourceInterface):
         )
         record = InstanceRecord(
             key=allocated_key(STUB_KEY_PREFIX, number),
-            url=InstanceUrl(params.get("path", "/")),
+            url=InstanceUrl(params.get(PATH_PARAM, DEFAULT_PATH)),
             title=InstanceTitle(f"Stub {number}"),
             status=InstanceStatus.IDLE,
             lifetime=InstanceLifetime.EXPLICIT,
