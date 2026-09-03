@@ -341,7 +341,8 @@ def supervisord_program_band(program_name: str, priority_by_program: Mapping[str
     ``priority_by_program`` is the app registry's view (``app_registry``): the
     ``priority`` band name each registered app's manifest declares, keyed by the
     supervisord program that runs it. A program with a row resolves through that
-    name (an unknown band name, like ``user``, is the user-service band). A
+    name (``user``, or a band name that does not exist, is the user-service
+    band). A
     program without one falls back to the tables: a built-in service's program
     name doubles as its SERVICE_BANDS key, and the handful of programs outside
     that map have explicit expected bands above. Anything else is a user-created
