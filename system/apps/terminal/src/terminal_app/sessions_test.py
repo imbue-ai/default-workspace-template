@@ -13,11 +13,10 @@ from app_instances.errors import (
 from app_instances.primitives import InstanceKey, InstanceTitle, LocationPath
 from app_manifest.primitives import ActionId
 
-from terminal_app.data_types import TerminalSessionRecord, TmuxSession
-from terminal_app.primitives import TmuxSessionName, Workdir
+from terminal_app.data_types import TmuxSession
 from terminal_app.sessions import TmuxSessionSource, is_agent_session
 from terminal_app.store import JsonTerminalSessionStore
-from terminal_app.testing import FakeTmux
+from terminal_app.testing import FakeTmux, make_terminal_record
 
 _NEW = ActionId("new")
 _ACTIVITY = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
@@ -47,16 +46,10 @@ def test_list_merges_live_sessions_with_remembered_ones_and_hides_agents(
         ]
     )
     session_store.save_record(
-        TerminalSessionRecord(
-            name=TmuxSessionName("terminal-1"), title=None, workdir=Workdir("/srv")
-        )
+        make_terminal_record(name="terminal-1", title=None, workdir="/srv")
     )
     session_store.save_record(
-        TerminalSessionRecord(
-            name=TmuxSessionName("build"),
-            title=InstanceTitle("The Build"),
-            workdir=None,
-        )
+        make_terminal_record(name="build", title="The Build", workdir=None)
     )
 
     listed = session_source.list_instances()
@@ -88,9 +81,7 @@ def test_create_allocates_the_lowest_free_number_over_live_and_remembered_names(
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3"), _session("terminal-3", "$4")])
     session_store.save_record(
-        TerminalSessionRecord(
-            name=TmuxSessionName("terminal-2"), title=None, workdir=None
-        )
+        make_terminal_record(name="terminal-2", title=None, workdir=None)
     )
 
     created = session_source.create_instance(_NEW, {"workdir": "/home/user/workspace"})
@@ -137,9 +128,7 @@ def test_delete_kills_the_session_and_forgets_it(
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3")])
     session_store.save_record(
-        TerminalSessionRecord(
-            name=TmuxSessionName("terminal-1"), title=None, workdir=None
-        )
+        make_terminal_record(name="terminal-1", title=None, workdir=None)
     )
 
     session_source.delete_instance(InstanceKey("terminal-1"))
@@ -178,9 +167,7 @@ def test_rename_canonicalizes_the_title_renames_in_tmux_and_rekeys_the_record(
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3")])
     session_store.save_record(
-        TerminalSessionRecord(
-            name=TmuxSessionName("terminal-1"), title=None, workdir=Workdir("/srv")
-        )
+        make_terminal_record(name="terminal-1", title=None, workdir="/srv")
     )
 
     renamed = session_source.rename_instance(
@@ -194,11 +181,7 @@ def test_rename_canonicalizes_the_title_renames_in_tmux_and_rekeys_the_record(
     assert ["rename-session", "-t", "=terminal-1", "My-Build"] in fake_tmux.calls()
     assert fake_tmux.session_names() == ["My-Build"]
     assert session_store.list_records() == [
-        TerminalSessionRecord(
-            name=TmuxSessionName("My-Build"),
-            title=InstanceTitle("My Build"),
-            workdir=Workdir("/srv"),
-        )
+        make_terminal_record(name="My-Build", title="My Build", workdir="/srv")
     ]
 
 
@@ -237,9 +220,7 @@ def test_rename_of_a_stopped_terminal_rekeys_the_record_without_touching_tmux(
     session_source: TmuxSessionSource,
 ) -> None:
     session_store.save_record(
-        TerminalSessionRecord(
-            name=TmuxSessionName("terminal-1"), title=None, workdir=None
-        )
+        make_terminal_record(name="terminal-1", title=None, workdir=None)
     )
 
     renamed = session_source.rename_instance(
@@ -276,7 +257,7 @@ def test_rename_refuses_a_name_another_terminal_holds_case_insensitively(
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3"), _session("build", "$4")])
     session_store.save_record(
-        TerminalSessionRecord(name=TmuxSessionName("deploy"), title=None, workdir=None)
+        make_terminal_record(name="deploy", title=None, workdir=None)
     )
 
     with pytest.raises(InstanceConflictError, match="already named 'Build'"):
