@@ -4438,6 +4438,24 @@ def test_a_rollback_leaves_the_tool_of_an_app_the_merge_added_alone(
     assert "system/apps/newapp is not in the restored tree" in capsys.readouterr().err
 
 
+def test_recovery_rebuilds_only_the_app_tools_with_no_copy_and_a_directory(
+    tmp_path: Path, capsys
+) -> None:
+    repo_root = _make_apply_repo(tmp_path)
+    by_name = {app.tool_name: app for app in update_classification.read_app_tools(repo_root)}
+    added = update_classification.AppTool(
+        directory="system/apps/gone", tool_name="gone", executable="gone", plugin_key=None, is_critical=False
+    )
+    restored = {update_environment.tool_snapshot_name("system-interface")}
+
+    rebuild = update_apply._app_tools_to_rebuild(
+        (by_name["system-interface"], by_name["browser"], added), restored, repo_root
+    )
+
+    assert rebuild == (by_name["browser"],)
+    assert "system/apps/gone is not in the restored tree" in capsys.readouterr().err
+
+
 def test_a_rollback_survives_a_plugin_manifest_it_cannot_read(
     apply_repo: Path, capsys
 ) -> None:
