@@ -10,10 +10,10 @@ from app_instances.errors import InvalidInstanceValueError
 # The instance-key rule of the workspace app model (contracts.md section 1): unique within
 # its app, never changing, and drawn from a URL-safe alphabet so a key rides addresses,
 # URL paths, and JSON keys unencoded.
-INSTANCE_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
-)
 MAX_INSTANCE_KEY_LENGTH: Final[int] = 128
+INSTANCE_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    rf"^[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_INSTANCE_KEY_LENGTH - 1}}}$"
+)
 
 # A key prefix leaves room for the ``-<N>`` suffix the allocator appends.
 INSTANCE_KEY_PREFIX_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -31,6 +31,14 @@ MAX_INSTANCE_TITLE_LENGTH: Final[int] = 256
 # The one substitution a title template makes: the number of the allocated key.
 TITLE_NUMBER_PLACEHOLDER: Final[str] = "{n}"
 
+# How much of an offending value an error message quotes.
+_ERROR_VALUE_PREVIEW_LENGTH: Final[int] = 80
+
+
+@pure
+def _preview(value: str) -> str:
+    return repr(value[:_ERROR_VALUE_PREVIEW_LENGTH])
+
 
 @pure
 def describe_instance_url_problem(
@@ -38,16 +46,16 @@ def describe_instance_url_problem(
 ) -> str | None:
     """Return why ``value`` cannot be an instance URL (or a location path), or None when it can."""
     if not value.startswith("/") or value.startswith("//"):
-        return f"invalid path {value[:80]!r}: must be rooted with a single slash"
+        return f"invalid path {_preview(value)}: must be rooted with a single slash"
     if len(value) > MAX_INSTANCE_URL_LENGTH:
         return f"invalid path: {len(value)} characters is over the {MAX_INSTANCE_URL_LENGTH}-character limit"
     if any(character < " " or character == "\x7f" for character in value):
-        return f"invalid path {value[:80]!r}: control characters are not allowed"
+        return f"invalid path {_preview(value)}: control characters are not allowed"
     placeholder_count = value.count(TAB_PLACEHOLDER)
     if placeholder_count > 1:
-        return f"invalid path {value[:80]!r}: the {TAB_PLACEHOLDER} placeholder may appear at most once"
+        return f"invalid path {_preview(value)}: the {TAB_PLACEHOLDER} placeholder may appear at most once"
     if placeholder_count == 1 and not is_placeholder_allowed:
-        return f"invalid path {value[:80]!r}: the {TAB_PLACEHOLDER} placeholder is not allowed here"
+        return f"invalid path {_preview(value)}: the {TAB_PLACEHOLDER} placeholder is not allowed here"
     return None
 
 
@@ -57,7 +65,7 @@ class InstanceKey(str):
     def __new__(cls, value: str) -> Self:
         if not INSTANCE_KEY_PATTERN.match(value):
             raise InvalidInstanceValueError(
-                f"invalid instance key {value[:80]!r}: keys match ^[A-Za-z0-9][A-Za-z0-9._-]{{0,127}}$"
+                f"invalid instance key {_preview(value)}: keys match {INSTANCE_KEY_PATTERN.pattern}"
             )
         return super().__new__(cls, value)
 
@@ -76,7 +84,7 @@ class InstanceKeyPrefix(str):
     def __new__(cls, value: str) -> Self:
         if not INSTANCE_KEY_PREFIX_PATTERN.match(value):
             raise InvalidInstanceValueError(
-                f"invalid key prefix {value[:80]!r}: prefixes match ^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                f"invalid key prefix {_preview(value)}: prefixes match {INSTANCE_KEY_PREFIX_PATTERN.pattern}"
             )
         if len(value) > MAX_INSTANCE_KEY_PREFIX_LENGTH:
             raise InvalidInstanceValueError(
@@ -157,7 +165,7 @@ class TitleTemplate(str):
     def __new__(cls, value: str) -> Self:
         if TITLE_NUMBER_PLACEHOLDER not in value:
             raise InvalidInstanceValueError(
-                f"invalid title template {value[:80]!r}: must contain {TITLE_NUMBER_PLACEHOLDER}"
+                f"invalid title template {_preview(value)}: must contain {TITLE_NUMBER_PLACEHOLDER}"
             )
         return super().__new__(cls, value)
 
