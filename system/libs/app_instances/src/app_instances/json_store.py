@@ -231,9 +231,16 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
             raise InstanceStoreError(
                 f"cannot create the instance store directory {self.store_path.parent}: {e}"
             ) from e
-        temp_fd, temp_name = tempfile.mkstemp(
-            dir=self.store_path.parent, prefix=f"{self.store_path.name}.", suffix=".tmp"
-        )
+        try:
+            temp_fd, temp_name = tempfile.mkstemp(
+                dir=self.store_path.parent,
+                prefix=f"{self.store_path.name}.",
+                suffix=".tmp",
+            )
+        except OSError as e:
+            raise InstanceStoreError(
+                f"cannot create a temporary file beside the instance store {self.store_path}: {e}"
+            ) from e
         try:
             with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_file:
                 json.dump(document.model_dump(mode="json"), temp_file, indent=2)

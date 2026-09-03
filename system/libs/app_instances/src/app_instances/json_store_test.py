@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from app_manifest.primitives import ActionId, AppName
+from imbue.imbue_common.model_update import to_update
 
 from app_instances.data_types import InstanceLifetime, InstanceStatus
 from app_instances.errors import (
@@ -238,3 +239,19 @@ def test_an_unreadable_store_raises_instead_of_reading_as_empty(
         files_store.list_instances()
     with pytest.raises(InstanceStoreError, match=reason):
         files_store.create_instance(_NEW, {})
+
+
+def test_a_temp_file_that_cannot_be_created_is_a_store_error(
+    files_store: JsonStoreInstanceSource,
+) -> None:
+    # The store's own name fits a filesystem's 255-byte limit; the temp file's longer name does not.
+    long_named_store = files_store.model_copy_update(
+        to_update(
+            files_store.field_ref().store_path,
+            files_store.store_path.parent / ("x" * 250),
+        )
+    )
+
+    with pytest.raises(InstanceStoreError, match="cannot create a temporary file"):
+        long_named_store.create_instance(_NEW, {})
+    assert long_named_store.list_instances() == []
