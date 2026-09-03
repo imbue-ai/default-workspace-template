@@ -20,18 +20,18 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 
 You manage your work using `tk`, the vendored ticket tracker at `system/vendor/tk/`. It is the **only** task tracker available — Claude Code's built-in `TodoWrite` is disabled. `tk` stores two kinds of records, distinguished by the `--step` flag at creation:
 
-- **Step records** (`tk create --step "..."`) are the replacement for `TodoWrite`: turn-bound, creator-private progress markers that render as nodes on the user-facing chat progress view (a vertical timeline with a status icon and a one-line summary per step). Most turns use only these.
+- **Step records** (`tk create --step "<user facing title>"`) are the replacement for `TodoWrite`: turn-bound, creator-private progress markers that render as nodes on the user-facing chat progress view (a vertical timeline with a status icon and a one-line summary per step). Most turns use only these. (`tk close <id> "<user facing summary>") closes the step.
 - **Regular tickets** (`tk create "..."`, no flag) are substantive, cross-agent work units other agents can see and pick up. They do **not** render in the chat progress view. They matter only when work spans turns or is handed between agents.
 
-Because step titles and close-summaries populate the progress view, **every one is user-facing copy**: plain English for a non-technical reader, no file names, no tool names, no jargon.
+Because step titles and close-summaries populate the progress view, **every one is user-facing copy**: plain English for a non-technical reader, no file names, no tool names, no jargon. Use casual terms "login's rebuilt - faster and more secure" instead of technical precision "I refactored AuthProvider, swapped the JWT library for Jose and updated 14 call sites."
 
 ## Declaring and running steps
 
 The first thing you do on any prompt that warrants real work is decompose it into steps and create them all up front, BEFORE doing any of the work — the step sequence is the user-visible plan. Concretely:
 
 1. (Optional) one short prose acknowledgement, e.g. "Sure, looking into that now." Keep it to one line; don't narrate the plan here.
-2. `tk create --step "..."` for every step you currently expect, in order. You may batch them into one tool call, but each step must be its **own separate `tk create` command** (on its own line or joined with `;`) — each `tk create` makes exactly one step, so never pass multiple `--step`s to a single `tk create` (tk rejects that). **Never redirect the output of a `tk create`/`start`/`close`** (`>`, `>>`, `2>`, `&>`, `| tee`, …): the progress view reads each step from the command's visible output (`Created <id>: <title>`), so a redirect makes the step drop out of the plan. Note the ids. Do NOT `tk start` any yet.
-3. `tk start <id>` the first step, do its work, then `tk close <id> "summary"`. Move to the next. Only one step is `in_progress` at a time.
+2. `tk create --step "<user facing title>"` for every step you currently expect, in order. You may batch them into one tool call, but each step must be its **own separate `tk create` command** (on its own line or joined with `;`) — each `tk create` makes exactly one step, so never pass multiple `--step`s to a single `tk create` (tk rejects that). **Never redirect the output of a `tk create`/`start`/`close`** (`>`, `>>`, `2>`, `&>`, `| tee`, …): the progress view reads each step from the command's visible output (`Created <id>: <title>`), so a redirect makes the step drop out of the plan. Note the ids. Do NOT `tk start` any yet.
+3. `tk start <id>` the first step, do its work, then `tk close <id> "user facing summary"`. Move to the next. Only one step is `in_progress` at a time.
 
 **`tk start` and `tk close` must each be the only command in their tool call** — no `cd` prefix, no chaining (`&&`, `;`, `|`, `&`, newline), no redirection; otherwise the progress view can't place the step. (You can still batch several `tk create` commands into one tool call — as separate commands, one `--step` each, with no redirection.)
 
@@ -55,7 +55,7 @@ Skip records for: chitchat, single-line acknowledgements, and trivial answers; p
 
 ## Regular tickets and delegation
 
-Regular tickets are managed cross-agent: `tk ls` / `tk ready` / `tk blocked` list them (step records hidden unless `--include-steps`/`--only-steps`), `tk show <id>` displays one, `tk create "..."` files one (unassigned until picked up), `tk start <id>` picks it up (auto-self-assigns), `tk close <id> [summary]` closes it (summary optional for tickets, required for steps). They can stay `in_progress` across turns.
+Regular tickets are managed cross-agent: `tk ls` / `tk ready` / `tk blocked` list them (step records hidden unless `--include-steps`/`--only-steps`), `tk show <id>` displays one, `tk create "..."` files one (unassigned until picked up), `tk start <id>` picks it up (auto-self-assigns), `tk close <id> [user facing summary]` closes it (summary optional for tickets, required for steps). They can stay `in_progress` across turns.
 
 When you delegate via the `launch-task` skill, the whole delegation is **one step** in your progress — the sub-agent uses its own `tk` internally and that work doesn't surface in your chat. Represent it as a single step (e.g. "Delegate the auth refactor to a sub-agent and review the result") and close it with the outcome.
 
