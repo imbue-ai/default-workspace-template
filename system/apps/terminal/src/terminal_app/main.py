@@ -69,7 +69,12 @@ class TerminalAppArguments(FrozenModel):
 
 @pure
 def ttyd_port(app_url: AppUrl) -> int:
-    port = urllib.parse.urlsplit(app_url).port
+    try:
+        port = urllib.parse.urlsplit(app_url).port
+    except ValueError as e:
+        raise TerminalAppError(
+            f"the app URL {app_url!r} names no usable port for ttyd: {e}"
+        ) from e
     if port is None:
         raise TerminalAppError(f"the app URL {app_url!r} names no port for ttyd")
     return port
