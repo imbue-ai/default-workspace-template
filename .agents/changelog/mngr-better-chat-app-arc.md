@@ -9,3 +9,9 @@ Phase 1 of the workspace app model (`docs/system/blueprint/workspace-app-model/`
 - `serve_isolated_instance.py` invokes `forward_port.py` under a plain `python3` now that the script is standard-library only.
 
 - The migrate-workspace port scan (`migrate_workspace.py list-ports`) reads the manifest-form program lines too: a `forward_port.py --manifest ... --url ...` call, which carries no `--name`, is reported under its `[program:<name>]`, so the built-ins and every newly scaffolded app still count toward name and port collisions on both sides of a migration.
+
+Phase 3 of the workspace app model (the terminal app):
+
+- The migrate-workspace port scan (`migrate_workspace.py list-ports`) also reports a registry row's `instances_url` port beside its `url` port, so an app serving its instances API on a second port (the terminal's 7682) counts toward name and port collisions.
+
+- The update-self apply's tests know the terminal as a tool: `system/apps/terminal` has a `pyproject.toml` and an `app.toml` now, so a change under it reinstalls `terminal-app`, and it is `critical` (snapshot-and-rollback).

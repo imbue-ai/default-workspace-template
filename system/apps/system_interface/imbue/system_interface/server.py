@@ -2358,13 +2358,18 @@ def _terminal_notify_endpoint() -> Response:
     session_name = str(body.get("session_name") or "")
     session_id = str(body.get("session_id") or "")
     client_tty = str(body.get("client_tty") or "")
+    # CLEANUP: drop the ``terminal_id`` field and ``_resolve_terminal_id_for_tty`` in phase 7
+    # of the workspace app model, when the terminal app re-points tabs through
+    # /api/tabs/<tab_id>/instance and this endpoint goes away. Until then the terminal
+    # app, which owns the pty-to-tab records now, resolves the id and forwards it here.
+    provided_terminal_id = str(body.get("terminal_id") or "")
     broadcaster: WebSocketBroadcaster = get_state().broadcaster
     if kind == "session-changed":
         # Resolve which dockview tab this tmux client belongs to. An
         # unresolved tty (e.g. an mngr agent-session client, which never
         # writes the ttyd clients map) means there is no terminal tab to
         # update, so skip the broadcast entirely.
-        terminal_id = _resolve_terminal_id_for_tty(client_tty)
+        terminal_id = provided_terminal_id or _resolve_terminal_id_for_tty(client_tty)
         if terminal_id is None:
             return _json_response({"ok": True, "broadcast": False})
         broadcaster.broadcast_terminal_session(terminal_id, session_id, session_name)

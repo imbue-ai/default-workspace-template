@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final
+from typing import Final, TypeVar
 
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import ActionId, AppName
@@ -52,6 +52,8 @@ DEFAULT_PATH: Final[LocationPath] = LocationPath("/")
 _KEY_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(?P<prefix>.+)-(?P<number>[1-9][0-9]*)$"
 )
+
+_DocumentModel = TypeVar("_DocumentModel", bound=FrozenModel)
 
 
 class _StoreDocument(FrozenModel):
@@ -214,26 +216,9 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
 
     def _read_records(self) -> tuple[InstanceRecord, ...]:
         """The stored records; a missing file is an empty store, an unreadable one raises InstanceStoreError."""
-        if not self.store_path.exists():
+        document = read_json_document(self.store_path, _StoreDocument)
+        if document is None:
             return ()
-        try:
-            raw_text = self.store_path.read_text(encoding="utf-8")
-        except OSError as e:
-            raise InstanceStoreError(
-                f"cannot read the instance store {self.store_path}: {e}"
-            ) from e
-        try:
-            data = json.loads(raw_text)
-        except json.JSONDecodeError as e:
-            raise InstanceStoreError(
-                f"the instance store {self.store_path} is not valid JSON: {e}"
-            ) from e
-        try:
-            document = _StoreDocument.model_validate(data)
-        except ValidationError as e:
-            raise InstanceStoreError(
-                f"the instance store {self.store_path} is malformed: {describe_validation_error(e)}"
-            ) from e
         if document.version != STORE_VERSION:
             raise InstanceStoreError(
                 f"the instance store {self.store_path} is version {document.version}; this library reads version {STORE_VERSION}"
@@ -241,33 +226,64 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
         return document.instances
 
     def _write_records(self, records: tuple[InstanceRecord, ...]) -> None:
-        """Replace the file atomically: a reader sees the old document or the new one, never a partial write."""
-        document = _StoreDocument(version=STORE_VERSION, instances=records)
-        try:
-            self.store_path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            raise InstanceStoreError(
-                f"cannot create the instance store directory {self.store_path.parent}: {e}"
-            ) from e
-        try:
-            temp_fd, temp_name = tempfile.mkstemp(
-                dir=self.store_path.parent,
-                prefix=f"{self.store_path.name}.",
-                suffix=".tmp",
-            )
-        except OSError as e:
-            raise InstanceStoreError(
-                f"cannot create a temporary file beside the instance store {self.store_path}: {e}"
-            ) from e
-        try:
-            with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_file:
-                json.dump(document.model_dump(mode="json"), temp_file, indent=2)
-            os.replace(temp_name, self.store_path)
-        except OSError as e:
-            Path(temp_name).unlink(missing_ok=True)
-            raise InstanceStoreError(
-                f"cannot write the instance store {self.store_path}: {e}"
-            ) from e
+        write_json_document(
+            self.store_path, _StoreDocument(version=STORE_VERSION, instances=records)
+        )
+
+
+def read_json_document(
+    path: Path, model: type[_DocumentModel]
+) -> _DocumentModel | None:
+    """The JSON document at ``path`` as ``model``, or None when there is no file.
+
+    A file that cannot be read, is not JSON, or does not fit the model raises InstanceStoreError
+    rather than reading as empty, so a corrupt store is a loud failure, never a silent loss of
+    every record. Apps whose instances have backing state of their own (the terminal's tmux
+    sessions) keep their own document shape and read it through here.
+    """
+    if not path.exists():
+        return None
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise InstanceStoreError(f"cannot read the instance store {path}: {e}") from e
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        raise InstanceStoreError(
+            f"the instance store {path} is not valid JSON: {e}"
+        ) from e
+    try:
+        return model.model_validate(data)
+    except ValidationError as e:
+        raise InstanceStoreError(
+            f"the instance store {path} is malformed: {describe_validation_error(e)}"
+        ) from e
+
+
+def write_json_document(path: Path, document: FrozenModel) -> None:
+    """Replace the file at ``path`` atomically: a reader sees the old document or the new one, never a partial write."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise InstanceStoreError(
+            f"cannot create the instance store directory {path.parent}: {e}"
+        ) from e
+    try:
+        temp_fd, temp_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f"{path.name}.", suffix=".tmp"
+        )
+    except OSError as e:
+        raise InstanceStoreError(
+            f"cannot create a temporary file beside the instance store {path}: {e}"
+        ) from e
+    try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_file:
+            json.dump(document.model_dump(mode="json"), temp_file, indent=2)
+        os.replace(temp_name, path)
+    except OSError as e:
+        Path(temp_name).unlink(missing_ok=True)
+        raise InstanceStoreError(f"cannot write the instance store {path}: {e}") from e
 
 
 @pure

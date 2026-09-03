@@ -11,7 +11,8 @@ Built-in apps:
   tabs the other apps render in, so it is an app that also serves as the
   workspace chrome. Do not use it as a template for new apps.
 - `terminal/` - The terminal tab (ttyd over the web), including its named
-  persistent sessions.
+  persistent sessions; a Python package (`terminal-app`) that runs ttyd and
+  serves the instances API over the workspace's tmux sessions.
 - `files/` - The file viewer tab (dufs over `data/`).
 - `browser/` - The live browser tab: a headless Chromium streamed to the UI.
 

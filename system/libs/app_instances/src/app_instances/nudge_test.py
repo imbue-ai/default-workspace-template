@@ -18,7 +18,7 @@ def test_nudge_posts_the_changed_route_for_the_app_and_tolerates_a_refusing_shel
     nudger.nudge()
     nudger.nudge()
 
-    assert recording_shell.requests == [("POST", "/api/apps/files/changed")] * 2
+    assert recording_shell.paths() == [("POST", "/api/apps/files/changed")] * 2
 
 
 def test_nudge_swallows_an_unreachable_shell() -> None:

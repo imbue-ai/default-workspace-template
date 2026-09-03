@@ -90,7 +90,7 @@ JSON in and out; every error body is `{"detail": "<message>"}`.
 ```json
 {
   "key": "terminal-2",
-  "url": "/?arg=session&arg=terminal-2&arg={tab}",
+  "url": "/?arg=_&arg=session&arg=terminal-2&arg={tab}",
   "title": "Terminal 2",
   "status": "idle",
   "lifetime": "explicit",
@@ -128,7 +128,7 @@ Every mutating route, `DELETE` of an unknown key included, nudges the shell; the
 
 | App | Key | `url` | `title` | `status` | `lifetime` | `renameable` | Create | Delete | Location |
 |---|---|---|---|---|---|---|---|---|---|
-| terminal | tmux session name | `/?arg=session&arg=<key>&arg={tab}` | the session's display name (see phase 3) | `idle`, or `stopped` when the session is absent from tmux and the store still holds the name | `explicit` | true | allocates the lowest free `terminal-<N>`, records it in the store; the session itself is created on first attach (`new-session -A`) as today; `params.workdir` optional | kills the session and drops the name | `400` |
+| terminal | tmux session name | `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]` (the leading `_` lands in `$0` of the `bash -c` dispatch snippet, as today's frontend sends it; `workdir` rides as the last argument when the create gave one) | the title the user gave it, else `Terminal <N>` for `terminal-<N>` and the name verbatim (see phase 3) | `idle`, or `stopped` when the session is absent from tmux and the store still holds the name | `explicit` | true | allocates the lowest free `terminal-<N>`, records it in the store; the session itself is created on first attach (`new-session -A`) as today; `params.workdir` optional | kills the session and drops the name | `400` |
 | files | `files-<N>` | the stored path | `File Viewer <N>` | `idle` | `referenced` | false | allocates the lowest free number, stores `params.path` or `/` | drops the record | records the path |
 | browser | browser name | `/?session=<key>` | `Browser <N>` or the legacy name | `working` while an agent holds control, else `idle`; `error` for a crashed browser | `explicit` | false | `POST /browsers` | `DELETE /browsers/<key>` | navigates the live browser to the path (a full URL is accepted in `path` for this app) and records it |
 | chat | agent id, or `<agent-id>.<session-id>` for a subagent | `/<key>` | the agent's display name; `Subagent: <description>` for a subagent; `New chat` for a provisional instance | thinking or tool-running `working`; pending permission `attention`; lifecycle stopped, done, or unknown `stopped`; provisional `attention`; subagent `idle` | `explicit` for agents, `referenced` for provisional and subagent instances | true for agents, false otherwise | `new` mints the agent id and a provisional record; `subagent` requires `parent` and `session` and returns an existing record when one exists | `mngr destroy` for an agent; drops the record for the others | `400` |

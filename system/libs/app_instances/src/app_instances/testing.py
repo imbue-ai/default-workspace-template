@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import click
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
@@ -198,25 +198,45 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+class RecordedShellRequest(FrozenModel):
+    """One request a fake shell received."""
+
+    method: str = Field(description="The HTTP method")
+    path: str = Field(description="The request path")
+    body: Any = Field(
+        description="The parsed JSON body, or None when the body was empty or not JSON"
+    )
+
+
 class RecordedShellRequests(MutableModel):
     """What a fake shell received, and where it listens."""
 
     base_url: str = Field(frozen=True, description="Where the fake shell listens")
-    requests: list[tuple[str, str]] = Field(
-        default_factory=list, description="Every (method, path) received, in order"
+    requests: list[RecordedShellRequest] = Field(
+        default_factory=list, description="Every request received, in order"
     )
+
+    def paths(self) -> list[tuple[str, str]]:
+        """Every (method, path) received, in order."""
+        return [(received.method, received.path) for received in self.requests]
 
 
 @contextmanager
 def serve_recording_shell() -> Iterator[RecordedShellRequests]:
-    """A loopback server that records every (method, path) and answers 404, as the shell does before phase 7."""
+    """A loopback server that records every request and answers 404, as the shell does before phase 7."""
     port = free_port()
     recorded = RecordedShellRequests(base_url=f"http://{LOOPBACK_HOST}:{port}")
     app = Flask(__name__)
 
     @app.route("/<path:_anything>", methods=["GET", "POST"])
     def record(_anything: str) -> tuple[str, int]:
-        recorded.requests.append((request.method, request.path))
+        recorded.requests.append(
+            RecordedShellRequest(
+                method=request.method,
+                path=request.path,
+                body=request.get_json(force=True, silent=True),
+            )
+        )
         return "", 404
 
     with serve_in_background(LOOPBACK_HOST, port, app):

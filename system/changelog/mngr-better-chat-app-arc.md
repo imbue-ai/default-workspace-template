@@ -19,3 +19,11 @@ Phase 2 of that model, "the instances library" (nothing user-visible changes: no
 - New `system/libs/app_instances` (see its own changelog): the instances API blueprint, the JSON store, the shell nudge, and the sidecar launcher for wrapped third-party servers; `system/libs/README.md` lists it.
 
 - `contracts.md` section 4 gained the rules the library enforces: an instance URL or path is rooted with a single slash and carries no control characters, a title is non-blank and at most 256 characters, and a key that fails the key rule answers `400` on every keyed route (including `DELETE`, which otherwise answers `204` for any key).
+
+Phase 3 of that model, "the terminal app" (nothing user-visible changes: the same tabs, titles, session switching, renaming, and reattach after a container restart):
+
+- `system/supervisord.conf`'s `[program:terminal]` runs `terminal-app`, the new Python package under `system/apps/terminal` (see its own changelog), instead of `bash system/apps/terminal/run_ttyd.sh`, which is deleted; the root `pyproject.toml` no longer excludes the terminal from the uv workspace, so `uv.lock` gained the package.
+
+- `system/test_app_manifests.py` accepts a program that registers from inside its own entry point (the console script's module exports `MANIFEST_PATH`), and `system/apps/README.md` and `system/services/app_watcher/README.md` describe the terminal as a package.
+
+- `contracts.md` section 4.3's terminal URL gained the leading `arg=_` (it lands in `$0` of the `bash -c` dispatch, as today's frontend sends it) and the optional trailing `workdir` argument, and its title column names the stored title; `phase_03_terminal_app.md` records what landed, including the terminal's own store (the library's `JsonStoreInstanceSource` cannot hold a renamed name or a `{tab}` URL) and the naming rule renames follow.

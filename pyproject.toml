@@ -76,12 +76,11 @@ package = false
 # in this file keep resolving; the cost is that `uv sync --all-packages` also
 # installs the manifest apps here, unused. The workspace app model's migration
 # phase rewrites pre-manifest apps to the manifest form and takes apps out of
-# the workspace. The terminal app is excluded: it is a shell-script wrapper
-# around the vendored mngr_ttyd plugin, not a Python package. The files app
-# likewise: it is the pinned dufs binary (see system/scripts/install_dufs.sh)
-# plus its manifest and icon, with no Python of its own.
+# the workspace. The files app is excluded: it is the pinned dufs binary (see
+# system/scripts/install_dufs.sh) plus its manifest and icon, with no Python of
+# its own.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
-exclude = ["system/apps/terminal", "system/apps/files"]
+exclude = ["system/apps/files"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }

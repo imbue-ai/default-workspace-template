@@ -717,10 +717,14 @@ def parse_supervisord_ports(text: str) -> list[AppPort]:
     matches), and a program name is exactly the wiring a collision is about.
     """
     headers = list(_PROGRAM_HEADER_RE.finditer(text))
-    ports = _forward_port_calls_in(text[: headers[0].start()] if headers else text, None)
+    ports = _forward_port_calls_in(
+        text[: headers[0].start()] if headers else text, None
+    )
     for index, header in enumerate(headers):
         end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
-        ports.extend(_forward_port_calls_in(text[header.start() : end], header.group("program")))
+        ports.extend(
+            _forward_port_calls_in(text[header.start() : end], header.group("program"))
+        )
     return ports
 
 
@@ -736,25 +740,33 @@ def parse_apps_registry(toml_text: str) -> list[AppPort]:
     Accepts both the current ``[[apps]]`` shape and the pre-rename
     ``[[applications]]`` one. An entry whose URL carries no parseable port is
     skipped -- it is a registration the migration cannot act on mechanically, and
-    the supervisord scan is the authoritative source anyway.
+    the supervisord scan is the authoritative source anyway. A row whose
+    ``instances_url`` names a second port (an app serving its instances API
+    beside a wrapped server, such as the terminal's 7682) reports that port too:
+    it is listening just as surely, and only the registry knows about it.
     """
     parsed = tomllib.loads(toml_text)
     ports: list[AppPort] = []
+    seen: set[tuple[str, int]] = set()
     for key in _REGISTRY_KEYS:
         for entry in parsed.get(key, []):
             name = entry.get("name")
-            url = entry.get("url", "")
-            match = re.search(r":(\d+)", url)
-            if not name or match is None:
+            if not name:
                 continue
-            ports.append(
-                AppPort(
-                    name=name,
-                    port=int(match.group(1)),
-                    url=url,
-                    found_in=f"registry [[{key}]]",
+            for url_key in ("url", "instances_url"):
+                url = entry.get(url_key, "")
+                match = re.search(r":(\d+)", url)
+                if match is None or (name, int(match.group(1))) in seen:
+                    continue
+                seen.add((name, int(match.group(1))))
+                ports.append(
+                    AppPort(
+                        name=name,
+                        port=int(match.group(1)),
+                        url=url,
+                        found_in=f"registry [[{key}]] {url_key}",
+                    )
                 )
-            )
     return ports
 
 
