@@ -105,6 +105,11 @@ def _load_sidecar_manifest(
         raise SidecarError(
             f"manifest {manifest_path} does not declare instances = true"
         )
+    if manifest.instances_url is None:
+        raise SidecarError(
+            f"manifest {manifest_path} declares no instances_url; "
+            f"a sidecar needs instances_url = {instances_url!r}"
+        )
     if manifest.instances_url != instances_url:
         raise SidecarError(
             f"manifest {manifest_path} declares instances_url {manifest.instances_url!r}, "

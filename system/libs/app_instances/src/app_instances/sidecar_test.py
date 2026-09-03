@@ -70,6 +70,29 @@ def test_run_sidecar_refuses_a_manifest_whose_instances_url_differs(
         )
 
 
+def test_run_sidecar_refuses_a_manifest_without_an_instances_url(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+    manifest_path = tmp_path / "app.toml"
+    manifest_path.write_text(
+        f'name = "{_unique_app_name()}"\ndisplay_name = "Bare"\nicon = "icon.svg"\n'
+        "instances = true\n"
+    )
+
+    with pytest.raises(
+        SidecarError,
+        match="declares no instances_url; a sidecar needs instances_url = 'http://127.0.0.1:8301'",
+    ):
+        run_sidecar(
+            manifest_path=manifest_path,
+            app_url=AppUrl("http://localhost:8300"),
+            instances_url=InstancesUrl("http://127.0.0.1:8301"),
+            child_argv=[sys.executable, "-c", "pass"],
+            source=StubInstanceSource(),
+        )
+
+
 def test_run_sidecar_refuses_a_single_instance_manifest(tmp_path: Path) -> None:
     (tmp_path / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
     manifest_path = tmp_path / "app.toml"
