@@ -19,9 +19,8 @@
  * but the agent only resumes once the desktop client's retried `mngr message`
  * delivery actually lands the notice in its session -- until then the agent is
  * genuinely IDLE and the strip would show nothing, so the user sees their
- * decision land and then apparent silence. Through that gap the strip shows a
- * bare dot with no caption (there is nothing truthful to say yet), bounded by
- * `WAKE_SPINNER_MS`.
+ * decision land and then apparent silence. Through that gap the strip says
+ * `WAKE_LABEL`, bounded by `WAKE_SPINNER_MS`.
  */
 
 import m from "mithril";
@@ -88,38 +87,33 @@ export function labelForActivityState(state: string | null | undefined, events: 
   return null;
 }
 
-// What the captionless wake-up dot is called for anyone who cannot see it (and
-// for anyone who hovers it). Not rendered as visible text: the whole point of
-// this state is that we do not yet know what the agent will do with the
-// verdict, so a visible caption would be inventing detail.
-const WAKE_DESCRIPTION = "Passing your decision to the agent";
+// What the strip says while the verdict is on its way to the agent. Phrased
+// around the permission change rather than around the agent, because at this
+// point nothing is known about what the agent will do with it -- claiming it is
+// "thinking" would be inventing detail, and it may yet never be told at all.
+const WAKE_LABEL = "Confirming permission changes…";
 
 // Marks the wake-up strip for styling and tests. Deliberately not one of the
 // server's activity states -- the server has no signal for this beat.
 const WAKE_STATE = "WAKING";
 
-function renderStrip(label: string | null, state: string | null | undefined): m.Vnode {
-  const attrs: Record<string, unknown> = { "data-state": state, role: "status", "aria-live": "polite" };
-  if (label === null) {
-    attrs["aria-label"] = WAKE_DESCRIPTION;
-    attrs["title"] = WAKE_DESCRIPTION;
-  }
-  return m("div.agent-activity-indicator", attrs, [
+function renderStrip(label: string, state: string | null | undefined): m.Vnode {
+  return m("div.agent-activity-indicator", { "data-state": state, role: "status", "aria-live": "polite" }, [
     m("span.agent-activity-indicator__dot"),
-    label === null ? null : m("span.agent-activity-indicator__label", label),
+    m("span.agent-activity-indicator__label", label),
   ]);
 }
 
-// How long the bare dot may stand in for the agent after a verdict. Long enough
-// to cover an ordinary delivery (discovery, the TUI paste-and-confirm
-// handshake, and the first retry or two), short enough that a delivery which
-// never lands leaves the chat honestly idle rather than spinning forever.
-const WAKE_SPINNER_MS = 10_000;
+// How long the wake-up strip may stand in for the agent after a verdict. Long
+// enough to cover an ordinary delivery (discovery, the TUI paste-and-confirm
+// handshake, and a retry or two), short enough that a delivery which never
+// lands leaves the chat honestly idle rather than spinning forever.
+const WAKE_SPINNER_MS = 20_000;
 
 /**
- * When the wake-up dot should stop, or null when it should not be shown.
+ * When the wake-up strip should stop, or null when it should not be shown.
  *
- * The dot is shown for a request meeting all three of:
+ * It is shown for a request meeting all three of:
  *   (a) THIS agent filed it -- verdicts are recorded page-wide, so a sibling
  *       panel's request must not spin this panel;
  *   (b) the shell reported its verdict within the last `WAKE_SPINNER_MS`;
@@ -131,7 +125,7 @@ const WAKE_SPINNER_MS = 10_000;
  * its notice in the transcript.
  *
  * Returns the latest such deadline, so a second verdict resolved during the
- * window extends the dot rather than truncating it.
+ * window extends the strip rather than truncating it.
  */
 export function wakeUpSpinnerDeadline(events: TranscriptEvent[], now: number): number | null {
   const since = now - WAKE_SPINNER_MS;
@@ -184,7 +178,7 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
   let heldToolCaption: string | null = null;
   let heldUntil = 0;
   let releaseTimer: number | null = null;
-  // Fires at the wake-up dot's deadline: nothing else would redraw this panel
+  // Fires at the wake-up strip's deadline: nothing else would redraw this panel
   // when the window simply runs out (the agent never arriving is, by
   // definition, the absence of an event).
   let wakeTimer: number | null = null;
@@ -238,8 +232,8 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       }
 
       if (label === null) {
-        // Nothing else is going on, so this is the only moment the wake-up dot
-        // may take the strip -- a real turn always outranks it.
+        // Nothing else is going on, so this is the only moment the wake-up
+        // caption may take the strip -- a real turn always outranks it.
         const wakeDeadline = wakeUpSpinnerDeadline(events, now);
         if (wakeDeadline !== null) {
           if (wakeTimer === null) {
@@ -248,7 +242,7 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
               m.redraw();
             }, wakeDeadline - now);
           }
-          return renderStrip(null, WAKE_STATE);
+          return renderStrip(WAKE_LABEL, WAKE_STATE);
         }
         cancelWake();
         return null;
