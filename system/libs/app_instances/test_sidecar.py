@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Final
 from uuid import uuid4
 
 import httpx
@@ -22,8 +23,8 @@ from app_manifest.registry import read_registry
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import Field
 
-_STARTUP_TIMEOUT_SECONDS = 20.0
-_EXIT_TIMEOUT_SECONDS = 10.0
+_STARTUP_TIMEOUT_SECONDS: Final[float] = 20.0
+_EXIT_TIMEOUT_SECONDS: Final[float] = 10.0
 
 
 class _SidecarUnderTest(FrozenModel):
