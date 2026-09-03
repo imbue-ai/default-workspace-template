@@ -4960,7 +4960,7 @@ def _forward_port_removal_result(returncode: int, stderr: str = "") -> FinishedP
         returncode=returncode,
         stdout="",
         stderr=stderr,
-        command=("uv", "run", "python3", "forward_port.py", "--remove", "--name", "docs-viewer"),
+        command=("python3", "forward_port.py", "--remove", "--name", "docs-viewer"),
         is_output_already_logged=False,
     )
 
@@ -4998,8 +4998,6 @@ def test_deregister_app_unregisters_it_and_unfiles_it_everywhere(
         "is_process_stopped": False,
     }
     assert mock_run.call_args.kwargs["command"] == [
-        "uv",
-        "run",
         "python3",
         str(_FORWARD_PORT_SCRIPT),
         "--remove",
