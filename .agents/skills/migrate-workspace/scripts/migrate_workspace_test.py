@@ -446,6 +446,45 @@ def test_parse_supervisord_ports_reads_the_forward_port_call() -> None:
     assert ports[0].found_in == "supervisord.conf"
 
 
+# The manifest form the build-app scaffold and every built-in write: no --name,
+# the app's name is the program's. Alongside it, a --name call with its flags in
+# the other order, and a registration line in a comment that names no port.
+_MANIFEST_SUPERVISORD_SNIPPET = """
+# The file viewer registers its manifest via forward_port.py, then execs dufs.
+[program:files]
+command=python3 system/services/oom_priority/bin/oom_tag_service.py files bash -c "python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml --url http://localhost:8300 && exec dufs --port 8300"
+
+[program:inbox-status]
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/inbox_status/app.toml --url http://localhost:8091 && inbox-status"
+
+[program:docs-viewer]
+command=bash -c "python3 system/scripts/forward_port.py --name docs-viewer --url http://localhost:8092 --no-icon && jupyter notebook --port 8092"
+
+[eventlistener:oom-tag-backstop]
+command=python3 system/services/oom_priority/bin/oom_tag_backstop.py
+"""
+
+
+def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program() -> None:
+    ports = migrate_workspace.parse_supervisord_ports(_MANIFEST_SUPERVISORD_SNIPPET)
+    assert [(port.name, port.port) for port in ports] == [
+        ("files", 8300),
+        ("inbox-status", 8091),
+        ("docs-viewer", 8092),
+    ]
+
+
+def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
+    conf = Path(__file__).resolve().parents[4] / "system" / "supervisord.conf"
+    ports = migrate_workspace.parse_supervisord_ports(conf.read_text(encoding="utf-8"))
+    # The terminal registers from run_ttyd.sh, so the config itself names the other three.
+    assert {(port.name, port.port) for port in ports} >= {
+        ("system_interface", 8000),
+        ("files", 8300),
+        ("browser", 8081),
+    }
+
+
 def test_parse_apps_registry_accepts_both_registry_vintages() -> None:
     current = migrate_workspace.parse_apps_registry(
         '[[apps]]\nname = "dashboard"\nurl = "http://localhost:8091"\n'
