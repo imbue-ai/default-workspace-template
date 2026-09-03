@@ -187,6 +187,8 @@ class TmuxSessionSource(InstanceSourceInterface):
         try:
             name = _session_name_for_key(key)
         except UnknownInstanceError:
+            # DELETE of an unknown key is a 204 by contract; a key no terminal can have is one.
+            logger.debug("Ignored deleting {!r}: no terminal can have that key", key)
             return
         if is_agent_session(name, self.agent_session_prefix):
             raise InstanceConflictError(
