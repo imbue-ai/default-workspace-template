@@ -398,8 +398,8 @@ _SERVICE_REF_PREFIX = "service:"
 # of ``system/apps/system_interface/imbue/system_interface``.
 _FORWARD_PORT_SCRIPT = WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
 
-# Generous: the registration script runs under ``uv run``, which may have to
-# resolve the workspace environment before the (near-instant) TOML rewrite.
+# Generous: the script takes the registry's lock, so it can wait behind a
+# concurrent registration before its (near-instant) TOML rewrite.
 _FORWARD_PORT_TIMEOUT_SECONDS = 60.0
 
 # How often flask-sock sends a keepalive ping on each WebSocket connection.
