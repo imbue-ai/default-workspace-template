@@ -5,15 +5,15 @@
 runs the sidecar over a JSON store, which is how the integration test drives it as a real process.
 """
 
-import argparse
 import socket
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
+import click
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import ActionId, AppName, AppUrl, InstancesUrl
 from imbue.imbue_common.model_update import to_update
@@ -221,16 +221,17 @@ def run_stub_app(port: int) -> None:
     server.serve_forever()
 
 
-def _run_stub_command(arguments: argparse.Namespace) -> int:
-    run_stub_app(arguments.port)
-    return 0
-
-
-def _run_sidecar_command(arguments: argparse.Namespace, child_argv: list[str]) -> int:
-    manifest_path = Path(arguments.manifest)
+def run_sidecar_over_json_store(
+    manifest_path: Path,
+    app_url: AppUrl,
+    instances_url: InstancesUrl,
+    store_path: Path,
+    child_argv: Sequence[str],
+) -> int:
+    """Run the sidecar with a referenced, location-tracked JSON store keyed by the manifest's name."""
     manifest = load_manifest(manifest_path)
     source = JsonStoreInstanceSource(
-        store_path=Path(arguments.store),
+        store_path=store_path,
         key_prefix=InstanceKeyPrefix(manifest.name),
         title_template=TitleTemplate(f"{manifest.display_name} {{n}}"),
         lifetime=InstanceLifetime.REFERENCED,
@@ -239,55 +240,64 @@ def _run_sidecar_command(arguments: argparse.Namespace, child_argv: list[str]) -
     )
     return run_sidecar(
         manifest_path=manifest_path,
-        app_url=AppUrl(arguments.app_url),
-        instances_url=InstancesUrl(arguments.instances_url),
+        app_url=app_url,
+        instances_url=instances_url,
         child_argv=child_argv,
         source=source,
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Scratch servers for the instances library"
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    stub_parser = subparsers.add_parser(
-        "stub", help="Serve the stub app (in-memory instances) on a loopback port"
-    )
-    stub_parser.add_argument(
-        "--port", type=int, required=True, help="The loopback port to serve on"
-    )
-    sidecar_parser = subparsers.add_parser(
-        "sidecar", help="Run the sidecar over a JSON store around a child command"
-    )
-    sidecar_parser.add_argument(
-        "--manifest", required=True, help="The app.toml to register"
-    )
-    sidecar_parser.add_argument(
-        "--app-url", required=True, help="The URL the child serves the app at"
-    )
-    sidecar_parser.add_argument(
-        "--instances-url", required=True, help="Where to serve the instances API"
-    )
-    sidecar_parser.add_argument(
-        "--store", required=True, help="The instances.json file of the JSON store"
-    )
-    sidecar_parser.add_argument(
-        "child_argv", nargs=argparse.REMAINDER, help="The child command, after --"
-    )
-    arguments = parser.parse_args()
-    if arguments.command == "stub":
-        exit_code = _run_stub_command(arguments)
-    elif arguments.command == "sidecar":
-        child_argv = (
-            arguments.child_argv[1:]
-            if arguments.child_argv[:1] == ["--"]
-            else arguments.child_argv
+@click.group()
+def testing_cli() -> None:
+    """Scratch servers for the instances library."""
+
+
+@testing_cli.command("stub")
+@click.option("--port", type=int, required=True, help="The loopback port to serve on")
+def _serve_stub_command(port: int) -> None:
+    """Serve the stub app (in-memory instances) on a loopback port."""
+    run_stub_app(port)
+
+
+@testing_cli.command("sidecar")
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="The app.toml to register",
+)
+@click.option("--app-url", required=True, help="The URL the child serves the app at")
+@click.option("--instances-url", required=True, help="Where to serve the instances API")
+@click.option(
+    "--store",
+    "store_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="The instances.json file of the JSON store",
+)
+@click.argument("child_argv", nargs=-1, required=True)
+def _run_sidecar_command(
+    manifest_path: Path,
+    app_url: str,
+    instances_url: str,
+    store_path: Path,
+    child_argv: tuple[str, ...],
+) -> None:
+    """Run the sidecar over a JSON store around CHILD_ARGV (the child command, given after --)."""
+    sys.exit(
+        run_sidecar_over_json_store(
+            manifest_path=manifest_path,
+            app_url=AppUrl(app_url),
+            instances_url=InstancesUrl(instances_url),
+            store_path=store_path,
+            child_argv=child_argv,
         )
-        exit_code = _run_sidecar_command(arguments, child_argv)
-    else:
-        parser.error(f"unknown command {arguments.command!r}")
-    sys.exit(exit_code)
+    )
+
+
+def main() -> None:
+    testing_cli()
 
 
 if __name__ == "__main__":

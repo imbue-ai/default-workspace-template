@@ -205,6 +205,7 @@ version = "0.1.0"
 source = { editable = "system/libs/app_instances" }
 dependencies = [
     { name = "app-manifest" },
+    { name = "click" },
     { name = "flask" },
     { name = "httpx" },
     { name = "imbue-common" },
@@ -216,6 +217,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
