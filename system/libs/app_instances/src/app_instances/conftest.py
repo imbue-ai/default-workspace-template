@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 from flask import Flask, request
 from flask.testing import FlaskClient
+from imbue.imbue_common.mutable_model import MutableModel
+from pydantic import Field
 
 from app_instances.blueprint import build_instances_app
 from app_instances.data_types import InstanceLifetime
@@ -60,12 +62,13 @@ def renameable_store(tmp_path: Path) -> JsonStoreInstanceSource:
     )
 
 
-class RecordedShellRequests:
+class RecordedShellRequests(MutableModel):
     """What a fake shell received, and where it listens."""
 
-    def __init__(self, base_url: str) -> None:
-        self.base_url = base_url
-        self.requests: list[tuple[str, str]] = []
+    base_url: str = Field(frozen=True, description="Where the fake shell listens")
+    requests: list[tuple[str, str]] = Field(
+        default_factory=list, description="Every (method, path) received, in order"
+    )
 
 
 @pytest.fixture
