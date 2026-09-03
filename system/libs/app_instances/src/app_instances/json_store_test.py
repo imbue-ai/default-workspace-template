@@ -10,7 +10,6 @@ from app_instances.data_types import InstanceLifetime, InstanceStatus
 from app_instances.errors import (
     InstanceConflictError,
     InstanceStoreError,
-    InvalidInstanceValueError,
     InvalidParamsError,
     LocationNotTrackedError,
     NotRenameableError,
@@ -116,7 +115,7 @@ def test_create_rejects_other_actions_unknown_params_and_bad_paths(
         files_store.create_instance(ActionId("open"), {})
     with pytest.raises(InvalidParamsError, match="unknown params \\['workdir'\\]"):
         files_store.create_instance(_NEW, {"workdir": "/x"})
-    with pytest.raises(InvalidInstanceValueError, match="single slash"):
+    with pytest.raises(InvalidParamsError, match="invalid 'path'.*single slash"):
         files_store.create_instance(_NEW, {"path": "docs"})
     assert files_store.list_instances() == []
 

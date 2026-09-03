@@ -20,6 +20,7 @@ from app_instances.data_types import InstanceLifetime, InstanceRecord, InstanceS
 from app_instances.errors import (
     InstanceConflictError,
     InstanceStoreError,
+    InvalidInstanceValueError,
     InvalidParamsError,
     LocationNotTrackedError,
     NotRenameableError,
@@ -151,7 +152,10 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
             raise InvalidParamsError(
                 f"unknown params {unknown_params}: {NEW_ACTION_ID!r} only accepts {PATH_PARAM!r}"
             )
-        path = LocationPath(params.get(PATH_PARAM, DEFAULT_PATH))
+        try:
+            path = LocationPath(params.get(PATH_PARAM, DEFAULT_PATH))
+        except InvalidInstanceValueError as e:
+            raise InvalidParamsError(f"invalid {PATH_PARAM!r}: {e}") from e
         with self._lock:
             records = self._read_records()
             number = allocate_instance_number(
