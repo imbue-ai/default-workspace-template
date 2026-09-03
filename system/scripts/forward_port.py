@@ -393,6 +393,9 @@ def _load_apps(path: Path) -> list[dict[str, object]]:
     apps = doc.get("apps", [])
     if not isinstance(apps, list):
         raise MalformedRegistryError(f"registry {path} has an 'apps' key that is not an array of tables")
+    for app in apps:
+        if not isinstance(app, dict):
+            raise MalformedRegistryError(f"registry {path} has an 'apps' element that is not a table: {app!r}")
     return [dict(app) for app in apps]
 
 
