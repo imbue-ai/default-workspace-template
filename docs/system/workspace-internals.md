@@ -62,8 +62,8 @@ in that app's folder and is named `<app>-<role>`.
   Python app is installed as its own uv tool (and is also a member of the uv
   workspace via the `system/apps/*` glob)
 - `system/services/` - Standalone background services (`app_watcher/`,
-  `caretaker/`, `eval_worker/`, `share_gateway/`, `host_backup/`,
-  `env_converge/`, `oom_priority/`)
+  `caretaker/`, `share_gateway/`, `host_backup/`, `env_converge/`,
+  `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
   setup, then launches supervisord to supervise the apps and services),
   `app_manifest/` (the manifest and registry models), and `automations/`
