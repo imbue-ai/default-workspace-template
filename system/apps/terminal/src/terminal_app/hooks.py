@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
+from app_instances.blueprint import HTTP_BAD_REQUEST, HTTP_NO_CONTENT
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.nudge import post_to_shell
 from app_manifest.manifest import describe_validation_error
@@ -32,8 +33,7 @@ TAB_INSTANCE_ROUTE_TEMPLATE: Final[str] = "/api/tabs/{tab_id}/instance"
 # and its terminal_session broadcast is gone.
 TERMINAL_NOTIFY_ROUTE: Final[str] = "/api/terminals/notify"
 
-HTTP_NO_CONTENT: Final[int] = 204
-HTTP_BAD_REQUEST: Final[int] = 400
+# The one status the library's routes never answer; the others come from the blueprint.
 HTTP_FORBIDDEN: Final[int] = 403
 
 
