@@ -1,5 +1,6 @@
 """Integration: the sidecar as a real process around ``python -m http.server``."""
 
+import os
 import signal
 import subprocess
 import sys
@@ -94,10 +95,21 @@ def _read_log(sidecar: _SidecarUnderTest) -> str:
 
 
 def _spawn(sidecar: _SidecarUnderTest) -> subprocess.Popen[bytes]:
+    # A session of its own puts the sidecar and the server it wraps in one process group,
+    # so a failed test can kill both rather than orphan the wrapped server on its port.
     with sidecar.log_path.open("wb") as log_file:
         return subprocess.Popen(
-            sidecar.command, stdout=subprocess.DEVNULL, stderr=log_file
+            sidecar.command,
+            stdout=subprocess.DEVNULL,
+            stderr=log_file,
+            start_new_session=True,
         )
+
+
+def _kill_if_running(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
 
 
 @pytest.mark.timeout(60)
@@ -161,9 +173,7 @@ def test_sidecar_registers_serves_instances_and_forwards_sigterm_to_the_child(
         assert not is_port_accepting(sidecar.child_port)
         assert not is_port_accepting(sidecar.instances_port)
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
+        _kill_if_running(process)
 
 
 @pytest.mark.timeout(60)
@@ -181,6 +191,4 @@ def test_sidecar_exits_with_the_childs_own_exit_code(
         ]
         assert not is_port_accepting(sidecar.instances_port)
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
+        _kill_if_running(process)
