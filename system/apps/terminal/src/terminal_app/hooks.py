@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, assert_never
 
 from app_instances.blueprint import HTTP_BAD_REQUEST, HTTP_NO_CONTENT
 from app_instances.interfaces import InstanceNudgerInterface
@@ -167,6 +167,8 @@ def build_tmux_hook_blueprint(
                 handle_session_changed(event)
             case TmuxHookKind.SESSION_RENAMED:
                 handle_session_renamed(event)
+            case _ as unreachable:
+                assert_never(unreachable)
         return "", HTTP_NO_CONTENT
 
     return blueprint
