@@ -1,10 +1,9 @@
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
-import httpx
 from app_instances.interfaces import InstanceNudgerInterface
+from app_instances.nudge import post_to_shell
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from flask import Blueprint, jsonify, request
@@ -33,40 +32,20 @@ TAB_INSTANCE_ROUTE_TEMPLATE: Final[str] = "/api/tabs/{tab_id}/instance"
 # and its terminal_session broadcast is gone.
 TERMINAL_NOTIFY_ROUTE: Final[str] = "/api/terminals/notify"
 
-# A post to the shell is one loopback request the shell answers without work; past the first
-# threshold it is suspicious, past the second it is broken.
-SHELL_POST_SLOW_SECONDS: Final[float] = 0.5
-SHELL_POST_TIMEOUT_SECONDS: Final[float] = 2.0
-
 HTTP_NO_CONTENT: Final[int] = 204
 HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_FORBIDDEN: Final[int] = 403
 
 
 class HttpShellPoster(ShellPosterInterface):
-    """Posts to the shell over loopback; an unreachable or refusing shell is a debug log, never an error."""
+    """Posts to the shell over loopback through the library's ``post_to_shell``, which swallows an unreachable or refusing shell at debug level."""
 
     shell_url: str = Field(
         frozen=True, description="The shell's base URL, without a trailing slash"
     )
 
     def post_json(self, path: str, body: Mapping[str, Any]) -> None:
-        url = f"{self.shell_url}{path}"
-        started_at = time.monotonic()
-        try:
-            response = httpx.post(url, json=body, timeout=SHELL_POST_TIMEOUT_SECONDS)
-        except httpx.HTTPError as e:
-            logger.debug("Skipped posting to the shell at {}: {}", url, e)
-            return
-        elapsed = time.monotonic() - started_at
-        if elapsed > SHELL_POST_SLOW_SECONDS:
-            logger.warning("Posted to the shell at {} slowly, in {:.1f}s", url, elapsed)
-        if response.is_error:
-            logger.debug(
-                "Posted to the shell at {} and it answered {}",
-                url,
-                response.status_code,
-            )
+        post_to_shell(f"{self.shell_url}{path}", body)
 
 
 def resolve_tab_id_for_tty(clients_dir: Path, client_tty: str) -> TerminalTabId | None:
