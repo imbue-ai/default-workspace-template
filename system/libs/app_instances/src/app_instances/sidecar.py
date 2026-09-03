@@ -149,8 +149,8 @@ def serve_in_background(host: str, port: int, app: Flask) -> Iterator[BaseWSGISe
 
 def _forward_signals_to(child: subprocess.Popen[bytes]) -> None:
     def forward(signum: int, _frame: FrameType | None) -> None:
-        logger.debug("Forwarded signal {} to the child process {}", signum, child.pid)
         child.send_signal(signum)
+        logger.debug("Forwarded signal {} to the child process {}", signum, child.pid)
 
     for forwarded_signal in _FORWARDED_SIGNALS:
         signal.signal(forwarded_signal, forward)
