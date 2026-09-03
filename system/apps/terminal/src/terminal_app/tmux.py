@@ -90,12 +90,14 @@ class SubprocessTmux(TmuxInterface):
         # A missing server (no sessions yet) is a non-zero exit, not an error.
         completed = self._run(["list-sessions", "-F", SESSIONS_FORMAT])
         if completed.returncode != 0:
+            logger.debug("Listed no tmux sessions: {}", completed.stderr.strip())
             return []
         return parse_tmux_sessions(completed.stdout)
 
     def list_clients(self) -> list[TmuxClient]:
         completed = self._run(["list-clients", "-F", CLIENTS_FORMAT])
         if completed.returncode != 0:
+            logger.debug("Listed no tmux clients: {}", completed.stderr.strip())
             return []
         return parse_tmux_clients(completed.stdout)
 
