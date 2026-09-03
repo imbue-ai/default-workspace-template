@@ -548,9 +548,10 @@ Flags:
   `critical`, `priority`, `program`, `internal`, `default_shortcut`,
   `actions`) are copied onto the registry row on every call, so a changed
   manifest updates the row on the next start. This is the form every app
-  with a directory uses; `--name`, `--icon-file`, `--program`, `--internal`
-  and `--no-icon` are for registrations with no app directory (previews,
-  isolated test servers) and cannot be combined with it.
+  with a directory uses. `--name` may accompany it and must then equal the
+  manifest's name; `--icon-file`, `--program`, `--internal` and `--no-icon`
+  are for registrations with no app directory (previews, isolated test
+  servers) and cannot be combined with it.
 - `--name`: app name. It becomes the service's hostname label (the
   tab renders at `http://<name>.<workspace-host>/`), so it is
   validated: lowercase letters/digits/underscores with single hyphens,
