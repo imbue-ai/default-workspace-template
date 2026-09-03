@@ -342,12 +342,12 @@ def supervisord_program_band(program_name: str, priority_by_program: Mapping[str
     ``priority`` band name each registered app's manifest declares, keyed by the
     supervisord program that runs it. A program with a row resolves through that
     name (``user``, or a band name that does not exist, is the user-service
-    band). A
-    program without one falls back to the tables: a built-in service's program
-    name doubles as its SERVICE_BANDS key, and the handful of programs outside
-    that map have explicit expected bands above. Anything else is a user-created
-    service and lands at ``USER_SERVICE``: an unknown process must default to
-    being expendable, never to the protected default it would otherwise inherit.
+    band). A program without one falls back to the tables: a built-in service's
+    program name doubles as its SERVICE_BANDS key, and the handful of programs
+    outside that map have explicit expected bands above. Anything else is a
+    user-created service and lands at ``USER_SERVICE``: an unknown process must
+    default to being expendable, never to the protected default it would
+    otherwise inherit.
     """
     priority = priority_by_program.get(program_name)
     if priority is not None:
