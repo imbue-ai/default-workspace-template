@@ -1,0 +1,14 @@
+name = "browser"
+display_name = "Browser"
+icon = "icon.svg"
+instances = true
+critical = false
+priority = "browser"
+
+[default_shortcut]
+action = "new"
+mode = "focus"
+
+[[actions]]
+id = "new"
+label = "New Browser"

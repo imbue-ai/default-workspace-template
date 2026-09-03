@@ -142,6 +142,21 @@ process restarts:
   supervisorctl status <name>   # confirm it came back RUNNING
   ```
 
+- **Dependency or entry-point change to an app** (its `pyproject.toml`):
+  every Python app runs from its own uv tool environment, an editable
+  install of `system/apps/<package>/` that picks up source edits on its
+  own but not a new dependency or console script. Reinstall the tool, then
+  restart:
+
+  ```bash
+  uv tool install -e system/apps/<package> --reinstall
+  uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
+  supervisorctl restart <name>
+  ```
+
+  (Background services under `system/services/` run from the root venv
+  instead: `uv sync --all-packages`, then restart.)
+
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new
   markup. Skip straight to the refresh.

@@ -17,8 +17,10 @@ mngr create my-workspace main -t local \
 Users make "creations". There are conventions for the common kinds:
 
 - an **app**: something the user opens as a tab and interacts with. Lives
-  under `system/apps/<package>/`, runs as a supervisord program, registers its
-  port via `forward_port.py`, and is served at its own browser origin: the
+  under `system/apps/<package>/` beside its `app.toml` manifest (name, display
+  name, icon, instances, priority, criticality, program), runs as a supervisord
+  program from its own uv tool environment, registers its manifest and port
+  via `forward_port.py --manifest`, and is served at its own browser origin: the
   service name is prefixed as a hostname label on the workspace host, so
   locally the app lives at `http://<name>.<host-id>.localhost:8421/` (the
   workspace host id looks like `host-<32hex>`; shared hostnames follow the
@@ -55,15 +57,17 @@ in that app's folder and is named `<app>-<role>`.
 - `system/supervisord.conf` - Supervisord config defining the apps' and
   services' programs
 - `system/apps/` - Everything tab-openable: `system_interface/` (the workspace
-  web UI -- the special app that hosts the other tabs), `terminal/`,
-  `browser/`, and every user-built app; registered in the uv workspace via the
-  `system/apps/*` member glob
+  web UI -- the special app that hosts the other tabs), `terminal/`, `files/`,
+  `browser/`, and every user-built app, each with an `app.toml` manifest; every
+  Python app is installed as its own uv tool (and is also a member of the uv
+  workspace via the `system/apps/*` glob)
 - `system/services/` - Standalone background services (`app_watcher/`,
   `caretaker/`, `eval_worker/`, `share_gateway/`, `host_backup/`,
   `env_converge/`, `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
-  setup, then launches supervisord to supervise the apps and services) and
-  `automations/` (the machinery that runs skills on a schedule)
+  setup, then launches supervisord to supervise the apps and services),
+  `app_manifest/` (the manifest and registry models), and `automations/`
+  (the machinery that runs skills on a schedule)
 - `data/` - Gitignored workspace data: documents and project folders, uploads,
   memories, tickets, secrets, machine state, and per-app data (see
   `data/README.md`)

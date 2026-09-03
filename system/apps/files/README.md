@@ -9,8 +9,9 @@ per-arch sha256 pinned there). supervisord's `[program:files]` runs it over
 operations enabled (browse, preview, upload, rename, delete): the workspace
 origin is what gates access, exactly as for every other registered app.
 
-Beyond the registered icon (`icon.svg`, passed to `forward_port.py
---icon-file` at service start), this directory holds `assets/`: a vendored
+Beyond the manifest (`app.toml`, which `forward_port.py --manifest` registers
+at service start together with the icon it names, `icon.svg`), this directory
+holds `assets/`: a vendored
 copy of dufs's own frontend (its `assets/` directory at the pinned release,
 served via `--assets`), carrying two workspace patches -- a toolbox toggle
 that hides "system files" (any path whose name, or any segment of a search

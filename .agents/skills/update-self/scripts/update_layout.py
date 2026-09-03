@@ -41,10 +41,19 @@ RECEIPT = "uv-receipt.toml"
 # receipt only knows the plugins a tool was installed with *last time*, so a
 # release that ships a new plugin needs this to reach an existing workspace:
 # the merged tree's manifest is unioned into the reinstall, keyed by the name
-# the manifest uses for each tool.
+# the plugin table uses for each tool -- ``mngr`` for the mngr tool, and an
+# app's manifest name (``system/apps/<package>/app.toml``) for the app's tool.
 PLUGIN_MANIFEST_PATH = "system/config/mngr_plugins.toml"
 
-MANIFEST_TOOL_NAMES = {MNGR_TOOL_NAME: "mngr", TOOL_NAME: "system-interface"}
+MNGR_PLUGIN_KEY = "mngr"
+
+# Every ``system/apps/<package>/`` with a ``pyproject.toml`` is a Python app
+# that runs from its own uv tool environment (see build_workspace.sh); its
+# ``app.toml`` manifest names it and says whether it is critical (a
+# snapshot-and-rollback target in the apply).
+APPS_DIR = "system/apps"
+
+MANIFEST_FILENAME = "app.toml"
 
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
 # and this ``static/`` bundle are gitignored, so they never appear in a diff --

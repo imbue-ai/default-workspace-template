@@ -49,15 +49,22 @@ from update_apply_contract import (
     write_provision_incomplete,
 )
 from update_banding import ExpendWrapper, as_expendable, keep_protected
-from update_classification import ApplyPlan, plan_apply, read_provisioner_inputs
+from update_classification import (
+    ApplyPlan,
+    plan_apply,
+    read_app_tools,
+    read_provisioner_inputs,
+)
 from update_environment import (
     ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
-    ENVIRONMENT_SNAPSHOT_NAMES,
+    BACKEND_SNAPSHOT_NAMES,
     discard_snapshots,
+    refresh_app_tools,
     refresh_backend_dependencies,
     restore_snapshots,
     run_provisioner,
     take_snapshots,
+    tool_snapshot_name,
 )
 from update_layout import (
     BUNDLE_STAMP_FILENAME,
@@ -426,8 +433,15 @@ def _recover_running_state(
             # No stamp comparison here: the tree is rolled back, and an older
             # tree's build may predate the stamping postbuild step.
             _assert_bundle_built(repo_root, None, live_service_restarted=False)
-        if plan.backend_manifest and not ENVIRONMENT_SNAPSHOT_NAMES <= restored:
+        if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(repo_root, runner, keep_protected)
+        # An app tool with no copy to put back (a non-critical app, or a copy
+        # that could not be taken) is re-resolved from the restored tree.
+        unrestored_app_tools = tuple(
+            app for app in plan.app_tools if tool_snapshot_name(app.tool_name) not in restored
+        )
+        if unrestored_app_tools:
+            refresh_app_tools(unrestored_app_tools, repo_root, runner, keep_protected)
         if live_service_restarted:
             run_checked(
                 runner,
@@ -669,7 +683,9 @@ def apply_update(
 
     name_status = diff_name_status(repo_root, marker.rollback_to, runner)
     plan = plan_apply(
-        [path for _, path in name_status], read_provisioner_inputs(repo_root)
+        [path for _, path in name_status],
+        read_provisioner_inputs(repo_root),
+        read_app_tools(repo_root),
     )
 
     unresolved_frontend_failure: str | None = None
@@ -733,6 +749,10 @@ def apply_update(
         if plan.backend_manifest:
             refresh_backend_dependencies(
                 repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
+            )
+        if plan.app_tools:
+            refresh_app_tools(
+                plan.app_tools, repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
             )
         _advance(PHASE_REFRESHED)
 
@@ -1083,7 +1103,9 @@ def recover(
     write_marker(marker, repo_root, now)
     name_status = diff_name_status(repo_root, marker.rollback_to, runner)
     plan = plan_apply(
-        [path for _, path in name_status], read_provisioner_inputs(repo_root)
+        [path for _, path in name_status],
+        read_provisioner_inputs(repo_root),
+        read_app_tools(repo_root),
     )
     try:
         # Before anything commits: an apply killed inside its merge left the
