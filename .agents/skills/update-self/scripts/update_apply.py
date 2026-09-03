@@ -51,6 +51,7 @@ from update_apply_contract import (
 from update_banding import ExpendWrapper, as_expendable, keep_protected
 from update_classification import (
     ApplyPlan,
+    AppTool,
     plan_apply,
     read_app_tools,
     read_provisioner_inputs,
@@ -436,12 +437,23 @@ def _recover_running_state(
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(repo_root, runner, keep_protected)
         # An app tool with no copy to put back (a non-critical app, or a copy
-        # that could not be taken) is re-resolved from the restored tree.
-        unrestored_app_tools = tuple(
-            app for app in plan.app_tools if tool_snapshot_name(app.tool_name) not in restored
-        )
-        if unrestored_app_tools:
-            refresh_app_tools(unrestored_app_tools, repo_root, runner, keep_protected)
+        # that could not be taken) is re-resolved from the restored tree. An
+        # app the merge added has no directory there to resolve from, so its
+        # environment is left as the failed apply built it.
+        rebuildable_app_tools: list[AppTool] = []
+        for app in plan.app_tools:
+            if tool_snapshot_name(app.tool_name) in restored:
+                continue
+            if (repo_root / app.directory / "pyproject.toml").is_file():
+                rebuildable_app_tools.append(app)
+            else:
+                sys.stderr.write(
+                    f"recovery: the app at {app.directory} is not in the restored tree, so "
+                    f"its tool environment ('{app.tool_name}') is left as the failed apply "
+                    f"built it; `uv tool uninstall {app.tool_name}` removes it.\n"
+                )
+        if rebuildable_app_tools:
+            refresh_app_tools(rebuildable_app_tools, repo_root, runner, keep_protected)
         if live_service_restarted:
             run_checked(
                 runner,
