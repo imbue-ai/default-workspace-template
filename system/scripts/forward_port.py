@@ -204,7 +204,9 @@ def _validate_icon_element(element: ElementTree.Element) -> str | None:
                 return f"invalid icon: event-handler attribute {name!r} is not allowed"
             if "javascript:" in attribute_value.lower().replace(" ", ""):
                 return f"invalid icon: attribute {name!r} contains a javascript: URL"
-            if name in _ICON_REFERENCE_ATTRIBUTES and not attribute_value.startswith("#"):
+            if name in _ICON_REFERENCE_ATTRIBUTES and not attribute_value.startswith(
+                "#"
+            ):
                 return (
                     f"invalid icon: attribute {name!r} must reference the icon "
                     "itself (a '#id' fragment); icons may not point at external "
@@ -262,7 +264,10 @@ def read_icon_file(path: Path) -> tuple[str | None, str | None]:
     stripped) are what gets persisted; the path is not recorded anywhere.
     """
     if path.suffix.lower() != ".svg":
-        return None, f"icon file {str(path)!r} must be an .svg file (icons are SVG-only so every glyph stays in the same vector style)"
+        return (
+            None,
+            f"icon file {str(path)!r} must be an .svg file (icons are SVG-only so every glyph stays in the same vector style)",
+        )
     if not path.is_file():
         return None, f"icon file {str(path)!r} does not exist"
     try:
@@ -341,7 +346,11 @@ def _toml_string(value: str) -> str:
 
 
 def _toml_inline_table(table: dict[str, object]) -> str:
-    return "{" + ", ".join(f"{key} = {_toml_scalar(value)}" for key, value in table.items()) + "}"
+    return (
+        "{"
+        + ", ".join(f"{key} = {_toml_scalar(value)}" for key, value in table.items())
+        + "}"
+    )
 
 
 def _toml_scalar(value: object) -> str:
@@ -392,10 +401,14 @@ def _load_apps(path: Path) -> list[dict[str, object]]:
         doc = tomllib.load(f)
     apps = doc.get("apps", [])
     if not isinstance(apps, list):
-        raise MalformedRegistryError(f"registry {path} has an 'apps' key that is not an array of tables")
+        raise MalformedRegistryError(
+            f"registry {path} has an 'apps' key that is not an array of tables"
+        )
     for app in apps:
         if not isinstance(app, dict):
-            raise MalformedRegistryError(f"registry {path} has an 'apps' element that is not a table: {app!r}")
+            raise MalformedRegistryError(
+                f"registry {path} has an 'apps' element that is not a table: {app!r}"
+            )
     return [dict(app) for app in apps]
 
 
@@ -417,7 +430,9 @@ def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
         raise
 
 
-def _read_manifest(path: Path, name_from_flag: str | None) -> tuple[dict[str, object], Path | None, str | None]:
+def _read_manifest(
+    path: Path, name_from_flag: str | None
+) -> tuple[dict[str, object], Path | None, str | None]:
     """Read ``path`` and return ``(row_fields, icon_path, error)``.
 
     ``row_fields`` holds every manifest-owned registry key the manifest sets
@@ -440,7 +455,11 @@ def _read_manifest(path: Path, name_from_flag: str | None) -> tuple[dict[str, ob
     if name_error is not None:
         return {}, None, f"manifest {str(path)!r}: {name_error}"
     if name_from_flag is not None and name_from_flag != name:
-        return {}, None, f"--name {name_from_flag!r} does not match the manifest's name {name!r}"
+        return (
+            {},
+            None,
+            f"--name {name_from_flag!r} does not match the manifest's name {name!r}",
+        )
 
     fields: dict[str, object] = {"name": name}
     for key in _MANIFEST_STRING_KEYS:
@@ -458,18 +477,41 @@ def _read_manifest(path: Path, name_from_flag: str | None) -> tuple[dict[str, ob
 
     shortcut = raw.get("default_shortcut")
     if shortcut is not None:
-        if not (isinstance(shortcut, dict) and isinstance(shortcut.get("action"), str) and isinstance(shortcut.get("mode"), str)):
-            return {}, None, f"manifest {str(path)!r}: default_shortcut must be a table with string 'action' and 'mode'"
-        fields["default_shortcut"] = {"action": shortcut["action"], "mode": shortcut["mode"]}
+        if not (
+            isinstance(shortcut, dict)
+            and isinstance(shortcut.get("action"), str)
+            and isinstance(shortcut.get("mode"), str)
+        ):
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: default_shortcut must be a table with string 'action' and 'mode'",
+            )
+        fields["default_shortcut"] = {
+            "action": shortcut["action"],
+            "mode": shortcut["mode"],
+        }
 
     actions = raw.get("actions")
     if actions is not None:
         if not isinstance(actions, list):
-            return {}, None, f"manifest {str(path)!r}: actions must be an array of tables"
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: actions must be an array of tables",
+            )
         copied_actions: list[dict[str, object]] = []
         for action in actions:
-            if not (isinstance(action, dict) and isinstance(action.get("id"), str) and isinstance(action.get("label"), str)):
-                return {}, None, f"manifest {str(path)!r}: every action needs a string 'id' and 'label'"
+            if not (
+                isinstance(action, dict)
+                and isinstance(action.get("id"), str)
+                and isinstance(action.get("label"), str)
+            ):
+                return (
+                    {},
+                    None,
+                    f"manifest {str(path)!r}: every action needs a string 'id' and 'label'",
+                )
             copied_actions.append({"id": action["id"], "label": action["label"]})
         fields["actions"] = copied_actions
 
@@ -512,7 +554,9 @@ def _upsert(
     or removed when the manifest omits it.
     """
     apps = _load_apps(path)
-    manifest_owned = _manifest_owned_values(manifest_fields, internal=internal, program=program)
+    manifest_owned = _manifest_owned_values(
+        manifest_fields, internal=internal, program=program
+    )
 
     # Update an existing entry's URL in place, minting a label only if one was
     # never assigned (a legacy row, or a row written before labels existed).
@@ -536,7 +580,11 @@ def _upsert(
     # ``internal``, ``program``, and manifest keys are omitted entirely when
     # there is nothing to say, so the common row keeps the shape it has always
     # had (a missing key reads as "no icon" / "not internal" / "not supervised").
-    entry: dict[str, object] = {"name": name, "url": url, "label": mint_service_label(name)}
+    entry: dict[str, object] = {
+        "name": name,
+        "url": url,
+        "label": mint_service_label(name),
+    }
     if icon is not None:
         entry["icon"] = icon
     for key in _MANIFEST_OWNED_KEYS:
@@ -551,7 +599,11 @@ def _manifest_owned_values(
 ) -> dict[str, object]:
     """The manifest-owned keys a registration sets, from the manifest or from the plain flags."""
     if manifest_fields is not None:
-        values = {key: value for key, value in manifest_fields.items() if key in _MANIFEST_OWNED_KEYS}
+        values = {
+            key: value
+            for key, value in manifest_fields.items()
+            if key in _MANIFEST_OWNED_KEYS
+        }
         # ``internal`` keeps its flag shape on the row (present only when true).
         if not values.get("internal", False):
             values.pop("internal", None)
@@ -580,7 +632,8 @@ def _remove(path: Path, name: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Register or remove an app port")
     parser.add_argument(
-        "--name", help="App name (e.g. 'terminal', 'browser'). Required without --manifest; must match the manifest's name with it."
+        "--name",
+        help="App name (e.g. 'terminal', 'browser'). Required without --manifest; must match the manifest's name with it.",
     )
     parser.add_argument(
         "--manifest",
@@ -594,8 +647,15 @@ def main() -> None:
         "--url",
         help="Full URL where the app is accessible (e.g. http://localhost:7681)",
     )
-    parser.add_argument("--icon-file", help="Path to the app's .svg icon; its contents are read now, validated, and stored (the path is not recorded). Omit to leave any stored icon untouched.")
-    parser.add_argument("--no-icon", action="store_true", help="Register a brand-new entry without an icon, keeping the generic letter monogram. Does NOT hide the entry (that is --internal's job). Prefer --icon-file; use only when an icon was explicitly declined or would never be rendered.")
+    parser.add_argument(
+        "--icon-file",
+        help="Path to the app's .svg icon; its contents are read now, validated, and stored (the path is not recorded). Omit to leave any stored icon untouched.",
+    )
+    parser.add_argument(
+        "--no-icon",
+        action="store_true",
+        help="Register a brand-new entry without an icon, keeping the generic letter monogram. Does NOT hide the entry (that is --internal's job). Prefer --icon-file; use only when an icon was explicitly declined or would never be rendered.",
+    )
     parser.add_argument(
         "--program",
         help=(
@@ -641,17 +701,27 @@ def main() -> None:
         parser.error("--program cannot be combined with --remove")
 
     if args.manifest is not None and (
-        args.remove or args.icon_file is not None or args.no_icon or args.program is not None or args.internal
+        args.remove
+        or args.icon_file is not None
+        or args.no_icon
+        or args.program is not None
+        or args.internal
     ):
-        parser.error("--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, or --internal")
+        parser.error(
+            "--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, or --internal"
+        )
 
     if args.program is not None and not args.program.strip():
         parser.error("--program must not be empty")
 
     manifest_fields: dict[str, object] | None = None
-    icon_path: Path | None = Path(args.icon_file) if args.icon_file is not None else None
+    icon_path: Path | None = (
+        Path(args.icon_file) if args.icon_file is not None else None
+    )
     if args.manifest is not None:
-        manifest_fields, icon_path, manifest_error = _read_manifest(Path(args.manifest), args.name)
+        manifest_fields, icon_path, manifest_error = _read_manifest(
+            Path(args.manifest), args.name
+        )
         if manifest_error is not None:
             parser.error(manifest_error)
         name = str(manifest_fields["name"])
@@ -666,7 +736,9 @@ def main() -> None:
     if icon_path is not None:
         icon, icon_error = read_icon_file(icon_path)
 
-    is_internal = args.internal or bool(manifest_fields is not None and manifest_fields.get("internal", False))
+    is_internal = args.internal or bool(
+        manifest_fields is not None and manifest_fields.get("internal", False)
+    )
 
     apps_file = _apps_file()
     lock_path = apps_file.parent / ".apps.lock"
@@ -686,7 +758,9 @@ def main() -> None:
                 if icon_error is not None:
                     if is_new_pickable:
                         parser.error(icon_error)
-                    sys.stderr.write(f"warning: {icon_error}; registering without an icon\n")
+                    sys.stderr.write(
+                        f"warning: {icon_error}; registering without an icon\n"
+                    )
                 if icon is None and not args.no_icon and is_new_pickable:
                     parser.error(
                         f"app {name!r} is new and has no icon: pass --icon-file with a house-style "
