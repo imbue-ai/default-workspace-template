@@ -1,38 +1,38 @@
 /**
- * The provider chooser and its sign-in screens, ported from the mockup
- * (`imbue-ai/mind-sketches`, `prototypes/minds-harness`).
+ * The provider chooser and its sign-in screens.
  *
- * It is the mockup's two dialogs collapsed into one component, because our flow has no
- * router: `IntroChooserModal`'s row list is the entry screen, and picking a row swaps the
- * same panel to `ProviderSignInModal`'s body with a back chevron in the header. The class
- * strings all come from `providerSignInStyles.ts`, verbatim.
+ * Two dialogs collapsed into one component, because this flow has no router: the lane rows
+ * are the entry screen, and picking a row swaps the same panel to the sign-in body with a
+ * back chevron in the header. Its chrome is the workspace's own -- the modal shell's overlay
+ * and card, the shared Button and Input, the floating-menu recipe for the key picker -- and
+ * `providerSignInStyles.ts` holds only what is particular to this flow.
  *
- * The mode names are the mockup's, and so is what each renders:
+ * What each mode renders:
  *
- *   chooser    the lane rows (IntroChooserModal)
+ *   chooser    the lane rows
  *   menu       a lane's primary method, plus "Other ways to sign in" under it
  *   steps      one browser method, as the numbered 1-2 sequence
  *   apiKey     one paste method: pick a provider, paste the key
  *   verifying  the spinner screen
  *   success    the check screen, with a Done footer
  *
- * Where we diverge from the mockup, only the part that differs changes and the frame
- * around it stays (see the plan's "UI comes from the mockup verbatim" addendum):
+ * Two shapes worth knowing about:
  *
- *   * no `Runs on <harness>` dropdown, and no `Runs on X` line on the rows -- provider ->
- *     harness is fixed in V1, so neither is a choice or a fact worth a third line;
- *   * `code_then_wait` (OpenAI's device flow) runs the other way round: it shows a code you
- *     carry to the browser rather than taking one back, so its step 2 is a code plus a Copy
- *     button. The mockup has no screen for it; it still sits in the numbered-step block;
- *   * the signed-in list, re-auth and delete are ours -- the mockup shows one connection.
+ *   * there is no `Runs on <harness>` picker -- provider -> harness is fixed in V1, so the
+ *     header states it as a fact rather than offering it as a choice;
+ *   * `code_then_wait` (OpenAI's device flow) runs the other way round from a paste flow: it
+ *     shows a code you carry to the browser rather than taking one back, so its step 2 is a
+ *     code plus a Copy button.
  *
- * Which of the three shapes a method uses comes from the server, so nothing here knows
- * what a harness is.
+ * Which of the three shapes a method uses comes from the server, so nothing here knows what a
+ * harness is.
  */
 
 import m from "mithril";
 
+import { Button, buttonClass } from "./components/Button";
 import { icon, loginSpinnerIcon, warningIcon } from "./components/icons";
+import { inputClass } from "./components/Input";
 import { MODAL_OVERLAY_CLASS } from "./components/Modal";
 import { backdropDismissAttrs } from "./components/modalBackdrop";
 import { providerMark } from "./providerMarks";
@@ -62,8 +62,7 @@ export interface ProviderChooserModalAttrs {
 type Mode = "chooser" | "menu" | "steps" | "apiKey";
 
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
- *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope --
- *  the same reason the mockup keeps it there. */
+ *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope. */
 let savedScroll = 0;
 
 export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
@@ -71,7 +70,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let lane: Lane | null = null;
   let method: LaneMethod | null = null;
   /** True when this screen was entered straight from the chooser, so back returns there
-   *  rather than to a menu that was never shown. The mockup's `cameFromChooser`. */
+   *  rather than to a menu that was never shown. */
   let cameFromChooser = false;
   let codeInput = "";
   let keyInput = "";
@@ -85,7 +84,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let copyFailed = false;
   // The provider dropdown's open state and where to pin it. It is rendered into the overlay
   // rather than inline because the panel is overflow-hidden -- an in-panel popover of 28
-  // rows would simply be clipped. Same reason the mockup portals it to <body>.
+  // rows would simply be clipped, hence the portal.
   let keyMenuOpen = false;
   let keyMenuAnchor: DOMRect | null = null;
   // Set once a credential has been handed over and we are waiting on the verdict. The
@@ -199,7 +198,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     }
   }
 
-  /** The mockup's back: a deep screen returns to the menu, an entry screen to the chooser. */
+  /** Back: a deep screen returns to the menu, an entry screen to the chooser. */
   function back(): void {
     abortFlow();
     if (mode === "menu" || cameFromChooser || lane === null) {
@@ -303,11 +302,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         m(
           "div",
           { class: css.FOOTER_ROW },
-          m(
-            "button",
-            { type: "button", class: css.PRIMARY_BTN, disabled: busy, onclick: () => void load() },
-            "Try again",
-          ),
+          m(Button, { variant: "primary", disabled: busy, onclick: () => void load() }, "Try again"),
         ),
       ];
     }
@@ -327,7 +322,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ];
   }
 
-  /** Ours: the mockup shows one connection. A signed-in account is a STATE, not a place to
+  /** A signed-in account is a STATE, not a place to
    *  navigate to, so the row is not a button -- it reads as a listed fact with two explicit
    *  actions beside it. Re-auth stays reachable because an expired credential is otherwise
    *  a dead end: without it the only way back is to delete the account, which orphans every
@@ -350,20 +345,21 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             ),
             m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, account.label),
             m(
-              "button",
+              Button,
               {
-                type: "button",
-                class: css.ROW_ACTION,
+                variant: "ghost",
+                sm: true,
                 title: "Sign in again, keeping this account and every chat on it",
                 onclick: () => void reauthenticate(account.id, account.lane),
               },
               "Sign in again",
             ),
             m(
-              "button",
+              Button,
               {
-                type: "button",
-                class: css.ROW_ACTION,
+                variant: "ghost",
+                sm: true,
+                icon: true,
                 "aria-label": `Remove ${account.label}`,
                 onclick: () => {
                   confirmingDelete = account.id;
@@ -398,7 +394,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       m(
         "a",
         {
-          class: css.PRIMARY_LINK_BTN,
+          class: buttonClass("primary", { block: true, extra: "gap-[7px]" }),
           href: url,
           target: "_blank",
           rel: "noopener noreferrer",
@@ -427,7 +423,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       stepLabel("2", "Approve, then paste the code shown"),
       m("div", { class: css.FIELD_ROW }, [
         m("input", {
-          class: `${css.INPUT} flex-1`,
+          class: inputClass({ mono: true, extra: "flex-1" }),
           type: "text",
           value: codeInput,
           // No placeholder. It read as an instruction about the code's SHAPE, and the shape
@@ -449,10 +445,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           },
         }),
         m(
-          "button",
+          Button,
           {
-            type: "button",
-            class: `${css.PRIMARY_BTN} whitespace-nowrap`,
+            variant: "primary",
             disabled: busy || codeInput.trim() === "",
             onclick: () => void send(() => submitCode(codeInput.trim()), true),
           },
@@ -470,10 +465,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       m("div", { class: css.FIELD_ROW }, [
         m("div", { class: css.CODE }, code ?? ""),
         m(
-          "button",
+          Button,
           {
-            type: "button",
-            class: `${css.SECONDARY_BTN} whitespace-nowrap`,
+            variant: "secondary",
             disabled: code === null,
             onclick: () => void copyToClipboard(code ?? "", "code"),
           },
@@ -555,7 +549,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const withPicker = choices.length > 1;
     const keyField = m("div", { class: css.FIELD_ROW }, [
       m("input", {
-        class: `${css.INPUT} flex-1`,
+        class: inputClass({ mono: true, extra: "flex-1" }),
         type: "password",
         value: keyInput,
         placeholder: withPicker ? (selected?.hint ?? "Paste your key") : (selected?.hint ?? "sk-..."),
@@ -574,10 +568,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         },
       }),
       m(
-        "button",
+        Button,
         {
-          type: "button",
-          class: `${css.PRIMARY_BTN} whitespace-nowrap`,
+          variant: "primary",
           // `getFlow() === null` too: a paste screen renders BEFORE its flow exists -- there is
           // nothing to wait for, so `begin` shows the form and lets the mint land behind it --
           // and submitting without one returns silently, so the button did nothing at all with
@@ -674,7 +667,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   }
 
   /** The menu: this lane's primary method inline, with its alternates under it. The
-   *  mockup's codex menu, which is why the section labels read the way they do. */
+   *  the harness's own menu, which is why the section labels read the way they do. */
   function menuBody(current: Lane): m.Children {
     const primary = current.methods[0];
     const others = current.methods.slice(1);
@@ -790,10 +783,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             "div",
             { class: css.FOOTER_ROW },
             m(
-              "button",
+              Button,
               {
-                type: "button",
-                class: css.PRIMARY_BTN,
+                variant: "primary",
                 disabled: busy,
                 onclick: () =>
                   void begin(current, method ?? current.methods[0], {
@@ -863,16 +855,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               m("div", { class: css.HEADER }, [
                 current !== null
                   ? m(
-                      "button",
-                      { type: "button", class: css.BACK_BUTTON, onclick: back, "aria-label": "Back" },
+                      Button,
+                      { variant: "ghost", sm: true, icon: true, onclick: back, "aria-label": "Back", extra: "-ml-2" },
                       m.trust(icon("chevron-left", { size: 16 })),
                     )
                   : null,
                 m("h2", { class: css.TITLE }, title),
-                // Which harness this connection will run on, stated top-right where the mockup
-                // puts its harness picker. Not a picker here: provider -> harness is fixed in
-                // V1, so there is nothing to choose -- but it is still the fact you want before
-                // you hand over a credential, and the header is where the mockup says it goes.
+                // Which harness this connection will run on. Not a picker: provider ->
+                // harness is fixed in V1, so there is nothing to choose -- but it is still the
+                // fact you want before you hand over a credential, so the header states it.
                 m("span", { class: css.HEADER_END }, [
                   current !== null && !isSuccess && !isPending
                     ? m("span", { class: css.RUNS_ON }, [
@@ -881,8 +872,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                       ])
                     : null,
                   m(
-                    "button",
-                    { type: "button", class: css.CLOSE_BUTTON, onclick: onClose, "aria-label": "Close" },
+                    Button,
+                    {
+                      variant: "ghost",
+                      sm: true,
+                      icon: true,
+                      onclick: onClose,
+                      "aria-label": "Close",
+                      extra: "-mr-1",
+                    },
                     m.trust(icon("close", { size: 16 })),
                   ),
                 ]),
@@ -907,11 +905,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                     m(
                       "div",
                       { class: css.FOOTER_ROW },
-                      m(
-                        "button",
-                        { type: "button", class: css.PRIMARY_BTN, "data-e2e": "done", onclick: onClose },
-                        "Done",
-                      ),
+                      m(Button, { variant: "primary", "data-e2e": "done", onclick: onClose }, "Done"),
                     ),
                   )
                 : null,
