@@ -1,5 +1,6 @@
 import gzip
 import shlex
+import zlib
 from pathlib import Path
 from typing import Final
 
@@ -185,9 +186,11 @@ def install_ttyd_web_client(compressed_client: Path, destination: Path) -> bool:
             compressed_client,
         )
         return False
+    # gzip.decompress raises EOFError for a truncated stream and zlib.error for corrupt data; a
+    # file that is not gzip at all is a BadGzipFile, which is an OSError.
     try:
         destination.write_bytes(gzip.decompress(compressed_client.read_bytes()))
-    except (OSError, gzip.BadGzipFile) as e:
+    except (OSError, EOFError, zlib.error) as e:
         logger.warning(
             "Failed to decompress the ttyd web client at {}: {}; using the stock client",
             compressed_client,
