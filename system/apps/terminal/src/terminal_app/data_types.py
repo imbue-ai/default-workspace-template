@@ -76,7 +76,7 @@ class TerminalPaths(FrozenModel):
     """Where the terminal app keeps its machine state, all under one directory."""
 
     state_dir: Path = Field(
-        description="The app's state directory (data/.state/terminal under the repo root)"
+        description="The app's state directory (data/.state/terminal under the repo root), absolute so the dispatch scripts can embed it"
     )
 
     @computed_field

@@ -77,7 +77,9 @@ def ttyd_port(app_url: AppUrl) -> int:
 
 def run_terminal_app(arguments: TerminalAppArguments) -> int:
     """Do what the launcher script did (dispatch scripts, web client, discovery event), then run ttyd under the sidecar."""
-    paths = TerminalPaths(state_dir=arguments.state_dir)
+    # The dispatch scripts bake the directory in, so it is anchored here rather than left to the
+    # cwd of every shell ttyd spawns.
+    paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
     with log_span("Installing the ttyd dispatch scripts under {}", paths.commands_dir):
         install_dispatch_scripts(paths)
     is_client_installed = install_ttyd_web_client(
