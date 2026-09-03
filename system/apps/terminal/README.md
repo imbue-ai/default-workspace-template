@@ -17,7 +17,8 @@ sidecar's child (`app_instances.sidecar.run_sidecar_app`):
    `commands/<key>.sh` with the remaining arguments.
 2. Decompresses the OSC 52-capable ttyd web client vendored with the
    `mngr_ttyd` plugin (`system/vendor/mngr/libs/mngr_ttyd/`) and serves it via
-   `ttyd -I`, falling back to the stock client when the asset is missing.
+   `ttyd -I`, falling back to the stock client (with a warning) when the asset
+   is missing or will not decompress.
 3. Appends the `server_registered` discovery event to
    `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl` (`discovery.py`).
 4. Serves the instances API (`GET/POST /_instances`, ...) on `127.0.0.1:7682`,
