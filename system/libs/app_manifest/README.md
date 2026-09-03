@@ -42,5 +42,5 @@ which treats an unknown band name as `user`.
 The registration script itself does not import this library: it runs under a
 plain `python3` from every supervisord program line, so it stays stdlib-only
 and copies the manifest's fields without applying the rules above. The rules
-are applied by `validate-manifest` when an app is scaffolded and by every
-reader of the registry.
+are applied by `validate-manifest` (which the build-app scaffold runs on the
+manifest it writes) and by every reader of the registry.

@@ -145,12 +145,12 @@ Optional:
 - `--port`: explicit port; auto-picked if omitted.
 - `--extra-dep`: repeatable. Add libraries beyond `flask`/`flask-sock`
   (e.g. `--extra-dep "jinja2>=3.1" --extra-dep "anthropic>=0.40"`).
-- `--skip-uv-sync`: skip the final tool install and
+- `--skip-uv-sync`: skip the final manifest check, tool install and
   `uv sync --all-packages` (for fast iteration / dry runs).
 
 The scaffolder fails non-zero with a clear stderr message if the lib
 already exists, the name is reserved or invalid, the requested port
-is taken, or the tool install or `uv sync` fails.
+is taken, or the manifest check, the tool install or `uv sync` fails.
 
 What gets generated:
 
@@ -158,8 +158,9 @@ What gets generated:
   `name`, `display_name`, `icon`, `instances = false` (one tab),
   `priority = "user"` (shed before any built-in under memory pressure),
   and `program` (its supervisord program). `forward_port.py --manifest`
-  reads it on every start; `uv run app-manifest validate-manifest
-  system/apps/<package>/app.toml` checks it.
+  reads it on every start; the scaffold checks it with `uv run app-manifest
+  validate-manifest system/apps/<package>/app.toml` (run that yourself after
+  editing it).
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
   the app's own tool environment exposes.
