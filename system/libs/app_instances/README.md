@@ -65,13 +65,15 @@ The shell is the only caller of the API, over loopback, at the registry row's
   cannot be read, is not JSON, or does not fit raises `InstanceStoreError`)
   and `write_json_document(path, document)` (the atomic replace) are the
   store's file handling, for an app that keeps a document shape of its own.
-- `app_instances.nudge`: `ShellNudger(app_name, shell_url)` posts
-  `POST <shell>/api/apps/<name>/changed` with a two-second timeout, logs an
-  unreachable or refusing shell at debug level (until phase 7 of the model the
-  shell answers `404`, which is expected), and warns when a nudge took over
-  half a second; `shell_base_url()` resolves the shell
-  exactly as `system/scripts/layout.py` does (`MINDS_WORKSPACE_SERVER_URL`,
-  default `http://127.0.0.1:8000`).
+- `app_instances.nudge`: `post_to_shell(url, body)` is every post an app
+  makes to the shell: JSON body (or none) with a two-second timeout, an
+  unreachable or refusing shell logged at debug level (until phase 7 of the
+  model the shell answers `404`, which is expected), a warning when the post
+  took over half a second. `ShellNudger(app_name, shell_url)` posts
+  `POST <shell>/api/apps/<name>/changed` through it; an app's own posts to the
+  shell's tab routes (the terminal's) go through it too. `shell_base_url()`
+  resolves the shell exactly as `system/scripts/layout.py` does
+  (`MINDS_WORKSPACE_SERVER_URL`, default `http://127.0.0.1:8000`).
 - `app_instances.sidecar`: `run_sidecar(manifest_path, app_url, instances_url,
   child_argv, source)` starts the blueprint at `instances_url` on a daemon
   thread (werkzeug's threaded server), registers the app by running

@@ -1,6 +1,7 @@
 import os
 import time
-from typing import Final
+from collections.abc import Mapping
+from typing import Any, Final
 
 import httpx
 from app_manifest.primitives import AppName
@@ -13,14 +14,37 @@ from app_instances.interfaces import InstanceNudgerInterface
 DEFAULT_SHELL_URL: Final[str] = "http://127.0.0.1:8000"
 ENV_SHELL_URL: Final[str] = "MINDS_WORKSPACE_SERVER_URL"
 
-# A nudge is one loopback POST the shell answers without work; past the first threshold it
-# is suspicious (every mutating route waits on it), past the second it is broken.
-NUDGE_SLOW_SECONDS: Final[float] = 0.5
-NUDGE_TIMEOUT_SECONDS: Final[float] = 2.0
+# A post to the shell is one loopback request the shell answers without work; past the first
+# threshold it is suspicious (every mutating route waits on the nudge), past the second it is
+# broken.
+SHELL_POST_SLOW_SECONDS: Final[float] = 0.5
+SHELL_POST_TIMEOUT_SECONDS: Final[float] = 2.0
 
 
 def shell_base_url() -> str:
     return os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/")
+
+
+def post_to_shell(url: str, body: Mapping[str, Any] | None) -> None:
+    """POST ``body`` as JSON (None for an empty body) to the shell route at ``url``.
+
+    An unreachable or refusing shell is a debug log, never an error (until phase 7 of the model
+    the shell has none of the routes apps post to), and a slow one a warning. Every post an app
+    makes to the shell goes through here: the nudge, and an app's own posts to the tab routes.
+    """
+    started_at = time.monotonic()
+    try:
+        response = httpx.post(url, json=body, timeout=SHELL_POST_TIMEOUT_SECONDS)
+    except httpx.HTTPError as e:
+        logger.debug("Skipped posting to the shell at {}: {}", url, e)
+        return
+    elapsed = time.monotonic() - started_at
+    if elapsed > SHELL_POST_SLOW_SECONDS:
+        logger.warning("Posted to the shell at {} slowly, in {:.1f}s", url, elapsed)
+    if response.is_error:
+        logger.debug(
+            "Posted to the shell at {} and it answered {}", url, response.status_code
+        )
 
 
 class ShellNudger(InstanceNudgerInterface):
@@ -34,17 +58,4 @@ class ShellNudger(InstanceNudgerInterface):
     )
 
     def nudge(self) -> None:
-        url = f"{self.shell_url}/api/apps/{self.app_name}/changed"
-        started_at = time.monotonic()
-        try:
-            response = httpx.post(url, timeout=NUDGE_TIMEOUT_SECONDS)
-        except httpx.HTTPError as e:
-            logger.debug("Skipped nudging the shell at {}: {}", url, e)
-            return
-        elapsed = time.monotonic() - started_at
-        if elapsed > NUDGE_SLOW_SECONDS:
-            logger.warning("Nudged the shell at {} slowly, in {:.1f}s", url, elapsed)
-        if response.is_error:
-            logger.debug(
-                "Nudged the shell at {} and it answered {}", url, response.status_code
-            )
+        post_to_shell(f"{self.shell_url}/api/apps/{self.app_name}/changed", None)
