@@ -2308,9 +2308,11 @@ def _set_terminal_banner_dismissed() -> Response:
 def _resolve_terminal_id_for_tty(client_tty: str) -> str | None:
     """Reverse-look-up the dockview terminal id bound to a tmux client tty.
 
-    ``system/apps/terminal/run_ttyd.sh`` records ``terminal_id -> $(tty)`` files under
-    ``$MNGR_AGENT_STATE_DIR/commands/ttyd/clients/`` when a tab attaches; this
-    finds the id whose recorded tty matches ``client_tty``. Returns None when
+    The fallback for a notify post that carries no ``terminal_id``: it reads the
+    ``terminal_id -> $(tty)`` files the terminal's dispatch recorded under
+    ``$MNGR_AGENT_STATE_DIR/commands/ttyd/clients/`` before phase 3 of the
+    workspace app model moved them into the terminal app's own state directory,
+    and finds the id whose recorded tty matches ``client_tty``. Returns None when
     the mapping directory or a matching entry is absent.
     """
     if not client_tty:
