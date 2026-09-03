@@ -143,10 +143,12 @@ process restarts:
   ```
 
 - **Dependency or entry-point change to an app** (its `pyproject.toml`):
-  every Python app runs from its own uv tool environment, an editable
-  install of `system/apps/<package>/` that picks up source edits on its
-  own but not a new dependency or console script. Reinstall the tool, then
-  restart:
+  an app with an `app.toml` manifest runs from its own uv tool environment,
+  an editable install of `system/apps/<package>/` that picks up source
+  edits on its own but not a new dependency or console script. Reinstall
+  the tool, then restart (an app scaffolded before manifests existed has
+  no `app.toml` and still runs from the root venv: for it, only the
+  `uv sync --all-packages` below is needed):
 
   ```bash
   uv tool install -e system/apps/<package> --reinstall
