@@ -8,18 +8,22 @@ import pytest
 from harbor.environments.base import ExecResult
 from loguru import logger
 
+from imbue.minds_evals import minds_bridge
 from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import WorkspaceCreateError
 from imbue.minds_evals.minds_bridge import AGENTS_PATH
 from imbue.minds_evals.minds_bridge import AUTH_MODE_API_KEY
 from imbue.minds_evals.minds_bridge import CLAUDE_AUTH_STATUS_PATH
+from imbue.minds_evals.minds_bridge import WaitHeartbeat
 from imbue.minds_evals.minds_bridge import WorkspaceSignIn
+from imbue.minds_evals.minds_bridge import _WAIT_HEARTBEAT_SECONDS
 from imbue.minds_evals.minds_bridge import authenticate_workspace
 from imbue.minds_evals.minds_bridge import build_box_env
 from imbue.minds_evals.minds_bridge import build_create_payload
 from imbue.minds_evals.minds_bridge import build_credential_lines
 from imbue.minds_evals.minds_bridge import create_chat_agent
 from imbue.minds_evals.minds_bridge import create_workspace_and_wait
+from imbue.minds_evals.minds_bridge import describe_agents_listing
 from imbue.minds_evals.minds_bridge import destroy_workspaces
 from imbue.minds_evals.minds_bridge import fetch_event_total
 from imbue.minds_evals.minds_bridge import fetch_events_window
@@ -28,10 +32,16 @@ from imbue.minds_evals.minds_bridge import load_modal_token_env
 from imbue.minds_evals.minds_bridge import parse_activation_exports
 from imbue.minds_evals.minds_bridge import parse_agent_ssh_info
 from imbue.minds_evals.minds_bridge import parse_curl_response
+from imbue.minds_evals.minds_bridge import read_box_file_tail
 from imbue.minds_evals.minds_bridge import redact_secret
 from imbue.minds_evals.minds_bridge import resolve_chat_agent_id
 from imbue.minds_evals.minds_bridge import run_in_workspace
 from imbue.minds_evals.minds_bridge import send_chat_message
+from imbue.minds_evals.minds_bridge import service_log_path
+from imbue.minds_evals.minds_bridge import snapshot_workspace
+from imbue.minds_evals.minds_bridge import start_backend
+from imbue.minds_evals.minds_bridge import start_proxy
+from imbue.minds_evals.minds_bridge import start_reverse_tunnel
 from imbue.minds_evals.minds_bridge import wait_for_auth_endpoint
 from imbue.minds_evals.minds_bridge import workspace_curl
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
@@ -671,3 +681,113 @@ def test_parse_agent_ssh_info_tolerates_a_bare_list_payload() -> None:
 
 def test_parse_agent_ssh_info_returns_none_on_unparseable_output() -> None:
     assert parse_agent_ssh_info("not json at all", "ws-1") is None
+
+
+def test_service_logs_are_kept_out_of_the_directory_harbor_empties_between_steps() -> None:
+    """Anything a long-running box process holds open must not live under the agent logs dir: a
+    multi-step run empties that directory before every step, unlinking the file while the writer
+    keeps appending to the dead inode."""
+    assert not service_log_path(minds_bridge.BOX_LOG_FILENAME).startswith(minds_bridge.BOX_LOGS_DIR + "/")
+    assert service_log_path(minds_bridge.BOX_LOG_FILENAME) == "/logs/artifacts/minds/box.log"
+
+
+def test_start_backend_writes_the_backend_log_where_it_survives_the_whole_trial(tmp_path: Path) -> None:
+    environment = MockBoxEnvironment(tmp_path, [])
+
+    asyncio.run(start_backend(environment, {}))
+
+    (command,) = environment.exec_commands
+    assert "> {} 2>&1".format(service_log_path(minds_bridge.BOX_LOG_FILENAME)) in command
+    assert "mkdir -p {}".format(minds_bridge.BOX_SERVICE_LOGS_DIR) in command
+
+
+def test_the_tunnel_and_proxy_log_beside_the_backend(tmp_path: Path) -> None:
+    """Both are started once and outlive the step that started them, so both share the backend's
+    fate if they log under the agent logs dir."""
+    ssh_info = {"user": "root", "host": "1.2.3.4", "port": "22", "key_path": "/k"}
+    tunnel_environment = MockBoxEnvironment(tmp_path / "tunnel", [])
+    proxy_environment = MockBoxEnvironment(tmp_path / "proxy", [])
+
+    asyncio.run(
+        start_reverse_tunnel(tunnel_environment, {}, "ws-1", ssh_info, 4000, 60.0, is_probe_token_served=False)
+    )
+    asyncio.run(start_proxy(proxy_environment, {}, "model_list: []", "sk-up", "sk-trial", 4000))
+
+    tunnel_command = tunnel_environment.exec_commands[-1]
+    assert "> {} 2>&1".format(service_log_path(minds_bridge.TUNNEL_LOG_FILENAME)) in tunnel_command
+    proxy_command = proxy_environment.exec_commands[-1]
+    assert "> {} 2>&1".format(service_log_path(minds_bridge.PROXY_LOG_FILENAME)) in proxy_command
+
+
+def test_snapshots_stay_under_the_agent_logs_dir(tmp_path: Path) -> None:
+    """A finished tarball has no writer holding it open, and the agent logs dir is downloaded once
+    per step -- under the never-emptied service logs dir every earlier step's tarballs would be
+    re-transferred and re-archived on every later step."""
+    environment = MockBoxEnvironment(
+        tmp_path,
+        [
+            ScriptedExecRule("tar czf /tmp/post_message_1", [ok_result(mngr_exec_json(""))]),
+            ScriptedExecRule("mngr rsync", [ok_result()]),
+        ],
+    )
+
+    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_1"))
+
+    pull_command = environment.exec_commands[-1]
+    assert "{}/snapshots/".format(minds_bridge.BOX_LOGS_DIR) in pull_command
+
+
+def test_read_box_file_tail_bounds_the_read_in_the_box(tmp_path: Path) -> None:
+    environment = MockBoxEnvironment(tmp_path, [ScriptedExecRule("tail -c", [ok_result("last lines\n")])])
+
+    assert asyncio.run(read_box_file_tail(environment, {}, "/logs/artifacts/minds/box.log", 512)) == "last lines"
+    assert "tail -c 512 /logs/artifacts/minds/box.log" in environment.exec_commands[0]
+
+
+def test_read_box_file_tail_reads_an_absent_file_as_empty(tmp_path: Path) -> None:
+    """A service that never started leaves no log, and the caller is diagnostics that must not be
+    turned into a failure by one missing file. Absence is handled in the box rather than on the
+    host, so the suppression has to be in the command itself."""
+    environment = MockBoxEnvironment(tmp_path, [ScriptedExecRule("tail -c", [failed_result("No such file")])])
+
+    assert asyncio.run(read_box_file_tail(environment, {}, "/nope.log", 512)) == ""
+    assert "2>/dev/null || true" in environment.exec_commands[0]
+
+
+def test_describe_agents_listing_names_the_three_ways_a_chat_agent_stays_unresolvable() -> None:
+    """An unresolvable chat agent is nearly always one of these, and the driver log has to say
+    which: the listing never answers, it is empty, or several agents make the fallback ambiguous."""
+    assert "unreachable" in describe_agents_listing(None)
+    assert describe_agents_listing({"agents": []}) == "an empty agents list"
+    assert (
+        describe_agents_listing(
+            {"agents": [{"name": "system-services", "state": "WAITING"}, {"name": "other", "state": "BUSY"}]}
+        )
+        == "system-services(WAITING), other(BUSY)"
+    )
+
+
+def test_wait_heartbeat_says_it_is_still_waiting_then_holds_off() -> None:
+    """One line as soon as a poll fails, then at most one per interval: a twenty-minute wait must be
+    visible in the log without becoming thousands of lines of it."""
+    heartbeat = WaitHeartbeat(label="the chat agent")
+    logged: list[str] = []
+    handler_id = logger.add(lambda message: logged.append(message.record["message"]), level="TRACE")
+    try:
+        heartbeat.tick("state=unreachable")
+        heartbeat.tick("state=unreachable")
+        lines_within_the_interval = list(logged)
+        # Past the hold-off window, without waiting one out: the class reads a monotonic clock, so
+        # moving its bookkeeping back is the same thing as time passing.
+        heartbeat.last_logged_at -= _WAIT_HEARTBEAT_SECONDS + 1.0
+        heartbeat.tick("state=BUSY")
+    finally:
+        logger.remove(handler_id)
+
+    # What the log has to carry: which wait it is, how long it has run, and what the workspace was
+    # answering meanwhile -- a wait that is stuck says nothing without the last of those.
+    (first_line,) = lines_within_the_interval
+    assert "the chat agent" in first_line
+    assert "state=unreachable" in first_line
+    assert len(logged) == 2
+    assert "state=BUSY" in logged[1]

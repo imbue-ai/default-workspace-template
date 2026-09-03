@@ -1,0 +1,3 @@
+`specs/minds-eval-harbor/goal_driven_turns.md` specifies goal-driven conversation turns for minds_evals: a `prompts` entry can expand into a bounded back-and-forth driven by a goal-holding client LLM via the driver's `TurnSource` seam, until the client is satisfied or its exchange budget runs out.
+
+The spec covers the entry schema and generation-time validation, the `Say | Done` source interface with source-declared exhaustion outcomes, the `GoalTurnSource` forced-tool design, per-entry recording and snapshot cadence, the re-founded gates, the oracle rule, the measurement-comparability warning, and how the mechanism composes with harbor multi-step tasks. The accompanying implementation lands in `apps/minds_evals` (see that project's changelog entry).

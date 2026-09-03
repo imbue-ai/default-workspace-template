@@ -1,57 +1,46 @@
 """Unit tests for the grade-time judge-transcript renderer. The renderer ships as a self-contained
-verifier-container script under templates/tests/ (stdlib only, not a package module), so it is loaded
+verifier-container script under templates/tests/verifier/ (stdlib only, not a package module), so it is loaded
 by file path rather than imported as ``imbue.minds_evals.templates...``."""
 
-import importlib.util
 import json
 from pathlib import Path
 from typing import Any
 
-_RENDERER_PATH = Path(__file__).parent / "templates" / "tests" / "render_judge_transcript.py"
+from imbue.minds_evals.template_loading import load_template_module
+from imbue.minds_evals.testing import atif_document
+
+_RENDERER = load_template_module("tests/verifier/render_judge_transcript.py", "minds_evals_judge_renderer")
 
 
-def _load_renderer() -> Any:
-    spec = importlib.util.spec_from_file_location("minds_evals_judge_renderer", _RENDERER_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_RENDERER = _load_renderer()
-
-
-def _sample_events() -> list[dict[str, Any]]:
-    """A synthetic full_transcript covering every event kind: the /welcome trigger, two is_meta
-    skill-body ingestions, real client turns, non-empty agent messages, empty/tool-only assistant
-    events, a tool_result, and the driver's appended decider_message."""
+def _sample_steps() -> list[dict[str, Any]]:
+    """A workspace-shaped trajectory covering every step kind: framework-injected system steps, real
+    client turns, non-empty agent messages, and tool-only agent inferences."""
     return [
-        {"type": "user_message", "content": "/welcome"},
-        {"type": "user_message", "content": "WELCOME SKILL BODY -- 1738 chars of instructions", "is_meta": True},
-        {"type": "user_message", "content": "hi what can you do"},
-        {"type": "assistant_message", "text": ""},
-        {"type": "assistant_message", "text": "Hey! I can build you small web apps you open as a tab."},
+        {"step_id": 1, "source": "system", "message": "WELCOME SKILL BODY -- 1738 chars of instructions"},
+        {"step_id": 2, "source": "user", "message": "hi what can you do"},
+        {"step_id": 3, "source": "agent", "message": ""},
+        {"step_id": 4, "source": "agent", "message": "Hey! I can build you small web apps you open as a tab."},
         {
-            "type": "assistant_message",
-            "text": "",
-            "tool_calls": [{"tool_name": "Skill", "input_preview": '{"skill":"build-app"}'}],
+            "step_id": 5,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [{"tool_call_id": "c1", "function_name": "Skill", "arguments": {"skill": "build-app"}}],
+            "observation": {"results": [{"source_call_id": "c1", "content": "Launching skill: build-app"}]},
         },
-        {"type": "tool_result", "tool_name": "Skill", "output": "Launching skill: build-app"},
-        {"type": "user_message", "content": "BUILD-APP SKILL BODY -- 24585 chars of instructions", "is_meta": True},
-        {"type": "assistant_message", "text": "Here's my plan: a simple task tracker, just for you."},
-        {"type": "user_message", "content": "Looks good, go for it."},
-        {"type": "assistant_message", "text": "Building it now."},
-        {"type": "decider_message", "turn": 2, "text": "SIMULATED CLIENT MESSAGE", "is_fallback": False},
+        {"step_id": 6, "source": "system", "message": "BUILD-APP SKILL BODY -- 24585 chars of instructions"},
+        {"step_id": 7, "source": "agent", "message": "Here's my plan: a simple task tracker, just for you."},
+        {"step_id": 8, "source": "user", "message": "Looks good, go for it."},
+        {"step_id": 9, "source": "agent", "message": "Building it now."},
     ]
 
 
 def test_render_keeps_only_client_turns_and_numbered_agent_messages() -> None:
-    rendered = _RENDERER.render_judge_transcript(_sample_events())
+    rendered = _RENDERER.render_judge_transcript(_sample_steps())
 
     blocks = rendered.split("\n\n")
     headers = [block.splitlines()[0] for block in blocks]
-    # Two real client turns and three non-empty agent messages, numbered running
-    # across the whole conversation (message 2 lands before the second client turn).
+    # Two client turns and three non-empty agent messages, numbered running across the whole
+    # conversation (message 2 lands before the second client turn).
     assert headers == [
         "[USER]",
         "[AGENT · message 1]",
@@ -64,84 +53,46 @@ def test_render_keeps_only_client_turns_and_numbered_agent_messages() -> None:
     assert "Building it now." in rendered
 
 
-def test_render_omits_framework_noise_tools_and_decider_events() -> None:
-    rendered = _RENDERER.render_judge_transcript(_sample_events())
+def test_render_omits_system_steps_and_tool_only_inferences() -> None:
+    rendered = _RENDERER.render_judge_transcript(_sample_steps())
 
-    # No /welcome trigger, no is_meta skill bodies, no tool call/result, no empty
-    # agent event surfacing as a block, and no appended decider audit message.
-    assert "/welcome" not in rendered
+    # Framework-injected text and tool plumbing carry nothing the client would see.
     assert "SKILL BODY" not in rendered
     assert "Launching skill" not in rendered
     assert "build-app" not in rendered
-    assert "SIMULATED CLIENT MESSAGE" not in rendered
     assert "tool_calls" not in rendered
-    # Exactly three agent blocks: the empty and tool-only assistant events were dropped.
-    assert "[AGENT · message 4]" not in rendered
     assert rendered.count("[AGENT · message") == 3
 
 
-def _atif_sample_events() -> list[dict[str, Any]]:
-    """The same conversation as ``_sample_events``, in the ATIF-shaped records mngr emits."""
-    return [
-        {"type": "header", "event_id": "header", "emitter": "claude/common_transcript"},
-        {"type": "step", "source": "user", "message": "/welcome"},
-        # Framework-injected text is a system step in this vintage, not an is_meta user message.
-        {"type": "step", "source": "system", "message": "WELCOME SKILL BODY -- 1738 chars"},
-        {"type": "step", "source": "user", "message": "hi what can you do"},
-        {"type": "step", "source": "agent", "message": ""},
-        {"type": "step", "source": "agent", "message": "Hey! I can build you small web apps you open as a tab."},
-        {
-            "type": "step",
-            "source": "agent",
-            "message": "",
-            "tool_calls": [{"tool_call_id": "c1", "function_name": "Skill", "arguments": {"skill": "build-app"}}],
-        },
-        {
-            "type": "observation",
-            "results": [{"source_call_id": "c1", "content": "Launching skill: build-app"}],
-        },
-        {"type": "step", "source": "system", "message": "BUILD-APP SKILL BODY -- 24585 chars"},
-        {"type": "step", "source": "agent", "message": "Here's my plan: a simple task tracker, just for you."},
-        {"type": "step", "source": "user", "message": "Looks good, go for it."},
-        {"type": "step", "source": "agent", "message": "Building it now."},
-        {"type": "decider_message", "turn": 2, "text": "SIMULATED CLIENT MESSAGE", "is_fallback": False},
+def test_render_of_the_hand_built_shape_is_one_block_per_turn() -> None:
+    steps = [
+        {"step_id": 1, "source": "user", "message": "Build it"},
+        {"step_id": 2, "source": "agent", "message": "Building it now.\n\nAll done."},
     ]
 
-
-def test_render_of_atif_records_matches_the_legacy_rendering() -> None:
-    assert _RENDERER.render_judge_transcript(_atif_sample_events()) == _RENDERER.render_judge_transcript(
-        _sample_events()
+    assert (
+        _RENDERER.render_judge_transcript(steps)
+        == "[USER]\nBuild it\n\n[AGENT · message 1]\nBuilding it now.\n\nAll done.\n"
     )
 
 
-def test_render_of_atif_records_omits_system_steps_observations_and_the_header() -> None:
-    rendered = _RENDERER.render_judge_transcript(_atif_sample_events())
-
-    assert "/welcome" not in rendered
-    assert "SKILL BODY" not in rendered
-    assert "Launching skill" not in rendered
-    assert "SIMULATED CLIENT MESSAGE" not in rendered
-    assert "common_transcript" not in rendered
-    assert rendered.count("[AGENT · message") == 3
-
-
-def test_render_of_empty_stream_is_empty() -> None:
+def test_render_of_no_steps_is_empty() -> None:
     assert _RENDERER.render_judge_transcript([]) == ""
 
 
-def test_load_transcript_parses_jsonl_and_tolerates_bad_lines(tmp_path: Path) -> None:
-    transcript_path = tmp_path / "full_transcript.jsonl"
-    lines = [json.dumps(event) for event in _sample_events()]
-    # Blank and unparseable lines must be tolerated (skipped), not abort the render.
-    transcript_path.write_text("\n".join([lines[0], "", "{not json", *lines[1:]]) + "\n")
+def test_load_trajectory_steps_reads_the_documents_steps(tmp_path: Path) -> None:
+    trajectory_path = tmp_path / "trajectory.json"
+    trajectory_path.write_text(json.dumps(atif_document()))
 
-    events = _RENDERER._load_transcript(transcript_path)
+    steps = _RENDERER.load_trajectory_steps(trajectory_path)
 
-    assert len(events) == len(lines)
-    rendered = _RENDERER.render_judge_transcript(events)
-    assert "[USER]\nhi what can you do" in rendered
-    assert rendered.count("[AGENT · message") == 3
+    assert [step["source"] for step in steps] == ["user", "agent"]
+    assert "[AGENT · message 1]\nBuilding it now." in _RENDERER.render_judge_transcript(steps)
 
 
-def test_load_transcript_of_missing_file_is_empty(tmp_path: Path) -> None:
-    assert _RENDERER._load_transcript(tmp_path / "does-not-exist.jsonl") == []
+def test_load_trajectory_steps_of_a_missing_or_malformed_file_is_empty(tmp_path: Path) -> None:
+    assert _RENDERER.load_trajectory_steps(tmp_path / "does-not-exist.json") == []
+    (tmp_path / "not-json.json").write_text("{not json")
+    assert _RENDERER.load_trajectory_steps(tmp_path / "not-json.json") == []
+    (tmp_path / "not-a-document.json").write_text("[1, 2]")
+    assert _RENDERER.load_trajectory_steps(tmp_path / "not-a-document.json") == []

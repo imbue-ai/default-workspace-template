@@ -1,24 +1,14 @@
 """Unit tests for the grade-time UI-flow flattener. Like the other verifier pre-steps it ships as a
-self-contained stdlib script under templates/tests/, so it is loaded by file path rather than
+self-contained stdlib script under templates/tests/verifier/, so it is loaded by file path rather than
 imported as a package module."""
 
-import importlib.util
 import json
 from pathlib import Path
 from typing import Any
 
-_RENDERER_PATH = Path(__file__).parent / "templates" / "tests" / "render_flow_evidence.py"
+from imbue.minds_evals.template_loading import load_template_module
 
-
-def _load_renderer() -> Any:
-    spec = importlib.util.spec_from_file_location("minds_evals_flow_evidence_renderer", _RENDERER_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_RENDERER = _load_renderer()
+_RENDERER = load_template_module("tests/verifier/render_flow_evidence.py", "minds_evals_flow_evidence_renderer")
 
 # A one-pixel PNG, so the sizing rules can be exercised on a real image file.
 _PNG_BYTES = bytes.fromhex(

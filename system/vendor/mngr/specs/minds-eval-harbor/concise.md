@@ -68,13 +68,13 @@ These four forks were decided with the user before writing this spec.
 ## The environment (box)
 
 * The box image is the new app's adapted copy of the box `Dockerfile` with its desktop stack; the entrypoint is NOT auto-started (harbor keeps its default `sleep infinity` keepalive).
-* The driver's `setup()` starts the backend itself: `environment.exec("setsid nohup /usr/local/bin/entrypoint.sh > /logs/agent/box.log 2>&1 < /dev/null &", env={...})`.
+* The driver's `setup()` starts the backend itself: `environment.exec("setsid nohup /usr/local/bin/entrypoint.sh > /logs/artifacts/minds/box.log 2>&1 < /dev/null &", env={...})`. The log goes under `/logs/artifacts/`, not `/logs/agent/`: harbor empties the agent logs dir before every step of a multi-step task, which would unlink the file while the backend kept writing to the dead inode.
 * The env supplied at that exec carries everything the box needs: `MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET` (parsed from the host `~/.modal.toml`), `ANTHROPIC_API_KEY` (host env), `MNGR__PROVIDERS__MODAL__USER_ID` (below), `MINDS_ENV=staging`, `MINDS_MODAL_EXTRA_TEMPLATE=modal_eval`, and `MINDS_BOX_MNGR_REF=<mngr_sha>`. **Correction (PR1):** the dwt `modal` template carries no `pass_host_env` of its own, so the key is named in `MINDS_EXTRA_PASS_HOST_ENV` (which the in-box minds backend turns into `--pass-host-env` per create). That alone was insufficient: dwt pins claude agents to shared config-dir mode, in which mngr_claude skips the create-time step that pre-approves the key, so the workspace's claude chat agent deadlocked on Claude Code's custom-API-key TUI dialog. The manifest therefore also forwards `MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR=true` (a config-override that outranks the dwt settings file), which restores the approval. See the Implementation corrections section.
 * `USER_ID` is the sanitized trial name (derived from `logs_dir`, `jobs/<job>/<trial>/agent`) plus a fresh per-`run()` salt: harbor trial names already carry a random shortuuid, and the salt guarantees that re-runs or resumes can never collide even if a trial name repeats, since the old harness's atomic `modal environment create` uniqueness claim has no harbor equivalent.
 * Starting the backend from `setup()` rather than the image entrypoint is what makes the Modal-provider `USER_ID` unique per trial, so each trial's Minds discovery only ever sees its own workspaces. This replaces the old per-batch Modal environment isolation; no `modal environment create` is needed anymore.
 * `setup()` then polls for the backend port (port of `minds_client.discover_api_port`, driven through `environment.exec` reading `/proc/net/tcp`) before returning. There is no `[environment.healthcheck]` because the service starts in the agent phase, after env-level healthchecks run.
 * Agent setup has a 360s default timeout in harbor; the job config sets the agent-level `agents[].override_setup_timeout_sec` high enough for Electron plus backend boot (measured in PR1).
-* Run-scoped knobs: `--ek sandbox_timeout_secs` is set to agent timeout + verifier timeout + 30 min slack; `-n` controls concurrent boxes (each is 6 CPU / 16 GB, so the default of 4 is a reasonable cost ceiling for dev runs).
+* Run-scoped knobs: `--ek sandbox_timeout_secs` is fixed at 14400 in the run recipe, which covers a flat case's agent and verifier budgets with room to spare and a stepped case's every step but the last; `-n` controls concurrent boxes (each is 6 CPU / 16 GB, so the default of 4 is a reasonable cost ceiling for dev runs).
 * The watchable noVNC desktop URL does not survive the conversion (harbor's Modal provider opens no tunnels); debugging uses `harbor task start-env -e modal -i` and `modal shell`. Nothing replaces the watchable desktop the old app's `box` utility gave (tracked on #708).
 
 ## The driver agent
@@ -82,11 +82,11 @@ These four forks were decided with the user before writing this spec.
 * Invocation: `uv run --project apps/minds_evals harbor run -p <dataset> -a imbue.minds_evals.driver:MindsPersonaDriver -e modal -n 4 -y ...` from the monorepo root.
 * `harbor[modal]==0.21.0` is a pinned dependency of `apps/minds_evals`, so `uv run --project apps/minds_evals harbor` gets the right harbor version AND makes the driver import path resolvable; a bare `uvx harbor` would run in an isolated env that cannot import the app.
 * `apps/minds_evals` is a standalone uv project rather than a member of the monorepo's uv workspace: harbor's `rich>=14.1.0` and `modal>=1.5.1` floors cannot co-resolve with the workspace's `litellm[proxy]` (`rich<14`) and `modal==1.4.3` pins, and uv allows one version per package per workspace. It therefore carries its own `uv.lock`, and its tests and type check run under `just test-minds-evals` via a dedicated path-gated CI job instead of the root offload run.
-* `run()` implements the existing turn semantics exactly:
+* `run()` implements the ported turn semantics for string entries, extended for goal entries per `goal_driven_turns.md`:
   1. Create the per-case dwt clone inside the box (port of `launch._ensure_base`/`_prepare_clone`, minus writing `test_case_metadata.json`, which only the retired in-workspace eval worker consumed) and create the workspace through the Minds API (`workspace.build_payload` semantics unchanged: `launch_mode=MODAL`, `backup_provider=CONFIGURE_LATER`), polling the create operation to `agent_id`.
-  2. For each prompt: wait until the workspace agent reaches `WAITING`, send the turn (literal, or `decider.py` for `DECIDE_FROM_PERSONA`), and wait for the reply. That wait is a bridged poll: `environment.exec` into the box, then mngr's remote-exec path into the workspace, then curl against the workspace-local system_interface -- the same API the old worker polled (the exact mngr CLI invocation is a PR1 verification item).
-  3. After each completed turn, snapshot the workspace `/mngr` dir as a tarball (same exclude set as the old restic job) into `/logs/agent/snapshots/post_message_<k>.tar.gz` via the bridge; snapshot cadence is a driver kwarg (`--ak snapshot_mode=per-turn|final|off`, default `per-turn`).
-  4. Append every event to `/logs/agent/full_transcript.jsonl` after each turn (same event schema as today), and maintain `/logs/agent/state.json` (`waits_done`, `num_turns`, `test_state`) so a timed-out trial still leaves a gradeable partial transcript.
+  2. For each prompts entry, for each of its exchanges: ask the entry's turn source what to do, and if it says something, wait until the workspace agent reaches `WAITING`, send that message, and wait for the reply. A string entry is one exchange; a goal entry runs until its client stops or its budget does (see `goal_driven_turns.md`). That reply wait is a bridged poll: `environment.exec` into the box, then mngr's remote-exec path into the workspace, then curl against the workspace-local system_interface -- the same API the old worker polled (the exact mngr CLI invocation is a PR1 verification item).
+  3. Snapshot the workspace `/mngr` dir as a tarball (same exclude set as the old restic job) into `/logs/agent/snapshots/post_message_<k>.tar.gz` via the bridge, where `<k>` numbers the messages actually sent. Cadence is a driver kwarg (`--ak snapshot_mode=per-turn|final|off`, default `per-turn`) selecting a named point: `per-turn` snapshots after every exchange, `final` once after the last entry.
+  4. Append every event to `/logs/agent/full_transcript.jsonl` after each turn (same event schema as today), and maintain `/logs/agent/state.json` (`waits_done`, `num_turns`, `test_state`, plus one `entries` record per prompts entry) so a timed-out trial still leaves a gradeable partial transcript.
   5. Also emit an ATIF `trajectory.json` with `source: "user"` / `"agent"` steps so `harbor view` renders the conversation.
 * `-m/--model` selects the decider (simulated-user) model, defaulting to the currently pinned `claude-opus-4-8`; this gives the harbor-conventional model flag a real meaning.
 
@@ -95,26 +95,53 @@ These four forks were decided with the user before writing this spec.
 * Each entry in a case's `prompts` list resolves to a turn source -- the object that produces the user's next message for that turn:
 
 ```python
+class Say(FrozenModel):
+    """The client's next message for this exchange."""
+
+
+class Done(FrozenModel):
+    """The entry is over: a TurnOutcome and the source's own words for why."""
+
+
 class TurnSource(ABC):
-    """Produces the simulated user's message for one conversation turn."""
+    """Produces the simulated user's messages for one prompts entry, one exchange at a time."""
+
+    @property
+    @abstractmethod
+    def kind(self) -> TurnEntryKind: ...
+
+    @property
+    @abstractmethod
+    def exhaustion_end(self) -> Done:
+        """How the entry ended when its budget stopped this source (`goal_driven_turns.md`)."""
 
     @abstractmethod
-    def next_message(self, case: CaseConfig, transcript: Transcript) -> str: ...
+    def next_action(self, case: CaseConfig, transcript: Transcript) -> Say | Done: ...
 
 
-class LiteralTurnSource(TurnSource):
-    """Deterministic: returns the config's literal prompt string verbatim."""
+class SingleMessageTurnSource(TurnSource):
+    """A source whose entry is exactly one message: it says its piece once, then
+    the entry is COMPLETED."""
 
 
-class PersonaLLMTurnSource(TurnSource):
+class LiteralTurnSource(SingleMessageTurnSource):
+    """Deterministic: says the config's literal prompt string verbatim, once."""
+
+
+class PersonaLLMTurnSource(SingleMessageTurnSource):
     """Non-deterministic: renders the persona plus the transcript so far into
-    the role-play prompt, calls the decider model, and falls back to the
+    the role-play prompt, calls the decider model once, and falls back to the
     literal "Sounds good." on any error (ported from eval_decider.py)."""
+
+
+class GoalTurnSource(TurnSource):
+    """Non-deterministic: one forced-tool call per exchange either says the next
+    thing or declares the goal met (`goal_driven_turns.md`)."""
 ```
 
-* The generator-facing config keeps today's encoding: a literal string maps to `LiteralTurnSource`, and the `DECIDE_FROM_PERSONA` sentinel maps to `PersonaLLMTurnSource`.
-* The turn loop is source-agnostic: wait for `WAITING` -> `source.next_message(...)` -> send -> wait for the reply -> snapshot/record; sources never touch the environment.
-* All non-determinism is confined to `PersonaLLMTurnSource`: literal turns are pure data and replay-stable, and the decider's model name and each role-played message are recorded in the transcript so LLM turns are auditable after the fact.
+* The generator-facing config keeps today's encoding: a literal string maps to `LiteralTurnSource`, the `DECIDE_FROM_PERSONA` sentinel maps to `PersonaLLMTurnSource`, and a goal object maps to `GoalTurnSource` (`goal_driven_turns.md`).
+* The turn loop is source-agnostic: `source.next_action(...)` -> on a `Done`, record the entry's outcome and move on -> on a `Say`, wait for `WAITING` -> send -> wait for the reply -> snapshot/record; sources never touch the environment.
+* All non-determinism is confined to the LLM-backed sources (`PersonaLLMTurnSource` and `GoalTurnSource`): literal turns are pure data and replay-stable, and the decider's model name and every message it produced are recorded in the transcript -- with the entry and exchange they came from -- so LLM turns are auditable after the fact.
 * Future rule-based sources (e.g. a state-machine responder keyed on the agent's last reply) implement `TurnSource` without changes to the loop, the config plumbing, or verification.
 * `populate_context_post_run` fills `AgentContext`: decider token counts and cost, plus `metadata` with descriptive stats (turns completed, avg words per agent turn, timed_out).
 * Cleanup runs in a `finally` block (harbor agents have no teardown hook): `environment.exec("cd /work/mngr && uv run mngr list --ids | uv run mngr destroy - --force")` tears down the trial's workspace sandboxes (`mngr destroy` has no `--all` flag; the pipe-from-`list` form is the documented destroy-everything idiom, and the box only ever sees its own `USER_ID` scope); the nested sandboxes' own `modal_eval` 3h timeout is the backstop if the driver dies.
@@ -127,7 +154,7 @@ class PersonaLLMTurnSource(TurnSource):
 * Separate mode is required for `harbor trial regrade` (harbor rejects regrade on shared-mode tasks), and it lets the heavyweight box be torn down before verification instead of idling through it.
 * In separate mode `tests/` is the verifier image's build context, so the generator emits a small `tests/Dockerfile` (slim base with uv) that copies `test.sh`, `checks.py`, `judge.toml`, and `case.json` to `/tests`.
 * The transcript and state files reach the verifier via declared artifacts: `artifacts = ["/logs/agent/full_transcript.jsonl", "/logs/agent/state.json"]` in `task.toml`, re-materialized at their original paths in the verifier container.
-* `tests/test.sh` runs `uvx --from 'harbor-rewardkit==0.1.*' rewardkit /tests`.
+* `tests/verifier/test.sh` runs `uvx --from 'harbor-rewardkit==0.1.*' rewardkit /tests`.
 * The criteria descriptions are written fresh in rewardkit's idiom but preserve the intent of the current `_JUDGE_PROMPT` dimensions ("how an AI agent talks to a non-technical client it is building software for").
 * Raw judge answers and per-criterion values live in each trial's `verifier/reward-details.json`; the raw avg-word-count value also lands in `agent_result.metadata`.
 * The judge model is pinned in `judge.toml`; its key arrives through `[verifier.env]`.
@@ -211,7 +238,7 @@ the old-vs-new justification lives in that PR's description.
 * **Per-trial backend boot**: every trial boots its own box (Electron + backend), adding a few minutes per trial that the shared-box design amortized across a batch. Image-build cost is amortized by the Modal layer cache; boot cost is accepted for isolation.
 * **Workspace sandbox leaks**: if the harbor runner is killed hard (no `finally`), nested sandboxes survive until their 3h timeout; the driver's cleanup plus the timeout backstop bound the cost.
 * **Judge nondeterminism**: rewardkit likert judges make oracle assertions and cross-run comparisons statistical, not exact; PR2 must report means over multiple trials (`-k/--n-attempts`) rather than single runs.
-* **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run --project apps/minds_evals harbor`), and the only remaining uvx call -- rewardkit inside `tests/test.sh` -- pins its version explicitly.
+* **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run --project apps/minds_evals harbor`), and the only remaining uvx call -- rewardkit inside `tests/verifier/test.sh` -- pins its version explicitly.
 
 ## Resolved questions
 

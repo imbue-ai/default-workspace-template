@@ -3,7 +3,9 @@
 Harbor-based Minds persona evals. Each persona case in an eval config becomes one
 [harbor](https://github.com/harbor-framework/harbor) task; a run drives real multi-turn
 conversations against real Minds workspaces on Modal and grades the transcripts with a rewardkit
-verifier. It replaces a bespoke pre-harbor harness, whose eval-config schema it kept unchanged.
+verifier. It replaces a bespoke pre-harbor harness; every config that harness accepted still reads
+unchanged, and the schema is a superset of it: a config that adopts a goal entry (below) runs here
+only.
 
 ## How a trial works
 
@@ -25,25 +27,40 @@ verifier. It replaces a bespoke pre-harbor harness, whose eval-config schema it 
    none -- which is why the sign-in has to come first: a create issued before it is refused for want
    of an account. A create whose answer is lost is retried, and the collision that retry hits is
    resolved back to the chat the first attempt left behind.
-   Being the workspace's first chat, it is the one that gets `/welcome`. `conversation.jsonl` --
-   the eval's own turns, which the gates and the wordiness check read -- carries no trace of it;
-   the judged transcript drops the `/welcome` trigger but keeps the greeting it draws, as its first
-   agent message. Either way the driver waits for that welcome to be *answered* before turn 1. A
+   Being the workspace's first chat, it is the one that gets `/welcome`. The greeting it draws is
+   the trajectory's first agent message, before any client turn: the gates and the wordiness check
+   count only agent messages after the client's first turn, so it answers nothing there, while the
+   judged transcript keeps it as the first agent message. Either way the driver waits for that
+   welcome to be *answered* before turn 1. A
    new chat reports WAITING as soon as its agent is up, which is before the workspace has
    typed `/welcome` in; sending into that window would race the delivery and leave the greeting
    landing where turn 1's reply is read from.
-5. It then drives the case's turns: wait until the workspace chat agent is WAITING, send the turn
-   (literal, or role-played by the decider model on `DECIDE_FROM_PERSONA`), wait for the reply,
-   snapshot the workspace if the cadence calls for it (the run recipe's `final` snapshots only after
-   the last turn), and keep `/logs/agent/full_transcript.jsonl` + `state.json` current in the box.
+5. It places the step's [uploads](#per-step-files), if it declares any, and then drives the case's
+   turns. The loop has two levels: one pass per `prompts` entry, and within an entry one pass per
+   exchange until its turn source says it is done or the loop stops it at the entry's budget. Each
+   exchange starts by asking the entry's turn source what to do; a source that says it is done ends
+   the entry there, without touching the workspace at all. For a message (literal, role-played by
+   the decider model on `DECIDE_FROM_PERSONA`, or decided by the goal-holding client) the rest of
+   the sequence follows: wait until the workspace chat agent is WAITING, send it, wait for the
+   reply, snapshot the workspace if the cadence calls for it (the run recipe's `final` snapshots
+   only after the last entry), and keep `/logs/agent/trajectory.json` + `state.json` current
+   in the box. Turn sources never touch the environment: the loop owns all I/O, and a source only
+   ever answers "say this" or "I am done". The welcome greeting is not part of that conversation, so
+   a goal-holding client never sees it.
 6. Once the last turn is done and while the workspace is still alive, the driver runs an
    **evidence-collection** phase: it records what was actually delivered (the app registry,
    supervisord's view of it, a file inventory, HTTP probes, declared test commands, UI flows, and
-   the delivered repo as a git bundle) into `/logs/agent/verification/`. It has to happen here,
-   because the verifier runs after the workspace is destroyed. See
-   [Outcome verification](#outcome-verification).
+   the delivered repo as a git bundle) into `/logs/agent/verification/`, and captures the workspace
+   agent's own common transcript, which then becomes `trajectory.json` (see
+   [The trajectory](#the-trajectory)). It has to happen here, because the verifier runs after the
+   workspace is destroyed. See [Outcome verification](#outcome-verification).
 7. The **verifier** (pure rewardkit, separate container) scores the recorded transcript and
    evidence. See [Scoring](#scoring).
+
+Steps 1-4 are the workspace bring-up, and they run once per trial. A case that declares
+[steps](#stepped-cases) runs 5 and 6 once per step against the same, already-signed-in workspace,
+with a verifier of its own after each; the workspace is torn down by the last step, or by the step
+on which the trial gave up.
 
 ## Setup
 
@@ -108,8 +125,10 @@ not a per-PR gate**. Handy knobs:
 
 - `-m/--model` selects the decider (simulated-user) model; default `claude-opus-4-8`.
 - `--ak snapshot_mode=per-turn|final|off` controls workspace snapshot cadence; the run recipe
-  passes `final`, and a later `--ak` wins. Extra harbor args are the recipe's *fourth* parameter, so
-  `concurrency` must be given explicitly or they bind to it:
+  passes `final`, and a later `--ak` wins. `per-turn` snapshots after every *exchange*, so a goal
+  entry costs one tarball per exchange rather than one per configured entry, and `final` takes a
+  single snapshot once the last entry is done. Extra harbor args are the recipe's *fourth* parameter,
+  so `concurrency` must be given explicitly or they bind to it:
   `just minds-evals-run <dataset> <job> <concurrency> --ak snapshot_mode=per-turn`.
 - `--ak verifier_model=<model>` runs the UI-flow verification agent on a different model from the
   decider (default: the decider's). Flow driving is mechanical, so a cheaper tier may do -- measure
@@ -120,17 +139,114 @@ not a per-PR gate**. Handy knobs:
 
 Results land in `apps/minds_evals/jobs/<job>/<trial>/`: harbor's `result.json` and
 `verifier/reward-details.json` at the trial root, and everything the driver collects under `agent/`
--- `full_transcript.jsonl`, `state.json`, `snapshots/`, `usage.json`, and `verification/`. They stay
-there; the recipe uploads nothing. Archiving belongs to whatever runs the eval on a schedule, which
-supplies its own credentials rather than reading a developer's.
+-- `trajectory.json`, `state.json`, `snapshots/`, `usage.json`, `driver.log`, and
+`verification/` (plus `timeout_diagnostics.json` when the trial gave up). They stay there; the
+recipe uploads nothing. Archiving belongs to whatever runs the eval on a schedule, which supplies
+its own credentials rather than reading a developer's.
+
+## Diagnosing a trial that went wrong
+
+Four artifacts answer "what happened", in the order worth reading:
+
+- `agent/state.json` -- `test_state`, and, when it is `timed_out`, `timed_out_reason`: prose naming
+  what the trial gave up on. Preparation names its own wait (no key to sign in with, an auth
+  endpoint that never came up, credentials the workspace refused, a chat that was never created or
+  never reached WAITING or never answered its welcome, the in-box proxy not coming up); the
+  conversation names the message it stopped at (`could not send message N`, `no reply to message
+  N`, `agent never reached WAITING before message N`); a stepped case adds the step's own uploads
+  (`could not create the workspace's uploads directory ...`, `could not place the step's upload
+  ...`) and the workspace an earlier step took with it (`an earlier step failed and tore the
+  workspace down, so this step has none to drive`, which is what a later step of an aborted trial
+  reports). The same string is on the trial metadata.
+- `agent/driver.log` -- this driver's own timestamped log for the run, written per step (for a
+  stepped case these, and everything else under `agent/`, live under `steps/<name>/agent/`). Without
+  it loguru goes only to the harbor process's stderr, which no artifact keeps. Every readiness poll
+  reports once a minute that it is still waiting and what the workspace is answering meanwhile (the
+  agents listing, the chat agent's state, or that the bridge is answering nothing at all), so a wait
+  that never finishes says why.
+- `agent/timeout_diagnostics.json` -- written only when the trial gave up, and only then: the
+  workspace's `/api/agents` body, the chat agent's state, and the tails of the three box service
+  logs, captured while the workspace still existed. Every capture is guarded and the whole bundle
+  is bounded, so a capture that fails records its failure text rather than losing the rest.
+- `artifacts/logs/artifacts/minds/` (for a stepped case,
+  `steps/<name>/artifacts/logs/artifacts/minds/`) -- the box's own service logs, in full: `box.log`
+  (the Minds backend), `reverse_tunnel.log`, and `proxy.log`. These live outside `/logs/agent`
+  deliberately: harbor empties that directory before every step of a multi-step task, which would
+  unlink `box.log` while the backend kept writing to the dead inode. Snapshots stay under
+  `agent/snapshots/` instead, because a finished tarball has no writer holding it open and the
+  service logs dir is re-collected in full on every step.
+
+Workspace preparation -- create, sign-in, creating the chat, waiting out its welcome -- runs against
+its own 1200s budget rather than the case's `timeout_seconds`, so a workspace that comes up dead is
+reported as such within twenty minutes instead of consuming the whole case. The conversation deadline
+still caps it (whichever is sooner wins) and still governs the turns themselves. A reason that names
+that ceiling is one of those preparation waits; only they quote it. A reason that does not may still
+be a wait -- the in-box proxy, an uploads directory, an upload placement -- and says which operation
+ran out instead, or it may be a failure the driver could tell immediately, such as having no key to
+sign in with.
+
+### The trajectory
+
+`trajectory.json` is the trial's only conversation record and the one every grade-time reader takes
+the conversation from, exactly as for any other harbor eval: the judge-transcript renderer, the
+structural gates, and the wordiness guard read its ATIF steps, and the judges read the rendering.
+Nothing at grade time knows the workspace UI feed exists.
+
+Two transcripts of the workspace agent exist: the workspace UI feed (`/api/agents/<id>/events`),
+which the driver polls to detect each reply and price its usage, and mngr's own **common
+transcript** (the ATIF-shaped `header`/`step`/`observation` stream at full fidelity, see
+`specs/atif-transcript-alignment/spec.md`). The trajectory comes from the latter whenever the
+workspace can provide it:
+
+- While the trial runs, the driver keeps `trajectory.json` current in the box after every turn as
+  its own hand-built summary of the clean conversation (one step per client turn and per merged
+  agent reply), so a trial that dies mid-way still leaves a gradeable record.
+- Once the evidence phase has captured it, the driver replaces that with the ATIF document
+  `mngr transcript --format atif` built inside the workspace (tool calls, observations, thinking,
+  embedded proxy-subagent trajectories), with `final_metrics` replaced by the trial's resolved usage
+  and an `extra.minds_evals` block naming the driver, the decider model and its turns, the case, and
+  the usage source.
+- Background workers the agent launched through the launch-task skill (`create_worker.py launch
+  --name <x>`, a separate mngr agent in the same workspace) are discovered from the launch commands
+  in its own stream, captured one by one (`mngr transcript` for a worker still in place, mngr's
+  preserved copy of the stream for one destroyed after finishing), and embedded in `trajectory.json`
+  under the launching call as ATIF `subagent_trajectories` with `subagent_kind: "mngr"` and an
+  `extra.worker` block. Launches are followed three levels deep: the chat agent's workers, their
+  workers, and theirs. The report each worker pushed back to its lead is captured beside it.
+- `metadata.trajectory_source` (`workspace`, `hand_built`, or `none`) and
+  `metadata.transcript_capture` say which shape the file has and, when the capture failed, why;
+  `metadata.workers` lists each launched worker with what was captured for it and its own usage.
+  `none` means no `trajectory.json` was written at all: the trial never exchanged a message, so
+  there was no conversation to hand-build, and no captured document reached the box either.
+
+A workspace whose mngr predates ATIF cannot answer `mngr transcript --format atif`, and any other
+capture failure (bridge, pull, download) is recorded the same way: grading proceeds on the hand-built
+document, which carries the same `extra.minds_evals` block with `source: "hand_built"`. Two problems
+arise after a successful capture and fall back the same way -- a captured document that is not valid
+ATIF, and a final upload of `trajectory.json` that cannot reach the box; they leave the document half
+marked captured beside `trajectory_source: hand_built` (the last per-turn copy stands in the box), and
+their cause is in the driver's log rather than the metadata. A failed final upload on a trial with no
+exchange has no per-turn copy to fall back on, so it reports `none`. The capture never adds a manifest
+entry, so a transcript problem can never read to the outcome judge as an unmeasured deliverable
+check. The bundle keeps the captured stream (`verification/common_transcript.jsonl`) and the
+unmodified document (`verification/workspace_trajectory.json`) as evidence. Design and
+consumer-by-consumer notes: `specs/minds-evals-atif-transcripts/spec.md`; the worker capture is in
+`specs/minds-evals-worker-trajectories/spec.md`.
+
+A [stepped case](#stepped-cases) captures and publishes once per step, and each step's
+`trajectory.json` describes the **whole conversation so far** rather than that step alone: the steps
+share one workspace, so the document its agent builds is cumulative, and the hand-built shape is
+built from the same accumulating conversation. A worker still alive when a later step collects is
+captured again by that step, so every step's bundle and trajectory stand on their own.
 
 ## Eval config
 
-The checked-in configs live in `configs/`: `eval-config.json` (nine cases) and
-`eval-config-small.json` (three, two of them carrying `expectations`) for quick end-to-end runs.
-Both pin `mngr_branch: main`. A config naming a branch that no longer exists fails at generation
-time, when the branch is resolved to a SHA -- so a config pinned to a feature branch is worth
-keeping only while that branch is.
+The checked-in configs live in `configs/`: `eval-config.json` (nine cases), `eval-config-small.json`
+(three, two of them carrying `expectations`) for quick end-to-end runs, and
+`eval-config-stepped.json` (one [stepped case](#stepped-cases), whose uploads live in
+`configs/datasets/`). All pin `mngr_branch: main`. A config naming a branch that no longer exists
+fails at generation time, when the branch is resolved to a SHA -- so a config pinned to a feature
+branch is worth keeping only while that branch is.
 
 ```json
 {
@@ -152,19 +268,253 @@ keeping only while that branch is.
   **picking up new template changes requires regenerating the dataset**. Each trial's own record
   carries `mngr_sha` and `dwt_sha` too (in `state.json` and the agent metadata), so a captured trial
   says which mngr and which template produced it.
-- Each `prompts` entry is one turn: a literal string sent verbatim, or `DECIDE_FROM_PERSONA` (the
-  decider role-plays the client from the persona plus the transcript so far; cannot be the first
-  entry).
+- A string `prompts` entry is one turn: a literal message sent verbatim, or `DECIDE_FROM_PERSONA`
+  (the decider role-plays the client from the persona plus the transcript so far; cannot be the
+  first entry).
+- An entry may instead be a **goal object**, `{"goal": "...", "max_exchanges": 3}`, which expands
+  into a bounded back-and-forth: a goal-holding client keeps replying until it declares itself
+  satisfied or the budget runs out. One model call per exchange decides both questions at once
+  (say the next thing, or stop). `max_exchanges` defaults to 3 and is capped at 8, because each
+  exchange is a full agent turn in a real workspace; generation warns when a case's worst case
+  cannot fit its `timeout_seconds`. The first entry must stay a literal string, so a case's opening
+  ask is deterministic. The client judges satisfaction **from the conversation alone** -- it never
+  reaches into the workspace, and the evidence phase plus outcome judge remain the ground truth for
+  whether the goal was actually achieved.
+  **Scores are not comparable across the adoption of a goal entry**: a persistent client changes the
+  conversation being measured, so version or flag result sets at that cut point.
+- `state.json` also carries `timed_out_reason`: empty while the trial is going, and otherwise prose
+  naming which wait ran out. `timed_out: true` on its own cannot tell a workspace that never came up
+  from an agent that stopped replying halfway through.
+- `elapsed_seconds` is the whole trial's, and `step_elapsed_seconds` is this step's -- the span
+  `timeout_seconds` bounds, since for a stepped case that key is only the step's share of the
+  conversation budget. On a flat case the two agree.
+- Each entry's outcome is recorded in `state.json` under `entries`, as
+  `{index, kind, exchange_count, outcome, detail}` with `outcome` one of `completed`, `satisfied`,
+  `budget_exhausted`, or `fallback`, and `detail` why the entry stopped: for `satisfied` the
+  client's own satisfaction reason, which is always present because a satisfaction with no reason is
+  treated as no answer at all; for a `fallback` the harness's note that the client's model call
+  failed, which every `fallback` carries whether the client reported it or the budget stopped the
+  entry first. It is empty otherwise. `waits_done` counts the messages actually sent, which a goal
+  entry can push past `num_turns` (the configured entry count). A `budget_exhausted` entry does not
+  zero the reward -- an agent that cannot satisfy an unreasonable goal is not a broken trial -- and
+  the exchanges it produced stay in the conversation the judges grade. The outcome labels themselves
+  are read only by the structural gate, not by the judges, which grade the rendered conversation.
+  An entry only earns a record once it has stopped, so a timed-out trial's `entries` ends at the
+  entry it died in: that entry and any after it are absent, and `waits_done` can then exceed the
+  exchanges the records account for.
 - `avg_word_count_baseline` feeds the verifier's wordiness guard (pass unless the average words per
-  agent turn exceeds baseline * 1.1). A "turn" here is one client turn's merged agent reply; the
-  driver records that per-turn average as `average_words_per_turn` in the trial metadata and, for
-  observability only (no gate), the finer `average_words_per_message` (words per individual agent
-  message, before the per-turn merge).
+  agent turn exceeds baseline * 1.1). The guard takes its counts from `trajectory.json`: a "turn"
+  is the agent messages between one client turn and the next, merged. The driver separately
+  records its own `average_words_per_turn` and the finer `average_words_per_message` (words per
+  individual agent message, before the per-turn merge) in the trial metadata, for observability
+  only; neither figure is read at grade time.
 - `verification_timeout_seconds` (default 1800) is the evidence-collection phase's own budget. It is
   *added* to the task's `[agent].timeout_sec` (case timeout + verification budget + grace), so
   verification never competes with the conversation for time. It is a deadline, not a reservation:
   a case with no UI flows finishes the phase in a couple of minutes and the rest is never spent.
 - Each persona entry may carry an `expectations` block; see below.
+- A case may declare `steps` **instead of** `prompts`; see below. Declaring both is rejected, as
+  is a case-level `expectations` on a stepped case.
+
+## Stepped cases
+
+A case that declares `steps` becomes a harbor multi-step task: the driver is invoked once per step
+against one workspace, every step is verified by the standard verifier with that step's own
+expectations, and a step's `min_reward` decides whether the trial may go on.
+
+```json
+{
+  "id": "project-roadmap",
+  "persona": "Head of product at a small startup. Non-technical, but knows their own projects well.",
+  "reward_strategy": "final",
+  "steps": [
+    {
+      "name": "build-from-data",
+      "files": [{"source": "datasets/roadmap-v1", "upload_id": "41e940fcd33540078ab77fd79f3b3943"}],
+      "prompts": [
+        "Can you build me an editable roadmap tool? The data is in /home/user/workspace/data/uploads/41e940fcd33540078ab77fd79f3b3943. Sketch me something first.",
+        {"goal": "See a concrete mockup and sign off on it", "max_exchanges": 4}
+      ],
+      "expectations": {"outcome": "The agent presented a concrete mockup and the client approved it."},
+      "min_reward": {"gates": 1.0, "outcome": 0.5}
+    },
+    {
+      "name": "updated-dataset",
+      "files": [{"source": "datasets/roadmap-v2", "upload_id": "985e2d4f7eb948b3b45a8f0923521ab8"}],
+      "prompts": ["Here is an updated pull, in /home/user/workspace/data/uploads/985e2d4f7eb948b3b45a8f0923521ab8."],
+      "expectations": {
+        "outcome": "The running roadmap reflects the updated export.",
+        "deliverable": {"kind": "minds-app"},
+        "ui_flows": [{"name": "updated-content", "steps": "Open the roadmap.", "expect": "The new milestones are shown."}]
+      }
+    }
+  ]
+}
+```
+
+The block above is abridged to two steps. `configs/eval-config-stepped.json`, with the datasets in
+`configs/datasets/`, is the full worked example: the same client, with a middle
+`adjust-requirements` step between the two shown here.
+
+- One **workspace** for the whole trial, prepared on the first step and torn down after the last,
+  or on a step the driver itself gave up on. A step that merely scored below its `min_reward` is
+  not one of those: harbor decides that after `run()` has returned, so nothing in the driver sees
+  it, and the workspace sandboxes -- which outlive the box that made them -- are reclaimed by their
+  own 3h lifetime instead. A gate-aborted trial therefore leaves them idling until then. The
+  Minds conversation lives in that workspace, so the client and the agent simply carry on across a
+  step boundary -- nothing is replayed or resumed.
+- A step's `prompts` is exactly a flat case's `prompts`, goal entries included. Only the case's
+  *opening* ask (the first entry of the first step) must be a literal string; a later step opens
+  mid-conversation, where there is a transcript for the client to decide from.
+- A step's `expectations` has exactly the case-level schema, and a step that omits it is graded on
+  the structural gates and the conversation alone. A **case-level** `expectations` on a stepped case
+  is rejected: every step states its own, so that a reader of a step sees what that step is graded
+  on. A step whose expectations carry no `deliverable` and no `ui_flows` commissions nothing
+  probeable and is judged from the conversation -- which is what an early phase ("a mockup was
+  presented and approved") wants.
+- `min_reward` is the reward the step must reach for the trial to continue, in harbor's own form:
+  a bare number gates the composed `reward` key, and an object gates each dimension it names
+  (`gates`, `quality`, `outcome`, `reward`). A dimension the object leaves out is not gated;
+  a dimension it names but the verifier did not produce counts as `-inf` and always fails. Below the
+  threshold, harbor **aborts every remaining step** -- there is no continue-past-failure.
+  The recommended shape is `{"gates": 1.0, "outcome": <threshold>}`: the structural gates are binary
+  and the outcome score is graded, so the threshold is a judgment the author calibrates from the
+  `reward-details.json` of a first run.
+- The **last step may not declare a `min_reward`**, and generation rejects one that does: harbor's
+  threshold only ever aborts *later* steps, so one there would be graded and then ignored.
+- A non-final step **without** `min_reward` has no abort path: after an earlier failure harbor still
+  runs the next step, against a workspace that has already given up. Generation warns, and the
+  driver fails that step fast rather than spending its budget rediscovering the same dead workspace.
+- `reward_strategy` selects harbor's `multi_step_reward_strategy`: `final` (the default) scores the
+  trial by the last step that ran, and `mean` averages every step that produced a reward. Both are
+  legitimate because every step is graded by the same verifier on the same scale as a flat case.
+  Under `final` a gate-aborted trial is scored by the aborted step's own graded reward -- a real
+  measurement of the step the agent failed. Under `mean`, note that aborted steps produce no reward
+  at all rather than a zero, so an early abort *raises* the mean; the aborted and completed trials
+  are different populations either way and must not be pooled.
+- A trial whose step verifier could not produce a reward at all (a judge failure, an unparseable
+  reward file) stops there too -- harbor aborts the remaining steps on a step that has an exception
+  and no verifier result -- but the trial is recorded as an **error** rather than as a scored
+  failure. That is the same distinction a flat case makes between "the agent fell short" and "the
+  harness could not find out", and it is why such trials must be excluded rather than read as zeros.
+- Generation also rejects, beyond the rules above: a step `name` that does not match
+  `^[a-z0-9][a-z0-9-]*$` (it has to serve as a task subdirectory, a harbor step and a verifier
+  container session at once), a name repeated within the case, an unknown key in a step object or in
+  a `files` entry, a `source` that is absolute or climbs out of the config's directory with `..`, an
+  `upload_id` that does not match `^[A-Za-z0-9][A-Za-z0-9._-]*$` (it names a directory in the
+  workspace and in the box, and is quoted into prompts as a path), a `files` value that is not a
+  list, a `reward_strategy` on a case with no `steps`, a `min_reward` that is neither a number nor an
+  object, one whose key is not a reward dimension or whose floor is not a number, an empty
+  `min_reward` object (which would gate nothing), and an `outcome` floor on a step that declares no
+  `expectations` -- that step's verifier emits no outcome score, so harbor would read the missing
+  key as `-inf` and abort the trial there on every run.
+
+### Per-step files
+
+A step's `files` are what the client "uploaded" for that phase. They do not exist in the workspace
+before that step, and that is a fact of the filesystem rather than a convention: the file is not in
+the template, not in the box image, and not in the workspace until the driver places it. Shipping
+every dataset from the start and pointing at each by an opaque directory name only hides the future
+from an agent that does not look.
+
+- `source` is a file or directory **relative to the eval config file**, and `upload_id` is the
+  directory it appears under in the workspace's `data/uploads/`, so a prompt can quote the same path
+  the client would see in Minds. Each `upload_id` must be unique across the case; a missing source
+  or a duplicate id fails generation.
+- Files travel in two hops, because neither end can reach the other directly. Generation copies each
+  source into `steps/<name>/workdir/step_files/<upload_id>/`; harbor merges that `workdir/` into the
+  box's working directory before the step's agent runs and executes the generated `setup.sh`, which
+  relocates the uploads to `/work/step_files/<name>/` and deletes itself -- the box's working
+  directory is the mngr checkout every workspace is vendored from, and must stay what the image
+  shipped. The driver then makes the workspace's `data/uploads/` and copies each upload in with the
+  same `mngr rsync` the snapshot pull uses in the other direction, before the step's first message.
+  That transfer creates its own destination tree; the explicit directory call ahead of it is what
+  lets a workspace that will not take the directory at all be reported as that rather than as a
+  broken upload.
+- They land **untracked** (the template ignores `data/uploads/*`), exactly as a real upload does, so
+  they never enter the eval-case commit or the captured deliverable. Whether the agent actually used
+  them is the outcome judge's and the UI flows' question, not a file-inventory check.
+- A placement that fails marks the trial timed out with that reason: a conversation about an upload
+  that is not there measures nothing.
+- Keep the datasets small. A source is copied into every task directory that uses it and travels
+  into the box once per step.
+
+### Per-step verification
+
+The evidence phase runs at the end of **every** step, against that step's expectations and within
+its own `verification_timeout_seconds`, while the workspace and the app inside it are still alive.
+A step that commissions no deliverable collects the always-on capture plus any UI flows and
+`test_commands` it declares -- no HTTP or file probes, and no deliverable bundle. Only the bundle is
+tied to `deliverable`; `ui_flows` and `test_commands` are declared independently of it, so a step
+can probe or exercise what an earlier step delivered without commissioning anything of its own. The
+workspace is torn down after the last step, or on the step where the trial gave up.
+
+That is the expensive part of a trial (browser flows, screenshots, judge calls, a bundle, a
+snapshot), so **a three-step case costs roughly three times a flat one to verify**. This is a
+nightly-job feature, not a per-PR gate.
+
+UI flows are not read-only: a persistence check that renames an item leaves that rename in the app
+for every later step, where the next step's agent and goal-holding client will both see it.
+Convention: intermediate steps declare read-only flows (open, read, filter) and mutating checks are
+reserved for the last step. Generation warns on any non-final step's `ui_flows` so the author
+confirms they are read-only.
+
+### Generated layout and per-step output
+
+```
+task.toml              [[steps]] with name, min_reward and split timeouts; multi_step_reward_strategy
+environment/           byte-identical across the dataset, as for a flat case
+steps/<name>/
+  instruction.md       the step's prose plus the fenced JSON config for THIS step
+  workdir/             only for a step with files
+    step_files/<upload_id>/...
+    setup.sh
+  tests/               a complete copy of the standard verifier whose case.json holds this step's
+                       expanded expectations
+  solution/solve.sh    the oracle for this step: every prompt up to and including it, replayed
+```
+
+- There is **no top-level `instruction.md`, `tests/` or `solution/`**: harbor reads each step's own
+  and would leave the top-level ones unread. In `separate` verifier mode a step's `tests/` *replaces*
+  the task's build context rather than overlaying it, which is why every step ships the whole
+  verifier. The Dockerfile copies the criteria (`tests/verifier/`) before `tests/case.json`, so
+  steps declaring the same scoring dimensions share every layer beneath the case data.
+- Each step's oracle replays the conversation **up to and including** that step. It has to: the
+  structural gates hold a step answerable for every entry the trial has configured so far, so a
+  single task-level script replaying the whole case into every step would fail each earlier step's
+  turn gate. Harbor prefers a step's own `solution/` over the task's whenever the directory exists.
+- `timeout_seconds` is the whole case's conversation budget and is **split across the steps** in
+  proportion to their worst-case exchange counts, because harbor otherwise applies the task's agent
+  timeout to every step. Each step's `[steps.agent].timeout_sec` is its share plus the verification
+  budget plus grace, and each step restates `[steps.verifier].timeout_sec` so that the figure a
+  reader of a step sees is the one that step gets rather than one inherited from the `[verifier]`
+  block, which also configures the task-level verifier a stepped task never runs. Anything that must
+  outlive one step (the proxy tunnel) is sized from the trial's whole lifetime instead, which is
+  more than the conversation budget: between two conversations the trial also spends a step's
+  evidence phase, its cleanup grace and its verifier container.
+- That trial lifetime runs into **two ceilings a case config cannot raise**, and a stepped case has
+  to fit inside both. The workspace every step shares is created on the `modal_eval` overlay, whose
+  sandbox lifetime is 3h; generation warns when a case's worst case exceeds it, and there is no
+  knob -- the fix is a shorter `timeout_seconds`, a shorter `verification_timeout_seconds`, or
+  fewer steps. The box is capped separately by the run recipe's `--ek sandbox_timeout_secs=14400`,
+  and it has to survive every step's agent run plus the verifier of every step but the last, so a
+  long stepped dataset raises it by passing `--ek sandbox_timeout_secs=<n>` as an extra harbor arg
+  (extra args pass through last and the later value wins). A flat case is nowhere near either.
+- Per-step trial output: harbor moves the agent dir into `steps/<name>/agent/` after each step and
+  empties the box's `/logs/agent` before the next one, so each step's `trajectory.json`,
+  `state.json`, `usage.json`, `verification/` and `driver.log` land under that step. Their contents
+  are **cumulative** (the conversation so far, the entries so far) except `driver.log` and
+  `verification/`, which are genuinely step-local: the log sink is opened and closed per `run()`
+  call, and each step's evidence is collected fresh.
+- Anything a long-running box process writes goes to `/logs/artifacts/minds/` instead, which harbor
+  collects after every step and never empties. The backend, the reverse tunnel and the proxy all
+  start on the first step and outlive it, so a log of theirs under `/logs/agent` would be unlinked
+  out from under its writer before step 1 even ran.
+- Because a step's case file holds only that step's own turns while the entry records accumulate, the
+  step config carries `step.entries_before`; the `all_turns_completed` gate holds a step answerable
+  for that many entries plus its own.
+- **`harbor trial regrade` does not support multi-step tasks.** Re-scoring a stepped trial means
+  re-running it.
 
 ## Outcome verification
 
@@ -186,9 +536,15 @@ nothing would outscore one that ships a working app in terse messages. A case th
 
 - `outcome` (required) is the prose the outcome judge grades against -- the task description *for
   the eval*, alongside the prompts *for the agent*.
-- `deliverable` is **required**. A block with none would expand to no programmatic checks, and
-  rewardkit only pools a programmatic reward when criteria exist -- so the outcome dimension would
-  silently become judge-only, carrying double the judge weight of every other case.
+- `deliverable` says what the case commissions. A block **without** one expands to no HTTP or file
+  checks and no deliverable bundle, and the collector records only its always-on capture. With no
+  `ui_flows` either, that leaves the outcome dimension to the judge reading the conversation -- a
+  composition deliberately different from a deliverable case's even split between the judge and the
+  programmatic checks, so **the two are not comparable score for score**. It exists for a stepped
+  case's early phases, where the exit criterion is what the client and the agent agreed on rather
+  than what is running; a flat case that commissions an artifact should say so. `ui_flows` are
+  independent of `deliverable`: a block that declares them runs them and scores `ui_flows_completed`
+  either way, which is how a later step probes what an earlier one delivered.
 - `minds-app` is a **kind with implied checks**, not a hand-written check list: at least one
   *delivered* app registered in the workspace's `data/.state/apps.toml`, its supervisord service
   running, an HTTP 200 from each delivered app's root path, and the delivered repo captured as a git
@@ -223,6 +579,10 @@ verification/
   services.txt           # supervisorctl status output
   repo_state.json        # HEAD sha, the base and dwt-tip shas, commit count, git status --porcelain
   deliverable.bundle     # incremental `git bundle <clone HEAD>..HEAD` -- the agent's own commits
+  common_transcript.jsonl    # the workspace agent's common transcript, as `mngr transcript --format jsonl` wrote it
+  workspace_trajectory.json  # the unmodified ATIF document `mngr transcript --format atif` built from it
+  workers/agents.json        # `mngr list --format json` at collection time
+  workers/<name>/            # per launched worker: trajectory.json, common_transcript.jsonl, reports/
   http/<check>_<n>_<app>.json  # per probe: status, headers, timing, body head (256 KB cap)
   flows/<slug>/log.jsonl # per UI-flow step: the verbatim page state, the action, the reasoning
   flows/<slug>/step_NNN.png  # a screenshot per step
@@ -369,17 +729,18 @@ evidence; `finalize.py` composes the trial's final reward from rewardkit's dimen
 afterwards. Every trial is scored on two dimensions, and cases that declare
 `expectations` gain a third.
 
-- **`gates`** -- structural: the transcript parses, the agent engaged with distinct non-stub
+- **`gates`** -- structural: the trajectory parses, the agent engaged with distinct non-stub
   replies, all turns completed, the run did not time out. These zero the reward when they fail.
 - **`quality`** -- three 1-10 likert judge criteria (`conciseness`, `nontechnical_language`,
   `proactive`) plus the binary wordiness guard.
-- **`outcome`** (expectation cases only; the generator omits `tests/outcome/` otherwise, so
-  rewardkit never emits a partial score for it) -- one programmatic criterion per declared check
+- **`outcome`** (expectation cases only; the generator omits the verifier's `outcome/` directory
+  otherwise, so rewardkit never emits a partial score for it) -- one criterion per declared check
   class (`app_registered`, `http_expectations_met`, `files_expectations_met`,
   `ui_flows_completed`) plus a `works_as_expected` likert judge over the rendered expectations, the
   manifest, the conversation, and the flow evidence. The conversation is in there deliberately:
-  `DECIDE_FROM_PERSONA` turns are free-form, so a client who steers the build mid-conversation must
-  be graded against the evolved ask.
+  `DECIDE_FROM_PERSONA` turns and goal entries are both free-form -- and a goal entry is a whole
+  stretch of negotiation, not one line -- so a client who steers the build mid-conversation must be
+  graded against the evolved ask.
 
 `ui_flows_completed` scores COMPLETION: the fraction of measurable flows that carried out their
 declared steps. It does not score whether the app did what a flow's `expect` describes. That is the
@@ -387,6 +748,9 @@ judge's ruling, made from the step log and the screenshots. Trial time collects;
 verifies.
 
 ### Reward composition
+
+A stepped case is scored the same way, once per step, against that step's own expectations; the
+trial's reward is then the last step's or the mean, per `reward_strategy`.
 
 `quality = weighted mean(conciseness, nontechnical_language, proactive, wordiness guard)` -- likert
 criteria normalized as `(raw - 1) / 9`, so raw judge scores stay recoverable (`raw = 9 * normalized
@@ -396,8 +760,13 @@ structural gate passed. For expectation cases it is an even split, `reward = gat
 are equally imperfect. The split is a constant, not per-case configuration -- per-case weights would
 make rewards incomparable across cases.
 
-The gate composition lives in `tests/test.sh` (`finalize.py`) because rewardkit's `reward.toml`
-aggregations cannot express "binary gate zeroes a weighted mean".
+Expectations that carry no `deliverable` register no HTTP, file or app criteria, so unless they
+declare `ui_flows` -- which register `ui_flows_completed` either way -- their outcome dimension is
+the judge alone rather than an even split with the checks. Those scores are on the same 0-1 scale
+but are not the same measurement; see [Outcome verification](#outcome-verification).
+
+The gate composition lives in the verifier's `test.sh` (`finalize.py`) because rewardkit's
+`reward.toml` aggregations cannot express "binary gate zeroes a weighted mean".
 
 Note how rewardkit weights a dimension, because it is easy to get backwards: every `.py` criterion
 in a dimension directory is averaged into **one** programmatic reward of weight 1.0, and each
@@ -412,9 +781,11 @@ Grade-time pre-steps rebuild the judges' inputs from the captured evidence on ev
 `harbor trial regrade` re-scores captured trials under the current rendering with no conversation
 re-run:
 
-- `judge_transcript.txt` (from `full_transcript.jsonl`): one `[USER]` block per client turn and one
-  `[AGENT · message N]` block per agent message, so conciseness is judged per individual message
-  rather than over the driver's per-turn merge.
+- `judge_transcript.txt` (from `trajectory.json`): one `[USER]` block per `user` step and one
+  `[AGENT · message N]` block per `agent` step with a message, so conciseness is judged per
+  individual message rather than over a per-turn merge. On the workspace's own document that is one
+  block per inference; on the hand-built fallback (see [The trajectory](#the-trajectory)) it is one
+  per turn. Both the quality judge and the outcome judge read it.
 - `judge_flows_digest.txt` and a flat `judge_screenshots/` (from the flow evidence, which rewardkit
   cannot reach because it expands a listed directory exactly one level and never recurses). The
   digest carries, per flow: the declared steps, the `expect` the judge is to rule on, the completion
@@ -466,13 +837,16 @@ same resolved usage, which is the proxy's figures whenever a proxy metered the t
 own models are reported separately and never folded into those fields -- the decider as
 `metadata.decider_usage`, the UI-flow verification agent as `metadata.verifier_agent_usage`.
 
-**Delegated work is missing from transcript-sourced totals.** The events endpoint serves
-main-session events only, so a subagent's turns and any work handed to a newly created worker agent
-never reach the transcript, and an agent that delegates looks cheaper than one working inline. Such
-trials are marked `is_cost_complete: false`, with `delegated_call_count` (exact -- `Agent` tool
-calls) and `worker_launch_count` (heuristic -- Bash commands that look like a worker launch)
-alongside. Treat a flagged trial's cost as a lower bound, and never compare it against an unflagged
-one.
+**Delegated work reaches transcript-sourced totals only when it was captured.** The events endpoint
+serves main-session events only, so a subagent's turns never reach the transcript. Work handed to a
+launched worker agent does, once the evidence phase has captured that worker's stream: each captured
+worker is priced like the chat agent's own stream and summed into the transcript account
+(`worker_launch_count` launches found in the captured transcripts, the chat agent's and each captured
+worker's own, `worker_captured_count` of them brought out settled; a worker still running at capture
+time, or one whose state could not be established, is summed but not counted, so the account stays
+incomplete). A trial that delegated to a subagent, or launched a worker that could not be captured,
+is marked `is_cost_complete: false`. Treat a flagged trial's cost as a lower bound, and never compare
+it against an unflagged one.
 
 **`--ak proxy=true` closes that gap**, by routing the workspace through a LiteLLM proxy the driver
 runs inside the box, signed in with a per-trial key rather than the upstream credential. The
