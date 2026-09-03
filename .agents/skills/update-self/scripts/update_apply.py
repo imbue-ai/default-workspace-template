@@ -57,8 +57,8 @@ from update_classification import (
     read_provisioner_inputs,
 )
 from update_environment import (
-    ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
     BACKEND_SNAPSHOT_NAMES,
+    ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
     discard_snapshots,
     refresh_app_tools,
     refresh_backend_dependencies,
