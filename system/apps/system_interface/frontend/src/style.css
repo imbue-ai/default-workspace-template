@@ -1333,10 +1333,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: rgba(20, 20, 20, 0.45);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
-  /* The combo card's surfaces keep the mockup's own little z scale (overlay 50,
-     flyouts 120, the chooser's picker menu 210) rather than the workspace's
-     --z-* steps: the portal'd menus must clear this scrim, and --z-overlay
-     (10000) would bury them. */
+  /* The chooser's surfaces keep the mockup's own little z scale (this scrim at
+     50, its picker menu at 210) rather than the workspace's --z-* steps: the
+     portal'd picker must clear this scrim, and --z-overlay (10000) would bury
+     it. The combo card and its flyouts sit on --z-dropdown with every other
+     floating menu (modelCardStyles.ts), which also clears 50. */
   z-index: 50;
   display: flex;
   align-items: center;
