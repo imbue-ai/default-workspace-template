@@ -358,12 +358,12 @@ def _lib_readme(name: str, description: str) -> str:
 MAX_DISPLAY_NAME_LENGTH = 64
 
 
-def _display_name(name: str, description: str, explicit: str | None) -> str:
+def _display_name(description: str, explicit: str | None) -> str:
     """The manifest's ``display_name``: the explicit one, else the description when it fits."""
     candidate = explicit if explicit is not None else description
     candidate = candidate.strip()
     if not candidate:
-        sys.exit("error: --display-name must not be empty")
+        sys.exit("error: the display name must not be empty (--display-name, or --description when it is omitted)")
     if len(candidate) > MAX_DISPLAY_NAME_LENGTH:
         sys.exit(
             f"error: the display name {candidate!r} is over {MAX_DISPLAY_NAME_LENGTH} characters; "
@@ -534,7 +534,7 @@ def main() -> None:
     )
     package = _kebab_to_snake(args.name)
     port = _pick_port(repo_root, args.port)
-    display_name = _display_name(args.name, args.description, args.display_name)
+    display_name = _display_name(args.description, args.display_name)
 
     lib_dir = _write_lib(
         repo_root, args.name, args.description, display_name, port, list(args.extra_dep), icon_markup
