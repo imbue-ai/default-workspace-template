@@ -1324,37 +1324,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   }
 }
 
-/* The provider chooser's backdrop (views/ProviderChooserModal.ts). Absolute
-   rather than fixed on purpose: it scrims the workspace root it is mounted in.
-   The class name is inherited from the sign-in modal this flow replaced. */
-.claude-login-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(20, 20, 20, 0.45);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  /* The chooser's surfaces keep the mockup's own little z scale (this scrim at
-     50, its picker menu at 210) rather than the workspace's --z-* steps: the
-     portal'd picker must clear this scrim, and --z-overlay (10000) would bury
-     it. The combo card and its flyouts sit on --z-dropdown with every other
-     floating menu (modelCardStyles.ts), which also clears 50. */
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: --spacing(4);
-  animation: claude-login-overlay-in 150ms ease-out;
-}
-
-@keyframes claude-login-overlay-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
 /* Progress view (the per-turn task timeline rendered from tk tickets).
    The timeline's structure lives as utilities in views/ProgressBlock.ts and
    views/icons.ts. What stays here is what utilities cannot carry: the

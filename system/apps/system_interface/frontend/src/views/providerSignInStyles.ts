@@ -1,11 +1,17 @@
 /**
- * The mockup's class strings, copied verbatim.
+ * The mockup's class strings, copied verbatim -- except the frame chrome.
  *
  * `prototypes/minds-harness` is the design source for the provider chooser, and this app
  * runs the same Tailwind v4 with the same `@theme` hexes -- `#e4e3df` border, `#2f6b4f`
  * accent, `#202020` primary text, `#666666` secondary, `#8c8c8c` tertiary -- so the
  * mockup's classes port across unchanged. Keeping them here as literals, rather than
  * re-deriving equivalent CSS, is what keeps a later diff against the mockup meaningful.
+ *
+ * The FRAME diverges from the mockup wholesale, like the combo card's does
+ * (modelCardStyles.ts): the panel wears the workspace's modal-card chrome, the key-provider
+ * picker wears the shared floating-menu chrome, and both stack on the --z-* scale -- the
+ * workspace already has a modal, a backdrop and named z layers, and this dialog is not the
+ * surface that gets to differ. Content-level strings below the frame stay verbatim.
  *
  * Source, file by file:
  *   PANEL / HEADER / SCROLL / CHOOSER_ROW*   IntroChooserModal.tsx
@@ -15,8 +21,13 @@
  *   MODAL                                    IntroFlowModal.tsx (panelClassName)
  */
 
+import { menuCardClass } from "./components/menu";
+
+/** The workspace's modal-card chrome (see MODAL_CARD_CLASS in components/Modal.ts) minus its
+ *  fixed width and padding -- the panel sizes per screen and pads its own regions. */
 export const MODAL =
-  "overflow-hidden rounded-xl bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06),0_16px_40px_rgba(0,0,0,0.18)]";
+  "overflow-hidden rounded-lg border border-default bg-surface shadow-overlay " +
+  "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
 /** The panel's frame. Both dimensions come from `panelSize` below, per screen.
  *
  *  The mockup uses one 460px panel with a fixed 498px body for every screen. Both parts were
@@ -187,16 +198,20 @@ export const PICKER_TRIGGER_EMPTY = "text-tertiary";
 export const PICKER_CARET = "shrink-0 text-tertiary transition-transform";
 export const PICKER_CARET_OPEN = "rotate-180";
 
-/** Swallows the outside click that closes the menu, so it never reaches the modal beneath. */
-export const PICKER_BACKDROP = "fixed inset-0 z-[210] cursor-default";
-/** Pinned under the trigger. The panel is overflow-hidden, so an in-panel popover would be
- *  clipped -- the mockup portals this to <body> for the same reason. */
-export const PICKER_MENU =
-  "fixed z-[211] max-h-[280px] overflow-y-auto overscroll-contain rounded-lg border " +
-  "border-default bg-white p-1 shadow-[0_2px_6px_rgba(0,0,0,0.08),0_12px_32px_rgba(0,0,0,0.16)]";
+/** Swallows the outside click that closes the menu, so it never reaches the modal beneath.
+ *  Both live inside the overlay's stacking context, so the dropdown layer only has to clear
+ *  the panel; the menu paints over its own backdrop by DOM order. */
+export const PICKER_BACKDROP = "fixed inset-0 z-(--z-dropdown) cursor-default";
+/** Pinned under the trigger, wearing the shared floating-menu chrome. The panel is
+ *  overflow-hidden, so an in-panel popover would be clipped -- the mockup portals this to
+ *  <body> for the same reason. */
+export const PICKER_MENU = menuCardClass("fixed max-h-[280px] overflow-y-auto overscroll-contain");
+/** The shared menu row shape (menuRowClass), minus its hover: the active row keeps its steady
+ *  accent fill, so only the idle variant hovers. */
 export const PICKER_OPTION =
-  "flex w-full items-center justify-between gap-3 rounded-md px-1.5 py-1.5 text-left cursor-pointer";
-export const PICKER_OPTION_IDLE = "hover:bg-[#f4f3f0]";
+  "flex h-8 w-full cursor-pointer items-center justify-between gap-3 px-3 text-left " +
+  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+export const PICKER_OPTION_IDLE = "hover:bg-fill-hover";
 export const PICKER_OPTION_ACTIVE = "bg-accent-light";
 export const PICKER_OPTION_NAME = "truncate text-sm";
 export const PICKER_OPTION_NAME_ACTIVE = "truncate text-sm text-accent";
