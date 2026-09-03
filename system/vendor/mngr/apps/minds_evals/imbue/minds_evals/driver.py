@@ -3,9 +3,8 @@
 The harbor environment is the Minds box; the driver starts the backend with per-trial env, creates
 one nested Modal workspace through the production Minds API, drives the scripted multi-turn
 conversation against the workspace's system_interface (bridged through ``mngr exec``), snapshots the
-workspace after turns, and keeps the raw transcript, the clean ``conversation.jsonl`` (what the
-verifier grades), and ``state.json`` current in the box so even a timed-out trial leaves a gradeable
-partial record.
+workspace after turns, and keeps the ATIF ``trajectory.json`` (what the verifier grades) and
+``state.json`` current in the box so even a timed-out trial leaves a gradeable partial record.
 """
 
 import asyncio
@@ -17,6 +16,7 @@ import uuid
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -28,15 +28,14 @@ from typing import assert_never
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.models.trajectories import Agent as TrajectoryAgent
-from harbor.models.trajectories import FinalMetrics
-from harbor.models.trajectories import Step
 from harbor.models.trajectories import Trajectory
 from loguru import logger
+from modal.exception import Error as ModalError
 from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
@@ -44,25 +43,41 @@ from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import proxy_config
+from imbue.minds_evals import trajectory as trajectory_building
 from imbue.minds_evals import ui_flows
 from imbue.minds_evals import usage as usage_accounting
+from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DeciderResult
+from imbue.minds_evals.data_types import DeciderTurn
+from imbue.minds_evals.data_types import EntryRecord
+from imbue.minds_evals.data_types import EvidenceManifest
+from imbue.minds_evals.data_types import GoalEntry
+from imbue.minds_evals.data_types import PromptEntry
+from imbue.minds_evals.data_types import TrajectoryProvenance
+from imbue.minds_evals.data_types import TrajectorySource
 from imbue.minds_evals.data_types import Transcript
+from imbue.minds_evals.data_types import TranscriptCapture
+from imbue.minds_evals.data_types import TurnEntryKind
+from imbue.minds_evals.data_types import TurnOutcome
+from imbue.minds_evals.data_types import UsageSource
+from imbue.minds_evals.data_types import WorkerCapture
+from imbue.minds_evals.data_types import WorkerState
+from imbue.minds_evals.data_types import entry_exchange_budget
 from imbue.minds_evals.errors import AgentKwargError
 from imbue.minds_evals.errors import InstructionParseError
+from imbue.minds_evals.errors import TrajectoryDocumentError
 
-TRANSCRIPT_FILENAME: Final[str] = "full_transcript.jsonl"
-# The eval's own user turns paired with the agent's replies, filtered free of
-# framework noise (the /welcome skill body, tool events, injected messages). The
-# judge scores this rather than the raw stream, and the decider reads it as the
-# conversation so far.
-CONVERSATION_FILENAME: Final[str] = "conversation.jsonl"
+# The ATIF trajectory the verifier grades and `harbor view` renders: the driver's hand-built turn
+# summary after every turn, so a trial that dies mid-way still leaves a gradeable record, replaced
+# by the workspace agent's own document once the evidence phase has captured it (see
+# specs/minds-evals-atif-transcripts/spec.md).
+TRAJECTORY_FILENAME: Final[str] = "trajectory.json"
 STATE_FILENAME: Final[str] = "state.json"
 # Token and cost accounting, written host-side beside the trajectory (the verifier does not grade
-# it, so unlike the transcript files it is not mirrored into the box).
+# it, so unlike the trajectory and state files it is not mirrored into the box).
 USAGE_FILENAME: Final[str] = "usage.json"
 MINDS_ENV: Final[str] = "staging"
 
@@ -145,6 +160,8 @@ class SnapshotMode(UpperCaseStrEnum):
 _EVAL_BASE_DIR: Final[str] = "/work/eval-base"
 # Where the per-case clones taken from it live; the workspace is created from its case's clone.
 _CLONES_DIR: Final[str] = "/work/clones"
+# The type the launch-task skill creates workers as, for a worker the listing no longer shows.
+_DEFAULT_WORKER_AGENT_TYPE: Final[str] = "claude"
 
 
 @pure
@@ -254,13 +271,25 @@ def parse_snapshot_mode(raw_value: object) -> SnapshotMode:
         ) from None
 
 
+class SnapshotPoint(UpperCaseStrEnum):
+    """A place in the conversation loop where a snapshot could be taken.
+
+    The two are distinguished because which exchange ends an entry is not known until the entry's
+    source is asked again: taking the `final` cadence's one snapshot per exchange, to keep the last,
+    would pull a whole tarball per exchange of a goal entry.
+    """
+
+    AFTER_EXCHANGE = auto()
+    AFTER_FINAL_ENTRY = auto()
+
+
 @pure
-def _is_snapshot_wanted(snapshot_mode: SnapshotMode, is_final_turn: bool) -> bool:
+def is_snapshot_wanted(snapshot_mode: SnapshotMode, point: SnapshotPoint) -> bool:
     match snapshot_mode:
         case SnapshotMode.PER_TURN:
-            return True
+            return point == SnapshotPoint.AFTER_EXCHANGE
         case SnapshotMode.FINAL:
-            return is_final_turn
+            return point == SnapshotPoint.AFTER_FINAL_ENTRY
         case SnapshotMode.OFF:
             return False
         case _ as unreachable:
@@ -297,32 +326,105 @@ def derive_user_id(trial_name: str, salt: str) -> str:
     return "{}-{}".format(base, salt)
 
 
+class Say(FrozenModel):
+    """The client's next message for this exchange."""
+
+    text: str = Field(description="What the simulated client says")
+
+
+class Done(FrozenModel):
+    """The entry is over; nothing more will be said for it."""
+
+    reason: TurnOutcome = Field(description="Why the entry stopped")
+    detail: str = Field(default="", description="The source's own words for why it stopped, if it gave any")
+
+
+# What one exchange of an entry asks of its source. The loop performs a Say and ends the entry on a
+# Done; a source never touches the environment, so this union is the whole contract.
+TurnAction = Say | Done
+
+
 class TurnSource(MutableModel, ABC):
-    """Produces the simulated user's message for one conversation turn."""
+    """Produces the simulated user's messages for one prompts entry, one exchange at a time."""
+
+    results: list[DeciderResult] = Field(
+        default_factory=list, description="One entry per decider-model call this source made"
+    )
+
+    @property
+    @abstractmethod
+    def kind(self) -> TurnEntryKind:
+        """Which kind of entry this source implements, as recorded in state.json."""
+
+    @property
+    @abstractmethod
+    def exhaustion_end(self) -> Done:
+        """How the entry ended when its exchange budget stopped this source, reason and detail both.
+
+        A fixed-script source has exactly one message and is COMPLETED once it has been sent; only a
+        goal-holding client can actually be cut off mid-conversation. Asking the source for one more
+        action just to learn which it was would cost a real model call per exhausted entry.
+
+        It is the same `Done` the source would have returned had it been asked again, so an ending
+        the budget pre-empts is recorded exactly as one the source reported itself.
+        """
 
     @abstractmethod
-    def next_message(self, case: CaseConfig, transcript: Transcript) -> str:
-        """Return the simulated user's next message for the current turn."""
+    def next_action(self, case: CaseConfig, transcript: Transcript) -> TurnAction:
+        """The client's next message, or the reason this entry is over."""
 
 
-class LiteralTurnSource(TurnSource):
-    """Deterministic: returns the config's literal prompt string verbatim."""
+class SingleMessageTurnSource(TurnSource, ABC):
+    """A source whose entry is exactly one message: it says its piece once, then the entry is over.
+
+    Holds the say-once rule in one place so that "a string prompts entry is one turn, and a spent
+    budget of one means COMPLETED rather than a client that was cut off" cannot drift between the
+    sources that share it.
+    """
+
+    is_message_said: bool = Field(default=False, description="Whether this entry's one message has been said")
+
+    @property
+    def exhaustion_end(self) -> Done:
+        return Done(reason=TurnOutcome.COMPLETED)
+
+    @abstractmethod
+    def _next_message(self, case: CaseConfig, transcript: Transcript) -> str:
+        """This entry's one message."""
+
+    def next_action(self, case: CaseConfig, transcript: Transcript) -> TurnAction:
+        if self.is_message_said:
+            return Done(reason=TurnOutcome.COMPLETED)
+        message = self._next_message(case, transcript)
+        self.is_message_said = True
+        return Say(text=message)
+
+
+class LiteralTurnSource(SingleMessageTurnSource):
+    """Deterministic: says the config's literal prompt string verbatim, once."""
 
     prompt: str = Field(frozen=True, description="The literal message sent for this turn")
 
-    def next_message(self, case: CaseConfig, transcript: Transcript) -> str:
+    @property
+    def kind(self) -> TurnEntryKind:
+        return TurnEntryKind.LITERAL
+
+    def _next_message(self, case: CaseConfig, transcript: Transcript) -> str:
         return self.prompt
 
 
-class PersonaLLMTurnSource(TurnSource):
+class PersonaLLMTurnSource(SingleMessageTurnSource):
     """Non-deterministic: renders the persona plus the transcript so far into the role-play prompt,
-    calls the decider model, and falls back to the literal "Sounds good." on any error."""
+    calls the decider model once, and falls back to the literal "Sounds good." on any error."""
 
     model: str = Field(frozen=True, description="The decider model")
     api_key: SecretStr = Field(frozen=True, description="Anthropic API key for the decider")
-    results: list[DeciderResult] = Field(default_factory=list, description="One entry per decider call")
 
-    def next_message(self, case: CaseConfig, transcript: Transcript) -> str:
+    @property
+    def kind(self) -> TurnEntryKind:
+        return TurnEntryKind.PERSONA
+
+    def _next_message(self, case: CaseConfig, transcript: Transcript) -> str:
         result = decider.decide_next_message(
             persona=case.persona,
             transcript=transcript,
@@ -333,15 +435,79 @@ class PersonaLLMTurnSource(TurnSource):
         return result.message
 
 
+# What a goal entry's record says when the client's own model call degraded: the literal fallback
+# line went out in place of a real message, and the entry ended there.
+FALLBACK_ENTRY_DETAIL: Final[str] = "The goal client's model call failed; the fallback line was sent instead."
+
+
+class GoalTurnSource(TurnSource):
+    """A goal-holding client: one forced-tool call per exchange either says the next thing or
+    declares the goal met.
+
+    It judges satisfaction from the conversation alone, exactly as a real non-technical client does:
+    it never reaches into the workspace, and out-of-band verification stays the ground truth for
+    whether the goal was actually achieved.
+    """
+
+    goal: str = Field(frozen=True, description="What this entry's client is holding out for")
+    model: str = Field(frozen=True, description="The decider model")
+    api_key: SecretStr = Field(frozen=True, description="Anthropic API key for the decider")
+    is_fallback_said: bool = Field(default=False, description="Whether the degraded fallback line has been sent")
+
+    @property
+    def kind(self) -> TurnEntryKind:
+        return TurnEntryKind.GOAL
+
+    @property
+    def exhaustion_end(self) -> Done:
+        # The fallback line is sent as a message, so an entry whose LAST allowed exchange was the
+        # degraded one is stopped by the budget before this source can report FALLBACK itself. That
+        # is a harness outage, not an agent that failed the client, and must be recorded as one --
+        # otherwise an entry with a budget of 1 could never be recorded as a fallback at all.
+        if self.is_fallback_said:
+            return Done(reason=TurnOutcome.FALLBACK, detail=FALLBACK_ENTRY_DETAIL)
+        return Done(reason=TurnOutcome.BUDGET_EXHAUSTED)
+
+    def next_action(self, case: CaseConfig, transcript: Transcript) -> TurnAction:
+        # A degraded call already cost the trial a full agent turn on a line that carries no goal.
+        # Ending the entry there keeps a flaky API from spending the whole budget on pleasantries.
+        if self.is_fallback_said:
+            return Done(reason=TurnOutcome.FALLBACK, detail=FALLBACK_ENTRY_DETAIL)
+        decision = decider.decide_goal_action(
+            persona=case.persona,
+            goal=self.goal,
+            transcript=transcript,
+            model=self.model,
+            api_key=self.api_key.get_secret_value(),
+        )
+        self.results.append(decision.call)
+        if decision.call.is_fallback:
+            self.is_fallback_said = True
+            return Say(text=decision.call.message)
+        if decision.is_satisfied:
+            logger.info("The client is satisfied: {}", decision.satisfaction_reason)
+            return Done(reason=TurnOutcome.SATISFIED, detail=decision.satisfaction_reason)
+        return Say(text=decision.call.message)
+
+
 @pure
 def resolve_turn_sources(case: CaseConfig, decider_model: str, api_key: str) -> list[TurnSource]:
-    """Map each prompts entry to its turn source: a literal string -> LiteralTurnSource, the
-    DECIDE_FROM_PERSONA sentinel -> a shared PersonaLLMTurnSource (shared so decider usage
-    accumulates in one place)."""
-    persona_source = PersonaLLMTurnSource(model=decider_model, api_key=SecretStr(api_key))
-    return [
-        persona_source if prompt == DECIDE_SENTINEL else LiteralTurnSource(prompt=prompt) for prompt in case.prompts
-    ]
+    """Map each prompts entry to its own turn source: a literal string -> LiteralTurnSource, the
+    DECIDE_FROM_PERSONA sentinel -> PersonaLLMTurnSource, a goal object -> GoalTurnSource.
+
+    One source per entry rather than a shared one: a source carries per-entry state (whether it has
+    said its piece, which goal it holds), and the driver -- not the sources -- accumulates the
+    decider usage across the whole conversation.
+    """
+    sources: list[TurnSource] = []
+    for entry in case.prompts:
+        if isinstance(entry, GoalEntry):
+            sources.append(GoalTurnSource(goal=entry.goal, model=decider_model, api_key=SecretStr(api_key)))
+        elif entry == DECIDE_SENTINEL:
+            sources.append(PersonaLLMTurnSource(model=decider_model, api_key=SecretStr(api_key)))
+        else:
+            sources.append(LiteralTurnSource(prompt=entry))
+    return sources
 
 
 @pure
@@ -378,7 +544,7 @@ def _words_per_agent_turn(conversation: list[dict[str, str]]) -> list[int]:
 @pure
 def _conversation_events(conversation: list[dict[str, str]]) -> list[dict[str, str]]:
     """The clean conversation rendered back into the workspace event schema (user_message.content /
-    assistant_message.text), for the decider's transcript and the judged conversation.jsonl."""
+    assistant_message.text), which is the shape the decider's prompt renders."""
     events: list[dict[str, str]] = []
     for entry in conversation:
         if entry["role"] == "user":
@@ -418,6 +584,180 @@ def build_eval_case_commit_command(clone_dir: str, commit_message: str) -> str:
 @pure
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+@pure
+def _box_trial_file_path(filename: str) -> str:
+    """Where one trial file is mirrored in the box, under the task's declared artifact directory."""
+    return "{}/{}".format(minds_bridge.BOX_LOGS_DIR, filename)
+
+
+@pure
+def _usage_source(resolved_usage: usage_accounting.ResolvedWorkspaceUsage) -> UsageSource:
+    return UsageSource.PROXY if resolved_usage.is_from_proxy else UsageSource.TRANSCRIPT
+
+
+@pure
+def _trajectory_json(trajectory: Trajectory) -> str:
+    return json.dumps(trajectory.to_json_dict(), indent=2)
+
+
+def _read_worker_streams(captures: Sequence[WorkerCapture]) -> dict[str, list[dict[str, Any]]]:
+    """Each captured worker stream's records by worker name, for the usage account; a stream that
+    cannot be read is left out, which the completeness figure then reflects."""
+    records_by_name: dict[str, list[dict[str, Any]]] = {}
+    for capture in captures:
+        if capture.stream.host_path is None:
+            continue
+        try:
+            content = capture.stream.host_path.read_text()
+        except OSError as exc:
+            logger.warning("Could not read worker {}'s captured stream: {}", capture.launch.name, exc)
+            continue
+        records_by_name[capture.launch.name] = trajectory_building.parse_transcript_jsonl(content)
+    return records_by_name
+
+
+@pure
+def _settled_worker_count(
+    captures: Sequence[WorkerCapture], stream_records_by_name: Mapping[str, Sequence[Mapping[str, Any]]]
+) -> int:
+    """How many captured workers the transcript account holds whole: their stream was read into it and
+    they are known to have settled by capture time (stopped in place, or destroyed after finishing).
+    A worker still running contributes its spend so far, not its whole spend, so it is summed but not
+    counted; one whose state could not be established is treated the same way, and neither is one
+    whose stream was never read."""
+    return sum(
+        1
+        for capture in captures
+        if capture.launch.name in stream_records_by_name
+        and capture.state in (WorkerState.STOPPED, WorkerState.DESTROYED)
+    )
+
+
+def _worker_document_or_none(capture: WorkerCapture) -> dict[str, Any] | None:
+    """The worker's document: the one mngr built inside the workspace when it was captured, else one
+    built here from its stream (a destroyed worker only leaves its preserved stream), else None."""
+    document_path = capture.document.host_path
+    if document_path is not None:
+        try:
+            return trajectory_building.parse_worker_document(document_path.read_text())
+        except (OSError, TrajectoryDocumentError) as exc:
+            logger.warning(
+                "Worker {}'s captured document is unusable; building one from its stream: {}",
+                capture.launch.name,
+                exc,
+            )
+    stream_path = capture.stream.host_path
+    if stream_path is None or not capture.agent_id:
+        logger.warning(
+            "Worker {} is not embedded in the trajectory: {}",
+            capture.launch.name,
+            "its stream was not captured" if stream_path is None else "no agent id was resolved to build it under",
+        )
+        return None
+    try:
+        return trajectory_building.build_worker_trajectory_from_stream(
+            stream_path.read_text(), capture.agent_id, capture.agent_type or _DEFAULT_WORKER_AGENT_TYPE
+        )
+    except (OSError, TrajectoryDocumentError) as exc:
+        logger.warning("Could not build worker {}'s trajectory from its stream: {}", capture.launch.name, exc)
+        return None
+
+
+def _embedded_workers(
+    captures: Sequence[WorkerCapture], host_logs_dir: Path
+) -> list[trajectory_building.EmbeddedWorker]:
+    """The chat agent's workers ready to embed, each with its own workers already grafted in: deepest
+    first, so a worker's document is complete before its lead's is assembled. Each report path is
+    named relative to the logs dir, the bundle root the verifier reads."""
+    embedded_by_name: dict[str, trajectory_building.EmbeddedWorker] = {}
+    for capture in sorted(captures, key=lambda capture: capture.launch.depth, reverse=True):
+        document = _worker_document_or_none(capture)
+        if document is None:
+            continue
+        children = [
+            embedded_by_name[child.launch.name]
+            for child in captures
+            if child.launch.lead_name == capture.launch.name and child.launch.name in embedded_by_name
+        ]
+        report_path = capture.report.host_path
+        embedded_by_name[capture.launch.name] = trajectory_building.EmbeddedWorker(
+            launch=capture.launch,
+            document=trajectory_building.graft_worker_trajectories(document, children),
+            state=capture.state,
+            report_path=report_path.relative_to(host_logs_dir).as_posix() if report_path is not None else "",
+        )
+    # A worker's own workers embed inside its document, so a lead that could not be embedded takes
+    # them out of the trajectory with it, however sound their documents were -- and its workers'
+    # workers too, down the whole chain. Shallowest first, so each lead is placed before its workers.
+    reachable_names: set[str] = set()
+    for capture in sorted(captures, key=lambda capture: capture.launch.depth):
+        if capture.launch.name not in embedded_by_name:
+            continue
+        if capture.launch.depth == 0 or capture.launch.lead_name in reachable_names:
+            reachable_names.add(capture.launch.name)
+            continue
+        logger.warning(
+            "Worker {} is not embedded in the trajectory: its lead {} was not",
+            capture.launch.name,
+            capture.launch.lead_name,
+        )
+    return [
+        embedded_by_name[capture.launch.name]
+        for capture in captures
+        if capture.launch.depth == 0 and capture.launch.name in embedded_by_name
+    ]
+
+
+@pure
+def _captured_file_metadata(captured: CapturedFile) -> dict[str, Any]:
+    """One captured file's outcome as trial metadata: whether it came out and, if not, why."""
+    return {
+        "is_captured": captured.is_captured,
+        "reason": captured.failure_reason,
+        "detail": captured.failure_detail,
+    }
+
+
+@pure
+def _worker_capture_metadata(
+    capture: WorkerCapture, stream_records: Sequence[Mapping[str, Any]] | None
+) -> dict[str, Any]:
+    """The capture's outcome as trial metadata: what the worker is, per part whether it came out and,
+    if not, why, and the worker's own usage account (None when its stream was not read), so the
+    delegated spend can be reconciled per worker against the proxy's figures."""
+    return {
+        "name": capture.launch.name,
+        "agent_type": capture.agent_type,
+        "agent_id": capture.agent_id,
+        "state": capture.state.value,
+        "depth": capture.launch.depth,
+        "lead_name": capture.launch.lead_name,
+        "launch_tool_call_id": capture.launch.tool_call_id,
+        **{
+            part: _captured_file_metadata(captured)
+            for part, captured in (
+                ("document", capture.document),
+                ("stream", capture.stream),
+                ("report", capture.report),
+            )
+        },
+        "usage": (
+            usage_accounting.workspace_usage_metadata(usage_accounting.summarize_workspace_usage(stream_records))
+            if stream_records is not None
+            else None
+        ),
+    }
+
+
+@pure
+def _transcript_capture_metadata(capture: TranscriptCapture) -> dict[str, Any]:
+    """The capture's outcome as trial metadata: per half, whether it came out and, if not, why."""
+    return {
+        name: _captured_file_metadata(captured)
+        for name, captured in (("stream", capture.stream), ("document", capture.document))
+    }
 
 
 class MindsPersonaDriver(BaseAgent):
@@ -470,10 +810,28 @@ class MindsPersonaDriver(BaseAgent):
         # Word count of each individual agent message (accumulated across turns,
         # before the per-turn merge), the raw material for average_words_per_message.
         self._agent_message_word_counts: list[int] = []
-        self._decider_events: list[dict[str, Any]] = []
-        self._persona_source: PersonaLLMTurnSource | None = None
+        # Every decider-model call the turn sources made, in conversation order: the results for the
+        # harness's own usage account, and the audit trail the trajectory's provenance carries.
+        # Accumulated on the driver because each entry has a source of its own, and the usage is
+        # the whole run's.
+        self._decider_results: list[DeciderResult] = []
+        self._decider_turns: list[DeciderTurn] = []
+        # How each prompts entry played out: its kind, the exchanges it actually sent, and why it
+        # stopped. The structural gates are founded on these.
+        self._entry_records: list[EntryRecord] = []
+        self._transcript_capture: TranscriptCapture = evidence_collection.not_attempted_transcript_capture()
+        # The background workers the evidence phase captured, their streams read back for the usage
+        # account, and the launches the capture's caps left out.
+        self._worker_captures: list[WorkerCapture] = []
+        self._worker_stream_records_by_name: dict[str, list[dict[str, Any]]] = {}
+        self._worker_capture_overflow: list[str] = []
+        # The trajectory.json text the box last accepted, so a failed final publish can put the host
+        # copy back to exactly what the verifier will read.
+        self._box_trajectory_json: str | None = None
         self._case: CaseConfig | None = None
         self._started_at: float = 0.0
+        # Client messages actually sent across the whole conversation, which is not the same thing
+        # as the entry count: one goal entry can send several.
         self._waits_done: int = 0
         self._test_state: str = "ongoing"
         # HEAD of the per-case dwt clone the workspace was created from: the base of the
@@ -543,11 +901,11 @@ class MindsPersonaDriver(BaseAgent):
             await self._collect_verification_evidence(environment)
             if self._is_proxy_enabled:
                 await self._collect_proxy_usage(environment)
-            self._populate_context_metadata(context)
             # Written here rather than in populate_context_post_run: harbor only
             # calls that hook when the agent context is still empty, and this
-            # driver always populates the context above.
-            self._write_trajectory()
+            # driver always populates the context below.
+            trajectory_source = await self._publish_trajectory(case, environment)
+            self._populate_context_metadata(context, trajectory_source)
             await self._teardown(environment)
 
     def _build_verification_agent(self) -> ui_flows.VerificationAgent | None:
@@ -567,8 +925,8 @@ class MindsPersonaDriver(BaseAgent):
     async def _collect_verification_evidence(self, environment: BaseEnvironment) -> None:
         """Capture what the delivered workspace actually is, while it still exists.
 
-        The cheap registry/service/inventory capture runs for every trial that got as far as a
-        workspace; the expectations-driven probes only run when the conversation finished, since an
+        The cheap registry/service/inventory/transcript capture runs for every trial that got as far
+        as a workspace; the expectations-driven probes only run when the conversation finished, since an
         unfinished trial's structural gates already zero its reward. Any failure here is swallowed:
         evidence is best-effort and must never discard an already-completed trial or block the
         teardown that stops the nested sandboxes from leaking.
@@ -579,6 +937,7 @@ class MindsPersonaDriver(BaseAgent):
             environment=environment,
             box_env=self._box_env,
             workspace_agent_id=self._workspace_agent_id,
+            chat_agent_id=self._chat_agent_id,
             case=self._case,
             clone_base_sha=self._clone_base_sha,
             dwt_tip_sha=self._dwt_tip_sha,
@@ -593,16 +952,23 @@ class MindsPersonaDriver(BaseAgent):
             browser_bridge_token=SecretStr(forward_instance.mint_forward_secret()),
         )
         logger.info("Collecting outcome-verification evidence from the workspace")
+        manifest: EvidenceManifest | None
         try:
             manifest = await collector.collect(
                 is_expectations_collection_wanted=self._test_state == "finished",
             )
         except Exception as exc:
             logger.opt(exception=exc).warning("Evidence collection failed; grading on what it managed to write")
-            # Whatever the flow agent spent before the failure is still spent, so keep the account.
-            self._verifier_usage = collector.verifier_usage()
-            return
+            manifest = None
+        # Whatever the flow agent spent before a failure is still spent, so keep the account, and
+        # whatever the transcript capture brought out before it is still worth having.
         self._verifier_usage = collector.verifier_usage()
+        self._transcript_capture = collector.transcript_capture
+        self._worker_captures = list(collector.worker_captures)
+        self._worker_capture_overflow = list(collector.worker_capture_overflow)
+        self._worker_stream_records_by_name = _read_worker_streams(self._worker_captures)
+        if manifest is None:
+            return
         self._verification_metadata = {
             "is_evidence_complete": manifest.is_evidence_complete,
             "entry_count": len(manifest.entries),
@@ -704,73 +1070,15 @@ class MindsPersonaDriver(BaseAgent):
 
         await self._capture_preexisting_registrations(environment)
 
-        sources = resolve_turn_sources(case, self._decider_model, self._get_env("ANTHROPIC_API_KEY") or "")
-        self._persona_source = next((source for source in sources if isinstance(source, PersonaLLMTurnSource)), None)
+        sources = self.build_turn_sources(case)
 
-        for turn, source in enumerate(sources, start=1):
-            is_ready = await minds_bridge.wait_for_chat_state(
-                environment,
-                self._box_env,
-                self._workspace_agent_id,
-                self._chat_agent_id,
-                is_waiting_desired=True,
-                deadline=deadline,
-                poll_seconds=self._poll_seconds,
-            )
-            if not is_ready:
-                await self._mark_timed_out(environment, "agent never reached WAITING for turn {}".format(turn))
+        # Outer loop over the config's entries, inner loop over one entry's exchanges. A string
+        # entry is one exchange; a goal entry keeps going until its client is satisfied or the
+        # budget stops it.
+        for entry_index, (entry, source) in enumerate(zip(case.prompts, sources, strict=True)):
+            is_entry_done = await self._run_entry(case, entry, entry_index, source, environment, deadline)
+            if not is_entry_done:
                 return
-
-            await self._refresh_events(environment)
-            message = source.next_message(case, Transcript(events=tuple(_conversation_events(self._conversation))))
-            if isinstance(source, PersonaLLMTurnSource) and source.results:
-                latest = source.results[-1]
-                self._decider_events.append(
-                    {
-                        "type": "decider_message",
-                        "turn": turn,
-                        "model": latest.model or self._decider_model,
-                        "text": latest.message,
-                        "is_fallback": latest.is_fallback,
-                    }
-                )
-            logger.info("Sending turn {}/{}: {}", turn, len(sources), message[:80])
-            # Anchor reply detection on the event count before the send, so an
-            # injected user message can't be mistaken for the agent's reply.
-            baseline_event_count = len(self._latest_events)
-            is_sent = await minds_bridge.send_chat_message(
-                environment,
-                self._box_env,
-                self._workspace_agent_id,
-                self._chat_agent_id,
-                message,
-                deadline,
-                self._poll_seconds,
-            )
-            if not is_sent:
-                await self._mark_timed_out(environment, "could not send turn {}".format(turn))
-                return
-            self._conversation.append({"role": "user", "text": message})
-            self._waits_done = turn
-            await self._sync_trial_files(environment)
-
-            is_replied = await self._wait_for_reply(environment, deadline, baseline_event_count)
-            if not is_replied:
-                await self._mark_timed_out(environment, "no reply to turn {}".format(turn))
-                return
-            reply_texts = _new_agent_reply_texts(self._latest_events, baseline_event_count)
-            # Record each message's length before merging, so the per-message
-            # metric sees the agent's real (short) messages, not the merged wall.
-            self._agent_message_word_counts.extend(len(text.split()) for text in reply_texts)
-            reply_text = "\n\n".join(reply_texts)
-            self._conversation.append({"role": "agent", "text": reply_text})
-            await self._sync_trial_files(environment)
-
-            is_final_turn = turn == len(sources)
-            if _is_snapshot_wanted(self._snapshot_mode, is_final_turn):
-                await minds_bridge.snapshot_workspace(
-                    environment, self._box_env, self._workspace_agent_id, "post_message_{}".format(turn)
-                )
 
         self._test_state = "finished"
         # The agent can keep working after it reports WAITING -- the workspace's own turn-end flow
@@ -779,7 +1087,224 @@ class MindsPersonaDriver(BaseAgent):
         # as the proxy accounting for requests the transcript has no messages for.
         await self._refresh_events(environment)
         await self._sync_trial_files(environment)
-        logger.info("Finished after {} turns", len(sources))
+        logger.info("Finished {} entr(ies) in {} exchange(s)", len(sources), self._waits_done)
+
+    def build_turn_sources(self, case: CaseConfig) -> list[TurnSource]:
+        """The turn source for each of the case's prompts entries.
+
+        The one seam between the conversation loop and the model calls that feed it, so the loop can
+        be driven end to end against scripted sources without any network.
+        """
+        return resolve_turn_sources(case, self._decider_model, self._get_env("ANTHROPIC_API_KEY") or "")
+
+    async def _run_entry(
+        self,
+        case: CaseConfig,
+        entry: PromptEntry,
+        entry_index: int,
+        source: TurnSource,
+        environment: BaseEnvironment,
+        deadline: float,
+    ) -> bool:
+        """Drive one prompts entry to its outcome; False means the trial was marked timed out.
+
+        The budget is enforced here rather than in the source, so no source can exceed it by
+        construction: the loop simply stops asking once the entry has sent its allowance.
+        """
+        assert self._box_env is not None
+        budget = entry_exchange_budget(entry)
+        end: Done | None = None
+        exchange_count = 0
+        while exchange_count < budget:
+            action = await self._run_exchange(case, entry_index, exchange_count, source, environment, deadline)
+            match action:
+                case None:
+                    return False
+                case Done():
+                    end = action
+                    break
+                case Say():
+                    exchange_count += 1
+                case _ as unreachable:
+                    assert_never(unreachable)
+        # An entry the budget stopped never reported an ending of its own; what the ceiling means
+        # depends on the source, which is the only thing that knows whether it had more to say.
+        # Reason and detail come from the one `Done` either way, so they cannot disagree.
+        if end is None:
+            end = source.exhaustion_end
+        self._entry_records.append(
+            EntryRecord(
+                index=entry_index,
+                kind=source.kind,
+                exchange_count=exchange_count,
+                outcome=end.reason,
+                detail=end.detail,
+            )
+        )
+        await self._sync_trial_files(environment)
+        is_final_entry = entry_index == len(case.prompts) - 1
+        # Gated on the whole run's message count, not this entry's: a final goal entry can be
+        # satisfied at exchange 0, and the workspace the earlier entries built is still worth
+        # capturing. Only a conversation that never said anything has nothing to snapshot.
+        is_snapshot_point = is_final_entry and self._waits_done > 0
+        if is_snapshot_point and is_snapshot_wanted(self._snapshot_mode, SnapshotPoint.AFTER_FINAL_ENTRY):
+            await minds_bridge.snapshot_workspace(
+                environment, self._box_env, self._workspace_agent_id, "post_message_{}".format(self._waits_done)
+            )
+        return True
+
+    async def _run_exchange(
+        self,
+        case: CaseConfig,
+        entry_index: int,
+        exchange_index: int,
+        source: TurnSource,
+        environment: BaseEnvironment,
+        deadline: float,
+    ) -> TurnAction | None:
+        """One exchange: ask the source, and if it spoke, run the full wait/send/reply/sync sequence.
+        None means the trial was marked timed out and the conversation must stop.
+
+        The source is asked before the workspace is touched. Whether the entry is over is a property
+        of the conversation the source already has, so an entry that ends here costs no round trip
+        -- and, more to the point, no WAITING poll whose expiry would be recorded as a trial timeout
+        for a conversation that was simply finished.
+        """
+        result_count_before = len(source.results)
+        # The client's judgment is a blocking HTTP call of up to a couple of minutes, and harbor
+        # runs every concurrent trial on one event loop, so it goes to a thread: run it inline and
+        # every other trial's polling -- and its deadline -- stalls behind this one.
+        action = await asyncio.to_thread(
+            source.next_action, case, Transcript(events=tuple(_conversation_events(self._conversation)))
+        )
+        if isinstance(action, Done):
+            self._record_decider_calls(source, result_count_before, entry_index, exchange_index, action, None)
+            return action
+
+        message_index = self._waits_done + 1
+        failure_reason = await self._say(
+            action.text, entry_index, exchange_index, message_index, environment, deadline
+        )
+        # `_waits_done` advances only once the message has reached the workspace, so it is what says
+        # whether this call's message actually went out: a wait or a send that expired leaves the
+        # audit event with no turn number, while a message that went out but drew no reply keeps one.
+        is_message_sent = self._waits_done == message_index
+        # Recorded before the trial can be marked timed out, because marking it writes the transcript
+        # for the last time.
+        self._record_decider_calls(
+            source,
+            result_count_before,
+            entry_index,
+            exchange_index,
+            action,
+            message_index if is_message_sent else None,
+        )
+        if failure_reason is not None:
+            await self._mark_timed_out(environment, failure_reason)
+            return None
+        return action
+
+    async def _say(
+        self,
+        text: str,
+        entry_index: int,
+        exchange_index: int,
+        message_index: int,
+        environment: BaseEnvironment,
+        deadline: float,
+    ) -> str | None:
+        """Send one client message and collect the agent's reply; the reason to time the trial out,
+        or None when the exchange completed.
+
+        The reason is returned rather than acted on so the caller can finish recording the exchange
+        before the trial is marked timed out, which is what writes the transcript for the last time.
+        """
+        assert self._box_env is not None
+        is_ready = await minds_bridge.wait_for_chat_state(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            self._chat_agent_id,
+            is_waiting_desired=True,
+            deadline=deadline,
+            poll_seconds=self._poll_seconds,
+        )
+        if not is_ready:
+            return "agent never reached WAITING before message {}".format(message_index)
+
+        # Refreshed after the wait, not before the source is asked: the agent can keep emitting
+        # events after it reports WAITING, and the baseline below has to be taken on the freshest
+        # view of the stream or that trailing work is read back as this message's reply.
+        await self._refresh_events(environment)
+        logger.info(
+            "Sending entry {} exchange {} as message {}: {}",
+            entry_index + 1,
+            exchange_index + 1,
+            message_index,
+            text[:80],
+        )
+        # Anchor reply detection on the event count before the send, so an
+        # injected user message can't be mistaken for the agent's reply.
+        baseline_event_count = len(self._latest_events)
+        is_sent = await minds_bridge.send_chat_message(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            self._chat_agent_id,
+            text,
+            deadline,
+            self._poll_seconds,
+        )
+        if not is_sent:
+            return "could not send message {}".format(message_index)
+        self._conversation.append({"role": "user", "text": text})
+        self._waits_done = message_index
+        await self._sync_trial_files(environment)
+
+        is_replied = await self._wait_for_reply(environment, deadline, baseline_event_count)
+        if not is_replied:
+            return "no reply to message {}".format(message_index)
+        reply_texts = _new_agent_reply_texts(self._latest_events, baseline_event_count)
+        # Record each message's length before merging, so the per-message
+        # metric sees the agent's real (short) messages, not the merged wall.
+        self._agent_message_word_counts.extend(len(reply_text.split()) for reply_text in reply_texts)
+        self._conversation.append({"role": "agent", "text": "\n\n".join(reply_texts)})
+        await self._sync_trial_files(environment)
+
+        if is_snapshot_wanted(self._snapshot_mode, SnapshotPoint.AFTER_EXCHANGE):
+            await minds_bridge.snapshot_workspace(
+                environment, self._box_env, self._workspace_agent_id, "post_message_{}".format(message_index)
+            )
+        return None
+
+    def _record_decider_calls(
+        self,
+        source: TurnSource,
+        result_count_before: int,
+        entry_index: int,
+        exchange_index: int,
+        action: TurnAction,
+        message_index: int | None,
+    ) -> None:
+        """Record every decider-model call the source just made, so an LLM-driven message -- or a
+        decision to stop without one -- can be traced back to the exchange that produced it.
+        ``message_index`` is the 1-based index of the message the call produced, or None when it
+        produced none (it ended the entry, or its message never reached the workspace)."""
+        for result in source.results[result_count_before:]:
+            self._decider_results.append(result)
+            self._decider_turns.append(
+                DeciderTurn(
+                    # A call that sent nothing carries no message number: stamping it with the next one
+                    # would hand that number to two calls, and (entry_index, exchange) locates it.
+                    turn=message_index,
+                    entry_index=entry_index,
+                    exchange=exchange_index,
+                    entry_kind=source.kind,
+                    model=result.model or self._decider_model,
+                    is_fallback=result.is_fallback,
+                    detail=action.detail if isinstance(action, Done) else "",
+                )
+            )
 
     async def _probe_reverse_tunnel(self, environment: BaseEnvironment) -> None:
         """Check that a box-local port is reachable from inside the workspace.
@@ -1111,16 +1636,21 @@ class MindsPersonaDriver(BaseAgent):
         await self._sync_trial_files(environment)
 
     def _state_payload(self) -> dict[str, Any]:
-        turn_count = len(self._case.prompts) if self._case is not None else 0
+        entry_count = len(self._case.prompts) if self._case is not None else 0
         return {
             "eval_name": self.logs_dir.parent.name,
             "case_name": self._case.case_id if self._case is not None else "",
             "mngr_sha": self._mngr_sha,
             "dwt_sha": self._case.dwt_sha if self._case is not None else "",
             "waits_done": self._waits_done,
-            # "num_turns" is the ported state.json schema key (the old harness's
-            # readers and the verifier gates both consume it).
-            "num_turns": turn_count,
+            # "num_turns" is the ported state.json schema key (the old harness's readers consume
+            # it). It counts CONFIGURED ENTRIES, which a goal entry can outrun -- "waits_done" is
+            # the messages actually sent, and the per-entry records below account for those
+            # messages entry by entry. An entry earns its record only once it has stopped, so a
+            # timed-out trial's records end at the entry it died in and account for fewer messages
+            # than "waits_done"; only a finished trial's two views are expected to agree.
+            "num_turns": entry_count,
+            "entries": [record.model_dump(mode="json") for record in self._entry_records],
             "test_state": self._test_state,
             "timed_out": self._test_state == "timed_out",
             "started_at": datetime.fromtimestamp(self._started_at, tz=timezone.utc).isoformat(),
@@ -1128,41 +1658,45 @@ class MindsPersonaDriver(BaseAgent):
             "timeout_seconds": self._case.timeout_seconds if self._case is not None else 0.0,
         }
 
-    @staticmethod
-    def _jsonl(records: list[dict[str, Any]]) -> str:
-        lines = [json.dumps(record) for record in records]
-        return "\n".join(lines) + ("\n" if lines else "")
-
-    def _transcript_jsonl(self) -> str:
-        # Workspace events verbatim (same schema as today), with the harness's
-        # decider events appended at the end so LLM turns stay auditable.
-        return self._jsonl([*self._latest_events, *self._decider_events])
-
     async def _sync_trial_files(self, environment: BaseEnvironment) -> None:
-        """Write the raw transcript, the clean conversation, and state to the host logs dir and
-        mirror them into the box's /logs/agent/, where the task's declared artifacts pick them up
-        for the verifier."""
+        """Write the hand-built trajectory and the state to the host logs dir and mirror them into the
+        box's /logs/agent/, where the task's declared artifacts pick them up for the verifier."""
+        assert self._case is not None, "the case is parsed before the conversation starts"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        file_contents = {
-            TRANSCRIPT_FILENAME: self._transcript_jsonl(),
-            CONVERSATION_FILENAME: self._jsonl(_conversation_events(self._conversation)),
-            STATE_FILENAME: json.dumps(self._state_payload(), indent=2),
-        }
+        file_contents = {STATE_FILENAME: json.dumps(self._state_payload(), indent=2)}
+        hand_built = self._hand_built_trajectory(self._case)
+        if hand_built is not None:
+            file_contents[TRAJECTORY_FILENAME] = _trajectory_json(hand_built)
         await environment.exec("mkdir -p {}".format(minds_bridge.BOX_LOGS_DIR), timeout_sec=60)
         for filename, content in file_contents.items():
             local_path = self.logs_dir / filename
             local_path.write_text(content)
-            await environment.upload_file(local_path, "{}/{}".format(minds_bridge.BOX_LOGS_DIR, filename))
+            await environment.upload_file(local_path, _box_trial_file_path(filename))
+        if TRAJECTORY_FILENAME in file_contents:
+            self._box_trajectory_json = file_contents[TRAJECTORY_FILENAME]
 
     def _resolve_workspace_usage(self) -> usage_accounting.ResolvedWorkspaceUsage:
         """The one resolution of the workspace agent's spend that every usage writer in this driver
         reads from; the choice between the two accounts is ``resolve_workspace_usage``'s."""
-        return usage_accounting.resolve_workspace_usage(self._latest_events, self._proxy_usage_records)
+        # The launch count is the capture's scan of the captured transcripts when there was one; before
+        # that, or without it, the polled feed's own heuristic stands.
+        worker_launch_count = (
+            len(self._worker_captures) + len(self._worker_capture_overflow)
+            if self._transcript_capture.stream.is_captured
+            else None
+        )
+        return usage_accounting.resolve_workspace_usage(
+            self._latest_events,
+            self._proxy_usage_records,
+            list(self._worker_stream_records_by_name.values()),
+            worker_launch_count,
+            _settled_worker_count(self._worker_captures, self._worker_stream_records_by_name),
+        )
 
-    def _populate_context_metadata(self, context: AgentContext) -> None:
+    def _populate_context_metadata(self, context: AgentContext, trajectory_source: TrajectorySource) -> None:
         turn_word_counts = _words_per_agent_turn(self._conversation)
         message_word_counts = self._agent_message_word_counts
-        decider_results = self._persona_source.results if self._persona_source is not None else []
+        decider_results = self._decider_results
         # Harbor's token/cost fields describe the agent under test, so they carry the workspace
         # agent's consumption. The decider is the harness's own spend and goes to metadata; putting
         # it here would report the simulated user's tokens as the agent's.
@@ -1181,9 +1715,11 @@ class MindsPersonaDriver(BaseAgent):
             )
         if not workspace_usage.is_cost_complete:
             logger.warning(
-                "This trial delegated ({} subagent call(s), {} worker launch(es)), so its reported cost is a "
-                "lower bound: delegated work is served on streams this driver does not read",
+                "This trial delegated ({} subagent call(s); {} of {} worker launch(es) captured), so its reported "
+                "cost is a lower bound: subagent turns and uncaptured workers are served on streams this total "
+                "does not include",
                 workspace_usage.delegated_call_count,
+                workspace_usage.worker_captured_count,
                 workspace_usage.worker_launch_count,
             )
         if workspace_usage.message_count:
@@ -1203,13 +1739,15 @@ class MindsPersonaDriver(BaseAgent):
                 logger.debug("Every request was served at standard speed")
         context.metadata = {
             "case_id": self._case.case_id if self._case is not None else "",
+            # Messages sent versus entries configured: a goal entry can send several, so these
+            # are two separate counts.
             "turns_completed": self._waits_done,
             "turn_count": len(self._case.prompts) if self._case is not None else 0,
+            "entries": [record.model_dump(mode="json") for record in self._entry_records],
             "test_state": self._test_state,
             "timed_out": self._test_state == "timed_out",
-            # Per merged agent turn (feeds the verifier's wordiness gate) vs. per
-            # individual agent message (observability only; the judge grades the
-            # per-message rendering it re-derives from full_transcript.jsonl).
+            # Per merged agent turn vs. per individual agent message, both observability only: the
+            # verifier re-derives its own counts from trajectory.json.
             "average_words_per_turn": round(sum(turn_word_counts) / len(turn_word_counts), 1)
             if turn_word_counts
             else 0.0,
@@ -1225,8 +1763,20 @@ class MindsPersonaDriver(BaseAgent):
             "workspace_usage": usage_accounting.workspace_usage_metadata(workspace_usage),
             # Both sources, so the two can be reconciled after the fact: they agree exactly when the
             # agent delegates nothing, and differ by the delegated spend when it does.
-            "usage_source": "proxy" if resolved_usage.is_from_proxy else "transcript",
+            "usage_source": _usage_source(resolved_usage).value,
             "transcript_usage": usage_accounting.workspace_usage_metadata(resolved_usage.transcript),
+            # Which shape trajectory.json has, with the capture's own account of why, so a hand-built
+            # document on a post-ATIF workspace is diagnosable rather than mysterious.
+            "trajectory_source": trajectory_source.value,
+            "transcript_capture": _transcript_capture_metadata(self._transcript_capture),
+            # One entry per background worker launched in the trial (the chat agent's and, in turn,
+            # theirs), and the launches the caps left uncaptured, so delegated work is accounted for
+            # by name.
+            "workers": [
+                _worker_capture_metadata(capture, self._worker_stream_records_by_name.get(capture.launch.name))
+                for capture in self._worker_captures
+            ],
+            "worker_capture_overflow": list(self._worker_capture_overflow),
             "decider_usage": usage_accounting.decider_usage_metadata(decider_usage),
             # The UI-flow verification agent is harness spend just like the decider: it measures
             # what the eval costs to run, never what the agent under test consumed.
@@ -1251,42 +1801,87 @@ class MindsPersonaDriver(BaseAgent):
         }
         (self.logs_dir / USAGE_FILENAME).write_text(json.dumps(payload, indent=2))
 
-    def _write_trajectory(self) -> None:
-        """Write the ATIF trajectory (for `harbor view`) from the clean per-turn conversation."""
-        timestamp = _utc_now_iso()
-        steps: list[Step] = [
-            Step(
-                step_id=index + 1,
-                timestamp=timestamp,
-                source="user" if entry["role"] == "user" else "agent",
-                message=entry["text"],
-            )
-            for index, entry in enumerate(self._conversation)
-            if entry["text"].strip()
-        ]
-        if not steps:
-            # ATIF requires at least one step; a trial that died before any
-            # exchange has no conversation to render.
-            return
-        workspace_usage = self._resolve_workspace_usage().reported
-        trajectory = Trajectory(
-            schema_version="ATIF-v1.7",
-            session_id=self.session_id,
-            agent=TrajectoryAgent(
-                name=self.name(), version=self.version() or "unknown", model_name=self._decider_model
-            ),
-            steps=steps,
-            # The workspace agent's totals, not the decider's: the trajectory describes the
-            # conversation being graded. total_steps counts conversation turns, not LLM calls.
-            final_metrics=FinalMetrics(
-                total_prompt_tokens=workspace_usage.n_input_tokens,
-                total_completion_tokens=workspace_usage.tokens.output,
-                total_cached_tokens=workspace_usage.n_cache_tokens,
-                total_cost_usd=workspace_usage.cost_usd,
-                total_steps=len(steps),
-            )
-            if workspace_usage.message_count
-            else None,
+    def _trajectory_provenance(self, case: CaseConfig, usage_source: UsageSource) -> TrajectoryProvenance:
+        return TrajectoryProvenance(
+            driver_name=self.name(),
+            driver_version=self.version() or "unknown",
+            decider_model=self._decider_model,
+            decider_turns=tuple(self._decider_turns),
+            harbor_session_id=self.session_id,
+            case_id=case.case_id,
+            usage_source=usage_source,
         )
+
+    def _workspace_trajectory_or_none(
+        self, document_path: Path, provenance: TrajectoryProvenance, workspace_usage: usage_accounting.TrialUsage
+    ) -> Trajectory | None:
+        """The captured workspace document with the eval's reconciliations and the captured workers
+        embedded, or None when it cannot be read or is not valid ATIF -- in which case the hand-built
+        shape is written instead."""
+        try:
+            document_json = document_path.read_text()
+        except OSError as exc:
+            logger.warning("Could not read the captured trajectory document; writing the hand-built one: {}", exc)
+            return None
+        try:
+            return trajectory_building.build_workspace_trajectory(
+                document_json, provenance, workspace_usage, _embedded_workers(self._worker_captures, self.logs_dir)
+            )
+        except TrajectoryDocumentError as exc:
+            logger.warning("The captured trajectory document is unusable; writing the hand-built one: {}", exc)
+            return None
+
+    def _hand_built_trajectory(self, case: CaseConfig) -> Trajectory | None:
+        """The driver's own per-turn summary of the conversation so far, or None before any exchange."""
+        resolved_usage = self._resolve_workspace_usage()
+        return trajectory_building.build_hand_built_trajectory(
+            conversation=self._conversation,
+            provenance=self._trajectory_provenance(case, _usage_source(resolved_usage)),
+            workspace_usage=resolved_usage.reported,
+            timestamp=_utc_now_iso(),
+        )
+
+    async def _publish_trajectory(self, case: CaseConfig, environment: BaseEnvironment) -> TrajectorySource:
+        """Write the final trajectory.json, host-side and into the box: the workspace's own document
+        when the evidence phase captured one, else the hand-built summary. Returns which shape the
+        box holds.
+
+        The box copy is the one that matters: harbor collects the declared artifacts from there for
+        the verifier and downloads /logs/agent over the host logs dir afterwards. So when the upload
+        fails, the last per-turn copy is what grading sees, and the host copy is put back to exactly
+        that rather than left describing a document the verifier never got.
+        """
+        resolved_usage = self._resolve_workspace_usage()
+        provenance = self._trajectory_provenance(case, _usage_source(resolved_usage))
+        document_path = self._transcript_capture.document.host_path
+        workspace_trajectory = (
+            self._workspace_trajectory_or_none(document_path, provenance, resolved_usage.reported)
+            if document_path is not None
+            else None
+        )
+        if workspace_trajectory is not None:
+            written_trajectory: Trajectory | None = workspace_trajectory
+            source = TrajectorySource.WORKSPACE
+        else:
+            written_trajectory = self._hand_built_trajectory(case)
+            source = TrajectorySource.HAND_BUILT
+        if written_trajectory is None:
+            # A trial that died before any exchange has no conversation to describe.
+            return TrajectorySource.NONE
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        (self.logs_dir / "trajectory.json").write_text(json.dumps(trajectory.to_json_dict(), indent=2))
+        host_path = self.logs_dir / TRAJECTORY_FILENAME
+        trajectory_json = _trajectory_json(written_trajectory)
+        host_path.write_text(trajectory_json)
+        try:
+            await environment.upload_file(host_path, _box_trial_file_path(TRAJECTORY_FILENAME))
+        except (OSError, RuntimeError, ModalError) as exc:
+            logger.warning(
+                "Could not publish the final trajectory into the box; grading on the per-turn copy: {}", exc
+            )
+            if self._box_trajectory_json is None:
+                host_path.unlink()
+                return TrajectorySource.NONE
+            host_path.write_text(self._box_trajectory_json)
+            return TrajectorySource.HAND_BUILT
+        self._box_trajectory_json = trajectory_json
+        return source

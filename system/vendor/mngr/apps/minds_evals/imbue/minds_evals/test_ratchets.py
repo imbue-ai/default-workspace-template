@@ -124,9 +124,12 @@ def test_prevent_exit_stack() -> None:
 
 # harbor's agent and environment interfaces are async (`BaseAgent.run`, `BaseEnvironment.exec`), so
 # every driver method that touches the box or the workspace has to be too. Reads of the workspace
-# cannot be made synchronous here; keep new async surface to what those interfaces force.
+# cannot be made synchronous here; keep new async surface to what those interfaces force. The one
+# await that is not forced by those interfaces is the `asyncio.to_thread` around the simulated
+# client's model call: harbor runs every concurrent trial on one event loop, so a blocking HTTP
+# call left inline would stall every other trial's polling and deadlines.
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(269))
+    rc.check_async_await(_DIR, snapshot(304))
 
 
 # --- Hardcoded paths ---
@@ -143,8 +146,12 @@ def test_prevent_hardcoded_guarded_binary() -> None:
 # --- Naming conventions ---
 
 
+# Every hit is a key in a wire format this code does not own: `num_turns` in the ported state.json
+# schema, which the old harness's readers consume and which the gate still reads back off a rollout
+# captured before per-entry records, and `num_retries` in litellm's proxy config. Neither name is a
+# naming choice available here.
 def test_prevent_num_prefix() -> None:
-    rc.check_num_prefix(_DIR, snapshot(7))
+    rc.check_num_prefix(_DIR, snapshot(9))
 
 
 # --- Documentation ---

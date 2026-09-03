@@ -27,13 +27,28 @@ from imbue.minds_evals.mock_verification_agent_test import ScriptedVerificationA
 from imbue.minds_evals.mock_verification_agent_test import click_action
 from imbue.minds_evals.mock_verification_agent_test import done_action
 from imbue.minds_evals.mock_verification_agent_test import reading
+from imbue.minds_evals.testing import BOX_COMMON_TRANSCRIPT_PATH
+from imbue.minds_evals.testing import BOX_WORKSPACE_TRAJECTORY_PATH
+from imbue.minds_evals.testing import CHAT_WORK_DIR
 from imbue.minds_evals.testing import FAKE_WORKSPACE_AGENT_ID
 from imbue.minds_evals.testing import SCRIPT_REGISTERED_APPS
 from imbue.minds_evals.testing import TEMPLATE_CONFIG_REGISTRATIONS
 from imbue.minds_evals.testing import TEMPLATE_PREEXISTING_APPS
 from imbue.minds_evals.testing import TEMPLATE_SUPERVISORD_CONF
+from imbue.minds_evals.testing import WORKER_AGENT_ID
+from imbue.minds_evals.testing import WORKER_NAME
+from imbue.minds_evals.testing import WORKER_TASK_FILE
+from imbue.minds_evals.testing import atif_document_json
+from imbue.minds_evals.testing import atif_stream_jsonl
+from imbue.minds_evals.testing import atif_stream_jsonl_with_worker_launch
+from imbue.minds_evals.testing import captured_transcript_downloads
 from imbue.minds_evals.testing import probe_sections
 from imbue.minds_evals.testing import program_block
+from imbue.minds_evals.testing import transcript_capture_output
+from imbue.minds_evals.testing import worker_capture_output
+from imbue.minds_evals.testing import worker_listing_json
+from imbue.minds_evals.testing import worker_listing_output
+from imbue.minds_evals.testing import worker_trial_downloads
 from imbue.minds_evals.testing import workspace_state_output
 
 _REGISTRY_TOML = (
@@ -527,10 +542,11 @@ def _collector_rules(
     services_text: str = _SERVICES_TEXT,
     http_status: str = "200 0.0041",
     test_exit_code: str = "0",
-    is_inventory_pulled: bool = True,
+    is_staged_file_pulled: bool = True,
     registry_status: str = "present",
     supervisord_conf: str = _SUPERVISORD_CONF,
     isolated_instances: str = "",
+    transcript_capture: str = transcript_capture_output("0", "0", ""),
 ) -> list[ScriptedExecRule]:
     probe = workspace_state_output(
         registry_text,
@@ -548,7 +564,8 @@ def _collector_rules(
         ScriptedExecRule("git bundle create", [ok_result(mngr_exec_json(repo_state))]),
         ScriptedExecRule("test_out", [ok_result(mngr_exec_json(test_result))]),
         ScriptedExecRule("http_headers", [ok_result(mngr_exec_json(http))]),
-        ScriptedExecRule("mngr rsync", [ok_result() if is_inventory_pulled else failed_result()]),
+        ScriptedExecRule("mngr rsync", [ok_result() if is_staged_file_pulled else failed_result()]),
+        ScriptedExecRule("MINDS_EVALS_SECTION:stream_exit", [ok_result(mngr_exec_json(transcript_capture))]),
     ]
 
 
@@ -559,14 +576,18 @@ def _run_collector(
     deadline_offset_seconds: float = 600.0,
     is_expectations_collection_wanted: bool = True,
     preexisting_registrations: frozenset[str] | None = TEMPLATE_PREEXISTING_APPS,
+    downloadable_content_by_source: dict[str, str] | None = None,
+    chat_agent_id: str = "chat-1",
 ) -> tuple[evidence_collection.EvidenceCollector, MockBoxEnvironment]:
     environment = MockBoxEnvironment(tmp_path, rules)
+    environment.downloadable_content_by_source = dict(downloadable_content_by_source or {})
     logs_dir = tmp_path / "agent"
     logs_dir.mkdir(parents=True, exist_ok=True)
     collector = evidence_collection.EvidenceCollector(
         environment=environment,
         box_env={"MINDS_ENV": "staging"},
         workspace_agent_id="ws-1",
+        chat_agent_id=chat_agent_id,
         case=case,
         clone_base_sha="a" * 40,
         dwt_tip_sha="e" * 40,
@@ -599,6 +620,7 @@ def test_collector_records_every_declared_check_as_passed_for_a_healthy_workspac
     assert manifest.is_evidence_complete is True
     assert {phase.name for phase in manifest.phases} == {
         "workspace_state",
+        "common_transcript",
         "file_inventory",
         "repo_state",
         "test_commands",
@@ -757,7 +779,7 @@ def test_collector_records_a_broken_supervisorctl_as_an_error_not_a_dead_service
 def test_collector_records_a_failed_inventory_pull_as_an_error(tmp_path: Path) -> None:
     case = _case_config(_authored())
 
-    collector, _environment = _run_collector(tmp_path, case, _collector_rules(is_inventory_pulled=False))
+    collector, _environment = _run_collector(tmp_path, case, _collector_rules(is_staged_file_pulled=False))
 
     assert _entry_status_by_id(collector)["file_inventory"] is CheckStatus.ERROR
     assert collector.manifest().is_evidence_complete is False
@@ -876,6 +898,475 @@ def test_collector_reports_a_dead_bridge_as_an_error(tmp_path: Path) -> None:
     }
 
 
+# --- the common-transcript capture ---
+
+
+def test_transcript_capture_command_reports_each_half_on_its_own() -> None:
+    command = evidence_collection.transcript_capture_command("chat-1")
+
+    # The stream and the document are two mngr invocations with two exit codes: a document that fails
+    # to build must not take the stream down with it. Only the codes and a stderr tail are printed;
+    # the files themselves stay in the staging directory for the rsync pull.
+    assert (
+        "mngr transcript chat-1 --headless --format jsonl > /tmp/minds-evals-verification/common_transcript.jsonl"
+        in command
+    )
+    assert (
+        "mngr transcript chat-1 --headless --format atif --output /tmp/minds-evals-verification/workspace_trajectory.json"
+        in command
+    )
+    assert command.index("stream_exit") < command.index("--format atif") < command.index("document_exit")
+    assert command.endswith("exit 0")
+
+
+def test_collector_brings_both_transcript_halves_out_of_the_workspace(tmp_path: Path) -> None:
+    case = _case_config(_authored())
+
+    collector, environment = _run_collector(
+        tmp_path, case, _collector_rules(), downloadable_content_by_source=captured_transcript_downloads()
+    )
+
+    capture = collector.transcript_capture
+    assert capture.stream.host_path == tmp_path / "agent" / "verification" / "common_transcript.jsonl"
+    assert capture.document.host_path == tmp_path / "agent" / "verification" / "workspace_trajectory.json"
+    assert (tmp_path / "agent" / "verification" / "common_transcript.jsonl").read_text() == atif_stream_jsonl()
+    assert (tmp_path / "agent" / "verification" / "workspace_trajectory.json").read_text() == atif_document_json()
+    pulls = [command for command in environment.exec_commands if "mngr rsync" in command]
+    assert any("common_transcript.jsonl /logs/agent/verification/" in command for command in pulls)
+    assert any("workspace_trajectory.json /logs/agent/verification/" in command for command in pulls)
+    # The capture is the trial's record, not outcome evidence: it is timed and traced, but adds no
+    # manifest entry, so a transcript problem can never read as an unmeasured check to the judge.
+    manifest = collector.manifest()
+    assert "common_transcript" in {phase.name for phase in manifest.phases}
+    assert all("transcript" not in entry.entry_id for entry in manifest.entries)
+    assert any(record.phase == "common_transcript" for record in collector.trace)
+
+
+def test_collector_records_both_halves_uncaptured_when_the_transcript_commands_fail(tmp_path: Path) -> None:
+    # A workspace with no `mngr` on its exec path fails both commands, and the stderr says why.
+    stderr = "sh: 1: mngr: not found"
+    rules = _collector_rules(transcript_capture=transcript_capture_output("127", "127", stderr))
+
+    collector, environment = _run_collector(tmp_path, case=_case_config(_authored()), rules=rules)
+
+    capture = collector.transcript_capture
+    assert not capture.stream.is_captured
+    assert not capture.document.is_captured
+    assert capture.stream.failure_reason == evidence_collection.REASON_TRANSCRIPT_COMMAND_FAILED
+    assert capture.document.failure_reason == evidence_collection.REASON_TRANSCRIPT_COMMAND_FAILED
+    assert stderr in capture.stream.failure_detail
+    assert not any("common_transcript.jsonl /logs/agent" in command for command in environment.exec_commands)
+    assert collector.manifest().is_evidence_complete is True
+
+
+def test_collector_keeps_the_stream_when_the_workspace_predates_atif(tmp_path: Path) -> None:
+    # A mngr that predates ATIF answers `--format jsonl` with the legacy-shaped records its emitter
+    # wrote but knows no `--format atif`: the stream comes out, the document does not.
+    stderr = "Error: Invalid value for '--format': 'atif' is not one of 'human', 'json', 'jsonl'."
+    rules = _collector_rules(transcript_capture=transcript_capture_output("0", "2", stderr))
+
+    collector, _environment = _run_collector(
+        tmp_path, _case_config(_authored()), rules, downloadable_content_by_source=captured_transcript_downloads()
+    )
+
+    capture = collector.transcript_capture
+    assert capture.stream.is_captured
+    assert capture.document.failure_reason == evidence_collection.REASON_TRANSCRIPT_COMMAND_FAILED
+    assert stderr in capture.document.failure_detail
+
+
+def test_collector_records_a_failed_transcript_pull(tmp_path: Path) -> None:
+    rules = _collector_rules(is_staged_file_pulled=False)
+
+    collector, _environment = _run_collector(
+        tmp_path, _case_config(_authored()), rules, downloadable_content_by_source=captured_transcript_downloads()
+    )
+
+    capture = collector.transcript_capture
+    assert capture.stream.failure_reason == evidence_collection.REASON_PULL_FAILED
+    assert capture.document.failure_reason == evidence_collection.REASON_PULL_FAILED
+
+
+def test_collector_records_a_failed_transcript_download(tmp_path: Path) -> None:
+    # The pull succeeded but only the stream is there to download; the document half fails on its own.
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored()),
+        _collector_rules(),
+        downloadable_content_by_source={BOX_COMMON_TRANSCRIPT_PATH: atif_stream_jsonl()},
+    )
+
+    capture = collector.transcript_capture
+    assert capture.stream.is_captured
+    assert capture.document.failure_reason == evidence_collection.REASON_DOWNLOAD_FAILED
+
+
+def test_collector_records_a_dead_bridge_on_the_transcript_capture(tmp_path: Path) -> None:
+    rules = [ScriptedExecRule("MINDS_EVALS_SECTION:stream_exit", [failed_result("mngr exec: workspace unreachable")])]
+
+    collector, _environment = _run_collector(tmp_path, _case_config(_authored()), rules)
+
+    capture = collector.transcript_capture
+    assert capture.stream.failure_reason == evidence_collection.REASON_BRIDGE_FAILED
+    assert "workspace unreachable" in capture.stream.failure_detail
+    assert capture.document.failure_reason == evidence_collection.REASON_BRIDGE_FAILED
+
+
+def test_collector_skips_the_transcript_capture_without_a_chat_agent(tmp_path: Path) -> None:
+    collector, environment = _run_collector(tmp_path, _case_config(_authored()), _collector_rules(), chat_agent_id="")
+
+    capture = collector.transcript_capture
+    assert capture.stream.failure_reason == evidence_collection.REASON_NOT_ATTEMPTED
+    assert capture.document.failure_reason == evidence_collection.REASON_NOT_ATTEMPTED
+    assert not any("mngr transcript" in command for command in environment.exec_commands)
+
+
+# --- background workers ---
+
+
+def _worker_rules(
+    listing_json: str, capture_output: str, transcript_capture: str = transcript_capture_output("0", "0", "")
+) -> list[ScriptedExecRule]:
+    return [
+        ScriptedExecRule(
+            "MINDS_EVALS_SECTION:list_exit", [ok_result(mngr_exec_json(worker_listing_output(listing_json)))]
+        ),
+        ScriptedExecRule("mngr transcript {}".format(WORKER_NAME), [ok_result(mngr_exec_json(capture_output))]),
+        *_collector_rules(transcript_capture=transcript_capture),
+    ]
+
+
+def test_worker_capture_command_brings_out_the_document_stream_and_report() -> None:
+    command = evidence_collection.worker_capture_command(WORKER_NAME, CHAT_WORK_DIR, WORKER_TASK_FILE)
+
+    assert "mngr transcript crystallize-todo --headless --format atif --output" in command
+    assert "mngr transcript crystallize-todo --headless --format jsonl >" in command
+    # A destroyed worker's stream comes from the newest preserved directory of its name.
+    assert '/preserved/"crystallize-todo"--"*/' in command
+    # The report is read from the lead's side, at the path the task file's frontmatter names.
+    assert "finish_report_path" in command
+    assert "/home/user/workspace/data/.tasks/harden/crystallize-todo/task.md" in command
+    assert (
+        command.index("document_exit")
+        < command.index("stream_exit")
+        < command.index("preserved")
+        < command.index("report_path")
+        < command.index("report_exit")
+    )
+    assert command.endswith("exit 0")
+
+
+def test_worker_capture_command_skips_the_report_when_the_launch_named_no_task_file() -> None:
+    assert "finish_report_path" not in evidence_collection.worker_capture_command("w", CHAT_WORK_DIR, "")
+
+
+def test_worker_capture_command_reads_an_absolute_task_file_as_written() -> None:
+    command = evidence_collection.worker_capture_command("w", CHAT_WORK_DIR, "/home/user/tasks/task.md")
+
+    assert " /home/user/tasks/task.md " in command
+    assert CHAT_WORK_DIR + "//" not in command
+
+
+def test_parse_worker_listing_folds_states_and_keeps_work_dirs() -> None:
+    entries = evidence_collection.parse_worker_listing(worker_listing_json("RUNNING"))
+
+    assert [(entry.name, entry.state.value, entry.work_dir) for entry in entries] == [
+        ("EVAL-todo-app", "stopped", CHAT_WORK_DIR),
+        (WORKER_NAME, "running", "/home/user/worktrees/" + WORKER_NAME),
+    ]
+    assert evidence_collection.parse_worker_listing("not json") == ()
+
+
+@pytest.mark.parametrize(
+    ("raw_state", "expected"),
+    [
+        ("WAITING", "stopped"),
+        ("DONE", "stopped"),
+        ("RUNNING_UNKNOWN_AGENT_TYPE", "running"),
+        ("REPLACED", "unknown"),
+        # A state mngr's lifecycle enum does not know.
+        ("STARTING", "unknown"),
+    ],
+)
+def test_parse_worker_listing_folds_every_lifecycle_state(raw_state: str, expected: str) -> None:
+    entries = evidence_collection.parse_worker_listing(worker_listing_json(raw_state))
+
+    assert entries[1].state.value == expected
+
+
+def test_preserved_worker_id_reads_the_directory_basename() -> None:
+    assert evidence_collection.preserved_worker_id("/home/user/.mngr/preserved/w--agent-abc/", "w") == "agent-abc"
+    assert evidence_collection.preserved_worker_id("/home/user/.mngr/preserved/other--agent-abc/", "w") == ""
+
+
+def test_collector_captures_a_settled_worker_the_chat_agent_launched(tmp_path: Path) -> None:
+    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", WORKER_TASK_FILE, ""))
+
+    collector, environment = _run_collector(
+        tmp_path, _case_config(_authored()), rules, downloadable_content_by_source=worker_trial_downloads()
+    )
+
+    assert len(collector.worker_captures) == 1
+    capture = collector.worker_captures[0]
+    assert (capture.launch.name, capture.agent_id, capture.agent_type, capture.state.value, capture.launch.depth) == (
+        WORKER_NAME,
+        WORKER_AGENT_ID,
+        "claude",
+        "stopped",
+        0,
+    )
+    worker_dir = tmp_path / "agent" / "verification" / "workers" / WORKER_NAME
+    assert capture.document.host_path == worker_dir / "trajectory.json"
+    assert capture.stream.host_path == worker_dir / "common_transcript.jsonl"
+    assert capture.report.host_path == worker_dir / "reports"
+    assert (worker_dir / "reports" / "report.md").read_text().startswith("# Report")
+    # The capture was resolved against the lead's work dir, and the directory was pulled once.
+    capture_command = next(
+        command for command in environment.exec_commands if "mngr transcript {}".format(WORKER_NAME) in command
+    )
+    assert CHAT_WORK_DIR + "/" + WORKER_TASK_FILE in capture_command
+    assert any("mngr rsync" in command and "verification/workers/" in command for command in environment.exec_commands)
+    assert "workers" in {phase.name for phase in collector.manifest().phases}
+    assert collector.worker_capture_overflow == []
+    assert all("worker" not in entry.entry_id for entry in collector.manifest().entries)
+
+
+def test_collector_captures_a_destroyed_worker_from_its_preserved_stream(tmp_path: Path) -> None:
+    # No agent answers to the name any more: the document command fails, the live stream is empty,
+    # and the preserved directory supplies both the stream and the worker's id.
+    preserved = "/home/user/.mngr/preserved/{}--{}/".format(WORKER_NAME, WORKER_AGENT_ID)
+    listing_without_worker = json.dumps(
+        {
+            "agents": [
+                {
+                    "id": "chat-1",
+                    "name": "EVAL-todo-app",
+                    "type": "claude",
+                    "state": "WAITING",
+                    "work_dir": CHAT_WORK_DIR,
+                }
+            ]
+        }
+    )
+    rules = _worker_rules(
+        listing_without_worker, worker_capture_output("1", "1", preserved, WORKER_TASK_FILE, "no such agent")
+    )
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        _case_config(_authored()),
+        rules,
+        downloadable_content_by_source=worker_trial_downloads(is_document_included=False),
+    )
+
+    capture = collector.worker_captures[0]
+    assert (capture.agent_id, capture.agent_type, capture.state.value) == (WORKER_AGENT_ID, "", "destroyed")
+    assert capture.document.failure_reason == evidence_collection.REASON_TRANSCRIPT_COMMAND_FAILED
+    assert "no such agent" in capture.document.failure_detail
+    assert capture.stream.host_path is not None
+    assert capture.report.host_path is not None
+
+
+def test_collector_captures_a_worker_by_name_when_the_listing_fails(tmp_path: Path) -> None:
+    # The bridge could not run the listing: the worker is still captured by name, with nothing the
+    # listing would have said about it, and its task file is resolved against the default repo root.
+    rules = [
+        ScriptedExecRule("MINDS_EVALS_SECTION:list_exit", [failed_result()]),
+        ScriptedExecRule(
+            "mngr transcript {}".format(WORKER_NAME),
+            [ok_result(mngr_exec_json(worker_capture_output("0", "0", "", WORKER_TASK_FILE, "")))],
+        ),
+        *_collector_rules(),
+    ]
+
+    collector, environment = _run_collector(
+        tmp_path, _case_config(_authored()), rules, downloadable_content_by_source=worker_trial_downloads()
+    )
+
+    capture = collector.worker_captures[0]
+    assert (capture.agent_id, capture.agent_type, capture.state.value) == ("", "", "unknown")
+    assert capture.document.host_path is not None
+    assert capture.stream.host_path is not None
+    capture_command = next(
+        command for command in environment.exec_commands if "mngr transcript {}".format(WORKER_NAME) in command
+    )
+    assert evidence_collection.DEFAULT_WORKSPACE_REPO_ROOT + "/" + WORKER_TASK_FILE in capture_command
+
+
+def test_collector_records_a_worker_the_transfer_could_not_bring_over(tmp_path: Path) -> None:
+    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", "", ""))
+    # The transcript downloads are there, but nothing under the workers directory is.
+    downloads = {
+        BOX_COMMON_TRANSCRIPT_PATH: atif_stream_jsonl_with_worker_launch(),
+        BOX_WORKSPACE_TRAJECTORY_PATH: atif_document_json(),
+    }
+
+    collector, _environment = _run_collector(
+        tmp_path, _case_config(_authored()), rules, downloadable_content_by_source=downloads
+    )
+
+    capture = collector.worker_captures[0]
+    assert capture.document.failure_reason == evidence_collection.REASON_DOWNLOAD_FAILED
+    assert capture.stream.failure_reason == evidence_collection.REASON_DOWNLOAD_FAILED
+    assert capture.report.failure_reason == evidence_collection.REASON_NO_REPORT_PATH
+
+
+def test_collector_records_a_report_that_was_named_but_not_there(tmp_path: Path) -> None:
+    # The task file names a report path, but nothing is at it: the worker never reported.
+    rules = _worker_rules(
+        worker_listing_json("WAITING"),
+        worker_capture_output("0", "0", "", WORKER_TASK_FILE, "cp: cannot stat reports", report_exit="1"),
+    )
+
+    collector, _environment = _run_collector(
+        tmp_path, _case_config(_authored()), rules, downloadable_content_by_source=worker_trial_downloads()
+    )
+
+    capture = collector.worker_captures[0]
+    assert capture.document.host_path is not None
+    assert capture.report.failure_reason == evidence_collection.REASON_TRANSCRIPT_COMMAND_FAILED
+    assert "cannot stat" in capture.report.failure_detail
+
+
+def test_collector_records_a_worker_whose_directory_could_not_be_pulled(tmp_path: Path) -> None:
+    # The file pulls succeed (the chat transcript comes out), only the workers directory rsync fails.
+    rules = [
+        ScriptedExecRule("mngr rsync ws-1:/tmp/minds-evals-verification/workers/ ", [failed_result()]),
+        *_worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", "", "")),
+    ]
+
+    collector, _environment = _run_collector(
+        tmp_path, _case_config(_authored()), rules, downloadable_content_by_source=worker_trial_downloads()
+    )
+
+    capture = collector.worker_captures[0]
+    assert capture.document.failure_reason == evidence_collection.REASON_PULL_FAILED
+    assert capture.stream.failure_reason == evidence_collection.REASON_PULL_FAILED
+
+
+def test_collector_records_workers_as_timed_out_once_the_budget_is_gone(tmp_path: Path) -> None:
+    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", WORKER_TASK_FILE, ""))
+
+    collector, environment = _run_collector(
+        tmp_path,
+        _case_config(_authored()),
+        rules,
+        deadline_offset_seconds=-1.0,
+        downloadable_content_by_source=worker_trial_downloads(),
+    )
+
+    # The launch is still recorded, but neither a capture exec nor the directory transfer was spent
+    # on it past the deadline.
+    capture = collector.worker_captures[0]
+    assert (capture.launch.name, capture.agent_id, capture.state.value) == (WORKER_NAME, WORKER_AGENT_ID, "stopped")
+    assert {part.failure_reason for part in (capture.document, capture.stream, capture.report)} == {
+        evidence_collection.REASON_TIMEOUT
+    }
+    assert not any("mngr transcript {}".format(WORKER_NAME) in command for command in environment.exec_commands)
+    assert not any("mngr rsync" in command and "/workers/" in command for command in environment.exec_commands)
+
+
+def test_collector_skips_the_worker_step_when_the_chat_agent_launched_none(tmp_path: Path) -> None:
+    collector, environment = _run_collector(
+        tmp_path,
+        _case_config(_authored()),
+        _collector_rules(),
+        downloadable_content_by_source=captured_transcript_downloads(),
+    )
+
+    assert collector.worker_captures == []
+    assert not any("mngr list --headless --format json" in command for command in environment.exec_commands)
+
+
+def _stream_launching(names: list[str]) -> str:
+    """The chat agent's stream, followed by one launch step per name (no task file)."""
+    launches = [
+        {
+            "type": "step",
+            "event_id": "launch-" + name,
+            "emitter": "claude/common_transcript",
+            "timestamp": "2026-09-01T00:00:10Z",
+            "source": "agent",
+            "message": "",
+            "tool_calls": [
+                {
+                    "tool_call_id": "call-" + name,
+                    "function_name": "Bash",
+                    "arguments": {"command": "uv run create_worker.py launch --name " + name},
+                }
+            ],
+        }
+        for name in names
+    ]
+    return atif_stream_jsonl() + "".join(json.dumps(record) + "\n" for record in launches)
+
+
+def _capped_worker_rules(capture_output: str) -> list[ScriptedExecRule]:
+    """Rules answering the listing and every worker capture alike, whatever the worker's name."""
+    return [
+        ScriptedExecRule(
+            "MINDS_EVALS_SECTION:list_exit",
+            [ok_result(mngr_exec_json(worker_listing_output(worker_listing_json("WAITING"))))],
+        ),
+        ScriptedExecRule("/workers/", [ok_result(mngr_exec_json(capture_output))]),
+        *_collector_rules(),
+    ]
+
+
+def _worker_stream_download(name: str, launched_names: list[str]) -> dict[str, str]:
+    return {
+        "/logs/agent/verification/workers/{}/common_transcript.jsonl".format(name): _stream_launching(launched_names)
+    }
+
+
+def test_collector_records_a_launch_past_the_count_cap_once(tmp_path: Path) -> None:
+    # The chat agent fills the cap exactly; the first worker's own launch then has no room, and a
+    # round that captures nothing must not rescan the earlier rounds or count the overflow again.
+    names = ["w{:03d}".format(index) for index in range(evidence_collection.MAX_WORKER_COUNT)]
+    downloads = {
+        BOX_COMMON_TRANSCRIPT_PATH: _stream_launching(names),
+        BOX_WORKSPACE_TRAJECTORY_PATH: atif_document_json(),
+        **_worker_stream_download(names[0], ["one-too-many"]),
+    }
+
+    collector, environment = _run_collector(
+        tmp_path,
+        _case_config(_authored()),
+        _capped_worker_rules(worker_capture_output("1", "0", "", "", "")),
+        downloadable_content_by_source=downloads,
+    )
+
+    assert [capture.launch.name for capture in collector.worker_captures] == names
+    assert collector.worker_capture_overflow == ["one-too-many"]
+    assert sum("mngr rsync" in command and "/workers/" in command for command in environment.exec_commands) == 1
+
+
+def test_collector_follows_a_workers_workers_to_the_round_cap(tmp_path: Path) -> None:
+    # Two chat-launched workers both launch `shared`, which launches `deep`, which launches one more:
+    # three rounds capture the four, once each, and the fourth round's launch is overflow.
+    downloads = {
+        BOX_COMMON_TRANSCRIPT_PATH: _stream_launching(["w0", "w1"]),
+        BOX_WORKSPACE_TRAJECTORY_PATH: atif_document_json(),
+        **_worker_stream_download("w0", ["shared"]),
+        **_worker_stream_download("w1", ["shared"]),
+        **_worker_stream_download("shared", ["deep", "w0"]),
+        **_worker_stream_download("deep", ["past-the-rounds"]),
+    }
+
+    collector, environment = _run_collector(
+        tmp_path,
+        _case_config(_authored()),
+        _capped_worker_rules(worker_capture_output("1", "0", "", "", "")),
+        downloadable_content_by_source=downloads,
+    )
+
+    assert [
+        (capture.launch.name, capture.launch.depth, capture.launch.lead_name) for capture in collector.worker_captures
+    ] == [("w0", 0, ""), ("w1", 0, ""), ("shared", 1, "w0"), ("deep", 2, "shared")]
+    assert collector.worker_capture_overflow == ["past-the-rounds"]
+    assert sum("mngr rsync" in command and "/workers/" in command for command in environment.exec_commands) == 3
+
+
 # --- the oracle's fabricated bundle ---
 
 
@@ -986,6 +1477,7 @@ def _flow_collector(
         environment=environment,
         box_env={"MINDS_ENV": "staging"},
         workspace_agent_id=agent_id,
+        chat_agent_id="chat-1",
         case=_case_config(_authored(ui_flows=flows if flows is not None else _FLOWS)),
         clone_base_sha="a" * 40,
         dwt_tip_sha="e" * 40,

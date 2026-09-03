@@ -15,7 +15,6 @@ like the other verifier scripts.
 """
 
 import ast
-import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -23,18 +22,14 @@ from typing import Any
 import pytest
 
 from imbue.minds_evals.data_types import ExpandedExpectations
+from imbue.minds_evals.template_loading import TEMPLATES_DIR
+from imbue.minds_evals.template_loading import load_template_module
 
-_TEMPLATES = Path(__file__).parent / "templates"
-_CHECKS_PATH = _TEMPLATES / "outcome" / "checks.py"
-_FINALIZE_PATH = _TEMPLATES / "tests" / "finalize.py"
+_CHECKS_PATH = TEMPLATES_DIR / "outcome" / "checks.py"
 
 
 def _load_finalize() -> Any:
-    spec = importlib.util.spec_from_file_location("minds_evals_finalize", _FINALIZE_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_template_module("tests/finalize.py", "minds_evals_finalize")
 
 
 def _module_string_constants(tree: ast.Module) -> dict[str, str]:

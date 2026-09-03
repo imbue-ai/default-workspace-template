@@ -104,6 +104,9 @@ class ConversationModel:
         # What the workspace reports after a submit; a mode other than the one the driver asked for
         # is how a bad credential shows up, since the endpoint itself never validates.
         self.expected_auth_mode = "api_key"
+        # The 1-based client message the message endpoint refuses to accept, if any. The driver
+        # retries a send until its deadline, so this is how a send that never lands is exercised.
+        self.refused_send_index: int | None = None
         self.signed_in_account_ids: list[str] = []
         # The chat, once one exists: the create-chat calls made, and the account it bound to.
         self.create_chat_commands: list[str] = []
@@ -190,6 +193,9 @@ class ConversationModel:
         if "/api/agents/create-chat" in command:
             return self._handle_create_chat(command)
         if "/api/agents/{}/message".format(self.chat_agent_id) in command:
+            if self.refused_send_index == self._turn_index + 1:
+                # An unparseable body is what the bridge sees when a send does not land.
+                return mngr_exec_json("")
             # The welcome turn is queued ahead of anything sent afterwards, so a send that beats it
             # is answered behind it rather than instead of it.
             self._welcome_delay_polls = 0
@@ -239,6 +245,11 @@ class MockBoxEnvironment(BaseEnvironment):
         self.exec_commands: list[str] = []
         self.exec_envs: list[dict[str, str] | None] = []
         self.uploaded_content_by_target: dict[str, str] = {}
+        # What a `download_file` of a box path yields; a path not listed here is a missing file.
+        self.downloadable_content_by_source: dict[str, str] = {}
+        # An upload whose content contains this fails the way a transport hiccup does; empty means
+        # every upload lands.
+        self.rejected_upload_content_substring: str = ""
 
     @staticmethod
     def type() -> str:
@@ -254,16 +265,30 @@ class MockBoxEnvironment(BaseEnvironment):
         pass
 
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:
-        self.uploaded_content_by_target[target_path] = Path(source_path).read_text()
+        content = Path(source_path).read_text()
+        if self.rejected_upload_content_substring and self.rejected_upload_content_substring in content:
+            raise RuntimeError("upload of {} failed".format(target_path))
+        self.uploaded_content_by_target[target_path] = content
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         pass
 
     async def download_file(self, source_path: str, target_path: Path | str) -> None:
-        pass
+        if source_path not in self.downloadable_content_by_source:
+            raise FileNotFoundError(source_path)
+        Path(target_path).write_text(self.downloadable_content_by_source[source_path])
 
     async def download_dir(self, source_dir: str, target_dir: Path | str) -> None:
-        pass
+        prefix = source_dir.rstrip("/") + "/"
+        matching = {
+            key: content for key, content in self.downloadable_content_by_source.items() if key.startswith(prefix)
+        }
+        if not matching:
+            raise FileNotFoundError(source_dir)
+        for key, content in matching.items():
+            path = Path(target_dir) / key[len(prefix) :]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
 
     async def exec(
         self,

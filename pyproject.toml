@@ -15,7 +15,6 @@ dependencies = [
     "tomlkit>=0.12",
     "playwright==1.58.0",
     "litellm>=1.88.1",
-    "eval-worker",
 ]
 
 [dependency-groups]
@@ -88,7 +87,6 @@ github-sync = { workspace = true }
 env-converge = { workspace = true }
 host-backup = { workspace = true }
 share-gateway = { workspace = true }
-eval-worker = { workspace = true }
 mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }

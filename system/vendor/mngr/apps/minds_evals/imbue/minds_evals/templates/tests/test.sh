@@ -9,10 +9,10 @@
 # harbor errors the trial instead of scoring it 0.
 set -euo pipefail
 
-# Rebuild the judged transcript from the raw event stream at grade time (so
+# Rebuild the judged transcript from the ATIF trajectory at grade time (so
 # `harbor trial regrade` re-scores captured trials under the current rendering):
-# one message-per-block rendering the judge scores conciseness against, per
-# individual agent message rather than per merged turn.
+# one block per agent step with a message, which the judge scores conciseness
+# against per individual message rather than per merged turn.
 python3 /tests/render_judge_transcript.py
 
 # Cases that declare expectations get an outcome dimension; its judge grades against the case's
