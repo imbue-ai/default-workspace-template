@@ -5,10 +5,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from app_instances.primitives import InstanceTitle
 from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 
-from terminal_app.data_types import TmuxClient, TmuxSession
+from terminal_app.data_types import TerminalSessionRecord, TmuxClient, TmuxSession
+from terminal_app.primitives import TmuxSessionName, Workdir
 
 # Where the fake tmux keeps its canned answers and its call log.
 ENV_FAKE_TMUX_DIR: Final[str] = "FAKE_TMUX_DIR"
@@ -174,3 +176,14 @@ def read_fake_ttyd_argv(record_dir: Path) -> list[str] | None:
     if not argv_path.exists():
         return None
     return argv_path.read_text().splitlines()
+
+
+def make_terminal_record(
+    name: str, title: str | None, workdir: str | None
+) -> TerminalSessionRecord:
+    """A store record from plain strings; None for a title or workdir the record has none of."""
+    return TerminalSessionRecord(
+        name=TmuxSessionName(name),
+        title=InstanceTitle(title) if title is not None else None,
+        workdir=Workdir(workdir) if workdir is not None else None,
+    )

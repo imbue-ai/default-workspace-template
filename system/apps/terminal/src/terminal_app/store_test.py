@@ -2,21 +2,10 @@ import json
 
 import pytest
 from app_instances.errors import InstanceStoreError
-from app_instances.primitives import InstanceTitle
 
-from terminal_app.data_types import TerminalSessionRecord
-from terminal_app.primitives import TmuxSessionName, Workdir
+from terminal_app.primitives import TmuxSessionName
 from terminal_app.store import JsonTerminalSessionStore
-
-
-def _record(
-    name: str, title: str | None = None, workdir: str | None = None
-) -> TerminalSessionRecord:
-    return TerminalSessionRecord(
-        name=TmuxSessionName(name),
-        title=InstanceTitle(title) if title else None,
-        workdir=Workdir(workdir) if workdir else None,
-    )
+from terminal_app.testing import make_terminal_record
 
 
 def test_store_starts_empty_and_keeps_records_in_creation_order(
@@ -24,8 +13,12 @@ def test_store_starts_empty_and_keeps_records_in_creation_order(
 ) -> None:
     assert session_store.list_records() == []
 
-    session_store.save_record(_record("terminal-1"))
-    session_store.save_record(_record("terminal-2", workdir="/home/user"))
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None)
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-2", title=None, workdir="/home/user")
+    )
 
     assert [record.name for record in session_store.list_records()] == [
         "terminal-1",
@@ -43,20 +36,31 @@ def test_store_starts_empty_and_keeps_records_in_creation_order(
 def test_save_record_replaces_the_record_with_the_same_name(
     session_store: JsonTerminalSessionStore,
 ) -> None:
-    session_store.save_record(_record("terminal-1"))
-    session_store.save_record(_record("terminal-1", title="Build"))
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None)
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title="Build", workdir=None)
+    )
 
-    assert session_store.list_records() == [_record("terminal-1", title="Build")]
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Build", workdir=None)
+    ]
 
 
 def test_replace_record_swaps_a_renamed_terminal_in_one_write(
     session_store: JsonTerminalSessionStore,
 ) -> None:
-    session_store.save_record(_record("terminal-1", workdir="/srv"))
-    session_store.save_record(_record("terminal-2"))
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir="/srv")
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-2", title=None, workdir=None)
+    )
 
     session_store.replace_record(
-        TmuxSessionName("terminal-1"), _record("build", title="Build", workdir="/srv")
+        TmuxSessionName("terminal-1"),
+        make_terminal_record(name="build", title="Build", workdir="/srv"),
     )
 
     assert [record.name for record in session_store.list_records()] == [
@@ -68,7 +72,9 @@ def test_replace_record_swaps_a_renamed_terminal_in_one_write(
 def test_remove_record_forgets_a_terminal_and_tolerates_an_absent_one(
     session_store: JsonTerminalSessionStore,
 ) -> None:
-    session_store.save_record(_record("terminal-1"))
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None)
+    )
 
     session_store.remove_record(TmuxSessionName("terminal-1"))
     session_store.remove_record(TmuxSessionName("terminal-1"))
