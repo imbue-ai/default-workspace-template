@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 from app_manifest.primitives import ActionId, AppName
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
+from pydantic import Field
 
 from app_instances.data_types import InstanceLifetime, InstanceStatus
 from app_instances.errors import (
@@ -23,6 +25,8 @@ from app_instances.json_store import (
     allocated_key,
     app_store_path,
     instance_number,
+    read_json_document,
+    write_json_document,
 )
 from app_instances.primitives import (
     InstanceKey,
@@ -268,3 +272,48 @@ def test_a_temp_file_that_cannot_be_created_is_a_store_error(
     with pytest.raises(InstanceStoreError, match="cannot create a temporary file"):
         long_named_store.create_instance(_NEW, {})
     assert long_named_store.list_instances() == []
+
+
+class _NamesDocument(FrozenModel):
+    """A document shape of an app that keeps its own records, for the helper tests."""
+
+    version: int = Field(description="The document format version")
+    names: tuple[str, ...] = Field(description="The stored names")
+
+
+def test_read_json_document_returns_none_for_a_missing_file(tmp_path: Path) -> None:
+    assert read_json_document(tmp_path / "absent.json", _NamesDocument) is None
+
+
+def test_write_json_document_round_trips_through_read_and_leaves_no_temp_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "nested" / "names.json"
+    document = _NamesDocument(version=1, names=("terminal-1", "build"))
+
+    write_json_document(path, document)
+
+    assert read_json_document(path, _NamesDocument) == document
+    assert json.loads(path.read_text()) == {
+        "version": 1,
+        "names": ["terminal-1", "build"],
+    }
+    assert sorted(entry.name for entry in path.parent.iterdir()) == ["names.json"]
+
+
+@pytest.mark.parametrize(
+    ("contents", "expected_problem"),
+    [
+        ("{not json", "is not valid JSON"),
+        ('{"version": 1}', "is malformed"),
+        ('{"version": 1, "names": "not-a-list"}', "is malformed"),
+    ],
+)
+def test_read_json_document_refuses_a_file_that_does_not_fit(
+    tmp_path: Path, contents: str, expected_problem: str
+) -> None:
+    path = tmp_path / "names.json"
+    path.write_text(contents)
+
+    with pytest.raises(InstanceStoreError, match=expected_problem):
+        read_json_document(path, _NamesDocument)

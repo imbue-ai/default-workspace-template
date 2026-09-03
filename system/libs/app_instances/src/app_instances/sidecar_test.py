@@ -4,15 +4,19 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from app_manifest.manifest import AppManifest
 from app_manifest.primitives import AppName, AppUrl, InstancesUrl
 from app_manifest.registry import read_registry
+from flask import Flask
 
 from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
+from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.sidecar import (
     child_exit_code,
     register_app,
     run_sidecar,
+    run_sidecar_app,
     serve_in_background,
     split_instances_url,
 )
@@ -190,3 +194,47 @@ def test_serve_in_background_accepts_while_entered_and_releases_the_port_on_exit
                 pass
 
     assert not is_port_accepting(port)
+
+
+def test_run_sidecar_app_serves_the_routes_the_app_mounts_beside_the_blueprint(
+    sidecar_environment: SidecarEnvironment,
+) -> None:
+    instances_port = free_port()
+    instances_url = InstancesUrl(f"http://{LOOPBACK_HOST}:{instances_port}")
+    manifest_path = write_sidecar_manifest(
+        sidecar_environment.scratch_dir, _unique_app_name(), instances_url
+    )
+    seen_manifest_names: list[str] = []
+
+    def build_app_with_an_extra_route(
+        manifest: AppManifest, nudger: InstanceNudgerInterface
+    ) -> Flask:
+        seen_manifest_names.append(manifest.name)
+        app = build_instances_app(StubInstanceSource(), nudger)
+
+        @app.get("/extra")
+        def extra() -> str:
+            return "extra route"
+
+        return app
+
+    # The child proves the extra route is served while it runs: urlopen raises on a 404, and
+    # the interpreter then exits non-zero.
+    exit_code = run_sidecar_app(
+        manifest_path=manifest_path,
+        app_url=AppUrl("http://localhost:8300"),
+        instances_url=instances_url,
+        child_argv=[
+            sys.executable,
+            "-c",
+            "import urllib.request; "
+            f"body = urllib.request.urlopen('{instances_url}/extra').read(); "
+            "raise SystemExit(0 if body == b'extra route' else 2)",
+        ],
+        build_app=build_app_with_an_extra_route,
+    )
+
+    assert exit_code == 0
+    assert seen_manifest_names == [
+        row.name for row in read_registry(sidecar_environment.registry_path)
+    ]

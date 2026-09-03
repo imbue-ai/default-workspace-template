@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
@@ -22,7 +22,7 @@ from werkzeug.serving import LISTEN_QUEUE, BaseWSGIServer, make_server
 
 from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
-from app_instances.interfaces import InstanceSourceInterface
+from app_instances.interfaces import InstanceNudgerInterface, InstanceSourceInterface
 from app_instances.nudge import ShellNudger, shell_base_url
 
 # The registration script, relative to the repo root every supervised program runs from.
@@ -175,9 +175,34 @@ def run_sidecar(
     child_argv: Sequence[str],
     source: InstanceSourceInterface,
 ) -> int:
-    """Serve the instances API beside a wrapped server, and return the exit status to end the program with.
+    """Serve the instances API over ``source`` beside a wrapped server; see ``run_sidecar_app`` for the order of events and the return value."""
 
-    In order: the blueprint starts listening at ``instances_url`` (so the shell's first fetch after
+    def build_instances_only_app(
+        _manifest: AppManifest, nudger: InstanceNudgerInterface
+    ) -> Flask:
+        return build_instances_app(source, nudger)
+
+    return run_sidecar_app(
+        manifest_path=manifest_path,
+        app_url=app_url,
+        instances_url=instances_url,
+        child_argv=child_argv,
+        build_app=build_instances_only_app,
+    )
+
+
+def run_sidecar_app(
+    manifest_path: Path,
+    app_url: AppUrl,
+    instances_url: InstancesUrl,
+    child_argv: Sequence[str],
+    # Builds the Flask app served at instances_url from the loaded manifest and the nudger the
+    # sidecar made for it; an app that serves routes of its own beside the blueprint mounts them here.
+    build_app: Callable[[AppManifest, InstanceNudgerInterface], Flask],
+) -> int:
+    """Serve an app's Flask app beside a wrapped server, and return the exit status to end the program with.
+
+    In order: the app starts listening at ``instances_url`` (so the shell's first fetch after
     registration succeeds), the app is registered through ``forward_port.py --manifest`` with
     ``app_url``, the child is spawned, SIGTERM and SIGINT are forwarded to it, and its exit code
     (128 plus the signal number for a signal death) is returned once it ends. Must run on the main
@@ -192,7 +217,7 @@ def run_sidecar(
     manifest = _load_sidecar_manifest(manifest_path, instances_url)
     nudger = ShellNudger(app_name=manifest.name, shell_url=shell_base_url())
     host, port = split_instances_url(instances_url)
-    with serve_in_background(host, port, build_instances_app(source, nudger)):
+    with serve_in_background(host, port, build_app(manifest, nudger)):
         with log_span("Registering {} at {}", manifest.name, app_url):
             register_app(manifest_path, app_url)
         with log_span(

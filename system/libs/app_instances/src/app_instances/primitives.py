@@ -1,4 +1,5 @@
 import re
+from collections.abc import Iterable
 from typing import Any, Final, Self
 
 from imbue.imbue_common.pure import pure
@@ -34,10 +35,38 @@ TITLE_NUMBER_PLACEHOLDER: Final[str] = "{n}"
 # How much of an offending value an error message quotes.
 _ERROR_VALUE_PREVIEW_LENGTH: Final[int] = 80
 
+# The workspace's naming scheme, as the shell applies it to chats (its ``naming.py``): a user
+# types a human-readable title, and the true name every path, session, and key is built from is
+# a deterministic canonical form of it. Everything that is neither a safe-name character nor a
+# space is stripped; spaces survive so each run of them becomes one dash.
+_CANONICAL_STRIP_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-zA-Z0-9 _-]+")
+_CANONICAL_SPACES_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s+")
+
 
 @pure
 def _preview(value: str) -> str:
     return repr(value[:_ERROR_VALUE_PREVIEW_LENGTH])
+
+
+@pure
+def canonical_name_from_title(title: str) -> str:
+    """The true-name form of a human-readable title ("My Build" -> "My-Build"); "" when nothing usable remains."""
+    stripped = _CANONICAL_STRIP_PATTERN.sub("", title.strip())
+    return _CANONICAL_SPACES_PATTERN.sub("-", stripped).strip("-_")
+
+
+@pure
+def is_name_conflict(candidate_title: str, taken_names: Iterable[str]) -> bool:
+    """Whether ``candidate_title`` collides with a taken name: canonical forms compared case-insensitively.
+
+    The casefold makes the check stricter than tmux's or mngr's own uniqueness, refusing
+    near-duplicates ("build" beside "Build") that would only confuse.
+    """
+    candidate_key = canonical_name_from_title(candidate_title).casefold()
+    return any(
+        canonical_name_from_title(name).casefold() == candidate_key
+        for name in taken_names
+    )
 
 
 @pure

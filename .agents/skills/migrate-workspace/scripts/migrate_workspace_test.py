@@ -465,7 +465,9 @@ command=python3 system/services/oom_priority/bin/oom_tag_backstop.py
 """
 
 
-def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program() -> None:
+def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program() -> (
+    None
+):
     ports = migrate_workspace.parse_supervisord_ports(_MANIFEST_SUPERVISORD_SNIPPET)
     assert [(port.name, port.port) for port in ports] == [
         ("files", 8300),
@@ -477,7 +479,7 @@ def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program
 def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
     conf = Path(__file__).resolve().parents[4] / "system" / "supervisord.conf"
     ports = migrate_workspace.parse_supervisord_ports(conf.read_text(encoding="utf-8"))
-    # The terminal registers from run_ttyd.sh, so the config itself names the other three.
+    # The terminal registers from inside its own process, so the config itself names the other three.
     assert {(port.name, port.port) for port in ports} >= {
         ("system_interface", 8000),
         ("files", 8300),
@@ -495,6 +497,21 @@ def test_parse_apps_registry_accepts_both_registry_vintages() -> None:
     assert [(port.name, port.port) for port in current] == [("dashboard", 8091)]
     assert [(port.name, port.port) for port in legacy] == [("dashboard", 8091)]
     assert "applications" in legacy[0].found_in
+
+
+def test_parse_apps_registry_reports_a_distinct_instances_url_port_too() -> None:
+    ports = migrate_workspace.parse_apps_registry(
+        '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\n'
+        'instances_url = "http://127.0.0.1:7682"\n'
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\n'
+        'instances_url = "http://localhost:8081"\n'
+    )
+
+    assert [(port.name, port.port, port.found_in) for port in ports] == [
+        ("terminal", 7681, "registry [[apps]] url"),
+        ("terminal", 7682, "registry [[apps]] instances_url"),
+        ("browser", 8081, "registry [[apps]] url"),
+    ]
 
 
 def test_parse_apps_registry_skips_an_entry_with_no_parseable_port() -> None:
@@ -683,7 +700,9 @@ def test_read_command_recovers_files_without_trailing_newline() -> None:
     assert recovered["/b/data.json"].rstrip("\n") == '{"id": "b"}'
     import json as _json
 
-    assert {_json.loads(recovered[p])["id"] for p in ("/a/data.json", "/b/data.json")} == {
+    assert {
+        _json.loads(recovered[p])["id"] for p in ("/a/data.json", "/b/data.json")
+    } == {
         "a",
         "b",
     }

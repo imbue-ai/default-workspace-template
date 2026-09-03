@@ -41,8 +41,13 @@ The shell is the only caller of the API, over loopback, at the registry row's
   `InstanceKeyPrefix`, `InstanceUrl` (rooted with a single slash, at most 2048
   characters, no control characters, `{tab}` at most once), `LocationPath` (the
   same without the placeholder), `InstanceTitle` (non-blank, trimmed, at most
-  256 characters), `TitleTemplate` (must contain `{n}`), and
-  `render_title_template(template, number)`, which fills the placeholder in.
+  256 characters), `TitleTemplate` (must contain `{n}`),
+  `render_title_template(template, number)`, which fills the placeholder in,
+  and the workspace's naming rule as the shell applies it to chats:
+  `canonical_name_from_title` ("My Build" to "My-Build"; "" when nothing
+  usable remains) and `is_name_conflict(candidate_title, taken_names)`
+  (canonical forms compared case-insensitively), for an app whose keys are
+  the true names of user-typed titles (the terminal).
 - `app_instances.json_store`: `JsonStoreInstanceSource` keeps records in one
   `instances.json` (`{"version": 1, "instances": [record, ...]}`), rewritten
   atomically (temp file plus rename) under the source's own lock, so one source
@@ -56,6 +61,10 @@ The shell is the only caller of the API, over loopback, at the registry row's
   taken_keys)` (or `allocate_instance_number` plus `allocated_key`, when the
   number itself is wanted) and `instance_number(prefix, key)` are the
   allocator, for sources that keep their own record of keys.
+  `read_json_document(path, model)` (None for a missing file; a file that
+  cannot be read, is not JSON, or does not fit raises `InstanceStoreError`)
+  and `write_json_document(path, document)` (the atomic replace) are the
+  store's file handling, for an app that keeps a document shape of its own.
 - `app_instances.nudge`: `ShellNudger(app_name, shell_url)` posts
   `POST <shell>/api/apps/<name>/changed` with a two-second timeout, logs an
   unreachable or refusing shell at debug level (until phase 7 of the model the
@@ -74,19 +83,24 @@ The shell is the only caller of the API, over loopback, at the registry row's
   signal killed it. It must run on the main thread and from the repo root
   (the registration script and the registry are cwd-relative, like everything
   supervisord runs). The manifest must declare `instances = true` with an
-  `instances_url` equal to the one served. `serve_in_background(host, port,
+  `instances_url` equal to the one served. `run_sidecar_app(manifest_path,
+  app_url, instances_url, child_argv, build_app)` is the same with the Flask
+  app built by `build_app(manifest, nudger)`, for an app that mounts routes of
+  its own beside the blueprint (the terminal's hook route); `run_sidecar` wraps
+  it. `serve_in_background(host, port,
   app)` is the context manager it serves through (bind, daemon thread, shut
   down on exit), which tests reuse for scratch servers.
 - `app_instances.testing`: `StubInstanceSource` (in-memory, records every
   call), `RecordingNudger`, `free_port`, `is_port_accepting`, `wait_until`,
   `write_sidecar_manifest` (a valid multi-instance `app.toml` plus its icon),
   `SidecarEnvironment` (the scratch directory and registry a sidecar test runs
-  against), `serve_recording_shell()` (a fake shell that records every request
+  against), `serve_recording_shell()` (a fake shell that records every request's
+  method, path, and JSON body
   and answers `404`), and `run_stub_app(port)` for the shell's tests in later
   phases; as a module it
   serves the stub app (`python -m app_instances.testing stub --port <port>`) or
   runs the sidecar over a JSON store (`... sidecar --manifest ... --app-url ...
   --instances-url ... --store ... -- <child argv>`).
 
-Nothing mounts the blueprint yet: phase 3 (terminal), phase 4 (files), and
-phase 5 (browser) of the model are its first users.
+The terminal app (`system/apps/terminal`, phase 3) is its first user; phase 4
+(files) and phase 5 (browser) of the model follow.

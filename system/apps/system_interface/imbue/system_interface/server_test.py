@@ -2550,6 +2550,27 @@ def test_terminal_notify_session_changed_resolves_terminal_id_from_clients_map(
     assert response.get_json() == {"ok": True, "broadcast": True}
 
 
+def test_terminal_notify_session_changed_prefers_the_terminal_id_the_terminal_app_resolved(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The terminal app owns the pty-to-tab records now and forwards the resolved id."""
+    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
+
+    response = client.post(
+        "/api/terminals/notify",
+        json={
+            "kind": "session-changed",
+            "client_tty": "/dev/pts/7",
+            "session_name": "terminal-1",
+            "session_id": "$3",
+            "terminal_id": "term-xyz",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "broadcast": True}
+
+
 def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
     """The index page includes a hostname meta tag."""
     static_dir = tmp_path / "static"
