@@ -64,7 +64,7 @@ code paths to confirm the fix didn't regress anything. Scenario specifics
 
 ## Stage 5: Review gates
 
-Run `/autofix` and the other gates per `harden-creation.md`; fix what they flag.
+Run gates per `harden-creation.md`; fix what they flag.
 
 ## Stage 6: Final gate, then commit and hand off
 

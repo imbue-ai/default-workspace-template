@@ -390,8 +390,8 @@ is hidden).
 ## Step 5: Finalize in the background (after the user confirms the working site)
 
 The foreground work stops at a usable, surfaced site. The thorough pass --
-extending Playwright coverage, the full test suite and ratchets, `/autofix`, and
-the code-guardian gates -- runs in a **background harden worker**, never in the
+extending Playwright coverage, the full test suite and ratchets, review gates
+ -- runs in a **background harden worker**, never in the
 main agent. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
 operation with the **app** type -- the scaffolded app is already on
