@@ -9,9 +9,9 @@ from loguru import logger
 from pydantic import Field
 
 from terminal_app.data_types import TmuxClient, TmuxSession
-from terminal_app.errors import TmuxCommandError
+from terminal_app.errors import InvalidTerminalValueError, TmuxCommandError
 from terminal_app.interfaces import TmuxInterface
-from terminal_app.primitives import TmuxSessionName
+from terminal_app.primitives import ClientTty, TmuxSessionName
 
 # A tmux command is one round trip to a local socket; past the first threshold it is suspicious,
 # past the second it is broken.
@@ -51,19 +51,32 @@ def _parse_activity(raw_activity: str) -> datetime | None:
 
 @pure
 def parse_tmux_clients(output: str) -> list[TmuxClient]:
-    """Parse ``tmux list-clients`` lines of ``tty\\tname\\tid``; a line with fewer fields is skipped."""
+    """Parse ``tmux list-clients`` lines of ``tty\\tname\\tid``; a line with fewer fields, or whose tty is not a device path, is skipped."""
     clients: list[TmuxClient] = []
     for line in output.splitlines():
         fields = line.split("\t", 2)
         if len(fields) < 3:
             continue
         client_tty, session_name, session_id = fields
+        if not _is_client_tty(client_tty):
+            continue
         clients.append(
             TmuxClient(
-                client_tty=client_tty, session_name=session_name, session_id=session_id
+                client_tty=ClientTty(client_tty),
+                session_name=session_name,
+                session_id=session_id,
             )
         )
     return clients
+
+
+@pure
+def _is_client_tty(value: str) -> bool:
+    try:
+        ClientTty(value)
+    except InvalidTerminalValueError:
+        return False
+    return True
 
 
 class SubprocessTmux(TmuxInterface):

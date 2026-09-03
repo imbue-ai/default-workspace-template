@@ -32,8 +32,12 @@ def test_parse_tmux_sessions_reads_the_activity_timestamp_and_skips_short_lines(
     ]
 
 
-def test_parse_tmux_clients_reads_tty_name_and_id() -> None:
-    assert parse_tmux_clients("/dev/pts/7\tterminal-1\t$3\n") == [
+def test_parse_tmux_clients_reads_tty_name_and_id_and_skips_a_client_with_no_pty() -> (
+    None
+):
+    parsed = parse_tmux_clients("/dev/pts/7\tterminal-1\t$3\n\tbuild\t$4\n")
+
+    assert parsed == [
         TmuxClient(client_tty="/dev/pts/7", session_name="terminal-1", session_id="$3")
     ]
 

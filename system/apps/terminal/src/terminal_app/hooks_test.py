@@ -1,10 +1,12 @@
 from pathlib import Path
 
+import pytest
 from app_instances.testing import RecordedShellRequests, RecordingNudger
 from flask.testing import FlaskClient
 
 from terminal_app.data_types import TerminalPaths, TmuxClient
 from terminal_app.hooks import resolve_tab_id_for_tty
+from terminal_app.primitives import ClientTty
 from terminal_app.testing import FakeTmux
 
 
@@ -20,11 +22,14 @@ def test_resolve_tab_id_finds_the_file_holding_the_pty(
     _record_tab(terminal_paths, "term-b", "/dev/pts/4")
     (terminal_paths.clients_dir / "bad name").write_text("/dev/pts/5\n")
 
-    assert resolve_tab_id_for_tty(terminal_paths.clients_dir, "/dev/pts/4") == "term-b"
-    assert resolve_tab_id_for_tty(terminal_paths.clients_dir, "/dev/pts/5") is None
-    assert resolve_tab_id_for_tty(terminal_paths.clients_dir, "/dev/pts/9") is None
-    assert resolve_tab_id_for_tty(terminal_paths.clients_dir, "") is None
-    assert resolve_tab_id_for_tty(Path("/nonexistent/clients"), "/dev/pts/4") is None
+    clients_dir = terminal_paths.clients_dir
+    assert resolve_tab_id_for_tty(clients_dir, ClientTty("/dev/pts/4")) == "term-b"
+    assert resolve_tab_id_for_tty(clients_dir, ClientTty("/dev/pts/5")) is None
+    assert resolve_tab_id_for_tty(clients_dir, ClientTty("/dev/pts/9")) is None
+    assert (
+        resolve_tab_id_for_tty(Path("/nonexistent/clients"), ClientTty("/dev/pts/4"))
+        is None
+    )
 
 
 def test_session_changed_repoints_the_tab_and_forwards_with_the_resolved_id(
@@ -66,14 +71,15 @@ def test_session_changed_repoints_the_tab_and_forwards_with_the_resolved_id(
     assert recording_nudger.nudge_count == 0
 
 
-def test_session_changed_from_a_pty_no_tab_recorded_posts_nothing(
-    hook_client: FlaskClient, recording_shell: RecordedShellRequests
+@pytest.mark.parametrize("client_tty", ["/dev/pts/9", ""])
+def test_session_changed_from_a_pty_no_tab_recorded_or_from_no_pty_posts_nothing(
+    hook_client: FlaskClient, recording_shell: RecordedShellRequests, client_tty: str
 ) -> None:
     response = hook_client.post(
         "/tmux-hook",
         json={
             "kind": "session-changed",
-            "client_tty": "/dev/pts/9",
+            "client_tty": client_tty,
             "session_name": "build",
             "session_id": "$4",
         },
