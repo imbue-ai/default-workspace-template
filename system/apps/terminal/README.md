@@ -31,9 +31,11 @@ sidecar's child (`app_instances.sidecar.run_sidecar_app`):
 
 `sessions.py` (`TmuxSessionSource`) serves the terminal row of
 `docs/system/blueprint/workspace-app-model/contracts.md` section 4.3. Keys are
-tmux session names. The list is every non-`mngr-` tmux session (`idle`) plus
-every terminal the store remembers that tmux no longer has (`stopped`, which is
-how a tab reattaches after a container restart cleared the tmux server). The
+tmux session names. The list is every non-`mngr-` tmux session whose name can
+be an instance key (`idle`; a hand-made session with, say, a space in its name
+is skipped) plus every terminal the store remembers that tmux no longer has
+(`stopped`, which is how a tab reattaches after a container restart cleared
+the tmux server). The
 URL is `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]`; the shell
 substitutes the tab id, and `session.sh` receives it as its second argument.
 
