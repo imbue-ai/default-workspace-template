@@ -3900,7 +3900,8 @@ def test_only_apply_and_recover_band_themselves(
 
 # --- apply: the uv tool environments ------------------------------------------------
 #
-# The refresh rebuilds the two uv tool environments the workspace runs from.
+# The refresh rebuilds the uv tool environments the workspace runs from (the
+# mngr tool and one per Python app).
 # ``uv tool install --reinstall`` rebuilds a tool from its base package alone,
 # so both halves of this are load-bearing: WHICH installation is rebuilt
 # (``_uv_tool_env``, from the console script's own shebang) and WHAT it is
@@ -3971,7 +3972,7 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     # A release that ships a new plugin (opencode, say) merges a settings.toml
     # its agent type needs, and a reinstall from the receipt alone leaves an
     # mngr that rejects its own config at the restart -- so the merged tree's
-    # manifest is unioned in, for both tools, without repeating what the
+    # manifest is unioned in, for every tool, without repeating what the
     # receipt already has.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(

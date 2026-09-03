@@ -1,5 +1,6 @@
 """Where the served workspace lives: the system interface, the vendored mngr and its
-uv tool, the frontend bundle, and the provisioner the apply re-runs.
+uv tool, the Python apps and their tools, the frontend bundle, and the provisioner
+the apply re-runs.
 """
 
 from __future__ import annotations
