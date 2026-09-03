@@ -8,7 +8,8 @@ runs the sidecar over a JSON store, which is how the integration test drives it 
 import socket
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
@@ -16,8 +17,10 @@ from typing import Final
 import click
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import ActionId, AppName, AppUrl, InstancesUrl
+from flask import Flask, request
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
+from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 from werkzeug.serving import make_server
 
@@ -46,7 +49,7 @@ from app_instances.primitives import (
     LocationPath,
     TitleTemplate,
 )
-from app_instances.sidecar import run_sidecar
+from app_instances.sidecar import run_sidecar, serve_in_background
 
 STUB_ACTION_ID: Final[ActionId] = ActionId("new")
 STUB_KEY_PREFIX: Final[InstanceKeyPrefix] = InstanceKeyPrefix("stub")
@@ -176,6 +179,31 @@ def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind((LOOPBACK_HOST, 0))
         return probe.getsockname()[1]
+
+
+class RecordedShellRequests(MutableModel):
+    """What a fake shell received, and where it listens."""
+
+    base_url: str = Field(frozen=True, description="Where the fake shell listens")
+    requests: list[tuple[str, str]] = Field(
+        default_factory=list, description="Every (method, path) received, in order"
+    )
+
+
+@contextmanager
+def serve_recording_shell() -> Iterator[RecordedShellRequests]:
+    """A loopback server that records every (method, path) and answers 404, as the shell does before phase 7."""
+    port = free_port()
+    recorded = RecordedShellRequests(base_url=f"http://{LOOPBACK_HOST}:{port}")
+    app = Flask(__name__)
+
+    @app.route("/<path:_anything>", methods=["GET", "POST"])
+    def record(_anything: str) -> tuple[str, int]:
+        recorded.requests.append((request.method, request.path))
+        return "", 404
+
+    with serve_in_background(LOOPBACK_HOST, port, app):
+        yield recorded
 
 
 def is_port_accepting(port: int) -> bool:

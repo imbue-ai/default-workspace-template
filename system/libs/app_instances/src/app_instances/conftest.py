@@ -2,21 +2,17 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from flask import Flask, request
 from flask.testing import FlaskClient
-from imbue.imbue_common.mutable_model import MutableModel
-from pydantic import Field
 
 from app_instances.blueprint import build_instances_app
 from app_instances.data_types import InstanceLifetime
 from app_instances.json_store import JsonStoreInstanceSource
 from app_instances.primitives import InstanceKeyPrefix, TitleTemplate
-from app_instances.sidecar import serve_in_background
 from app_instances.testing import (
-    LOOPBACK_HOST,
+    RecordedShellRequests,
     RecordingNudger,
     StubInstanceSource,
-    free_port,
+    serve_recording_shell,
 )
 
 
@@ -62,26 +58,7 @@ def renameable_store(tmp_path: Path) -> JsonStoreInstanceSource:
     )
 
 
-class RecordedShellRequests(MutableModel):
-    """What a fake shell received, and where it listens."""
-
-    base_url: str = Field(frozen=True, description="Where the fake shell listens")
-    requests: list[tuple[str, str]] = Field(
-        default_factory=list, description="Every (method, path) received, in order"
-    )
-
-
 @pytest.fixture
 def recording_shell() -> Iterator[RecordedShellRequests]:
-    """A loopback server that records every (method, path) and answers 404, as the shell does before phase 7."""
-    port = free_port()
-    recorded = RecordedShellRequests(base_url=f"http://{LOOPBACK_HOST}:{port}")
-    app = Flask(__name__)
-
-    @app.route("/<path:_anything>", methods=["GET", "POST"])
-    def record(_anything: str) -> tuple[str, int]:
-        recorded.requests.append((request.method, request.path))
-        return "", 404
-
-    with serve_in_background(LOOPBACK_HOST, port, app):
+    with serve_recording_shell() as recorded:
         yield recorded
