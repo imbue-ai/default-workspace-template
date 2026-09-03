@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 from app_manifest.manifest import MANIFEST_FILENAME
-from app_manifest.manifest import AppManifest
 from app_manifest.manifest import load_manifest
 from oom_priority import bands
 
@@ -33,10 +32,6 @@ def _command_by_program() -> dict[str, str]:
     }
 
 
-def _load_built_in(manifest_path: Path) -> AppManifest:
-    return load_manifest(manifest_path)
-
-
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
     # The terminal and files apps have no Python yet, but they have manifests;
     # any directory under system/apps/ is an app and must describe itself.
@@ -50,7 +45,7 @@ def test_every_built_in_app_directory_ships_a_manifest() -> None:
 
 @pytest.mark.parametrize("manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name)
 def test_built_in_manifest_validates_and_matches_its_program(manifest_path: Path) -> None:
-    manifest = _load_built_in(manifest_path)
+    manifest = load_manifest(manifest_path)
     command_by_program = _command_by_program()
 
     assert manifest.program in command_by_program, (
@@ -69,14 +64,14 @@ def test_built_in_manifest_validates_and_matches_its_program(manifest_path: Path
     ]
     expected_relative = str(manifest_path.relative_to(_REPO_ROOT))
     assert any(
-        flag == expected_relative or flag.endswith(f"/{MANIFEST_FILENAME}") and manifest_path.parent.name in flag
+        flag == expected_relative or (flag.endswith(f"/{MANIFEST_FILENAME}") and manifest_path.parent.name in flag)
         for flag in manifest_flags
     ), f"program {manifest.program!r} does not register with --manifest {expected_relative}: {manifest_flags}"
 
 
 @pytest.mark.parametrize("manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name)
 def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
-    manifest = _load_built_in(manifest_path)
+    manifest = load_manifest(manifest_path)
 
     assert manifest.priority in bands.SERVICE_BANDS, (
         f"{manifest_path} declares priority {manifest.priority!r}, which is not a SERVICE_BANDS key"
@@ -87,7 +82,7 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
 
 
 def test_built_in_manifests_agree_with_the_contract_table() -> None:
-    by_name = {manifest.name: manifest for manifest in map(_load_built_in, _built_in_manifest_paths())}
+    by_name = {manifest.name: manifest for manifest in map(load_manifest, _built_in_manifest_paths())}
 
     assert by_name["system_interface"].internal is True
     assert by_name["system_interface"].critical is True
