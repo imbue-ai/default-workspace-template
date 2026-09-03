@@ -310,15 +310,14 @@ class AppTool(NamedTuple):
     console script the pyproject declares, which is how the installation
     actually on PATH is located (every script of a tool shares its environment,
     so any one of them resolves it); ``plugin_key`` is the manifest name the plugin table keys
-    the app's mngr plugins by (``None`` for an app without a manifest);
-    ``is_critical`` is the manifest's ``critical``, which makes the tool
-    environment a snapshot-and-rollback target.
+    the app's mngr plugins by; ``is_critical`` is the manifest's ``critical``,
+    which makes the tool environment a snapshot-and-rollback target.
     """
 
     directory: str
     tool_name: str
     executable: str
-    plugin_key: str | None
+    plugin_key: str
     is_critical: bool
 
 
@@ -340,9 +339,10 @@ def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
 
     Read off the tree being applied (the merged tree, or the restored one on
     rollback), so an app a release adds is refreshed as it ships. An app whose
-    pyproject or manifest will not parse, or that declares no console script,
-    is skipped with a note rather than raising: this runs on the rollback path
-    too, where an exception would escape the apply's last line of defense.
+    pyproject or manifest will not parse, that declares no console script, or
+    whose manifest names no app, is skipped with a note rather than raising:
+    this runs on the rollback path too, where an exception would escape the
+    apply's last line of defense.
     """
     apps_dir = repo_root / APPS_DIR
     if not apps_dir.is_dir():
@@ -373,14 +373,16 @@ def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
             _warn_app_skipped(directory, f"its {MANIFEST_FILENAME} could not be read: {exc}")
             continue
         name = manifest.get("name")
-        plugin_key = name if isinstance(name, str) and name else None
+        if not isinstance(name, str) or not name:
+            _warn_app_skipped(directory, f"its {MANIFEST_FILENAME} names no app")
+            continue
         is_critical = manifest.get("critical") is True
         tools.append(
             AppTool(
                 directory=f"{APPS_DIR}/{directory.name}",
                 tool_name=tool_name,
                 executable=next(iter(scripts)),
-                plugin_key=plugin_key,
+                plugin_key=name,
                 is_critical=is_critical,
             )
         )
