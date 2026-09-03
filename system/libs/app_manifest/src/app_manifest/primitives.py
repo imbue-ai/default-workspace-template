@@ -1,14 +1,11 @@
 import re
 from pathlib import Path
-from typing import Any
-from typing import Final
-from typing import Self
+from typing import Any, Final, Self
 
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from pydantic import GetCoreSchemaHandler
-from pydantic_core import CoreSchema
-from pydantic_core import core_schema
+from pydantic_core import CoreSchema, core_schema
 
 from app_manifest.errors import InvalidManifestValueError
 
@@ -24,10 +21,16 @@ MAX_DISPLAY_NAME_LENGTH: Final[int] = 64
 
 ACTION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
-# Where the shell reaches an app's instances API: loopback only, one port.
-INSTANCES_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^http://(?:127\.0\.0\.1|localhost):[0-9]{1,5}$")
+# Where the shell reaches an app's instances API: loopback only, one port a socket can listen on.
+INSTANCES_URL_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^http://(?:127\.0\.0\.1|localhost):(?P<port>[0-9]{1,5})$"
+)
+MIN_PORT: Final[int] = 1
+MAX_PORT: Final[int] = 65535
 
-PRIORITY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
+PRIORITY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$"
+)
 
 ICON_SUFFIX: Final[str] = ".svg"
 
@@ -60,8 +63,12 @@ class AppName(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
 
 
 class DisplayName(str):
@@ -77,8 +84,12 @@ class DisplayName(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
 
 
 class ActionId(str):
@@ -92,23 +103,36 @@ class ActionId(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
 
 
 class InstancesUrl(str):
     """Where the shell reaches an app's instances API: a loopback origin with a port."""
 
     def __new__(cls, value: str) -> Self:
-        if not INSTANCES_URL_PATTERN.match(value):
+        match = INSTANCES_URL_PATTERN.match(value)
+        if match is None:
             raise InvalidManifestValueError(
                 f"invalid instances_url {value!r}: expected http://127.0.0.1:<port> or http://localhost:<port>"
+            )
+        if not MIN_PORT <= int(match.group("port")) <= MAX_PORT:
+            raise InvalidManifestValueError(
+                f"invalid instances_url {value!r}: the port must be between {MIN_PORT} and {MAX_PORT}"
             )
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
 
 
 class PriorityName(str):
@@ -116,12 +140,18 @@ class PriorityName(str):
 
     def __new__(cls, value: str) -> Self:
         if not PRIORITY_NAME_PATTERN.match(value):
-            raise InvalidManifestValueError(f"invalid priority {value!r}: expected a band name such as 'user'")
+            raise InvalidManifestValueError(
+                f"invalid priority {value!r}: expected a band name such as 'user'"
+            )
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
 
 
 class ProgramName(NonEmptyStr):
@@ -129,12 +159,18 @@ class ProgramName(NonEmptyStr):
 
     def __new__(cls, value: str) -> Self:
         if not value or any(character.isspace() for character in value):
-            raise InvalidManifestValueError(f"invalid program {value!r}: must be a non-empty name without whitespace")
+            raise InvalidManifestValueError(
+                f"invalid program {value!r}: must be a non-empty name without whitespace"
+            )
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
 
 
 class AppUrl(NonEmptyStr):
@@ -147,11 +183,19 @@ class IconPath(str):
     def __new__(cls, value: str) -> Self:
         path = Path(value)
         if not value or path.is_absolute():
-            raise InvalidManifestValueError(f"invalid icon {value!r}: must be a path relative to the manifest")
+            raise InvalidManifestValueError(
+                f"invalid icon {value!r}: must be a path relative to the manifest"
+            )
         if path.suffix.lower() != ICON_SUFFIX:
-            raise InvalidManifestValueError(f"invalid icon {value!r}: must be an {ICON_SUFFIX} file")
+            raise InvalidManifestValueError(
+                f"invalid icon {value!r}: must be an {ICON_SUFFIX} file"
+            )
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )

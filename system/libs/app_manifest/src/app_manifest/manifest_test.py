@@ -5,10 +5,12 @@ import pytest
 from pydantic import ValidationError
 
 from app_manifest.errors import ManifestLoadError
-from app_manifest.manifest import AppManifest
-from app_manifest.manifest import ShortcutMode
-from app_manifest.manifest import load_manifest
-from app_manifest.manifest import manifest_icon_path
+from app_manifest.manifest import (
+    AppManifest,
+    ShortcutMode,
+    load_manifest,
+    manifest_icon_path,
+)
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -26,7 +28,11 @@ def _full_manifest_data() -> dict[str, object]:
         "internal": False,
         "default_shortcut": {"action": "new", "mode": "focus"},
         "actions": [
-            {"id": "new", "label": "New File Viewer", "params": [{"name": "path", "label": "Path", "required": False}]}
+            {
+                "id": "new",
+                "label": "New File Viewer",
+                "params": [{"name": "path", "label": "Path", "required": False}],
+            }
         ],
     }
 
@@ -48,7 +54,9 @@ def test_full_manifest_round_trips_every_field() -> None:
 
 
 def test_minimal_manifest_takes_the_documented_defaults() -> None:
-    manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
+    manifest = AppManifest.model_validate(
+        {"name": "news", "display_name": "News", "icon": "icon.svg"}
+    )
 
     assert manifest.instances is False
     assert manifest.instances_url is None
@@ -63,7 +71,12 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
 
 def test_program_defaults_to_the_name_but_an_explicit_program_wins() -> None:
     manifest = AppManifest.model_validate(
-        {"name": "news", "display_name": "News", "icon": "icon.svg", "program": "news-server"}
+        {
+            "name": "news",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "program": "news-server",
+        }
     )
 
     assert manifest.program == "news-server"
@@ -71,60 +84,116 @@ def test_program_defaults_to_the_name_but_an_explicit_program_wins() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["MyApp", "host-abc", "agent-abc", "-leading", "trailing-", "double--hyphen", "", "dot.name", "localhost", "auth", "a" * 33],
+    [
+        "MyApp",
+        "host-abc",
+        "agent-abc",
+        "-leading",
+        "trailing-",
+        "double--hyphen",
+        "",
+        "dot.name",
+        "localhost",
+        "auth",
+        "a" * 33,
+    ],
 )
 def test_invalid_names_are_rejected(name: str) -> None:
     with pytest.raises(ValidationError, match="invalid app name"):
-        AppManifest.model_validate({"name": name, "display_name": "X", "icon": "icon.svg"})
+        AppManifest.model_validate(
+            {"name": name, "display_name": "X", "icon": "icon.svg"}
+        )
 
 
-@pytest.mark.parametrize("name", ["terminal", "my-app", "app2", "a", "system_interface", "openvscode-server-4"])
+@pytest.mark.parametrize(
+    "name",
+    ["terminal", "my-app", "app2", "a", "system_interface", "openvscode-server-4"],
+)
 def test_valid_names_are_accepted(name: str) -> None:
-    assert AppManifest.model_validate({"name": name, "display_name": "X", "icon": "icon.svg"}).name == name
+    assert (
+        AppManifest.model_validate(
+            {"name": name, "display_name": "X", "icon": "icon.svg"}
+        ).name
+        == name
+    )
 
 
 @pytest.mark.parametrize("display_name", ["", "   ", "x" * 65])
-def test_display_name_must_be_non_empty_and_at_most_64_characters(display_name: str) -> None:
+def test_display_name_must_be_non_empty_and_at_most_64_characters(
+    display_name: str,
+) -> None:
     with pytest.raises(ValidationError, match="display_name"):
-        AppManifest.model_validate({"name": "news", "display_name": display_name, "icon": "icon.svg"})
+        AppManifest.model_validate(
+            {"name": "news", "display_name": display_name, "icon": "icon.svg"}
+        )
 
 
 def test_icon_is_required_unless_internal() -> None:
     with pytest.raises(ValidationError, match="icon is required"):
         AppManifest.model_validate({"name": "news", "display_name": "News"})
 
-    internal = AppManifest.model_validate({"name": "owner-exec", "display_name": "Owner exec", "internal": True})
+    internal = AppManifest.model_validate(
+        {"name": "owner-exec", "display_name": "Owner exec", "internal": True}
+    )
     assert internal.icon is None
 
 
 @pytest.mark.parametrize("icon", ["icon.png", "/abs/icon.svg", "icon"])
 def test_icon_must_be_a_relative_svg_path(icon: str) -> None:
     with pytest.raises(ValidationError, match="invalid icon"):
-        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": icon})
+        AppManifest.model_validate(
+            {"name": "news", "display_name": "News", "icon": icon}
+        )
 
 
 @pytest.mark.parametrize(
     "instances_url",
-    ["https://127.0.0.1:8301", "http://0.0.0.0:8301", "http://127.0.0.1", "http://127.0.0.1:8301/", "127.0.0.1:8301"],
+    [
+        "https://127.0.0.1:8301",
+        "http://0.0.0.0:8301",
+        "http://127.0.0.1",
+        "http://127.0.0.1:8301/",
+        "127.0.0.1:8301",
+        "http://127.0.0.1:0",
+        "http://127.0.0.1:70000",
+    ],
 )
-def test_instances_url_must_be_a_bare_loopback_origin(instances_url: str) -> None:
+def test_instances_url_must_be_a_bare_loopback_origin_with_a_usable_port(
+    instances_url: str,
+) -> None:
     with pytest.raises(ValidationError, match="invalid instances_url"):
         AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "instances": True, "instances_url": instances_url}
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "instances": True,
+                "instances_url": instances_url,
+            }
         )
 
 
 def test_instances_url_requires_instances() -> None:
     with pytest.raises(ValidationError, match="instances_url is only allowed"):
         AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "instances_url": "http://localhost:9000"}
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "instances_url": "http://localhost:9000",
+            }
         )
 
 
 def test_actions_are_forbidden_for_a_single_instance_app() -> None:
     with pytest.raises(ValidationError, match="actions are only allowed"):
         AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "actions": [{"id": "new", "label": "New"}]}
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "actions": [{"id": "new", "label": "New"}],
+            }
         )
 
 
@@ -136,7 +205,10 @@ def test_duplicate_action_ids_are_rejected() -> None:
                 "display_name": "News",
                 "icon": "icon.svg",
                 "instances": True,
-                "actions": [{"id": "new", "label": "New"}, {"id": "new", "label": "Again"}],
+                "actions": [
+                    {"id": "new", "label": "New"},
+                    {"id": "new", "label": "Again"},
+                ],
             }
         )
 
@@ -171,7 +243,12 @@ def test_default_shortcut_must_name_a_declared_action() -> None:
 
 def test_default_shortcut_open_is_allowed_only_for_a_single_instance_app() -> None:
     single = AppManifest.model_validate(
-        {"name": "news", "display_name": "News", "icon": "icon.svg", "default_shortcut": {"action": "open", "mode": "focus"}}
+        {
+            "name": "news",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "default_shortcut": {"action": "open", "mode": "focus"},
+        }
     )
     assert single.default_shortcut is not None
     assert single.default_shortcut.action == "open"
@@ -192,20 +269,42 @@ def test_default_shortcut_open_is_allowed_only_for_a_single_instance_app() -> No
 def test_default_shortcut_mode_must_be_focus_or_new() -> None:
     with pytest.raises(ValidationError, match="mode"):
         AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "default_shortcut": {"action": "open", "mode": "always"}}
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "default_shortcut": {"action": "open", "mode": "always"},
+            }
         )
 
 
 def test_handles_must_be_absent_or_empty() -> None:
-    assert AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {}}).handles == {}
+    assert (
+        AppManifest.model_validate(
+            {"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {}}
+        ).handles
+        == {}
+    )
     with pytest.raises(ValidationError, match="handles"):
-        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {"scheme": "x"}})
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "handles": {"scheme": "x"},
+            }
+        )
 
 
 def test_unknown_keys_are_rejected() -> None:
     with pytest.raises(ValidationError, match="instance_lifetime"):
         AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "instance_lifetime": "explicit"}
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "instance_lifetime": "explicit",
+            }
         )
 
 
@@ -214,7 +313,9 @@ def test_load_manifest_reads_a_file_and_resolves_its_icon(tmp_path: Path) -> Non
     app_dir.mkdir()
     (app_dir / "icon.svg").write_text(_ICON)
     manifest_path = app_dir / "app.toml"
-    manifest_path.write_text('name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n')
+    manifest_path.write_text(
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
+    )
 
     manifest = load_manifest(manifest_path)
 
@@ -224,7 +325,9 @@ def test_load_manifest_reads_a_file_and_resolves_its_icon(tmp_path: Path) -> Non
 
 def test_load_manifest_reports_a_missing_icon_file(tmp_path: Path) -> None:
     manifest_path = tmp_path / "app.toml"
-    manifest_path.write_text('name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n')
+    manifest_path.write_text(
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
+    )
 
     with pytest.raises(ManifestLoadError, match="does not exist"):
         load_manifest(manifest_path)
