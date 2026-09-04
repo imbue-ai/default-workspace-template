@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Print the PEP 508 requirement for mngr, or for the plugins one tool registers.
 
-``--base`` prints the requirement for ``imbue-mngr`` itself; ``--tool`` prints one
+``--pin`` prints the pinned repo URL and commit; ``--base`` prints the requirement for
+``imbue-mngr`` itself; ``--tool`` prints one
 requirement per plugin ``system/config/mngr_plugins.toml`` assigns to that tool, in
 file order. Either way each line is ready for ``uv tool install``:
 
@@ -63,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     what = parser.add_mutually_exclusive_group(required=True)
     what.add_argument("--base", action="store_true", help="print the requirement for imbue-mngr itself")
+    what.add_argument("--pin", action="store_true", help="print the pinned repo URL and commit, space-separated")
     what.add_argument("--tool", help="print the plugin requirements for this tool: mngr or system-interface")
     parser.add_argument(
         "--repo-root",
@@ -72,7 +74,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     root = Path(args.repo_root)
     pyproject_text = (root / PYPROJECT_PATH).read_text()
-    if args.base:
+    if args.pin:
+        lines = [" ".join(read_mngr_pin(pyproject_text))]
+    elif args.base:
         lines = [base_requirement(pyproject_text)]
     else:
         lines = plugin_requirements_for_tool((root / MANIFEST_PATH).read_text(), pyproject_text, args.tool)

@@ -1240,11 +1240,12 @@ diagnose before retrying step 2 -- do NOT re-create the repo:
 - A **GitHub secret-scanning / push-protection** rejection (e.g. `GH013:
   Repository rule violations`, "push cannot contain secrets") that names a
   **Google OAuth client ID or secret** -- a `GOCSPX-...` value or a
-  `...apps.googleusercontent.com` client ID, found under `system/vendor/mngr` -- is
+  `...apps.googleusercontent.com` client ID, found in mngr's `mngr_latchkey`
+  plugin (mngr is no longer vendored here, so this should not recur) -- is
   EXPECTED and safe. This is the shared **Minds-provided** Google OAuth client
   baked into the template (`MINDS_GOOGLE_OAUTH_CLIENT_ID` /
   `MINDS_GOOGLE_OAUTH_CLIENT_SECRET` in
-  `system/vendor/mngr/libs/mngr_latchkey/imbue/mngr_latchkey/core.py`); it is the
+  `libs/mngr_latchkey/imbue/mngr_latchkey/core.py` in the mngr repo); it is the
   app's built-in Google sign-in client that ships with every mind. It is NOT
   the user's own secret and NOT the user's data, and it is safe to publish.
   Do NOT strip it, rewrite the template, or treat the publish as failed.

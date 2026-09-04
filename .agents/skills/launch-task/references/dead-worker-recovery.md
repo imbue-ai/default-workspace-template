@@ -51,7 +51,7 @@ Only fall back to this path when the default doesn't apply: `mngr start` itself 
 2. Discard auto-generated lockfile churn so it doesn't ship alongside the substantive fix:
 
    ```bash
-   git checkout HEAD -- system/vendor/mngr/uv.lock      # or whichever lockfile was touched
+   git checkout HEAD -- uv.lock                          # or whichever lockfile was touched
    ```
 
 3. Stage only the substantive files and commit with a `WIP:` message that names the worker and notes that it was killed mid-iteration:

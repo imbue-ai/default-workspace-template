@@ -35,7 +35,7 @@ Two independent questions decide what to do next.
 Classify by git history:
 
 - **Built-in** if the file is any of:
-  - under `vendor/` (a vendored snapshot of an external repo, e.g. `system/vendor/mngr/`), or
+  - under `vendor/` (a vendored snapshot of an external repo, e.g. `system/vendor/tk/`), or
   - introduced by the initial template commit (the root commit of this repo's history), or
   - last changed by a commit reachable from an `update-self:` merge (the `/update-self` skill merges upstream template code with a commit subject starting `update-self:`).
 - **User-created** otherwise (you or the user wrote it in this workspace).
@@ -56,13 +56,9 @@ git log --grep="^update-self:" --oneline
 - **Fixable from here** -- you run inside this container, so you can change and use (*how* you apply each fix safely differs by creation -- see step 5):
   - user code,
   - template built-in code (e.g. `system/apps/system_interface`, skills, scripts), and
-  - `system/vendor/mngr/` code, **but only** when the fix changes how mngr behaves *inside this container* (the container runs from this checkout).
-- **Not fixable from here (give up on the fix)** -- the fix would require a new build of the outer minds desktop app, which you cannot produce. This is anything in the *installed outer app*:
-  - `system/vendor/mngr/apps/minds` (the desktop app itself),
-  - the outer app's bundled plugins `system/vendor/mngr/libs/mngr_forward` and `system/vendor/mngr/libs/mngr_latchkey`,
-  - the outer app's own vendored mngr.
+- **Not fixable from here (give up on the fix)** -- anything in mngr, or in the outer minds desktop app. mngr runs in this container as packages installed from the commit `pyproject.toml` pins; an edit to its files under `site-packages` is overwritten by the next reinstall and cannot be submitted, so it is not a fix. The outer app (`apps/minds`, its bundled `mngr_forward` and `mngr_latchkey`) needs a new app build you cannot produce.
 
-  You can still read all of these under `system/vendor/mngr/` to diagnose and to write a precise report -- you just cannot deploy a fix.
+  You can still read mngr's source to diagnose and to write a precise report -- the installed packages are plain Python under the tool's `site-packages`, and the full tree is at the pinned commit of https://github.com/imbue-ai/mngr -- you just cannot deploy a fix.
 
 ## 4. Confirm the diagnosis and plan before you change anything
 
@@ -131,5 +127,5 @@ Always confirm the diagnosis and plan with the user (step 4) before applying any
 | Template built-in: `system/apps/system_interface`    | Route through `update-system-interface` (never edit the served tree directly) | Yes              |
 | Template built-in: a skill or app             | Quick live fix, then defer hardening to `heal-creation` (`update-app` for service config) | Yes |
 | Other template built-in (scripts, etc.)       | Fix live, verify it works                                                     | Yes              |
-| `system/vendor/mngr` affecting this container         | Fix live, verify it works                                                      | Yes              |
-| Outer app (`apps/minds`, `mngr_forward`, `mngr_latchkey`, outer vendored mngr) | Cannot -- needs a new app build              | Yes |
+| mngr (installed from the pinned commit)       | Cannot -- report it; a mngr change is a mngr PR                                | Yes              |
+| Outer app (`apps/minds`, `mngr_forward`, `mngr_latchkey`) | Cannot -- needs a new app build                                    | Yes |

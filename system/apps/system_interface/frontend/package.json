@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "bash ../../../scripts/fetch_mngr_assets.sh",
     "build": "tsc --noEmit && vite build",
     "postbuild": "git rev-parse HEAD:./ > ../imbue/system_interface/static/.source-tree-hash 2>/dev/null || rm -f ../imbue/system_interface/static/.source-tree-hash",
     "preview": "vite preview",

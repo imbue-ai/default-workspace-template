@@ -129,13 +129,14 @@ fi
 # reaches the system clipboard. The tmux config (~/.tmux.conf, written by the
 # template's extra_provision_command) emits an OSC 52 escape on copy, but the
 # stock ttyd 1.7.7 client has no OSC 52 handler and silently drops it; the
-# patched client vendored with the mngr_ttyd plugin honors it. The mngr_ttyd
+# patched client shipped with the mngr_ttyd plugin honors it. The mngr_ttyd
 # plugin is disabled here (the terminal is a supervised service, not an mngr
-# window), so we replicate its client install: decompress that vendored client
-# and serve it via `ttyd -I`, falling back to the stock client if the asset is
-# missing (so ttyd still starts).
+# window), so we replicate its client install from the copy
+# system/scripts/fetch_mngr_assets.sh fetched at the pinned mngr commit:
+# decompress it and serve it via `ttyd -I`, falling back to the stock client if
+# the asset is missing (so ttyd still starts).
 TTYD_INDEX_FLAGS=()
-TTYD_CLIENT_GZ="$REPO_ROOT/system/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
+TTYD_CLIENT_GZ="$REPO_ROOT/system/vendor/mngr-assets/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
 if [ -n "${MNGR_AGENT_STATE_DIR:-}" ] && [ -f "$TTYD_CLIENT_GZ" ]; then
     TTYD_INDEX_PATH="$MNGR_AGENT_STATE_DIR/commands/ttyd/index.html"
     if gzip -dc "$TTYD_CLIENT_GZ" > "$TTYD_INDEX_PATH"; then

@@ -16,6 +16,7 @@ from `~/.tmux.conf`, which the main create template writes. Its hooks call
 system_interface when a terminal's tmux session changes or is renamed so the
 owning dockview tab's title follows along.
 
-The ttyd binary and its OSC 52-capable web client come from the vendored
-`mngr_ttyd` plugin at `system/vendor/mngr/libs/mngr_ttyd/` -- this folder is
-the template-side wiring around them.
+The ttyd binary and its OSC 52-capable web client come from mngr's `mngr_ttyd`
+plugin; the client is fetched at build time from the pinned mngr commit into
+`system/vendor/mngr-assets/` (`system/scripts/fetch_mngr_assets.sh`) -- this
+folder is the template-side wiring around them.

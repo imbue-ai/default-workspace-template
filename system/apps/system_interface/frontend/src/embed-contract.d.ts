@@ -1,7 +1,7 @@
 /**
  * Type surface for the vendored minds embed contract module (see the vite
  * alias in vite.config.ts). The implementation is plain JS shipped by minds
- * (`vendor/mngr/apps/minds/imbue/minds/desktop_client/static/embed_contract.js`);
+ * (`apps/minds/imbue/minds/desktop_client/static/embed_contract.js` in mngr, fetched at build time);
  * this declaration mirrors its exports -- update both together.
  */
 declare module "@minds/embed-contract" {

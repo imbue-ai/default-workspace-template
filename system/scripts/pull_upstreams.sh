@@ -76,6 +76,16 @@ else
     MNGR_BRANCH="${positional[1]}"
 fi
 
+# mngr is no longer vendored: it is installed from the public repo at the commit
+# pyproject.toml pins ([tool.uv.sources] imbue-mngr). Its dwt-side leg has nothing
+# to re-vendor; change mngr in a checkout of imbue-ai/mngr-internal and, once merged,
+# move the pin here (`uv lock --upgrade-package imbue-mngr` after editing the rev).
+if [ "$DWT_ONLY" -eq 0 ]; then
+    echo "error: the mngr leg is gone -- mngr is a pinned dependency now (pyproject.toml, [tool.uv.sources])." >&2
+    echo "       Use --dwt-only for the dwt leg; change mngr in an imbue-ai/mngr-internal checkout instead." >&2
+    exit 2
+fi
+
 # rsync is only needed for the mngr re-vendor leg, which --dwt-only skips.
 [ "$DWT_ONLY" -eq 1 ] || command -v rsync >/dev/null || { echo "error: rsync is required" >&2; exit 1; }
 
