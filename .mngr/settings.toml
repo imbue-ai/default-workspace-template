@@ -462,7 +462,7 @@ host_log_dir = "/var/log/mngr"
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
 # forever. A tmpfs /run makes the hard link work. Mirrors the tmpfs /run that the
-# aws-<region> provider start args and the ovh/vultr/imbue_cloud host setup apply.
+# aws_<hex> connection start args and the ovh/vultr/imbue_cloud host setup apply.
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
 # persist or ride a backup.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
@@ -694,34 +694,24 @@ extra_provision_command__extend = [
     "bash /home/user/workspace/system/scripts/minds_lima_autostart.sh",
 ]
 
-# template for the Modal sandbox provider (the "modal" compute provider).
+# template for the Modal sandbox provider (a "modal" connection instance).
 # Like Lima, Modal has no Dockerfile build -- the toolchain is provisioned over SSH
 # after the sandbox boots, reusing the exact scripts the Dockerfile RUNs. There is
 # no autostart unit: Modal sandboxes are ephemeral (~1 day) and do not survive a
 # reboot, so the minds desktop app re-creates them rather than relying on systemd
-# (the lima-autostart step is intentionally absent). Sizing + timeouts are set in
-# this template's setting__extend (below), not in the mngr_modal provider defaults.
+# (the lima-autostart step is intentionally absent). No `provider` is declared:
+# minds addresses the create as `system-services@<host>.modal_<hex>`, the
+# connection instance whose block minds writes into its mngr profile settings
+# (mirroring the aws/gcp/azure templates). That block also carries the sizing
+# (2 CPU / 4 GB) and the ~24h sandbox timeout; the eval harness shortens the
+# timeout through minds' MINDS_MODAL_SANDBOX_TIMEOUT_SECONDS override rather than
+# through a template overlay, since a template cannot name a connection instance.
 [create_templates.modal]
-provider = "modal"
 target_path = "/home/user/workspace/"
 # Disable idle detection entirely -- the host should never auto-shutdown. The
-# sandbox instead runs until the 24h max-age timeout set in setting__extend below
+# sandbox instead runs until the max-age timeout the connection block sets
 # (matching how the vultr/aws/imbue_cloud templates disable idle).
 idle_mode = "disabled"
-# Enable the (default-disabled) modal provider for this create, and set the
-# minds-facing sizing + timeouts HERE rather than in the mngr_modal provider
-# defaults: 2 CPU / 4 GB (matching the lima/docker convention) and a ~24h sandbox
-# timeout. The sandbox timeout (86310) plus the provider's 90s shutdown buffer
-# lands at 86400s (24h), Modal's hard cap. The workspaces an eval run creates
-# instead stack the `modal_eval` overlay below for a shorter timeout, leaving
-# this global template untouched.
-setting__extend = [
-    "providers.modal.is_enabled=true",
-    "providers.modal.default_cpu=2.0",
-    "providers.modal.default_memory=4.0",
-    "providers.modal.default_sandbox_timeout=86310",
-    "providers.modal.default_idle_timeout=86400",
-]
 # Modal has no Dockerfile build (like lima): run the same setup a Dockerfile-built
 # workspace would, directly in the sandbox over SSH.
 extra_provision_command__extend = [
@@ -739,17 +729,6 @@ extra_provision_command__extend = [
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
 ]
-
-# Short-timeout overlay for the workspaces an eval run creates. Always stacked on top
-# of `modal` (`--template modal --template modal_eval`), mirroring how `docker_runsc`
-# overlays `docker`: it reuses the entire `modal` body and only shortens the sandbox
-# timeout to 3h (10710 + the provider's 90s shutdown buffer = 10800s). An eval trial
-# tears its own workspaces down when it finishes, so this timeout is the backstop for
-# the case where the driver dies without doing so. The eval harness selects it via the
-# MINDS_MODAL_EXTRA_TEMPLATE env var on the eval box; normal Modal creates use plain
-# `modal` (24h). Keeping it separate leaves the global `modal` template alone.
-[create_templates.modal_eval]
-setting__extend = ["providers.modal.default_sandbox_timeout=10710"]
 
 # template for vultr VPS provider (cloud mode)
 [create_templates.vultr]
@@ -1086,12 +1065,12 @@ systemctl restart --no-block minds-autostart.service
 [create_templates.aws]
 target_path = "/home/user/workspace/"
 # No `provider` declared: minds addresses the create as
-# `system-services@<host>.aws-<region>`, which selects the region-specific
-# `[providers.aws-<region>]` block minds writes into its mngr profile settings
-# at startup (mirroring how the imbue_cloud template omits `provider` and lets
-# the `imbue_cloud_<slug>` address pick the instance). No region or instance
-# type is baked in: the region comes from the provider block's `default_region`
-# (and the matching `-b --aws-region=` minds passes), the instance type from
+# `system-services@<host>.aws_<hex>`, which selects the connection instance
+# block minds writes into its mngr profile settings (mirroring how the
+# imbue_cloud template omits `provider` and lets the `imbue_cloud_<user id>`
+# address pick the instance). No region or instance type is baked in: the
+# region comes from the connection block's `default_region` (and the matching
+# `-b --aws-region=` minds passes), the instance type from
 # `AwsProviderConfig.default_instance_type`.
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown. The
@@ -1101,7 +1080,7 @@ build_arg__extend = ["--file=system/Dockerfile", "."]
 idle_mode = "disabled"
 # gVisor runsc hardening for the agent container, matching the vultr/ovh
 # templates. runsc is installed+selected via `install_gvisor_runtime` /
-# `docker_runtime` on the minds-written `[providers.aws-<region>]` blocks; these
+# `docker_runtime` on the minds-written `[providers.aws_<hex>]` blocks; these
 # `docker run` args go via start_arg (vps_docker forwards start_arg to the inner
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
 # inside the mounted /home/user volume, already exists as the process cwd) and
@@ -1245,8 +1224,8 @@ systemctl restart --no-block minds-autostart.service
 
 # template for GCP Compute Engine VPS provider (gcp mode). Mirrors the aws
 # template above: minds addresses the create as
-# `system-services@<host>.byo-gcp-<slug>` (a bring-your-own account block minds
-# writes on account setup), so no `provider` is declared here. Zone / machine
+# `system-services@<host>.gcp_<hex>` (a connection instance block minds writes
+# when the connection is added), so no `provider` is declared here. Zone / machine
 # type come from that provider block (`default_zone` / `default_machine_type`)
 # plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` minds passes.
 [create_templates.gcp]
@@ -1398,8 +1377,8 @@ systemctl restart --no-block minds-autostart.service
 
 # template for Azure Virtual Machines VPS provider (azure mode). Mirrors the
 # aws template above: minds addresses the create as
-# `system-services@<host>.byo-azure-<slug>` (a bring-your-own account block
-# minds writes on account setup), so no `provider` is declared here. Region /
+# `system-services@<host>.azure_<hex>` (a connection instance block minds
+# writes when the connection is added), so no `provider` is declared here. Region /
 # VM size come from that provider block (`default_region` / `default_vm_size`)
 # plus the matching `-b --azure-region=` / `-b --azure-vm-size=` minds passes.
 [create_templates.azure]
@@ -1554,8 +1533,8 @@ systemctl restart --no-block minds-autostart.service
 # use `--template main --template <provider>`), so the imbue_cloud-specific
 # knobs that used to be inlined in `_build_mngr_create_command` live here
 # instead. The actual provider name on the address is per-account
-# (`imbue_cloud_<account-slug>`), so it's not declared here -- the
-# `<name>@<host>.imbue_cloud_<slug>` address tells mngr where to land.
+# (`imbue_cloud_<user id>`), so it's not declared here -- the
+# `<name>@<host>.imbue_cloud_<user id>` address tells mngr where to land.
 [create_templates.imbue_cloud]
 # Leased pool hosts must never auto-shutdown -- the host is borrowed for a
 # whole user session, not a one-shot job.
