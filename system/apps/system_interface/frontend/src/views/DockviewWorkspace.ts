@@ -28,15 +28,15 @@ import {
   themeLight,
   type DockviewGroupPanel,
   type IContentRenderer,
+  type IDockviewPanel,
   type IHeaderActionsRenderer,
   type ITabRenderer,
   type SerializedDockview,
   type TabPartInitParameters,
 } from "dockview-core";
-import { ChatPanel } from "./ChatPanel";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { requestTerminalFocus } from "./terminalFocus";
-import { IframePanel, IFRAME_PANEL_LIVE_KEY_ATTR, reloadIframesForService } from "./IframePanel";
+import { CHAT_FRAME_SANDBOX, IframePanel, IFRAME_PANEL_LIVE_KEY_ATTR, reloadIframesForService } from "./IframePanel";
 import {
   BROWSER_SERVICE_NAME,
   bindSlot,
@@ -46,6 +46,7 @@ import {
   initializeLiveLayer,
   liveKeyForPanel,
   liveKeyForRef,
+  liveSurfaceBoundPanelId,
   liveSurfaceElement,
   liveSurfaceParams,
   reconcileLiveSurfaces,
@@ -59,7 +60,6 @@ import {
   type PanelParams,
 } from "./liveSurfaces";
 import { TerminalBanner } from "./TerminalBanner";
-import { SubagentView } from "./SubagentView";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ProjectMembershipDialog } from "./ProjectMembershipDialog";
 import { serviceIconMarkup } from "./appIcon";
@@ -74,14 +74,17 @@ import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "./hoverTooltip";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
+import { SHELL_CLOSE_REQUEST, SHELL_FOCUSED, SHELL_LOCATION, SHELL_OPEN } from "../app_contract";
+import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import { reloadInterface } from "../reload";
-import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { apiUrl, getPrimaryAgentId } from "../base-path";
-import { deriveServiceOrigin } from "../origin";
+import { apiUrl, getBasePath, getPrimaryAgentId } from "../base-path";
+import { deriveServiceOrigin, workspaceHostCoordinate } from "../origin";
 import {
   addAgentsUpdatedListener,
+  buildAgentTerminalUrl,
+  getTerminalUrl,
   addLayoutOpListener,
   addLayoutSyncListener,
   addMemberLastUsedListener,
@@ -123,7 +126,6 @@ import {
   getStoredProjectId,
   setActiveProjectId,
 } from "../models/ClientIdentity";
-import { loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
   applyMemberTitleChange,
   displayNameForMember,
@@ -247,21 +249,33 @@ function serviceSessionLabel(query: string): string {
   return params.get("session") ?? query.replace(/^\?/, "");
 }
 
-export function getTerminalUrl(): string {
-  return deriveServiceOrigin(labelForService("terminal"));
+// The registered name of the chat app: the origin its pages are served from, and the app
+// every chat address names.
+const CHAT_SERVICE_NAME = "chat";
+
+/** The chat app's address for an instance key (an agent id, or ``<agent-id>.<session-id>``). */
+export function chatAddress(instanceKey: string): string {
+  return `app:${CHAT_SERVICE_NAME}?instance=${instanceKey}`;
 }
 
-/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux
- *  session. The ttyd dispatch reads ``$1`` ("_") then ``$2`` ("agent")
- *  then ``$3`` (the agent name), so the args are written in that order.
- *
- *  One caller: the BACK FACE of that agent's chat. A terminal is reachable only there, because
- *  two live ttyd clients on one tmux window keep resizing it out from under each other --
- *  `window-size latest` means the most recent attach wins. */
-export function buildAgentTerminalUrl(agentName: string): string {
-  const baseUrl = getTerminalUrl();
-  const separator = baseUrl.includes("?") ? "&" : "?";
-  return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
+/** The instance key a chat address names, or null when the address is not the chat app's. */
+export function chatInstanceKeyFromAddress(address: string): string | null {
+  const match = /^app:([^?]+)\?instance=(.+)$/.exec(address);
+  if (match === null || match[1] !== CHAT_SERVICE_NAME) return null;
+  return match[2];
+}
+
+/**
+ * Where the chat page for an instance key is served: the chat app's own origin, derived from
+ * its registered label like every other app's. A host with no workspace coordinate (a direct
+ * hit on the loopback port, the e2e suite) has no origin family to derive into, so the page
+ * is loaded from this document's own origin instead, where the process serves it by path.
+ */
+export function chatPageUrl(instanceKey: string, host: string = window.location.host): string {
+  if (workspaceHostCoordinate(host) === host) {
+    return `${window.location.origin}${getBasePath()}/${instanceKey}`;
+  }
+  return `${deriveServiceOrigin(labelForService(CHAT_SERVICE_NAME))}${instanceKey}`;
 }
 
 /** Rebuild a restored agent-terminal URL on the current host, or null when
@@ -434,22 +448,6 @@ function reloadIframeForKey(key: LiveKey): void {
 function refreshPanelContent(panelId: string): void {
   const params = panelParams.get(panelId);
   if (params === undefined) return;
-  if (params.panelType === "chat") {
-    const chatAgentId = params.chatAgentId ?? params.agentId;
-    void loadSnapshotWithStream(chatAgentId)
-      .catch(() => {
-        // The transcript that was already on screen stays; the chat's own
-        // reconnect loop keeps retrying.
-      })
-      .finally(() => {
-        m.redraw();
-      });
-    return;
-  }
-  if (params.panelType === "subagent") {
-    m.redraw();
-    return;
-  }
   if (params.serviceName) {
     reloadIframesForService(params.serviceName);
     return;
@@ -1519,25 +1517,10 @@ function scheduleTabWidthRecompute(): void {
   });
 }
 
-/** Report the current open/visible chat tabs to the backend (OOM priority).
- *
- *  Computed from ``dockview.panels`` (the live panel set) rather than
- *  ``panelParams`` so a just-removed panel isn't reported as still open when
- *  this fires from ``onDidLayoutChange`` before ``onDidRemovePanel`` clears its
- *  params. Only chat panels are reported; the report is debounced in the
- *  reporter, so calling it on every layout/visibility change is cheap. */
-function reportChatTabActivity(): void {
-  if (!dockview) return;
-  const open: string[] = [];
-  const visible: string[] = [];
-  for (const panel of dockview.panels) {
-    const pp = panelParams.get(panel.id);
-    if (pp?.panelType !== "chat") continue;
-    const chatId = pp.chatAgentId ?? pp.agentId;
-    open.push(chatId);
-    if (panel.api.isVisible) visible.push(chatId);
-  }
-  reportActivity({ open, visible });
+/** A pane started or stopped showing a page: the frames redraw so a page that speaks the
+ *  contract is told shown or hidden (see IframePanel), and a chat's presence follows. */
+function redrawForVisibility(): void {
+  m.redraw();
 }
 
 /** Placement options that tab a newly-added panel into ``targetGroup`` (the
@@ -3237,31 +3220,12 @@ function handleOpenPanelRequest(
   });
 }
 
-export function openIframeTabForAgent(agentId: string, url: string, title: string): void {
-  if (!dockview) return;
-  const existing = dockview.panels.find((p) => {
-    const pp = panelParams.get(p.id);
-    return pp?.panelType === "iframe" && pp.agentId === agentId && pp.url === url;
-  });
-  if (existing) {
-    if (!existing.api.isActive) {
-      dockview.setActivePanel(existing);
-    }
-    return;
-  }
-  const panelId = `iframe-agent-${agentId}-${Date.now()}`;
-  const params: PanelParams = { panelType: "iframe", agentId, url, title };
-  panelParams.set(panelId, params);
-  dockview.addPanel({
-    id: panelId,
-    component: "iframe",
-    title,
-    params,
-  });
-  recordMembership(panelId);
-}
-
-export function openSubagentTab(agentId: string, subagentSessionId: string, description: string): void {
+export function openSubagentTab(
+  agentId: string,
+  subagentSessionId: string,
+  description: string,
+  targetGroup?: DockviewGroupPanel | null,
+): void {
   if (!dockview) return;
 
   const existingPanel = dockview.panels.find((p) => {
@@ -3286,8 +3250,58 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
     component: "subagent",
     title: description,
     params,
+    ...placementForGroup(targetGroup),
   });
   recordMembership(panelId);
+}
+
+/** The panel a child frame stands in for: the frame's live key resolves to the page, and the
+ *  page to the slot showing it. Null for a frame the dock is not showing. */
+function panelForChildFrame(frame: HTMLIFrameElement): IDockviewPanel | null {
+  const liveKey = frame.getAttribute(IFRAME_PANEL_LIVE_KEY_ATTR);
+  if (liveKey === null) return null;
+  const panelId = liveSurfaceBoundPanelId(liveKey);
+  if (panelId === null) return null;
+  return dockview?.panels.find((panel) => panel.id === panelId) ?? null;
+}
+
+/** ``shell:focused`` from a page: the pane showing it becomes the active one. */
+function activatePanelForChildFrame(frame: HTMLIFrameElement): void {
+  const panel = panelForChildFrame(frame);
+  if (panel !== null && !panel.api.isActive) dockview?.setActivePanel(panel);
+}
+
+/**
+ * ``shell:open`` from a page (contracts.md section 10): dock an instance of the posting
+ * frame's app beside it, or focus the tab already showing it. In this phase the chat app is
+ * the one app whose pages ask, and its addresses resolve to the chat and subagent panels the
+ * dock already knows how to open; phase 7 makes this generic over the inventory.
+ * CLEANUP: the ``title`` hint goes with phase 7, which titles tabs from the instances API.
+ */
+function openInstanceForChildFrame(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+  const address = payload.address;
+  if (typeof address !== "string") return;
+  const instanceKey = chatInstanceKeyFromAddress(address);
+  if (instanceKey === null) {
+    console.warn(`[si] shell:open ignored: ${address} is not an address of the chat app`);
+    return;
+  }
+  const titleHint = typeof payload.title === "string" && payload.title !== "" ? payload.title : null;
+  const targetGroup = panelForChildFrame(frame)?.api.group ?? null;
+  const separator = instanceKey.indexOf(".");
+  if (separator > 0) {
+    const parentAgentId = instanceKey.slice(0, separator);
+    const sessionId = instanceKey.slice(separator + 1);
+    openSubagentTab(parentAgentId, sessionId, titleHint ?? "Sub-agent", targetGroup);
+  } else {
+    const agent = getAgentById(instanceKey);
+    focusOrCreateChatPanel(
+      instanceKey,
+      titleHint ?? (agent === undefined ? instanceKey : chatDisplayName(agent)),
+      targetGroup,
+    );
+  }
+  m.redraw();
 }
 
 /**
@@ -4952,19 +4966,36 @@ function mountLiveContent(surface: LiveSurface, kind: LiveContentKind): void {
   m.mount(surface.element, { view: () => renderLiveContent(surface, kind) });
 }
 
+/** A chat page (or a subagent view) framed at the chat origin, speaking the app contract:
+ *  the shell hands it its tab and client on every load and follows the pane's visibility,
+ *  which is what feeds the chat's presence and lets it skip scroll work while hidden. */
+function renderChatFrame(surface: LiveSurface, instanceKey: string, title: string): m.Children {
+  return m(IframePanel, {
+    url: chatPageUrl(instanceKey),
+    title,
+    serviceName: CHAT_SERVICE_NAME,
+    liveKey: surface.key,
+    sandbox: CHAT_FRAME_SANDBOX,
+    contract: {
+      address: chatAddress(instanceKey),
+      tabId: surface.boundPanelId ?? "",
+      isVisible: surface.isVisible,
+    },
+  });
+}
+
 function renderLiveContent(surface: LiveSurface, kind: LiveContentKind): m.Children {
   const params = surface.params;
   const url = params.url ?? "";
   switch (kind) {
     case "chat":
-      // dockview keeps hidden panels mounted and mithril's redraw is global, so
-      // a page nothing is showing keeps redrawing at whatever size it was left.
-      // ``isVisible`` is what lets the chat skip work that must not run then --
-      // its scroll management, which would otherwise corrupt the retained
-      // scroll position against a display:none element.
-      return m(ChatPanel, { agentId: params.chatAgentId ?? params.agentId, isVisible: surface.isVisible });
+      return renderChatFrame(surface, params.chatAgentId ?? params.agentId, params.title ?? "Chat");
     case "subagent":
-      return m(SubagentView, { agentId: params.agentId, subagentSessionId: params.subagentSessionId ?? "" });
+      return renderChatFrame(
+        surface,
+        `${params.agentId}.${params.subagentSessionId ?? ""}`,
+        params.title ?? "Sub-agent",
+      );
     case "terminal":
       return [
         m(TerminalBanner),
@@ -5022,7 +5053,13 @@ function createLiveSlotRenderer(
 
 function closeActiveTabFromEmbedder(): void {
   const activePanel = dockview?.activePanel;
-  if (activePanel) activePanel.api.close();
+  if (!activePanel) return;
+  // A page that speaks the contract is told first, so it can flush pending state; there is
+  // no veto, and the close follows at once.
+  const key = liveKeyForPanel(activePanel.id, panelParams.get(activePanel.id));
+  const frame = key === null ? null : (liveSurfaceElement(key)?.querySelector("iframe") ?? null);
+  if (frame !== null) sendToChildFrame(frame, SHELL_CLOSE_REQUEST);
+  activePanel.api.close();
 }
 
 function initializeDockview(parentElement: HTMLElement): void {
@@ -5119,7 +5156,7 @@ function initializeDockview(parentElement: HTMLElement): void {
   // That layer is stable across every ``clear()`` and ``fromJSON`` -- the
   // gridview only ever swaps its root child -- which is what lets a page
   // outlive the panels that show it.
-  initializeLiveLayer(dv.overlayRenderContainer.element, reportChatTabActivity);
+  initializeLiveLayer(dv.overlayRenderContainer.element, redrawForVisibility);
 
   // A surface sits over the (now empty) panel overlay that carries dockview's
   // drop-target forwarding, so it steps out of the way for the length of a
@@ -5146,13 +5183,21 @@ function initializeDockview(parentElement: HTMLElement): void {
   // active dockview tab in response.
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, closeActiveTabFromEmbedder);
 
+  // The shell side of the app contract (contracts.md section 10). A page's location report
+  // is logged and ignored until phase 7 relays it to the owning app.
+  setChildFrameMessageHandler(SHELL_FOCUSED, activatePanelForChildFrame);
+  setChildFrameMessageHandler(SHELL_OPEN, openInstanceForChildFrame);
+  setChildFrameMessageHandler(SHELL_LOCATION, (frame, payload) => {
+    console.debug(
+      `[si] shell:location from ${frame.getAttribute(IFRAME_PANEL_LIVE_KEY_ATTR)} ignored until phase 7`,
+      payload,
+    );
+  });
+
   // Listen for layout changes and auto-save
   dv.api.onDidLayoutChange(() => {
     scheduleSave();
-    // Opening, closing, or moving a tab changes the open/visible chat set;
-    // report it so the OOM prioritizer re-scores the affected chats.
-    reportChatTabActivity();
-    // ...and it changes how many tabs each strip is fitting.
+    // Opening, closing, or moving a tab changes how many tabs each strip is fitting.
     scheduleTabWidthRecompute();
     // ...and where the live pages have to be drawn.
     scheduleReconcile();

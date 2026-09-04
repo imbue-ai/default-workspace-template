@@ -25,19 +25,21 @@ import urllib.request
 from collections.abc import Callable
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
+from playwright.sync_api import FrameLocator
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
-from imbue.system_interface.accounts import commit_account
-from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -127,6 +129,20 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
         WebSocketBroadcaster.broadcast_proto_agent_completed(self, agent_id=agent_id, success=success, error=error)
 
 
+class _ReplayHidingAgentManager(AgentManager):
+    """Hides in-flight creations from a fresh WebSocket client's connect-time replay.
+
+    The chat page is its own document now (phase 6 of the workspace app model) and connects
+    to the agents WebSocket after its tab opened, so the shell's replay of in-flight proto
+    agents would cover the creation window with the build log on its own. These tests model
+    the window the replay cannot cover -- a page whose socket only comes up after the create
+    finished, or that fell a whole creation window behind -- so the replay is what they hide.
+    """
+
+    def get_proto_agents(self) -> list[dict[str, Any]]:
+        return []
+
+
 @contextlib.contextmanager
 def _serving_workspace(
     tmp_path: Path,
@@ -167,7 +183,7 @@ def _serving_workspace(
     account_id, _ = mint_account_dir()
     commit_account(account_id, "anthropic", "Anthropic")
 
-    manager = AgentManager.build(
+    manager = _ReplayHidingAgentManager.build(
         broadcaster,
         messenger=RecordingMngrMessenger(),
         mngr_binary=str(fake_mngr),
@@ -210,6 +226,12 @@ def _is_serving(base_url: str) -> bool:
     except OSError:
         return False
     return True
+
+
+def _shown_chat(page: Page) -> FrameLocator:
+    """The chat page on screen: the new chat's tab is the active one, and the fixture's primary chat
+    stays mounted at zero size behind it, so the visible chat frame is the one under test."""
+    return page.frame_locator('iframe[data-service-name="chat"]:visible')
 
 
 def _create_chat_through_ui(page: Page, base_url: str) -> None:
@@ -255,14 +277,14 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
             timeout=_RECOVERY_TIMEOUT_MS
         )
 
-        not_found = page.locator(".message-list-not-found")
+        not_found = _shown_chat(page).locator(".message-list-not-found")
         expect(not_found).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
         expect(not_found).to_have_count(0, timeout=_RECOVERY_TIMEOUT_MS)
         # Recovered into the transcript view -- empty, since the fresh agent has
         # no messages yet, but a real transcript rather than the error state.
         # Scoped to `:visible` because dockview keeps the inactive primary chat
         # mounted at zero size, and it carries an empty transcript too.
-        expect(page.locator(".message-list-empty:visible")).to_have_count(1, timeout=_RECOVERY_TIMEOUT_MS)
+        expect(_shown_chat(page).locator(".message-list-empty")).to_have_count(1, timeout=_RECOVERY_TIMEOUT_MS)
 
 
 @pytest.mark.tmux
@@ -281,10 +303,10 @@ def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
     with _serving_workspace(tmp_path, monkeypatch, port=_PORT + 1, release_on_completion=True) as base_url:
         _create_chat_through_ui(page, base_url)
 
-        not_found = page.locator(".message-list-not-found")
+        not_found = _shown_chat(page).locator(".message-list-not-found")
         expect(not_found).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
         expect(not_found).to_have_count(0, timeout=_RECOVERY_TIMEOUT_MS)
-        expect(page.locator(".message-list-empty:visible")).to_have_count(1, timeout=_RECOVERY_TIMEOUT_MS)
+        expect(_shown_chat(page).locator(".message-list-empty")).to_have_count(1, timeout=_RECOVERY_TIMEOUT_MS)
 
 
 @pytest.mark.tmux
@@ -308,8 +330,8 @@ def test_not_found_panel_does_not_poll_the_screen_capture_endpoint(
         )
 
         _create_chat_through_ui(page, base_url)
-        expect(page.locator(".message-list-not-found")).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
-        expect(page.locator(".message-list-not-found")).not_to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
+        expect(_shown_chat(page).locator(".message-list-not-found")).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
+        expect(_shown_chat(page).locator(".message-list-not-found")).not_to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
 
         # One capture attempt for the agent, however many times the view redrew.
         assert len(screen_requests) <= 2, f"screen capture was polled {len(screen_requests)} times"

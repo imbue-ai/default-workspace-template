@@ -1,9 +1,29 @@
 # System Interface
 
-Web chat interface for viewing and interacting with mngr-managed Claude agents.
+The workspace's shell (its window manager and app management) and, until phase
+10 of the workspace app model, the chat app it embeds: live conversations with
+mngr-managed agents, with real-time updates via Server-Sent Events.
 
-Shows live conversations from Claude session files in a web UI, with real-time
-updates via Server-Sent Events.
+## Two documents from one process
+
+The process serves two documents. The shell document (`/`, the dockview UI)
+arranges tabs, keeps projects, and manages apps. The chat document
+(`/<agent-id>`, and `/<agent-id>.<session-id>` for a subagent view) is one
+page per chat, which the shell frames as an ordinary app tab at the
+registered `chat` origin; its manifest is `system/apps/chat/app.toml`, and the
+shell's supervisord line registers that row beside its own at the same port.
+Requests are dispatched to the chat app by path (`wsgi_dispatch.py`), never
+by origin label, so loopback callers such as `curl
+http://127.0.0.1:8000/api/agents/<id>/events` keep working. The chat app
+serves the instances API of the workspace app model at `/_instances`
+(`chat_instances.py`, over the agent manager) and the presence route its
+pages report through; the shell serves `/api/health` and the browser-side
+contract module at `/_static/app_contract.js`. The frontend is two entries of
+one vite build: `index.html` (the shell) and `chat.html` (`src/chat/`, which
+the shell bundle never imports), plus the contract library
+(`vite.contract.config.ts`). The chat page talks to the shell only through
+that contract (`src/app_contract.ts`; the shell's side is `src/relay.ts`,
+which also relays the chat pages' permission cards to the minds chrome).
 
 ## Usage
 

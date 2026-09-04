@@ -35,6 +35,16 @@ export function getHostname(): string {
   return cachedHostname;
 }
 
+/** The chat the chat document shows; "" on the shell's own document. */
+export function getChatAgentId(): string {
+  return document.querySelector('meta[name="system-interface-chat-agent-id"]')?.getAttribute("content") ?? "";
+}
+
+/** The subagent session the chat document shows; "" for a chat's own page. */
+export function getChatSessionId(): string {
+  return document.querySelector('meta[name="system-interface-chat-session-id"]')?.getAttribute("content") ?? "";
+}
+
 let cachedPrimaryAgentId: string | null = null;
 
 export function getPrimaryAgentId(): string {

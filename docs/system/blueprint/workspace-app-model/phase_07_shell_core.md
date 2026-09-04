@@ -38,7 +38,9 @@ Modified:
   - `views/Sidebar.ts`: shortcut rows from the project's `shortcuts` (Everything: every app with an action, fixed), the tab list from the view's tab set resolved against the inventory, statuses from instance records.
   - `views/NewTabLauncher.ts`: tiles from every app's actions, the two tables from the tab set and the inventory, `last_active` from records.
   - `views/appIcon.ts`, `derived-names.ts`, `agentLiveness.ts`: derived names and dots come from records; `agentLiveness.ts` is deleted.
-  - `locationBeacon.ts` is deleted; its origin check moves into the contract listener in `DockviewWorkspace.ts`.
+  - `locationBeacon.ts` is deleted; its origin check is the one `relay.ts` (phase 6's child-frame boundary) already applies, so the location relay is a `shell:location` handler registered from `DockviewWorkspace.ts` like phase 6's `shell:focused` and `shell:open` handlers.
+- The `shell:open` handler becomes generic over the inventory (phase 6 resolves chat addresses only) and drops the `title` hint (contracts section 10); the tab id the handshake carries becomes the minted `tab-<hex>` of contracts section 1 (phase 6 sends the panel id).
+- The shell's inventory reads the chat row's `/_instances` at the shell's own port (the row's URL until phase 10), and the nudge route `POST /api/apps/<name>/changed` lands for the first time (phase 6's chat nudges are debug-level logs).
 - `system/apps/terminal/src/terminal_app/hooks.py`: delete the compatibility forward from phase 3.
 - `system/apps/browser/src/browser/session.py` and `runner.py`: the manager's browser lookup (`get`, `resolve`) raises the typed `UnknownBrowserError` that phase 5 gave `navigate_browser`, and the runner's `/browsers` routes catch that instead of `KeyError` (they catch it only around the lookup coroutine today, so this is consistency rather than a bug); the routes themselves stay, for the fleet CLI.
 - `system/apps/files/assets/index.js`: the shell stops accepting `minds-location`.
