@@ -35,7 +35,7 @@ def instances_client(
 
 @pytest.fixture
 def files_store(tmp_path: Path) -> JsonStoreInstanceSource:
-    """A store wired the way the files app will wire it: referenced, not renameable, location tracked."""
+    """A store wired the way the files app wires it (``files_app.main.build_files_source``): referenced, not renameable, location tracked."""
     return JsonStoreInstanceSource(
         store_path=tmp_path / "instances.json",
         key_prefix=InstanceKeyPrefix("files"),
