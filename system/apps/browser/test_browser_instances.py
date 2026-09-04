@@ -12,7 +12,7 @@ from browser import runner
 from browser import session as bsession
 
 # The manifest the supervisord program line registers with ``forward_port.py --manifest``.
-_MANIFEST_PATH = Path(__file__).parent / "app.toml"
+_APP_MANIFEST_PATH = Path(__file__).parent / "app.toml"
 
 
 def _install_running_browser(name: str) -> bsession.LiveBrowser:
@@ -30,7 +30,7 @@ def _instances() -> list[dict[str, Any]]:
 
 
 def test_the_daemon_names_itself_after_its_manifest() -> None:
-    manifest = load_manifest(_MANIFEST_PATH)
+    manifest = load_manifest(_APP_MANIFEST_PATH)
     assert manifest.name == runner.APP_NAME
     assert manifest.instances is True
     assert manifest.instances_url is None
