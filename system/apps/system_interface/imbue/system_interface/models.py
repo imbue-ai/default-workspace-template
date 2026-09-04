@@ -433,6 +433,21 @@ class CreatedChatAgent(FrozenModel):
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 
 
+class ReplacementAgent(FrozenModel):
+    """The candidate agent a harness switch created, before the chat is re-pointed at it.
+
+    Distinct from ``CreatedChatAgent`` because it is NOT a new chat: it carries no
+    ChatId of its own (it inherits the chat it is about to back), and its
+    ``display_name`` is the chat's existing one, so the tab title never changes
+    across a switch. Its physical ``name`` is necessarily different -- two agents
+    cannot share a name while both exist.
+    """
+
+    agent_id: str = Field(description="The candidate agent's id")
+    name: str = Field(description="The candidate's unique physical (canonical) name")
+    display_name: str = Field(description="The chat's display name, unchanged by the switch")
+
+
 class CreateAgentResponse(FrozenModel):
     """Response from agent creation endpoints."""
 

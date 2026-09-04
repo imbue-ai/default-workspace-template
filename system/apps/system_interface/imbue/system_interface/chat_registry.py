@@ -157,6 +157,44 @@ class ChatRegistry(MutableModel):
             record = self._records.get(chat_id)
         return record.active_agent_id if record is not None else str(chat_id)
 
+    def chat_id_for_active_agent(self, agent_id: str) -> ChatId | None:
+        """Which chat ``agent_id`` currently backs, or None if it backs none.
+
+        The inverse of ``resolve_active_agent_id``, and the answer the agents
+        projection needs: an agent knows nothing about the chat above it, so the
+        chat id every product surface addresses has to be looked up from here.
+        Retired agents deliberately do not match -- they back no chat any more.
+        """
+        with self._lock:
+            for chat_id, record in self._records.items():
+                if record.active_agent_id == agent_id:
+                    return chat_id
+        # An unrecorded chat resolves by identity, so an agent with no record is its
+        # own chat -- exactly what the fallback in ``resolve_active_agent_id`` assumes.
+        return None
+
+    def chat_id_by_active_agent(self) -> dict[str, ChatId]:
+        """Every recorded chat's backing agent, mapped to the chat it backs.
+
+        The bulk form of ``chat_id_for_active_agent``, for the agents projection: it
+        stamps a chat id on every row it lists, and doing that a row at a time would
+        take this lock once per agent.
+        """
+        with self._lock:
+            return {record.active_agent_id: chat_id for chat_id, record in self._records.items()}
+
+    def retired_agent_ids(self, chat_id: ChatId) -> tuple[str, ...]:
+        """The chat's previous backing agents, oldest first. Empty until it switches.
+
+        These are what the transcript archive is keyed by, so reading a chat's whole
+        history is this list plus its active agent -- in exactly this order.
+        """
+        with self._lock:
+            record = self._records.get(chat_id)
+        if record is None:
+            return ()
+        return tuple(segment.agent_id for segment in record.segments[:-1])
+
     def ensure_chat(self, chat_id: ChatId, agent_id: str, harness: HarnessType, account_id: str | None) -> None:
         """Record a chat backed by ``agent_id``, if it has no record yet.
 

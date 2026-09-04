@@ -21,6 +21,8 @@ from imbue.system_interface.chat_registry import chats_dir_for_layout_dir
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.handoff_archive import TranscriptArchive
+from imbue.system_interface.handoff_archive import archives_dir_for_layout_dir
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import reconcile
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
@@ -89,6 +91,9 @@ def build_production_state(
         exclude_filters=exclude_filters,
         agent_manager=agent_manager,
         event_queues=event_queues,
+        transcript_archive=TranscriptArchive(
+            archives_dir=archives_dir_for_layout_dir(layout_dir) if layout_dir else None
+        ),
         # Advisory in-process mutex serializing layout-mutating ops. The agent
         # script never auto-retries on contention -- it surfaces the 409 to the
         # agent along with the in-flight holder's metadata.
@@ -111,6 +116,9 @@ def build_production_state(
     # transition into a dead state, the state drops that agent's watcher -- the
     # resident transcript, watch thread, and inotify watches go with it.
     agent_manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
+    # Deletion wiring: a chat that is gone for good takes its archived segments with it,
+    # so a switched-then-deleted chat leaves no transcripts behind.
+    agent_manager.set_chat_history_removal_callback(state.transcript_archive.remove_chat)
     return state
 
 
