@@ -13,6 +13,7 @@ from app_instances.primitives import (
     AbsoluteHttpUrl,
     InstanceKey,
     InstanceTitle,
+    InstanceUrl,
     LocationPath,
 )
 from app_manifest.primitives import ActionId
@@ -49,7 +50,7 @@ def test_list_maps_numbered_and_legacy_names_to_the_contracts_browser_row() -> N
     assert source.list_instances() == [
         InstanceRecord(
             key=InstanceKey("browser-2"),
-            url="/?session=browser-2",
+            url=InstanceUrl("/?session=browser-2"),
             title=InstanceTitle("Browser 2"),
             status=InstanceStatus.IDLE,
             lifetime=InstanceLifetime.EXPLICIT,
@@ -58,7 +59,7 @@ def test_list_maps_numbered_and_legacy_names_to_the_contracts_browser_row() -> N
         ),
         InstanceRecord(
             key=InstanceKey("alex-smith"),
-            url="/?session=alex-smith",
+            url=InstanceUrl("/?session=alex-smith"),
             title=InstanceTitle("alex-smith"),
             status=InstanceStatus.IDLE,
             lifetime=InstanceLifetime.EXPLICIT,
