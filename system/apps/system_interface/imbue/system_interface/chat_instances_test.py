@@ -166,7 +166,9 @@ def test_subagent_create_is_idempotent_and_listed(agent_manager: AgentManager) -
 
 def test_subagent_create_requires_a_listed_parent_and_both_params(agent_manager: AgentManager) -> None:
     parent_id = _agent_id()
+    primary_id = _agent_id()
     _seed_agent(agent_manager, parent_id, "Chat-1")
+    _seed_agent(agent_manager, primary_id, "services", labels={"is_primary": "true"})
     source = _source(agent_manager)
     with pytest.raises(InvalidParamsError):
         source.create_instance(ActionId("subagent"), {"parent": parent_id})
@@ -174,6 +176,9 @@ def test_subagent_create_requires_a_listed_parent_and_both_params(agent_manager:
         source.create_instance(ActionId("subagent"), {"session": "abc"})
     with pytest.raises(InvalidParamsError):
         source.create_instance(ActionId("subagent"), {"parent": _agent_id(), "session": "abc"})
+    # The primary services agent is tracked but never listed, so it is no parent either.
+    with pytest.raises(InvalidParamsError):
+        source.create_instance(ActionId("subagent"), {"parent": primary_id, "session": "abc"})
     with pytest.raises(InvalidParamsError):
         source.create_instance(ActionId("subagent"), {"parent": parent_id, "session": "abc", "extra": "x"})
 
