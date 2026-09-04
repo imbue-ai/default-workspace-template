@@ -21,7 +21,9 @@ Assert on markers that are true if and only if a route behaves correctly --
 status, the rendered content, the raw-data/source affordance, and the empty and
 overflow states -- not just that the route returned `200`. Add Playwright
 coverage wherever the value is in the rendered UI rather than the JSON, driving
-it against the isolated instance.
+it against the isolated instance. Launch with
+`executable_path="/opt/fortress/tilion-fortress/tilion"`: Fortress is the
+workspace's only browser, so never `playwright install` a managed one.
 
 ## Look at the rendered page
 
