@@ -195,6 +195,9 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
   // Every poll then 404s and the modal says the sign-in was replaced, while a live flow exists.
   startGeneration += 1;
   const attempt = startGeneration;
+  // Clear stale sign-in state on client before server replaces it.
+  flow = null;
+  m.redraw();
   const started = await m.request<FlowStart>({
     method: "POST",
     url: apiUrl("/api/accounts"),
