@@ -22,6 +22,14 @@ Modified, frontend:
 - `views/DockviewWorkspace.ts`: deep-link handling on load (contracts section 13), stripped from the URL with `history.replaceState`.
 - `models/ClientIdentity.ts`: active view no longer in local storage; the server's client record is the source on connect.
 
+Modified, the browser app (`system/apps/browser`), so that `layout.py open <url>` is one create:
+
+- `app.toml`: the `new` action gains the optional param `url`; contracts section 2's built-in table and the 4.3 browser row already describe it.
+- `src/browser/instances.py`: `create_instance` accepts `params.url`, validated as an `AbsoluteHttpUrl` (any other param stays a `400`), and hands it to the fleet.
+- `src/browser/interfaces.py`, `bridged_fleet.py`, `mock_fleet_test.py`: `create_browser` takes the optional start URL.
+- `src/browser/session.py`: `BrowserSessionManager.create` takes the start URL and passes it to the launch as the tab list (`_spawn_launch(session, restore_tabs=[url])`, the path restore already uses), and the manifest entry written at registration carries it, so a daemon crash before Chromium is up still restores the browser to that page. `POST /browsers` (`runner.py`) and the CLI's `new` may take the same field; the viewer and the shell's passthrough are unchanged.
+- Why not create then location: the daemon returns from a create while Chromium is still launching for several seconds, and the location verb answers `409` for a browser that is not `running`, so a relay that created and then navigated would have to poll.
+
 Rewritten:
 
 - `system/scripts/layout.py`: the surface of contracts section 12; stays stdlib-only; reads the registry for app names and origins as today; `open <app>` resolves the action; `rename`, `delete`, `replace-url` call the relay routes; `list`, `views`, `context` read `/api/inventory` and the client-activity summary; the wait-stable predicate reads the requesting client's layout.
@@ -34,10 +42,11 @@ Rewritten:
 - Two browsers (two clients) on one workspace arrange independently and share projects; a new client of a device kind starts from the most recently saved layout of that kind.
 - `tab_rebound` from the terminal app re-points the tab that switched or was renamed, exactly as today's `terminal_session` message did, and adds the new address to the view's tab set.
 - A deep link `/?view=<id>&open=<address>` switches the requesting client and docks the instance; a stale target is ignored.
-- `layout.py open https://example.com` creates a browser instance at that URL through the relay.
+- `layout.py open https://example.com` creates a browser instance at that URL through the relay: one `POST /api/apps/browser/instances` with `{"action": "new", "params": {"url": "https://example.com"}}`, docked like any other action.
 
 ## Tests
 
+- Browser: `new` with `url` starts the browser on that page (over the fake fleet, and the manifest entry carries it), an invalid or non-absolute `url` is a `400`, and `new` without it keeps opening the home page.
 - Backend: save-id echo suppression, stale-save refusal, seed rewrite, active-view broadcast, tab route validation (unknown tab, app mismatch), pruning removes files and records, the inventory document snapshot.
 - `layout_test.py`: every subcommand's argument parsing, the old spellings refused with the new form named, `open` resolution order, `--client` and `--view` handling, output shapes (inline snapshots).
 - Frontend: `layout_updated` and `active_view_changed` and `tab_rebound` handling, deep-link parsing.
