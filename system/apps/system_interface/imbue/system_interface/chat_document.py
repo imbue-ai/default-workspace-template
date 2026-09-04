@@ -37,7 +37,6 @@ from imbue.mngr.primitives import AgentId
 from imbue.system_interface import accounts_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
-from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import SendFailedError
@@ -53,6 +52,7 @@ from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.chat_instances import AGENT_ID_PATTERN
 from imbue.system_interface.chat_instances import SUBAGENT_KEY_SEPARATOR
 from imbue.system_interface.chat_instances import build_chat_instance_source
+from imbue.system_interface.chat_instances import taken_member_titles
 from imbue.system_interface.config import Config
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
@@ -954,11 +954,6 @@ def _create_chat_agent() -> Response:
     project_id = str(body.get("project_id") or "")
     request_fields = {key: value for key, value in body.items() if key != "project_id"}
 
-    # Chosen member titles count as taken so an auto-minted "Chat 2" can never
-    # collide with, say, a terminal someone renamed to "Chat 2".
-    layout_dir = _primary_agent_layout_dir()
-    titled_names = tuple(member_titles.read_titles(layout_dir).values()) if layout_dir is not None else ()
-
     try:
         create_request = CreateChatRequest.model_validate(request_fields)
         created = agent_manager.create_chat_agent(
@@ -967,7 +962,7 @@ def _create_chat_agent() -> Response:
             # anything a client asks for -- bootstrap stacks it on its own `mngr create`.
             extra_role_templates=(),
             project_id=project_id,
-            extra_taken_names=titled_names,
+            extra_taken_names=taken_member_titles(),
             account_id=create_request.account_id,
         )
         response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)

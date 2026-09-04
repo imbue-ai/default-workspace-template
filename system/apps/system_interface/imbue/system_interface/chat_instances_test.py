@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -16,6 +17,8 @@ from app_instances.primitives import MAX_INSTANCE_TITLE_LENGTH
 from app_instances.testing import RecordingNudger
 from app_manifest.primitives import ActionId
 
+from imbue.system_interface import member_titles
+from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.chat_errors import ChatCreateRefusedError
@@ -25,6 +28,7 @@ from imbue.system_interface.chat_instances import AgentManagerNudger
 from imbue.system_interface.chat_instances import instance_status_for_agent
 from imbue.system_interface.chat_instances import subagent_instance_key
 from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.models import CreatedChatAgent
 
 
 def _agent_id() -> str:
@@ -210,6 +214,23 @@ def test_unknown_action_and_params_are_refused(agent_manager: AgentManager) -> N
         source.create_instance(ActionId("open"), {})
     with pytest.raises(InvalidParamsError):
         source.create_instance(ActionId("new"), {"workdir": "/tmp"})
+
+
+def test_new_counts_the_chosen_member_titles_as_taken_names(agent_manager: AgentManager) -> None:
+    """A member someone renamed to "Chat 2" holds that name as surely as a chat, as the create route counts it."""
+    layout_dir = projects.primary_agent_layout_dir_from_env()
+    assert layout_dir is not None
+    member_titles.set_title(layout_dir, "terminal:terminal-1", "Chat 2")
+    created = CreatedChatAgent(agent_id=_agent_id(), name="Chat-3", display_name="Chat 3")
+    source = _source(agent_manager)
+
+    with patch.object(agent_manager, "create_chat_agent", return_value=created) as create:
+        record = source.create_instance(ActionId("new"), {})
+
+    assert create.call_args.kwargs["extra_taken_names"] == ("Chat 2",)
+    assert record.key == created.agent_id
+    assert record.title == "Chat 3"
+    assert record.lifetime is InstanceLifetime.REFERENCED
 
 
 def test_new_without_a_signed_in_account_is_refused(agent_manager: AgentManager) -> None:
