@@ -5,7 +5,7 @@ from app_instances.primitives import AbsoluteHttpUrl
 from pydantic import Field
 
 from browser.data_types import BrowserSnapshot
-from browser.errors import FleetCreateRefusedError, UnknownBrowserError
+from browser.errors import FleetCreateRefusedError
 from browser.interfaces import FleetInterface
 from browser.loop_bridge import AsyncLoopBridge
 from browser.primitives import BrowserName
@@ -58,13 +58,10 @@ class BridgedFleet(FleetInterface):
         )
 
     def navigate_browser(self, name: BrowserName, url: AbsoluteHttpUrl) -> None:
-        try:
-            self.bridge.run(
-                self.manager.navigate_browser(name, url),
-                timeout=self.route_timeout_seconds,
-            )
-        except KeyError as e:
-            raise UnknownBrowserError(f"no browser named {name!r}") from e
+        self.bridge.run(
+            self.manager.navigate_browser(name, url),
+            timeout=self.route_timeout_seconds,
+        )
 
 
 class ManagerNudger(InstanceNudgerInterface):
