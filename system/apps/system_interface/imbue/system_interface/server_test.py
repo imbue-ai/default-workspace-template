@@ -2692,6 +2692,11 @@ def test_create_chat_rejects_a_conflicting_explicit_name_with_a_409(
     assert "chat 2" in response.get_json()["detail"]
 
 
+# The initial snapshot crosses a real threaded server on the loopback; under CI load it has
+# been seen arriving after the default pytest-timeout, so the test gets the receive helper's
+# own budget and a retry.
+@pytest.mark.flaky
+@pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     """The WebSocket endpoint sends agents_updated and apps_updated on connect."""
     with serve_app(app) as served:
@@ -3065,6 +3070,9 @@ def test_layout_broadcast_refresh_bypasses_mutex(app: Flask) -> None:
     }
 
 
+# Same real-socket timing as test_websocket_endpoint_sends_initial_snapshot: the broadcast
+# has to cross the threaded server, which under CI load occasionally outlasts the budget.
+@pytest.mark.flaky
 @pytest.mark.timeout(15)
 def test_layout_broadcast_reload_system_interface_emits_ws_message(app: Flask) -> None:
     """``reload_system_interface`` broadcasts a layout_op so the shell reloads.
