@@ -17,7 +17,15 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
-import { getAgentById } from "../models/AgentManager";
+import { chatIdOfAgent, getAgentById } from "../models/AgentManager";
+import type { AgentState } from "../models/AgentManager";
+import {
+  dismissHarnessSwitchFailure,
+  harnessSwitchFailureFor,
+  harnessSwitchFor,
+  isSwitchingHarness,
+  requestHarnessSwitch,
+} from "../models/HarnessSwitch";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
@@ -29,6 +37,7 @@ import { placeFlyout } from "./flyout-position";
 import { Portal } from "./portal";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
+import { makeNoticeDialog } from "./NoticeDialog";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
 
@@ -36,8 +45,13 @@ import * as css from "./modelCardStyles";
  *  scriptable form, so the card cannot drive it -- and says where the user can. */
 const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
 
-/** Shown on a provider row this chat cannot switch to. */
-const LOCKED_PROVIDER_TOOLTIP = "Start a new chat to use this provider. In-chat provider switching is coming soon!";
+/** Shown on a provider row this chat cannot switch to: another account on the harness it is
+ *  already running. What a switch moves is the HARNESS, and moving to the one already in use
+ *  would destroy and rebuild the agent to accomplish nothing -- so the backend refuses it. */
+const SAME_HARNESS_TOOLTIP = "This chat already runs on this harness. Start a new chat to use this account.";
+
+/** Shown on every provider row while a switch is running: one at a time, per chat. */
+const SWITCH_IN_FLIGHT_TOOLTIP = "Wait for the switch in progress to finish.";
 
 /** The effort to carry when switching to `option`: keep the current one if the new
  *  model declares it, else the model's first shown (or first declared) effort. Null
@@ -51,6 +65,12 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
   }
   const shown = option.efforts.filter((effort) => effort.in_picker);
   return (shown[0] ?? option.efforts[0]).level;
+}
+
+/** A harness's display name, taken from any signed-in account that runs it. Falls back to the
+ *  bare harness key, which is what the backend calls it and is never nothing. */
+function harnessLabelFor(harness: string): string {
+  return getAccounts().find((account) => account.harness === harness)?.harness_label ?? harness;
 }
 
 function capitalizeEffort(level: string): string {
@@ -98,6 +118,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // Cleared whenever the flyout or the card closes, so someone who clicked the bin to see
   // what it did does not come back later to a primed one.
   const rowState = emptyAccountRowState();
+  // The account the user has picked to move this chat to, while the confirmation is up. Held
+  // rather than acted on immediately: a harness switch retires the agent that has been
+  // answering, so the row press is a proposal and the dialog is the decision.
+  let proposedAccount: ProviderAccount | null = null;
+  // Its own instance, because the dialog owns the Escape listener it closes over.
+  const NoticeDialog = makeNoticeDialog();
   // The index the pointer is currently dragging the effort slider to. Held locally because
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
@@ -408,12 +434,17 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
-   * Every account that is not this chat's is LOCKED. Our chats bind to an account when they
-   * are created and nothing rebinds them, so there is no state in which switching would work
-   * -- clicking one opens a new chat on it instead, which is what the user meant.
+   * An account on ANOTHER harness moves this chat onto it, keeping the conversation. An
+   * account on the harness the chat already runs is locked, because a switch changes the
+   * harness and there would be nothing to change -- and so is every row while a switch is
+   * already in flight, since a chat can only be doing one at a time.
+   *
+   * Picking one asks first. The switch destroys the agent that has been answering and starts
+   * another in its place, which is not something a click on a menu row should do unannounced.
    */
-  function providerFlyout(current: ProviderAccount | null): m.Vnode {
+  function providerFlyout(current: ProviderAccount | null, agent: AgentState): m.Vnode {
     const rows = getAccounts();
+    const switching = isSwitchingHarness(agent);
     return flyoutShell([
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every row here is keyed.
@@ -424,20 +455,28 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
           : rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
+              const sameHarness = row.harness === agent.harness;
+              const offered = !isCurrent && !sameHarness && !switching;
+              const lockedTooltip = switching ? SWITCH_IN_FLIGHT_TOOLTIP : SAME_HARNESS_TOOLTIP;
               return accountRow({
                 row,
                 isCurrent,
-                rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW_LOCKED,
+                rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : offered ? css.ACCOUNT_ROW : css.ACCOUNT_ROW_LOCKED,
                 rowAttrs: {
-                  "aria-disabled": isCurrent ? undefined : "true",
-                  ...tooltipAttrs(isCurrent ? null : LOCKED_PROVIDER_TOOLTIP),
+                  "aria-disabled": isCurrent || offered ? undefined : "true",
+                  ...tooltipAttrs(isCurrent ? null : offered ? `Move this chat to ${row.label}` : lockedTooltip),
                 },
                 onSelect: () => {
-                  // Locked, and locked means locked: a chat's account is fixed at create
-                  // time. Opening a new chat on it is the reachable version of the wish,
-                  // but it is a different act, so it is the tooltip's offer -- not
-                  // something a click on a disabled-looking row does by surprise.
-                  if (isCurrent) setFlyout(null);
+                  if (isCurrent) {
+                    setFlyout(null);
+                    return;
+                  }
+                  // Locked stays locked: nothing happens, and the tooltip is the whole
+                  // explanation. Everything else asks before it moves the chat.
+                  if (offered) {
+                    proposedAccount = row;
+                    setFlyout(null);
+                  }
                 },
                 state: rowState,
               });
@@ -575,6 +614,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
 
+      // A switch is reported by the BACKEND on the agent, so every open window says the same
+      // thing about it -- not only the one that asked for it.
+      const switchState = harnessSwitchFor(agent);
+      const switchInFlight = switchState !== null && switchState.phase !== "failed";
+      const switchFailure = harnessSwitchFailureFor(agent);
+
       // The chip states the WHOLE choice, from the same three values the card's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
       // the model has one to state, and the bolt only when fast is actually on.
@@ -619,7 +664,54 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         ],
       );
 
-      if (cardAnchor === null) return m("div", { class: "model-bar" }, trigger);
+      // One dialog at a time, and a failure to report outranks a proposal: the two share this
+      // component instance (it owns the Escape handler it closes over), and a switch that just
+      // failed is news the user needs before being asked to pick again.
+      const dialog =
+        switchFailure !== null
+          ? m(NoticeDialog, {
+              title: "The harness switch did not happen",
+              body: [switchFailure, "This chat is still on the harness it was on, with its conversation intact."],
+              dismissLabel: "OK",
+              onDismiss: () => {
+                proposedAccount = null;
+                dismissHarnessSwitchFailure(agent);
+              },
+            })
+          : proposedAccount === null
+            ? null
+            : m(NoticeDialog, {
+                title: `Move this chat to ${proposedAccount.harness_label}?`,
+                body: [
+                  `The conversation, its tab and its projects all stay as they are. The agent answering ` +
+                    `it is replaced by one running on ${proposedAccount.label}, which starts by reading the ` +
+                    `history so far.`,
+                  "Anything the current agent knows that is not written down in the conversation is lost.",
+                ],
+                dismissLabel: "Cancel",
+                actions: [
+                  {
+                    label: "Switch harness",
+                    tooltip: `Retire this chat's agent and continue on ${proposedAccount.harness_label}`,
+                    run: () => {
+                      const picked = proposedAccount;
+                      proposedAccount = null;
+                      if (picked !== null) {
+                        closeCard();
+                        requestHarnessSwitch(chatIdOfAgent(agent), picked.id, picked.harness);
+                      }
+                    },
+                  },
+                ],
+                onDismiss: () => {
+                  proposedAccount = null;
+                },
+              });
+
+      if (cardAnchor === null) {
+        const bar = m("div", { class: "model-bar" }, trigger);
+        return dialog === null ? bar : [bar, m(Portal, { children: [dialog] })];
+      }
 
       const currentIdentity: ModelIdentity =
         matched === null
@@ -640,8 +732,14 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         m("div", { class: css.CARD_INNER }, [
           menuRow({
             label: "Provider",
-            value: account?.provider ?? "Not signed in",
-            sub: account?.harness_label,
+            // Mid-switch the row states the switch instead of the account: the account it is
+            // showing is the outgoing one, and naming it while it is being replaced is the one
+            // thing that would be actively misleading.
+            value:
+              switchState !== null && switchInFlight
+                ? `Moving to ${harnessLabelFor(switchState.target_harness)}...`
+                : (account?.provider ?? "Not signed in"),
+            sub: switchInFlight ? undefined : account?.harness_label,
             which: "providers",
             openable: true,
             tooltip: null,
@@ -689,14 +787,14 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
       const openFlyout =
         flyout === "providers"
-          ? providerFlyout(account)
+          ? providerFlyout(account, agent)
           : flyout === "model"
             ? modelFlyout(agentId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
             : null;
 
       // The card and its flyout PORTAL to <body>. The chat panel lives inside dockview's
       // clipping overlay, so a card that extends past the panel would be cut off at its edge.
-      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout] })];
+      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout, dialog] })];
     },
   };
 }

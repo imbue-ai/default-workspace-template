@@ -50,6 +50,7 @@ from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_chat_display_label_command
+from imbue.system_interface.agent_manager import _build_chat_freeze_command
 from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
@@ -70,6 +71,9 @@ from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.models import ChatId
+from imbue.system_interface.models import HandoffPhase
+from imbue.system_interface.models import HandoffState
 from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -1434,6 +1438,187 @@ def test_chat_display_label_argv_accepted_by_live_cli() -> None:
     argv = _build_chat_display_label_command(mngr_binary="mngr", agent_id="agent-123", name="Chat 2")
     assert_mngr_argv_valid(argv)
     assert argv == ["mngr", "label", "agent-123", "--label", "display_name=Chat 2"]
+
+
+def test_retiring_a_switched_chats_old_agent_keeps_the_chat(agent_manager: AgentManager) -> None:
+    """Destroying a RETIRED agent must not delete the chat it used to back.
+
+    The sharpest case in the whole feature: a chat's id is its FIRST agent's id, so on a
+    first switch the agent being destroyed is the one the chat is named after. Removing
+    the record by that id would delete the live chat moments after the commit point.
+    """
+    old = _agent_details("Chat-1")
+    replacement = _agent_details("Chat-1-h2")
+    agent_manager._handle_observe_event(make_agent_state_event(old))
+    chat_id = ChatId(str(old.id))
+    agent_manager.chat_registry.ensure_chat(chat_id, str(old.id), HarnessType.CLAUDE, None)
+    agent_manager.chat_registry.begin_segment(chat_id, str(replacement.id), HarnessType.CODEX, None)
+
+    agent_manager._handle_observe_event(make_agent_removed_event(old.id, old.name, old.host.id))
+
+    assert agent_manager.chat_registry.get(chat_id) is not None
+    assert agent_manager.chat_registry.resolve_active_agent_id(chat_id) == str(replacement.id)
+
+
+def test_destroying_a_chats_active_agent_removes_the_chat(agent_manager: AgentManager) -> None:
+    """The other half of the same branch: an agent that still backs its chat IS the chat."""
+    agent = _agent_details("Chat-2")
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    chat_id = ChatId(str(agent.id))
+    agent_manager.chat_registry.ensure_chat(chat_id, str(agent.id), HarnessType.CLAUDE, None)
+
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
+
+    assert agent_manager.chat_registry.get(chat_id) is None
+
+
+def test_chat_freeze_argv_accepted_by_live_cli() -> None:
+    """Freezing a chat sets the label mngr's send and start paths refuse on."""
+    argv = _build_chat_freeze_command(mngr_binary="mngr", agent_id="agent-123", operation_id="op-7")
+    assert_mngr_argv_valid(argv)
+    assert argv == ["mngr", "label", "agent-123", "--label", "chat_frozen=op-7"]
+
+
+def test_chat_unfreeze_argv_clears_the_label_by_setting_it_empty() -> None:
+    """``mngr label`` merges, so an EMPTY value is the only way to lift a freeze.
+
+    Pinned as its own test because rollback correctness depends on it: if an empty
+    value merged as a set rather than a clear, a rolled-back switch would leave the
+    user's chat permanently unable to receive a message.
+    """
+    argv = _build_chat_freeze_command(mngr_binary="mngr", agent_id="agent-123", operation_id="")
+    assert_mngr_argv_valid(argv)
+    assert argv[-1] == "chat_frozen="
+
+
+def test_replacement_create_argv_keeps_the_display_name_and_takes_the_message_from_a_file() -> None:
+    """A switch is the one create whose display and physical names differ.
+
+    The chat keeps its title (so no tab renames across a switch) while the new agent
+    takes a distinct canonical name, because two live agents cannot share one. The
+    handover text rides ``--message-file`` rather than argv: it is a whole transcript
+    digest, far past any safe command-line length.
+    """
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="Chat 2",
+        agent_id="agent-123",
+        primary_labels={},
+        harness=HarnessType.CODEX,
+        physical_name="Chat-2-h2",
+        message_file=Path("/tmp/handoff/first_message.md"),
+    )
+    assert_mngr_argv_valid(argv)
+    # Position 2 is the positional name; the display name survives only as the label.
+    assert argv[2] == "Chat-2-h2"
+    assert "display_name=Chat 2" in argv
+    assert argv[argv.index("--message-file") + 1] == "/tmp/handoff/first_message.md"
+
+
+def test_replacement_create_argv_omits_the_message_file_when_there_is_no_handover() -> None:
+    """No context file means a cold start, not a create that fails on a missing path."""
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="Chat 2",
+        agent_id="agent-123",
+        primary_labels={},
+        harness=HarnessType.CODEX,
+        physical_name="Chat-2-h2",
+        message_file=None,
+    )
+    assert_mngr_argv_valid(argv)
+    assert "--message-file" not in argv
+
+
+def test_replacement_name_counts_switches_rather_than_chats(agent_manager: AgentManager) -> None:
+    """A replacement is named after the chat it backs, suffixed by switch number.
+
+    Not minted from the free-slot allocator: that names a NEW conversation, so a
+    switch of "Chat 2" in a workspace whose next free slot is 7 would produce
+    "Chat-7" and the machine-level view would stop reading as that chat.
+    """
+    _tracked_chat(agent_manager, "a1", "Chat-2", display_name="Chat 2")
+    with agent_manager._lock:
+        first = agent_manager._free_replacement_name_locked("Chat 2", agent_manager._taken_names_locked())
+    assert first == "Chat-2-h2"
+
+    _tracked_chat(agent_manager, "a2", "Chat-2-h2", display_name="Chat 2")
+    with agent_manager._lock:
+        second = agent_manager._free_replacement_name_locked("Chat 2", agent_manager._taken_names_locked())
+    assert second == "Chat-2-h3"
+
+
+def test_get_agents_serialized_stamps_the_chat_id_and_hides_a_switch_candidate(
+    agent_manager: AgentManager,
+) -> None:
+    """A row carries the chat it backs; a switch's candidate is not a row at all.
+
+    The candidate exists on the machine from the moment ``mngr create`` registers it,
+    which is before the chat is re-pointed at it -- listing it would show the user a
+    second, empty copy of the chat they are switching.
+    """
+    _tracked_chat(agent_manager, "a1", "Chat-2", display_name="Chat 2")
+    _tracked_chat(agent_manager, "a2", "Chat-2-h2", display_name="Chat 2")
+    agent_manager.chat_registry.ensure_chat(ChatId("a1"), "a1", HarnessType.CLAUDE, None)
+    agent_manager.set_agent_hidden("a2", True)
+
+    rows = agent_manager.get_agents_serialized()
+    assert [row["id"] for row in rows] == ["a1"]
+    assert rows[0]["chat_id"] == "a1"
+    assert rows[0]["handoff"] is None
+
+    # After the commit point the chat is the replacement's, and the row it stamps is
+    # still the ORIGINAL chat id -- that is the whole point of the registry.
+    agent_manager.chat_registry.begin_segment(ChatId("a1"), "a2", HarnessType.CODEX, None)
+    agent_manager.set_agent_hidden("a2", False)
+    by_id = {row["id"]: row for row in agent_manager.get_agents_serialized()}
+    assert by_id["a2"]["chat_id"] == "a1"
+    assert by_id["a1"]["chat_id"] is None
+
+
+def test_discovering_a_switch_candidate_does_not_record_it_as_a_chat(agent_manager: AgentManager) -> None:
+    """The bootstrap must leave a hidden candidate alone until the chat is re-pointed.
+
+    ``mngr create`` registers the candidate well before it returns, so discovery sees a
+    chat-labelled agent with no record. Recording one would give it a chat of its own
+    id, and that record would then compete with the real chat for the same active agent
+    -- which is what made the chat's id appear to change at the commit point.
+    """
+    _tracked_chat(agent_manager, "a1", "Chat-2", display_name="Chat 2")
+    _tracked_chat(agent_manager, "a2", "Chat-2-h2", display_name="Chat 2")
+    agent_manager.chat_registry.ensure_chat(ChatId("a1"), "a1", HarnessType.CLAUDE, None)
+    agent_manager.set_agent_hidden("a2", True)
+
+    agent_manager._ensure_chat_recorded("a2", {"display_name": "Chat 2"}, HarnessType.CODEX)
+
+    assert agent_manager.chat_registry.get(ChatId("a2")) is None
+    assert agent_manager.chat_registry.chat_id_by_active_agent() == {"a1": ChatId("a1")}
+
+    # And once the commit point has moved the chat onto it, a later pass is still a no-op.
+    agent_manager.chat_registry.begin_segment(ChatId("a1"), "a2", HarnessType.CODEX, None)
+    agent_manager.set_agent_hidden("a2", False)
+    agent_manager._ensure_chat_recorded("a2", {"display_name": "Chat 2"}, HarnessType.CODEX)
+
+    assert agent_manager.chat_registry.get(ChatId("a2")) is None
+    assert agent_manager.chat_registry.chat_id_by_active_agent() == {"a2": ChatId("a1")}
+
+
+def test_get_agents_serialized_reports_the_switch_in_flight(agent_manager: AgentManager) -> None:
+    """Progress lives on the backend so every client rebuilds it, not just the clicker."""
+    _tracked_chat(agent_manager, "a1", "Chat-2", display_name="Chat 2")
+    agent_manager.chat_registry.ensure_chat(ChatId("a1"), "a1", HarnessType.CLAUDE, None)
+    agent_manager.set_handoff_state(
+        ChatId("a1"),
+        HandoffState(phase=HandoffPhase.PREPARING, target_harness=HarnessType.CODEX, detail="Freezing the chat"),
+    )
+
+    handoff = agent_manager.get_agents_serialized()[0]["handoff"]
+    assert handoff is not None
+    assert handoff["phase"] == HandoffPhase.PREPARING
+    assert handoff["target_harness"] == HarnessType.CODEX
+
+    agent_manager.set_handoff_state(ChatId("a1"), None)
+    assert agent_manager.get_agents_serialized()[0]["handoff"] is None
 
 
 def _tracked_chat(manager: AgentManager, agent_id: str, name: str, display_name: str | None = None) -> None:

@@ -56,6 +56,7 @@ from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface.harness_handoff import HandoffError
 from imbue.system_interface import accounts_endpoints
 from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.interrupt import restart_drain
@@ -112,6 +113,8 @@ from imbue.system_interface.models import SetModelChoiceRequest
 from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import StopAgentResponse
+from imbue.system_interface.models import SwitchHarnessRequest
+from imbue.system_interface.models import SwitchHarnessResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
@@ -1029,6 +1032,28 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
     # the resolved value is unchanged (see H1 in the model-bar plan).
     agent_manager.refresh_model_choice(agent_info.id)
     return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+def _switch_harness_endpoint(chat_id: str) -> Response:
+    """Move this CHAT onto another account's harness, keeping the conversation.
+
+    Chat-native, so it is the one route on the chats blueprint that is NOT handed a
+    resolved ``agent_id``: the whole point of the operation is that the agent behind
+    the chat changes, so resolving it up front would name the agent that is about to
+    be retired.
+
+    Answers only whether the switch was accepted. Every refusal is decided
+    synchronously and returned here (404 unknown chat, 409 not switchable right now,
+    500 the attempt broke); the accepted switch then runs on its own thread and
+    reports itself through ``AgentStateItem.handoff`` on the agents WebSocket, which
+    is what every open client watches -- not just the one that clicked.
+    """
+    req = SwitchHarnessRequest.model_validate(request.get_json())
+    try:
+        get_state().handoff_coordinator.start_switch(ChatId(chat_id), req.account_id, req.operation_id)
+    except HandoffError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=e.http_status)
+    return _json_response(SwitchHarnessResponse(status="accepted", operation_id=req.operation_id).model_dump())
 
 
 def _get_model_options_endpoint(agent_id: str) -> Response:
@@ -2935,8 +2960,12 @@ def _destroy_agent(agent_id: str) -> Response:
         error = ErrorResponse(detail=failure)
         return _json_response(error.model_dump(), status_code=500)
 
-    # No-op for ids that were never chats (workers).
-    agent_manager.chat_registry.remove(ChatId(agent_id))
+    # Removed by CHAT id, which is only the same as this agent's id for a chat that has
+    # never switched harness -- looking it up is what keeps a switched chat's record from
+    # surviving its own deletion. No-op for ids that were never chats (workers).
+    chat_id = agent_manager.chat_registry.chat_id_for_active_agent(agent_state.id) or ChatId(agent_state.id)
+    agent_manager.chat_registry.remove(chat_id)
+    get_state().transcript_archive.remove_chat(chat_id)
 
     return _json_response(DestroyAgentResponse(status="ok").model_dump())
 
@@ -3603,6 +3632,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
             ("/subagents/<subagent_session_id>/events", _get_subagent_events, ("GET",)),
             ("/subagents/<subagent_session_id>/stream", _stream_subagent_events, ("GET",)),
         ),
+        chat_native_rules=(("/switch-harness", _switch_harness_endpoint, ("POST",)),),
     )
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(

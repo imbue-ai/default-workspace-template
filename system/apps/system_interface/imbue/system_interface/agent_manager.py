@@ -42,6 +42,7 @@ from imbue.mngr.api.observe import parse_observe_event_line
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import CHAT_FROZEN_LABEL
 from imbue.mngr.primitives import HostName
 from imbue.system_interface import client_activity
 from imbue.system_interface import projects
@@ -96,7 +97,9 @@ from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import ChatId
 from imbue.system_interface.models import CreatedChatAgent
+from imbue.system_interface.models import HandoffState
 from imbue.system_interface.models import QueuedMessageState
+from imbue.system_interface.models import ReplacementAgent
 from imbue.system_interface.naming import AUTO_NAME_WORD_BY_HARNESS
 from imbue.system_interface.naming import canonical_agent_name
 from imbue.system_interface.naming import first_free_numbered_name
@@ -147,6 +150,14 @@ _LIVENESS_POLL_INTERVAL_SECONDS: Final[float] = 10.0
 # host), so they are short local operations -- but they run inside a request the
 # user is waiting on, so they are bounded rather than left to hang.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
+
+# How long a harness switch waits for its replacement agent. ``mngr create``
+# provisions the agent, starts the harness, waits for it to be ready and delivers
+# the first message before returning, so this bounds all of that -- a cold harness
+# start plus a first turn's worth of model latency. Generous for the same reason
+# the destroy cap is: the alternative to patience here is rolling a switch back
+# that was about to succeed.
+REPLACEMENT_CREATE_TIMEOUT_SECONDS: Final[float] = 300.0
 
 # Labels that ask for a chat's tab to be surfaced when the chat appears, so the
 # user lands on it without hunting. ``assist`` is the original, set by the minds
@@ -233,6 +244,8 @@ def _build_chat_create_command(
     extra_role_templates: tuple[str, ...] = (),
     project_id: str = "",
     account_args: Sequence[str] = (),
+    physical_name: str = "",
+    message_file: Path | None = None,
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent on a given harness.
 
@@ -242,6 +255,17 @@ def _build_chat_create_command(
     shares this one builder: adding a harness means passing a different name here, not
     writing another near-identical builder, and not adding a per-harness create template.
 
+    ``name`` is the display name, and the agent's true name is its canonical form --
+    the pairing mngr enforces -- except when ``physical_name`` splits the two. A
+    harness switch is the one case that needs them apart: the replacement agent has to
+    keep the chat's display name (or the tab would rename itself mid-conversation)
+    while taking a name of its own, because the outgoing agent still holds the
+    canonical one.
+
+    ``message_file`` is delivered as the agent's first message once it is ready.
+    Passed as a file rather than ``--message`` because a handover pointer is
+    multi-line prose, and argv is the wrong place for it.
+
     Pure: argv assembly only, so the repo<->mngr CLI contract is testable against the
     live CLI without constructing an ``AgentManager`` or running a subprocess (see
     ``agent_manager_test.py``).
@@ -249,7 +273,7 @@ def _build_chat_create_command(
     cmd = [
         mngr_binary,
         "create",
-        canonical_agent_name(name) or name,
+        physical_name or canonical_agent_name(name) or name,
         "--id",
         agent_id,
         "--transfer",
@@ -278,6 +302,8 @@ def _build_chat_create_command(
     project_label = _chat_project_label(primary_labels, project_id)
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
+    if message_file is not None:
+        cmd.extend(["--message-file", str(message_file)])
     # The account this chat runs on, if any. These come from ``binding.create_args`` and have
     # to ride the create rather than follow it: ``mngr create`` provisions, starts, waits for
     # readiness and delivers the first message before returning, so a repoint afterwards
@@ -353,6 +379,26 @@ def _rename_failure_detail(cmd: list[str], result: FinishedProcess) -> str:
     if result.returncode is not None and result.returncode < 0:
         return f"'{cmd[1]}' was stopped by signal {-result.returncode}"
     return f"'{cmd[1]}' exited with code {result.returncode}"
+
+
+def _build_chat_freeze_command(mngr_binary: str, agent_id: str, operation_id: str) -> list[str]:
+    """Build the ``mngr label`` argv that freezes or unfreezes one agent's chat.
+
+    An ``operation_id`` of "" unfreezes. That asymmetry is mngr's, not ours: the
+    label CLI merges rather than replaces, so an empty value is how a label is
+    cleared -- and it means freeze and unfreeze are the same command, which is
+    what makes a rollback as simple as a freeze. The value is the operation id
+    rather than "true" so a stuck freeze names the switch that left it behind.
+
+    Pure: argv assembly only (see ``_build_chat_create_command``).
+    """
+    return [
+        mngr_binary,
+        "label",
+        agent_id,
+        "--label",
+        f"{CHAT_FROZEN_LABEL}={operation_id}",
+    ]
 
 
 def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
@@ -628,6 +674,18 @@ class AgentManager:
     # Bootstrapped idempotently from every discovery pass; resolution falls
     # back to identity, so a missing record never changes behavior today.
     _chat_registry: ChatRegistry
+    # Agents that exist on the machine but must not be listed as chats: a harness
+    # switch's candidate, from the moment it is created until the chat is
+    # re-pointed at it. A candidate has no registry record yet (the record still
+    # names the outgoing agent), so this cannot live on the registry -- and it is
+    # deliberately in-memory: a candidate cannot survive a restart of the process
+    # that was mid-switch, so on the next boot it is an orphan to clean up, not a
+    # hidden agent to keep hiding.
+    _hidden_agent_ids: set[str]
+    # What a chat's switch is currently doing, keyed by CHAT id, so the frontend
+    # can rebuild the progress it shows from the backend rather than remember it
+    # across a reload or a second client. Absent = no switch in flight.
+    _handoff_by_chat_id: dict[ChatId, HandoffState]
     # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: UI presence and
     # messages (via ``record_activity``, from the ``/api/activity`` endpoint),
     # lifecycle changes (via ``record_running_agents``, from the observe stream),
@@ -647,6 +705,11 @@ class AgentManager:
     # manager only knows WHEN an agent is positively gone or stopped. ``None`` (tests) =
     # no eviction.
     _watcher_eviction_callback: Callable[[str], None] | None
+    # Disposes of a DELETED chat's archived history (the retired segments a harness
+    # switch left on disk). Same injection reason as above, opposite meaning: the
+    # manager knows when a chat is gone for good, not where its history is kept.
+    # ``None`` (tests) = nothing to dispose of.
+    _chat_history_removal_callback: Callable[[ChatId], None] | None
 
     @classmethod
     def build(
@@ -710,8 +773,11 @@ class AgentManager:
         manager._auto_open_ledger = auto_open_ledger if auto_open_ledger is not None else AutoOpenLedger(path=None)
         manager._pending_auto_open_name_by_id = {}
         manager._chat_registry = chat_registry if chat_registry is not None else ChatRegistry(chats_dir=None)
+        manager._hidden_agent_ids = set()
+        manager._handoff_by_chat_id = {}
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
+        manager._chat_history_removal_callback = None
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
         # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
@@ -881,12 +947,76 @@ class AgentManager:
         recorded, which makes it safe on every discovery pass and restart.
         Called outside ``_lock``: the registry has its own lock and may write a
         file.
+
+        Also a no-op for a hidden agent: the only hidden agents are a harness
+        switch's candidates, which are nobody's chat until ``begin_segment``
+        re-points the chat at them. Recording one here would give it a chat of its
+        own id, and that record would then compete with the real one for the same
+        active agent.
         """
         if not _is_chat_agent(labels):
             return
+        with self._lock:
+            if agent_id in self._hidden_agent_ids:
+                return
         self._chat_registry.ensure_chat(
             ChatId(agent_id), agent_id=agent_id, harness=harness, account_id=labels.get("account")
         )
+
+    def set_handoff_state(self, chat_id: ChatId, state: HandoffState | None) -> None:
+        """Publish (or clear) what ``chat_id``'s switch is doing, and push it to clients.
+
+        The frontend never derives switch progress from its own optimism: it renders
+        whatever this says, so a reload mid-switch, a second window, and a switch
+        started by another client all show the same thing.
+        """
+        with self._lock:
+            if state is None:
+                self._handoff_by_chat_id.pop(chat_id, None)
+            else:
+                self._handoff_by_chat_id[chat_id] = state
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def get_handoff_state(self, chat_id: ChatId) -> HandoffState | None:
+        """What ``chat_id``'s switch is doing, or None if it has none in flight."""
+        with self._lock:
+            return self._handoff_by_chat_id.get(chat_id)
+
+    def set_agent_hidden(self, agent_id: str, is_hidden: bool) -> None:
+        """Hide or unhide one agent from the chat list (see ``_hidden_agent_ids``).
+
+        Unhiding is what the commit point does: the candidate becomes the chat's
+        agent and must be listed from then on. Rollback destroys it instead, which
+        drops it from ``_agents`` and makes the hidden entry moot -- so this is
+        cleared there too rather than left to accumulate.
+        """
+        with self._lock:
+            if is_hidden:
+                self._hidden_agent_ids.add(agent_id)
+            else:
+                self._hidden_agent_ids.discard(agent_id)
+
+    def set_chat_frozen(self, agent_id: str, operation_id: str) -> str | None:
+        """Freeze ``agent_id``'s chat against sends and starts, or unfreeze it with "".
+
+        Returns None on success or a failure detail. Freezing is the FIRST step of a
+        switch and the one that makes the rest safe: while the label is set, mngr
+        refuses to deliver to this agent and refuses to start it, so nothing can slip
+        a turn into the conversation between the snapshot and the handover -- not the
+        UI, not ``mngr message`` from a terminal, not the auto-revive of a stopped
+        agent. Reads are untouched, which is what keeps the outgoing transcript
+        available to archive.
+        """
+        cmd = _build_chat_freeze_command(self._mngr_binary, agent_id, operation_id)
+        result = run_local_command_modern_version(
+            command=cmd,
+            cwd=None,
+            is_checked=False,
+            timeout=_RENAME_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            return _rename_failure_detail(cmd, result)
+        return None
 
     def record_activity(
         self,
@@ -977,9 +1107,7 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
             if agent_state is None or not is_lifecycle_dead(agent_state.state):
                 return
-            self._agents[agent_id] = agent_state.model_copy_update(
-                to_update(agent_state.field_ref().state, "WAITING")
-            )
+            self._agents[agent_id] = agent_state.model_copy_update(to_update(agent_state.field_ref().state, "WAITING"))
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
@@ -1257,11 +1385,27 @@ class AgentManager:
         name mngr holds for the agent, and ``name`` is its canonical form, so the
         UI can show what the user typed while still addressing the agent by
         ``name``. Null means mngr has no such label and ``name`` is all there is.
+
+        ``chat_id`` is the id every product surface addresses this row by -- equal to
+        ``id`` for a chat that has never switched harness, and the ORIGINAL id after
+        one. It is sent explicitly rather than left implicit so the frontend never has
+        to know whether a switch has happened. Null means the agent backs no chat (a
+        worker, the primary services agent), which is also every row the UI does not
+        route through a chat.
+
+        A harness switch's candidate agent is left out entirely: it exists on the
+        machine but is not yet anybody's chat, and listing it would put a second tab
+        on screen for one conversation.
         """
+        # Resolved before taking ``_lock``: the registry takes its own lock, and reading
+        # it once per row would also make listing quadratic in the number of chats.
+        chat_id_by_agent_id = self._chat_registry.chat_id_by_active_agent()
         with self._lock:
             return [
                 {
                     "id": a.id,
+                    "chat_id": chat_id_by_agent_id.get(a.id),
+                    "handoff": self._handoff_payload_locked(chat_id_by_agent_id.get(a.id)),
                     "name": a.name,
                     "state": a.state,
                     "labels": a.labels,
@@ -1280,7 +1424,15 @@ class AgentManager:
                     "shoulder_tap_available": self._shoulder_tap_available(a),
                 }
                 for a in self._agents.values()
+                if a.id not in self._hidden_agent_ids
             ]
+
+    def _handoff_payload_locked(self, chat_id: ChatId | None) -> dict[str, Any] | None:
+        """The switch in flight for ``chat_id``, serialized, or None. Caller holds ``_lock``."""
+        if chat_id is None:
+            return None
+        state = self._handoff_by_chat_id.get(chat_id)
+        return state.model_dump() if state is not None else None
 
     def _shoulder_tap_available(self, agent_state: AgentStateItem) -> bool:
         """Whether the shoulder-tap button is offered for ``agent_state`` (contract Shoulder-tap).
@@ -1490,6 +1642,117 @@ class AgentManager:
         )
 
         return CreatedChatAgent(agent_id=ChatId(agent_id), name=canonical_name, display_name=display_name)
+
+    def _free_replacement_name_locked(self, display_name: str, taken_names: list[str]) -> str:
+        """A canonical name for a replacement agent that no live agent already holds.
+
+        Derived from the chat's own name rather than minted fresh, so the machine-level
+        view of a switched chat still reads as that chat: ``Chat-2``, ``Chat-2-h2``,
+        ``Chat-2-h3``. The suffix counts SWITCHES, not chats -- ``first_free_numbered_name``
+        is for naming a new conversation, and using it here would name the replacement
+        after an unrelated free slot ("Chat 7" for a switch of "Chat 2").
+
+        Caller holds ``_lock`` (``taken_names`` is only valid under it).
+        """
+        base = canonical_agent_name(display_name) or display_name
+        for suffix in range(2, 1000):
+            candidate = f"{base}-h{suffix}"
+            if not is_name_conflict(candidate, taken_names):
+                return candidate
+        raise AgentCreationError(f"Could not find a free replacement name for '{display_name}'")
+
+    def create_replacement_agent(
+        self,
+        *,
+        display_name: str,
+        account_id: str,
+        message_file: Path | None,
+        project_id: str = "",
+        timeout: float = REPLACEMENT_CREATE_TIMEOUT_SECONDS,
+    ) -> ReplacementAgent:
+        """Create the candidate agent for a harness switch, synchronously and unlisted.
+
+        This is ``create_chat_agent``'s sibling for an agent that is replacing another
+        rather than starting a conversation, and every difference follows from that:
+
+        - It blocks. ``mngr create`` provisions, starts, waits for the harness to be
+          ready and delivers the first message before it returns, so a returncode of 0
+          IS the readiness signal a switch needs before it dare re-point the chat.
+        - It is hidden until the chat is re-pointed at it. A candidate that is listed
+          would show up as a second tab for one conversation, and a candidate that
+          failed would leave one behind.
+        - It broadcasts no proto-agent, claims no ``/welcome``, and moves no
+          most-recently-used account. Those all announce a NEW chat; this is the same
+          chat continuing.
+        - It keeps the chat's ``display_name`` and takes a physical name of its own
+          (see ``_free_replacement_name_locked``).
+
+        Raises ``AgentCreationError`` if the candidate could not be brought up. The
+        caller is then still holding a frozen but intact outgoing agent, which is
+        exactly the state a rollback needs.
+        """
+        try:
+            account = resolve_binding(account_id)
+        except (AccountError, BindingError) as e:
+            raise AgentCreationError(str(e)) from e
+        harness = harness_for(account)
+        assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
+
+        agent_id = str(AgentId())
+        with self._lock:
+            work_dir = self._resolve_agent_work_dir(self._own_agent_id)
+            if work_dir is None:
+                raise AgentCreationError(f"Cannot determine work directory for primary agent {self._own_agent_id}")
+            primary = self._agents.get(self._own_agent_id)
+            primary_labels = dict(primary.labels) if primary else {}
+            physical_name = self._free_replacement_name_locked(display_name, self._taken_names_locked())
+            # Hidden from here on, not after the create returns: the observe stream can
+            # surface the agent the moment mngr registers it, which is well before that.
+            self._hidden_agent_ids.add(agent_id)
+
+        account_args = [
+            *binding_create_args(harness, account_dir(account.id), self._get_agent_state_dir(agent_id)),
+            "--label",
+            f"account={account.id}",
+        ]
+        cmd = _build_chat_create_command(
+            self._mngr_binary,
+            display_name,
+            agent_id,
+            primary_labels,
+            harness,
+            project_id=project_id,
+            account_args=account_args,
+            physical_name=physical_name,
+            message_file=message_file,
+        )
+        result = run_local_command_modern_version(
+            command=cmd,
+            cwd=Path(work_dir),
+            is_checked=False,
+            timeout=timeout,
+            shutdown_event=self._shutdown_event,
+        )
+        if result.returncode != 0:
+            self.set_agent_hidden(agent_id, False)
+            raise AgentCreationError(f"Could not start the replacement agent: {result.stderr.strip()[:500]}")
+
+        labels: dict[str, str] = {"user_created": "true", "display_name": display_name, "account": account.id}
+        project_label = _chat_project_label(primary_labels, project_id)
+        if project_label:
+            labels["project"] = project_label
+        with self._lock:
+            self._agents[agent_id] = AgentStateItem(
+                id=agent_id,
+                name=physical_name,
+                state="RUNNING",
+                labels=labels,
+                work_dir=str(work_dir),
+                harness=harness,
+            )
+        self._ensure_activity_tracking(agent_id)
+        self._ensure_model_tracking(agent_id)
+        return ReplacementAgent(agent_id=agent_id, name=physical_name, display_name=display_name)
 
     def _launch_creation_thread(
         self,
@@ -1932,10 +2195,17 @@ class AgentManager:
             with self._lock:
                 self._pending_auto_open_name_by_id.pop(agent_id, None)
             self._auto_open_ledger.forget(agent_id)
-            # A destroyed agent is a deleted chat today (one backing agent per
-            # chat), so its chat record goes too. No-op for workers and for
-            # ids that were never chats.
-            self._chat_registry.remove(ChatId(agent_id))
+            # A destroyed agent that STILL BACKS its chat is a deleted chat, so the
+            # record and the chat's archived history go with it. A destroyed agent that
+            # no longer backs one is a segment retired by a harness switch: the chat
+            # lives on behind its replacement, and on a first switch the retired agent's
+            # id IS the chat id -- removing by id there would delete the live chat.
+            # Unrecorded ids (workers, and anything that was never a chat) resolve by
+            # identity, so they take the removal branch and no-op inside it.
+            chat_id = ChatId(agent_id)
+            if self._chat_registry.resolve_active_agent_id(chat_id) == agent_id:
+                self._chat_registry.remove(chat_id)
+                self._forget_chat_history(chat_id)
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
@@ -2231,6 +2501,21 @@ class AgentManager:
         callback = self._watcher_eviction_callback
         if callback is not None:
             callback(agent_id)
+
+    def set_chat_history_removal_callback(self, callback: Callable[[ChatId], None]) -> None:
+        """Wire the disposal of a deleted chat's archived history (composition root, once).
+
+        Separate from watcher eviction because the two are opposites: eviction frees
+        memory for a chat that still exists, while this deletes files for a chat that
+        does not. Injected rather than reached for directly so the manager keeps knowing
+        nothing about the transcript archive.
+        """
+        self._chat_history_removal_callback = callback
+
+    def _forget_chat_history(self, chat_id: ChatId) -> None:
+        callback = self._chat_history_removal_callback
+        if callback is not None:
+            callback(chat_id)
 
     def _broadcast_codex_user_turn(self, agent_id: str, event: dict[str, Any]) -> None:
         """Broadcast one ledger-owned committed user-turn to the agent's transcript stream.

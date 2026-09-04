@@ -28,6 +28,7 @@ from pydantic import PrivateAttr
 from pydantic import model_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.atomic_write import write_json_atomic
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -109,9 +110,18 @@ class ChatRegistry(MutableModel):
     chats_dir: Path | None
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _records: dict[ChatId, ChatRecord] = PrivateAttr(default_factory=dict)
+    # Every agent that has ever backed a chat, active or retired, mapped to that chat.
+    # Kept beside ``_records`` rather than derived on demand because it answers the
+    # question ``ensure_chat`` has to ask on every discovery pass: has this agent
+    # already got a chat above it? Scanning all segments of all chats to answer that
+    # would make discovery quadratic.
+    _chat_id_by_any_agent: dict[str, ChatId] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, context: object, /) -> None:
         self._records = self._load()
+        self._chat_id_by_any_agent = {
+            segment.agent_id: chat_id for chat_id, record in self._records.items() for segment in record.segments
+        }
 
     def _load(self) -> dict[ChatId, ChatRecord]:
         if self.chats_dir is None or not self.chats_dir.is_dir():
@@ -157,15 +167,60 @@ class ChatRegistry(MutableModel):
             record = self._records.get(chat_id)
         return record.active_agent_id if record is not None else str(chat_id)
 
+    def chat_id_for_active_agent(self, agent_id: str) -> ChatId | None:
+        """Which chat ``agent_id`` currently backs, or None if it backs none.
+
+        The inverse of ``resolve_active_agent_id``, and the answer the agents
+        projection needs: an agent knows nothing about the chat above it, so the
+        chat id every product surface addresses has to be looked up from here.
+        Retired agents deliberately do not match -- they back no chat any more.
+        """
+        with self._lock:
+            for chat_id, record in self._records.items():
+                if record.active_agent_id == agent_id:
+                    return chat_id
+        # An unrecorded chat resolves by identity, so an agent with no record is its
+        # own chat -- exactly what the fallback in ``resolve_active_agent_id`` assumes.
+        return None
+
+    def chat_id_by_active_agent(self) -> dict[str, ChatId]:
+        """Every recorded chat's backing agent, mapped to the chat it backs.
+
+        The bulk form of ``chat_id_for_active_agent``, for the agents projection: it
+        stamps a chat id on every row it lists, and doing that a row at a time would
+        take this lock once per agent.
+        """
+        with self._lock:
+            return {record.active_agent_id: chat_id for chat_id, record in self._records.items()}
+
+    def retired_agent_ids(self, chat_id: ChatId) -> tuple[str, ...]:
+        """The chat's previous backing agents, oldest first. Empty until it switches.
+
+        These are what the transcript archive is keyed by, so reading a chat's whole
+        history is this list plus its active agent -- in exactly this order.
+        """
+        with self._lock:
+            record = self._records.get(chat_id)
+        if record is None:
+            return ()
+        return tuple(segment.agent_id for segment in record.segments[:-1])
+
     def ensure_chat(self, chat_id: ChatId, agent_id: str, harness: HarnessType, account_id: str | None) -> None:
-        """Record a chat backed by ``agent_id``, if it has no record yet.
+        """Record a chat backed by ``agent_id``, if neither it nor the agent is known yet.
 
         Idempotent: an existing record is left untouched (its segments are its
         history; discovery must never rewrite them), which is what makes the
         bootstrap safe to run on every discovery pass and every restart.
+
+        An agent that already appears in some chat's segments is equally a no-op,
+        and that is the case that matters after a harness switch: the successor
+        agent's id is not the chat's id, so a bootstrap that only checked
+        ``chat_id`` would give it a second chat of its own -- which then wins the
+        agents projection's chat lookup and makes the chat's id appear to change
+        under the user at the commit point.
         """
         with self._lock:
-            if chat_id in self._records:
+            if chat_id in self._records or agent_id in self._chat_id_by_any_agent:
                 return
             record = ChatRecord(
                 chat_id=str(chat_id),
@@ -180,13 +235,56 @@ class ChatRegistry(MutableModel):
                 ),
             )
             self._records[chat_id] = record
+            self._chat_id_by_any_agent[agent_id] = chat_id
             self._save_record_unlocked(record)
+
+    def begin_segment(
+        self, chat_id: ChatId, agent_id: str, harness: HarnessType, account_id: str | None
+    ) -> ChatRecord:
+        """Re-point ``chat_id`` at ``agent_id``, closing the outgoing segment.
+
+        This single call is the commit point of a harness handoff: the chat's
+        active agent and its segment history move together, under one lock and
+        one atomic file write, so no reader and no restart can observe a chat
+        whose active agent and whose open segment disagree. Everything before it
+        is reversible (the candidate agent can be destroyed and the old one
+        unfrozen); nothing after it is.
+
+        Raises ``ChatRecordError`` for an unrecorded chat: a chat with no record
+        resolves by identity, and re-pointing something that resolves by
+        identity would silently do nothing.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            record = self._records.get(chat_id)
+            if record is None:
+                raise ChatRecordError(f"Chat {chat_id} has no record to re-point")
+            outgoing = record.segments[-1]
+            retired = outgoing.model_copy_update(to_update(outgoing.field_ref().ended_at, now))
+            successor = ChatSegment(
+                agent_id=agent_id,
+                harness=harness,
+                account_id=account_id,
+                started_at=now,
+            )
+            updated = ChatRecord(
+                chat_id=record.chat_id,
+                active_agent_id=agent_id,
+                segments=(*record.segments[:-1], retired, successor),
+            )
+            self._records[chat_id] = updated
+            self._chat_id_by_any_agent[agent_id] = chat_id
+            self._save_record_unlocked(updated)
+            return updated
 
     def remove(self, chat_id: ChatId) -> None:
         """Drop a deleted chat's record and its file. No-op for an unrecorded chat."""
         with self._lock:
-            if self._records.pop(chat_id, None) is None:
+            removed = self._records.pop(chat_id, None)
+            if removed is None:
                 return
+            for segment in removed.segments:
+                self._chat_id_by_any_agent.pop(segment.agent_id, None)
             path = self._record_path(chat_id)
             if path is None:
                 return
