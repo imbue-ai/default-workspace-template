@@ -1607,8 +1607,10 @@ def _resolve_stoppable_app(name: str) -> "AppEntry | Response":
     Shared by the two endpoints so what may be stopped and what may be started
     stay the same set: 404 for an unknown name, 400 for the essential services
     (defense in depth against a hand-edited registry granting them a
-    ``program``), 400 for a row without a ``program`` (nothing here supervises
-    the process behind it).
+    ``program``) and for any row whose ``program`` is an essential service's
+    (the chat row runs inside the shell's program until phase 10 of the
+    workspace app model), 400 for a row without a ``program`` (nothing here
+    supervises the process behind it).
     """
     if name in _ESSENTIAL_SERVICE_NAMES:
         error = ErrorResponse(detail=f"{name!r} is an essential service and cannot be stopped or started here")
@@ -1622,6 +1624,14 @@ def _resolve_stoppable_app(name: str) -> "AppEntry | Response":
             detail=(
                 f"App {name!r} has no supervised program registered, so it cannot be "
                 "stopped or started from the workspace (it is managed outside it)"
+            )
+        )
+        return json_response(error.model_dump(), status_code=400)
+    if app_entry.program in _ESSENTIAL_SERVICE_NAMES:
+        error = ErrorResponse(
+            detail=(
+                f"App {name!r} runs inside the essential service {app_entry.program!r}, "
+                "which cannot be stopped or started here"
             )
         )
         return json_response(error.model_dump(), status_code=400)
