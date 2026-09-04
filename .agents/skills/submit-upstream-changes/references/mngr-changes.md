@@ -38,12 +38,12 @@ usually needs to carry nothing but that pin bump, if anything.
    pin back afterwards:
 
    ```bash
-   # try the checkout's mngr as the workspace's tool (leaves pyproject.toml alone)
+   # install the checkout's packages over the workspace's tool (leaves pyproject.toml alone)
    uv tool install -e .external_worktrees/mngr/libs/mngr \
        --with-editable .external_worktrees/mngr/libs/mngr_claude   # plus the other plugins you need
    # ...test...
    # restore the build pyproject.toml calls for
-   bash system/scripts/install_mngr_tools.sh
+   bash system/scripts/build_mngr_tools.sh
    ```
 
 3. Commit in the checkout and follow mngr's own conventions from there (its
@@ -53,4 +53,4 @@ usually needs to carry nothing but that pin bump, if anything.
 
 4. After it merges: bump the pin here by editing the `rev` under
    `[tool.uv.sources]` in `pyproject.toml` to the public-mirror commit that
-   carries it, then `uv lock` and `bash system/scripts/install_mngr_tools.sh`.
+   carries it, then `uv lock` and `bash system/scripts/build_mngr_tools.sh`.

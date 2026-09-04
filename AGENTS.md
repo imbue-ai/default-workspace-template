@@ -259,7 +259,7 @@ When GitHub sync is not enabled, there is no auto-push and no GitHub remote to p
 
 If you get a failure in `test_no_type_errors` that seems spurious, try running `uv sync --all-packages` and then re-running the tests. If that doesn't work, the error is probably real, and should be fixed.
 
-If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running a command that is defined in this repo (like `mngr`), then rebuild that tool exactly as `system/scripts/build_workspace.sh` does -- mngr and every plugin together, from the pinned commit: `bash system/scripts/install_mngr_tools.sh --reinstall` -- and then try running the command again.
+If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running a command that is defined in this repo (like `mngr`), then rebuild that tool exactly as `system/scripts/build_workspace.sh` does -- mngr and every plugin together, from the pinned commit: `bash system/scripts/build_mngr_tools.sh --reinstall` -- and then try running the command again.
 
 If you get a failure when trying to commit the first time, just try committing again (the pre-commit hook returns a non-zero exit code when ruff reformats files).
 
