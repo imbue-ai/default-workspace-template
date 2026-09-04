@@ -74,15 +74,18 @@ describe("isWorkspaceFamilyOrigin", () => {
 });
 
 describe("the embedder relay", () => {
-  it("forwards a minds: message from a child frame up to the chrome unchanged", () => {
+  it("forwards a minds: message from a child frame up to the chrome unchanged, and to no shell: handler", () => {
     const chrome = framedUnderChrome();
     const frame = mountFrame();
+    const shellHandler = vi.fn();
+    setChildFrameMessageHandler("minds:open-request-modal", shellHandler);
     const message = { type: "minds:open-request-modal", requestId: "evt-1", extra: { nested: true } };
 
     post(message, SHELL_ORIGIN, frameWindow(frame));
 
     expect(chrome.postMessage).toHaveBeenCalledTimes(1);
     expect(chrome.postMessage).toHaveBeenCalledWith(message, "*");
+    expect(shellHandler).not.toHaveBeenCalled();
   });
 
   it("drops a minds: message from a foreign origin, a stranger window, or a non-minds type", () => {
@@ -125,7 +128,8 @@ describe("the embedder relay", () => {
 });
 
 describe("the shell side of the app contract", () => {
-  it("dispatches a shell: message to its handler with the posting frame", () => {
+  it("dispatches a shell: message to its handler with the posting frame, and never up to the chrome", () => {
+    const chrome = framedUnderChrome();
     const frame = mountFrame();
     const handler = vi.fn();
     setChildFrameMessageHandler("shell:open", handler);
@@ -135,6 +139,7 @@ describe("the shell side of the app contract", () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0][0]).toBe(frame);
     expect(handler.mock.calls[0][1]).toEqual({ type: "shell:open", address: "app:chat?instance=agent-2" });
+    expect(chrome.postMessage).not.toHaveBeenCalled();
   });
 
   it("ignores a shell: message from a foreign origin or an unknown window", () => {
