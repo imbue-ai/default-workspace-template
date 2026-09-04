@@ -920,8 +920,6 @@ export async function sendMessage(agentId: string, message: string, messageId?: 
       device_kind: getDeviceKind(),
     },
   });
-  // Bump this chat's OOM recency now that a message was accepted, so an actively
-  // messaged chat is more protected from a memory shed than idler ones.
   return id;
 }
 
