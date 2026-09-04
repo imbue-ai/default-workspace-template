@@ -1,4 +1,3 @@
-from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -27,8 +26,9 @@ from imbue.system_interface.chat_instances import AgentManagerInstanceSource
 from imbue.system_interface.chat_instances import AgentManagerNudger
 from imbue.system_interface.chat_instances import instance_status_for_agent
 from imbue.system_interface.chat_instances import subagent_instance_key
-from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import CreatedChatAgent
+from imbue.system_interface.testing import seed_agent_state
+from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
 def _agent_id() -> str:
@@ -40,19 +40,17 @@ def _seed_agent(
     agent_id: str,
     name: str,
     *,
-    state: str = "RUNNING",
     labels: dict[str, str] | None = None,
     activity_state: ActivityState | None = None,
 ) -> None:
-    with manager._lock:
-        manager._agents[agent_id] = AgentStateItem(
-            id=agent_id,
-            name=name,
-            state=state,
-            labels=labels if labels is not None else {"display_name": name.replace("-", " ")},
-            work_dir=None,
-            activity_state=activity_state,
-        )
+    """A tracked chat named ``name``, whose display name is the spaced form unless ``labels`` says otherwise."""
+    seed_agent_state(
+        manager,
+        agent_id,
+        name=name,
+        labels=labels if labels is not None else {"display_name": name.replace("-", " ")},
+        activity_state=activity_state,
+    )
 
 
 def _source(agent_manager: AgentManager) -> AgentManagerInstanceSource:
@@ -216,19 +214,41 @@ def test_unknown_action_and_params_are_refused(agent_manager: AgentManager) -> N
         source.create_instance(ActionId("new"), {"workdir": "/tmp"})
 
 
-def test_new_counts_the_chosen_member_titles_as_taken_names(agent_manager: AgentManager) -> None:
+class _CreateRecordingAgentManager(AgentManager):
+    """Answers a create with a fixed chat and keeps the taken names it was given, instead of running mngr."""
+
+    created: CreatedChatAgent = CreatedChatAgent(agent_id=f"agent-{uuid4().hex}", name="Chat-3", display_name="Chat 3")
+    last_extra_taken_names: tuple[str, ...] | None = None
+
+    def create_chat_agent(
+        self,
+        requested_name: str,
+        extra_role_templates: tuple[str, ...] = (),
+        project_id: str = "",
+        extra_taken_names: tuple[str, ...] = (),
+        account_id: str = "",
+    ) -> CreatedChatAgent:
+        self.last_extra_taken_names = extra_taken_names
+        return self.created
+
+
+def test_new_counts_the_chosen_member_titles_as_taken_names(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
     """A member someone renamed to "Chat 2" holds that name as surely as a chat, as the create route counts it."""
+    # The fixture's environment names the layout directory the titles are read from.
     layout_dir = projects.primary_agent_layout_dir_from_env()
     assert layout_dir is not None
     member_titles.set_title(layout_dir, "terminal:terminal-1", "Chat 2")
-    created = CreatedChatAgent(agent_id=_agent_id(), name="Chat-3", display_name="Chat 3")
-    source = _source(agent_manager)
+    recording = _CreateRecordingAgentManager.build(broadcaster)
+    # ``build`` is typed as returning the base class.
+    assert isinstance(recording, _CreateRecordingAgentManager)
+    source = _source(recording)
 
-    with patch.object(agent_manager, "create_chat_agent", return_value=created) as create:
-        record = source.create_instance(ActionId("new"), {})
+    record = source.create_instance(ActionId("new"), {})
 
-    assert create.call_args.kwargs["extra_taken_names"] == ("Chat 2",)
-    assert record.key == created.agent_id
+    assert recording.last_extra_taken_names == ("Chat 2",)
+    assert record.key == recording.created.agent_id
     assert record.title == "Chat 3"
     assert record.lifetime is InstanceLifetime.REFERENCED
 
