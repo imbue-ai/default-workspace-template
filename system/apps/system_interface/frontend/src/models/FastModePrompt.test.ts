@@ -48,7 +48,7 @@ describe("answering the fast-mode prompt", () => {
 
     expect(mockSetFastMode).toHaveBeenCalledWith("agent-a", false);
     expect(mockRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "POST", url: "/api/agents/agent-a/fast-mode-answered" }),
+      expect.objectContaining({ method: "POST", url: "/api/chats/agent-a/fast-mode-answered" }),
     );
     expect(fastModePrompt.getFastModePromptAgentId()).toBeNull();
     expect(fastModePrompt.isFastModePromptAnswered("agent-a", {})).toBe(true);

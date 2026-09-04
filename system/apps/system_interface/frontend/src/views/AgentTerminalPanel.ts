@@ -31,7 +31,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
   async function ensureAgentStarted(agentId: string): Promise<void> {
     // Defensive: if the panel was constructed without an agentId (e.g. a
     // legacy or corrupt PanelParams entry from a restored layout), there is
-    // no agent to start. POSTing to `/api/agents//start` would just 404;
+    // no agent to start. POSTing to `/api/chats//start` would just 404;
     // skip straight to mounting the iframe with no error banner.
     if (agentId === "") {
       starting = false;
@@ -39,7 +39,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
       return;
     }
     try {
-      const response = await fetch(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/start`), {
+      const response = await fetch(apiUrl(`/api/chats/${encodeURIComponent(agentId)}/start`), {
         method: "POST",
       });
       if (!response.ok) {

@@ -25,6 +25,7 @@
  */
 
 import m from "mithril";
+import type { ChatId } from "../ids";
 import {
   FILL_CHUNK_LIMIT,
   INITIAL_TAIL_LIMIT,
@@ -151,7 +152,7 @@ export interface TranscriptScrollEngine {
   /** Tear down listeners/observers/timers. Call from onremove. */
   detach(): void;
   /** Reset all state for a different agent, loading its persisted scroll state. */
-  setAgent(agentKey: string | null): void;
+  setAgent(agentKey: ChatId | null): void;
   /** The user submitted a message: snap back to following the tail. */
   noteMessageSent(): void;
   /** Viewport currently sits over a virtual end spacer (show the loading overlay). */
@@ -266,7 +267,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let isAfterRenderQueued = false;
 
   // --- persistence / restore ------------------------------------------------
-  let persistAgentKey: string | null = null;
+  let persistAgentKey: ChatId | null = null;
   let pendingRestore: RestoredScrollState | null = null;
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -461,7 +462,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
   }
 
-  function loadPersisted(agentKey: string): RestoredScrollState {
+  function loadPersisted(agentKey: ChatId): RestoredScrollState {
     try {
       return decodePersistedScrollState(localStorage.getItem(scrollStateStorageKey(agentKey)));
     } catch {
@@ -1380,7 +1381,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       }
     },
 
-    setAgent(agentKey: string | null): void {
+    setAgent(agentKey: ChatId | null): void {
       if (persistTimer !== null) {
         clearTimeout(persistTimer);
         persistTimer = null;

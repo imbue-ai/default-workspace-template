@@ -5,6 +5,7 @@ import {
   scrollStateStorageKey,
   validateRestoredAnchor,
 } from "./persistence";
+import { asChatId } from "../../ids";
 import { FOLLOW_STATE } from "./state";
 import type { ScrollPositionState } from "./types";
 
@@ -55,7 +56,7 @@ describe("persistence codec", () => {
   });
 
   it("keys storage per agent", () => {
-    expect(scrollStateStorageKey("agent-1")).not.toBe(scrollStateStorageKey("agent-2"));
+    expect(scrollStateStorageKey(asChatId("agent-1"))).not.toBe(scrollStateStorageKey(asChatId("agent-2")));
   });
 });
 

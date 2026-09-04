@@ -146,7 +146,7 @@ describe("effectiveChoice", () => {
     const call = mockRequest.mock.calls.find((args) => (args[0] as RequestOptions).method === "POST");
     expect(call).toBeDefined();
     const options = call![0] as RequestOptions;
-    expect(options.url).toBe("/api/agents/:agentId/model");
+    expect(options.url).toBe("/api/chats/:agentId/model");
     expect(options.body).toEqual({ model_id: "opus[1m]", effort: "high", fast: true, axes: ["effort", "fast"] });
   });
 

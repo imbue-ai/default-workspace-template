@@ -40,6 +40,7 @@ import {
   type ToolCall,
   type TranscriptEvent,
 } from "./Response";
+import { asChatId, type ChatId } from "../ids";
 
 function makeEvent(id: string): TranscriptEvent {
   return {
@@ -93,8 +94,8 @@ function toolCallsOf(event: TranscriptEvent): ToolCall[] {
 }
 
 let counter = 0;
-function freshAgent(): string {
-  return `agent-${counter++}`;
+function freshAgent(): ChatId {
+  return asChatId(`agent-${counter++}`);
 }
 
 /** A request whose settling the test controls, for observing the in-flight state and ordering two fetches. */
@@ -123,8 +124,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function ids(agentId: string): string[] {
-  return getEventsForAgent(agentId).map((e) => e.event_id);
+function ids(chatId: ChatId): string[] {
+  return getEventsForAgent(chatId).map((e) => e.event_id);
 }
 
 describe("appendEvents subagent_metadata merge", () => {

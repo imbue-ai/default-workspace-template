@@ -15,6 +15,7 @@ import m from "mithril";
 import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
 import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
+import { asChatId } from "../ids";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { getEventDetailState, requestEventDetail } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
@@ -388,20 +389,21 @@ export function PermissionCard(): m.Component<{
   return {
     view(vnode) {
       const { toolCall, toolResult, resolution, agentId, assistantEventId } = vnode.attrs;
+      const chatId = asChatId(agentId);
       const details = parsePermissionRequest(toolCall, toolResult);
       const scopeInfo = details?.scope ? getScopeInfo(details.scope) : null;
       // The raw disclosure fetches the full input/output on open (cached frontend-side);
       // until they land, the structured request object stands in.
       if (rawOpen) {
         if (toolCall.input_chars > 0) {
-          requestEventDetail(agentId, assistantEventId);
+          requestEventDetail(chatId, assistantEventId);
         }
         if (toolResult && toolResult.output_chars > 0) {
-          requestEventDetail(agentId, toolResult.event_id);
+          requestEventDetail(chatId, toolResult.event_id);
         }
       }
-      const inputDetail = rawOpen ? getEventDetailState(agentId, assistantEventId) : undefined;
-      const outputDetail = rawOpen && toolResult ? getEventDetailState(agentId, toolResult.event_id) : undefined;
+      const inputDetail = rawOpen ? getEventDetailState(chatId, assistantEventId) : undefined;
+      const outputDetail = rawOpen && toolResult ? getEventDetailState(chatId, toolResult.event_id) : undefined;
       const rawInput =
         inputDetail?.state === "loaded"
           ? (inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? "")

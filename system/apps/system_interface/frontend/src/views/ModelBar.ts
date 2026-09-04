@@ -116,7 +116,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     try {
       const response = await m.request<{ models: string[] | null; options?: CatalogModelOption[] | null }>({
         method: "GET",
-        url: apiUrl("/api/agents/:agentId/model-options"),
+        url: apiUrl("/api/chats/:agentId/model-options"),
         params: { agentId },
       });
       // A DYNAMIC harness (codex) answers with the full per-agent `options`; a static/gated harness

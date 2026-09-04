@@ -151,7 +151,7 @@ async function postModelChoice(agentId: string, identity: ModelIdentity, axes: s
   try {
     await m.request({
       method: "POST",
-      url: apiUrl("/api/agents/:agentId/model"),
+      url: apiUrl("/api/chats/:agentId/model"),
       params: { agentId },
       body: { model_id: identity.model_id, effort: identity.effort, fast: identity.fast, axes },
     });

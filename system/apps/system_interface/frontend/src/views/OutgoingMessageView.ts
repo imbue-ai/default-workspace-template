@@ -8,6 +8,7 @@
  * + text restored), and the bubble is dropped.
  */
 import m from "mithril";
+import type { ChatId } from "../ids";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import type { OutgoingMessage } from "../models/OutgoingMessages";
 
@@ -29,6 +30,6 @@ function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
 
 /** The optimistic outgoing bubbles for an agent, in send order. Returns [] when
  *  there are none. */
-export function renderOutgoingMessages(agentId: string): m.Vnode[] {
-  return getOutgoingMessages(agentId).map(renderOutgoingBubble);
+export function renderOutgoingMessages(chatId: ChatId): m.Vnode[] {
+  return getOutgoingMessages(chatId).map(renderOutgoingBubble);
 }

@@ -27,6 +27,7 @@ vi.mock("../models/Response", () => ({
 vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
 import { renderQueuedMessages } from "./QueuedMessageView";
+import { asChatId } from "../ids";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -75,12 +76,12 @@ describe("renderQueuedMessages", () => {
   });
 
   it("renders nothing when the queue is empty", () => {
-    expect(renderQueuedMessages("agent-1")).toEqual([]);
+    expect(renderQueuedMessages(asChatId("agent-1"))).toEqual([]);
   });
 
   it("renders a header row with the label and the shoulder-tap button plus one bubble per message", () => {
     mocks.queued = [queuedMessage("q1", "first"), queuedMessage("q2", "second")];
-    const nodes = renderQueuedMessages("agent-1");
+    const nodes = renderQueuedMessages(asChatId("agent-1"));
     expect(nodes).toHaveLength(1);
     const text = renderedText(nodes);
     // Header label on the left, shoulder-tap on the right; NO interrupt button.
@@ -95,13 +96,13 @@ describe("renderQueuedMessages", () => {
 
   it("gives the shoulder-tap button the exact hover tooltip text", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
-    const button = findByClass(renderQueuedMessages("agent-1"), "queued-action--flush");
+    const button = findByClass(renderQueuedMessages(asChatId("agent-1")), "queued-action--flush");
     expect(button?.attrs?.["data-tooltip"]).toBe("Gently interrupt your agent to send queued messages early");
   });
 
   it("shows an info affordance next to the label with the explanatory tooltip", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
-    const info = findByClass(renderQueuedMessages("agent-info"), "queued-info");
+    const info = findByClass(renderQueuedMessages(asChatId("agent-info")), "queued-info");
     expect(info?.attrs?.["data-tooltip"]).toBe(
       "Messages below are sent when your agent takes a breather mid-work or finishes a turn.",
     );
@@ -109,13 +110,13 @@ describe("renderQueuedMessages", () => {
 
   it("fires the one harness-agnostic shoulder-tap intent on click (no harness branch)", async () => {
     mocks.queued = [queuedMessage("q1", "hi")];
-    const button = findByClass(renderQueuedMessages("agent-tap"), "queued-action--flush");
+    const button = findByClass(renderQueuedMessages(asChatId("agent-tap")), "queued-action--flush");
     await (button?.attrs?.onclick as () => Promise<void>)();
     expect(mocks.shoulderTap).toHaveBeenCalledWith("agent-tap");
   });
 
   it("renders the live backend snapshot during a tap -- no local freeze or reconstruction", async () => {
-    const agent = "agent-live-snapshot";
+    const agent = asChatId("agent-live-snapshot");
     mocks.queued = [queuedMessage("q1", "hi")];
     let resolveTap: () => void = () => {};
     mocks.shoulderTap.mockImplementationOnce(
@@ -141,11 +142,13 @@ describe("renderQueuedMessages", () => {
     // the frontend computes nothing, it just obeys the backend flag.
     mocks.queued = [queuedMessage("q1", "hi")];
     mocks.available = false;
-    expect(findByClass(renderQueuedMessages("agent-unavail"), "queued-action--flush")?.attrs?.disabled).toBe(true);
+    expect(findByClass(renderQueuedMessages(asChatId("agent-unavail")), "queued-action--flush")?.attrs?.disabled).toBe(
+      true,
+    );
   });
 
   it("greys the button while this tap's own request is in flight, then re-enables it", async () => {
-    const agent = "agent-inflight-tap";
+    const agent = asChatId("agent-inflight-tap");
     mocks.queued = [queuedMessage("q1", "hi")];
     mocks.available = true;
     // Available and nothing in flight -> the button is live.
@@ -174,7 +177,7 @@ describe("renderQueuedMessages", () => {
   it("renders no queued-group chrome when every entry is sending", () => {
     mocks.queued = [queuedMessage("q1", "beep", true)];
 
-    const rendered = renderQueuedMessages("agent-1");
+    const rendered = renderQueuedMessages(asChatId("agent-1"));
 
     expect(findByClass(rendered, "queued-header")).toBeUndefined();
     expect(findByClass(rendered, "queued-action--flush")).toBeUndefined();
@@ -189,7 +192,7 @@ describe("renderQueuedMessages", () => {
   it("still shows the chrome when only some entries are sending", () => {
     mocks.queued = [queuedMessage("q1", "beep", true), queuedMessage("q2", "boop")];
 
-    const rendered = renderQueuedMessages("agent-1");
+    const rendered = renderQueuedMessages(asChatId("agent-1"));
 
     expect(findByClass(rendered, "queued-header")).toBeDefined();
     expect(findByClass(rendered, "queued-action--flush")).toBeDefined();

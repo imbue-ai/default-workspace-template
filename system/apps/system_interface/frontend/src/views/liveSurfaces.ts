@@ -27,6 +27,7 @@
 
 import m from "mithril";
 import type { DockviewPanelApi } from "dockview-core";
+import { asChatId, type ChatId } from "../ids";
 
 // The per-workspace browser fleet's service name. Each browser is addressed
 // per session rather than per service, so it is the one service whose live key
@@ -43,6 +44,10 @@ export interface PanelParams {
   panelType: PanelType;
   agentId: string;
   chatAgentId?: string;
+  // The chat's stable id. Nothing writes it yet: it exists so a future
+  // backing-agent replacement can persist the stable chat id alongside the
+  // physical agentId. Read only through ``chatIdForPanel``.
+  chatId?: string;
   url?: string;
   title?: string;
   // LEGACY, read-only. The name a rename used to write onto the panel, back
@@ -78,6 +83,15 @@ export interface PanelParams {
   terminalSessionName?: string;
   terminalId?: string;
   terminalSessionId?: string;
+}
+
+/** The chat a panel is showing, or null for a non-chat panel. Resolution order
+ *  is chatId (the stable id, once something writes it) then the legacy
+ *  chatAgentId then the owning agentId -- the same fallback chain every chat
+ *  code path used inline before. */
+export function chatIdForPanel(params: PanelParams): ChatId | null {
+  if (params.panelType !== "chat") return null;
+  return asChatId(params.chatId ?? params.chatAgentId ?? params.agentId);
 }
 
 /** The identity a live page is filed under, machine-wide. */
@@ -152,8 +166,8 @@ export function sessionParamFromUrl(url: string | undefined): string | null {
 export function liveKeyForPanel(panelId: string, params: PanelParams | undefined): LiveKey | null {
   if (params === undefined || params.panelType === "launcher") return null;
   if (params.panelType === "chat") {
-    const chatAgentId = params.chatAgentId ?? params.agentId;
-    return chatAgentId ? `chat:${chatAgentId}` : null;
+    const chatId = chatIdForPanel(params);
+    return chatId ? `chat:${chatId}` : null;
   }
   if (params.terminalSessionName) return `terminal:${params.terminalSessionName}`;
   if (params.serviceName) {
