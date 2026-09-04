@@ -4,7 +4,7 @@ import { apiUrl } from "../base-path";
 import { getApps } from "../models/AgentManager";
 import type { AppEntry } from "../models/AgentManager";
 import { appStoppedDetail, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
-import { getActiveProjectId, getClientId, getDeviceKind } from "../models/ClientIdentity";
+import { getClientId, getDeviceKind } from "../models/ClientIdentity";
 import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
 import { sendToChildFrame } from "../relay";
@@ -16,8 +16,22 @@ export interface IframeContractAttrs {
   address: string;
   /** The tab's id, which the shell mints per panel. */
   tabId: string;
+  /** The view (a project id, or Everything) whose tab shows the page. */
+  viewId: string;
   /** Whether the pane showing this frame is on screen right now. */
   isVisible: boolean;
+}
+
+/** The part of the handshake that can change while the page lives: a page outlives the
+ *  pane and the view that showed it, so it is told again whenever these change. */
+interface HandshakeIdentity {
+  address: string;
+  tabId: string;
+  viewId: string;
+}
+
+function isSameIdentity(first: HandshakeIdentity, second: HandshakeIdentity): boolean {
+  return first.address === second.address && first.tabId === second.tabId && first.viewId === second.viewId;
 }
 
 interface IframePanelAttrs {
@@ -30,7 +44,8 @@ interface IframePanelAttrs {
    *  which project) is showing it. */
   liveKey?: string;
   /** Set for a page that speaks the app contract: the shell hands it a handshake on
-   *  every load and follows the pane's visibility with shown and hidden. */
+   *  every load (and again when the tab or view showing it changes) and follows the
+   *  pane's visibility with shown and hidden. */
   contract?: IframeContractAttrs;
   /** The sandbox flags, when the default set is not enough. */
   sandbox?: string;
@@ -52,27 +67,48 @@ export const CHAT_FRAME_SANDBOX = `${DEFAULT_FRAME_SANDBOX} allow-popups-to-esca
 export function IframePanel(): m.Component<IframePanelAttrs> {
   let frame: HTMLIFrameElement | null = null;
   let latestContract: IframeContractAttrs | null = null;
-  // The visibility last told to the page, so shown and hidden are sent on change only; a
-  // load resets it, since a fresh page has been told nothing.
+  // What the page was last told, so a handshake goes out again only when its identity
+  // changed and shown or hidden only when the visibility did; a load resets both, since a
+  // fresh page has been told nothing.
+  let lastSentIdentity: HandshakeIdentity | null = null;
   let lastSentVisibility: boolean | null = null;
 
   function syncVisibility(): void {
-    if (frame === null || latestContract === null || lastSentVisibility === latestContract.isVisible) return;
+    // Nothing until the page has had its handshake: before its load there is nobody listening.
+    if (frame === null || latestContract === null || lastSentIdentity === null) return;
+    if (lastSentVisibility === latestContract.isVisible) return;
     lastSentVisibility = latestContract.isVisible;
     sendToChildFrame(frame, latestContract.isVisible ? SHELL_SHOWN : SHELL_HIDDEN);
   }
 
   function greet(): void {
     if (frame === null || latestContract === null) return;
+    const identity: HandshakeIdentity = {
+      address: latestContract.address,
+      tabId: latestContract.tabId,
+      viewId: latestContract.viewId,
+    };
     sendToChildFrame(frame, SHELL_HANDSHAKE, {
       clientId: getClientId(),
       deviceKind: getDeviceKind(),
-      viewId: getActiveProjectId(),
-      address: latestContract.address,
-      tabId: latestContract.tabId,
+      ...identity,
     });
+    lastSentIdentity = identity;
+  }
+
+  function greetOnLoad(): void {
+    lastSentIdentity = null;
     lastSentVisibility = null;
+    greet();
     syncVisibility();
+  }
+
+  /** A page that has had its handshake is told again when the tab or view showing it changed. */
+  function syncIdentity(): void {
+    if (lastSentIdentity === null || latestContract === null || isSameIdentity(lastSentIdentity, latestContract)) {
+      return;
+    }
+    greet();
   }
 
   return {
@@ -100,13 +136,15 @@ export function IframePanel(): m.Component<IframePanelAttrs> {
           frame = created.dom as HTMLIFrameElement;
           // Every load, not just the first: a reload (the tab's Refresh, or the page's
           // own) is a fresh page that has to be told who it is again.
-          frame.addEventListener("load", greet);
+          frame.addEventListener("load", greetOnLoad);
         },
         onupdate: () => {
+          syncIdentity();
           syncVisibility();
         },
         onremove: () => {
           frame = null;
+          lastSentIdentity = null;
         },
       };
       if (serviceName) {

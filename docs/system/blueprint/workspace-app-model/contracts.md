@@ -255,7 +255,7 @@ Unknown types are ignored; shipped types never change meaning.
 
 | Direction | Type | Payload |
 |---|---|---|
-| shell to app | `shell:handshake` | `{"clientId", "deviceKind", "viewId", "address", "tabId"}`; sent after every `load` event of the frame |
+| shell to app | `shell:handshake` | `{"clientId", "deviceKind", "viewId", "address", "tabId"}`; sent after every `load` event of the frame, and again whenever the tab or view showing the page changes (a page outlives the pane that showed it) |
 | shell to app | `shell:shown` / `shell:hidden` | `{}` |
 | shell to app | `shell:close-request` | `{}` |
 | app to shell | `shell:focused` | `{}` |

@@ -4967,8 +4967,9 @@ function mountLiveContent(surface: LiveSurface, kind: LiveContentKind): void {
 }
 
 /** A chat page (or a subagent view) framed at the chat origin, speaking the app contract:
- *  the shell hands it its tab and client on every load and follows the pane's visibility,
- *  which is what feeds the chat's presence and lets it skip scroll work while hidden. */
+ *  the shell hands it its tab, view, and client on every load (and again when the tab or
+ *  view showing it changes) and follows the pane's visibility, which is what feeds the
+ *  chat's presence and lets it skip scroll work while hidden. */
 function renderChatFrame(surface: LiveSurface, instanceKey: string, title: string): m.Children {
   return m(IframePanel, {
     url: chatPageUrl(instanceKey),
@@ -4979,6 +4980,7 @@ function renderChatFrame(surface: LiveSurface, instanceKey: string, title: strin
     contract: {
       address: chatAddress(instanceKey),
       tabId: surface.boundPanelId ?? "",
+      viewId: getActiveProjectId(),
       isVisible: surface.isVisible,
     },
   });
