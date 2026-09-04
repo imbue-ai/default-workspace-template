@@ -1,0 +1,5 @@
+You can now switch the harness behind an existing chat. The conversation keeps its identity, its history, its tab, and its place in your projects; only the agent answering for it changes.
+
+The chat registry gained the commit point of a switch: re-pointing a chat at its replacement agent and closing the outgoing agent's segment happen together, under one lock and one atomic write. Nothing can observe a chat whose active agent and whose open segment disagree, including across a restart in the middle of a switch.
+
+A retired agent's transcript is archived before the agent is destroyed, with every tool input, output, and thinking payload copied in rather than left as a pointer into files that are about to go away. Reads of a switched chat serve its archived history and its live agent as one continuous transcript: scrolling back past a switch reaches the previous harness's turns, offsets and paging span the boundary, and opening a detail from an old turn still works. A chat that has never switched is unaffected.

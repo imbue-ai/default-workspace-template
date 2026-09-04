@@ -182,6 +182,43 @@ class ChatRegistry(MutableModel):
             self._records[chat_id] = record
             self._save_record_unlocked(record)
 
+    def begin_segment(
+        self, chat_id: ChatId, agent_id: str, harness: HarnessType, account_id: str | None
+    ) -> ChatRecord:
+        """Re-point ``chat_id`` at ``agent_id``, closing the outgoing segment.
+
+        This single call is the commit point of a harness handoff: the chat's
+        active agent and its segment history move together, under one lock and
+        one atomic file write, so no reader and no restart can observe a chat
+        whose active agent and whose open segment disagree. Everything before it
+        is reversible (the candidate agent can be destroyed and the old one
+        unfrozen); nothing after it is.
+
+        Raises ``ChatRecordError`` for an unrecorded chat: a chat with no record
+        resolves by identity, and re-pointing something that resolves by
+        identity would silently do nothing.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            record = self._records.get(chat_id)
+            if record is None:
+                raise ChatRecordError(f"Chat {chat_id} has no record to re-point")
+            retired = record.segments[-1].model_copy(update={"ended_at": now})
+            successor = ChatSegment(
+                agent_id=agent_id,
+                harness=harness,
+                account_id=account_id,
+                started_at=now,
+            )
+            updated = ChatRecord(
+                chat_id=record.chat_id,
+                active_agent_id=agent_id,
+                segments=(*record.segments[:-1], retired, successor),
+            )
+            self._records[chat_id] = updated
+            self._save_record_unlocked(updated)
+            return updated
+
     def remove(self, chat_id: ChatId) -> None:
         """Drop a deleted chat's record and its file. No-op for an unrecorded chat."""
         with self._lock:

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from imbue.system_interface.chat_registry import ChatRecord
+from imbue.system_interface.chat_registry import ChatRecordError
 from imbue.system_interface.chat_registry import ChatRegistry
 from imbue.system_interface.chat_registry import ChatSegment
 from imbue.system_interface.chat_registry import chats_dir_for_layout_dir
@@ -132,3 +133,77 @@ def test_chat_record_rejects_a_non_final_active_segment() -> None:
     )
     with pytest.raises(ValueError, match="non-final"):
         ChatRecord(chat_id="agent-x", active_agent_id="agent-y", segments=(first, second))
+
+
+def test_begin_segment_repoints_the_chat_and_closes_the_outgoing_segment(tmp_path: Path) -> None:
+    registry = _make_registry(tmp_path)
+    chat_id = ChatId("agent-" + "f" * 32)
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id="account-1")
+    successor_id = "agent-" + "0" * 32
+
+    record = registry.begin_segment(chat_id, agent_id=successor_id, harness=HarnessType.CODEX, account_id="account-2")
+
+    # The chat's identity is untouched; only which agent answers for it has moved.
+    assert record.chat_id == str(chat_id)
+    assert record.active_agent_id == successor_id
+    assert registry.resolve_active_agent_id(chat_id) == successor_id
+    assert [segment.agent_id for segment in record.segments] == [str(chat_id), successor_id]
+    assert record.segments[0].ended_at is not None
+    assert record.segments[0].harness == HarnessType.CLAUDE
+    assert record.segments[1].ended_at is None
+    assert record.segments[1].harness == HarnessType.CODEX
+    assert record.segments[1].account_id == "account-2"
+
+
+def test_begin_segment_hands_off_without_a_gap_in_the_history(tmp_path: Path) -> None:
+    registry = _make_registry(tmp_path)
+    chat_id = ChatId("agent-" + "1" * 32)
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+
+    record = registry.begin_segment(chat_id, agent_id="agent-" + "2" * 32, harness=HarnessType.CODEX, account_id=None)
+
+    # The outgoing segment ends exactly when the incoming one starts, so no instant of the
+    # chat's history is attributable to no agent (or to two).
+    assert record.segments[0].ended_at == record.segments[1].started_at
+
+
+def test_begin_segment_survives_a_reload_from_disk(tmp_path: Path) -> None:
+    chat_id = ChatId("agent-" + "3" * 32)
+    successor_id = "agent-" + "4" * 32
+    registry = _make_registry(tmp_path)
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+    registry.begin_segment(chat_id, agent_id=successor_id, harness=HarnessType.CODEX, account_id=None)
+
+    reloaded = _make_registry(tmp_path)
+
+    # The flip is the handoff's commit point, so a restart right after it must find the
+    # chat pointing at the replacement rather than at the agent about to be destroyed.
+    assert reloaded.resolve_active_agent_id(chat_id) == successor_id
+    record = reloaded.get(chat_id)
+    assert record is not None
+    assert len(record.segments) == 2
+
+
+def test_repeated_begin_segment_accumulates_segments(tmp_path: Path) -> None:
+    registry = _make_registry(tmp_path)
+    chat_id = ChatId("agent-" + "5" * 32)
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+    registry.begin_segment(chat_id, agent_id="agent-" + "6" * 32, harness=HarnessType.CODEX, account_id=None)
+
+    record = registry.begin_segment(chat_id, agent_id="agent-" + "7" * 32, harness=HarnessType.CLAUDE, account_id=None)
+
+    assert len(record.segments) == 3
+    assert [segment.ended_at is None for segment in record.segments] == [False, False, True]
+
+
+def test_begin_segment_rejects_an_unrecorded_chat(tmp_path: Path) -> None:
+    registry = _make_registry(tmp_path)
+
+    # An unrecorded chat resolves by identity, so re-pointing it would silently do nothing.
+    with pytest.raises(ChatRecordError, match="no record"):
+        registry.begin_segment(
+            ChatId("agent-" + "8" * 32),
+            agent_id="agent-" + "9" * 32,
+            harness=HarnessType.CODEX,
+            account_id=None,
+        )
