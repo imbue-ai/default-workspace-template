@@ -196,7 +196,7 @@ def test_location_is_a_conflict_when_chromium_refuses_the_navigation() -> None:
         source.set_location(InstanceKey("browser-1"), _URL)
 
 
-def test_reads_close_and_navigate_wait_for_the_init_gate() -> None:
+def test_reads_close_and_navigate_are_refused_until_the_init_gate_opens() -> None:
     source, fleet = _source(_snapshot("browser-1"))
     fleet.is_fleet_ready = False
 
