@@ -2098,7 +2098,9 @@ class BrowserSessionManager(MutableModel):
         return _snapshot_of(await self.create(None))
 
     async def navigate_browser(self, browser_id: str, url: str) -> None:
-        """Navigate a browser's active tab (see :meth:`LiveBrowser.navigate_active_tab`), then checkpoint the manifest so the new tab URL is what a restart restores. UnknownBrowserError for a name no browser has."""
+        """Navigate a browser's active tab (see :meth:`LiveBrowser.navigate_active_tab`), then
+        checkpoint the manifest so the new tab URL is what a restart restores.
+        UnknownBrowserError for a name no browser has."""
         browser = self._browsers.get(browser_id)
         if browser is None:
             raise UnknownBrowserError(f"no browser named {browser_id!r}")
