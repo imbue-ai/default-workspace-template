@@ -47,45 +47,60 @@ export function shellViewId(): string {
   return handshake?.viewId ?? "";
 }
 
+export interface ChatShellOptions {
+  /**
+   * Whether this page reports its presence for `agentId`. A chat's own page does; a subagent
+   * view does not, because the chat app keeps one report per chat and client, and a second
+   * page of the same chat in the same client would overwrite the chat page's own (as the
+   * dock's chat panels alone counted before the split).
+   */
+  isPresenceReported: boolean;
+}
+
 /**
  * Connect the page for `agentId`: adopt the client identity the shell hands over, follow the
- * tab's visibility for the panel and for presence, and forward focus so the shell activates
- * the tab.
+ * tab's visibility for the panel and (when this page reports it) for presence, and forward
+ * focus so the shell activates the tab.
  */
-export function connectChatToShell(agentId: string): ShellConnection {
+export function connectChatToShell(agentId: string, options: ChatShellOptions): ShellConnection {
+  const { isPresenceReported } = options;
   connection = connectToShell({
     onHandshake: (received) => {
       handshake = received;
       adoptClientIdentity({ clientId: received.clientId, deviceKind: received.deviceKind, viewId: received.viewId });
       // Hidden until the shell says shown: a page can load into a background tab, and open
       // (any client's unexpired report) is what a hidden report keeps.
-      startPresenceReporting(agentId, received.clientId, isShown ? "visible" : "hidden");
+      if (isPresenceReported) startPresenceReporting(agentId, received.clientId, isShown ? "visible" : "hidden");
       m.redraw();
     },
     onShown: () => {
       isShown = true;
-      reportPresence("visible");
+      if (isPresenceReported) reportPresence("visible");
       m.redraw();
     },
     onHidden: () => {
       isShown = false;
-      reportPresence("hidden");
+      if (isPresenceReported) reportPresence("hidden");
       m.redraw();
     },
   });
   if (!connection.isFramed) {
     // A direct visit has no shell to say when the page is showing; the document's own
     // visibility is the closest fact, and there is no shell-handed client id to key on.
-    startPresenceReporting(agentId, "direct-visit", document.visibilityState === "visible" ? "visible" : "hidden");
-    document.addEventListener("visibilitychange", () => {
-      reportPresence(document.visibilityState === "visible" ? "visible" : "hidden");
-    });
+    if (isPresenceReported) {
+      startPresenceReporting(agentId, "direct-visit", document.visibilityState === "visible" ? "visible" : "hidden");
+      document.addEventListener("visibilitychange", () => {
+        reportPresence(document.visibilityState === "visible" ? "visible" : "hidden");
+      });
+    }
   } else {
     isShown = false;
   }
-  window.addEventListener("pagehide", () => {
-    if (currentPresenceState() !== "closed") reportPresence("closed");
-  });
+  if (isPresenceReported) {
+    window.addEventListener("pagehide", () => {
+      if (currentPresenceState() !== "closed") reportPresence("closed");
+    });
+  }
   window.addEventListener("focus", () => connection?.focused());
   return connection;
 }

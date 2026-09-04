@@ -2,7 +2,9 @@
  * The chat page's presence reports (see `presence.py`): `hidden` once the shell has handed
  * the page its handshake, `visible` on `shell:shown`, `hidden` on `shell:hidden`, `closed` on
  * `pagehide`, and a heartbeat of the current state every minute so a page that vanished
- * without its `pagehide` stops counting on its own. The OOM prioritizer reads the aggregate.
+ * without its `pagehide` stops counting on its own. Only the chat's own page reports (a
+ * subagent view's reports would overwrite it: one report per chat and client is kept). The
+ * OOM prioritizer reads the aggregate.
  */
 
 import { apiUrl } from "../base-path";
