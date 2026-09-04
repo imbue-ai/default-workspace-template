@@ -40,6 +40,7 @@ Modified:
   - `views/appIcon.ts`, `derived-names.ts`, `agentLiveness.ts`: derived names and dots come from records; `agentLiveness.ts` is deleted.
   - `locationBeacon.ts` is deleted; its origin check moves into the contract listener in `DockviewWorkspace.ts`.
 - `system/apps/terminal/src/terminal_app/hooks.py`: delete the compatibility forward from phase 3.
+- `system/apps/browser/src/browser/session.py` and `runner.py`: the manager's browser lookup (`get`, `resolve`) raises the typed `UnknownBrowserError` that phase 5 gave `navigate_browser`, and the runner's `/browsers` routes catch that instead of `KeyError` (they catch it only around the lookup coroutine today, so this is consistency rather than a bug); the routes themselves stay, for the fleet CLI.
 - `system/apps/files/assets/index.js`: the shell stops accepting `minds-location`.
 - `test_ratchets.py` and `test_embed_ratchets.py`: the contract listener file joins the allowlist; a new ratchet forbids the strings `chat:`, `terminal:`, `service:`, `url:`, and `subagent:` as ref prefixes anywhere under the shell package and frontend.
 
