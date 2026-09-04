@@ -67,7 +67,12 @@ def test_prevent_broad_exception_catch() -> None:
     # same thread-boundary shape. The worker is the ONLY thing that ever delivers
     # a held message, so an escaping exception would strand every queued message
     # for the life of the process; it logs and keeps looping instead.
-    rc.check_broad_exception_catch(_DIR, snapshot(5))
+    # Bumped again for the switch worker's wrapper in
+    # harness_handoff._run_switch_and_release: same thread-boundary shape. The
+    # thread is unchecked and holds the chat's exclusive switch slot, so anything
+    # escaping would wedge the chat -- claimed forever, stuck mid-switch, with no
+    # way to retry; it publishes the failure and releases the slot instead.
+    rc.check_broad_exception_catch(_DIR, snapshot(6))
 
 
 def test_prevent_base_exception_catch() -> None:

@@ -19,6 +19,7 @@ from flask import Flask
 from flask import Response
 from flask import request
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.models import ChatId
 
@@ -28,17 +29,22 @@ from imbue.system_interface.models import ChatId
 ChatRouteRule = tuple[str, Callable[..., Response], tuple[str, ...]]
 
 
-def _make_chat_resolver(chat_native_endpoints: frozenset[str]) -> Callable[[], None]:
-    """Build the blueprint's ``before_request``, given the endpoints to leave alone.
+class ChatIdResolver(FrozenModel):
+    """The blueprint's ``before_request``: a callable carrying the endpoints to leave alone.
 
-    A CHAT-NATIVE route is one whose subject is the conversation rather than the
+    A model rather than a closure so it stays a top-level, testable object with its
+    allowlist stated as a field.
+
+    A CHAT-NATIVE endpoint is one whose subject is the conversation rather than the
     process behind it -- switching harness is the first, since the point of it is
     that the backing agent changes. Those views take ``chat_id`` straight through;
     everything else is a twin of an ``/api/agents`` handler and gets the resolved
     ``agent_id`` instead.
     """
 
-    def resolve_chat_to_active_agent() -> None:
+    chat_native_endpoints: frozenset[str]
+
+    def __call__(self) -> None:
         """Rewrite the request's ``chat_id`` view arg to the chat's active ``agent_id``.
 
         Runs before every blueprint dispatch (``before_request`` fires ahead of the
@@ -50,12 +56,10 @@ def _make_chat_resolver(chat_native_endpoints: frozenset[str]) -> Callable[[], N
         view_args: dict[str, Any] | None = request.view_args
         if view_args is None or "chat_id" not in view_args:
             return
-        if request.endpoint in chat_native_endpoints:
+        if request.endpoint in self.chat_native_endpoints:
             return
         chat_id = ChatId(str(view_args.pop("chat_id")))
         view_args["agent_id"] = get_state().chat_registry.resolve_active_agent_id(chat_id)
-
-    return resolve_chat_to_active_agent
 
 
 def register_chat_routes(
@@ -79,7 +83,7 @@ def register_chat_routes(
     # view function, so the allowlist the resolver checks is derived from the same
     # string the route is registered under -- there is no second place to keep in sync.
     native_endpoints = frozenset(f"chats.{_endpoint_name(rule)}" for rule, _view_func, _methods in chat_native_rules)
-    blueprint.before_request(_make_chat_resolver(native_endpoints))
+    blueprint.before_request(ChatIdResolver(chat_native_endpoints=native_endpoints))
     for rule, view_func, methods in rules:
         blueprint.add_url_rule(rule, view_func=view_func, methods=list(methods))
     for rule, view_func, methods in chat_native_rules:

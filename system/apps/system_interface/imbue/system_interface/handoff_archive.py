@@ -231,9 +231,18 @@ class CompositeChatWatcher(AgentSessionWatcher):
     archived segments are immutable history and generate no events.
     """
 
-    def __init__(self, archived: tuple[ArchivedSegmentWatcher, ...], live: AgentSessionWatcher) -> None:
-        self._archived = archived
-        self._live = live
+    _archived: tuple[ArchivedSegmentWatcher, ...]
+    _live: AgentSessionWatcher
+
+    @classmethod
+    def build_over(
+        cls, archived: tuple[ArchivedSegmentWatcher, ...], live: AgentSessionWatcher
+    ) -> "CompositeChatWatcher":
+        """Wrap watchers that already exist, following ``ArchivedSegmentWatcher.build_from_rows``."""
+        composite = cls()
+        composite._archived = archived
+        composite._live = live
+        return composite
 
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "CompositeChatWatcher":
@@ -426,4 +435,4 @@ def build_chat_watcher(
         archived.append(watcher)
     if not archived:
         return live
-    return CompositeChatWatcher(tuple(archived), live)
+    return CompositeChatWatcher.build_over(tuple(archived), live)
