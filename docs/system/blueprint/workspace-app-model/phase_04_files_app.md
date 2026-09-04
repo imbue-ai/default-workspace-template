@@ -31,6 +31,7 @@ Modified:
 - `.agents/skills/migrate-workspace/scripts/migrate_workspace_test.py`: the real `supervisord.conf` names ports for the shell and the browser only; the terminal and files register from inside their processes and the registry scan covers their ports.
 
 Done at the start of this phase, as its own commit: contracts section 17 (where app data and machine state live), the root `CLAUDE.md` sentence pointing at it, and the terminal's store moved from `data/.state/terminal/instances.json` to `data/.apps/terminal/instances.json` (`terminal-app --store`), so every app keeps its instance records under `data/.apps/<name>/` and `data/.state/terminal/` holds only the dispatch scripts and pty records.
+`AGENTS.md`'s copy of that sentence was aligned with `CLAUDE.md`'s later in the phase; its other differences from `CLAUDE.md` are prior work and were left alone.
 
 ## Behaviour
 
