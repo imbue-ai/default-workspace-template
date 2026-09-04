@@ -11,9 +11,9 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.documents import CHAT_AGENT_ID_META_NAME
 from imbue.system_interface.documents import CHAT_SESSION_ID_META_NAME
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
-from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import seed_agent_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -23,10 +23,7 @@ def _agent_id() -> str:
 
 def _state_with_chat(static_directory: Path, chat_id: str) -> tuple[SystemInterfaceState, AgentManager]:
     manager = AgentManager.build(WebSocketBroadcaster())
-    with manager._lock:
-        manager._agents[chat_id] = AgentStateItem(
-            id=chat_id, name="Chat-1", state="RUNNING", labels={"display_name": "Chat 1"}, work_dir=None
-        )
+    seed_agent_state(manager, chat_id, name="Chat-1", labels={"display_name": "Chat 1"})
     manager.note_agent_list_known()
     state = build_test_state(agent_manager=manager)
     state.static_directory = static_directory

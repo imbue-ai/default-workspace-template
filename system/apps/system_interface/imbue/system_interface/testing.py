@@ -24,6 +24,7 @@ import time
 import xmlrpc.client
 from collections.abc import Generator
 from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
@@ -38,6 +39,7 @@ from flask import Flask
 
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
+from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.agent_manager import AgentManager
@@ -45,10 +47,12 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
-from imbue.system_interface.harnesses.signed_in import SignedIn
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
+from imbue.system_interface.harnesses.signed_in import SignedIn
 from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -183,6 +187,29 @@ def is_e2e_browser_installed() -> bool:
     else:
         cache_dir = Path.home() / ".cache" / "ms-playwright"
     return cache_dir.exists() and any(cache_dir.iterdir())
+
+
+def seed_agent_state(
+    manager: AgentManager,
+    agent_id: str,
+    *,
+    name: str,
+    state: str = "RUNNING",
+    labels: Mapping[str, str] | None = None,
+    harness: HarnessType = HarnessType.CLAUDE,
+    activity_state: ActivityState | None = None,
+) -> None:
+    """Insert an ``AgentStateItem`` straight into the manager's tracked map, bypassing discovery."""
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id,
+            name=name,
+            state=state,
+            labels=dict(labels) if labels is not None else {},
+            work_dir=None,
+            harness=harness,
+            activity_state=activity_state,
+        )
 
 
 class RecordingMngrMessenger(MngrMessenger):
@@ -351,7 +378,6 @@ class FakePexpectProcess:
 
     def close(self) -> None:
         self.close_calls += 1
-
 
 
 def _find_free_port() -> int:

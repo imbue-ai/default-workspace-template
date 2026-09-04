@@ -73,6 +73,7 @@ from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.testing import seed_agent_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -90,15 +91,7 @@ def _seed_agent(
     state: str = "RUNNING",
 ) -> None:
     """Insert a placeholder ``AgentStateItem`` directly into the tracked map."""
-    with manager._lock:
-        manager._agents[agent_id] = AgentStateItem(
-            id=agent_id,
-            name=f"agent-{agent_id}",
-            state=state,
-            labels={},
-            work_dir=None,
-            harness=harness,
-        )
+    seed_agent_state(manager, agent_id, name=f"agent-{agent_id}", state=state, harness=harness)
 
 
 _PROVIDER = ProviderInstanceName("local")
