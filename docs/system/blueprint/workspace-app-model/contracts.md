@@ -116,7 +116,7 @@ JSON in and out; every error body is `{"detail": "<message>"}`.
 | `POST /_instances` | `{"action": "<id>", "params": {...}}` | `201 {"instance": record}` | `400` unknown action or bad params, `409` the app cannot create now (with a detail the shell shows verbatim), `503` initialising |
 | `DELETE /_instances/<key>` | | `204` | none: an unknown key is `204` (idempotent) |
 | `POST /_instances/<key>/rename` | `{"title": "<text>"}` | `200 {"instance": record}` | `400` not renameable or bad title, `404` unknown key, `409` title collision |
-| `POST /_instances/<key>/location` | `{"path": "<path>"}` | `200 {"instance": record}` | `400` bad path or the app does not track location, `404` unknown key |
+| `POST /_instances/<key>/location` | `{"path": "<path>"}` | `200 {"instance": record}` | `400` bad path or the app does not track location, `404` unknown key, `409` the app cannot navigate there now (the browser; see section 4.3) |
 
 `path` obeys the same rule as `url`, minus the placeholder: rooted with a single slash, at most 2048 characters, no control characters; or, for an app that navigates to other sites' pages (the browser), an absolute `http` or `https` URL with a host, under the same length and character rules.
 Each app takes the form that fits it and answers `400` for the other.
