@@ -1,3 +1,4 @@
+from enum import StrEnum
 from typing import NewType
 
 from pydantic import Field
@@ -108,6 +109,36 @@ class SetModelChoiceRequest(FrozenModel):
         default=(),
         description="Which axes this click changed (against the value the user saw); the switch applies only these",
     )
+
+
+class SwitchHarnessRequest(FrozenModel):
+    """Request body for POST /api/chats/{chat_id}/switch-harness.
+
+    The target is named by ACCOUNT, not by harness: a chat runs on one signed-in
+    provider account and the harness follows from it, so an account id is the
+    only choice that is always unambiguous (two accounts can share a harness).
+    """
+
+    account_id: str = Field(description="The signed-in account the chat should move to")
+    operation_id: str = Field(
+        description=(
+            "Client-minted idempotency key for this switch. A retry of the same click "
+            "(a flaky POST, a double-submit, a second client) carries the same key and "
+            "joins the running switch instead of starting a second one."
+        )
+    )
+
+
+class SwitchHarnessResponse(FrozenModel):
+    """Response from POST /api/chats/{chat_id}/switch-harness.
+
+    Answers only that the switch was accepted and started; the switch itself is
+    reported through the agents WebSocket (``AgentStateItem.handoff``), which is
+    what every client watches -- including the one that did not click.
+    """
+
+    status: str = Field(description="Always 'accepted'")
+    operation_id: str = Field(description="The accepted operation's idempotency key")
 
 
 class ModelOptionsResponse(FrozenModel):
@@ -243,6 +274,25 @@ class QueuedMessageState(FrozenModel):
     )
 
 
+class HandoffPhase(StrEnum):
+    """How far an in-flight harness switch has got, as the frontend reads it."""
+
+    # The old agent is frozen and the replacement is being created; still reversible.
+    PREPARING = "preparing"
+    # The chat has been re-pointed; the old agent is being snapshotted and destroyed.
+    FINISHING = "finishing"
+    # Terminal, and only ever observed as the last push before the field clears.
+    FAILED = "failed"
+
+
+class HandoffState(FrozenModel):
+    """The frontend-visible state of one harness switch."""
+
+    phase: HandoffPhase = Field(description="How far the switch has got")
+    target_harness: HarnessType = Field(description="The harness the chat is moving to")
+    detail: str = Field(default="", description="Why a FAILED switch failed; empty otherwise")
+
+
 class AgentStateItem(FrozenModel):
     """Agent state for the unified WebSocket stream."""
 
@@ -281,6 +331,25 @@ class AgentStateItem(FrozenModel):
             "queue, in enqueue order. Empty when nothing is queued (or the harness "
             "has no queue populator). A sibling of ``activity_state``: ephemeral "
             "live state pushed on the agents WebSocket, replaced wholesale each push."
+        ),
+    )
+    chat_id: ChatId | None = Field(
+        default=None,
+        description=(
+            "The stable id of the chat this agent backs, which is what every product "
+            "surface addresses. Equal to ``id`` for a chat the workspace has always "
+            "backed with this agent, and NOT equal after a harness switch has "
+            "re-pointed the chat at a replacement agent. None for an agent that backs "
+            "no chat (the primary services agent, workers)."
+        ),
+    )
+    handoff: HandoffState | None = Field(
+        default=None,
+        description=(
+            "The in-flight harness switch for this chat, or None when none is running. "
+            "Server-authoritative: the frontend renders progress from this rather than "
+            "from its own optimistic state, so a reload or a second client mid-switch "
+            "shows the same thing."
         ),
     )
 
@@ -359,9 +428,7 @@ class CreateChatRequest(FrozenModel):
 class CreatedChatAgent(FrozenModel):
     """A freshly-created chat agent's identity: its id and its name pair."""
 
-    agent_id: ChatId = Field(
-        description="The pre-generated agent ID, which is also the chat's stable ChatId"
-    )
+    agent_id: ChatId = Field(description="The pre-generated agent ID, which is also the chat's stable ChatId")
     name: str = Field(description="The agent's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 
