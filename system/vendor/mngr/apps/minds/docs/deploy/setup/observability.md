@@ -4,7 +4,7 @@ Operator runbook for standing up the per-tier log and telemetry aggregation
 instances and rolling the fleet collectors out. Design and rationale live in
 `specs/minds-openobserve-telemetry.md`; the CLI surface is documented in
 `apps/observability/README.md`. Track the per-tier status in
-[next_deploy.md](./next_deploy.md).
+[next_deploy.md](../next_deploy.md).
 
 Order matters: bring up **dev first** and run the validation gates below --
 the OpenObserve API shapes and the Modal OpenTelemetry integration are pinned
@@ -14,7 +14,7 @@ Then staging, let it soak, then production.
 ## Prerequisites
 
 - PR mngr-internal#465 merged (or run from its branch).
-- `vault login` (see [vault-setup.md](./vault-setup.md)) and an activated
+- `vault login` (see [vault-setup.md](vault.md)) and an activated
   env for the target tier (`eval "$(uv run minds-admin env activate <env>)"`).
   Any `dev-*`/`ci-*` env maps to the single shared **dev** instance.
 - Access to the tier's Cloudflare account (R2 + origin certs), Neon org, and
@@ -102,11 +102,11 @@ configure the OpenTelemetry integration by hand:
 
 ### 5. Roll the fleet collectors
 
-- Boxes: one `just prep-server <server-id>` pass per box (`minds-admin server
+- Boxes: one `just server-prep <server-id>` pass per box (`minds-admin server
   prep` resolves the tier's boxes credential from Vault in-process, installs
   the pinned otelcol-contrib, and verifies the unit is active -- fail-closed;
   it logs a clean skip while the credential is absent). New boxes get it at
-  `just setup-server` / prep automatically.
+  `just server-setup` / prep automatically.
 - Relays (existing ones; new dev relays get this during
   `just provision-dev-relay`):
 
@@ -180,7 +180,7 @@ Repeat the per-tier procedure with `staging` and then `production` activated.
 Remember the tiers are fully isolated (own Cloudflare account, Neon org, OVH
 credentials, Modal workspace) -- every resource in step 1 is created fresh
 per tier. Record completion (and any lessons) in
-[next_deploy.md](./next_deploy.md) / [history/](./history/).
+[next_deploy.md](../next_deploy.md) / [history/](../history/).
 
 ## Querying Modal app logs by severity
 
@@ -241,4 +241,4 @@ dashboards work needs it (mngr-internal#656).
   ingest path.
 - Dashboards + alert-on-no-data rules (separate PR).
 - Migrate Bugsink onto this hosting pattern: mngr-internal#464 -- DONE; see
-  [bugsink-bringup.md](./bugsink-bringup.md).
+  [bugsink-bringup.md](bugsink.md).

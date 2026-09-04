@@ -235,7 +235,7 @@ def assert_lima_image_published(
     except urllib.error.HTTPError as exc:
         raise PromotionError(
             f"No Lima image published for {fallback_branch} ({url} returned {exc.code}). "
-            f"Publish it (see apps/minds/docs/deploy/release.md) or clients will silently build in-VM."
+            f"Publish it (see apps/minds/docs/deploy/ops/app-release.md) or clients will silently build in-VM."
         ) from exc
     except urllib.error.URLError as exc:
         # An unreachable image host cannot be told apart from an unpublished

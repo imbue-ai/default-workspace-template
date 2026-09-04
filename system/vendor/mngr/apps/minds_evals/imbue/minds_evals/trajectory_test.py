@@ -3,6 +3,7 @@ import json
 import pytest
 
 from imbue.minds_evals.data_types import DeciderTurn
+from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import UsageSource
@@ -20,6 +21,8 @@ from imbue.minds_evals.testing import atif_document_with_worker_launch
 from imbue.minds_evals.testing import worker_document
 from imbue.minds_evals.testing import worker_stream_jsonl
 from imbue.minds_evals.trajectory import EmbeddedWorker
+from imbue.minds_evals.trajectory import STEP_BOUNDARY_BANNER
+from imbue.minds_evals.trajectory import STEP_BOUNDARY_KIND
 from imbue.minds_evals.trajectory import build_hand_built_trajectory
 from imbue.minds_evals.trajectory import build_worker_trajectory_from_stream
 from imbue.minds_evals.trajectory import build_workspace_trajectory
@@ -88,7 +91,7 @@ def test_workspace_trajectory_carries_the_resolved_usage_and_leaves_the_rest_alo
     document = atif_document()
 
     built = build_workspace_trajectory(
-        atif_document_json(), _provenance(), _usage(message_count=2), workers=()
+        atif_document_json(), _provenance(), _usage(message_count=2), workers=(), boundaries=()
     ).to_json_dict()
 
     # The trial's resolved account replaces the document's own per-step sums, cache-inclusive as ATIF
@@ -109,7 +112,7 @@ def test_workspace_trajectory_carries_the_resolved_usage_and_leaves_the_rest_alo
 
 def test_workspace_trajectory_keeps_the_documents_own_sums_when_the_usage_account_is_empty() -> None:
     built = build_workspace_trajectory(
-        atif_document_json(), _provenance(), _usage(message_count=0), workers=()
+        atif_document_json(), _provenance(), _usage(message_count=0), workers=(), boundaries=()
     ).to_json_dict()
 
     assert built["final_metrics"] == atif_document()["final_metrics"]
@@ -119,13 +122,15 @@ def test_workspace_trajectory_is_validated_after_the_edits() -> None:
     stepless = {**atif_document(), "steps": []}
 
     with pytest.raises(TrajectoryDocumentError, match="not valid ATIF"):
-        build_workspace_trajectory(json.dumps(stepless), _provenance(), _usage(message_count=2), workers=())
+        build_workspace_trajectory(
+            json.dumps(stepless), _provenance(), _usage(message_count=2), workers=(), boundaries=()
+        )
 
 
 @pytest.mark.parametrize("document_json", ["{not json", "[1, 2]"])
 def test_workspace_trajectory_refuses_a_document_that_is_not_an_object(document_json: str) -> None:
     with pytest.raises(TrajectoryDocumentError):
-        build_workspace_trajectory(document_json, _provenance(), _usage(message_count=2), workers=())
+        build_workspace_trajectory(document_json, _provenance(), _usage(message_count=2), workers=(), boundaries=())
 
 
 def test_hand_built_trajectory_carries_the_same_provenance_block_and_skips_empty_turns() -> None:
@@ -137,7 +142,7 @@ def test_hand_built_trajectory_carries_the_same_provenance_block_and_skips_empty
     ]
 
     built = build_hand_built_trajectory(
-        conversation, _provenance(), _usage(message_count=2), timestamp="2026-09-01T00:00:00Z"
+        conversation, _provenance(), _usage(message_count=2), timestamp="2026-09-01T00:00:00Z", boundaries=()
     )
 
     assert built is not None
@@ -158,7 +163,7 @@ def test_hand_built_trajectory_carries_the_same_provenance_block_and_skips_empty
 def test_hand_built_trajectory_is_none_without_an_exchange() -> None:
     assert (
         build_hand_built_trajectory(
-            [{"role": "user", "text": "   "}], _provenance(), _usage(message_count=0), timestamp="t"
+            [{"role": "user", "text": "   "}], _provenance(), _usage(message_count=0), timestamp="t", boundaries=()
         )
         is None
     )
@@ -328,7 +333,11 @@ def test_workspace_trajectory_embeds_workers_and_still_validates() -> None:
     )
 
     built = build_workspace_trajectory(
-        json.dumps(atif_document_with_worker_launch()), _provenance(), _usage(message_count=2), workers=[worker]
+        json.dumps(atif_document_with_worker_launch()),
+        _provenance(),
+        _usage(message_count=2),
+        workers=[worker],
+        boundaries=(),
     ).to_json_dict()
 
     assert [entry["trajectory_id"] for entry in built["subagent_trajectories"]] == ["sub-1", WORKER_AGENT_ID]
@@ -352,7 +361,11 @@ def test_workspace_trajectory_refuses_two_workers_with_one_id() -> None:
 
     with pytest.raises(TrajectoryDocumentError, match="not valid ATIF"):
         build_workspace_trajectory(
-            json.dumps(atif_document_with_worker_launch()), _provenance(), _usage(message_count=2), workers=workers
+            json.dumps(atif_document_with_worker_launch()),
+            _provenance(),
+            _usage(message_count=2),
+            workers=workers,
+            boundaries=(),
         )
 
 
@@ -391,3 +404,123 @@ def test_parse_worker_document_accepts_what_the_workspace_built() -> None:
 def test_parse_worker_document_refuses_what_cannot_be_embedded(document: object, expected_match: str) -> None:
     with pytest.raises(TrajectoryDocumentError, match=expected_match):
         parse_worker_document(json.dumps(document))
+
+
+# --- step boundaries ---
+
+
+def _boundary(
+    name: str = "adjust-requirements",
+    started_at: str = "2026-09-01T00:00:05Z",
+    conversation_index: int = 2,
+    opening_message: str = "",
+) -> StepBoundary:
+    return StepBoundary(
+        name=name,
+        started_at=started_at,
+        conversation_index=conversation_index,
+        opening_message=opening_message,
+    )
+
+
+_STEPPED_CONVERSATION = (
+    {"role": "user", "text": "Build it"},
+    {"role": "agent", "text": "Built."},
+    {"role": "user", "text": "Now change it"},
+    {"role": "agent", "text": "Changed."},
+)
+
+
+def test_hand_built_boundary_becomes_a_system_step_ahead_of_the_steps_first_turn() -> None:
+    built = build_hand_built_trajectory(
+        _STEPPED_CONVERSATION,
+        _provenance(),
+        _usage(message_count=2),
+        timestamp="2026-09-01T00:00:00Z",
+        boundaries=(_boundary(name="build", conversation_index=0), _boundary(conversation_index=2)),
+    )
+
+    assert built is not None
+    rendered = built.to_json_dict()
+    assert [(step["step_id"], step["source"]) for step in rendered["steps"]] == [
+        (1, "system"),
+        (2, "user"),
+        (3, "agent"),
+        (4, "system"),
+        (5, "user"),
+        (6, "agent"),
+    ]
+    marker = rendered["steps"][3]
+    assert marker["message"].startswith(STEP_BOUNDARY_BANNER)
+    assert "Step: adjust-requirements" in marker["message"]
+    assert marker["extra"] == {"minds_evals": {"kind": STEP_BOUNDARY_KIND, "step_name": "adjust-requirements"}}
+    # The markers are cosmetic, so the trial's reported step count stays the conversation's.
+    assert rendered["final_metrics"]["total_steps"] == 4
+
+
+def test_hand_built_boundary_for_a_step_that_never_spoke_lands_last() -> None:
+    built = build_hand_built_trajectory(
+        _STEPPED_CONVERSATION,
+        _provenance(),
+        _usage(message_count=2),
+        timestamp="2026-09-01T00:00:00Z",
+        boundaries=(_boundary(name="stalled", conversation_index=4),),
+    )
+
+    assert built is not None
+    assert [step["source"] for step in built.to_json_dict()["steps"]] == ["user", "agent", "user", "agent", "system"]
+
+
+def test_hand_built_trajectory_is_still_none_when_only_boundaries_would_remain() -> None:
+    assert (
+        build_hand_built_trajectory(
+            [{"role": "user", "text": "  "}],
+            _provenance(),
+            _usage(message_count=0),
+            timestamp="t",
+            boundaries=(_boundary(conversation_index=0),),
+        )
+        is None
+    )
+
+
+def test_workspace_boundary_is_placed_at_the_steps_opening_client_message() -> None:
+    built = build_workspace_trajectory(
+        atif_document_json(),
+        _provenance(),
+        _usage(message_count=2),
+        workers=(),
+        boundaries=(_boundary(opening_message="Build it"),),
+    ).to_json_dict()
+
+    assert [(step["step_id"], step["source"]) for step in built["steps"]] == [(1, "system"), (2, "user"), (3, "agent")]
+    # Renumbering moves no other reference: the agent step still owns its call and its result.
+    agent_step = built["steps"][2]
+    assert agent_step["tool_calls"][0]["tool_call_id"] == "call-1"
+    assert agent_step["observation"]["results"][0]["source_call_id"] == "call-1"
+    assert built["final_metrics"]["total_steps"] == 2
+
+
+def test_workspace_boundary_without_a_message_match_falls_back_to_the_timestamp() -> None:
+    built = build_workspace_trajectory(
+        atif_document_json(),
+        _provenance(),
+        _usage(message_count=2),
+        workers=(),
+        boundaries=(_boundary(started_at="2026-09-01T00:00:05Z"),),
+    ).to_json_dict()
+
+    # The first step at or after the boundary's own clock is the agent step at :05.
+    assert [step["source"] for step in built["steps"]] == ["user", "system", "agent"]
+
+
+def test_workspace_boundary_that_resolves_to_nothing_is_dropped() -> None:
+    built = build_workspace_trajectory(
+        atif_document_json(),
+        _provenance(),
+        _usage(message_count=2),
+        workers=(),
+        boundaries=(_boundary(opening_message="never said", started_at="2027-01-01T00:00:00Z"),),
+    ).to_json_dict()
+
+    assert [step["source"] for step in built["steps"]] == ["user", "agent"]

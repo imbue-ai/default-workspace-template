@@ -16,7 +16,7 @@ unrecoverable under memory exhaustion while lima still reported it `Running`):
 Both changes are code-complete on the mngr side. This runbook covers getting
 them onto the production fleet. Audience: an operator with production Vault
 access and an activated production env (see
-[environments.md](./environments.md)).
+[environments.md](../../reference/environments.md)).
 
 **Note:** the minds desktop app bundles its *own* lima (pinned at 2.0.3 in
 `apps/minds/scripts/build.js` for a macOS-only usernet regression,
@@ -45,7 +45,7 @@ Requires operator action:
 
 ## Step 1: release the code
 
-Merge the PR, then cut a minds release (see [release.md](./release.md)); the
+Merge the PR, then cut a minds release (see [app-release.md](../../ops/app-release.md)); the
 release syncs the vendored mngr into default-workspace-template and tags both
 repos. This is what delivers the cap to desktop clients' slow-path rebuilds --
 bakes pick it up as soon as the operator's checkout has the merged code.
@@ -68,7 +68,7 @@ ssh limahost@<box-address> 'cat /usr/local/share/lima/.mngr-installed-lima-versi
 ```
 
 Bake one slice at the release tag (region label per the box, see
-[production-release-deployment.md](./production-release-deployment.md)):
+[order-boxes.md](../../setup/order-boxes.md)):
 
 ```bash
 just bake-slice-prod <REGION> <minds-vX.Y.Z> 1 --server-id <canary-box-id>
@@ -106,9 +106,9 @@ just prep-server <box-id>       # installs lima 2.2.0; idempotent
 ```
 
 Then bake the new generation and retire old rows following the standard flows:
-[production-release-deployment.md](./production-release-deployment.md) for
+[order-boxes.md](../../setup/order-boxes.md) for
 per-release capacity, and "Upgrading the pool" in
-[host-pool-setup.md](./host-pool-setup.md) for destroying old `available`
+[pool-hosts.md](../../ops/pool-hosts.md) for destroying old `available`
 rows. Old-version *leased* slices keep running until their leases end; the
 connector destroys each slice VM at release.
 
@@ -184,7 +184,7 @@ rows baked at several `repo_branch_or_tag` values. That is fine by design:
   (the provider logs a warning).
 - Old *available* rows should still be retired promptly after the new
   generation bakes (see "Upgrading the pool" in
-  [host-pool-setup.md](./host-pool-setup.md)): every fast-path lease they
+  [pool-hosts.md](../../ops/pool-hosts.md)): every fast-path lease they
   absorb is a slice running the old guestagent.
 
 Order matters per box: **prep before bake**, so every new slice VM boots with
@@ -231,7 +231,7 @@ Boxes whose images predate the docker preinstall (2026-06-16) are unaffected
   `employee` role is denied on `secrets/minds/staging/*`; tokens expire after
   168h, so expect to re-login). Deploys additionally need the
   `minds-staging` Modal profile (see
-  [staging-bringup.md](./staging-bringup.md)).
+  [tier-bringup.md](../../setup/tier-bringup.md)).
 - Redeploy the tier services first (`minds-admin env activate --deploy staging` +
   `minds-admin env deploy --yes-i-mean-staging`, from `main`), then run steps 2-5:
   canary-prep one box, bake one slice at the release tag, run all four canary
@@ -253,7 +253,7 @@ Boxes whose images predate the docker preinstall (2026-06-16) are unaffected
 - Staging is the rehearsal for production: run the same commands in the same
   order you will use for production (production adds the new-boxes-per-region
   capacity step from
-  [production-release-deployment.md](./production-release-deployment.md);
+  [order-boxes.md](../../setup/order-boxes.md);
   fresh boxes get lima 2.2.0 at `server setup` automatically, so only
   *pre-existing* production boxes need the re-prep).
 

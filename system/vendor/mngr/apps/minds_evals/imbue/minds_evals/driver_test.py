@@ -104,6 +104,7 @@ from imbue.minds_evals.testing import worker_listing_json
 from imbue.minds_evals.testing import worker_listing_output
 from imbue.minds_evals.testing import worker_trial_downloads
 from imbue.minds_evals.testing import workspace_state_output
+from imbue.minds_evals.trajectory import STEP_BOUNDARY_BANNER
 
 
 def _case_config(
@@ -3103,3 +3104,120 @@ def test_concurrent_trials_do_not_write_into_each_others_logs(tmp_path: Path) ->
     assert "Build beta" not in alpha_log.read_text()
     assert "Build beta" in beta_log.read_text()
     assert "Build alpha" not in beta_log.read_text()
+
+
+# --- the step boundary, the driver's own view, and the instruction ---
+
+
+def test_each_step_marks_its_boundary_as_a_system_step(tmp_path: Path) -> None:
+    """Both trajectory shapes are cumulative, so without a marker a later step's trajectory reads as
+    one undivided conversation."""
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build me a roadmap",), ("Here is an updated pull.",)),
+        _goal_conversation(("On it.", "Updated.")),
+        trial_name="project-roadmap__bounds1",
+    )
+
+    steps = _box_trajectory(environment)["steps"]
+    assert [(step["step_id"], step["source"]) for step in steps] == [
+        (1, "system"),
+        (2, "user"),
+        (3, "agent"),
+        (4, "system"),
+        (5, "user"),
+        (6, "agent"),
+    ]
+    assert steps[0]["message"].startswith(STEP_BOUNDARY_BANNER)
+    assert "Step: step-1" in steps[0]["message"]
+    assert steps[3]["message"].startswith(STEP_BOUNDARY_BANNER)
+    assert "Step: step-2" in steps[3]["message"]
+
+
+def test_a_trial_without_steps_has_no_boundary_to_mark(tmp_path: Path) -> None:
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[_reply_events("Built it.")])
+
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__flat1",
+        timeout_seconds=1800.0,
+    )
+
+    assert [step["source"] for step in _box_trajectory(environment)["steps"]] == ["user", "agent"]
+
+
+def test_the_driver_writes_its_own_view_of_the_trial_beside_the_trajectory(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[_reply_events("Building it now."), _reply_events("All done.")],
+    )
+
+    driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it", "Sounds good."),
+        conversation,
+        trial_name="todo-app__view1",
+        timeout_seconds=1800.0,
+    )
+
+    records = [json.loads(line) for line in (driver.logs_dir / "driver_events.jsonl").read_text().splitlines()]
+
+    # The feed the driver polled, verbatim -- the half that shows a workspace whose replies the
+    # driver could not make out.
+    assert "All done." in json.dumps(records)
+    # Operational only: nothing in the box grades it, so it is never mirrored there.
+    assert "/logs/agent/driver_events.jsonl" not in environment.uploaded_content_by_target
+
+
+def test_the_driver_view_records_each_decider_call_with_the_message_it_produced(tmp_path: Path) -> None:
+    goal_source = ScriptedTurnSource(
+        actions=[say("Where is it?"), done(TurnOutcome.SATISFIED, "It is running.")],
+        entry_kind=TurnEntryKind.GOAL,
+        budget_outcome=TurnOutcome.BUDGET_EXHAUSTED,
+        is_decider_call_simulated=True,
+    )
+    driver, _environment, _context = _run_driver(
+        tmp_path,
+        (_OPENING_PROMPT, GoalEntry(goal="See the app running", max_exchanges=2)),
+        _goal_conversation(("Here.", "Running.")),
+        trial_name="todo-app__view2",
+        timeout_seconds=1800.0,
+        scripted_sources=[LiteralTurnSource(prompt=_OPENING_PROMPT), goal_source],
+    )
+
+    records = [json.loads(line) for line in (driver.logs_dir / "driver_events.jsonl").read_text().splitlines()]
+    decider_records = [record for record in records if record.get("type") == "decider_message"]
+
+    # Every call the decider made, including the one that ended the entry without speaking. The text
+    # is what the trajectory's provenance block leaves out, and what makes this a debugging record.
+    assert [record["text"] for record in decider_records] == ["Where is it?", ""]
+    assert [record["entry_kind"] for record in decider_records] == ["goal", "goal"]
+    assert [record["detail"] for record in decider_records] == ["", "It is running."]
+
+
+def test_the_instruction_is_kept_beside_the_results_it_drove(tmp_path: Path) -> None:
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[_reply_events("Built it.")])
+
+    driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__instr1",
+        timeout_seconds=1800.0,
+    )
+
+    assert "Build it" in (driver.logs_dir / "instruction.md").read_text()
+    # The expectations it carries never reach the machine the agent under test runs on.
+    assert "/logs/agent/instruction.md" not in environment.uploaded_content_by_target
+
+
+def test_an_unparsable_instruction_is_still_written_for_a_reader(tmp_path: Path) -> None:
+    driver = _make_driver(tmp_path, "todo-app__instr2")
+    environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=_one_turn_conversation())
+
+    with pytest.raises(InstructionParseError):
+        asyncio.run(driver.run("no fenced json here", environment, AgentContext()))
+
+    assert (driver.logs_dir / "instruction.md").read_text() == "no fenced json here"

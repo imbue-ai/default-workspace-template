@@ -103,6 +103,7 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import HostId
 from imbue.mngr.providers.ssh_utils import add_host_to_known_hosts
 from imbue.mngr.utils.polling import poll_for_value
+from imbue.mngr.utils.ssh import quote_ssh_option_value
 from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.data_types import BareMetalServerCapacity
@@ -247,7 +248,12 @@ def _box_ssh_host_key_options(server_address: str, box_host_public_key: str) -> 
     os.close(known_hosts_fd)
     try:
         add_host_to_known_hosts(Path(known_hosts_path), server_address, 22, box_host_public_key)
-        yield ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known_hosts_path}"]
+        yield [
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            f"UserKnownHostsFile={quote_ssh_option_value(known_hosts_path)}",
+        ]
     finally:
         Path(known_hosts_path).unlink(missing_ok=True)
 
@@ -1018,7 +1024,7 @@ def _slice_run_in_container(
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
-            f"UserKnownHostsFile={known_hosts_path}",
+            f"UserKnownHostsFile={quote_ssh_option_value(known_hosts_path)}",
             "-o",
             "ConnectTimeout=20",
             "-o",
@@ -1809,7 +1815,7 @@ def assert_box_is_exclusive_to_tier(
 ) -> None:
     """Refuse to bake unless this box belongs solely to the activated env's tier.
 
-    Tier isolation is a stated invariant (``apps/minds/docs/deploy/environments.md``:
+    Tier isolation is a stated invariant (``apps/minds/docs/deploy/reference/environments.md``:
     "There is zero cross-tier reach"), but nothing used to enforce it at the moment
     it matters. Two independent ways a box drifts across tiers, both caught here
     before a single slice is carved:
@@ -1849,7 +1855,7 @@ def assert_box_is_exclusive_to_tier(
                 "`minds-admin server prep` writes that file with a single-key overwrite, so the extra key(s) were "
                 "added out of band and give another tier SSH access to this box. Inspect them with "
                 "`ssh-keygen -lf ~/.ssh/authorized_keys` on the box. Do NOT re-prep before checking the box "
-                "for another tier's slices (`just audit-boxes`): prep overwrites authorized_keys, which would "
+                "for another tier's slices (`just server-audit`): prep overwrites authorized_keys, which would "
                 "cut the other key's owner off from slices that are still running here."
             )
         raise click.UsageError(
@@ -1871,7 +1877,7 @@ def assert_box_is_exclusive_to_tier(
         "Tiers are isolated by construction -- each has its own pool keypair, and there is meant to be zero "
         "cross-tier reach -- so a box serving both is a box each tier's operators can SSH (and via limactl "
         "control) the other's workspaces on, and neither tier's reap will ever reclaim the other's slices. "
-        "Retire the foreign slices from their OWN env (`just destroy-pool-hosts <row-id>` with that env "
+        "Retire the foreign slices from their OWN env (`just pool-destroy <row-id>` with that env "
         "activated) or bake onto a box belonging to this tier."
     )
 

@@ -3,7 +3,7 @@
 > **This rollout is complete.** Both sweeps ran fleet-wide during the
 > minds-v0.3.17 deploy (`prep-server` on all 21 boxes; the in-VM backfill
 > verified 188/188 VMs -- see
-> [history/minds-v0.3.17.md](./history/minds-v0.3.17.md)), and every slice
+> [history/minds-v0.3.17.md](../minds-v0.3.17.md)), and every slice
 > baked since gets the installer at host create. The one-time backfill sweep
 > tool (`minds-admin server backfill-autostart` / `just backfill-autostart`)
 > has been removed; this document remains as the design record and for the
@@ -33,7 +33,7 @@ exposed the premature-trigger failure that the merged #381 then fixed with
 the mount-gated readiness marker).
 
 Audience: an operator with production Vault access and an activated production
-env (see [environments.md](./environments.md)). Deferred follow-ups (the
+env (see [environments.md](../../reference/environments.md)). Deferred follow-ups (the
 reconciler watchdog, reboot forensics, persistent journald) are tracked in
 mngr-internal#333, not here.
 
@@ -71,7 +71,7 @@ Already done (during incident response and verification):
   (the sweep uses your local `build_box_prep_script`).
 - Production Vault token loaded and the env activated:
   `eval "$(uv run minds-admin env activate production)"` (see
-  [vault-setup.md](./vault-setup.md)). No OVH supplier creds needed.
+  [vault.md](../../setup/vault.md)). No OVH supplier creds needed.
 
 ## Step 1: box sweep (box unit + apt pin)
 
@@ -88,7 +88,7 @@ untouched.
 
 **Note:** re-prep also applies any pending lima upgrade (the version-marker
 guard in prep), so this sweep doubles as the lima 2.2.0 sweep from
-[slice-hardening-rollout.md](./slice-hardening-rollout.md) if that has not
+[slice-hardening-rollout.md](slice-hardening.md) if that has not
 been completed -- one pass covers both.
 
 Verify per box (as `debian@<box-address>` with the pool key):
@@ -184,6 +184,6 @@ never data-destructive.
   (in-VM units, merged), mngr-internal#266 (the original race, closed),
   mngr-internal#333 (deferred follow-ups incl. the backfill script and the
   reconciler watchdog).
-- [host-pool-setup.md](./host-pool-setup.md) for prep/bake background;
-  [slice-hardening-rollout.md](./slice-hardening-rollout.md) for the prior
+- [pool-hosts.md](../../ops/pool-hosts.md) for prep/bake background;
+  [slice-hardening-rollout.md](slice-hardening.md) for the prior
   sweep this one composes with.

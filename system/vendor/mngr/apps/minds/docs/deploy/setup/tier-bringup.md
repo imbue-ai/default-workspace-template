@@ -7,9 +7,9 @@ on the machine) but has never touched staging or production cloud
 state.
 
 Companion reading:
-- [environments.md](./environments.md) -- per-tier model + the deploy CLI
-- [vault-setup.md](./vault-setup.md) -- Vault paths each tier expects
-- [host-pool-setup.md](./host-pool-setup.md) -- pool hosts for leased mode
+- [environments.md](../reference/environments.md) -- per-tier model + the deploy CLI
+- [vault-setup.md](vault.md) -- Vault paths each tier expects
+- [pool-hosts.md](../ops/pool-hosts.md) -- pool hosts for leased mode
 
 Production bring-up follows the same shape; substitute `staging` ->
 `production`, `minds-staging` -> `minds-production`, and
@@ -247,7 +247,7 @@ Modal-pushed entries (consumed by the deployed apps at runtime):
   the connector and LiteLLM proxy consume. Push the template with all
   values empty (empty simply disables reporting); the tier's Bugsink
   bring-up (`just provision-bugsink`, see
-  [bugsink-bringup.md](./bugsink-bringup.md)) fills the DSNs in, and
+  [bugsink-bringup.md](bugsink.md)) fills the DSNs in, and
   the next deploy picks them up. The Bugsink instance itself is an
   operator-lifecycle OVH VPS outside the tier deploy; its own
   `secrets/minds/staging/bugsink` entry is populated during that
@@ -331,7 +331,7 @@ state.
 - [ ] Deploy finished cleanly; both URLs printed match the committed
   `staging/client.toml`.
 - [ ] Error tracking: bring up the tier's Bugsink instance per
-  [bugsink-bringup.md](./bugsink-bringup.md) (operator-lifecycle OVH
+  [bugsink-bringup.md](bugsink.md) (operator-lifecycle OVH
   VPS, outside this deploy), then re-run the tier deploy so the
   reporting services pick up the freshly stamped
   `sentry-staging-<deploy-id>` Secret.
@@ -362,7 +362,7 @@ what runs on it.
   # wait for cloud-init: ssh debian@<ip> cloud-init status --wait
   just register-share-relay https://<connector> <region> <ip>:7000 <ip> share-relay-staging-<region>-<ordinal>
   # note the relay_id the registration prints
-  FRPS_AUTH_SECRET=<secret> just deploy-share-relay <ip> <relay_id> <region> <SHARE_CONTENT_DOMAIN> \
+  FRPS_AUTH_SECRET=<secret> just services-deploy-share-relay <ip> <relay_id> <region> <SHARE_CONTENT_DOMAIN> \
       "https://<connector>/frps/auth"
   ```
   (`FRPS_AUTH_SECRET` and `SHARE_CONTENT_DOMAIN` come from the tier's
@@ -393,18 +393,18 @@ without any pool hosts.
 Pool hosts are baked as bare-metal **slices**. You first need a
 bare-metal box that is registered + prepped (`status=ready`) via the
 `minds-admin server` commands -- see
-[host-pool-setup.md](./host-pool-setup.md) step 5. With staging activated,
+[pool-hosts.md](../ops/pool-hosts.md) step 5. With staging activated,
 bake onto a `ready` box via the canonical justfile recipe:
 
 ```bash
-just bake-slice-prod US-WEST-OR v0.3.0 1 --server-id <bare-metal-server-id>
+just pool-bake US-WEST-OR v0.3.0 1 --server-id <bare-metal-server-id>
 ```
 
-`just bake-slice-prod <region> <tag> [count] [extra flags]` wraps
+`just pool-bake <region> <tag> [count] [extra flags]` wraps
 `minds-admin pool create`, which derives the pool SSH key from
 the tier's Vault entry and -- for staging/production -- reads the host_pool
 DSN from `secrets/minds/staging/neon`. You do NOT export any of those by
-hand. See [host-pool-setup.md](./host-pool-setup.md) step 5 for the full
+hand. See [pool-hosts.md](../ops/pool-hosts.md) step 5 for the full
 breakdown.
 
 `region` is the lease-region **label** stamped on each row (what the
@@ -420,7 +420,7 @@ method`` -- the supplier account needs a default payment method (OVH manager
 UI: Billing -> Payment methods -> add -> mark as default) before any box
 order can go through.
 
-- [ ] `just list-pool-hosts` shows the row.
+- [ ] `just pool-list` shows the row.
 
 ---
 
