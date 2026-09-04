@@ -71,6 +71,11 @@ in that app's folder and is named `<app>-<role>`.
   from mngr (the embed contract and service icons the UI bundles, the terminal's
   ttyd client), fetched at build time from the mngr commit `pyproject.toml` pins.
   mngr itself is installed as packages from that same commit, not vendored.
+- `system/vendor/mngr/` - Absent in a released workspace. An mngr checkout
+  dropped here before the build (untracked; the mngr repo's dev and CI harnesses
+  do this) takes over from the pinned commit: `system/scripts/use_local_mngr.py`
+  rewrites `pyproject.toml`'s mngr sources to editable paths into it and relocks,
+  so the tools, the venv and `mngr-assets` all come from the tree.
 - `system/vendor/tk/` - A vendored copy of the
   [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script
   (also callable as `tk`) manages tickets stored as markdown. We point

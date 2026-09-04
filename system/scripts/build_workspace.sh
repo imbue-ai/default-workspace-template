@@ -40,28 +40,19 @@ cd "$REPO_ROOT"
 # refuse on an ownership mismatch.
 git config --global --add safe.directory "$REPO_ROOT"
 
+# An mngr checkout dropped at system/vendor/mngr (untracked) takes over from the
+# public-repo commit pyproject.toml pins: everything below reads the rewritten file.
+python3 "$REPO_ROOT/system/scripts/use_local_mngr.py" "$REPO_ROOT"
+
 # Build the system_interface frontend (deps installed by install_dependencies.sh).
 ( cd "$REPO_ROOT/system/apps/system_interface/frontend" && npm run build )
 
 # Install mngr and system-interface as tools (both need the plugin packages so
-# they can parse plugin-specific config). mngr and every plugin come from the
-# public mngr repo at the one commit pyproject.toml pins; the plugin set comes
-# from system/config/mngr_plugins.toml, which the update-self apply reads too, so
-# a release adding a plugin registers it in existing workspaces as well as here.
-# Each tool is installed in a single command so uv resolves its whole set at one
-# commit. mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
-SI_PLUGIN_ARGS=()
-while IFS= read -r requirement; do
-    SI_PLUGIN_ARGS+=(--with "$requirement")
-done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool system-interface --repo-root "$REPO_ROOT")
-MNGR_PLUGIN_ARGS=()
-while IFS= read -r requirement; do
-    MNGR_PLUGIN_ARGS+=(--with "$requirement")
-done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --repo-root "$REPO_ROOT")
-MNGR_BASE="$(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --base --repo-root "$REPO_ROOT")"
-
-uv tool install "$MNGR_BASE" "${MNGR_PLUGIN_ARGS[@]}"
-uv tool install -e "$REPO_ROOT/system/apps/system_interface" "${SI_PLUGIN_ARGS[@]}"
+# they can parse plugin-specific config). The plugin set comes from
+# system/config/mngr_plugins.toml, which the update-self apply reads too, so a
+# release adding a plugin registers it in existing workspaces as well as here.
+# mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
+bash "$REPO_ROOT/system/scripts/install_mngr_tools.sh"
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.

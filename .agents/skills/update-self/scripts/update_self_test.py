@@ -3928,6 +3928,81 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     ]
 
 
+def test_the_refresh_installs_a_local_mngr_tree_editable(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A checkout pointed at a local mngr tree gives imbue-mngr an editable path
+    # source instead of a commit. The refresh installs mngr and each manifest
+    # plugin editable from that tree, and the plugin the receipt still names by
+    # its old git pin is replaced by its editable path rather than kept alongside
+    # it -- two sources for one package would fail the resolve.
+    checkout = tmp_path / "mngr-checkout"
+    for subdirectory, package in (
+        ("libs/mngr", "imbue-mngr"),
+        ("libs/mngr_claude", "imbue-mngr-claude"),
+        ("libs/mngr_wait", "imbue-mngr-wait"),
+    ):
+        (checkout / subdirectory).mkdir(parents=True)
+        (checkout / subdirectory / "pyproject.toml").write_text(f'[project]\nname = "{package}"\n')
+    (apply_repo / update_layout.PYPROJECT_PATH).write_text(
+        "[tool.uv.sources]\n"
+        f'imbue-mngr = {{ path = "{checkout / "libs/mngr"}", editable = true }}\n'
+    )
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        update_layout.MNGR_TOOL_NAME,
+        f"""
+        [tool]
+        requirements = [
+            {{ name = "imbue-mngr", git = "{_MNGR_GIT}?subdirectory=libs%2Fmngr&rev={_MNGR_REV}" }},
+            {{ name = "imbue-mngr-claude", git = "{_MNGR_GIT}?subdirectory=libs%2Fmngr_claude&rev={_MNGR_REV}" }},
+        ]
+        """,
+    )
+    manifest = apply_repo / update_layout.PLUGIN_MANIFEST_PATH
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        """
+        [[plugins]]
+        package = "imbue-mngr-claude"
+        subdirectory = "libs/mngr_claude"
+        tools = ["mngr", "system-interface"]
+
+        [[plugins]]
+        package = "imbue-mngr-wait"
+        subdirectory = "libs/mngr_wait"
+        tools = ["mngr"]
+        """
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert _install_argv(runner, str(checkout / "libs/mngr")) == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        str(checkout / "libs/mngr"),
+        "--with-editable",
+        str(checkout / "libs/mngr_claude"),
+        "--with-editable",
+        str(checkout / "libs/mngr_wait"),
+        "--reinstall",
+    ]
+    assert _install_argv(runner, update_layout.SYSTEM_INTERFACE_DIR) == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        update_layout.SYSTEM_INTERFACE_DIR,
+        "--with-editable",
+        str(checkout / "libs/mngr_claude"),
+        "--reinstall",
+    ]
+
+
 def test_the_refresh_repins_the_base_to_the_merged_trees_commit(
     apply_repo: Path, tmp_path: Path
 ) -> None:
