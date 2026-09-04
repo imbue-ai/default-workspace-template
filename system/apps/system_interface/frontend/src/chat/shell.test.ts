@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
-vi.mock("../models/AgentManager", () => ({ createChatAgent: vi.fn() }));
+const createChatAgent = vi.fn();
+vi.mock("../models/AgentManager", () => ({ createChatAgent }));
 vi.mock("../models/Projects", () => ({ isEverythingView: () => false }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
@@ -34,6 +35,7 @@ let connection: ShellConnection | null = null;
  *  The presence mock is one object across those copies, so its calls are cleared per test. */
 async function loadShell(): Promise<{
   connectChatToShell: typeof import("./shell").connectChatToShell;
+  startChatOnAccount: typeof import("./shell").startChatOnAccount;
   presence: { startPresenceReporting: ReturnType<typeof vi.fn>; reportPresence: ReturnType<typeof vi.fn> };
 }> {
   vi.resetModules();
@@ -42,7 +44,7 @@ async function loadShell(): Promise<{
     reportPresence: ReturnType<typeof vi.fn>;
   };
   const shell = await import("./shell");
-  return { connectChatToShell: shell.connectChatToShell, presence };
+  return { connectChatToShell: shell.connectChatToShell, startChatOnAccount: shell.startChatOnAccount, presence };
 }
 
 /** Frame this window under a spy parent for the duration of the test. */
@@ -103,5 +105,37 @@ describe("connectChatToShell", () => {
     window.dispatchEvent(new Event("focus"));
 
     expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:focused" }, "*");
+  });
+});
+
+describe("startChatOnAccount", () => {
+  it("asks the shell to open the new chat beside this one", async () => {
+    const parent = framed();
+    const { connectChatToShell, startChatOnAccount } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    deliver(HANDSHAKE, parent);
+    createChatAgent.mockResolvedValueOnce({ agentId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
+
+    await startChatOnAccount("account-1");
+
+    expect(createChatAgent).toHaveBeenCalledWith("everything", "account-1");
+    expect(parent.postMessage).toHaveBeenCalledWith(
+      { type: "shell:open", address: "app:chat?instance=agent-2", title: "Chat 2" },
+      "*",
+    );
+  });
+
+  it("tells the user when the create fails rather than opening nothing silently", async () => {
+    const parent = framed();
+    const { connectChatToShell, startChatOnAccount } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    createChatAgent.mockRejectedValueOnce(new Error("no usable account"));
+
+    await startChatOnAccount("account-1");
+
+    expect(alertSpy).toHaveBeenCalledWith("Failed to create chat: no usable account");
+    expect(parent.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "shell:open" }), "*");
+    alertSpy.mockRestore();
   });
 });
