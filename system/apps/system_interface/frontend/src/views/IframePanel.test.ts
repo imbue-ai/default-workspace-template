@@ -125,6 +125,26 @@ describe("IframePanel's side of the app contract", () => {
     expect(sentTypes(sent)).toEqual([SHELL_HANDSHAKE, SHELL_HANDSHAKE]);
   });
 
+  it("does not re-greet a page no tab shows, and greets it again when one does", () => {
+    const { frame, sent } = mountPanel();
+    frame.dispatchEvent(new Event("load"));
+    sent.mockClear();
+
+    // The page's tab closed, or the active view does not include it: the surface is unbound.
+    contract.tabId = "";
+    contract.viewId = "project-1";
+    contract.isVisible = false;
+    m.redraw.sync();
+    expect(sentTypes(sent)).toEqual([SHELL_HIDDEN]);
+
+    // A tab in the new view picks the page up again.
+    contract.tabId = "chat-agent-1-in-project-1";
+    contract.isVisible = true;
+    m.redraw.sync();
+    expect(sentTypes(sent)).toEqual([SHELL_HIDDEN, SHELL_HANDSHAKE, SHELL_SHOWN]);
+    expect(lastHandshake(sent)).toMatchObject({ viewId: "project-1", tabId: "chat-agent-1-in-project-1" });
+  });
+
   it("tells a page nothing before it has loaded", () => {
     const { sent } = mountPanel();
     contract.viewId = "project-1";
