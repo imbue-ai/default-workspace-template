@@ -93,6 +93,32 @@ def test_location_is_a_conflict_while_an_agent_holds_the_browser() -> None:
     assert "held by Alice" in response.get_json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("is_running", "is_crashed", "detail"),
+    [
+        (False, False, "still starting"),
+        (True, True, "crashed and is gone"),
+        (True, False, "no Chromium connection"),
+    ],
+)
+def test_location_is_a_conflict_while_the_browser_cannot_be_driven(
+    is_running: bool, is_crashed: bool, detail: str
+) -> None:
+    fake = bsession.LiveBrowser(browser_id="browser-1")
+    if is_running:
+        fake._lifecycle = "running"
+    if is_crashed:
+        fake._crashed = True
+    runner.manager._browsers["browser-1"] = fake
+
+    response = runner.application.test_client().post(
+        "/_instances/browser-1/location", json={"path": "https://example.com/"}
+    )
+
+    assert response.status_code == 409
+    assert detail in response.get_json()["detail"]
+
+
 def test_location_of_a_browser_the_fleet_does_not_hold_is_a_404() -> None:
     _install_running_browser("browser-1")
 
