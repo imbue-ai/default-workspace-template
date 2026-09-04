@@ -2,29 +2,40 @@
 # one goes into. Read at image build by system/scripts/build_workspace.sh and
 # again by the update-self apply after a merge, so a release that ships a new
 # plugin registers it in the workspace being updated rather than only in
-# freshly built images. Paths are relative to the workspace root.
+# freshly built images.
+#
+# Every plugin is installed from the public mngr repo at the ONE commit pinned in
+# pyproject.toml ([tool.uv.sources] imbue-mngr); uv refuses to mix commits across
+# packages from the same repo. Each entry names the package and its subdirectory
+# in that repo. mngr_modal is intentionally not registered
+# (providers.modal.is_enabled=false).
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_claude"
+package = "imbue-mngr-claude"
+subdirectory = "libs/mngr_claude"
 tools = ["mngr", "system-interface"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_codex"
+package = "imbue-mngr-codex"
+subdirectory = "libs/mngr_codex"
 tools = ["mngr", "system-interface"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_pi_coding"
+package = "imbue-mngr-pi-coding"
+subdirectory = "libs/mngr_pi_coding"
 tools = ["mngr", "system-interface"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_opencode"
+package = "imbue-mngr-opencode"
+subdirectory = "libs/mngr_opencode"
 tools = ["mngr", "system-interface"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_antigravity"
+package = "imbue-mngr-antigravity"
+subdirectory = "libs/mngr_antigravity"
 tools = ["mngr", "system-interface"]
 
-# The wait plugin only adds a CLI command, so the system interface has no use for it.
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_wait"
+package = "imbue-mngr-wait"
+subdirectory = "libs/mngr_wait"
 tools = ["mngr"]
