@@ -5,11 +5,23 @@ Operator tool that runs **locally against a tier's live backends** -- no
 connector deploy required. It removes, for each account:
 
 - every connector-database row keyed to the account (``account_entitlements``,
-  ``workspace_records``, ``account_key_bundles``, ``r2_cleanup_grants``, and the
-  ``shares`` / ``relay_tokens`` keyed by the account's 32-hex share label);
+  ``workspace_records``, ``account_key_bundles``, ``r2_cleanup_grants``,
+  ``account_attribution``, and the ``shares`` / ``relay_tokens`` keyed by the
+  account's 32-hex share label);
 - the account's LiteLLM internal user (best-effort -- a missing user is fine);
+- the account's raw transcripts from the analytics lake (plus a deletion-event
+  fact row), when the tier has an analytics stack;
 - the SuperTokens identity itself (``POST {core}/user/remove``), last, so a
   mid-run failure leaves a still-resolvable account that a re-run finishes.
+
+``account_attribution`` carries the account's email, so it goes with the
+identity -- at the cost of what analytics reads from that row. For an account
+created after the static SuperTokens backfill it is analytics' only record of
+the signup, and ``gold.accounts`` / ``gold.funnel_daily`` are rewritten in full
+on every aggregation run, so the next run drops the account from the accounts
+dimension and its signup from the funnel counts for every day of history.
+``gold.activity`` recomputes only a trailing window, so the signup signals it
+already wrote outside that window survive.
 
 R2 backup buckets are intentionally NOT deleted here: removing an account's
 ``workspace_records`` orphans its ``host-<hex>`` backup buckets, and the
@@ -80,11 +92,18 @@ _HTTP_TIMEOUT_SECONDS: Final[float] = 30.0
 _SUPERTOKENS_CDI_VERSION: Final[str] = "5.1"
 
 # Connector tables keyed by the FULL SuperTokens user id (the hyphenated UUID).
+# Mirrored in scripts/bulk_delete_accounts.py and pinned to it by a test in
+# delete_accounts_test.py: both tools must clear the same connector-DB rows.
+# (Outside the connector DB they diverge on purpose -- only this tool touches
+# LiteLLM users and analytics transcripts.)
 _TABLES_KEYED_BY_USER_ID: Final[tuple[str, ...]] = (
     "account_entitlements",
     "workspace_records",
     "account_key_bundles",
     "r2_cleanup_grants",
+    # Holds the account's email alongside its marketing touches, so it is
+    # account-identifying data and must not outlive the identity.
+    "account_attribution",
 )
 # Connector tables keyed by the 32-hex share label (hyphens stripped). Delete
 # the child (relay_tokens) before the parent (shares): relay_tokens has an

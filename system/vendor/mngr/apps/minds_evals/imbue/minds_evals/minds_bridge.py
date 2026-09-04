@@ -24,12 +24,24 @@ from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import WorkspaceCreateError
 
 BOX_MNGR_DIR: Final[str] = "/work/mngr"
+# The trial artifact directory the task declares its files under. harbor EMPTIES this before every
+# step of a multi-step task, so nothing a long-running box process holds an open handle on may live
+# here: emptying unlinks the file while the writer keeps appending to the dead inode, and the log is
+# then unrecoverable for the rest of the trial. Only files the driver rewrites from the host belong
+# here -- the transcript mirrors, which task.toml's artifacts and the verifier judge read at these
+# exact paths.
 BOX_LOGS_DIR: Final[str] = "/logs/agent"
+# Where the box's long-running services log instead. harbor collects /logs/artifacts as an implicit
+# artifact after every step and never empties it, so a service started on step 1 keeps writing to a
+# file that survives -- and is collected -- for the whole trial.
+BOX_SERVICE_LOGS_DIR: Final[str] = "/logs/artifacts/minds"
+BOX_LOG_FILENAME: Final[str] = "box.log"
 # Scripts this app runs inside the box, shipped in the package and uploaded per trial. They are not
 # baked into the box image because it is layer-cached per mngr SHA and has to stay byte-identical
 # across a dataset, so changing them would cost a rebuild -- and because the image is built from the
@@ -47,6 +59,10 @@ PROXY_CONFIG_FILENAME: Final[str] = "proxy_config.yaml"
 BOX_PROXY_USAGE_LOG_PATH: Final[str] = "/tmp/eval_proxy/usage_proxy.jsonl"
 TUNNEL_LOG_FILENAME: Final[str] = "reverse_tunnel.log"
 PROXY_LOG_FILENAME: Final[str] = "proxy.log"
+# How much of a service log the timeout diagnostics keep. The tail is where a wedged service says
+# why, and the whole log is collected separately as an artifact, so this only has to be enough to
+# read at a glance.
+SERVICE_LOG_TAIL_BYTES: Final[int] = 20_000
 # Read by the uploaded hooks; named here so the two sides cannot drift apart.
 PROXY_KEY_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_KEY"
 PROXY_USAGE_LOG_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_USAGE_LOG"
@@ -72,6 +88,15 @@ AUTH_MODE_IMBUE: Final[str] = "imbue"
 
 _QUICK_EXEC_TIMEOUT_SECONDS: Final[int] = 180
 _SLOW_EXEC_TIMEOUT_SECONDS: Final[int] = 900
+
+# The overlay template every workspace this box creates is stacked on, and the sandbox lifetime that
+# template gives it. The overlay lives in default-workspace-template, so the number is a fact about
+# that repo restated here; it is named because it is a hard ceiling on a trial, not a preference.
+# The trial's whole conversation lives in one workspace -- across every step of a stepped case -- so
+# a case whose steps together outlast this loses the workspace mid-trial, whatever the case's own
+# timeouts say. `generate.trial_lifetime_seconds` is measured against it at generation time.
+EVAL_WORKSPACE_TEMPLATE: Final[str] = "modal_eval"
+EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS: Final[float] = 3 * 60 * 60
 
 # Providers other than Modal are unusable in the box; exec'd mngr commands need
 # the same disables the entrypoint exports for the backend.
@@ -168,9 +193,10 @@ def build_box_env(
             "MINDS_ENV": minds_env,
             "MNGR__PROVIDERS__MODAL__USER_ID": user_id,
             "MINDS_BOX_MNGR_REF": mngr_sha,
-            # Every workspace this box creates is an eval workspace: stack the
-            # modal_eval overlay (shorter 3h sandbox timeout) on the modal template.
-            "MINDS_MODAL_EXTRA_TEMPLATE": "modal_eval",
+            # Every workspace this box creates is an eval workspace: stack the eval overlay, whose
+            # shorter sandbox lifetime is EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS, on the modal
+            # template.
+            "MINDS_MODAL_EXTRA_TEMPLATE": EVAL_WORKSPACE_TEMPLATE,
             "SKIP_AUTH": "1",
         }
     )
@@ -208,6 +234,66 @@ async def check_run_in_box(
     return result
 
 
+# How often a readiness poll says it is still waiting. A poll that has answered nothing for twenty
+# minutes and a poll that is not running at all look identical in a log; this is what tells them
+# apart, without turning a long wait into thousands of lines.
+_WAIT_HEARTBEAT_SECONDS: Final[float] = 60.0
+
+
+class WaitHeartbeat(MutableModel):
+    """Reports, at a bounded rate, that a readiness poll is still waiting and what it last saw.
+
+    The observation is the point: knowing a wait is stuck localizes the failure, but knowing what
+    the workspace was answering while it was stuck is what explains it.
+    """
+
+    label: str = Field(frozen=True, description="What the poll is waiting for, as the log names it")
+    started_at: float = Field(
+        default_factory=time.monotonic, description="When the wait began, on the monotonic clock"
+    )
+    last_logged_at: float = Field(default=0.0, description="When the last heartbeat was emitted; 0 means none yet")
+
+    def tick(self, observation: str) -> None:
+        now = time.monotonic()
+        if self.last_logged_at and now - self.last_logged_at < _WAIT_HEARTBEAT_SECONDS:
+            return
+        self.last_logged_at = now
+        logger.info(
+            "Still waiting for {} after {:.0f}s -- the workspace answers: {}",
+            self.label,
+            now - self.started_at,
+            observation,
+        )
+
+
+@pure
+def describe_agents_listing(body: Any) -> str:
+    """What the workspace's agents listing currently says, in one line.
+
+    An unresolvable chat agent is nearly always one of three things -- the listing not answering at
+    all, a workspace whose chat was never created, or a chat listed under a name other than the one
+    being looked for -- and all three are readable off this.
+    """
+    agents = body.get("agents") if isinstance(body, dict) else None
+    if not isinstance(agents, list):
+        return "nothing (the system_interface is unreachable or answered no agents list)"
+    if not agents:
+        return "an empty agents list"
+    return ", ".join(
+        "{}({})".format(agent.get("name") or "unnamed", agent.get("state") or "no state")
+        if isinstance(agent, dict)
+        else "malformed entry"
+        for agent in agents
+    )
+
+
+@pure
+def service_log_path(filename: str) -> str:
+    """The box path a long-running service logs to. Every service log goes through here so none of
+    them can drift back under the directory harbor empties between steps."""
+    return "{}/{}".format(BOX_SERVICE_LOGS_DIR, filename)
+
+
 async def read_box_mngr_sha(environment: BaseEnvironment) -> str:
     """The exact mngr SHA the box image was built from (stamped into the image by the generator;
     the staged clone carries no .git because Modal's build-context upload drops it)."""
@@ -223,8 +309,8 @@ async def start_backend(environment: BaseEnvironment, env: dict[str, str]) -> No
     backend spawns (including each `mngr create`) inherits it."""
     await check_run_in_box(
         environment,
-        "mkdir -p {logs} && setsid nohup /usr/local/bin/entrypoint.sh > {logs}/box.log 2>&1 < /dev/null &".format(
-            logs=BOX_LOGS_DIR
+        "mkdir -p {logs} && setsid nohup /usr/local/bin/entrypoint.sh > {log} 2>&1 < /dev/null &".format(
+            logs=BOX_SERVICE_LOGS_DIR, log=service_log_path(BOX_LOG_FILENAME)
         ),
         env,
         _QUICK_EXEC_TIMEOUT_SECONDS,
@@ -497,6 +583,7 @@ async def fetch_chat_agent_id(
     is not listed yet, which is why this polls rather than reading once. A workspace that boots with
     no chat at all gets its chat from ``create_chat_agent``.
     """
+    heartbeat = WaitHeartbeat(label="the workspace chat agent to appear in the agents listing")
     while time.time() < deadline:
         body = await workspace_curl_json(environment, env, workspace_agent_id, AGENTS_PATH, None)
         agents = body.get("agents") if isinstance(body, dict) else None
@@ -504,6 +591,7 @@ async def fetch_chat_agent_id(
             chat_agent_id = resolve_chat_agent_id(agents, display_name)
             if chat_agent_id is not None:
                 return chat_agent_id
+        heartbeat.tick(describe_agents_listing(body))
         await asyncio.sleep(poll_seconds)
     return None
 
@@ -539,6 +627,7 @@ async def create_chat_agent(
     if account_id:
         request_body["account_id"] = account_id
     payload = json.dumps(request_body)
+    heartbeat = WaitHeartbeat(label="the workspace's create-chat endpoint to answer")
     unanswered_detail = ""
     while time.time() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, CREATE_CHAT_PATH, payload)
@@ -548,6 +637,7 @@ async def create_chat_agent(
             # what an earlier one said, since that is the only account of why the call keeps
             # failing.
             unanswered_detail = response.text or unanswered_detail
+            heartbeat.tick(unanswered_detail or "nothing readable from {}".format(CREATE_CHAT_PATH))
             await asyncio.sleep(poll_seconds)
             continue
         if response.is_ok:
@@ -627,10 +717,12 @@ async def wait_for_auth_endpoint(
     all, and posting credentials at a harness that just said so only moves the failure somewhere
     less legible.
     """
+    heartbeat = WaitHeartbeat(label="the workspace's claude-auth endpoint")
     while time.time() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, CLAUDE_AUTH_STATUS_PATH, None)
         if response.is_ok and isinstance(response.body, dict):
             return True
+        heartbeat.tick("status {} from {}".format(response.status, CLAUDE_AUTH_STATUS_PATH))
         await asyncio.sleep(poll_seconds)
     return False
 
@@ -644,8 +736,8 @@ class WorkspaceSignIn(FrozenModel):
     account_id: str = Field(default="", description="The provider account the credentials minted")
 
 
-# What every path that leaves the workspace unauthenticated reports, whether the workspace refused
-# the credentials or was never asked for them at all.
+# What every path that leaves the workspace unauthenticated answers with, whichever way the sign-in
+# was refused. Named for the state it reports rather than for any one cause of it.
 NOT_SIGNED_IN: Final[WorkspaceSignIn] = WorkspaceSignIn(is_signed_in=False)
 
 
@@ -765,10 +857,11 @@ async def start_reverse_tunnel(
     with resources.as_file(_RESOURCES / BOX_REVERSE_TUNNEL_FILENAME) as script_path:
         await environment.upload_file(script_path, BOX_REVERSE_TUNNEL_PATH)
     command = (
-        "cd {mngr} && setsid nohup uv run python {script} --agent-id {agent} --ssh-user {user} "
+        "mkdir -p {logs} && cd {mngr} && setsid nohup uv run python {script} --agent-id {agent} --ssh-user {user} "
         "--ssh-host {host} --ssh-port {ssh_port} --ssh-key {key} --port {port} "
-        "--hold-seconds {hold}{probe} > {logs}/{log} 2>&1 < /dev/null &"
+        "--hold-seconds {hold}{probe} > {log} 2>&1 < /dev/null &"
     ).format(
+        logs=BOX_SERVICE_LOGS_DIR,
         mngr=BOX_MNGR_DIR,
         script=BOX_REVERSE_TUNNEL_PATH,
         agent=shlex.quote(workspace_agent_id),
@@ -779,8 +872,7 @@ async def start_reverse_tunnel(
         port=port,
         hold=hold_seconds,
         probe=" --serve-probe-token" if is_probe_token_served else "",
-        logs=BOX_LOGS_DIR,
-        log=TUNNEL_LOG_FILENAME,
+        log=service_log_path(TUNNEL_LOG_FILENAME),
     )
     await check_run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
 
@@ -805,6 +897,19 @@ async def upload_flow_step_script(environment: BaseEnvironment, target_path: str
 async def read_box_file(environment: BaseEnvironment, env: dict[str, str], path: str) -> str:
     result = await run_in_box(
         environment, "cat {} 2>/dev/null || true".format(shlex.quote(path)), env, _QUICK_EXEC_TIMEOUT_SECONDS
+    )
+    return (result.stdout or "").strip()
+
+
+async def read_box_file_tail(environment: BaseEnvironment, env: dict[str, str], path: str, max_bytes: int) -> str:
+    """The tail of a box file, empty when it is absent. Bounded in the box rather than on the host,
+    because a service log can reach hundreds of megabytes and the whole of it would ride the exec
+    round trip."""
+    result = await run_in_box(
+        environment,
+        "tail -c {} {} 2>/dev/null || true".format(max_bytes, shlex.quote(path)),
+        env,
+        _QUICK_EXEC_TIMEOUT_SECONDS,
     )
     return (result.stdout or "").strip()
 
@@ -839,14 +944,14 @@ async def start_proxy(
         }
     )
     command = (
-        "cd {mngr} && setsid nohup uv run --package modal-litellm litellm --config {config} "
-        "--port {port} --host 127.0.0.1 > {logs}/{log} 2>&1 < /dev/null &"
+        "mkdir -p {logs} && cd {mngr} && setsid nohup uv run --package modal-litellm litellm --config {config} "
+        "--port {port} --host 127.0.0.1 > {log} 2>&1 < /dev/null &"
     ).format(
+        logs=BOX_SERVICE_LOGS_DIR,
         mngr=BOX_MNGR_DIR,
         config="{}/{}".format(BOX_PROXY_DIR, PROXY_CONFIG_FILENAME),
         port=port,
-        logs=BOX_LOGS_DIR,
-        log=PROXY_LOG_FILENAME,
+        log=service_log_path(PROXY_LOG_FILENAME),
     )
     await check_run_in_box(environment, command, proxy_env, _QUICK_EXEC_TIMEOUT_SECONDS)
 
@@ -919,10 +1024,12 @@ async def wait_for_chat_state(
 ) -> bool:
     """Block until the chat agent is WAITING (True) or has left WAITING (False), same gating the old
     in-workspace worker used."""
+    heartbeat = WaitHeartbeat(label="the chat agent to {} WAITING".format("reach" if is_waiting_desired else "leave"))
     while time.time() < deadline:
         state = await fetch_chat_agent_state(environment, env, workspace_agent_id, chat_agent_id)
         if state is not None and (state == "WAITING") == is_waiting_desired:
             return True
+        heartbeat.tick("state={}".format(state or "unreachable"))
         await asyncio.sleep(poll_seconds)
     return False
 
@@ -1045,7 +1152,14 @@ async def snapshot_workspace(
     tag: str,
 ) -> bool:
     """Tar the workspace home tree (minus SNAPSHOT_EXCLUDES) and pull it into the box's
-    /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts."""
+    /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts.
+
+    Snapshots stay under the agent logs dir rather than joining the service logs: harbor downloads
+    that dir once per step and then empties it, so each tarball travels exactly once and lands under
+    the step that took it. Under the service logs dir -- which is never emptied -- every earlier
+    step's tarballs would be re-downloaded and re-archived on every later step, at tens of megabytes
+    each. A completed tarball also has no writer holding it open, so emptying cannot orphan it.
+    """
     exclude_flags = " ".join("--exclude={}".format(shlex.quote(pattern)) for pattern in SNAPSHOT_EXCLUDES)
     # Name the workspace-side tarball after the tag and pull it INTO the
     # snapshots directory (trailing slash): rsyncing a named file into a
@@ -1072,6 +1186,52 @@ async def snapshot_workspace(
         logger.warning("Skipped snapshot {}: rsync pull failed: {}", tag, (result.stderr or "").strip()[:200])
         return False
     return True
+
+
+@pure
+def build_workspace_push_command(box_dir: str, workspace_agent_id: str, workspace_dir: str) -> str:
+    """The in-box command that copies a box directory's contents into the running workspace.
+
+    The trailing slashes are rsync's "contents of" on the source and "into this exact directory" on
+    the destination; an absolute `:PATH` on an agent endpoint targets that path rather than
+    something under the agent's worktree.
+
+    ``--uncommitted-changes clobber`` turns off mngr's stash guard on the destination. The guard
+    exists to protect a git worktree it is about to overwrite, and this destination is inside one --
+    but nothing here overwrites the agent's work, and stashing it mid-conversation would take away
+    the very thing the trial is measuring.
+    """
+    return ("cd {mngr} && uv run mngr rsync --uncommitted-changes clobber {src}/ {destination}").format(
+        mngr=BOX_MNGR_DIR,
+        src=shlex.quote(box_dir),
+        # Quoted as one word, since the agent and the path are one rsync endpoint: quoting the two
+        # halves separately would put the shell's quotes around the colon that joins them.
+        destination=shlex.quote("{}:{}/".format(workspace_agent_id, workspace_dir)),
+    )
+
+
+async def push_to_workspace(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    box_dir: str,
+    workspace_dir: str,
+) -> tuple[bool, str]:
+    """Copy a box directory's contents into the running workspace; returns (success, failure text).
+
+    The same mngr transfer the snapshot pull uses, pointed the other way: the box is the local side
+    of the transfer and the workspace sandbox is the remote one, so this is the only channel from a
+    task directory into a live workspace.
+    """
+    result = await run_in_box(
+        environment,
+        build_workspace_push_command(box_dir, workspace_agent_id, workspace_dir),
+        env,
+        _SLOW_EXEC_TIMEOUT_SECONDS,
+    )
+    if result.return_code != 0:
+        return False, ((result.stderr or result.stdout or "no output").strip())[:300]
+    return True, ""
 
 
 async def _destroy_pass(environment: BaseEnvironment, env: dict[str, str]) -> list[str]:

@@ -29,7 +29,7 @@ _CHECKS_PATH = TEMPLATES_DIR / "outcome" / "checks.py"
 
 
 def _load_finalize() -> Any:
-    return load_template_module("tests/finalize.py", "minds_evals_finalize")
+    return load_template_module("tests/verifier/finalize.py", "minds_evals_finalize")
 
 
 def _module_string_constants(tree: ast.Module) -> dict[str, str]:

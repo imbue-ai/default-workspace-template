@@ -93,6 +93,7 @@ def _case_config(expectations: Expectations | None, verification_timeout_seconds
         dwt_branch="main",
         dwt_sha="d" * 40,
         avg_word_count_baseline=100.0,
+        step=None,
         expectations=expand_expectations(expectations) if expectations is not None else None,
         authored_expectations=expectations,
     )
@@ -807,6 +808,24 @@ def test_collector_records_a_ships_nothing_trial_as_evidence_not_an_error(tmp_pa
     assert collector.manifest().is_evidence_complete is True
     repo_state = json.loads(environment.uploaded_content_by_target["/logs/agent/verification/repo_state.json"])
     assert repo_state["commit_count_beyond_base"] == "0"
+
+
+def test_a_step_that_commissions_nothing_captures_no_repo_state_but_still_runs_its_test_commands(
+    tmp_path: Path,
+) -> None:
+    """Expectations may state an outcome with no deliverable -- the shape an early step of a stepped
+    case uses. There is then no artifact to bundle, but `test_commands` are declared independently
+    of `deliverable` and still say something about the workspace."""
+    case = _case_config(_authored(deliverable=None, test_commands=["uv run pytest -q"]))
+
+    collector, environment = _run_collector(tmp_path, case, _collector_rules())
+
+    entry_ids = {entry.entry_id for entry in collector.entries}
+    assert "deliverable_bundle" not in entry_ids
+    assert not any("git bundle create" in command for command in environment.exec_commands)
+    assert "/logs/agent/verification/repo_state.json" not in environment.uploaded_content_by_target
+    # The always-on capture and the declared test command both still ran.
+    assert entry_ids == {"file_inventory", "test_command_0"}
 
 
 def test_repo_state_command_never_invokes_git_bundle_on_an_empty_range() -> None:

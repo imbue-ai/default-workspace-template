@@ -115,6 +115,24 @@ def is_agent_engaged_substantively(replies: Sequence[str], sent_count: int) -> b
     return len(set(replies)) >= min(2, sent_count)
 
 
+def entries_before_step(case: Mapping[str, Any]) -> int:
+    """How many prompts entries the earlier steps of this case already recorded.
+
+    A step's case file holds only that step's own turns, while the entry records accumulate across
+    the whole conversation, so this is the offset in those records at which this step's own entries
+    begin. Zero for a single-step case.
+    """
+    step = case.get("step")
+    entries_before = step.get("entries_before") if isinstance(step, Mapping) else 0
+    return entries_before if isinstance(entries_before, int) else 0
+
+
+def expected_entry_count(case: Mapping[str, Any]) -> int:
+    """How many prompts entries the trial should have recorded by the time this verifier runs: a
+    step is answerable for its own entries plus every earlier step's."""
+    return entries_before_step(case) + len(case.get("prompts") or [])
+
+
 def is_every_turn_completed_without_entries(state: Mapping[str, Any], prompt_count: int) -> bool:
     """The rule for a state.json written before per-entry records existed: every configured entry
     sent exactly one message, and all of them were sent.
@@ -144,29 +162,32 @@ def is_every_entry_completed(state: Mapping[str, Any] | None, case: Mapping[str,
     if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
         return False
     entry_records: list[dict[str, Any]] = entries
-    if len(entry_records) != prompt_count:
+    if len(entry_records) != expected_entry_count(case):
         return False
     if not all(entry.get("outcome") in _ENTRY_OUTCOMES for entry in entry_records):
         return False
     # Read through the same guard as `waits_done`: the two numbers are compared, so a record
     # this module cannot read as a count has to fail the gate rather than be summed as zero
     # (or raise out of the criterion).
-    exchange_total = 0
-    for entry, prompt in zip(entry_records, prompts, strict=False):
+    exchange_counts: list[int] = []
+    for entry in entry_records:
         exchange_count = _as_count(entry.get("exchange_count"))
         if exchange_count is None:
             return False
-        # A string prompts entry is exactly one message, so any other count is a run that dropped or
-        # repeated a deterministic turn -- a shape the totals alone would let another entry's surplus
-        # hide. A goal entry has no such floor: a client the first reply already satisfied sends
-        # nothing at all, which is the best outcome an entry can have.
+        exchange_counts.append(exchange_count)
+    # A string prompts entry is exactly one message, so any other count is a run that dropped or
+    # repeated a deterministic turn -- a shape the totals alone would let another entry's surplus
+    # hide. A goal entry has no such floor: a client the first reply already satisfied sends
+    # nothing at all, which is the best outcome an entry can have. Only this step's own prompts are
+    # on hand to hold to that floor; the records ahead of them belong to earlier steps, which each
+    # verifier run held to its own case file.
+    for prompt, exchange_count in zip(prompts, exchange_counts[entries_before_step(case) :], strict=True):
         if isinstance(prompt, str) and exchange_count != 1:
             return False
-        exchange_total += exchange_count
     sent_count = messages_sent(state)
     if sent_count is None:
         return False
-    return state.get("test_state") == "finished" and sent_count == exchange_total
+    return state.get("test_state") == "finished" and sent_count == sum(exchange_counts)
 
 
 @criterion

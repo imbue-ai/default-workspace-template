@@ -160,6 +160,11 @@ def _is_class_scorable(check_class: str, expectation_key: str) -> bool:
 # Registration goes through the rewardkit module rather than the decorated name: @criterion returns
 # a handle that refuses a direct call, and only the module-level lookup reaches the factory that
 # actually registers a check (and accepts the criterion's name).
+#
+# Registering NOTHING is a supported state, not a fault: expectations that commission no deliverable
+# and declare no UI flows have no probeable class at all, and their outcome dimension is the judge
+# alone. rewardkit warns that the criterion above was defined and never called; the dimension still
+# scores.
 for _check_class, _expectation_key, _criterion_name in CRITERION_BY_CLASS:
     if _is_class_scorable(_check_class, _expectation_key):
         rk.expectation_class_met(_check_class, name=_criterion_name)

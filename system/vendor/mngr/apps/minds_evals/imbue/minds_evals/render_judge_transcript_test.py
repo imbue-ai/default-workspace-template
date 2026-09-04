@@ -1,5 +1,5 @@
 """Unit tests for the grade-time judge-transcript renderer. The renderer ships as a self-contained
-verifier-container script under templates/tests/ (stdlib only, not a package module), so it is loaded
+verifier-container script under templates/tests/verifier/ (stdlib only, not a package module), so it is loaded
 by file path rather than imported as ``imbue.minds_evals.templates...``."""
 
 import json
@@ -9,7 +9,7 @@ from typing import Any
 from imbue.minds_evals.template_loading import load_template_module
 from imbue.minds_evals.testing import atif_document
 
-_RENDERER = load_template_module("tests/render_judge_transcript.py", "minds_evals_judge_renderer")
+_RENDERER = load_template_module("tests/verifier/render_judge_transcript.py", "minds_evals_judge_renderer")
 
 
 def _sample_steps() -> list[dict[str, Any]]:

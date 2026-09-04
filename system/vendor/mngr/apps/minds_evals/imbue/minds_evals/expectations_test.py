@@ -190,13 +190,20 @@ def test_expand_expectations_merges_refinements_onto_the_implied_checks() -> Non
     assert [(check.check_id, check.min_count) for check in expectations.files_checks] == [("files_0", 1)]
 
 
-def test_parse_expectations_rejects_a_block_that_would_check_nothing() -> None:
-    # Prose-only expectations expand to zero check classes. rewardkit only pools a programmatic
-    # reward when criteria exist, so the outcome dimension would silently become 100% judge --
-    # double the judge weight every other case carries, which breaks the cross-case comparability
-    # the fixed 50/50 split exists to provide.
-    with pytest.raises(EvalConfigError, match="needs a 'deliverable'"):
-        parse_expectations({"outcome": "Just advice."}, "greeting")
+def test_expand_expectations_without_a_deliverable_commissions_nothing_probeable() -> None:
+    """Prose-only expectations expand to no checks and no bundle, so the collector records only its
+    always-on capture and the outcome dimension is the judge reading the conversation.
+
+    That composition is deliberately different from a deliverable case's even split between the
+    judge and the programmatic checks, so the two are not comparable score for score. It is the
+    shape a stepped case's early phases need, where the exit criterion is what the client and the
+    agent agreed on rather than what is running.
+    """
+    expanded = expand_expectations(parse_expectations({"outcome": "A mockup was approved."}, "roadmap"))
+
+    assert (expanded.app_checks, expanded.http_checks, expanded.files_checks) == ((), (), ())
+    assert not expanded.is_deliverable_bundle_required
+    assert expanded.outcome == "A mockup was approved."
 
 
 def test_expand_expectations_turns_natural_language_flows_into_checks() -> None:
