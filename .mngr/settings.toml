@@ -703,10 +703,9 @@ extra_provision_command__extend = [
 # minds addresses the create as `system-services@<host>.modal_<hex>`, the
 # connection instance whose block minds writes into its mngr profile settings
 # (mirroring the aws/gcp/azure templates). That block also carries the sizing
-# (2 CPU / 4 GB) and the ~24h sandbox timeout that used to live here; the eval
-# harness shortens the timeout through minds' MINDS_MODAL_SANDBOX_TIMEOUT_SECONDS
-# override rather than through a template overlay, since a template cannot name
-# a connection instance.
+# (2 CPU / 4 GB) and the ~24h sandbox timeout; the eval harness shortens the
+# timeout through minds' MINDS_MODAL_SANDBOX_TIMEOUT_SECONDS override rather than
+# through a template overlay, since a template cannot name a connection instance.
 [create_templates.modal]
 target_path = "/home/user/workspace/"
 # Disable idle detection entirely -- the host should never auto-shutdown. The
