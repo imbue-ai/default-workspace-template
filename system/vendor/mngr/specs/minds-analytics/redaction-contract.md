@@ -14,10 +14,57 @@ document in the same PR.
 
 Common-transcript JSONL records
 (`$MNGR_AGENT_STATE_DIR/events/<agent_type>/common_transcript/events.jsonl`),
-per the common-transcript standard: `user_message`, `assistant_message`,
-`tool_result`, each with the `timestamp`/`event_id`/`source` envelope.
+in either of the two stream vintages the fleet carries:
 
-## Dispositions
+- **ATIF-shaped records** (see
+  [`../atif-transcript-alignment/spec.md`](../atif-transcript-alignment/spec.md)):
+  `header`, `step`, `observation`, framed by `type`/`event_id`/`emitter` plus a
+  `timestamp` on everything except the header.
+- **Legacy records**, still emitted by agents provisioned before the ATIF
+  cutover (an agent keeps its emitter for life): `user_message`,
+  `assistant_message`, `tool_result`, each with the
+  `timestamp`/`event_id`/`source` envelope.
+
+Note the envelope rename: what the legacy records called `source` (the emitting
+script, e.g. `claude/common_transcript`) is `emitter` on the ATIF records, whose
+own `source` is the ATIF step originator (`system`/`user`/`agent`).
+
+## ATIF-record dispositions
+
+| Field | Disposition |
+|---|---|
+| Envelope (`type`, `event_id`, `emitter`, `timestamp`) | Kept verbatim |
+| `header.schema_version` | Kept verbatim (the whole header is envelope; it carries nothing else) |
+| `step.source` (`system`/`user`/`agent`) | Kept verbatim |
+| `step.message` | Kept after text scrubbing (below) |
+| `step.reasoning_content` | **Dropped entirely** |
+| `step.model_name`, `llm_call_count`, `is_copied_context`, `reasoning_effort` | Kept verbatim |
+| `step.metrics` | Dropped except the numeric `prompt_tokens`, `completion_tokens`, `cached_tokens`, `cost_usd`, and `extra.cache_creation_input_tokens` |
+| `step.metrics.prompt_token_ids`, `.completion_token_ids`, `.logprobs` | **Dropped entirely** (they are the transcript itself, detokenizable; no emitter sets them, and the allowlist above is what keeps one that starts to from shipping them) |
+| `step.tool_calls[]` | The key is present only on steps that carry calls; `tool_call_id` and `function_name` kept verbatim |
+| `step.tool_calls[].arguments` | **Dropped entirely** |
+| `step.observation` (inline, on system steps) | Stripped exactly like an `observation` record's `results` (below) |
+| `step.extra` | Dropped except `finish_reason`, `message_id`, `conversation_id`, `session_id`, `agent_id` (the collection-added one), `is_sidechain`, and `context_management` |
+| `step.extra.is_sidechain` | Kept, coerced to a bool. Available but unused: the gold tables do not yet separate the sidechain lane from the main one |
+| `step.extra.context_management` | Dropped except `type` and `boundary`, each coerced to a string |
+| `observation.results[].source_call_id` | Kept verbatim |
+| `observation.results[].extra.is_error`, `.extra.tool_name` | Kept, coerced, in place under `extra` |
+| `observation.results[].extra.is_sidechain` | Kept, coerced to a bool, when the emitter set it (same availability note as the step's) |
+| `observation.results[].content` | **Dropped entirely** (replaced by a sibling `content_byte_count`) |
+| Emitter-specific extra fields | Dropped unless explicitly allowlisted (the same allowlist as below, plus the collection-added `agent_id`) |
+
+A `step` without a `source`, and any record missing an envelope field, is
+dropped and counted -- the same fail-closed rule as an unknown record type.
+
+The redacted `header` survives the strip but is not stored as a row: it has no
+event timestamp (it describes the stream, not an event in it) and its
+`event_id` is the same on every agent's stream. The runner skips it by type
+before its envelope check, so it does not land in the dropped-line count --
+that count is the ops signal for corrupt or hostile output, and stream framing
+is neither. Nothing is lost: the stream's vintage is evident from the record
+types themselves.
+
+## Legacy-record dispositions
 
 | Field | Disposition |
 |---|---|
@@ -25,7 +72,8 @@ per the common-transcript standard: `user_message`, `assistant_message`,
 | Structural metadata (`role`, `parts_ordered`) | Kept verbatim |
 | `user_message.content` | Kept after text scrubbing (below) |
 | `assistant_message.text` | Kept after text scrubbing (below) |
-| `assistant_message.model`, `usage`, `finish_reason` | Kept verbatim |
+| `assistant_message.model`, `finish_reason` | Kept verbatim |
+| `assistant_message.usage` | Dropped except the numeric `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` |
 | `assistant_message.tool_calls[].tool_name` | Kept verbatim |
 | `assistant_message.tool_calls[].tool_call_id` | Kept verbatim |
 | `assistant_message.tool_calls[].input_preview` | **Dropped entirely** |
@@ -44,8 +92,11 @@ names, counts, timings, and error rates.
 
 ## Text scrubbing (message text only)
 
-Applied in order, inside the container, to `user_message.content` and
-`assistant_message.text` / text parts:
+Applied in order, inside the container, to `step.message` and to the legacy
+`user_message.content` / `assistant_message.text` / text parts. Where ATIF
+allows a list of content parts instead of a string (no emitter of ours writes
+one), the list is serialized to JSON and scrubbed as text -- degraded, but
+never passed through unscanned:
 
 1. **Secret scanning**: the workspace's pinned secret scanners (betterleaks
    and kingfisher, already installed in every workspace image) run over the
@@ -66,8 +117,10 @@ Applied in order, inside the container, to `user_message.content` and
 ## What the runner enforces (outside, on untrusted output)
 
 - Per-line and per-run size caps; oversize or schema-invalid lines are
-  dropped and counted, never parsed further.
-- Envelope validation only (timestamp/event_id/type/source shape); the
-  runner never inspects or transforms message text.
+  dropped and counted, never parsed further. The ATIF stream header is the one
+  line skipped without being counted (see above).
+- Envelope validation only (timestamp/event_id/type shape, plus the emitting
+  source -- `emitter` on ATIF records, `source` on legacy ones); the runner
+  never inspects or transforms message text.
 - Every stored row is stamped with the collecting script's version hash, the
   run id, the workspace host id, and the account id.

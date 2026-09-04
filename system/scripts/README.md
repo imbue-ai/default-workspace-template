@@ -22,7 +22,6 @@ Provisioning and utility scripts:
 Cohesive machinery lives in packages instead: the recurring-job/automation
 scripts in `system/libs/automations/`, the Caretaker check in
 `system/services/caretaker/`, the OOM entry points in
-`system/services/oom_priority/bin/`, the eval worker in
-`system/services/eval_worker/`, the terminal tmux helpers in
+`system/services/oom_priority/bin/`, the terminal tmux helpers in
 `system/apps/terminal/`, and the github-sync git hook in
 `system/libs/github_sync/git_hooks/`.

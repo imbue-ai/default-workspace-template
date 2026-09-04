@@ -577,3 +577,18 @@ def test_seed_phase_is_skipped_when_another_seeder_holds_the_build_lock() -> Non
 
 def test_seed_phase_is_needed_when_the_tag_has_neither_tar_nor_lock() -> None:
     assert _is_seed_phase_needed(MockBoxImageCache(), "default-workspace-template:content-abc") is True
+
+
+def test_box_ssh_host_key_options_quote_the_known_hosts_path_for_ssh() -> None:
+    """ssh reads UserKnownHostsFile as a whitespace-separated list and splits the value itself.
+
+    The path comes from ``tempfile.mkstemp``, which honours ``TMPDIR``, so it is not
+    guaranteed space-free; the quotes are what keep it one file either way.
+    """
+    public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "A" * 20
+    with _box_ssh_host_key_options("198.51.100.7", public_key) as options:
+        option = next(arg for arg in options if arg.startswith("UserKnownHostsFile="))
+
+    value = option.removeprefix("UserKnownHostsFile=")
+    assert value.startswith('"') and value.endswith('"'), option
+    assert value.strip('"'), option

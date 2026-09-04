@@ -1313,7 +1313,7 @@ def test_the_download_fallback_names_the_build_stable_declares() -> None:
 
     assert f"Minds {declared['version']} - Build {declared['build_id']}" in fallback, (
         "the connector's download fallback no longer names the build stable serves -- see the "
-        "Release channels section of apps/minds/docs/deploy/release.md"
+        "Release channels section of apps/minds/docs/deploy/ops/app-release.md"
     )
 
 

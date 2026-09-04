@@ -139,7 +139,7 @@ def _read_shared_tier_host_pool_dsn_from_vault(env_name: str) -> str:
     if not dsn:
         raise click.ClickException(
             f"Vault entry {vault_prefix}/neon is missing {_POOL_DSN_VAULT_FIELD!r}; "
-            "see apps/minds/docs/deploy/host-pool-setup.md step 3 for the schema."
+            "see apps/minds/docs/deploy/setup/vault.md for the schema."
         )
     return dsn
 
@@ -199,7 +199,7 @@ def read_pool_private_key_from_vault(
     if not private_key:
         raise click.ClickException(
             f"Vault entry {vault_prefix}/pool-ssh is missing {_POOL_MGMT_PRIVATE_KEY_VAULT_FIELD!r}; "
-            "see apps/minds/docs/deploy/host-pool-setup.md step 2 for the schema."
+            "see apps/minds/docs/deploy/setup/vault.md for the schema."
         )
     return private_key
 
@@ -320,7 +320,7 @@ def ovh_config_from_vault_secret(secret: Mapping[str, str], vault_prefix: str) -
         raise click.ClickException(
             f"Vault entry {vault_prefix}/ovh is missing {', '.join(missing_fields)}; "
             "see .minds/template/ovh.sh for the schema and "
-            "apps/minds/docs/deploy/host-pool-setup.md step 3 for how to populate it."
+            "apps/minds/docs/deploy/setup/vault.md for how to populate it."
         )
     return OvhProviderConfig(
         application_key=SecretStr(secret["OVH_APPLICATION_KEY"]),

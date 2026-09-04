@@ -2,7 +2,7 @@
 
 ## Overview
 
-* `apps/mngr_minds_eval` is a bespoke harness that runs persona-driven multi-turn chat evals against real Minds workspaces on Modal, with results in R2 and a Claude judge for scoring (see its [README](../../apps/mngr_minds_eval/README.md) and [SETUP.md](../../apps/mngr_minds_eval/SETUP.md)).
+* `apps/mngr_minds_eval` was a bespoke harness that ran persona-driven multi-turn chat evals against real Minds workspaces on Modal, with results in R2 and a Claude judge for scoring. It has been removed; this spec is the record of what replaced it.
 * This spec converts it to a [Harbor](https://github.com/harbor-framework/harbor) eval (harbor 0.21.0). The design goal is to stay as close to vanilla harbor as possible: every custom concept that harbor already models is replaced by the harbor-native equivalent -- job runner, task format, Modal environment provider, agent API, rewardkit verifier, results layout, and viewer. (Correction: harbor is pinned via its upstream git tag, not `harbor[modal]` from PyPI; see Implementation corrections for why.)
 * The work ships as a stack of three PRs: (1) a new app adding the harbor eval alongside the existing one, (2) a side-by-side comparison of both harnesses, (3) removal of the old harness.
 * All load-bearing mechanisms were smoke-tested on Modal before this design was written: plain single-container tasks (oracle reward 1.0, 45s), docker-compose via DinD (reward 1.0, 63s), and nested Modal sandbox creation from inside a harbor environment via `[environment.env]` token passthrough (reward 1.0, 31s).
@@ -36,16 +36,15 @@ These four forks were decided with the user before writing this spec.
 
 ## New app
 
-* Location: `apps/minds_evals` (package `imbue/minds_evals/`, console script `minds-evals-harbor` until PR3 renames it to `minds-evals`).
-* The old app `apps/mngr_minds_eval` is untouched until PR3.
+* Location: `apps/minds_evals` (package `imbue/minds_evals/`, console script `minds-evals`).
 * Modules:
   * `generate.py` -- the task generator (adapter pattern): reads the existing eval-config JSON schema unchanged (`mngr_branch`, `dwt_repo`, `dwt_branch`, `timeout_seconds`, `personas[]`) and emits one harbor task directory per persona case into a dataset directory.
   * `driver.py` -- `MindsPersonaDriver(BaseAgent)`, the host-side conversation loop.
   * `decider.py` -- the `DECIDE_FROM_PERSONA` role-play call (ported from the dwt worker's `eval_decider.py`: same prompt framing, `claude-opus-4-8`, `max_tokens=64`, fallback literal `"Sounds good."`).
   * `minds_bridge.py` -- helpers that reach the box's Minds HTTP API and the workspace's system_interface through `environment.exec` (ported from `minds_client.py`).
   * `templates/` -- task templates: `task.toml`, `instruction.md`, `tests/` (rewardkit), `solution/` (oracle).
-* The CLI surface is deliberately minimal to stay harbor-aligned: `minds-evals-harbor generate --config <f> --output <dir>`, plus a justfile recipe that prints/invokes the full `harbor run` command. There is no wrapper around `harbor run` itself.
-* Generated datasets default to `apps/minds_evals/datasets/<config-stem>/`, which is gitignored; dev runs and CI regenerate them from the checked-in configs.
+* The CLI surface is deliberately minimal to stay harbor-aligned: `minds-evals generate --config <f> --output <dir>`, plus a justfile recipe that prints/invokes the full `harbor run` command. There is no wrapper around `harbor run` itself.
+* `--output` is required and datasets are generated outside the repo tree (the `minds-evals-generate` recipe defaults to `/tmp/minds-evals/datasets/generated`), because each task embeds a full mngr-internal clone and one under `apps/` trips the repo's marked-test discovery; `apps/minds_evals/datasets/` is gitignored as a safety net for an in-tree `--output`. Datasets are disposable -- dev runs and CI regenerate them from the checked-in configs.
 
 ## Task generation
 
@@ -54,7 +53,7 @@ These four forks were decided with the user before writing this spec.
 * `instruction.md` carries the persona and prompt list in prose plus a fenced JSON block with the full case config (persona, prompts, `timeout_seconds`, `mngr_sha`, `dwt_repo`, `dwt_branch`, `dwt_sha`). The driver parses that block out of the `instruction` argument to `run()`, which is necessary because custom harbor agents do not receive the task directory.
 * The same case data is also written to `tests/case.json` for the verifier's programmatic checks (expected turn counts).
 * `environment/` is identical across all tasks in a dataset: an adapted copy of the box `Dockerfile` and `entrypoint.sh` (owned by the new app) plus a staged shallow clone of mngr-internal at the resolved SHA (port of `box._fetch_mngr_source`).
-* The old harness's in-box app overlay (`box._stage_app_overlay`, and the Dockerfile's `rm -rf`/`COPY` of `apps/mngr_minds_eval`) is dropped from the adapted Dockerfile: the driver is host-side, so no harness code runs inside the box.
+* The old harness's in-box app overlay (`box._stage_app_overlay`, and the Dockerfile's `rm -rf`/`COPY` of the harness package) is dropped from the adapted Dockerfile: the driver is host-side, so no harness code runs inside the box.
 * Because the environment context is byte-identical across tasks, Modal's image-layer cache builds the box image once per mngr SHA and every other task in the job reuses it (`Image.from_dockerfile` builds on Modal's builders, same as today's `box.ensure`).
 * Each task directory carries its own ~50 MB mngr clone (roughly 400 MB on disk for an 8-case dataset); Modal deduplicates the upload by content hash, so only local disk pays for the copies.
 * Per-case data must never leak into `environment/`, or the cache key diverges and every task rebuilds the image.
@@ -69,25 +68,25 @@ These four forks were decided with the user before writing this spec.
 ## The environment (box)
 
 * The box image is the new app's adapted copy of the box `Dockerfile` with its desktop stack; the entrypoint is NOT auto-started (harbor keeps its default `sleep infinity` keepalive).
-* The driver's `setup()` starts the backend itself: `environment.exec("setsid nohup /usr/local/bin/entrypoint.sh > /logs/agent/box.log 2>&1 < /dev/null &", env={...})`.
+* The driver's `setup()` starts the backend itself: `environment.exec("setsid nohup /usr/local/bin/entrypoint.sh > /logs/artifacts/minds/box.log 2>&1 < /dev/null &", env={...})`. The log goes under `/logs/artifacts/`, not `/logs/agent/`: harbor empties the agent logs dir before every step of a multi-step task, which would unlink the file while the backend kept writing to the dead inode.
 * The env supplied at that exec carries everything the box needs: `MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET` (parsed from the host `~/.modal.toml`), `ANTHROPIC_API_KEY` (host env), `MNGR__PROVIDERS__MODAL__USER_ID` (below), `MINDS_ENV=staging`, `MINDS_MODAL_EXTRA_TEMPLATE=modal_eval`, and `MINDS_BOX_MNGR_REF=<mngr_sha>`. **Correction (PR1):** the dwt `modal` template carries no `pass_host_env` of its own, so the key is named in `MINDS_EXTRA_PASS_HOST_ENV` (which the in-box minds backend turns into `--pass-host-env` per create). That alone was insufficient: dwt pins claude agents to shared config-dir mode, in which mngr_claude skips the create-time step that pre-approves the key, so the workspace's claude chat agent deadlocked on Claude Code's custom-API-key TUI dialog. The manifest therefore also forwards `MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR=true` (a config-override that outranks the dwt settings file), which restores the approval. See the Implementation corrections section.
 * `USER_ID` is the sanitized trial name (derived from `logs_dir`, `jobs/<job>/<trial>/agent`) plus a fresh per-`run()` salt: harbor trial names already carry a random shortuuid, and the salt guarantees that re-runs or resumes can never collide even if a trial name repeats, since the old harness's atomic `modal environment create` uniqueness claim has no harbor equivalent.
 * Starting the backend from `setup()` rather than the image entrypoint is what makes the Modal-provider `USER_ID` unique per trial, so each trial's Minds discovery only ever sees its own workspaces. This replaces the old per-batch Modal environment isolation; no `modal environment create` is needed anymore.
 * `setup()` then polls for the backend port (port of `minds_client.discover_api_port`, driven through `environment.exec` reading `/proc/net/tcp`) before returning. There is no `[environment.healthcheck]` because the service starts in the agent phase, after env-level healthchecks run.
 * Agent setup has a 360s default timeout in harbor; the job config sets the agent-level `agents[].override_setup_timeout_sec` high enough for Electron plus backend boot (measured in PR1).
-* Run-scoped knobs: `--ek sandbox_timeout_secs` is set to agent timeout + verifier timeout + 30 min slack; `-n` controls concurrent boxes (each is 6 CPU / 16 GB, so the default of 4 is a reasonable cost ceiling for dev runs).
-* The watchable noVNC desktop URL does not survive the conversion (harbor's Modal provider opens no tunnels); debugging uses `harbor task start-env -e modal -i`, `modal shell`, and the old app's `box` utility until PR3.
+* Run-scoped knobs: `--ek sandbox_timeout_secs` is fixed at 14400 in the run recipe, which covers a flat case's agent and verifier budgets with room to spare and a stepped case's every step but the last; `-n` controls concurrent boxes (each is 6 CPU / 16 GB, so the default of 4 is a reasonable cost ceiling for dev runs).
+* The watchable noVNC desktop URL does not survive the conversion (harbor's Modal provider opens no tunnels); debugging uses `harbor task start-env -e modal -i` and `modal shell`. Nothing replaces the watchable desktop the old app's `box` utility gave (tracked on #708).
 
 ## The driver agent
 
 * Invocation: `uv run --project apps/minds_evals harbor run -p <dataset> -a imbue.minds_evals.driver:MindsPersonaDriver -e modal -n 4 -y ...` from the monorepo root.
 * `harbor[modal]==0.21.0` is a pinned dependency of `apps/minds_evals`, so `uv run --project apps/minds_evals harbor` gets the right harbor version AND makes the driver import path resolvable; a bare `uvx harbor` would run in an isolated env that cannot import the app.
 * `apps/minds_evals` is a standalone uv project rather than a member of the monorepo's uv workspace: harbor's `rich>=14.1.0` and `modal>=1.5.1` floors cannot co-resolve with the workspace's `litellm[proxy]` (`rich<14`) and `modal==1.4.3` pins, and uv allows one version per package per workspace. It therefore carries its own `uv.lock`, and its tests and type check run under `just test-minds-evals` via a dedicated path-gated CI job instead of the root offload run.
-* `run()` implements the existing turn semantics exactly:
+* `run()` implements the ported turn semantics for string entries, extended for goal entries per `goal_driven_turns.md`:
   1. Create the per-case dwt clone inside the box (port of `launch._ensure_base`/`_prepare_clone`, minus writing `test_case_metadata.json`, which only the retired in-workspace eval worker consumed) and create the workspace through the Minds API (`workspace.build_payload` semantics unchanged: `launch_mode=MODAL`, `backup_provider=CONFIGURE_LATER`), polling the create operation to `agent_id`.
-  2. For each prompt: wait until the workspace agent reaches `WAITING`, send the turn (literal, or `decider.py` for `DECIDE_FROM_PERSONA`), and wait for the reply. That wait is a bridged poll: `environment.exec` into the box, then mngr's remote-exec path into the workspace, then curl against the workspace-local system_interface -- the same API the old worker polled (the exact mngr CLI invocation is a PR1 verification item).
-  3. After each completed turn, snapshot the workspace `/mngr` dir as a tarball (same exclude set as the old restic job) into `/logs/agent/snapshots/post_message_<k>.tar.gz` via the bridge; snapshot cadence is a driver kwarg (`--ak snapshot_mode=per-turn|final|off`, default `per-turn`).
-  4. Append every event to `/logs/agent/full_transcript.jsonl` after each turn (same event schema as today), and maintain `/logs/agent/state.json` (`waits_done`, `num_turns`, `test_state`) so a timed-out trial still leaves a gradeable partial transcript.
+  2. For each prompts entry, for each of its exchanges: ask the entry's turn source what to do, and if it says something, wait until the workspace agent reaches `WAITING`, send that message, and wait for the reply. A string entry is one exchange; a goal entry runs until its client stops or its budget does (see `goal_driven_turns.md`). That reply wait is a bridged poll: `environment.exec` into the box, then mngr's remote-exec path into the workspace, then curl against the workspace-local system_interface -- the same API the old worker polled (the exact mngr CLI invocation is a PR1 verification item).
+  3. Snapshot the workspace `/mngr` dir as a tarball (same exclude set as the old restic job) into `/logs/agent/snapshots/post_message_<k>.tar.gz` via the bridge, where `<k>` numbers the messages actually sent. Cadence is a driver kwarg (`--ak snapshot_mode=per-turn|final|off`, default `per-turn`) selecting a named point: `per-turn` snapshots after every exchange, `final` once after the last entry.
+  4. Append every event to `/logs/agent/full_transcript.jsonl` after each turn (same event schema as today), and maintain `/logs/agent/state.json` (`waits_done`, `num_turns`, `test_state`, plus one `entries` record per prompts entry) so a timed-out trial still leaves a gradeable partial transcript.
   5. Also emit an ATIF `trajectory.json` with `source: "user"` / `"agent"` steps so `harbor view` renders the conversation.
 * `-m/--model` selects the decider (simulated-user) model, defaulting to the currently pinned `claude-opus-4-8`; this gives the harbor-conventional model flag a real meaning.
 
@@ -96,26 +95,53 @@ These four forks were decided with the user before writing this spec.
 * Each entry in a case's `prompts` list resolves to a turn source -- the object that produces the user's next message for that turn:
 
 ```python
+class Say(FrozenModel):
+    """The client's next message for this exchange."""
+
+
+class Done(FrozenModel):
+    """The entry is over: a TurnOutcome and the source's own words for why."""
+
+
 class TurnSource(ABC):
-    """Produces the simulated user's message for one conversation turn."""
+    """Produces the simulated user's messages for one prompts entry, one exchange at a time."""
+
+    @property
+    @abstractmethod
+    def kind(self) -> TurnEntryKind: ...
+
+    @property
+    @abstractmethod
+    def exhaustion_end(self) -> Done:
+        """How the entry ended when its budget stopped this source (`goal_driven_turns.md`)."""
 
     @abstractmethod
-    def next_message(self, case: CaseConfig, transcript: Transcript) -> str: ...
+    def next_action(self, case: CaseConfig, transcript: Transcript) -> Say | Done: ...
 
 
-class LiteralTurnSource(TurnSource):
-    """Deterministic: returns the config's literal prompt string verbatim."""
+class SingleMessageTurnSource(TurnSource):
+    """A source whose entry is exactly one message: it says its piece once, then
+    the entry is COMPLETED."""
 
 
-class PersonaLLMTurnSource(TurnSource):
+class LiteralTurnSource(SingleMessageTurnSource):
+    """Deterministic: says the config's literal prompt string verbatim, once."""
+
+
+class PersonaLLMTurnSource(SingleMessageTurnSource):
     """Non-deterministic: renders the persona plus the transcript so far into
-    the role-play prompt, calls the decider model, and falls back to the
+    the role-play prompt, calls the decider model once, and falls back to the
     literal "Sounds good." on any error (ported from eval_decider.py)."""
+
+
+class GoalTurnSource(TurnSource):
+    """Non-deterministic: one forced-tool call per exchange either says the next
+    thing or declares the goal met (`goal_driven_turns.md`)."""
 ```
 
-* The generator-facing config keeps today's encoding: a literal string maps to `LiteralTurnSource`, and the `DECIDE_FROM_PERSONA` sentinel maps to `PersonaLLMTurnSource`.
-* The turn loop is source-agnostic: wait for `WAITING` -> `source.next_message(...)` -> send -> wait for the reply -> snapshot/record; sources never touch the environment.
-* All non-determinism is confined to `PersonaLLMTurnSource`: literal turns are pure data and replay-stable, and the decider's model name and each role-played message are recorded in the transcript so LLM turns are auditable after the fact.
+* The generator-facing config keeps today's encoding: a literal string maps to `LiteralTurnSource`, the `DECIDE_FROM_PERSONA` sentinel maps to `PersonaLLMTurnSource`, and a goal object maps to `GoalTurnSource` (`goal_driven_turns.md`).
+* The turn loop is source-agnostic: `source.next_action(...)` -> on a `Done`, record the entry's outcome and move on -> on a `Say`, wait for `WAITING` -> send -> wait for the reply -> snapshot/record; sources never touch the environment.
+* All non-determinism is confined to the LLM-backed sources (`PersonaLLMTurnSource` and `GoalTurnSource`): literal turns are pure data and replay-stable, and the decider's model name and every message it produced are recorded in the transcript -- with the entry and exchange they came from -- so LLM turns are auditable after the fact.
 * Future rule-based sources (e.g. a state-machine responder keyed on the agent's last reply) implement `TurnSource` without changes to the loop, the config plumbing, or verification.
 * `populate_context_post_run` fills `AgentContext`: decider token counts and cost, plus `metadata` with descriptive stats (turns completed, avg words per agent turn, timed_out).
 * Cleanup runs in a `finally` block (harbor agents have no teardown hook): `environment.exec("cd /work/mngr && uv run mngr list --ids | uv run mngr destroy - --force")` tears down the trial's workspace sandboxes (`mngr destroy` has no `--all` flag; the pipe-from-`list` form is the documented destroy-everything idiom, and the box only ever sees its own `USER_ID` scope); the nested sandboxes' own `modal_eval` 3h timeout is the backstop if the driver dies.
@@ -128,7 +154,7 @@ class PersonaLLMTurnSource(TurnSource):
 * Separate mode is required for `harbor trial regrade` (harbor rejects regrade on shared-mode tasks), and it lets the heavyweight box be torn down before verification instead of idling through it.
 * In separate mode `tests/` is the verifier image's build context, so the generator emits a small `tests/Dockerfile` (slim base with uv) that copies `test.sh`, `checks.py`, `judge.toml`, and `case.json` to `/tests`.
 * The transcript and state files reach the verifier via declared artifacts: `artifacts = ["/logs/agent/full_transcript.jsonl", "/logs/agent/state.json"]` in `task.toml`, re-materialized at their original paths in the verifier container.
-* `tests/test.sh` runs `uvx --from 'harbor-rewardkit==0.1.*' rewardkit /tests`.
+* `tests/verifier/test.sh` runs `uvx --from 'harbor-rewardkit==0.1.*' rewardkit /tests`.
 * The criteria descriptions are written fresh in rewardkit's idiom but preserve the intent of the current `_JUDGE_PROMPT` dimensions ("how an AI agent talks to a non-technical client it is building software for").
 * Raw judge answers and per-criterion values live in each trial's `verifier/reward-details.json`; the raw avg-word-count value also lands in `agent_result.metadata`.
 * The judge model is pinned in `judge.toml`; its key arrives through `[verifier.env]`.
@@ -147,7 +173,7 @@ class PersonaLLMTurnSource(TurnSource):
 | only `finished` cases scored (`N/A` otherwise) | `checks.py` structural gates: transcript parses, agent engaged with distinct non-stub replies, all turns completed, not timed out; a failed gate zeroes the reward via `finalize.py` (see Implementation corrections -- rewardkit's `required_pass` cannot express this) and is marked in `reward-details.json` | binary gate | gate (no weight) |
 
 * `reward` = weighted mean of the four scored criteria above, gated by the structural checks; with equal weights the wordiness guard is 25% of the reward, which is the primary knob to adjust at review time.
-* `avg_word_count_baseline` is written into `tests/case.json` by the generator; it is seeded from recent old-harness batch averages (measured in PR2) and overridable per config.
+* `avg_word_count_baseline` is written into `tests/case.json` by the generator; its default is an unmeasured seed, and it is overridable per config, so the way to ground it is to measure the mean over a batch of real runs and set it there.
 * `judge.toml` sketch:
 
 ```toml
@@ -174,16 +200,19 @@ points = 10
 
 * Local/dev: results live in `jobs/<job-name>/` (per-trial dirs with `result.json`, transcripts, snapshots, and `verifier/reward-details.json`) and are browsed with `harbor view`.
 * CI: a scheduled job generates the dataset from the checked-in config, runs `harbor run`, and archives the `jobs/<job>/` directory as a build artifact.
-* R2 archival is behind an explicit flag on the run recipe (`--push-r2`, env `MINDS_EVALS_PUSH_R2`): when set, the `jobs/<job>/` directory is synced to R2 with plain `aws s3 sync` after the run. It defaults to false everywhere, including CI initially; no bespoke storage layer remains.
+* The run recipe uploads nothing: `jobs/<job>/` stays on the machine that ran it. Archival is the scheduled runner's job, with its own credentials; no bespoke storage layer remains.
 * The new harness needs none of R2, restic, `setup-r2.sh`, per-batch Modal environments, or `scripts/modal_nuke.py`.
 * Dropped semantics (accepted): fire-and-forget launches, since the harbor runner must stay up (moot on CI runners), and the live noVNC desktop URL.
 
 ## PR stack
 
+The conversion is complete: the new app landed, and the old harness has since been deleted and its
+console script name taken over. The comparison PR was closed unmerged, so no `comparison.md` exists;
+the old-vs-new justification lives in that PR's description.
+
 * PR1 (`apps/minds_evals`): the new app as specified above, unit tests for the generator/driver/decider (mocked environment), an oracle-based smoke path, docs (`README.md`), justfile recipes, and changelog entries.
 * PR2 (comparison): run both harnesses on the same config and mngr branch; commit `apps/minds_evals/docs/comparison.md` with the side-by-side metric table (old 1-10 judge scores and avg word count vs new rewardkit criteria), transcript spot-checks, wall-clock and cost notes, plus the small script that renders the table from old R2 results and a new jobs dir.
-* PR3 (replacement): delete `apps/mngr_minds_eval`, rename the console script to `minds-evals`, migrate remaining references (docs, justfile, CI), and open the companion default-workspace-template PR that retires the eval worker.
-* The stack is managed with `gh stack` (per user global instructions).
+* PR3 (replacement): delete the old harness, rename the console script to `minds-evals`, migrate remaining references (docs, justfile, CI), and open the companion default-workspace-template PR that retires the eval worker.
 
 ## Semantics preservation checklist
 
@@ -209,12 +238,12 @@ points = 10
 * **Per-trial backend boot**: every trial boots its own box (Electron + backend), adding a few minutes per trial that the shared-box design amortized across a batch. Image-build cost is amortized by the Modal layer cache; boot cost is accepted for isolation.
 * **Workspace sandbox leaks**: if the harbor runner is killed hard (no `finally`), nested sandboxes survive until their 3h timeout; the driver's cleanup plus the timeout backstop bound the cost.
 * **Judge nondeterminism**: rewardkit likert judges make oracle assertions and cross-run comparisons statistical, not exact; PR2 must report means over multiple trials (`-k/--n-attempts`) rather than single runs.
-* **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run --project apps/minds_evals harbor`), and the only remaining uvx call -- rewardkit inside `tests/test.sh` -- pins its version explicitly.
+* **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run --project apps/minds_evals harbor`), and the only remaining uvx call -- rewardkit inside `tests/verifier/test.sh` -- pins its version explicitly.
 
 ## Resolved questions
 
 * App naming: `apps/minds_evals` is approved (no PR3 directory rename needed).
-* CI archival: R2 push exists behind a flag, defaulting to false (including in CI initially); see Results, CI, and archival.
+* CI archival: the run recipe uploads nothing, so archival is the scheduled runner's own job, with its own credentials; see Results, CI, and archival.
 * The dwt eval worker removal does not wait for a release cycle; its PR is opened and merged with PR3.
 
 ## Implementation corrections (PR1)

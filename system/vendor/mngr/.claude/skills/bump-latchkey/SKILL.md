@@ -49,7 +49,7 @@ half-finished bump fails CI. Pin 4 is in another repo and is checked by nobody.
    `.external_worktrees/default-workspace-template` on the current branch.
    Commit and push there too, then tell the user the branch needs its own PR
    and merge -- that worktree is gitignored here, so a commit left in it reaches
-   nobody. `apps/minds/docs/deploy/release.md` covers how the template then reaches
+   nobody. `apps/minds/docs/deploy/ops/app-release.md` covers how the template then reaches
    users.
 
 ## Finish

@@ -51,6 +51,10 @@ METRICS_SOURCES: Final[frozenset[str]] = frozenset(
     }
 )
 
+# The ATIF transcript stream's framing record: skipped rather than stored, and not counted as
+# dropped.
+_ATIF_HEADER_TYPE: Final[str] = "header"
+
 # Event timestamps arrive as nanosecond-precision ISO 8601 strings;
 # datetime.fromisoformat only accepts up to microseconds, so the fraction is
 # trimmed before parsing.
@@ -110,13 +114,26 @@ def _bounded_str(value: Any) -> str | None:
     return value
 
 
+def _is_stream_header(raw_record: Any) -> bool:
+    """Whether the line carries the ATIF stream header rather than an event in the stream.
+
+    The header has no event timestamp and repeats the same event id on every agent's stream, so it
+    cannot be stored as a row -- but it is framing, not corruption, so it must not land in the
+    dropped-line count either (that count is the ops signal for a broken script or hostile output).
+    """
+    return isinstance(raw_record, dict) and raw_record.get("type") == _ATIF_HEADER_TYPE
+
+
 def _validate_record_line(parsed_line: dict[str, Any], feed_source: str) -> CollectedRecord | None:
     record = parsed_line.get("record")
     if not isinstance(record, dict):
         return None
     event_id = _bounded_str(record.get("event_id"))
     record_type = _bounded_str(record.get("type"))
-    record_source = _bounded_str(record.get("source"))
+    # ATIF-shaped transcript records name the emitting source ``emitter``; their
+    # ``source`` is the step originator (system/user/agent), a different thing.
+    # ``emitter`` is what the legacy ``source`` meant, so it fills this column.
+    record_source = _bounded_str(record.get("emitter")) or _bounded_str(record.get("source"))
     raw_timestamp = _bounded_str(record.get("timestamp"))
     if event_id is None or record_type is None or record_source is None or raw_timestamp is None:
         return None
@@ -220,6 +237,8 @@ def parse_collection_output(stdout_text: str) -> ParsedCollectionOutput:
             dropped_line_count += 1
             continue
         if feed_source == TRANSCRIPTS_SOURCE:
+            if _is_stream_header(parsed_line.get("record")):
+                continue
             record = _validate_record_line(parsed_line, TRANSCRIPTS_SOURCE)
             if record is None:
                 dropped_line_count += 1

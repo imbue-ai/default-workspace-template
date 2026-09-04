@@ -4,7 +4,11 @@ Implements specs/minds-analytics/redaction-contract.md exactly:
 
 1. Structural strip: tool inputs and outputs are dropped entirely; roles,
    message text, tool names/ids, counts, timings, and usage metadata survive.
-   Emitter-specific extra fields are dropped unless allowlisted.
+   Emitter-specific extra fields and token counters are dropped unless
+   allowlisted -- nothing emitter-controlled passes through. Both stream
+   vintages are handled: the ATIF-shaped ``header``/``step``/``observation``
+   records and the legacy ``user_message``/``assistant_message``/``tool_result``
+   ones that pre-cutover agents keep emitting.
 2. Text scrubbing (message text only): the workspace's pinned secret scanners
    (betterleaks + kingfisher) run over the surviving text and any finding's
    line is replaced with ``[REDACTED_SECRET]``; then a PII scrubber (Presidio,
@@ -67,7 +71,34 @@ _ALLOWLISTED_EXTRA_FIELDS: Final[frozenset[str]] = frozenset(
     {"session_id", "conversation_id", "message_id", "agent_id"}
 )
 
-_ENVELOPE_FIELDS: Final[tuple[str, ...]] = ("timestamp", "event_id", "source", "type")
+# Keys of an ATIF step's ``extra`` object that survive as-is: structural
+# annotations only, never free text. ``is_sidechain`` and ``context_management``
+# survive too, but coerced rather than copied (see ``_strip_atif_step``).
+_ALLOWLISTED_STEP_EXTRA_FIELDS: Final[frozenset[str]] = _ALLOWLISTED_EXTRA_FIELDS | frozenset({"finish_reason"})
+
+# The counters that survive from an ATIF step's ``metrics``. Allowlisting rather
+# than passing the object through is what structurally excludes ATIF's
+# ``prompt_token_ids`` / ``completion_token_ids`` / ``logprobs`` fields: none of
+# our emitters set them, and one that did would ship a detokenizable copy of the
+# transcript through a stage that only claims to carry counts.
+_ALLOWLISTED_METRIC_FIELDS: Final[frozenset[str]] = frozenset(
+    {"prompt_tokens", "completion_tokens", "cached_tokens", "cost_usd"}
+)
+_ALLOWLISTED_METRIC_EXTRA_FIELDS: Final[frozenset[str]] = frozenset({"cache_creation_input_tokens"})
+
+# The legacy ``usage`` block's counters, under the pre-cutover converter's names.
+_ALLOWLISTED_LEGACY_USAGE_FIELDS: Final[frozenset[str]] = frozenset(
+    {"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"}
+)
+
+_LEGACY_ENVELOPE_FIELDS: Final[tuple[str, ...]] = ("timestamp", "event_id", "source", "type")
+
+# The ATIF-shaped records name the emitting source ``emitter`` (ATIF claims
+# ``source`` for the step originator). Header records carry no timestamp: they
+# describe the stream, not an event in it.
+_ATIF_HEADER_ENVELOPE_FIELDS: Final[tuple[str, ...]] = ("event_id", "emitter", "type", "schema_version")
+_ATIF_EVENT_ENVELOPE_FIELDS: Final[tuple[str, ...]] = ("timestamp", "event_id", "emitter", "type")
+_ATIF_RECORD_TYPES: Final[frozenset[str]] = frozenset({"header", "step", "observation"})
 
 _SCANNER_TIMEOUT_SECONDS: Final[float] = 300.0
 
@@ -94,9 +125,39 @@ def _allowlisted_extras(record: dict[str, Any]) -> dict[str, Any]:
     return {key: record[key] for key in _ALLOWLISTED_EXTRA_FIELDS if key in record}
 
 
-def _envelope_or_none(record: dict[str, Any]) -> dict[str, Any] | None:
+def _is_number(value: Any) -> bool:
+    """Whether the value is a JSON number: bools are Python ints, but they are not counters."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _allowlisted_counters(raw_counters: Any, allowlisted_fields: frozenset[str]) -> dict[str, Any]:
+    if not isinstance(raw_counters, dict):
+        return {}
+    return {key: raw_counters[key] for key in allowlisted_fields if _is_number(raw_counters.get(key))}
+
+
+def _strip_metrics(raw_metrics: dict[str, Any]) -> dict[str, Any]:
+    """An ATIF step's ``metrics`` reduced to the allowlisted numeric counters."""
+    stripped = _allowlisted_counters(raw_metrics, _ALLOWLISTED_METRIC_FIELDS)
+    extra = _allowlisted_counters(raw_metrics.get("extra"), _ALLOWLISTED_METRIC_EXTRA_FIELDS)
+    if extra:
+        stripped["extra"] = extra
+    return stripped
+
+
+def _strip_context_management(raw_context_management: Any) -> dict[str, Any] | None:
+    """The compaction descriptor reduced to its two known scalars."""
+    if not isinstance(raw_context_management, dict):
+        return None
+    return {
+        "type": str(raw_context_management.get("type", "")),
+        "boundary": str(raw_context_management.get("boundary", "")),
+    }
+
+
+def _envelope_or_none(record: dict[str, Any], envelope_fields: tuple[str, ...]) -> dict[str, Any] | None:
     envelope: dict[str, Any] = {}
-    for field in _ENVELOPE_FIELDS:
+    for field in envelope_fields:
         value = record.get(field)
         if not isinstance(value, str) or not value:
             return None
@@ -137,12 +198,143 @@ def _strip_assistant_parts(raw_parts: Any) -> list[dict[str, Any]]:
     return stripped_parts
 
 
+def _content_text(value: Any) -> str:
+    """One message/result content field as text.
+
+    ATIF v1.6 allows a list of content parts where our emitters write a plain string. Serializing
+    such a list is what keeps a multimodal record's actual content -- rather than a Python repr of
+    it -- the thing that gets scrubbed and counted.
+    """
+    return json.dumps(value, ensure_ascii=False, sort_keys=True) if isinstance(value, list) else str(value)
+
+
+def _byte_count(value: Any) -> int:
+    return len(_content_text(value).encode("utf-8", errors="replace"))
+
+
+def _strip_observation_results(raw_results: Any) -> list[dict[str, Any]]:
+    """Apply the ATIF observation-result dispositions: the output text becomes its byte count.
+
+    ``is_error`` and ``tool_name`` stay nested under ``extra``, where the
+    unredacted record carries them, so a reader of the redacted stream can use
+    the same field paths.
+    """
+    stripped_results: list[dict[str, Any]] = []
+    if not isinstance(raw_results, list):
+        return stripped_results
+    for result in raw_results:
+        if not isinstance(result, dict):
+            continue
+        raw_extra = result.get("extra")
+        extra = raw_extra if isinstance(raw_extra, dict) else {}
+        stripped_extra: dict[str, Any] = {
+            "is_error": bool(extra.get("is_error", False)),
+            "tool_name": str(extra.get("tool_name", "")),
+        }
+        if "is_sidechain" in extra:
+            # Emitters mark only the sidechain lane, so the key stays absent on the main one.
+            stripped_extra["is_sidechain"] = bool(extra["is_sidechain"])
+        stripped_results.append(
+            {
+                "source_call_id": str(result.get("source_call_id", "")),
+                "content_byte_count": _byte_count(result.get("content", "")),
+                "extra": stripped_extra,
+            }
+        )
+    return stripped_results
+
+
+def _strip_atif_step(record: dict[str, Any], envelope: dict[str, Any]) -> dict[str, Any] | None:
+    """The ATIF step dispositions: message text survives (scrubbed), everything free-form does not.
+
+    ``reasoning_content`` is dropped wholesale, mirroring the legacy rule for
+    reasoning parts, and tool-call ``arguments`` are dropped the way the legacy
+    ``input_preview`` was.
+    """
+    source = record.get("source")
+    if not isinstance(source, str) or not source:
+        return None
+    stripped: dict[str, Any] = {
+        **envelope,
+        **_allowlisted_extras(record),
+        "source": source,
+        "message": _content_text(record.get("message", "")),
+    }
+    tool_calls = [
+        {"tool_call_id": str(call.get("tool_call_id", "")), "function_name": str(call.get("function_name", ""))}
+        for call in record.get("tool_calls") or []
+        if isinstance(call, dict)
+    ]
+    if tool_calls:
+        # The source schema has no ``tool_calls`` on user and system steps at all.
+        stripped["tool_calls"] = tool_calls
+    model_name = record.get("model_name")
+    if isinstance(model_name, str):
+        stripped["model_name"] = model_name
+    reasoning_effort = record.get("reasoning_effort")
+    if isinstance(reasoning_effort, str) or _is_number(reasoning_effort):
+        stripped["reasoning_effort"] = reasoning_effort
+    llm_call_count = record.get("llm_call_count")
+    if isinstance(llm_call_count, int) and not isinstance(llm_call_count, bool):
+        stripped["llm_call_count"] = llm_call_count
+    is_copied_context = record.get("is_copied_context")
+    if isinstance(is_copied_context, bool):
+        stripped["is_copied_context"] = is_copied_context
+    metrics = record.get("metrics")
+    if isinstance(metrics, dict):
+        stripped["metrics"] = _strip_metrics(metrics)
+    observation = record.get("observation")
+    if isinstance(observation, dict):
+        # System steps carry their result inline; it is stripped exactly like a
+        # streamed observation record's.
+        stripped["observation"] = {"results": _strip_observation_results(observation.get("results"))}
+    extra = record.get("extra")
+    if isinstance(extra, dict):
+        allowlisted = {key: extra[key] for key in _ALLOWLISTED_STEP_EXTRA_FIELDS if key in extra}
+        if "is_sidechain" in extra:
+            allowlisted["is_sidechain"] = bool(extra["is_sidechain"])
+        context_management = _strip_context_management(extra.get("context_management"))
+        if context_management is not None:
+            allowlisted["context_management"] = context_management
+        if allowlisted:
+            stripped["extra"] = allowlisted
+    return stripped
+
+
+def _strip_atif_record(record: dict[str, Any], record_type: str) -> dict[str, Any] | None:
+    if record_type == "header":
+        header_envelope = _envelope_or_none(record, _ATIF_HEADER_ENVELOPE_FIELDS)
+        if header_envelope is None:
+            return None
+        return {**header_envelope, **_allowlisted_extras(record)}
+    envelope = _envelope_or_none(record, _ATIF_EVENT_ENVELOPE_FIELDS)
+    if envelope is None:
+        return None
+    if record_type == "step":
+        return _strip_atif_step(record, envelope)
+    return {
+        **envelope,
+        **_allowlisted_extras(record),
+        "results": _strip_observation_results(record.get("results")),
+    }
+
+
 def strip_transcript_record(record: dict[str, Any]) -> dict[str, Any] | None:
-    """The structural strip: returns the surviving fields, or None to drop the record."""
-    envelope = _envelope_or_none(record)
+    """The structural strip: returns the surviving fields, or None to drop the record.
+
+    Handles both stream vintages: the ATIF-shaped records (``header`` / ``step``
+    / ``observation``) and, for agents provisioned before the cutover, the
+    legacy ``user_message`` / ``assistant_message`` / ``tool_result`` records.
+    """
+    if record.get("type") in _ATIF_RECORD_TYPES:
+        return _strip_atif_record(record, str(record["type"]))
+    envelope = _envelope_or_none(record, _LEGACY_ENVELOPE_FIELDS)
     if envelope is None:
         return None
     record_type = envelope["type"]
+    # CLEANUP: the legacy branches below serve agents provisioned before the ATIF
+    # cutover, which keep their old emitter for life. Remove them once no
+    # pre-cutover agent is still collected from.
     if record_type == "user_message":
         return {
             **envelope,
@@ -168,8 +360,9 @@ def strip_transcript_record(record: dict[str, Any]) -> dict[str, Any] | None:
         for optional_field in ("model", "finish_reason"):
             if isinstance(record.get(optional_field), str):
                 stripped[optional_field] = record[optional_field]
-        if isinstance(record.get("usage"), dict):
-            stripped["usage"] = record["usage"]
+        usage = record.get("usage")
+        if isinstance(usage, dict):
+            stripped["usage"] = _allowlisted_counters(usage, _ALLOWLISTED_LEGACY_USAGE_FIELDS)
         return stripped
     if record_type == "tool_result":
         output = record.get("output", "")
@@ -179,7 +372,7 @@ def strip_transcript_record(record: dict[str, Any]) -> dict[str, Any] | None:
             "tool_call_id": str(record.get("tool_call_id", "")),
             "tool_name": str(record.get("tool_name", "")),
             "is_error": bool(record.get("is_error", False)),
-            "output_byte_count": len(str(output).encode("utf-8", errors="replace")),
+            "output_byte_count": _byte_count(output),
         }
     return None
 
@@ -187,10 +380,10 @@ def strip_transcript_record(record: dict[str, Any]) -> dict[str, Any] | None:
 def _scrubbable_text_slots(record: dict[str, Any]) -> list[tuple[str, int | None]]:
     """The (field, part index) slots of a stripped record that hold message text."""
     slots: list[tuple[str, int | None]] = []
-    if "content" in record:
-        slots.append(("content", None))
-    if "text" in record:
-        slots.append(("text", None))
+    # "message" is the ATIF step's text; "content"/"text" are the legacy records'.
+    for text_field in ("message", "content", "text"):
+        if text_field in record:
+            slots.append((text_field, None))
     for part_idx, part in enumerate(record.get("parts", [])):
         if part.get("type") == "text":
             slots.append(("parts", part_idx))

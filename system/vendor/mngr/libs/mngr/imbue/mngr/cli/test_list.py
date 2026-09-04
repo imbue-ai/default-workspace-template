@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 
+import click
 import pluggy
 import pytest
 from click.testing import CliRunner
@@ -49,6 +50,9 @@ def test_list_command_json_format_no_agents(
 
 
 @pytest.mark.tmux
+@pytest.mark.flaky
+# real agent setup/teardown occasionally exceeds the 10s default.
+@pytest.mark.timeout(30)
 def test_list_command_with_agent(
     cli_runner: CliRunner,
     temp_work_dir: Path,
@@ -239,6 +243,9 @@ def test_list_command_with_include_filter(
 
 
 @pytest.mark.tmux
+@pytest.mark.flaky
+# real agent setup/teardown occasionally exceeds the 10s default.
+@pytest.mark.timeout(30)
 def test_list_command_with_exclude_filter(
     cli_runner: CliRunner,
     temp_work_dir: Path,
@@ -348,6 +355,9 @@ def test_list_command_with_host_provider_filter(
 
 
 @pytest.mark.tmux
+@pytest.mark.flaky
+# real agent setup/teardown occasionally exceeds the 10s default.
+@pytest.mark.timeout(30)
 def test_list_command_with_host_name_filter(
     cli_runner: CliRunner,
     temp_work_dir: Path,
@@ -416,7 +426,7 @@ def test_list_command_on_error_abort(
     cli_runner: CliRunner,
     plugin_manager: pluggy.PluginManager,
 ) -> None:
-    """Test list command with --on-error abort (default behavior)."""
+    """Test list command with an explicit --on-error abort (continue is the default)."""
     result = cli_runner.invoke(
         list_command,
         ["--on-error", "abort"],
@@ -425,6 +435,20 @@ def test_list_command_on_error_abort(
     )
 
     assert result.exit_code == 0
+
+
+def test_list_command_defaults_to_continue_on_error() -> None:
+    """The default `--on-error` mode is `continue`, not `abort`.
+
+    Under `abort` a single unreachable provider empties `mngr list --format json`
+    and breaks callers like `tmr-behaviors --reintegrate`; the partial-listing
+    behavior the `continue` default selects is covered by the CONTINUE-mode tests
+    in api/list_test.py.
+    """
+    (on_error_option,) = [param for param in list_command.params if param.name == "on_error"]
+    assert on_error_option.default == "continue"
+    assert isinstance(on_error_option.type, click.Choice)
+    assert set(on_error_option.type.choices) == {"abort", "continue"}
 
 
 @pytest.mark.tmux

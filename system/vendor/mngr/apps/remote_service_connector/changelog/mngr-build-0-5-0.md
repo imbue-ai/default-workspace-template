@@ -1,0 +1,1 @@
+The minds 0.4.0 wire-compat snapshot now also covers minds 0.5.0: `wire_types.py` is byte-unchanged between the 0.4.4 and 0.5.0 tags, so the strictly-parsed connector surface is identical and no new snapshot module is needed. Its `SUPPORT_ENDS` extends to 2026-10-02.

@@ -316,7 +316,7 @@ Verification-agent spend is harness spend: reported as `metadata.verifier_agent_
 
 ## Scoring integration
 
-A third rewardkit dimension, `tests/outcome/`, present only in tasks whose case declares `expectations` (the generator omits the directory otherwise, so rewardkit never emits a partial score for it):
+A third rewardkit dimension, `tests/verifier/outcome/`, present only in tasks whose case declares `expectations` (the generator omits the directory otherwise, so rewardkit never emits a partial score for it):
 
 - `checks.py` (programmatic, over the manifest): one criterion per expanded expectation class -- `files_expectations_met`, `app_registered`, `http_expectations_met`, `ui_flows_completed` (the fraction of measurable flows that carried out their declared steps, which is a fact about the run rather than a ruling on the `expect`).
   The file reads `case.json`'s expanded check list at import time and registers only the criteria for classes present in it (whether authored directly or implied by `deliverable.kind`), so an absent class contributes no score in either direction.
@@ -324,7 +324,7 @@ A third rewardkit dimension, `tests/outcome/`, present only in tasks whose case 
 - `judge.toml` (LLM judge): files = the rendered `expectations.md` (the `outcome` prose plus the declared checks), `manifest.json`, `conversation.jsonl`, the flow digest, and each flow's last four screenshots up to 24 in all (any screenshot over rewardkit's 1 MB judge limit is dropped from the judge input but kept as a trial artifact).
   A grade-time pre-step in `test.sh` renders `expectations.md` from `case.json` (the same pattern as `render_judge_transcript.py`), so `harbor trial regrade` picks up rendering changes.
   One criterion, `works_as_expected`, likert 10: "given this evidence, how fully does the delivered artifact meet the stated expectations?".
-  The prompt instructs the judge that evidence marked `error` is the harness's failure and not the agent's, that ruling on each flow's `expect` is its own call to make from the step log and the screenshots (the recorded completion says what was done, not whether it worked, and the agent's description of the final page is evidence rather than an answer), and -- because `DECIDE_FROM_PERSONA` turns are free-form and the simulated client may legitimately redirect the build mid-conversation -- that the conversation is provided so a deliverable the client visibly steered away from the scripted expectations is graded against the evolved ask, not the original prose.
+  The prompt instructs the judge that evidence marked `error` is the harness's failure and not the agent's, that ruling on each flow's `expect` is its own call to make from the step log and the screenshots (the recorded completion says what was done, not whether it worked, and the agent's description of the final page is evidence rather than an answer), and -- because `DECIDE_FROM_PERSONA` turns and goal entries are both free-form and the simulated client may legitimately redirect the build mid-conversation -- that the conversation is provided so a deliverable the client visibly steered away from the scripted expectations is graded against the evolved ask, not the original prose.
   This judge is the "smarter LLM-as-judge": it grades against per-case ground-truth expectations and physical evidence, not vibes about the transcript.
   The judge carries half the dimension via `[judge].weight = 1.0`: rewardkit aggregates a dimension in two levels -- all `.py` criteria pool into ONE programmatic reward of weight 1.0, and each judge toml is a second reward carrying its `[judge].weight` -- so 1.0 yields exactly 50/50 regardless of how many programmatic criteria the case declares.
   (The quality dimension's `weight = 3.0` fits the same model: judge 3/4, wordiness guard 1/4.)
@@ -362,8 +362,9 @@ Note the existing caveat (#706) that oracle reward floors are judge-dependent an
 
 - **Self-tests are the weakest evidence.** Kept judge-visible but never gated, per Level 2.
 - **A static mock can fool screenshots and even naive flows.** The persistence flow (mutate, reload, re-check) is the standing countermeasure; every app-building case should include one.
-- **The decider never verifies.** Today's simulated client says "Sounds good." no matter what; the agent's claims go unchallenged in-conversation.
+- **The decider never verifies.** A simulated client driven by a string `prompts` entry says "Sounds good." no matter what; the agent's claims go unchallenged in-conversation.
   This spec deliberately verifies *outside* the conversation instead of making the decider skeptical -- decider changes alter the thing being measured (the conversation) and belong to a separate discussion.
+  That discussion is [goal_driven_turns.md](goal_driven_turns.md), which adds a goal entry whose client does keep pushing until it is satisfied, so this caveat now describes only a case with no goal entry. Out-of-band verification stays the ground truth either way: that client judges from the conversation alone.
 - **Nothing at trial time rules on whether a flow worked.** The trial records completion and evidence; the judge decides satisfaction at grade time and regrade can revisit it, so there is no lenient trial-time verdict to survive into the score.
   The programmatic `ui_flows_completed` criterion is trial-time-frozen, but what it freezes is whether the declared steps were carried out -- a fact about the run that regrade has no reason to revisit.
 - **The agent cannot see the probes coming.** Collection starts only after the final turn, so there is no in-conversation tell that this trial is instrumented, and nothing new lands in the workspace clone for the agent to read.

@@ -271,6 +271,46 @@ def signup_email() -> Generator[MailtmInbox, None, None]:
     yield MailtmInbox(address=address, account_address=account_address, jwt=jwt)
 
 
+@pytest.fixture
+def register_signup_user_for_cleanup(
+    shared_env: Callable[[str], SharedEnvHandle],
+) -> Generator[Callable[[str], None], None, None]:
+    """Registrar that deletes real-signup accounts from the ``default`` env on teardown.
+
+    The realistic-signup tests create accounts through the live signup
+    endpoint (not the admin bypass), often at a mail.tm ``+<uuid>`` address
+    that does NOT match the session sweep's ``test-<hex>@example.test``
+    pattern -- so those users would otherwise leak on the shared env's
+    SuperTokens app across runs. A test calls the yielded callable with each
+    user id it creates; teardown deletes them via the env's SuperTokens admin
+    API. Delete failures are tolerated (logged, not raised): the account's
+    eventual SuperTokens app teardown at env-destroy is the safety net, and a
+    teardown error must not mask the test's own result.
+    """
+    handle = shared_env("default")
+    user_ids: list[NonEmptyStr] = []
+
+    def _register(user_id: str) -> None:
+        user_ids.append(NonEmptyStr(user_id))
+
+    yield _register
+
+    for user_id in user_ids:
+        try:
+            delete_user_via_admin_api(
+                connection_uri=handle.supertokens_connection_uri,
+                api_key=handle.supertokens_api_key,
+                user_id=user_id,
+            )
+        except (MindError, httpx.HTTPError) as exc:
+            logger.warning(
+                "Failed to delete real-signup user {!r} in teardown ({}); the shared env's "
+                "SuperTokens app teardown at env-destroy is the safety net.",
+                user_id,
+                exc,
+            )
+
+
 # Email-pattern + age threshold the session-scoped sweep uses to delete
 # leftover test users from a prior crashed run. Bounded conservatively:
 # 30 minutes is well beyond any single test run, so the sweep cannot

@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-minds-evals-harbor = "imbue.minds_evals.generate:main"
+minds-evals = "imbue.minds_evals.generate:main"
 
 # This project is deliberately NOT a member of the monorepo's uv workspace (the
 # root pyproject.toml excludes it) and resolves against its own uv.lock. harbor
@@ -79,7 +79,7 @@ dev = [
     # Not imported by anything this project runs: it is here so the type checker
     # can resolve templates/, whose criteria (under tests/ and outcome/ alike)
     # import `rewardkit`. The verifier container installs it separately via uvx,
-    # so this pin must match the one in templates/tests/test.sh, which runs the
+    # so this pin must match the one in templates/tests/verifier/test.sh, which runs the
     # whole verifier -- rewardkit_pin_test.py asserts that.
     # Its only base dependency is litellm, already present via harbor.
     "harbor-rewardkit==0.1.*",

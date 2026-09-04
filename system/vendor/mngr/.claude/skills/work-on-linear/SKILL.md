@@ -273,7 +273,47 @@ When the implementation is complete:
 
 Only if the user explicitly asks, follow up actions may include pushing the
 branch, opening a PR, or moving the Linear ticket to the team's review/done
-state.
+state. When you do open a PR, write its title and description in the voice below.
+
+## Writing the PR title and description
+
+Applies only when the user asks you to open a PR. Write for a teammate skimming a
+long list of PRs. Plain English: short, direct sentences (Hemingway); lead with
+the outcome (patio11). Explain any name a newcomer would not know.
+
+### Title
+
+Format: `[<IDENTIFIER>] <text>` (e.g. `[MIND-229] ...`). Lead with the ticket tag
+whenever the work has a ticket; if it genuinely has none, drop the tag entirely —
+no `[<no-ticket>]` placeholder. `<text>` names the subject and outcome — what got
+better, and where — in words a teammate would say out loud.
+
+Open `<text>` with a category label only when a strong, established one applies:
+`Deflake:` (tied to the flake-fixing process), with `Sentry:` coming soon. Skip
+it otherwise — weak labels like `Fix:` or `Refactor:` earn nothing.
+
+Two failure modes, with real examples from one deflake PR:
+
+- **Jargon salad** — internal identifiers strung together, reading like a code
+  path: `deflake list-agents continue-mode provider-error tests`.
+- **Coy / information-free** — a count or symptom with no subject, so the reader
+  must open the PR to see what it touches: `Fix three tests that randomly turned
+  CI red`.
+
+Target: `[MIND-229] Deflake: Make listing agents resilient to provider failures`.
+
+### Description
+
+Plain English, short paragraphs. In order:
+
+1. **What was wrong** — the symptom (CI went red, the command crashed).
+2. **Why** — the root cause in everyday terms; explain unfamiliar names (e.g.
+   "Lima runs VMs on your machine").
+3. **What you changed** — including what you did not change (e.g. "tests only;
+   the command behaves as before").
+4. **How you checked** — the checks you ran, with numbers.
+
+Skip the line-by-line diff, unexplained identifiers, and hype ("massive win").
 
 ## Quick reference
 

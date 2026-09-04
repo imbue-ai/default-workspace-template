@@ -1,0 +1,1 @@
+The `minds-evals-run` recipe in `private.just` drops its `push_r2` parameter and the R2 upload step it guarded, so extra harbor args are now the fourth positional parameter rather than the fifth. `specs/minds-eval-harbor/concise.md` is updated to match.

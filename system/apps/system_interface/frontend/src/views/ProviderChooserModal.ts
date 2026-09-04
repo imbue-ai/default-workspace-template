@@ -547,6 +547,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const choices = current.key_providers;
     const selected = choices.find((candidate) => candidate.provider_id === keyProvider) ?? null;
     const withPicker = choices.length > 1;
+    const canSubmit = (): boolean =>
+      !busy && getFlow() !== null && keyInput.trim() !== "" && !(withPicker && keyProvider === null);
     const keyField = m("div", { class: css.FIELD_ROW }, [
       m("input", {
         class: inputClass({ mono: true, extra: "flex-1" }),
@@ -561,7 +563,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           keyInput = (event.target as HTMLInputElement).value;
         },
         onkeydown: (event: KeyboardEvent) => {
-          if (event.key === "Enter" && keyInput.trim() !== "" && (!withPicker || keyProvider !== null)) {
+          if (event.key === "Enter" && canSubmit()) {
             event.preventDefault();
             void send(() => submitKey(keyInput.trim(), keyProvider));
           }
@@ -571,11 +573,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         Button,
         {
           variant: "primary",
-          // `getFlow() === null` too: a paste screen renders BEFORE its flow exists -- there is
-          // nothing to wait for, so `begin` shows the form and lets the mint land behind it --
-          // and submitting without one returns silently, so the button did nothing at all with
-          // no spinner and no error to say why.
-          disabled: busy || getFlow() === null || keyInput.trim() === "" || (withPicker && keyProvider === null),
+          disabled: !canSubmit(),
           "data-e2e": "save-key",
           onclick: () => void send(() => submitKey(keyInput.trim(), keyProvider)),
         },
