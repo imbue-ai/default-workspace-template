@@ -8,7 +8,17 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
+// The chat page's origin is derived from the chat app's registered label, which the app list
+// carries; only that lookup is replaced, so the derivation is pinned to the label the row
+// named "chat" has rather than to the bare-name fallback of an unloaded list.
+vi.mock("../models/AgentManager", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/AgentManager")>()),
+  labelForService: (name: string) => (name === "chat" ? "chat-7f3a" : name),
+}));
+
 import {
+  chatInstanceKeyFromAddress,
+  chatPageUrl,
   displayNameForView,
   equalTabWidth,
   isTitleTruncated,
@@ -234,5 +244,43 @@ describe("displayNameForView", () => {
 
   it("falls back to the bare id for a project the registry no longer holds", () => {
     expect(displayNameForView("gone", PROJECTS)).toBe("gone");
+  });
+});
+
+describe("chatInstanceKeyFromAddress", () => {
+  it("reads the agent id off a chat address", () => {
+    expect(chatInstanceKeyFromAddress("app:chat?instance=agent-1")).toBe("agent-1");
+  });
+
+  it("keeps a subagent key whole, dot and session included", () => {
+    expect(chatInstanceKeyFromAddress("app:chat?instance=agent-1.7f3a-session")).toBe("agent-1.7f3a-session");
+  });
+
+  it("names no key for another app's address or for a malformed one", () => {
+    expect(chatInstanceKeyFromAddress("app:terminal?instance=terminal-1")).toBeNull();
+    expect(chatInstanceKeyFromAddress("app:chat")).toBeNull();
+    expect(chatInstanceKeyFromAddress("chat:agent-1")).toBeNull();
+  });
+});
+
+describe("chatPageUrl", () => {
+  it("loads the page from this document's own origin on a host with no workspace coordinate", () => {
+    // A direct hit on the loopback port (the e2e suite): the process serves the page by path.
+    expect(chatPageUrl("agent-1", "127.0.0.1:18765", "http:", "")).toBe("http://127.0.0.1:18765/agent-1");
+  });
+
+  it("keeps the base path when the loopback document is served behind a forwarding prefix", () => {
+    expect(chatPageUrl("agent-1.7f3a", "localhost:9000", "http:", "/forwarding/abc/web")).toBe(
+      "http://localhost:9000/forwarding/abc/web/agent-1.7f3a",
+    );
+  });
+
+  it("derives the chat app's own origin from its registered label on a workspace host", () => {
+    // The shell's own service label is stripped and the chat's label is prefixed onto the
+    // coordinate, with the document's protocol carried through; the base path is another
+    // origin's and does not apply.
+    expect(chatPageUrl("agent-1", "web-9c2d.host-0f1e2d3c.localhost:8421", "https:", "/ignored")).toBe(
+      "https://chat-7f3a.host-0f1e2d3c.localhost:8421/agent-1",
+    );
   });
 });

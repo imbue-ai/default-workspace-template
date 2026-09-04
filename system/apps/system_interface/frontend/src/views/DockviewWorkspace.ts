@@ -276,12 +276,19 @@ export function chatInstanceKeyFromAddress(address: string): string | null {
  * its registered label like every other app's. A host with no workspace coordinate (a direct
  * hit on the loopback port, the e2e suite) has no origin family to derive into, so the page
  * is loaded from this document's own origin instead, where the process serves it by path.
+ * ``host``, ``protocol``, and ``basePath`` default to this document's own and are parameters
+ * so the derivation is unit-testable without a DOM, as ``deriveServiceOrigin`` is.
  */
-export function chatPageUrl(instanceKey: string, host: string = window.location.host): string {
+export function chatPageUrl(
+  instanceKey: string,
+  host: string = window.location.host,
+  protocol: string = window.location.protocol,
+  basePath: string = getBasePath(),
+): string {
   if (workspaceHostCoordinate(host) === host) {
-    return `${window.location.origin}${getBasePath()}/${instanceKey}`;
+    return `${protocol}//${host}${basePath}/${instanceKey}`;
   }
-  return `${deriveServiceOrigin(labelForService(CHAT_SERVICE_NAME))}${instanceKey}`;
+  return `${deriveServiceOrigin(labelForService(CHAT_SERVICE_NAME), host, protocol)}${instanceKey}`;
 }
 
 /** Rebuild a restored agent-terminal URL on the current host, or null when
