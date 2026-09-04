@@ -103,11 +103,13 @@ export function IframePanel(): m.Component<IframePanelAttrs> {
     syncVisibility();
   }
 
-  /** A page that has had its handshake is told again when the tab or view showing it changed. */
+  /** A page that has had its handshake is told again when the tab or view showing it changed.
+   *  A page no tab shows (its tab closed, or the active view does not include it) keeps the
+   *  identity it was last told: there is no tab to name, and it is told again when a tab
+   *  shows it. */
   function syncIdentity(): void {
-    if (lastSentIdentity === null || latestContract === null || isSameIdentity(lastSentIdentity, latestContract)) {
-      return;
-    }
+    if (lastSentIdentity === null || latestContract === null || latestContract.tabId === "") return;
+    if (isSameIdentity(lastSentIdentity, latestContract)) return;
     greet();
   }
 
