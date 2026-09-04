@@ -102,11 +102,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable
-from typing import Mapping
-from typing import NamedTuple
-from typing import Sequence
-from typing import TextIO
+from typing import Callable, Mapping, NamedTuple, Sequence, TextIO
 
 import yaml
 

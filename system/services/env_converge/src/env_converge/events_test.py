@@ -3,9 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from env_converge.events import EnvConvergeEventType
-from env_converge.events import default_events_path
-from env_converge.events import emit_event
+from env_converge.events import EnvConvergeEventType, default_events_path, emit_event
 
 
 def test_emit_event_appends_a_parseable_envelope_line(

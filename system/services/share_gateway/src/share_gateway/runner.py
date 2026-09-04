@@ -33,6 +33,7 @@ from werkzeug.serving import make_server
 from share_gateway import materials as materials_module
 from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import load_assignment
+from share_gateway.log import log as _log
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
@@ -41,7 +42,6 @@ from share_gateway.certs import ensure_share_certificate
 from share_gateway.frpc_config import render_frpc_toml
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
-from share_gateway.log import log as _log
 from share_gateway.materials import ShareMaterials
 from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret

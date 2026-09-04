@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from github_sync.wiring import HOOKS_PATH
-from github_sync.wiring import apply_git_wiring
-from github_sync.wiring import remove_git_wiring
+from github_sync.wiring import HOOKS_PATH, apply_git_wiring, remove_git_wiring
 
 
 def _get_all_global(key: str) -> list[str]:

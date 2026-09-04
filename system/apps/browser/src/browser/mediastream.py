@@ -26,29 +26,25 @@ import socket as socket_module
 import threading
 import time
 from collections import deque
-from typing import Any
-from typing import Callable
+from typing import Any, Callable
 
-from flask import Response
-from flask import jsonify
-from flask import request
+from flask import Response, jsonify, request
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
 from browser import telemetry
-from browser import window_guardian
-from browser.audiopipe import AudioPipe
-from browser.audiopipe import AudioPipeError
+from browser.audiopipe import AudioPipe, AudioPipeError
 from browser.audiopipe import is_available as is_audio_available
-from browser.stream_conductor import StreamConnection
-from browser.stream_conductor import conductor
-from browser.videopipe import PixelfluxVideoPipe
-from browser.videopipe import VideoPipeError
+from browser import window_guardian
+from browser.stream_conductor import StreamConnection, conductor
+from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
 from browser.window_guardian import WindowGuardian
-from browser.xclipboard import ClipboardError
-from browser.xclipboard import ClipboardMonitor
-from browser.xclipboard import read_clipboard
-from browser.xclipboard import set_clipboard
+from browser.xclipboard import (
+    ClipboardError,
+    ClipboardMonitor,
+    read_clipboard,
+    set_clipboard,
+)
 from browser.xinput import InputRouter
 
 _RECEIVE_POLL_SECONDS = 0.05

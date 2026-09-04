@@ -21,17 +21,15 @@ import shutil
 import subprocess
 import urllib.request
 from pathlib import Path
-from zoneinfo import ZoneInfo
-from zoneinfo import ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
-from tenacity import retry
-from tenacity import retry_if_exception_type
-from tenacity import stop_after_attempt
-from tenacity import wait_fixed
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
-from bootstrap.claude_state_migration import LEGACY_ROOT_HOME
-from bootstrap.claude_state_migration import migrate_legacy_claude_state
+from bootstrap.claude_state_migration import (
+    LEGACY_ROOT_HOME,
+    migrate_legacy_claude_state,
+)
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.

@@ -54,12 +54,9 @@ import subprocess
 import threading
 import time
 from collections import deque
-from collections.abc import Awaitable
-from collections.abc import Callable
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
-from typing import Any
-from typing import Literal
+from typing import Any, Literal
 
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
@@ -68,10 +65,8 @@ from pydantic import PrivateAttr
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest
 from browser.cdp_client import CdpClient
-from browser.cdp_proxy import BrowserProxy
-from browser.cdp_proxy import ProxyServer
-from browser.names import first_free_numbered_browser_name
-from browser.names import is_valid_browser_name
+from browser.cdp_proxy import BrowserProxy, ProxyServer
+from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,

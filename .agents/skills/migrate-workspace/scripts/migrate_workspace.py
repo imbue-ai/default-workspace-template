@@ -79,9 +79,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from typing import Mapping
-from typing import NamedTuple
-from typing import Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 # The old workspace could not be reached at all (host offline, or -- most often
 # in a long pass -- an expired SSH grant). Distinct from a generic failure so the

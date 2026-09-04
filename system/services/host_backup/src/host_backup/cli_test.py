@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from host_backup.cli import EXIT_BACKUP_FAILED
-from host_backup.cli import EXIT_BACKUP_SUCCEEDED
-from host_backup.cli import EXIT_BACKUPS_NOT_CONFIGURED
-from host_backup.cli import _exit_code_for_completion
-from host_backup.cli import _scan_for_inflight_tick_ids
-from host_backup.cli import _wait_for_next_completion
-from host_backup.events import BackupEventType
-from host_backup.events import make_event
-from host_backup.events import write_event
+from host_backup.cli import (
+    EXIT_BACKUP_FAILED,
+    EXIT_BACKUP_SUCCEEDED,
+    EXIT_BACKUPS_NOT_CONFIGURED,
+    _exit_code_for_completion,
+    _scan_for_inflight_tick_ids,
+    _wait_for_next_completion,
+)
+from host_backup.events import BackupEventType, make_event, write_event
 
 # Long enough that a waiter which fails to recognise a terminal event is
 # unambiguously stuck rather than merely slow, short enough that the test still

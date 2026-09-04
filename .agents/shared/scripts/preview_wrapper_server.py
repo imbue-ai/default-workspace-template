@@ -30,8 +30,7 @@ import argparse
 import html
 import json
 import sys
-from http.server import BaseHTTPRequestHandler
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 def build_wrapper_html(inner_service: str, title: str) -> str:

@@ -20,12 +20,14 @@ from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
 
-from env_converge.data_types import AptState
-from env_converge.data_types import BaseIdentity
-from env_converge.data_types import CargoState
-from env_converge.data_types import NpmGlobalState
-from env_converge.data_types import RecordSnapshot
-from env_converge.data_types import UvToolState
+from env_converge.data_types import (
+    AptState,
+    BaseIdentity,
+    CargoState,
+    NpmGlobalState,
+    RecordSnapshot,
+    UvToolState,
+)
 
 
 class EnvConvergeError(Exception):

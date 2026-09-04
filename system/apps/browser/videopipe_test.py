@@ -1,4 +1,5 @@
 import pytest
+
 from browser import videopipe
 from browser.videopipe import target_capture_fps
 

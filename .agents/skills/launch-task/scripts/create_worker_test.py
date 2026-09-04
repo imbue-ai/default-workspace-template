@@ -17,11 +17,9 @@ import io
 import json
 import subprocess
 import sys
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-from typing import Sequence
+from typing import Any, Sequence
 
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid

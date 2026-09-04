@@ -24,70 +24,73 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Callable
-from typing import NamedTuple
-from typing import Sequence
+from typing import Callable, NamedTuple, Sequence
 
-from update_apply_contract import ENV_DRI_AGENT
-from update_apply_contract import PHASE_BUILT
-from update_apply_contract import PHASE_MERGED
-from update_apply_contract import PHASE_PROVISIONED
-from update_apply_contract import PHASE_REFRESHED
-from update_apply_contract import PHASE_RESTARTED
-from update_apply_contract import PHASE_SNAPSHOTTED
-from update_apply_contract import PHASE_STARTED
-from update_apply_contract import ApplyMarker
-from update_apply_contract import SnapshotRecord
-from update_apply_contract import clear_emergency
-from update_apply_contract import clear_marker
-from update_apply_contract import clear_provision_incomplete
-from update_apply_contract import default_is_pid_a_live_apply
-from update_apply_contract import provision_incomplete_path
-from update_apply_contract import read_marker
-from update_apply_contract import snapshots_root
-from update_apply_contract import write_emergency
-from update_apply_contract import write_marker
-from update_apply_contract import write_provision_incomplete
-from update_banding import ExpendWrapper
-from update_banding import as_expendable
-from update_banding import keep_protected
-from update_classification import ApplyPlan
-from update_classification import plan_apply
-from update_classification import read_provisioner_inputs
-from update_environment import ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
-from update_environment import ENVIRONMENT_SNAPSHOT_NAMES
-from update_environment import discard_snapshots
-from update_environment import refresh_backend_dependencies
-from update_environment import restore_snapshots
-from update_environment import run_provisioner
-from update_environment import take_snapshots
-from update_layout import BUNDLE_STAMP_FILENAME
-from update_layout import DEFAULT_WORKSPACE_URL
-from update_layout import ENV_WORKSPACE_URL
-from update_layout import FRONTEND_BUILD_INDEX
-from update_layout import FRONTEND_DIR
-from update_layout import PROVISIONER_SCRIPT
-from update_layout import STATIC_DIR
-from update_ledger import LedgerCommitError
-from update_ledger import write_version_history_entry
-from update_probes import HEALTH_ATTEMPTS
-from update_probes import HEALTH_INTERVAL_SECONDS
-from update_probes import HEALTH_PATH
-from update_probes import describe_frontend_failure
-from update_probes import preflight
-from update_probes import refresh_workspace_view
-from update_probes import wait_healthy
-from update_runtime import ApplyFailed
-from update_runtime import ApplyPreconditionError
-from update_runtime import HttpClient
-from update_runtime import Runner
-from update_runtime import Spawner
-from update_runtime import abort_in_progress_merge
-from update_runtime import assert_clean_tree
-from update_runtime import detail_block
-from update_runtime import diff_name_status
-from update_runtime import git_out
-from update_runtime import run_checked
+from update_apply_contract import (
+    ENV_DRI_AGENT,
+    PHASE_BUILT,
+    PHASE_MERGED,
+    PHASE_PROVISIONED,
+    PHASE_REFRESHED,
+    PHASE_RESTARTED,
+    PHASE_SNAPSHOTTED,
+    PHASE_STARTED,
+    ApplyMarker,
+    SnapshotRecord,
+    clear_emergency,
+    clear_marker,
+    clear_provision_incomplete,
+    default_is_pid_a_live_apply,
+    provision_incomplete_path,
+    read_marker,
+    snapshots_root,
+    write_emergency,
+    write_marker,
+    write_provision_incomplete,
+)
+from update_banding import ExpendWrapper, as_expendable, keep_protected
+from update_classification import ApplyPlan, plan_apply, read_provisioner_inputs
+from update_environment import (
+    ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+    ENVIRONMENT_SNAPSHOT_NAMES,
+    discard_snapshots,
+    refresh_backend_dependencies,
+    restore_snapshots,
+    run_provisioner,
+    take_snapshots,
+)
+from update_layout import (
+    BUNDLE_STAMP_FILENAME,
+    DEFAULT_WORKSPACE_URL,
+    ENV_WORKSPACE_URL,
+    FRONTEND_BUILD_INDEX,
+    FRONTEND_DIR,
+    PROVISIONER_SCRIPT,
+    STATIC_DIR,
+)
+from update_ledger import LedgerCommitError, write_version_history_entry
+from update_probes import (
+    HEALTH_ATTEMPTS,
+    HEALTH_INTERVAL_SECONDS,
+    HEALTH_PATH,
+    describe_frontend_failure,
+    preflight,
+    refresh_workspace_view,
+    wait_healthy,
+)
+from update_runtime import (
+    ApplyFailed,
+    ApplyPreconditionError,
+    HttpClient,
+    Runner,
+    Spawner,
+    abort_in_progress_merge,
+    assert_clean_tree,
+    detail_block,
+    diff_name_status,
+    git_out,
+    run_checked,
+)
 
 # Per-step wall-clock budgets for the forward apply steps. Nothing about an
 # update should take anywhere near an hour, yet the old reveal ran for 1h28m

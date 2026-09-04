@@ -6,7 +6,6 @@ from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
 import jwt
-from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask
 from flask.testing import FlaskClient
 
@@ -18,6 +17,8 @@ from share_gateway.server import build_gateway_app
 from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
+
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _BROKER_URL = "https://accounts.example.com"

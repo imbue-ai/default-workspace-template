@@ -29,8 +29,7 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "libs" / "tk_command_parsing" / "src")
 )
 
-from tk_command_parsing.parser import CommandSegment
-from tk_command_parsing.parser import parse_command
+from tk_command_parsing.parser import CommandSegment, parse_command
 
 # The reserved latchkey host an agent POSTs to when asking the user to approve an
 # action, and the POST method flag that distinguishes filing a request from reading

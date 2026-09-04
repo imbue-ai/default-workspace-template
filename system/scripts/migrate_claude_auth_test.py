@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from imbue.system_interface.accounts import account_dir
 from imbue.system_interface.accounts import read_index
 

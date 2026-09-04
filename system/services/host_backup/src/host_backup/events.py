@@ -8,19 +8,20 @@ diagnose failures without rerunning anything.
 """
 
 import json
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from enum import auto
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
-from imbue.imbue_common.event_envelope import EventEnvelope
-from imbue.imbue_common.event_envelope import EventId
-from imbue.imbue_common.event_envelope import EventSource
-from imbue.imbue_common.event_envelope import EventType
-from imbue.imbue_common.event_envelope import IsoTimestamp
+from imbue.imbue_common.event_envelope import (
+    EventEnvelope,
+    EventId,
+    EventSource,
+    EventType,
+    IsoTimestamp,
+)
 from loguru import logger
 from pydantic import Field
 
