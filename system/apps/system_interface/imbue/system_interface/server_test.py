@@ -5174,11 +5174,15 @@ def test_stop_app_refuses_the_essential_services_unknown_names_and_programless_r
     fake_supervisor: FakeSupervisorServer,
 ) -> None:
     """The essential set is refused by name even when a hand-edited registry
-    grants it a program; a row without a program has nothing here to stop."""
+    grants it a program, and by program for a row that runs inside one (the
+    chat row shares the shell's program until phase 10 of the workspace app
+    model); a row without a program has nothing here to stop."""
     fake_supervisor.statename_by_program["terminal"] = "RUNNING"
+    fake_supervisor.statename_by_program["system_interface"] = "RUNNING"
     agent_manager = AgentManager.build(WebSocketBroadcaster())
     agent_manager._apps = [
         AppEntry(name="terminal", url="http://localhost:7681", program="terminal"),
+        AppEntry(name="chat", url="http://localhost:8000", program="system_interface", internal=True),
         AppEntry(name="docs-viewer", url="http://localhost:8090"),
     ]
     test_client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
@@ -5186,13 +5190,18 @@ def test_stop_app_refuses_the_essential_services_unknown_names_and_programless_r
     assert test_client.post("/api/apps/terminal/stop").status_code == 400
     assert test_client.post("/api/apps/system_interface/stop").status_code == 400
     assert test_client.post("/api/apps/terminal/start").status_code == 400
+    shared_program = test_client.post("/api/apps/chat/stop")
+    assert shared_program.status_code == 400
+    assert "essential service 'system_interface'" in shared_program.get_json()["detail"]
+    assert test_client.post("/api/apps/chat/start").status_code == 400
     assert test_client.post("/api/apps/unknown-app/stop").status_code == 404
     assert test_client.post("/api/apps/unknown-app/start").status_code == 404
     programless = test_client.post("/api/apps/docs-viewer/stop")
     assert programless.status_code == 400
     assert "no supervised program" in programless.get_json()["detail"]
-    # Nothing above reached supervisord: the terminal is still running.
+    # Nothing above reached supervisord: the terminal and the shell are still running.
     assert fake_supervisor.statename_by_program["terminal"] == "RUNNING"
+    assert fake_supervisor.statename_by_program["system_interface"] == "RUNNING"
 
 
 def test_stop_app_reports_an_unreachable_supervisord(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
