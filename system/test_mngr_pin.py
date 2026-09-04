@@ -5,10 +5,16 @@ mngr comes from wherever ``pyproject.toml``'s ``[tool.uv.sources]`` entry for
 mngr repo. The tool environments (``build_workspace.sh``, the update-self refresh)
 and the workspace venv (``uv.lock``) all derive from that one entry, so nothing may
 drift from it, and no copy of mngr's source may be tracked in the tree.
+
+mngr's packages arrive as built wheels, whose build configs exclude test
+infrastructure (``conftest.py``, ``testing.py``, ``*_test.py``), so a module this
+tree imports has to actually be in the wheel: ``test_every_imported_mngr_module_is_installed``
+holds every ``imbue.*`` import in the tree to that.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import subprocess
 import sys
@@ -175,3 +181,25 @@ def test_without_a_local_tree_the_pin_is_left_alone(tmp_path: Path) -> None:
 def test_this_checkout_pins_rather_than_pointing_at_a_local_tree() -> None:
     """The tracked pyproject.toml must never carry the rewritten form."""
     assert "system/vendor/mngr/" not in (_REPO_ROOT / "pyproject.toml").read_text()
+
+
+_IMPORT = re.compile(r"^\s*(?:from|import)\s+(imbue\.[A-Za-z0-9_.]+)", re.MULTILINE)
+
+
+def _imported_mngr_modules() -> list[str]:
+    """Every ``imbue.*`` module the tree imports that is not one of its own packages."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "*.py"], cwd=_REPO_ROOT, check=True, capture_output=True, text=True
+    ).stdout.split()
+    modules = {
+        match
+        for path in tracked
+        for match in _IMPORT.findall((_REPO_ROOT / path).read_text(errors="replace"))
+        if not match.startswith("imbue.system_interface")
+    }
+    return sorted(modules)
+
+
+@pytest.mark.parametrize("module", _imported_mngr_modules())
+def test_every_imported_mngr_module_is_installed(module: str) -> None:
+    assert importlib.util.find_spec(module) is not None, f"{module} is not in the installed packages"

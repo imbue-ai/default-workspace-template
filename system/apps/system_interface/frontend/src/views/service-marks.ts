@@ -26,7 +26,10 @@
 // `no-inline` keeps each mark an emitted file instead of a data URI folded into
 // the bundle: only the one mark a card actually shows is ever fetched.
 const MARK_MODULES = import.meta.glob<string>(
-  ["../../../../../vendor/mngr-assets/apps/minds/imbue/minds/desktop_client/static/service_icons/*.svg", "!**/*-on-dark.svg"],
+  [
+    "../../../../../vendor/mngr-assets/apps/minds/imbue/minds/desktop_client/static/service_icons/*.svg",
+    "!**/*-on-dark.svg",
+  ],
   { eager: true, query: "?url&no-inline", import: "default" },
 );
 
