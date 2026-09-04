@@ -18,6 +18,7 @@ from app_manifest.primitives import ActionId
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.chat_errors import ChatCreateRefusedError
+from imbue.system_interface.chat_errors import ChatTitleConflictError
 from imbue.system_interface.chat_instances import AgentManagerInstanceSource
 from imbue.system_interface.chat_instances import AgentManagerNudger
 from imbue.system_interface.chat_instances import instance_status_for_agent
@@ -235,7 +236,7 @@ def test_rename_conflict_is_a_conflict(agent_manager: AgentManager) -> None:
     _seed_agent(agent_manager, first_id, "Chat-1")
     _seed_agent(agent_manager, second_id, "Chat-2")
     source = _source(agent_manager)
-    with pytest.raises(ChatCreateRefusedError):
+    with pytest.raises(ChatTitleConflictError):
         source.rename_instance(InstanceKey(second_id), InstanceTitle("Chat 1"))
 
 

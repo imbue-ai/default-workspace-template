@@ -10,6 +10,10 @@ class ChatCreateRefusedError(ChatInstancesError, InstanceConflictError):
     """The chat app cannot start a chat right now: no provider is signed in, or mngr refused the create (a 409)."""
 
 
+class ChatTitleConflictError(ChatInstancesError, InstanceConflictError):
+    """A rename asked for a title another chat already has (a 409)."""
+
+
 class ChatDestroyFailedError(ChatInstancesError):
     """``mngr destroy`` failed for a chat that exists (a 500 with mngr's own words)."""
 
