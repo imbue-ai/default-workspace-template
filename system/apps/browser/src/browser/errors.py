@@ -27,3 +27,7 @@ class BrowserHeldByAgentError(BrowserFleetError):
 
 class NavigationFailedError(BrowserFleetError):
     """Chromium refused or never finished a navigation."""
+
+
+class FleetUnavailableError(BrowserFleetError):
+    """The daemon could not complete a verb: its loop did not answer in time, or a startup failure or a lost Chromium underneath it."""

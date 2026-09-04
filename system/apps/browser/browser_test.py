@@ -13,7 +13,10 @@ from app_instances.testing import RecordingNudger
 from browser import chrome_args
 from browser import chrome_launcher
 from browser import manifest
+from browser import runner
 from browser import session as bsession
+from browser.bridged_fleet import BridgedFleet
+from browser.errors import FleetUnavailableError
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
@@ -1567,3 +1570,41 @@ def test_set_nudger_reaches_browsers_registered_before_it() -> None:
     registered._crashed = True
 
     assert nudger.nudge_count == 1
+
+
+# --- the bridged fleet (the instances adapter's verbs, run on the daemon's loop) ---
+
+
+def _bridged_fleet(route_timeout_seconds: float) -> BridgedFleet:
+    return BridgedFleet(
+        bridge=runner.bridge,
+        manager=bsession.BrowserSessionManager(),
+        ready_gate=runner._init_done,
+        route_timeout_seconds=route_timeout_seconds,
+    )
+
+
+def test_bridged_fleet_answers_a_daemon_failure_under_a_verb_as_unavailable() -> None:
+    async def fail_to_start() -> None:
+        raise bsession.BrowserStartupError("no CDP endpoint")
+
+    with pytest.raises(FleetUnavailableError, match="no CDP endpoint") as caught:
+        _bridged_fleet(route_timeout_seconds=5)._run_on_loop(fail_to_start())
+
+    assert isinstance(caught.value.__cause__, bsession.BrowserStartupError)
+
+
+def test_bridged_fleet_answers_a_stalled_loop_as_unavailable() -> None:
+    async def outlast_the_route() -> None:
+        await asyncio.sleep(3600)
+
+    with pytest.raises(FleetUnavailableError, match="could not complete"):
+        _bridged_fleet(route_timeout_seconds=0.05)._run_on_loop(outlast_the_route())
+
+
+def test_bridged_fleet_passes_the_fleets_own_refusal_through() -> None:
+    async def refuse() -> None:
+        raise bsession.FleetFullError("2/2 browsers open -- close one first.")
+
+    with pytest.raises(bsession.FleetFullError, match="close one first"):
+        _bridged_fleet(route_timeout_seconds=5)._run_on_loop(refuse())
