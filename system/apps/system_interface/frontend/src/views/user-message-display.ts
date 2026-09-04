@@ -40,6 +40,54 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
   ]);
 }
 
+/**
+ * Render a status message (e.g. "Context was compacted").
+ * When body text is present, renders an expandable toggle on the status pill
+ * to show/hide the summary contents.
+ */
+function renderStatusMessage(label: string, body: string, expansionKey: string): m.Vnode {
+  if (!body) {
+    return m("div", { class: "message-system-status" }, label);
+  }
+  const expanded = isBlockExpanded(expansionKey);
+  return m(
+    "div",
+    {
+      class: `message-system-status-container${expanded ? " message-system-status-container--expanded" : ""}`,
+    },
+    [
+      m(
+        "div",
+        {
+          class: "message-system-status message-system-status--toggleable",
+          role: "button",
+          tabindex: 0,
+          onclick(e: Event) {
+            const container = (e.currentTarget as HTMLElement).parentElement;
+            if (container) {
+              setBlockExpanded(expansionKey, container.classList.toggle("message-system-status-container--expanded"));
+            }
+          },
+          onkeydown(e: KeyboardEvent) {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              const container = (e.currentTarget as HTMLElement).parentElement;
+              if (container) {
+                setBlockExpanded(
+                  expansionKey,
+                  container.classList.toggle("message-system-status-container--expanded"),
+                );
+              }
+            }
+          },
+        },
+        [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
+      ),
+      m("div", { class: "message-system-status-details" }, [m("div", { class: "message-system-status-body" }, body)]),
+    ],
+  );
+}
+
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
   return {
@@ -61,6 +109,11 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
       }
+      if (cls.kind === UserMessageKind.StatusMessage) {
+        const label = cls.label ?? (cls.body || "Context was compacted");
+        const body = cls.body && cls.body !== label ? cls.body : "";
+        return renderStatusMessage(label, body, `status:${event.event_id}`);
+      }
 
       const bubbleChildren: m.Children[] = [];
       if (visibleText.length > 0) {
@@ -78,7 +131,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
  * Render a `user_message` as a top-level row, or `null` when it produces no
  * user-rail row (hidden `/welcome`, or a skill expansion folded into its Skill
  * tool block). A `SystemChip` row gets the collapsed-system class; a genuine
- * prompt gets the user-bubble class.
+ * prompt gets the user-bubble class; a status message gets the status-row class.
  */
 export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
@@ -88,7 +141,11 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
     return null;
   }
   const messageClass =
-    kind === UserMessageKind.SystemChip ? "message message-system-collapsed" : "message message-user";
+    kind === UserMessageKind.SystemChip
+      ? "message message-system-collapsed"
+      : kind === UserMessageKind.StatusMessage
+        ? "message message-system-status-row"
+        : "message message-user";
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
   return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [m(StableUserMessage, { event })]);
