@@ -10,6 +10,7 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import { adoptClientIdentity } from "../models/ClientIdentity";
 import { createChatAgent } from "../models/AgentManager";
+import type { CreatedChatAgent } from "../models/AgentManager";
 import { isEverythingView } from "../models/Projects";
 import { connectToShell } from "../app_contract";
 import type { ShellConnection, ShellHandshake } from "../app_contract";
@@ -114,7 +115,13 @@ export function connectChatToShell(agentId: string, options: ChatShellOptions): 
 export async function startChatOnAccount(accountId: string): Promise<void> {
   const viewId = shellViewId();
   const projectId = viewId !== "" && !isEverythingView(viewId) ? viewId : "";
-  const created = await createChatAgent(projectId, accountId);
+  let created: CreatedChatAgent;
+  try {
+    created = await createChatAgent(projectId, accountId);
+  } catch (e) {
+    alert(`Failed to create chat: ${(e as Error).message}`);
+    return;
+  }
   connection?.open(chatAddress(created.agentId), created.displayName);
   m.redraw();
 }
