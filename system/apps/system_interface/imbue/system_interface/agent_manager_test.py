@@ -46,6 +46,7 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
+from imbue.system_interface.autocompact import ChatAutoCompactor
 from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import _build_chat_create_command
@@ -1801,6 +1802,48 @@ def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketB
         assert manager.get_chat_agent_ids() == ["chat"]
     finally:
         manager.stop()
+
+
+def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
+    """Only running chats are autocompacted: workers, primary, and dead chats are excluded."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, state, labels in (
+                ("chat-running", "RUNNING", {"user_created": "true"}),
+                ("chat-waiting", "WAITING", {"user_created": "true"}),
+                ("chat-dead", "DEAD", {"user_created": "true"}),
+                ("chat-stopped", "STOPPED", {"user_created": "true"}),
+                ("worker-running", "RUNNING", {"agent_created": "true"}),
+                ("primary-running", "RUNNING", {"is_primary": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=f"{agent_id}-name", state=state, labels=labels, work_dir=None
+                )
+        assert manager.get_running_chat_agent_names() == ["chat-running-name", "chat-waiting-name"]
+    finally:
+        manager.stop()
+
+
+def test_agent_manager_autocompactor_custom_injection_and_lifecycle(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    custom_compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: [],
+        runner=lambda *args, **kwargs: FinishedProcess(
+            command=(), returncode=0, stdout="", stderr="", is_timed_out=False, is_output_already_logged=False
+        ),
+    )
+    manager = AgentManager.build(broadcaster, autocompactor=custom_compactor)
+    assert manager._autocompactor is custom_compactor
+    assert manager._autocompactor._thread is None
+
+    manager._autocompactor.start()
+    assert manager._autocompactor._thread is not None
+    assert manager._autocompactor._thread.is_alive()
+
+    manager.stop()
+    assert manager._autocompactor._thread is None
 
 
 def test_observe_argv_accepted_by_live_cli() -> None:

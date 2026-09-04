@@ -816,6 +816,7 @@ dependencies = [
 dev = [
     { name = "imbue-mngr" },
     { name = "imbue-mngr-antigravity" },
+    { name = "imbue-mngr-autocompact" },
     { name = "imbue-mngr-claude" },
     { name = "imbue-mngr-codex" },
     { name = "imbue-mngr-opencode" },
@@ -851,6 +852,7 @@ requires-dist = [
 dev = [
     { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
     { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
+    { name = "imbue-mngr-autocompact", editable = "system/vendor/mngr/libs/mngr_autocompact" },
     { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
     { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
     { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
@@ -1550,6 +1552,17 @@ requires-dist = [
 name = "imbue-mngr-antigravity"
 version = "0.1.8"
 source = { editable = "system/vendor/mngr/libs/mngr_antigravity" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" }]
+
+[[package]]
+name = "imbue-mngr-autocompact"
+version = "0.1.0"
+source = { editable = "system/vendor/mngr/libs/mngr_autocompact" }
 dependencies = [
     { name = "imbue-mngr" },
 ]

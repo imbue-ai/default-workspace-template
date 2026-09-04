@@ -53,6 +53,7 @@ from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import is_lifecycle_dead
+from imbue.system_interface.autocompact import ChatAutoCompactor
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
@@ -593,6 +594,8 @@ class AgentManager:
     # is protected while engaged and climbs past the worker band once it has been
     # left alone long enough.
     _oom_prioritizer: ChatOomPrioritizer
+    # Runs periodic context compaction checks (mngr autocompact check) for active chats.
+    _autocompactor: ChatAutoCompactor
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -614,6 +617,7 @@ class AgentManager:
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         liveness_prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] = probe_all_app_liveness,
         auto_open_ledger: AutoOpenLedger | None = None,
+        autocompactor: ChatAutoCompactor | None = None,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -674,18 +678,27 @@ class AgentManager:
             set_adj=set_oom_score_adj,
             resolve_process_started_at=manager._read_agent_process_started_at,
         )
+        manager._autocompactor = (
+            autocompactor
+            if autocompactor is not None
+            else ChatAutoCompactor.build(
+                list_running_chat_agent_names=manager.get_running_chat_agent_names,
+                mngr_binary=mngr_binary,
+            )
+        )
         return manager
 
     def start(self) -> None:
         """Start the observe subprocess and perform initial agent discovery.
 
-        Also seeds and starts the OOM prioritizer. Seeding happens before the
-        sweep so the first pass ranks chats against their real message history
+        Also seeds and starts the OOM prioritizer and autocompactor. Seeding happens
+        before the sweep so the first pass ranks chats against their real message history
         rather than treating a restart as "nothing has ever been messaged".
         """
         self._initial_discover()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
+        self._autocompactor.start()
         self._start_liveness_sweep()
         self._start_observe()
 
@@ -697,6 +710,7 @@ class AgentManager:
         """Stop the observe subprocess, file watchers, and creation threads."""
         self._shutdown_event.set()
         self._oom_prioritizer.stop()
+        self._autocompactor.stop()
 
         self._liveness_stop.set()
         self._liveness_wake.set()
@@ -824,6 +838,21 @@ class AgentManager:
                 agent.id
                 for agent in self._agents.values()
                 if agent.labels.get("agent_created") != "true" and agent.labels.get("is_primary") != "true"
+            ]
+
+    def get_running_chat_agent_names(self) -> list[str]:
+        """Names of chat agents that currently have a running agent process.
+
+        Excludes workers (``agent_created=true``), the primary services agent
+        (``is_primary=true``), and dead/stopped agent processes.
+        """
+        with self._lock:
+            return [
+                agent.name
+                for agent in self._agents.values()
+                if agent.labels.get("agent_created") != "true"
+                and agent.labels.get("is_primary") != "true"
+                and not is_lifecycle_dead(agent.state)
             ]
 
     def record_activity(

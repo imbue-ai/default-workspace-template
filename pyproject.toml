@@ -54,6 +54,7 @@ dev = [
     # their `[agent_types.*]` config blocks.
     "imbue-mngr-opencode",
     "imbue-mngr-antigravity",
+    "imbue-mngr-autocompact",
     # Shared validator that checks mngr CLI argvs against the live mngr command
     # tree; used by the per-feature contract tests (bootstrap's manager_test,
     # launch-task's create_worker_test).
@@ -92,6 +93,7 @@ imbue-mngr-codex = { path = "system/vendor/mngr/libs/mngr_codex", editable = tru
 imbue-mngr-pi-coding = { path = "system/vendor/mngr/libs/mngr_pi_coding", editable = true }
 imbue-mngr-opencode = { path = "system/vendor/mngr/libs/mngr_opencode", editable = true }
 imbue-mngr-antigravity = { path = "system/vendor/mngr/libs/mngr_antigravity", editable = true }
+imbue-mngr-autocompact = { path = "system/vendor/mngr/libs/mngr_autocompact", editable = true }
 resource-guards = { path = "system/vendor/mngr/libs/resource_guards", editable = true }
 concurrency-group = { path = "system/vendor/mngr/libs/concurrency_group", editable = true }
 
