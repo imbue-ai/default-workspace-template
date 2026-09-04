@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit && eslint src/",
     "format": "prettier --write 'src/**/*.{ts,css,html}' '*.{ts,html}'",
     "format:check": "prettier --check 'src/**/*.{ts,css,html}' '*.{ts,html}'",
+    "pretest": "bash ../../../scripts/fetch_mngr_assets.sh",
     "test": "vitest run"
   },
   "dependencies": {

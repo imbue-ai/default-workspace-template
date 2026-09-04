@@ -38,12 +38,12 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *_AS_TEST_AUTHOR, *args], cwd=repo, check=True, capture_output=True)
 
 
-# A path the running server holds in memory (vendored mngr is imported
-# in-process), and paths the workspace repo moves for constantly without the
+# A path the running server holds in memory (its own backend, an editable
+# install), and paths the workspace repo moves for constantly without the
 # server being any staler for it: the apply's own ledger commit, ordinary
 # agent work, frontend source (whose bundle is rebuilt without a restart),
 # and skill prose.
-_RELEVANT_PATH = "system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py"
+_RELEVANT_PATH = "system/apps/system_interface/imbue/system_interface/server.py"
 _IRRELEVANT_PATHS = (
     "docs/VERSION_HISTORY.md",
     "data-notes.md",
@@ -73,16 +73,6 @@ _IRRELEVANT_PATHS = (
         ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", True),
         # A workspace library this process does not import.
         ("system/libs/bootstrap/src/bootstrap/manager.py", False),
-        # The vendored mngr, imported in-process and shelled out to. Broader
-        # than `.py` on purpose: this process reads that tree at runtime
-        # through more than its Python.
-        ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py", True),
-        ("system/vendor/mngr/libs/mngr/imbue/mngr/help/topics.toml", True),
-        # ... except its documentation and its tests, which nothing holds in
-        # memory -- and of which that tree has thousands.
-        ("system/vendor/mngr/libs/mngr/README.md", False),
-        ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list_test.py", False),
-        ("system/vendor/mngr/libs/mngr/imbue/mngr/test_end_to_end.py", False),
         # The frontend: its bundle is rebuilt on disk without a restart.
         ("system/apps/system_interface/frontend/src/views/App.ts", False),
         # Things minds commit constantly and are never staler for.
@@ -111,7 +101,7 @@ def _imported_workspace_package_source_paths() -> list[str]:
     names = {re.split(r"[<>=!~\[; ]", spec, maxsplit=1)[0] for spec in dependencies}
     local_packages = {
         tomllib.loads((manifest).read_text())["project"]["name"]: manifest.parent
-        for parent in ("system/libs", "system/services", "system/apps", "system/vendor/mngr/libs")
+        for parent in ("system/libs", "system/services", "system/apps")
         for manifest in (repo_root / parent).glob("*/pyproject.toml")
     }
     return sorted(
@@ -169,7 +159,7 @@ def test_tracker_reports_a_moved_path_git_would_otherwise_quote(git_work_dir: Pa
     # of such a file would show no banner.
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
-    _commit_files(repo, "an update with a non-ASCII path", "system/vendor/mngr/libs/mngr/imbue/mngr/api/l\u00efst.py")
+    _commit_files(repo, "an update with a non-ASCII path", "system/apps/system_interface/imbue/system_interface/l\u00efst.py")
     assert tracker.staleness() == STALENESS_TREE_MOVED
 
 

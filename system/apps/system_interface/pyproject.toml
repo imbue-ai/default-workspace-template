@@ -35,7 +35,6 @@ dev = [
     "playwright>=1.40",
     "pytest-playwright>=0.4",
     # Test infrastructure used by imbue.imbue_common.conftest_hooks
-    # (previously provided transitively by system/vendor/mngr's uv workspace dev group)
     "pytest>=9.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.3.0",
