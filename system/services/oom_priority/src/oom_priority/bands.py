@@ -252,9 +252,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
-    # The file viewer (dufs): a tiny static file server holding almost no
-    # memory, restarted by supervisord if shed, so it is the most expendable
-    # built-in service of all.
+    # The file viewer: the files-app sidecar (a small Python HTTP server for
+    # the instances API) and dufs, the tiny static file server it runs as its
+    # child. Together they hold little memory and supervisord restarts them if
+    # shed, so this is the most expendable built-in service of all.
     "files": 75,
     "user": USER_SERVICE,
 }
