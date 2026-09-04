@@ -34,6 +34,8 @@ from pydantic import Field
 from pydantic import PrivateAttr
 
 from imbue.imbue_common.pure import pure
+from imbue.system_interface import member_titles
+from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.agent_manager import AgentManager
@@ -167,6 +169,18 @@ def _require_params(action: ActionId, params: Mapping[str, str], allowed: frozen
         raise InvalidParamsError(f"action {action!r} does not take params {unknown}")
 
 
+def taken_member_titles() -> tuple[str, ...]:
+    """The names users gave workspace members, which a minted chat name must never collide with.
+
+    A terminal someone renamed to "Chat 2" holds that name as surely as a chat does, so both
+    create paths (the instances API's ``new`` and the chat routes' create) count them.
+    """
+    layout_dir = projects.primary_agent_layout_dir_from_env()
+    if layout_dir is None:
+        return ()
+    return tuple(member_titles.read_titles(layout_dir).values())
+
+
 class AgentManagerNudger(InstanceNudgerInterface):
     """The blueprint's nudger: fires whatever nudger the manager holds, so tests stay silent."""
 
@@ -258,7 +272,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
                 requested_name="",
                 extra_role_templates=(),
                 project_id="",
-                extra_taken_names=(),
+                extra_taken_names=taken_member_titles(),
                 account_id=params.get(ACCOUNT_ID_PARAM, ""),
             )
         except AgentCreationError as e:
