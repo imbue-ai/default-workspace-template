@@ -77,7 +77,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       const result = await m.request<SubagentEventsResponse>({
         method: "GET",
         url: apiUrl(
-          `/api/agents/${encodeURIComponent(agentId)}/subagents/${encodeURIComponent(subagentSessionId)}/events`,
+          `/api/chats/${encodeURIComponent(agentId)}/subagents/${encodeURIComponent(subagentSessionId)}/events`,
         ),
       });
       events = [];
@@ -97,7 +97,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     }
 
     const url = apiUrl(
-      `/api/agents/${encodeURIComponent(agentId)}/subagents/${encodeURIComponent(subagentSessionId)}/stream`,
+      `/api/chats/${encodeURIComponent(agentId)}/subagents/${encodeURIComponent(subagentSessionId)}/stream`,
     );
     eventSource = new EventSource(url);
 

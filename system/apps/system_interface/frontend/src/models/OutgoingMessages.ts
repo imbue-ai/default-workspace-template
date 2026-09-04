@@ -20,6 +20,7 @@
  * frontend timer, and it never gates real state.
  */
 import m from "mithril";
+import type { ChatId } from "../ids";
 
 export interface OutgoingMessage {
   id: string;
@@ -27,23 +28,23 @@ export interface OutgoingMessage {
   content: string;
 }
 
-const byAgent: Record<string, OutgoingMessage[]> = {};
-// Arrival ids already accounted for, per agent -- so a re-streamed transcript
+const byAgent: Record<ChatId, OutgoingMessage[]> = {};
+// Arrival ids already accounted for, per chat -- so a re-streamed transcript
 // event or a re-pushed queued snapshot does not drop a bubble twice.
-const seenArrivalIds: Record<string, Set<string>> = {};
+const seenArrivalIds: Record<ChatId, Set<string>> = {};
 let nextId = 0;
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
  *  so the caller can drop it on failure. */
-export function addOutgoing(agentId: string, content: string): string {
+export function addOutgoing(chatId: ChatId, content: string): string {
   const id = `outgoing-${nextId++}`;
-  (byAgent[agentId] ??= []).push({ id, content });
+  (byAgent[chatId] ??= []).push({ id, content });
   m.redraw();
   return id;
 }
 
-export function getOutgoingMessages(agentId: string): OutgoingMessage[] {
-  return byAgent[agentId] ?? [];
+export function getOutgoingMessages(chatId: ChatId): OutgoingMessage[] {
+  return byAgent[chatId] ?? [];
 }
 
 /** Remove a specific set of bubbles by id. Used by the interrupt path: it snapshots
@@ -51,39 +52,39 @@ export function getOutgoingMessages(agentId: string): OutgoingMessage[] {
  *  once the interrupt succeeds. Passing the pre-interrupt snapshot (not "all bubbles for
  *  the agent") is deliberate -- a new message the user sends DURING the interrupt
  *  round-trip must keep its bubble, since it is not part of the returned block. */
-export function clearOutgoing(agentId: string, ids: readonly string[]): void {
-  const list = byAgent[agentId];
+export function clearOutgoing(chatId: ChatId, ids: readonly string[]): void {
+  const list = byAgent[chatId];
   if (list === undefined || ids.length === 0) {
     return;
   }
   const toRemove = new Set(ids);
   const next = list.filter((entry) => !toRemove.has(entry.id));
   if (next.length !== list.length) {
-    byAgent[agentId] = next;
+    byAgent[chatId] = next;
     m.redraw();
   }
 }
 
 /** Remove a specific bubble -- used by the send-failure path (the message did not
  *  send; its text is returned to the composer by the caller). */
-export function dropOutgoing(agentId: string, id: string): void {
-  const list = byAgent[agentId];
+export function dropOutgoing(chatId: ChatId, id: string): void {
+  const list = byAgent[chatId];
   if (list === undefined) {
     return;
   }
   const next = list.filter((entry) => entry.id !== id);
   if (next.length !== list.length) {
-    byAgent[agentId] = next;
+    byAgent[chatId] = next;
     m.redraw();
   }
 }
 
-function removeOldest(agentId: string): void {
-  const list = byAgent[agentId];
+function removeOldest(chatId: ChatId): void {
+  const list = byAgent[chatId];
   if (list === undefined || list.length === 0) {
     return;
   }
-  dropOutgoing(agentId, list[0].id);
+  dropOutgoing(chatId, list[0].id);
 }
 
 /**
@@ -99,11 +100,11 @@ function removeOldest(agentId: string): void {
  * content. Over-eager removal is harmless: the real bubble is what shows, so at worst
  * the "Sending…" indicator clears a touch early -- never a duplicate.
  */
-export function noteBackendArrivals(agentId: string, ids: readonly string[]): void {
+export function noteBackendArrivals(chatId: ChatId, ids: readonly string[]): void {
   if (ids.length === 0) {
     return;
   }
-  const seen = (seenArrivalIds[agentId] ??= new Set());
+  const seen = (seenArrivalIds[chatId] ??= new Set());
   for (const id of ids) {
     if (seen.has(id)) {
       continue;
@@ -111,6 +112,6 @@ export function noteBackendArrivals(agentId: string, ids: readonly string[]): vo
     // Record every arrival id (so a re-stream/re-push cannot drop a later bubble),
     // and drop the oldest bubble -- a no-op when there are none.
     seen.add(id);
-    removeOldest(agentId);
+    removeOldest(chatId);
   }
 }

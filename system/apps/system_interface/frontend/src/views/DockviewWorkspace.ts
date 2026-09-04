@@ -40,6 +40,7 @@ import { IframePanel, IFRAME_PANEL_LIVE_KEY_ATTR, reloadIframesForService } from
 import {
   BROWSER_SERVICE_NAME,
   bindSlot,
+  chatIdForPanel,
   destroyLiveSurface,
   duplicateLiveKeyPanelIds,
   ensureLiveSurface,
@@ -102,6 +103,7 @@ import {
   removeAgentsUpdatedListener,
   reportClientState,
   whenAppsLoaded,
+  type AgentState,
   type AgentsUpdatedListener,
   type CreatedChatAgent,
   type AppEntry,
@@ -435,8 +437,9 @@ function refreshPanelContent(panelId: string): void {
   const params = panelParams.get(panelId);
   if (params === undefined) return;
   if (params.panelType === "chat") {
-    const chatAgentId = params.chatAgentId ?? params.agentId;
-    void loadSnapshotWithStream(chatAgentId)
+    const chatId = chatIdForPanel(params);
+    if (chatId === null) return;
+    void loadSnapshotWithStream(chatId)
       .catch(() => {
         // The transcript that was already on screen stays; the chat's own
         // reconnect loop keeps retrying.
@@ -827,14 +830,14 @@ function tabStopAction(
   kind: ObjectMenuKind,
 ): { label: string; run: () => void } | null {
   if (kind !== "chat") return null;
-  const chatAgentId = params.chatAgentId ?? params.agentId;
-  if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
-  const agent = getAgentById(chatAgentId);
-  const agentName = agent === undefined ? chatAgentId : chatDisplayName(agent);
+  const chatId = chatIdForPanel(params);
+  if (!chatId || chatId === getPrimaryAgentId()) return null;
+  const agent = getAgentById(chatId);
+  const agentName = agent === undefined ? chatId : chatDisplayName(agent);
   const displayedName = currentTabTitle(panelId, agentName);
   return {
     label: `Stop ${displayedName}`,
-    run: () => requestAgentStop(chatAgentId, displayedName),
+    run: () => requestAgentStop(chatId, displayedName),
   };
 }
 
@@ -862,16 +865,16 @@ function tabQuitAction(
 ): { label: string; run: () => void } | null {
   switch (kind) {
     case "chat": {
-      const chatAgentId = params.chatAgentId ?? params.agentId;
+      const chatId = chatIdForPanel(params);
       // The primary agent runs the workspace's own services; destroying it
       // would take the machine down, so it is not offered.
-      if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
-      const agent = getAgentById(chatAgentId);
-      const agentName = agent === undefined ? chatAgentId : chatDisplayName(agent);
+      if (!chatId || chatId === getPrimaryAgentId()) return null;
+      const agent = getAgentById(chatId);
+      const agentName = agent === undefined ? chatId : chatDisplayName(agent);
       return {
         label: `Delete ${currentTabTitle(panelId, agentName)}`,
         run: () => {
-          destroyTargetAgentId = chatAgentId;
+          destroyTargetAgentId = chatId;
           destroyTargetAgentName = agentName;
           destroyTargetPanelId = panelId;
           showDestroyDialog = true;
@@ -980,7 +983,7 @@ function requestAppLifecycleAction(serviceName: string, action: "stop" | "start"
  *  it is one message away from undone. The agent list catches up through the
  *  ordinary mngr observe stream rather than anything optimistic here. */
 function requestAgentStop(agentId: string, displayedName: string): void {
-  void fetch(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/stop`), { method: "POST" })
+  void fetch(apiUrl(`/api/chats/${encodeURIComponent(agentId)}/stop`), { method: "POST" })
     .then(async (response) => {
       if (response.ok) return;
       const data = (await response.json().catch(() => ({}))) as { detail?: string };
@@ -1278,7 +1281,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       const isLauncher = params?.panelType === "launcher";
 
       if (params?.panelType === "chat") {
-        appendChatLivenessDot(element, params.chatAgentId ?? params.agentId, disposables);
+        appendChatLivenessDot(element, chatIdForPanel(params) ?? params.agentId, disposables);
       }
 
       // An overflow-dropdown row is just the tab -- icon, title, liveness --
@@ -1533,7 +1536,8 @@ function reportChatTabActivity(): void {
   for (const panel of dockview.panels) {
     const pp = panelParams.get(panel.id);
     if (pp?.panelType !== "chat") continue;
-    const chatId = pp.chatAgentId ?? pp.agentId;
+    const chatId = chatIdForPanel(pp);
+    if (chatId === null) continue;
     open.push(chatId);
     if (panel.api.isVisible) visible.push(chatId);
   }
@@ -2912,6 +2916,13 @@ async function openNewBrowser(targetGroup: DockviewGroupPanel | null, launcherPa
   m.redraw();
 }
 
+/** The agent a layout-op ``chat:<agent-name>`` ref names. Layout-op chat refs
+ *  carry the agent's mngr NAME (not its id); the three resolution sites share
+ *  this one lookup. */
+function findAgentForChatRefName(agentName: string): AgentState | undefined {
+  return getAgents().find((a) => a.name === agentName);
+}
+
 /** Dedup-then-add for a ``service:``, ``chat:``, or ``https://`` ref.
  *
  *  Shared by ``handleSplit`` and ``handleOpenPanelRequest`` so that the
@@ -3071,7 +3082,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
 
   if (ref.startsWith("chat:")) {
     const agentName = ref.substring("chat:".length);
-    const agent = getAgents().find((a) => a.name === agentName);
+    const agent = findAgentForChatRefName(agentName);
     if (!agent) return null;
     const panelId = chatPanelId(agent.id);
     const existing = dockview.panels.find((p) => p.id === panelId);
@@ -3709,8 +3720,8 @@ function memberRefBody(ref: string): string {
 export function memberRefForPanelParams(params: PanelParams | undefined): string | null {
   if (params === undefined || params.panelType === "launcher") return null;
   if (params.panelType === "chat") {
-    const chatAgentId = params.chatAgentId ?? params.agentId;
-    return chatAgentId ? memberRef("chat", chatAgentId) : null;
+    const chatId = chatIdForPanel(params);
+    return chatId ? memberRef("chat", chatId) : null;
   }
   if (params.terminalSessionName) return memberRef("terminal", params.terminalSessionName);
   if (params.serviceName) {
@@ -4049,7 +4060,7 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
       for (const panel of dv.panels.slice()) {
         const params = panelParams.get(panel.id);
         if (params?.panelType !== "chat") continue;
-        const targetId = params.chatAgentId ?? params.agentId;
+        const targetId = chatIdForPanel(params);
         if (targetId === primaryId) {
           dv.removePanel(panel);
         }
@@ -4457,7 +4468,7 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
   }
   if (ref.startsWith("chat:")) {
     const agentName = ref.substring("chat:".length);
-    const agent = getAgents().find((a) => a.name === agentName);
+    const agent = findAgentForChatRefName(agentName);
     if (!agent) return null;
     const candidate = chatPanelId(agent.id);
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
@@ -4598,7 +4609,7 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
     // https / chat) share the same anchor-positioning and
     // share-existing-group defaults.
     const agentName = ref.substring("chat:".length);
-    if (!getAgents().find((a) => a.name === agentName)) return;
+    if (!findAgentForChatRefName(agentName)) return;
     handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
     return;
   }
@@ -4962,7 +4973,7 @@ function renderLiveContent(surface: LiveSurface, kind: LiveContentKind): m.Child
       // ``isVisible`` is what lets the chat skip work that must not run then --
       // its scroll management, which would otherwise corrupt the retained
       // scroll position against a display:none element.
-      return m(ChatPanel, { agentId: params.chatAgentId ?? params.agentId, isVisible: surface.isVisible });
+      return m(ChatPanel, { agentId: chatIdForPanel(params) ?? params.agentId, isVisible: surface.isVisible });
     case "subagent":
       return m(SubagentView, { agentId: params.agentId, subagentSessionId: params.subagentSessionId ?? "" });
     case "terminal":
@@ -5295,7 +5306,7 @@ async function executeAppInstanceDestroy(ref: string, panelId: string): Promise<
 async function executeDestroy(agentId: string, panelId: string): Promise<void> {
   // Destroy the target agent
   try {
-    const response = await fetch(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/destroy`), {
+    const response = await fetch(apiUrl(`/api/chats/${encodeURIComponent(agentId)}/destroy`), {
       method: "POST",
     });
     if (!response.ok) {

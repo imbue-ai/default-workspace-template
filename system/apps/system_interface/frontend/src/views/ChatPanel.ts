@@ -8,6 +8,7 @@
  */
 
 import m from "mithril";
+import { asChatId, type ChatId } from "../ids";
 import { isSlotClaimed } from "../slots";
 import {
   addMessageSentListener,
@@ -89,7 +90,7 @@ function isStillBeingCreated(agentId: string): boolean {
 }
 
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
-  let currentAgentId: string | null = null;
+  let currentAgentId: ChatId | null = null;
 
   // Whether this panel is the visible (selected) tab in its dockview group.
   // dockview keeps an inactive tab mounted (defaultRenderer: "always") and
@@ -115,32 +116,32 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     isVisible: () => panelVisible,
     dataSource: {
       getRows: () => cachedRows,
-      getWindowEventIds: () => getEventsForAgent(currentAgentId ?? "").map((event) => event.event_id),
-      getFirstOffset: () => getFirstOffset(currentAgentId ?? ""),
+      getWindowEventIds: () => getEventsForAgent(currentAgentId ?? asChatId("")).map((event) => event.event_id),
+      getFirstOffset: () => getFirstOffset(currentAgentId ?? asChatId("")),
       // Null until the first window has been placed (renderVersion bumps on
       // placement, including for an empty transcript), so the engine's fill
       // planner never races the initial snapshot+stream load.
       getTotalEvents: () => {
-        const agentId = currentAgentId ?? "";
-        return getRenderVersion(agentId) > 0 ? getTotalEventCount(agentId) : null;
+        const chatId = currentAgentId ?? asChatId("");
+        return getRenderVersion(chatId) > 0 ? getTotalEventCount(chatId) : null;
       },
-      getRenderVersion: () => getRenderVersion(currentAgentId ?? ""),
+      getRenderVersion: () => getRenderVersion(currentAgentId ?? asChatId("")),
       executeFill: (action: FillAction): Promise<void> => {
-        const agentId = currentAgentId;
-        if (agentId === null) {
+        const chatId = currentAgentId;
+        if (chatId === null) {
           return Promise.resolve();
         }
         switch (action.kind) {
           case "fetch-tail":
-            return fetchEvents(agentId).then(() => {});
+            return fetchEvents(chatId).then(() => {});
           case "fetch-before":
-            return fetchBackfillEvents(agentId, action.limit);
+            return fetchBackfillEvents(chatId, action.limit);
           case "fetch-after":
-            return fetchForwardEvents(agentId, action.limit);
+            return fetchForwardEvents(chatId, action.limit);
           case "fetch-at-offset":
-            return fetchWindowAtOffset(agentId, action.offset, action.limit);
+            return fetchWindowAtOffset(chatId, action.offset, action.limit);
           case "evict":
-            evictEvents(agentId, action.side, action.count);
+            evictEvents(chatId, action.side, action.count);
             return Promise.resolve();
           case "idle":
             return Promise.resolve();
@@ -199,7 +200,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
-  function handleDrop(event: DragEvent, agentId: string): void {
+  function handleDrop(event: DragEvent, chatId: ChatId): void {
     dragDepth = 0;
     const wasActive = isFileDragActive;
     isFileDragActive = false;
@@ -210,7 +211,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       return;
     }
     event.preventDefault();
-    uploadFilesToComposer(agentId, event.dataTransfer?.files);
+    uploadFilesToComposer(chatId, event.dataTransfer?.files);
     m.redraw();
   }
 
@@ -236,19 +237,19 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   let logError: string | null = null;
   let logAgentId: string | null = null;
 
-  async function fetchScreenCapture(agentId: string): Promise<void> {
-    if (screenAttemptedAgentId === agentId) {
+  async function fetchScreenCapture(chatId: ChatId): Promise<void> {
+    if (screenAttemptedAgentId === chatId) {
       return;
     }
-    screenAttemptedAgentId = agentId;
+    screenAttemptedAgentId = chatId;
     screenLoading = true;
     screenContent = null;
     screenError = null;
     try {
       const result = await m.request<{ screen: string | null; error?: string }>({
         method: "GET",
-        url: apiUrl("/api/agents/:agentId/screen"),
-        params: { agentId, scrollback: "true" },
+        url: apiUrl("/api/chats/:chatId/screen"),
+        params: { chatId, scrollback: "true" },
       });
       screenContent = result.screen;
       screenError = result.error ?? null;
@@ -341,11 +342,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     ]);
   }
 
-  async function loadAgent(agentId: string): Promise<void> {
+  async function loadAgent(chatId: ChatId): Promise<void> {
     try {
       // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
       // snapshot replace in fetchEvents cannot drop a live event on first load.
-      await loadSnapshotWithStream(agentId);
+      await loadSnapshotWithStream(chatId);
     } catch (error) {
       // Where the load got to is recorded against the agent by `fetchEvents` and
       // read back in the view, so that a later attempt -- from any caller,
@@ -355,7 +356,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // Still logged, as the paging and reconnect paths do -- an attempt that a
       // newer one has superseded is recorded nowhere at all, so the log is the
       // only trace of one that keeps losing the race.
-      console.warn(`Failed to load the transcript for agent ${agentId}`, error);
+      console.warn(`Failed to load the transcript for chat ${chatId}`, error);
     }
   }
 
@@ -371,12 +372,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * because a *failed* reload writes only the load state, which no redraw
    * follows on its own (a successful one repaints when it places the window).
    */
-  function reloadAfterFailure(agentId: string): void {
+  function reloadAfterFailure(chatId: ChatId): void {
     if (reloadInFlight) {
       return;
     }
     reloadInFlight = true;
-    loadAgent(agentId).finally(() => {
+    loadAgent(chatId).finally(() => {
       reloadInFlight = false;
       m.redraw();
     });
@@ -386,24 +387,24 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     "message-list-reload cursor-pointer rounded-md border border-border px-3 py-1 text-sm " +
     "text-text-primary hover:bg-bg-hover";
 
-  function manageStreamConnection(agentId: string): void {
-    if (!isConversationNotFound(agentId)) {
-      connectToStream(agentId);
+  function manageStreamConnection(chatId: ChatId): void {
+    if (!isConversationNotFound(chatId)) {
+      connectToStream(chatId);
     } else {
-      disconnectFromStream(agentId);
+      disconnectFromStream(chatId);
     }
   }
 
-  function ensureAgentLoaded(agentId: string): void {
-    if (agentId === currentAgentId) {
+  function ensureAgentLoaded(chatId: ChatId): void {
+    if (chatId === currentAgentId) {
       return;
     }
 
-    currentAgentId = agentId;
-    // Resets all scroll state and loads this agent's persisted position (which
+    currentAgentId = chatId;
+    // Resets all scroll state and loads this chat's persisted position (which
     // then steers the engine's fill toward it once the snapshot lands).
-    engine.setAgent(agentId);
-    loadAgent(agentId);
+    engine.setAgent(chatId);
+    loadAgent(chatId);
   }
 
   // A retry of the snapshot that 404'd is outstanding; only one at a time.
@@ -427,23 +428,23 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * here is exactly the condition under which the refetch stops 404ing.
    */
   function retryAfterAgentResolved(): void {
-    const agentId = currentAgentId;
-    if (agentId === null || notFoundRetryInFlight || !isConversationNotFound(agentId)) {
+    const chatId = currentAgentId;
+    if (chatId === null || notFoundRetryInFlight || !isConversationNotFound(chatId)) {
       return;
     }
     // Read the agent store rather than the broadcast payload, which is filtered
     // to the user-facing agents.
-    if (getAgentById(agentId) === undefined) {
+    if (getAgentById(chatId) === undefined) {
       return;
     }
     notFoundRetryInFlight = true;
-    loadAgent(agentId).finally(() => {
+    loadAgent(chatId).finally(() => {
       notFoundRetryInFlight = false;
       m.redraw();
     });
   }
 
-  function renderMessages(agentId: string): m.Vnode {
+  function renderMessages(chatId: ChatId): m.Vnode {
     // The build log covers creation, so it only applies while the agent is not
     // yet a real one. Both branches below are gated on that: the proto-agent
     // list is rebuilt from broadcasts and can name an agent that has since been
@@ -451,11 +452,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // late), and asking for its creation log then gets the backend's
     // "Proto-agent not found" -- which reads as `logDone && !logSuccess` and
     // would strand a perfectly healthy chat on a "creation failed" screen.
-    const isRegisteredAgent = getAgentById(agentId) !== undefined;
+    const isRegisteredAgent = getAgentById(chatId) !== undefined;
 
     // If this agent is still being created, show the build log
-    if (isStillBeingCreated(agentId)) {
-      return renderBuildLog(agentId);
+    if (isStillBeingCreated(chatId)) {
+      return renderBuildLog(chatId);
     }
 
     // Creation completed but failed -- keep the build log visible so the
@@ -464,22 +465,22 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // screen the instant proto_agent_completed arrives and the error flashes
     // by unreadably. The agent will never be added to getAgents() on
     // failure, so nothing else in the UI would surface the error either.
-    if (logAgentId === agentId && logDone && !logSuccess && !isRegisteredAgent) {
-      return renderBuildLog(agentId);
+    if (logAgentId === chatId && logDone && !logSuccess && !isRegisteredAgent) {
+      return renderBuildLog(chatId);
     }
 
     // Agent finished creating successfully -- disconnect log WebSocket and
     // force reload
-    if (logAgentId === agentId) {
+    if (logAgentId === chatId) {
       disconnectLogWs();
       currentAgentId = null;
     }
 
-    ensureAgentLoaded(agentId);
-    manageStreamConnection(agentId);
+    ensureAgentLoaded(chatId);
+    manageStreamConnection(chatId);
 
-    if (isConversationNotFound(agentId)) {
-      fetchScreenCapture(agentId);
+    if (isConversationNotFound(chatId)) {
+      fetchScreenCapture(chatId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
         m("p", { class: "text-lg font-semibold text-text-primary" }, "No conversation data"),
         m("p", { class: "text-text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
@@ -507,15 +508,15 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // reload firing under a fresh chat replaces that bubble with a spinner or an
     // error screen.
     const tailNodes =
-      getEventCount(agentId) === 0 ? [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)] : [];
-    const hasNothingToShow = getEventCount(agentId) === 0 && tailNodes.length === 0;
+      getEventCount(chatId) === 0 ? [...renderQueuedMessages(chatId), ...renderOutgoingMessages(chatId)] : [];
+    const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
 
     // Read per-render rather than latched at load time, so the panel leaves the
     // error state as soon as any reload succeeds -- the tab's Refresh or the
     // stream's background reconnect, neither of which goes through loadAgent.
     // The phase, not just the error: a load that is in flight -- including a retry -- must not
     // fall through to "No events yet for this agent.", which claims an answer it does not have.
-    const load = getConversationLoadState(agentId);
+    const load = getConversationLoadState(chatId);
     if (hasNothingToShow && load.phase === "loading") {
       return m(
         "div",
@@ -527,7 +528,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (hasNothingToShow && load.error !== null) {
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
         m("p", { class: "text-red-500" }, `Error: ${load.error}`),
-        m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+        m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
       ]);
     }
 
@@ -542,10 +543,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         ? null
         : m("div", { class: "message-list-stale-notice flex items-center gap-3 border-b border-border px-3 py-1.5" }, [
             m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
-            m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+            m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
           ]);
 
-    const events = getEventsForAgent(agentId);
+    const events = getEventsForAgent(chatId);
 
     if (events.length === 0) {
       // No transcript yet -- but render any queued or in-flight message rather
@@ -563,7 +564,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       ]);
     }
 
-    const agent = getAgentById(agentId);
+    const agent = getAgentById(chatId);
     const agentIsIdle = agent?.activity_state === "IDLE";
 
     // The first chat starts on fast mode; once it has run its grace period, ask
@@ -585,12 +586,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // cached rows. The grouping (steps, decoration, skill expansions, auth-error
     // hiding) is produced by the same functions on the same inputs, so the
     // rendered structure is identical to recomputing.
-    const renderKey = `${agentId}|${getRenderVersion(agentId)}|${agentIsIdle ? 1 : 0}`;
+    const renderKey = `${chatId}|${getRenderVersion(chatId)}|${agentIsIdle ? 1 : 0}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
-      cachedRows = buildConversationRows(agentId, events, agentIsIdle);
+      cachedRows = buildConversationRows(chatId, events, agentIsIdle);
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
@@ -611,16 +612,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
-        ...renderQueuedMessages(agentId),
-        ...renderOutgoingMessages(agentId),
+        ...renderQueuedMessages(chatId),
+        ...renderOutgoingMessages(chatId),
       ]),
     ]);
   }
 
   const handleAgentsUpdated = (): void => retryAfterAgentResolved();
 
-  const handleMessageSent = (agentId: string): void => {
-    if (agentId === currentAgentId) {
+  const handleMessageSent = (chatId: ChatId): void => {
+    if (chatId === currentAgentId) {
       engine.noteMessageSent();
     }
   };
@@ -643,15 +644,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     view(vnode) {
       const agentId = vnode.attrs.agentId;
+      const chatId = asChatId(agentId);
       // dockview's live visibility for this panel, fed in by the renderer. Read
       // it before building content / running lifecycle hooks so the scroll hooks
       // (which read this closure variable) see the current value. Undefined for a
       // mount without a panel api -- treat that as visible.
       panelVisible = vnode.attrs.isVisible ?? true;
 
-      const content = isSlotClaimed("conversation-content") ? null : renderMessages(agentId);
+      const content = isSlotClaimed("conversation-content") ? null : renderMessages(chatId);
 
-      const acceptsFileDrops = !isStillBeingCreated(agentId) && !isConversationNotFound(agentId);
+      const acceptsFileDrops = !isStillBeingCreated(agentId) && !isConversationNotFound(chatId);
 
       // The two renderings of one conversation. `hasEverFlipped` is STICKY and separate from
       // `isFlipped` on purpose: mithril destroys a vnode that becomes null, and destroying the
@@ -667,7 +669,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           ondragenter: acceptsFileDrops ? handleDragEnter : undefined,
           ondragover: acceptsFileDrops ? handleDragOver : undefined,
           ondragleave: acceptsFileDrops ? handleDragLeave : undefined,
-          ondrop: acceptsFileDrops ? (event: DragEvent) => handleDrop(event, agentId) : undefined,
+          ondrop: acceptsFileDrops ? (event: DragEvent) => handleDrop(event, chatId) : undefined,
         },
         [
           isFileDragActive && acceptsFileDrops
@@ -729,11 +731,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 ? null
                 : m("footer", { class: "app-footer" }, [
                     m(EmptySlot, { name: "conversation-before-input" }),
-                    isConversationNotFound(agentId)
+                    isConversationNotFound(chatId)
                       ? null
                       : m(ActivityIndicator, {
                           agentId,
-                          events: getEventsForAgent(agentId),
+                          events: getEventsForAgent(chatId),
                         }),
                     m(MessageInput, { agentId }),
                     // The under-bar is a sibling of the whole flip card, not part of this face: on

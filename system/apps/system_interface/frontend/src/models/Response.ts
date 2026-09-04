@@ -5,6 +5,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import type { ChatId } from "../ids";
 import { reportMessaged } from "./activityReporter";
 import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
 import { noteBackendArrivals } from "./OutgoingMessages";
@@ -231,8 +232,8 @@ function applyEventsRequestTimeout(xhr: XMLHttpRequest): XMLHttpRequest {
 // its physical cap and issues explicit evictions beyond it; the store itself
 // imposes no cap.
 
-// All per-agent transcript state is owned by one TranscriptStore instance per
-// agent (see storeByAgent below). The held events are a single contiguous window
+// All per-chat transcript state is owned by one TranscriptStore instance per
+// chat (see storeByChat below). The held events are a single contiguous window
 // of the full transcript: `firstOffset` is the global index of events[0] and
 // `total` the full length; whether more history exists above/below and the
 // scrollbar size are derived from those two. The window can sit anywhere (the live
@@ -483,10 +484,10 @@ class TranscriptStore {
   }
 }
 
-const storeByAgent: Record<string, TranscriptStore> = {};
-const notFoundAgentIds = new Set<string>();
+const storeByChat: Record<ChatId, TranscriptStore> = {};
+const notFoundChatIds = new Set<ChatId>();
 
-/** Where an agent's transcript snapshot stands: in flight, failed, or settled. */
+/** Where a chat's transcript snapshot stands: in flight, failed, or settled. */
 export interface TranscriptLoadState {
   readonly phase: "idle" | "loading" | "error";
   /** Why it failed. Set when `phase` is "error", null otherwise. */
@@ -495,7 +496,7 @@ export interface TranscriptLoadState {
 
 const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
 
-// Where each agent's snapshot load stands. It lives here rather than in the
+// Where each chat's snapshot load stands. It lives here rather than in the
 // panel because every path that reloads a transcript -- the panel's own load,
 // the tab's Refresh, and the stream's background reconnect -- goes through
 // `fetchEvents`, and only one of those is the panel. A panel holding its own
@@ -503,77 +504,77 @@ const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
 // hidden behind a stale error until the page was reloaded. Holding the whole
 // phase rather than just the error keeps the in-flight state visible to those
 // same three paths, so a reload nobody started still reads as loading.
-const loadStateByAgent = new Map<string, TranscriptLoadState>();
+const loadStateByChat = new Map<ChatId, TranscriptLoadState>();
 
-// Which snapshot attempt an agent's state belongs to. Those same three paths can
+// Which snapshot attempt a chat's state belongs to. Those same three paths can
 // have two fetches outstanding at once, and they settle in whatever order the
 // network allows: a request hung on a dead tunnel settles up to
 // EVENTS_REQUEST_TIMEOUT_MS after a later one has already landed. Only the newest
-// attempt speaks for the agent, so an older one's failure cannot put the panel
+// attempt speaks for the chat, so an older one's failure cannot put the panel
 // back on an error screen for a transcript that has since loaded. Same staleness
 // fence the paging fetches below apply to their window.
 let loadAttemptCounter = 0;
-const newestLoadAttemptByAgent = new Map<string, number>();
+const newestLoadAttemptByChat = new Map<ChatId, number>();
 
-/** Whether this attempt is still the agent's newest, i.e. whether its outcome still counts. */
-function isNewestLoadAttempt(agentId: string, attempt: number): boolean {
-  return newestLoadAttemptByAgent.get(agentId) === attempt;
+/** Whether this attempt is still the chat's newest, i.e. whether its outcome still counts. */
+function isNewestLoadAttempt(chatId: ChatId, attempt: number): boolean {
+  return newestLoadAttemptByChat.get(chatId) === attempt;
 }
 
-function storeFor(agentId: string): TranscriptStore {
-  let store = storeByAgent[agentId];
+function storeFor(chatId: ChatId): TranscriptStore {
+  let store = storeByChat[chatId];
   if (store === undefined) {
     store = new TranscriptStore();
-    storeByAgent[agentId] = store;
+    storeByChat[chatId] = store;
   }
   return store;
 }
 
-// Read accessors. These never create a store, so an unknown agent reads as empty
+// Read accessors. These never create a store, so an unknown chat reads as empty
 // defaults rather than allocating one on a mere read.
-export function getRenderVersion(agentId: string): number {
-  return storeByAgent[agentId]?.renderVersion ?? 0;
+export function getRenderVersion(chatId: ChatId): number {
+  return storeByChat[chatId]?.renderVersion ?? 0;
 }
 
-export function getFirstOffset(agentId: string): number {
-  return storeByAgent[agentId]?.firstOffset ?? 0;
+export function getFirstOffset(chatId: ChatId): number {
+  return storeByChat[chatId]?.firstOffset ?? 0;
 }
 
-export function getTotalEventCount(agentId: string): number {
-  return storeByAgent[agentId]?.total ?? 0;
+export function getTotalEventCount(chatId: ChatId): number {
+  return storeByChat[chatId]?.total ?? 0;
 }
 
-export function hasMoreBefore(agentId: string): boolean {
-  return storeByAgent[agentId]?.hasMoreBefore ?? false;
+export function hasMoreBefore(chatId: ChatId): boolean {
+  return storeByChat[chatId]?.hasMoreBefore ?? false;
 }
 
-export function hasMoreAfter(agentId: string): boolean {
-  return storeByAgent[agentId]?.hasMoreAfter ?? false;
+export function hasMoreAfter(chatId: ChatId): boolean {
+  return storeByChat[chatId]?.hasMoreAfter ?? false;
 }
 
-export function isConversationNotFound(agentId: string): boolean {
-  return notFoundAgentIds.has(agentId);
+export function isConversationNotFound(chatId: ChatId): boolean {
+  return notFoundChatIds.has(chatId);
 }
 
-/** Where this agent's transcript snapshot load stands; "idle" for one never attempted. */
-export function getConversationLoadState(agentId: string): TranscriptLoadState {
-  return loadStateByAgent.get(agentId) ?? IDLE_LOAD_STATE;
+/** Where this chat's transcript snapshot load stands; "idle" for one never attempted. */
+export function getConversationLoadState(chatId: ChatId): TranscriptLoadState {
+  return loadStateByChat.get(chatId) ?? IDLE_LOAD_STATE;
 }
 
-export function getEventsForAgent(agentId: string): TranscriptEvent[] {
-  return storeByAgent[agentId]?.events ?? [];
+export function getEventsForAgent(chatId: ChatId): TranscriptEvent[] {
+  return storeByChat[chatId]?.events ?? [];
 }
 
-export function getEventCount(agentId: string): number {
-  return storeByAgent[agentId]?.eventCount ?? 0;
+export function getEventCount(chatId: ChatId): number {
+  return storeByChat[chatId]?.eventCount ?? 0;
 }
 
-export function getFirstEventId(agentId: string): string | null {
-  return storeByAgent[agentId]?.firstEventId ?? null;
+export function getFirstEventId(chatId: ChatId): string | null {
+  return storeByChat[chatId]?.firstEventId ?? null;
 }
 
-export function getLastEventId(agentId: string): string | null {
-  return storeByAgent[agentId]?.lastEventId ?? null;
+export function getLastEventId(chatId: ChatId): string | null {
+  return storeByChat[chatId]?.lastEventId ?? null;
 }
 
 /**
@@ -611,8 +612,8 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
   return changed;
 }
 
-export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): void {
-  if (storeFor(agentId).append(newEvents)) {
+export function appendEvents(chatId: ChatId, newEvents: TranscriptEvent[]): void {
+  if (storeFor(chatId).append(newEvents)) {
     m.redraw();
   }
   // Route live user-message arrivals through the optimistic-send layer so a
@@ -622,39 +623,39 @@ export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): voi
   // history goes through the other append paths and must not drop live bubbles.
   const userEventIds = newEvents.filter((event) => event.type === "user_message").map((event) => event.event_id);
   if (userEventIds.length > 0) {
-    noteBackendArrivals(agentId, userEventIds);
+    noteBackendArrivals(chatId, userEventIds);
   }
 }
 
-export function prependEvents(agentId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {
-  if (storeFor(agentId).prepend(olderEvents, offset, total)) {
+export function prependEvents(chatId: ChatId, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {
+  if (storeFor(chatId).prepend(olderEvents, offset, total)) {
     m.redraw();
   }
 }
 
-export function appendForwardEvents(agentId: string, newerEvents: TranscriptEvent[], total?: number): void {
-  if (storeFor(agentId).appendForward(newerEvents, total)) {
+export function appendForwardEvents(chatId: ChatId, newerEvents: TranscriptEvent[], total?: number): void {
+  if (storeFor(chatId).appendForward(newerEvents, total)) {
     m.redraw();
   }
 }
 
-export function evictEvents(agentId: string, side: "older" | "newer", count: number): number {
-  const removed = storeFor(agentId).evict(side, count);
+export function evictEvents(chatId: ChatId, side: "older" | "newer", count: number): number {
+  const removed = storeFor(chatId).evict(side, count);
   if (removed > 0) {
     m.redraw();
   }
   return removed;
 }
 
-function placeWindow(agentId: string, result: EventsResponse): void {
+function placeWindow(chatId: ChatId, result: EventsResponse): void {
   const offset = result.offset ?? 0;
   const total = result.total ?? offset + result.events.length;
-  const store = storeFor(agentId);
+  const store = storeFor(chatId);
   store.reset(result.events, offset, total);
 }
 
-export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
-  notFoundAgentIds.delete(agentId);
+export async function fetchEvents(chatId: ChatId): Promise<TranscriptEvent[]> {
+  notFoundChatIds.delete(chatId);
   // Moved on the attempt, not on its outcome: whoever is about to learn the
   // outcome must not be shown the previous one. Only the snapshot tracks this --
   // a failed page or jump below leaves the loaded window intact and is
@@ -662,14 +663,14 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   // an attempt always supersedes any outstanding one, so this write needs no
   // fence; only the outcomes below do.
   const attempt = ++loadAttemptCounter;
-  newestLoadAttemptByAgent.set(agentId, attempt);
-  loadStateByAgent.set(agentId, { phase: "loading", error: null });
+  newestLoadAttemptByChat.set(chatId, attempt);
+  loadStateByChat.set(chatId, { phase: "loading", error: null });
 
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
-      url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId },
+      url: apiUrl("/api/chats/:chatId/events"),
+      params: { chatId },
       config: applyEventsRequestTimeout,
     });
     // Fenced for the same reason the outcome writes below are, and it matters
@@ -679,23 +680,23 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
     // appended in between, with no way back -- placeWindow also resets
     // firstOffset and hasMoreAfter, so neither backfill nor forward paging can
     // reach the lost events again.
-    if (!isNewestLoadAttempt(agentId, attempt)) {
+    if (!isNewestLoadAttempt(chatId, attempt)) {
       return result.events;
     }
-    placeWindow(agentId, result);
-    loadStateByAgent.set(agentId, IDLE_LOAD_STATE);
+    placeWindow(chatId, result);
+    loadStateByChat.set(chatId, IDLE_LOAD_STATE);
     return result.events;
   } catch (error) {
     // The not-found latch is fenced alongside the state because the panel acts on
     // it harder: it renders "No conversation data" ahead of (and unlike) the load
     // state, ungated by whether a transcript is already on screen, and disconnects
     // the stream. A superseded attempt's 404 would blank a live chat.
-    if (isNewestLoadAttempt(agentId, attempt)) {
+    if (isNewestLoadAttempt(chatId, attempt)) {
       const requestError = error as { code?: number; message?: string };
       if (requestError.code === 404) {
-        notFoundAgentIds.add(agentId);
+        notFoundChatIds.add(chatId);
       }
-      loadStateByAgent.set(agentId, { phase: "error", error: describeRequestError(error) });
+      loadStateByChat.set(chatId, { phase: "error", error: describeRequestError(error) });
     }
     throw error;
   }
@@ -703,25 +704,25 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
 
 /** Jump the window to an arbitrary global offset in one request (e.g. a scrollbar
  *  drag far from the loaded window), replacing the held events. */
-export async function fetchWindowAtOffset(agentId: string, offset: number, limit: number): Promise<void> {
+export async function fetchWindowAtOffset(chatId: ChatId, offset: number, limit: number): Promise<void> {
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
-      url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, offset: String(Math.max(0, offset)), limit: String(limit) },
+      url: apiUrl("/api/chats/:chatId/events"),
+      params: { chatId, offset: String(Math.max(0, offset)), limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
-    placeWindow(agentId, result);
+    placeWindow(chatId, result);
   } catch (error) {
-    console.warn(`Failed to load events at offset ${offset} for agent ${agentId}`, error);
+    console.warn(`Failed to load events at offset ${offset} for chat ${chatId}`, error);
   }
 }
 
-export async function fetchBackfillEvents(agentId: string, limit: number): Promise<void> {
-  if (!hasMoreBefore(agentId)) {
+export async function fetchBackfillEvents(chatId: ChatId, limit: number): Promise<void> {
+  if (!hasMoreBefore(chatId)) {
     return;
   }
-  const firstEventId = getFirstEventId(agentId);
+  const firstEventId = getFirstEventId(chatId);
   if (!firstEventId) {
     return;
   }
@@ -729,8 +730,8 @@ export async function fetchBackfillEvents(agentId: string, limit: number): Promi
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
-      url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, before: firstEventId, limit: String(limit) },
+      url: apiUrl("/api/chats/:chatId/events"),
+      params: { chatId, before: firstEventId, limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
     // Staleness fence: if the window changed while this page was in flight
@@ -738,29 +739,29 @@ export async function fetchBackfillEvents(agentId: string, limit: number): Promi
     // against coordinates that no longer exist -- applying it would corrupt
     // the window arithmetic. Discard; the next scroll retries with a
     // current cursor.
-    if (getFirstEventId(agentId) !== firstEventId) {
-      console.warn(`[si-transcript] discarding stale backfill page for agent ${agentId} (window changed)`);
+    if (getFirstEventId(chatId) !== firstEventId) {
+      console.warn(`[si-transcript] discarding stale backfill page for chat ${chatId} (window changed)`);
       return;
     }
     if (result.events.length > 0) {
-      prependEvents(agentId, result.events, result.offset, result.total);
+      prependEvents(chatId, result.events, result.offset, result.total);
     } else {
       // Nothing before the cursor: the window already starts at the beginning.
-      storeFor(agentId).markReachedStart(result.total);
+      storeFor(chatId).markReachedStart(result.total);
     }
   } catch (error) {
     // Backfill failure is non-fatal: the older history just isn't loaded, and
     // the window start is unchanged so the next scroll retries. Log it so a
     // persistent failure is diagnosable instead of vanishing silently.
-    console.warn(`Failed to backfill older events for agent ${agentId}`, error);
+    console.warn(`Failed to backfill older events for chat ${chatId}`, error);
   }
 }
 
-export async function fetchForwardEvents(agentId: string, limit: number): Promise<void> {
-  if (!hasMoreAfter(agentId)) {
+export async function fetchForwardEvents(chatId: ChatId, limit: number): Promise<void> {
+  if (!hasMoreAfter(chatId)) {
     return;
   }
-  const lastEventId = getLastEventId(agentId);
+  const lastEventId = getLastEventId(chatId);
   if (!lastEventId) {
     return;
   }
@@ -768,25 +769,25 @@ export async function fetchForwardEvents(agentId: string, limit: number): Promis
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
-      url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, after: lastEventId, limit: String(limit) },
+      url: apiUrl("/api/chats/:chatId/events"),
+      params: { chatId, after: lastEventId, limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
     // Staleness fence, mirroring fetchBackfillEvents: discard the page if the
     // window's tail moved while it was in flight (live append or a snapshot
     // reset) -- the next maybePage refires against the current cursor.
-    if (getLastEventId(agentId) !== lastEventId) {
-      console.warn(`[si-transcript] discarding stale forward page for agent ${agentId} (window changed)`);
+    if (getLastEventId(chatId) !== lastEventId) {
+      console.warn(`[si-transcript] discarding stale forward page for chat ${chatId} (window changed)`);
       return;
     }
     if (result.events.length > 0) {
-      appendForwardEvents(agentId, result.events, result.total);
+      appendForwardEvents(chatId, result.events, result.total);
     } else if (result.total !== undefined) {
       // Nothing after the cursor: the window reaches the live tail.
-      storeFor(agentId).reconcileTotalAtTail(result.total);
+      storeFor(chatId).reconcileTotalAtTail(result.total);
     }
   } catch (error) {
-    console.warn(`Failed to load newer events for agent ${agentId}`, error);
+    console.warn(`Failed to load newer events for chat ${chatId}`, error);
   }
 }
 
@@ -804,35 +805,35 @@ export type EventDetailState =
   // "payload no longer available" placeholder.
   | { state: "unavailable" };
 
-// Frontend-only payload cache, per agent, for the page session: the backend serves detail
+// Frontend-only payload cache, per chat, for the page session: the backend serves detail
 // reads statelessly and never caches them, so whatever the user expanded is remembered
 // here (alongside expansion-state) and survives virtualization remounts without refetching.
-const detailByAgent = new Map<string, Map<string, EventDetailState>>();
-// Bumped on every detail-state change, per agent, so memoized message wrappers know to
+const detailByChat = new Map<ChatId, Map<string, EventDetailState>>();
+// Bumped on every detail-state change, per chat, so memoized message wrappers know to
 // repaint an expanded block whose payload just arrived.
-const detailVersionByAgent = new Map<string, number>();
+const detailVersionByChat = new Map<ChatId, number>();
 // How long a transiently-failed detail fetch blocks its retry (the failed entry stays in
 // "loading" until then), pacing the expanded row's heal-on-render re-request.
 const DETAIL_RETRY_DELAY_MS = 3000;
 
-export function getEventDetailState(agentId: string, eventId: string): EventDetailState | undefined {
-  return detailByAgent.get(agentId)?.get(eventId);
+export function getEventDetailState(chatId: ChatId, eventId: string): EventDetailState | undefined {
+  return detailByChat.get(chatId)?.get(eventId);
 }
 
-export function getEventDetailVersion(agentId: string): number {
-  return detailVersionByAgent.get(agentId) ?? 0;
+export function getEventDetailVersion(chatId: ChatId): number {
+  return detailVersionByChat.get(chatId) ?? 0;
 }
 
-function bumpDetailVersion(agentId: string): void {
-  detailVersionByAgent.set(agentId, getEventDetailVersion(agentId) + 1);
+function bumpDetailVersion(chatId: ChatId): void {
+  detailVersionByChat.set(chatId, getEventDetailVersion(chatId) + 1);
 }
 
 /** Kick off a detail fetch if none is cached or in flight. Idempotent; redraws on arrival. */
-export function requestEventDetail(agentId: string, eventId: string): void {
-  let byEvent = detailByAgent.get(agentId);
+export function requestEventDetail(chatId: ChatId, eventId: string): void {
+  let byEvent = detailByChat.get(chatId);
   if (byEvent === undefined) {
     byEvent = new Map<string, EventDetailState>();
-    detailByAgent.set(agentId, byEvent);
+    detailByChat.set(chatId, byEvent);
   }
   if (byEvent.has(eventId)) {
     return;
@@ -841,19 +842,19 @@ export function requestEventDetail(agentId: string, eventId: string): void {
   void m
     .request<EventDetail>({
       method: "GET",
-      url: apiUrl("/api/agents/:agentId/events/:eventId/detail"),
-      params: { agentId, eventId },
+      url: apiUrl("/api/chats/:chatId/events/:eventId/detail"),
+      params: { chatId, eventId },
       config: applyEventsRequestTimeout,
     })
     .then((detail) => {
       byEvent.set(eventId, { state: "loaded", detail });
-      bumpDetailVersion(agentId);
+      bumpDetailVersion(chatId);
       m.redraw();
     })
     .catch((error: { code?: number }) => {
       if (error.code === 404) {
         byEvent.set(eventId, { state: "unavailable" });
-        bumpDetailVersion(agentId);
+        bumpDetailVersion(chatId);
         m.redraw();
         return;
       }
@@ -864,7 +865,7 @@ export function requestEventDetail(agentId: string, eventId: string): void {
       setTimeout(() => {
         if (byEvent.get(eventId)?.state === "loading") {
           byEvent.delete(eventId);
-          bumpDetailVersion(agentId);
+          bumpDetailVersion(chatId);
           m.redraw();
         }
       }, DETAIL_RETRY_DELAY_MS);
@@ -881,28 +882,28 @@ export function mintMessageId(): string {
     : `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-// Subscribers told when the user submits a message for an agent. The scroll
+// Subscribers told when the user submits a message for a chat. The scroll
 // engine snaps back to following the tail on send (MESSAGE_SENT transition);
 // routing the signal through here covers every send path without the composer
 // knowing about scrolling.
-const messageSentListeners = new Set<(agentId: string) => void>();
+const messageSentListeners = new Set<(chatId: ChatId) => void>();
 
-export function addMessageSentListener(listener: (agentId: string) => void): void {
+export function addMessageSentListener(listener: (chatId: ChatId) => void): void {
   messageSentListeners.add(listener);
 }
 
-export function removeMessageSentListener(listener: (agentId: string) => void): void {
+export function removeMessageSentListener(listener: (chatId: ChatId) => void): void {
   messageSentListeners.delete(listener);
 }
 
-export async function sendMessage(agentId: string, message: string, messageId?: string): Promise<string> {
+export async function sendMessage(chatId: ChatId, message: string, messageId?: string): Promise<string> {
   const trimmed = message.trim();
   const id = messageId ?? mintMessageId();
   if (!trimmed) {
     return id;
   }
   for (const listener of messageSentListeners) {
-    listener(agentId);
+    listener(chatId);
   }
 
   // The client identity rides along so the server can record which browser
@@ -911,8 +912,8 @@ export async function sendMessage(agentId: string, message: string, messageId?: 
   // the stable send-time id the backend reconciles delivery against (A4).
   await m.request({
     method: "POST",
-    url: apiUrl("/api/agents/:agentId/message"),
-    params: { agentId },
+    url: apiUrl("/api/chats/:chatId/message"),
+    params: { chatId },
     body: {
       message: trimmed,
       message_id: id,
@@ -923,15 +924,15 @@ export async function sendMessage(agentId: string, message: string, messageId?: 
   });
   // Bump this chat's OOM recency now that a message was accepted, so an actively
   // messaged chat is more protected from a memory shed than idler ones.
-  reportMessaged(agentId);
+  reportMessaged(chatId);
   return id;
 }
 
-export async function interruptAgent(agentId: string): Promise<void> {
+export async function interruptAgent(chatId: ChatId): Promise<void> {
   await m.request({
     method: "POST",
-    url: apiUrl("/api/agents/:agentId/interrupt"),
-    params: { agentId },
+    url: apiUrl("/api/chats/:chatId/interrupt"),
+    params: { chatId },
   });
 }
 
@@ -942,11 +943,11 @@ export async function interruptAgent(agentId: string): Promise<void> {
  *  nothing is painted locally. Whether the tap is available at all is the backend's
  *  ``shoulder_tap_available`` flag, which greys the button -- so this is never called when the
  *  backend would refuse it, and a benign no-op status is returned rather than an error. */
-export async function shoulderTap(agentId: string): Promise<{ status: string; block: string }> {
+export async function shoulderTap(chatId: ChatId): Promise<{ status: string; block: string }> {
   const result = await m.request<{ status: string; block?: string }>({
     method: "POST",
-    url: apiUrl("/api/agents/:agentId/shoulder-tap-atomic"),
-    params: { agentId },
+    url: apiUrl("/api/chats/:chatId/shoulder-tap-atomic"),
+    params: { chatId },
   });
   // ``block`` is non-empty only when a native (codex) tap's combined resend failed to submit: the
   // parked text is handed back for the composer so it is never swallowed (contract A1a). Default to
@@ -956,11 +957,11 @@ export async function shoulderTap(agentId: string): Promise<{ status: string; bl
 
 /** Interrupt to composer: restart the agent and get the queued messages back as
  *  one concatenated block to drop into the composer, unsent. */
-export async function drainToComposer(agentId: string): Promise<{ block: string }> {
+export async function drainToComposer(chatId: ChatId): Promise<{ block: string }> {
   return await m.request<{ block: string }>({
     method: "POST",
-    url: apiUrl("/api/agents/:agentId/drain-to-composer"),
-    params: { agentId },
+    url: apiUrl("/api/chats/:chatId/drain-to-composer"),
+    params: { chatId },
   });
 }
 
@@ -988,6 +989,6 @@ export function appendSyntheticResponse(): void {}
 
 export async function insertResponseItem(): Promise<void> {}
 
-export function fetchResponses(agentId: string): Promise<ResponseItem[]> {
-  return fetchEvents(agentId).then(() => []);
+export function fetchResponses(chatId: ChatId): Promise<ResponseItem[]> {
+  return fetchEvents(chatId).then(() => []);
 }
