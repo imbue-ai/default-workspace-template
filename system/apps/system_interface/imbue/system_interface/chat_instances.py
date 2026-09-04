@@ -27,6 +27,7 @@ from app_instances.primitives import InstanceKey
 from app_instances.primitives import InstanceTitle
 from app_instances.primitives import InstanceUrl
 from app_instances.primitives import LocationTarget
+from app_instances.primitives import MAX_INSTANCE_TITLE_LENGTH
 from app_manifest.primitives import ActionId
 from app_manifest.primitives import AppName
 from pydantic import Field
@@ -68,6 +69,9 @@ SUBAGENT_KEY_SEPARATOR: Final[str] = "."
 
 PROVISIONAL_TITLE: Final[str] = "New chat"
 SUBAGENT_TITLE_PREFIX: Final[str] = "Subagent: "
+# A subagent's description is free text from the transcript; the record keeps as much of it
+# as fits the title rule beside the prefix.
+MAX_SUBAGENT_DESCRIPTION_LENGTH: Final[int] = MAX_INSTANCE_TITLE_LENGTH - len(SUBAGENT_TITLE_PREFIX)
 
 
 @pure
@@ -148,6 +152,12 @@ def instance_record_for_subagent(key: InstanceKey, description: str) -> Instance
 @pure
 def is_primary_agent(agent: AgentStateItem) -> bool:
     return agent.labels.get("is_primary") == "true"
+
+
+@pure
+def _subagent_description(requested: str, session_id: str) -> str:
+    """The description a subagent record keeps: the requested one, cut to fit its title, else the session id."""
+    return (requested.strip() or session_id)[:MAX_SUBAGENT_DESCRIPTION_LENGTH]
 
 
 @pure
@@ -268,7 +278,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         with self._lock:
             description = self._description_by_subagent_key.get(key)
             if description is None:
-                description = params.get(DESCRIPTION_PARAM, "") or session
+                description = _subagent_description(params.get(DESCRIPTION_PARAM, ""), session)
                 self._description_by_subagent_key[key] = description
         return instance_record_for_subagent(key, description)
 
