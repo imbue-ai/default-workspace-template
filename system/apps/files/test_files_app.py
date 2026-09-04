@@ -164,8 +164,13 @@ def test_files_app_registers_runs_dufs_serves_instances_and_stops_with_dufs(
         assert _listed_keys_and_urls(app) == []
         first = _create(app, {"path": "/data/docs/"})
         assert first.status_code == 201, first.text
-        assert first.json()["instance"] == {
-            **first.json()["instance"],
+        first_instance = first.json()["instance"]
+        assert first_instance["last_active"] is not None
+        assert {
+            field: value
+            for field, value in first_instance.items()
+            if field != "last_active"
+        } == {
             "key": "files-1",
             "url": "/data/docs/",
             "title": "File Viewer 1",
