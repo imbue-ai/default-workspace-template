@@ -13,7 +13,8 @@ Built-in apps:
 - `terminal/` - The terminal tab (ttyd over the web), including its named
   persistent sessions; a Python package (`terminal-app`) that runs ttyd and
   serves the instances API over the workspace's tmux sessions.
-- `files/` - The file viewer tab: the `files-app` package, the instances library's sidecar around dufs over `data/`.
+- `files/` - The file viewer tab: the `files-app` package, the instances
+  library's sidecar around dufs over `data/`.
 - `browser/` - The live browser tab: a headless Chromium streamed to the UI.
 
 Every app describes itself in an `app.toml` manifest beside its code: its
