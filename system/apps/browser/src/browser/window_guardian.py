@@ -24,9 +24,7 @@ from typing import Any
 
 import Xlib.error
 from loguru import logger
-from Xlib import X
-from Xlib import Xatom
-from Xlib import protocol
+from Xlib import X, Xatom, protocol
 from Xlib.display import Display
 
 # One check a second: cheap (a query_tree + a few property reads), snaps a dragged window back

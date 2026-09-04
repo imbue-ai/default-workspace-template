@@ -20,18 +20,21 @@ the [program:github-sync] block to system/supervisord.conf).
 import json
 import os
 import time
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
 
-from github_sync.config import GithubSyncConfigError
-from github_sync.config import load_repo_url
-from github_sync.visibility import VISIBILITY_PRIVATE
-from github_sync.visibility import VISIBILITY_PUBLIC
-from github_sync.visibility import VISIBILITY_UNKNOWN
-from github_sync.visibility import check_repo_visibility
+from github_sync.config import (
+    GithubSyncConfigError,
+    load_repo_url,
+)
+from github_sync.visibility import (
+    VISIBILITY_PRIVATE,
+    VISIBILITY_PUBLIC,
+    VISIBILITY_UNKNOWN,
+    check_repo_visibility,
+)
 from github_sync.wiring import apply_git_wiring
 
 TICK_INTERVAL_SECONDS = 60

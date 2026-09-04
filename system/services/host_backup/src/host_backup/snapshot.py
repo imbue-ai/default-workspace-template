@@ -18,10 +18,8 @@ The three concrete implementations are selected from `BackupCapabilities.method`
 import json
 import subprocess
 import time
-from abc import ABC
-from abc import abstractmethod
-from datetime import datetime
-from datetime import timezone
+from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
@@ -31,8 +29,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import Field
 
-from host_backup.capabilities import BackupCapabilities
-from host_backup.capabilities import SnapshotMethod
+from host_backup.capabilities import BackupCapabilities, SnapshotMethod
 
 
 class SnapshotError(RuntimeError):

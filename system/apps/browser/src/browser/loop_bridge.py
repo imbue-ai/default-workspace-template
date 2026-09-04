@@ -20,8 +20,7 @@ import asyncio
 import concurrent.futures
 import threading
 from collections.abc import Coroutine
-from typing import Any
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from loguru import logger
 

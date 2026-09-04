@@ -10,12 +10,9 @@ import json
 import click
 
 from github_sync import runner
-from github_sync.config import GithubSyncConfigError
-from github_sync.config import load_repo_url
-from github_sync.visibility import VISIBILITY_PRIVATE
-from github_sync.visibility import check_repo_visibility
-from github_sync.wiring import apply_git_wiring
-from github_sync.wiring import remove_git_wiring
+from github_sync.config import GithubSyncConfigError, load_repo_url
+from github_sync.visibility import VISIBILITY_PRIVATE, check_repo_visibility
+from github_sync.wiring import apply_git_wiring, remove_git_wiring
 
 
 @click.group()

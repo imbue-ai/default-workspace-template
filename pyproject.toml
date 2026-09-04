@@ -157,12 +157,6 @@ exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interfa
 [tool.ruff.lint]
 select = ["F", "I", "UP006", "UP007"]
 
-[tool.ruff.lint.isort]
-# Matches the style guide the agent reads at system/vendor/mngr/style_guide.md ("Imports will be
-# automatically sorted into a single import per line"). Without this, ruff merges same-module
-# imports and the guide describes a formatting rule the formatter here does not apply.
-force-single-line = true
-
 [tool.pyright]
 pythonVersion = "3.11"
 # apps and skills are the top-level discoverability symlinks; excluding them

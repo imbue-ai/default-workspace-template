@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from host_backup.capabilities import BackupCapabilities
-from host_backup.capabilities import SnapshotMethod
-from host_backup.capabilities import detect_backup_capabilities
+from host_backup.capabilities import (
+    BackupCapabilities,
+    SnapshotMethod,
+    detect_backup_capabilities,
+)
 
 
 def test_detects_outer_trigger_when_trigger_dir_exists(tmp_path: Path) -> None:

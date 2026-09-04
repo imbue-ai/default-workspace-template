@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from github_sync.testing import install_fake_latchkey
-from github_sync.visibility import VISIBILITY_PRIVATE
-from github_sync.visibility import VISIBILITY_PUBLIC
-from github_sync.visibility import VISIBILITY_UNKNOWN
-from github_sync.visibility import check_repo_visibility
-from github_sync.visibility import parse_visibility_response
+from github_sync.visibility import (
+    VISIBILITY_PRIVATE,
+    VISIBILITY_PUBLIC,
+    VISIBILITY_UNKNOWN,
+    check_repo_visibility,
+    parse_visibility_response,
+)
 
 _REPO_URL = "https://github.com/some-user/my-workspace"
 

@@ -15,11 +15,9 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
-from typing import Sequence
+from typing import Callable, Sequence
 
 import pytest
 import update_apply

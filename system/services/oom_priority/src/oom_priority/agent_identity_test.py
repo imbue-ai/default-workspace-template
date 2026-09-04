@@ -3,9 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from oom_priority.agent_identity import is_chat_agent
-from oom_priority.agent_identity import is_primary_agent
-from oom_priority.agent_identity import is_worker_agent
+from oom_priority.agent_identity import is_chat_agent, is_primary_agent, is_worker_agent
 
 
 def _write_agent(host_dir: Path, agent_id: str, name: str, labels: dict) -> None:

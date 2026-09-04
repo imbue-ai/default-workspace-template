@@ -16,10 +16,7 @@ import json
 from typing import Any
 
 import pytest
-from browser.cdp_proxy import _ALWAYS_BLOCKED
-from browser.cdp_proxy import _LAST_PAGE_GUARDED
-from browser.cdp_proxy import BrowserProxy
-from browser.cdp_proxy import ProxyServer
+from browser.cdp_proxy import _ALWAYS_BLOCKED, _LAST_PAGE_GUARDED, BrowserProxy, ProxyServer
 
 
 def _proxy(*, allowed: bool = True, pages: int = 2) -> "tuple[BrowserProxy, dict[str, Any]]":

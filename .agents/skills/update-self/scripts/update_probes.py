@@ -12,16 +12,16 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from update_banding import ExpendWrapper
-from update_banding import as_expendable
-from update_layout import SYSTEM_INTERFACE_DIR
-from update_layout import TOOL_NAME
-from update_runtime import FrontendProbe
-from update_runtime import HttpClient
-from update_runtime import Runner
-from update_runtime import Spawner
-from update_runtime import find_free_port
-from update_runtime import tail
+from update_banding import ExpendWrapper, as_expendable
+from update_layout import SYSTEM_INTERFACE_DIR, TOOL_NAME
+from update_runtime import (
+    FrontendProbe,
+    HttpClient,
+    Runner,
+    Spawner,
+    find_free_port,
+    tail,
+)
 
 # The shared post-change refresh motion, repo-relative. It owns *how* a changed
 # interface is pushed to whoever is looking; this script only decides *when*.

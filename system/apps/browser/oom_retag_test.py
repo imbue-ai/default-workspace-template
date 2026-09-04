@@ -12,8 +12,7 @@ sweeps (not just one), since the processes spawn after the triggering event.
 
 import threading
 
-from browser.oom_retag import RetagScheduler
-from browser.oom_retag import sweep_once
+from browser.oom_retag import RetagScheduler, sweep_once
 from oom_priority import bands
 
 

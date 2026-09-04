@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from host_backup.restic import extract_snapshot_id_from_backup_output
-from host_backup.restic import is_repo_locked_error
-from host_backup.restic import is_repo_missing_error
+from host_backup.restic import (
+    extract_snapshot_id_from_backup_output,
+    is_repo_locked_error,
+    is_repo_missing_error,
+)
 
 
 def test_is_repo_missing_error_matches_common_phrases() -> None:

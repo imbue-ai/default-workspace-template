@@ -20,8 +20,7 @@ import importlib.util
 import subprocess
 from http.client import InvalidURL
 from pathlib import Path
-from typing import Any
-from typing import Sequence
+from typing import Any, Sequence
 
 import pytest
 

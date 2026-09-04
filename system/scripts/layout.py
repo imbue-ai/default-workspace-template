@@ -80,8 +80,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
-from typing import Callable
+from typing import Any, Callable
 
 import tomlkit
 import yaml

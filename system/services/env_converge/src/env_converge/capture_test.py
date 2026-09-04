@@ -1,9 +1,11 @@
-from env_converge.capture import parse_cargo_install_list
-from env_converge.capture import parse_dpkg_versions
-from env_converge.capture import parse_manual_packages
-from env_converge.capture import parse_npm_global_versions
-from env_converge.capture import parse_rustup_toolchain_list
-from env_converge.capture import parse_uv_tool_versions
+from env_converge.capture import (
+    parse_cargo_install_list,
+    parse_dpkg_versions,
+    parse_manual_packages,
+    parse_npm_global_versions,
+    parse_rustup_toolchain_list,
+    parse_uv_tool_versions,
+)
 
 
 def test_parse_dpkg_versions() -> None:

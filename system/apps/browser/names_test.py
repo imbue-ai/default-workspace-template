@@ -1,4 +1,5 @@
 import pytest
+
 from browser import names
 
 

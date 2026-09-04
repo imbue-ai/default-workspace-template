@@ -9,15 +9,16 @@ from pathlib import Path
 
 import pytest
 
-from host_backup.capabilities import BackupCapabilities
-from host_backup.capabilities import SnapshotMethod
-from host_backup.snapshot import DirectSnapshotTaker
-from host_backup.snapshot import OuterTriggerSnapshotTaker
-from host_backup.snapshot import SnapshotCleanupError
-from host_backup.snapshot import SnapshotError
-from host_backup.snapshot import _list_snapshot_names
-from host_backup.snapshot import _parse_snapshot_timestamp
-from host_backup.snapshot import make_snapshot_taker
+from host_backup.capabilities import BackupCapabilities, SnapshotMethod
+from host_backup.snapshot import (
+    DirectSnapshotTaker,
+    OuterTriggerSnapshotTaker,
+    SnapshotCleanupError,
+    SnapshotError,
+    _list_snapshot_names,
+    _parse_snapshot_timestamp,
+    make_snapshot_taker,
+)
 
 # --- DirectSnapshotTaker ---
 

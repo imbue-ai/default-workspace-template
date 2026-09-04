@@ -43,28 +43,26 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from flask import Flask
-from flask import Response
-from flask import jsonify
-from flask import request
+from flask import Flask, Response, jsonify, request
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
-from browser import mediastream
-from browser import telemetry
+from browser import mediastream, telemetry
 from browser.cdp_proxy import ProxyServer
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser.session import BrowserSessionManager
-from browser.session import BrowserStartupError
-from browser.session import DuplicateBrowserNameError
-from browser.session import FleetFullError
-from browser.session import InvalidBrowserNameError
-from browser.session import LiveBrowser
-from browser.session import deferred_install_ready
-from browser.session import set_proxy_server
+from browser.session import (
+    BrowserSessionManager,
+    BrowserStartupError,
+    DuplicateBrowserNameError,
+    FleetFullError,
+    InvalidBrowserNameError,
+    LiveBrowser,
+    deferred_install_ready,
+    set_proxy_server,
+)
 from browser.wsgi import make_threaded_server
 
 # The agent-facing CDP proxy port. Fixed by default so an attach URL an agent already
