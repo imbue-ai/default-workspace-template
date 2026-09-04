@@ -128,6 +128,11 @@ def subagent_instance_key(parent_agent_id: str, session_id: str) -> InstanceKey:
 
 
 @pure
+def _parent_agent_id(subagent_key: InstanceKey) -> str:
+    return subagent_key.partition(SUBAGENT_KEY_SEPARATOR)[0]
+
+
+@pure
 def instance_record_for_subagent(key: InstanceKey, description: str) -> InstanceRecord:
     return InstanceRecord(
         key=key,
@@ -170,7 +175,8 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
 
     manager: AgentManager = Field(frozen=True, description="The agent manager the instances are read from")
     # The subagent views the parent pages asked for, by key. In memory, as the phase file
-    # says: a restart forgets them, and the parent's page recreates one on demand.
+    # says: a restart forgets them, and the parent's page recreates one on demand. A record
+    # whose parent chat is gone is dropped the next time the list is read.
     _description_by_subagent_key: dict[InstanceKey, str] = PrivateAttr(default_factory=dict)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
@@ -184,6 +190,8 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             if agent_id and agent_id not in known_ids:
                 records.append(instance_record_for_provisional_chat(agent_id, str(proto.get("name", ""))))
         with self._lock:
+            for key in [key for key in self._description_by_subagent_key if _parent_agent_id(key) not in known_ids]:
+                del self._description_by_subagent_key[key]
             subagents = list(self._description_by_subagent_key.items())
         records.extend(instance_record_for_subagent(key, description) for key, description in subagents)
         return records

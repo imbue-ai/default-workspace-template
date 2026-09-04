@@ -75,7 +75,7 @@ Per contracts 4.3's chat row, over `AgentManager`:
 - `delete_instance`: `destroy_chat_agent` for an agent; drops a subagent record; a provisional key and an unknown key are no-ops.
 - `rename_instance`: `rename_chat_agent`; a collision is a `409`; provisional and subagent keys are not renameable.
 - `set_location`: `400`.
-- Records live in memory (the manager already holds the proto agents; the source holds the subagent descriptions): a restart forgets the subagent views, and the parent's page recreates one on demand.
+- Records live in memory (the manager already holds the proto agents; the source holds the subagent descriptions): a restart forgets the subagent views, and the parent's page recreates one on demand. A subagent record whose parent chat is no longer listed is dropped the next time the list is read.
 
 ## Tests
 

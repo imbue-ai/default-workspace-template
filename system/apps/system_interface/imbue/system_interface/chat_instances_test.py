@@ -205,6 +205,23 @@ def test_delete_drops_a_subagent_record_and_ignores_unknown_keys(agent_manager: 
     assert [candidate.key for candidate in source.list_instances()] == [parent_id]
 
 
+def test_a_subagent_record_goes_with_its_destroyed_parent(agent_manager: AgentManager) -> None:
+    parent_id = _agent_id()
+    survivor_id = _agent_id()
+    _seed_agent(agent_manager, parent_id, "Chat-1")
+    _seed_agent(agent_manager, survivor_id, "Chat-2")
+    source = _source(agent_manager)
+    orphaned = source.create_instance(ActionId("subagent"), {"parent": parent_id, "session": uuid4().hex})
+    kept = source.create_instance(ActionId("subagent"), {"parent": survivor_id, "session": uuid4().hex})
+
+    agent_manager.remove_agent(parent_id)
+
+    assert [record.key for record in source.list_instances()] == [survivor_id, kept.key]
+    # A page asking for the orphan again gets a fresh record rather than the stale one.
+    with pytest.raises(InvalidParamsError):
+        source.create_instance(ActionId("subagent"), {"parent": parent_id, "session": orphaned.key.split(".")[1]})
+
+
 def test_delete_never_touches_the_primary_agent(agent_manager: AgentManager) -> None:
     primary_id = _agent_id()
     _seed_agent(agent_manager, primary_id, "services", labels={"is_primary": "true"})
