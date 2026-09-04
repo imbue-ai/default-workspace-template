@@ -1,3 +1,0 @@
-Add the minds iframe-migration spec and blueprint plan (`specs/minds-iframe-migration/spec.md`, `blueprint/minds-iframe-migration/plan-minds-iframe-migration.md`): the minds app collapses to a single web context per window with workspace content in a cross-origin iframe, covering the forward-plugin embedding substrate, the embed contract, chrome unification, the Electron collapse, and the cross-repo testing strategy.
-
-The `minds-launch-to-msg` workflow's `macos_launch` job now also runs the new renderer-contract Playwright specs (`embed-flow`, `local-swap`, `recovery-redirect`, `landing-stopped-mind-restart`), which drive the real shell scripts in a plain chromium against a local harness server.

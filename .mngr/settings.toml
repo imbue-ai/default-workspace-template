@@ -574,7 +574,7 @@ type = "main"
 extra_window = ["bootstrap='uv run bootstrap'"]
 # Write a sane default tmux config on every minds host. tuple-typed
 # `extra_provision_command` stacks across templates (see
-# `apply_create_template` in system/vendor/mngr/.../common_opts.py), so the
+# `apply_create_template` in mngr's cli/common_opts.py), so the
 # mode-specific templates (docker/lima/...) keep their own commands.
 #
 # `mouse on` keeps wheel scroll and in-app mouse working in the browser

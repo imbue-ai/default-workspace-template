@@ -1,1 +1,0 @@
-README correction: the frps server plugin subscribes to `Login` / `NewProxy` / `Ping` (the `Ping` heartbeat op has been active since the 0.4.2 relay redeploys); the doc previously claimed `Login` / `NewProxy` only.

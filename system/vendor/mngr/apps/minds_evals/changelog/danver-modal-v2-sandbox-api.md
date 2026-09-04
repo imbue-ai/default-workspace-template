@@ -1,1 +1,0 @@
-Updated a stale comment in `pyproject.toml`: the monorepo workspace now pins `modal==1.5.4` (which satisfies harbor's `modal>=1.5.1` floor), so the sole remaining reason this project resolves against its own lock is the `rich<14` conflict.

@@ -27,8 +27,9 @@ Examine each changed setting and best-effort make it live. Lean hard toward
 applying live: most settings have a live counterpart, and "it's fiddly" is not
 a reason to defer -- only a genuine lack of any live lever is.
 
-**Ground every apply in how `system/vendor/mngr` consumes the setting.** For
-each changed key, grep `system/vendor/mngr` for its name to find exactly where
+**Ground every apply in how mngr consumes the setting.** For each changed key,
+grep mngr's source for its name -- the installed packages under the mngr tool's
+`site-packages`, or the pinned commit of https://github.com/imbue-ai/mngr -- to find exactly where
 mngr reads and enacts it at create time, then mirror *that* mechanism (a
 `commands.create` `host_env__extend` change: find where mngr turns those
 entries into the agent container's environment, and set them live in the same

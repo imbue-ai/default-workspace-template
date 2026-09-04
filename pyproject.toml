@@ -29,7 +29,7 @@ dev = [
     "tomlkit>=0.12",
     "pyyaml>=6",
     # used by test_mngr_template_stacking.py to verify .mngr/settings.toml
-    # composes correctly with system/vendor/mngr's apply_create_template logic
+    # composes correctly with mngr's apply_create_template logic
     "imbue-mngr",
     # imbue-mngr-claude isn't imported by any /home/user/workspace/ python -- it's here so
     # `uv sync --all-packages` registers it in /home/user/workspace/.venv. Without it,
@@ -128,7 +128,6 @@ norecursedirs = [
 timeout_func_only = true
 addopts = [
     "--timeout=10",
-    "--ignore=system/vendor/mngr",
     "--ignore=system/vendor/tk",
     # system/apps/system_interface has its own pytest config (coverage, slow-test reporting,
     # ratchets) that conflicts with the root config; it is run from inside its own dir.
@@ -142,7 +141,7 @@ addopts = [
 
 [tool.ruff]
 target-version = "py311"
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface"]
+exclude = ["system/vendor/tk", "system/apps/system_interface"]
 
 [tool.ruff.lint]
 select = ["F", "I", "UP006", "UP007"]
@@ -151,4 +150,4 @@ select = ["F", "I", "UP006", "UP007"]
 pythonVersion = "3.11"
 # apps and skills are the top-level discoverability symlinks; excluding them
 # keeps pyright from analyzing the same files twice via the symlink paths.
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface", "apps", "skills"]
+exclude = ["system/vendor/tk", "system/apps/system_interface", "apps", "skills"]

@@ -85,12 +85,14 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # failure this whole detector exists to prevent.
 #
 # The imported-source prefixes are every workspace tree this process runs code
-# from: its own backend, the vendored mngr (imported in-process and shelled
-# out to), the OOM banding library (``agent_manager``, ``oom_prioritizer``) and
-# the tk command parser (the claude/codex/pi-coding tool labels). All are
-# editable installs resolving straight into these trees, so the moment one
-# advances this process is running old code. ``test_every_imported_workspace_
-# package_is_covered`` holds this list to the app's actual dependencies.
+# from: its own backend, the OOM banding library (``agent_manager``,
+# ``oom_prioritizer``) and the tk command parser (the claude/codex/pi-coding tool
+# labels). All are editable installs resolving straight into these trees, so the
+# moment one advances this process is running old code. mngr (imported in-process
+# and shelled out to) is installed from the commit pyproject.toml pins, so a move
+# of that pin reaches this list through the root manifests below.
+# ``test_every_imported_workspace_package_is_covered`` holds this list to the
+# app's actual dependencies.
 _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
 _VENDORED_MNGR_PREFIX = "system/vendor/mngr/"
 _IMPORTED_SOURCE_PREFIXES = (

@@ -1,7 +1,0 @@
-Route every Claude model through a single pattern entry (`model_name: "claude-*"` forwarding to `anthropic/claude-*`) instead of enumerating one entry per model. A client's bare model name (`claude-opus-5`) now routes upstream as `anthropic/claude-opus-5`, so a newly released Claude model is usable the day it ships with no config change and no deploy. This is what makes Claude Opus 5 available to workspaces signed in with "Sign in with Imbue"; it also fixes `claude-sonnet-5`, which the workspace composer already offers but the proxy did not route.
-
-The pattern is scoped to `claude-*` rather than a bare `*` because this proxy holds only an Anthropic credential: a non-Claude model name should fail here as an unknown model rather than be forwarded to Anthropic and return a confusing upstream error.
-
-Inline per-token pricing is removed with it. litellm fetches its `model_prices_and_context_window` map remotely at startup and bills from that, and the map carries dimensions a single inline price cannot express: the fast-mode premium (2x on Opus 5 and Opus 4.8), the regional-processing uplift, and the 1-hour cache-write rate (2x base, against the 1.25x 5-minute rate a lone inline field assumes). The inline table was therefore not just redundant but systematically low on fast-mode and 1-hour-cached traffic.
-
-The proxy-to-`mngr_usage` drift test is removed as part of this: with no inline prices there is nothing to compare. `mngr_usage`'s own table is now pinned directly against litellm's map instead.

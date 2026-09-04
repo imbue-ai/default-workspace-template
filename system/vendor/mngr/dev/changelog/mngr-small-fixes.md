@@ -1,1 +1,0 @@
-Removed the `just backfill-autostart` recipe: the one-time reboot-resilience backfill sweep it wrapped (`minds-admin server backfill-autostart`) has been removed now that the fleet-wide rollout completed at minds-v0.3.17.
