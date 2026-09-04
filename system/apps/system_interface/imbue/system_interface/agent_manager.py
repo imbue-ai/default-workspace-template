@@ -947,9 +947,18 @@ class AgentManager:
         recorded, which makes it safe on every discovery pass and restart.
         Called outside ``_lock``: the registry has its own lock and may write a
         file.
+
+        Also a no-op for a hidden agent: the only hidden agents are a harness
+        switch's candidates, which are nobody's chat until ``begin_segment``
+        re-points the chat at them. Recording one here would give it a chat of its
+        own id, and that record would then compete with the real one for the same
+        active agent.
         """
         if not _is_chat_agent(labels):
             return
+        with self._lock:
+            if agent_id in self._hidden_agent_ids:
+                return
         self._chat_registry.ensure_chat(
             ChatId(agent_id), agent_id=agent_id, harness=harness, account_id=labels.get("account")
         )

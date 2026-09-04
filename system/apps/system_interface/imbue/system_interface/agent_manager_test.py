@@ -1576,6 +1576,33 @@ def test_get_agents_serialized_stamps_the_chat_id_and_hides_a_switch_candidate(
     assert by_id["a1"]["chat_id"] is None
 
 
+def test_discovering_a_switch_candidate_does_not_record_it_as_a_chat(agent_manager: AgentManager) -> None:
+    """The bootstrap must leave a hidden candidate alone until the chat is re-pointed.
+
+    ``mngr create`` registers the candidate well before it returns, so discovery sees a
+    chat-labelled agent with no record. Recording one would give it a chat of its own
+    id, and that record would then compete with the real chat for the same active agent
+    -- which is what made the chat's id appear to change at the commit point.
+    """
+    _tracked_chat(agent_manager, "a1", "Chat-2", display_name="Chat 2")
+    _tracked_chat(agent_manager, "a2", "Chat-2-h2", display_name="Chat 2")
+    agent_manager.chat_registry.ensure_chat(ChatId("a1"), "a1", HarnessType.CLAUDE, None)
+    agent_manager.set_agent_hidden("a2", True)
+
+    agent_manager._ensure_chat_recorded("a2", {"display_name": "Chat 2"}, HarnessType.CODEX)
+
+    assert agent_manager.chat_registry.get(ChatId("a2")) is None
+    assert agent_manager.chat_registry.chat_id_by_active_agent() == {"a1": ChatId("a1")}
+
+    # And once the commit point has moved the chat onto it, a later pass is still a no-op.
+    agent_manager.chat_registry.begin_segment(ChatId("a1"), "a2", HarnessType.CODEX, None)
+    agent_manager.set_agent_hidden("a2", False)
+    agent_manager._ensure_chat_recorded("a2", {"display_name": "Chat 2"}, HarnessType.CODEX)
+
+    assert agent_manager.chat_registry.get(ChatId("a2")) is None
+    assert agent_manager.chat_registry.chat_id_by_active_agent() == {"a2": ChatId("a1")}
+
+
 def test_get_agents_serialized_reports_the_switch_in_flight(agent_manager: AgentManager) -> None:
     """Progress lives on the backend so every client rebuilds it, not just the clicker."""
     _tracked_chat(agent_manager, "a1", "Chat-2", display_name="Chat 2")
