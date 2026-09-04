@@ -36,7 +36,13 @@ import {
 } from "dockview-core";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { requestTerminalFocus } from "./terminalFocus";
-import { CHAT_FRAME_SANDBOX, IframePanel, IFRAME_PANEL_LIVE_KEY_ATTR, reloadIframesForService } from "./IframePanel";
+import {
+  CHAT_FRAME_SANDBOX,
+  IframePanel,
+  IFRAME_PANEL_LIVE_KEY_ATTR,
+  IFRAME_PANEL_SERVICE_NAME_ATTR,
+  reloadIframesForService,
+} from "./IframePanel";
 import {
   BROWSER_SERVICE_NAME,
   bindSlot,
@@ -3273,9 +3279,10 @@ function activatePanelForChildFrame(frame: HTMLIFrameElement): void {
 
 /**
  * ``shell:open`` from a page (contracts.md section 10): dock an instance of the posting
- * frame's app beside it, or focus the tab already showing it. In this phase the chat app is
- * the one app whose pages ask, and its addresses resolve to the chat and subagent panels the
- * dock already knows how to open; phase 7 makes this generic over the inventory.
+ * frame's app beside it, or focus the tab already showing it. The address must name the
+ * posting frame's own app. In this phase the chat app is the one app whose pages ask, and
+ * its addresses resolve to the chat and subagent panels the dock already knows how to open;
+ * phase 7 makes this generic over the inventory.
  * CLEANUP: the ``title`` hint goes with phase 7, which titles tabs from the instances API.
  */
 function openInstanceForChildFrame(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
@@ -3284,6 +3291,13 @@ function openInstanceForChildFrame(frame: HTMLIFrameElement, payload: Record<str
   const instanceKey = chatInstanceKeyFromAddress(address);
   if (instanceKey === null) {
     console.warn(`[si] shell:open ignored: ${address} is not an address of the chat app`);
+    return;
+  }
+  const postingApp = frame.getAttribute(IFRAME_PANEL_SERVICE_NAME_ATTR);
+  if (postingApp !== CHAT_SERVICE_NAME) {
+    console.warn(
+      `[si] shell:open ignored: ${address} does not name the posting frame's app (${postingApp ?? "none"})`,
+    );
     return;
   }
   const titleHint = typeof payload.title === "string" && payload.title !== "" ? payload.title : null;
