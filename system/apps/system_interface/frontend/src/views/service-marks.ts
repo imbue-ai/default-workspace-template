@@ -1,13 +1,14 @@
 /**
  * The bundled brand mark for a permission scope's service.
  *
- * The artwork is minds' own service-icon set, reached through the vendored mngr
- * tree rather than copied into this repo a second time: `system/vendor/mngr` is
- * a snapshot of the mngr monorepo refreshed by the release sync, and the same
- * seam already supplies this frontend with the embed contract (see the alias in
- * vite.config.ts). Globbing it means the two surfaces cannot drift, and the
- * marks become ordinary build assets -- so the card needs no network round trip
- * and looks the same embedded in the minds app and opened directly in a browser.
+ * The artwork is minds' own service-icon set, fetched at build time from the mngr
+ * commit pyproject.toml pins rather than copied into this repo a second time
+ * (system/scripts/fetch_mngr_assets.sh, run by this package's prebuild), and the
+ * same fetch already supplies this frontend with the embed contract (see the
+ * alias in vite.config.ts). Globbing it means the two surfaces cannot drift, and
+ * the marks become ordinary build assets -- so the card needs no network round
+ * trip and looks the same embedded in the minds app and opened directly in a
+ * browser.
  *
  * A scope is a latchkey service name plus a transport suffix (`slack-api`,
  * `google-gmail-api`, `github-rest-api`), and the mark files are keyed by that
@@ -25,7 +26,10 @@
 // `no-inline` keeps each mark an emitted file instead of a data URI folded into
 // the bundle: only the one mark a card actually shows is ever fetched.
 const MARK_MODULES = import.meta.glob<string>(
-  ["../../../../../vendor/mngr/apps/minds/imbue/minds/desktop_client/static/service_icons/*.svg", "!**/*-on-dark.svg"],
+  [
+    "../../../../../vendor/mngr-assets/apps/minds/imbue/minds/desktop_client/static/service_icons/*.svg",
+    "!**/*-on-dark.svg",
+  ],
   { eager: true, query: "?url&no-inline", import: "default" },
 );
 

@@ -1,3 +1,0 @@
-Add the `pool_gauge_sweep` cron (every 5 minutes; `POST /admin/sweep/pool-gauges` on demand): emits `pool_hosts_count` per (status, template branch, region) -- zero-filled so drained series report 0 instead of going stale -- plus per-region `pool_slots_total` / `pool_slots_used` slot-capacity gauges and a `pool_gauge_sweep_ok` heartbeat, all as metric log records flowing into the tier's OpenObserve for the fleet-version dashboards.
-
-Each `/hosts/lease` / `/hosts/claim` attempt that reaches host selection now also emits one `host_lease_request` metric record tagged with its outcome (`leased` / `pool_exhausted` / `no_host_keys` / `injection_failed`) and the requested region and branch (client-supplied tag values are clamped so they cannot mint arbitrary metric series).

@@ -20,10 +20,12 @@ SYSTEM_INTERFACE_DIR = "system/apps/system_interface"
 
 FRONTEND_DIR = f"{SYSTEM_INTERFACE_DIR}/frontend"
 
-# The vendored mngr the workspace runs on, and the uv tool built from it. An
-# editable install pins the *source path*, not the dependency closure -- so the
-# moment a merge advances this tree, the ``mngr`` CLI starts running new code
-# against whatever was resolved for the old code.
+# mngr is installed from the public repo at the commit pyproject.toml pins in
+# [tool.uv.sources]; that pin is the one place the workspace's mngr version lives.
+# A merge that moves it shows up as a pyproject.toml / uv.lock change, which is
+# already a manifest change, so the refresh below re-resolves both tools.
+PYPROJECT_PATH = "pyproject.toml"
+
 MNGR_VENDOR_DIR = "system/vendor/mngr"
 
 MNGR_DIR = f"{MNGR_VENDOR_DIR}/libs/mngr"

@@ -73,26 +73,6 @@ COPY system/services/share_gateway/pyproject.toml /home/user/workspace/system/se
 COPY system/libs/github_sync/pyproject.toml /home/user/workspace/system/libs/github_sync/pyproject.toml
 COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/apps/system_interface/pyproject.toml
 
-# system/vendor/mngr path-dependency manifests. The root pyproject.toml's
-# [tool.uv.sources] points imbue-common, imbue-mngr, imbue-mngr-claude,
-# imbue-mngr-codex, imbue-mngr-pi-coding,
-# resource-guards, and concurrency-group at
-# system/vendor/mngr/libs/<pkg>; uv needs each pyproject.toml present to
-# resolve the workspace. mngr_modal and mngr_wait are also workspace members
-# whose transitive deps benefit from pre-warming even though only mngr_wait
-# is registered post-COPY (as a mngr plugin, not a tool install).
-COPY system/vendor/mngr/libs/imbue_common/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/imbue_common/pyproject.toml
-COPY system/vendor/mngr/libs/mngr/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_claude/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_claude/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_codex/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_codex/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_opencode/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_opencode/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_antigravity/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_antigravity/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_modal/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_wait/pyproject.toml
-COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml
-COPY system/vendor/mngr/libs/concurrency_group/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/concurrency_group/pyproject.toml
-
 # Frontend npm manifest (lockfile + package.json) -- install needs only these.
 COPY system/apps/system_interface/frontend/package.json system/apps/system_interface/frontend/package-lock.json /home/user/workspace/system/apps/system_interface/frontend/
 

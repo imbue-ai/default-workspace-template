@@ -117,9 +117,10 @@ question of who depends on the file.
 
 Exploration work, for every changed `system/scripts/**`, `system/libs/**`,
 `system/services/**`, `system/apps/**`, `system/vendor/**`, and `.agents/**`
-path. The vendored mngr is the largest surface an update moves; its changelog
-directories (`system/vendor/mngr/**/changelog/`) announce removed behavior in
-prose that no test failure surfaces -- read the merged entries and grep the
+path. A move of the mngr pin (`pyproject.toml`, `[tool.uv.sources]`) is the
+largest surface an update moves; mngr's changelog entries between the two
+commits announce removed behavior in prose that no test failure surfaces --
+read them (in the public repo at https://github.com/imbue-ai/mngr) and grep the
 workspace for every name they retire (an environment variable, a port, a
 command).
 
@@ -161,7 +162,7 @@ live-applicable, rebuild-only, or `stuck`.
 - **Suites, lint, ratchets** for each project in `projects_to_validate`: root
   `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
   its own `uv run pytest` (and `npm run lint && npm run test` when the
-  frontend merged); `system/vendor/mngr` its own `uv run pytest`.
+  frontend merged). mngr's own suite runs in its repo, not here.
 - **Isolated-service boots** for each impacted service, against a scratch
   data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
   `update-app`), never the live store. This runs on the host's global

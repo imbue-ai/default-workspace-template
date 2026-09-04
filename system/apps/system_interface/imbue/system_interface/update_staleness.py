@@ -79,20 +79,18 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # served bundle is rebuilt on disk without a restart), docs, skills, tests, or
 # anything else agents routinely commit. (The update apply itself restarts the
 # services agent on every apply, so it keeps no such rule; this one exists for
-# a tree moved by anything else.) The vendored mngr is read at runtime through
-# more than its ``.py`` files (this process both imports it and shells out to
-# it), so everything there but docs and tests counts -- a missed skew is the
-# failure this whole detector exists to prevent.
+# a tree moved by anything else.)
 #
 # The imported-source prefixes are every workspace tree this process runs code
-# from: its own backend, the vendored mngr (imported in-process and shelled
-# out to), the OOM banding library (``agent_manager``, ``oom_prioritizer``) and
-# the tk command parser (the claude/codex/pi-coding tool labels). All are
-# editable installs resolving straight into these trees, so the moment one
-# advances this process is running old code. ``test_every_imported_workspace_
-# package_is_covered`` holds this list to the app's actual dependencies.
+# from: its own backend, the OOM banding library (``agent_manager``,
+# ``oom_prioritizer``) and the tk command parser (the claude/codex/pi-coding tool
+# labels). All are editable installs resolving straight into these trees, so the
+# moment one advances this process is running old code. mngr (imported in-process
+# and shelled out to) is installed from the commit pyproject.toml pins, so a move
+# of that pin reaches this list through the root manifests below.
+# ``test_every_imported_workspace_package_is_covered`` holds this list to the
+# app's actual dependencies.
 _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
-_VENDORED_MNGR_PREFIX = "system/vendor/mngr/"
 _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
     "system/services/oom_priority/",
@@ -119,8 +117,6 @@ def _is_path_relevant_to_this_server(path: str) -> bool:
     """Whether a change to ``path`` leaves this running server stale."""
     if path == _LIVE_SETTINGS_FILE or path in _BACKEND_MANIFESTS:
         return True
-    if path.startswith(_VENDORED_MNGR_PREFIX):
-        return not path.endswith(".md") and not _is_test_file(path)
     if path.startswith(_IMPORTED_SOURCE_PREFIXES):
         return path.endswith(".py") and not _is_test_file(path)
     return False
@@ -178,7 +174,7 @@ def _read_changed_paths(repo_root: Path, since_head: str) -> list[str] | None:
     like :func:`_read_head`, everything degrades to "no banner".
     """
     # ``-z``: without it git C-quotes any path with a non-ASCII byte
-    # (``"system/vendor/mngr/.../l\303\257st.py"``), which then starts with a
+    # (``"system/apps/system_interface/.../l\303\257st.py"``), which then starts with a
     # quote and matches no prefix rule.
     output = _read_git(["git", "diff", "--name-only", "-z", since_head, "HEAD"], repo_root)
     if output is None:

@@ -386,3 +386,7 @@ system/scripts/notify_user.local.sh
 # the app or its tests)
 system/apps/system_interface/frontend/permission-demo.html
 system/apps/system_interface/frontend/src/permission-demo.ts
+
+# Fetched at build time from the pinned mngr commit by system/scripts/fetch_mngr_assets.sh.
+system/vendor/mngr-assets/
+system/vendor/mngr-assets.tmp/

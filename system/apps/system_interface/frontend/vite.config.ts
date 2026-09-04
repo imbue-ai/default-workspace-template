@@ -25,12 +25,13 @@ export default defineConfig({
   resolve: {
     alias: {
       // The minds embed contract -- the single sanctioned postMessage channel
-      // between this UI and the embedding minds chrome -- is consumed from the
-      // vendored mngr tree so both sides always ship from one source of truth.
+      // between this UI and the embedding minds chrome -- is fetched from the
+      // mngr commit pyproject.toml pins (system/scripts/fetch_mngr_assets.sh, run
+      // by this package's prebuild) so both sides always ship from one source.
       // Types come from src/embed-contract.d.ts; keep the two in sync.
       "@minds/embed-contract": path.resolve(
         __dirname,
-        "../../../vendor/mngr/apps/minds/imbue/minds/desktop_client/static/embed_contract.js",
+        "../../../vendor/mngr-assets/apps/minds/imbue/minds/desktop_client/static/embed_contract.js",
       ),
     },
   },

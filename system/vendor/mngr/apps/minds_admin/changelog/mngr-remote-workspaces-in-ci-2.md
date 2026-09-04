@@ -1,5 +1,0 @@
-Add `minds-admin pool warm-cache` (phase 2 of specs/remote-workspaces-in-ci.md): a DB-write-free, seed-only verb that pre-warms a bare-metal box's content-addressed image cache. It exits 0 immediately when the box already holds the tar for the derived content tag; otherwise it carves one throwaway slice under the reserved `ci-warm` pseudo-env label, lets the existing seed path build and publish the box tar, and destroys the slice unconditionally (the age-based CI slice sweep reclaims one a killed invocation leaks).
-
-`minds-admin pool create` now also skips its seed-first phase when another seeder already holds the tag's build lock (e.g. the CI warm job mid-build), so the fan-out slices block on the in-flight seed's tar instead of serializing one slice behind that same wait.
-
-The deployment-tests orchestrator gains a `warm-pool-cache` command (the CI warm job's entrypoint) that selects the same box the bake stage will select via the shared deterministic rule, and `bake-pool` now sizes the bake fan-out's `--max-concurrency` to the slice count (capped at 8) so the default roster bakes in one wave.

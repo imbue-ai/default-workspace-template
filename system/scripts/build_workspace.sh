@@ -40,6 +40,10 @@ cd "$REPO_ROOT"
 # refuse on an ownership mismatch.
 git config --global --add safe.directory "$REPO_ROOT"
 
+# An mngr checkout dropped at system/vendor/mngr (untracked) takes over from the
+# public-repo commit pyproject.toml pins: everything below reads the rewritten file.
+python3 "$REPO_ROOT/system/scripts/use_local_mngr.py" "$REPO_ROOT"
+
 # Build the system_interface frontend (deps installed by install_dependencies.sh).
 ( cd "$REPO_ROOT/system/apps/system_interface/frontend" && npm run build )
 
@@ -48,19 +52,7 @@ git config --global --add safe.directory "$REPO_ROOT"
 # system/config/mngr_plugins.toml, which the update-self apply reads too, so a
 # release adding a plugin registers it in existing workspaces as well as here.
 # mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
-SI_PLUGIN_ARGS=()
-while IFS= read -r plugin_path; do
-    SI_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
-done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool system-interface --repo-root "$REPO_ROOT")
-MNGR_PLUGIN_ARGS=()
-while IFS= read -r plugin_path; do
-    MNGR_PLUGIN_ARGS+=(--path "$plugin_path")
-done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --repo-root "$REPO_ROOT")
-
-uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
-uv tool install -e "$REPO_ROOT/system/apps/system_interface" "${SI_PLUGIN_ARGS[@]}"
-
-mngr plugin add "${MNGR_PLUGIN_ARGS[@]}"
+bash "$REPO_ROOT/system/scripts/build_mngr_tools.sh"
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.

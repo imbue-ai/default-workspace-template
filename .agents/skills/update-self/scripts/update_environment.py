@@ -10,8 +10,10 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from update_apply_contract import SnapshotRecord, snapshots_root
 from update_banding import ExpendWrapper
@@ -19,11 +21,11 @@ from update_classification import ApplyPlan
 from update_layout import (
     FRONTEND_DIR,
     MANIFEST_TOOL_NAMES,
-    MNGR_DIR,
     MNGR_EXECUTABLE,
     MNGR_TOOL_NAME,
     PLUGIN_MANIFEST_PATH,
     PROVISIONER_HOME,
+    PYPROJECT_PATH,
     PROVISIONER_PATH,
     PROVISIONER_SCRIPT,
     RECEIPT,
@@ -31,7 +33,7 @@ from update_layout import (
     SYSTEM_INTERFACE_DIR,
     TOOL_NAME,
 )
-from update_runtime import Runner, run_checked, tail
+from update_runtime import ApplyFailed, Runner, run_checked, tail
 
 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 1200.0
 
@@ -284,6 +286,106 @@ def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     return env
 
 
+_GIT_REF_QUERY_KEYS = frozenset({"rev", "tag", "branch"})
+_GIT_SUBDIRECTORY_QUERY_KEY = "subdirectory"
+
+
+def _format_git_url(url: str) -> str:
+    """Rewrite a git URL from uv's receipt form into the form ``uv tool install`` accepts.
+
+    Input, as uv writes it into uv-receipt.toml:
+    ``https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=v0.2.17``
+    Output, as ``uv tool install`` reads it back:
+    ``https://github.com/imbue-ai/mngr@v0.2.17#subdirectory=libs/mngr``
+    """
+    parsed = urlsplit(url)
+    params = parse_qsl(parsed.query, keep_blank_values=True)
+    ref = next((value for key, value in params if key in _GIT_REF_QUERY_KEYS), None)
+    subdirectory = next((value for key, value in params if key == _GIT_SUBDIRECTORY_QUERY_KEY), None)
+    if ref is None and subdirectory is None:
+        return url
+    # uv only honors "@<ref>" directly after the path; anywhere else it is silently
+    # ignored and the default branch is installed, e.g. "repo?foo=bar@v0.2.17" ignores @v0.2.17.
+    path = parsed.path if ref is None else f"{parsed.path}@{ref}"
+    rewritten = [(key, value) for key, value in params if key not in _GIT_REF_QUERY_KEYS and key != _GIT_SUBDIRECTORY_QUERY_KEY]
+    subdirectory_fragment = "" if subdirectory is None else f"{_GIT_SUBDIRECTORY_QUERY_KEY}={subdirectory}"
+    fragment = "&".join(part for part in (parsed.fragment, subdirectory_fragment) if part)
+    return urlunsplit((parsed.scheme, parsed.netloc, path, urlencode(rewritten), fragment))
+
+
+_MNGR_SUBDIRECTORY = Path("libs/mngr")
+
+
+@dataclass(frozen=True)
+class _GitPin:
+    """mngr comes from a git repo at a fixed commit."""
+
+    git_url: str
+    rev: str
+
+    def requirement(self, package: str, subdirectory: str) -> str:
+        return f"{package} @ git+{self.git_url}@{self.rev}#subdirectory={subdirectory}"
+
+
+@dataclass(frozen=True)
+class _LocalTree:
+    """mngr comes from a local checkout, installed editable; ``root`` is the checkout's top."""
+
+    root: Path
+
+
+def _mngr_source(repo_root: Path) -> _GitPin | _LocalTree | None:
+    """Where the merged tree's pyproject.toml says ``imbue-mngr`` comes from.
+
+    ``[tool.uv.sources]`` gives it as either a git commit
+    (``{ git = "...", rev = "<commit>", subdirectory = "libs/mngr" }``) or, in a
+    checkout pointed at a local mngr tree, an editable path
+    (``{ path = "<checkout>/libs/mngr", editable = true }``).
+
+    ``None`` when the source cannot be read; callers degrade to a warning because this
+    also runs on the rollback path, where a raised error would escape the apply's
+    last line of defense.
+    """
+    pyproject = repo_root / PYPROJECT_PATH
+    try:
+        source = tomllib.loads(pyproject.read_text()).get("tool", {}).get("uv", {}).get("sources", {}).get(MNGR_TOOL_NAME)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    if not isinstance(source, dict):
+        return None
+    if "git" in source and "rev" in source:
+        return _GitPin(git_url=str(source["git"]), rev=str(source["rev"]))
+    if "path" in source and source.get("editable") is True:
+        lib = Path(str(source["path"]))
+        if lib.parts[-len(_MNGR_SUBDIRECTORY.parts) :] != _MNGR_SUBDIRECTORY.parts:
+            return None
+        root = lib.parents[len(_MNGR_SUBDIRECTORY.parts) - 1]
+        return _LocalTree(root=root if root.is_absolute() else (repo_root / root).resolve())
+    return None
+
+
+def _mngr_base_arguments(repo_root: Path) -> list[str]:
+    """The positional arguments that reinstall the mngr tool from the merged tree's source."""
+    source = _mngr_source(repo_root)
+    if source is None:
+        raise ApplyFailed(
+            f"{PYPROJECT_PATH} does not give {MNGR_TOOL_NAME} a source in [tool.uv.sources] "
+            '(expected { git = "...", rev = "<commit>", subdirectory = "libs/mngr" } or '
+            '{ path = "<checkout>/libs/mngr", editable = true }); '
+            "the mngr tool cannot be re-resolved without it"
+        )
+    if isinstance(source, _GitPin):
+        return [source.requirement(MNGR_TOOL_NAME, _MNGR_SUBDIRECTORY.as_posix())]
+    return ["-e", str(source.root / _MNGR_SUBDIRECTORY)]
+
+
+def _plugin_extra(source: _GitPin | _LocalTree, package: str, subdirectory: str) -> list[str]:
+    """The ``--with`` / ``--with-editable`` pair that adds one manifest plugin from ``source``."""
+    if isinstance(source, _GitPin):
+        return ["--with", source.requirement(package, subdirectory)]
+    return ["--with-editable", str(source.root / subdirectory)]
+
+
 def _tool_extras(
     tool_name: str, repo_root: Path, runner: Runner, env: dict
 ) -> list[str]:
@@ -328,7 +430,7 @@ def _tool_extras(
         if editable:
             extras.extend(["--with-editable", editable])
         elif requirement.get("git"):
-            extras.extend(["--with", f"{name} @ git+{requirement['git']}"])
+            extras.extend(["--with", f"{name} @ git+{_format_git_url(requirement['git'])}"])
         elif requirement.get("specifier"):
             extras.extend(["--with", f"{name}{requirement['specifier']}"])
         else:
@@ -337,7 +439,7 @@ def _tool_extras(
 
 
 def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
-    """The ``--with-editable`` args ``PLUGIN_MANIFEST_PATH`` assigns to ``tool_name``.
+    """The ``--with``/``--with-editable`` args ``PLUGIN_MANIFEST_PATH`` assigns to ``tool_name``, from the merged tree's mngr source.
 
     Empty for a tree that predates the manifest (a rollback re-refreshes the
     restored tree, and the receipt alone was that tree's whole answer).
@@ -363,14 +465,18 @@ def _manifest_extras(tool_name: str, repo_root: Path) -> list[str]:
             manifest_path, "its 'plugins' key is not a list of tables"
         )
         return []
+    source = _mngr_source(repo_root)
+    if source is None:
+        _warn_manifest_unread(manifest_path, f"{PYPROJECT_PATH} does not give {MNGR_TOOL_NAME} a source")
+        return []
     tool = MANIFEST_TOOL_NAMES.get(tool_name, tool_name)
     extras: list[str] = []
     for entry in entries:
-        if not isinstance(entry, dict) or not entry.get("path"):
-            _warn_manifest_unread(manifest_path, "it lists a plugin with no path")
+        if not isinstance(entry, dict) or not entry.get("package") or not entry.get("subdirectory"):
+            _warn_manifest_unread(manifest_path, "it lists a plugin with no package or subdirectory")
             continue
         if tool in entry.get("tools", []):
-            extras.extend(["--with-editable", str(repo_root / str(entry["path"]))])
+            extras.extend(_plugin_extra(source, str(entry["package"]), str(entry["subdirectory"])))
     return extras
 
 
@@ -389,15 +495,35 @@ def _warn_manifest_unread(manifest_path: Path, why: str) -> None:
     )
 
 
+def _extra_key(flag: str, target: str) -> str:
+    """What makes two extras the same package: its name, from a ``--with`` requirement or
+    an editable path's ``pyproject.toml``; the path itself when that has no name."""
+    if flag == "--with":
+        for separator in (" @ ", "==", ">=", "<=", "~=", "!=", ">", "<", ";", "["):
+            if separator in target:
+                return _canonical(target.split(separator, 1)[0].strip())
+        return _canonical(target.strip())
+    try:
+        name = tomllib.loads((Path(target) / PYPROJECT_PATH).read_text()).get("project", {}).get("name")
+    except (OSError, tomllib.TOMLDecodeError):
+        name = None
+    return _canonical(name) if isinstance(name, str) and name else target
+
+
 def _merge_extras(*extra_lists: list[str]) -> list[str]:
-    """Concatenate ``--with``/``--with-editable`` pairs, dropping repeats of a target."""
+    """Concatenate ``--with``/``--with-editable`` pairs, keeping the first of each package.
+
+    Order the lists so the one that should win comes first: the merged tree's manifest
+    carries the new pin, the receipt the old one, and both name the same plugins.
+    """
     merged: list[str] = []
     seen: set[str] = set()
     for extras in extra_lists:
         for flag, target in zip(extras[::2], extras[1::2]):
-            if target in seen:
+            key = _extra_key(flag, target)
+            if key in seen:
                 continue
-            seen.add(target)
+            seen.add(key)
             merged.extend([flag, target])
     return merged
 
@@ -418,15 +544,16 @@ def _canonical(name: str) -> str:
 def _reinstall_tool(
     tool_name: str,
     executable: str,
-    source_dir: str,
+    base: list[str],
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
     timeout: float | None = None,
 ) -> None:
-    """Re-resolve the installed ``executable``'s tool from its in-tree source,
-    keeping the extras it was installed with and adding the merged tree's own
-    plugin manifest.
+    """Re-resolve the installed ``executable``'s tool from ``base`` -- ``["-e", <dir>]``
+    for an in-tree app or a local mngr tree, or a single git requirement for a pinned
+    mngr -- keeping the extras it
+    was installed with and adding the merged tree's own plugin manifest.
 
     ``expend`` gates the expendable tag: a forward install may be shed (the
     rollback restores the tool-environment snapshot), a recovery install must
@@ -437,11 +564,10 @@ def _reinstall_tool(
         "uv",
         "tool",
         "install",
-        "-e",
-        source_dir,
+        *base,
         *_merge_extras(
-            _tool_extras(tool_name, repo_root, runner, env),
             _manifest_extras(tool_name, repo_root),
+            _tool_extras(tool_name, repo_root, runner, env),
         ),
         "--reinstall",
     ]
@@ -462,15 +588,13 @@ def refresh_backend_dependencies(
     timeout: float | None = None,
 ) -> None:
     """Re-resolve the three backend environments from the current tree,
-    mirroring ``build_workspace.sh``: the vendored ``mngr`` tool, the
-    ``system-interface`` tool, and the workspace venv (``uv sync``).
-    ``timeout`` bounds each of the three (the forward apply's budget; recovery
-    passes none)."""
+    mirroring ``build_workspace.sh``: the ``mngr`` tool from the source
+    pyproject.toml gives it, the ``system-interface`` tool, and the workspace venv
+    (``uv sync``). ``timeout`` bounds each of the three (the forward apply's
+    budget; recovery passes none)."""
+    _reinstall_tool(MNGR_TOOL_NAME, MNGR_EXECUTABLE, _mngr_base_arguments(repo_root), repo_root, runner, expend, timeout)
     _reinstall_tool(
-        MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner, expend, timeout
-    )
-    _reinstall_tool(
-        TOOL_NAME, TOOL_NAME, SYSTEM_INTERFACE_DIR, repo_root, runner, expend, timeout
+        TOOL_NAME, TOOL_NAME, ["-e", SYSTEM_INTERFACE_DIR], repo_root, runner, expend, timeout
     )
     run_checked(
         runner,
