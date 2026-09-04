@@ -29,6 +29,11 @@ must make as `gate` reports and stop; end the run with a terminal `done` or
 `stuck` status. The operation reference names the exact gate and
 status values its flow uses.
 
+## Parallelism
+
+Write tests and optimize in parallel, if possible. The long tail is often review passes 
+and full test suites at the end of hardening.
+
 ## Testing and hardening contract
 
 - **Write or extend thorough tests** that assert on markers which are true if
