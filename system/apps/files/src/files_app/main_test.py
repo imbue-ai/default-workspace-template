@@ -6,6 +6,7 @@ from app_manifest.manifest import load_manifest
 from inline_snapshot import snapshot
 
 from files_app.main import (
+    APP_NAME,
     APP_URL,
     INSTANCES_URL,
     MANIFEST_PATH,
@@ -21,7 +22,7 @@ def test_the_fixed_wiring_agrees_with_the_manifest() -> None:
     manifest = load_manifest(_REPO_ROOT / MANIFEST_PATH)
 
     assert manifest.instances_url == INSTANCES_URL
-    assert manifest.name == "files"
+    assert manifest.name == APP_NAME
     assert app_url_port(APP_URL) == 8300
     assert STORE_PATH == Path("data/.apps/files/instances.json")
 
