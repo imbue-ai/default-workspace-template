@@ -485,10 +485,7 @@ def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
         ("system_interface", 8000),
         ("browser", 8081),
     }
-    assert not {name for name, _ in ((port.name, port.port) for port in ports)} & {
-        "terminal",
-        "files",
-    }
+    assert not {port.name for port in ports} & {"terminal", "files"}
 
 
 def test_parse_apps_registry_accepts_both_registry_vintages() -> None:
