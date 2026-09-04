@@ -19,13 +19,14 @@ import os
 from pathlib import Path
 
 from app_instances.json_store import app_store_path
-from app_manifest.primitives import AppName
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import ValidationError
 
+from browser.primitives import APP_NAME
+
 # Relative to the daemon's cwd (= repo root). Override for tests / alternate layouts.
-_MANIFEST_PATH = Path(os.environ.get("BROWSER_MANIFEST_PATH", str(app_store_path(AppName("browser")))))
+_MANIFEST_PATH = Path(os.environ.get("BROWSER_MANIFEST_PATH", str(app_store_path(APP_NAME))))
 # Where the manifest lived before phase 5 of the workspace app model moved it under the
 # app's own data directory. A workspace upgraded across that move has its saved fleet
 # only at the old path until the daemon's first write to the new one, so reads fall back.

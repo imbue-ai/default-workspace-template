@@ -2,12 +2,17 @@ import re
 from typing import Any, Final, Self
 
 from app_instances.primitives import InstanceTitle, InstanceUrl
+from app_manifest.primitives import AppName
 from imbue.imbue_common.pure import pure
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 
 from browser.errors import InvalidBrowserNameValueError
 from browser.names import NUMBERED_NAME_STEM, is_valid_browser_name
+
+# The app's registered name (what its manifest, system/apps/browser/app.toml, declares and the
+# supervisord program line registers): the shell nudge and the instance store are named by it.
+APP_NAME: Final[AppName] = AppName("browser")
 
 # The names the daemon mints, whose titles derive back from the number ("Browser 3"), as the
 # workspace UI has always shown them.

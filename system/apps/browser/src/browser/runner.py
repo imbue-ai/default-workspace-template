@@ -51,7 +51,6 @@ from typing import Any, Final
 
 from app_instances.blueprint import build_instances_blueprint
 from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
-from app_manifest.primitives import AppName
 from flask import Flask, Response, jsonify, request
 from flask_sock import Sock
 from loguru import logger
@@ -64,6 +63,7 @@ from browser.instances import FleetInstanceSource
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
+from browser.primitives import APP_NAME
 from browser.session import (
     BrowserSessionManager,
     BrowserStartupError,
@@ -76,10 +76,8 @@ from browser.session import (
 )
 from browser.wsgi import make_threaded_server
 
-# The app's registered name and manifest (what the supervisord program line registers with
-# ``forward_port.py --manifest``); the shell nudge names the app by it. ``test_app_manifests.py``
-# and the wiring test pin the two to the manifest.
-APP_NAME: Final[AppName] = AppName("browser")
+# The app's manifest (what the supervisord program line registers with
+# ``forward_port.py --manifest``); the wiring test pins ``APP_NAME`` to it.
 MANIFEST_PATH: Final[Path] = Path("system/apps/browser/app.toml")
 
 # The agent-facing CDP proxy port. Fixed by default so an attach URL an agent already
