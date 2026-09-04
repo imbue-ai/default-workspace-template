@@ -11,7 +11,8 @@ from app_manifest.manifest import load_manifest
 from browser import runner
 from browser import session as bsession
 
-_REPO_ROOT_DEPTH = 3
+# The manifest the supervisord program line registers with ``forward_port.py --manifest``.
+_MANIFEST_PATH = Path(__file__).parent / "app.toml"
 
 
 def _install_running_browser(name: str) -> bsession.LiveBrowser:
@@ -29,9 +30,7 @@ def _instances() -> list[dict[str, Any]]:
 
 
 def test_the_daemon_names_itself_after_its_manifest() -> None:
-    manifest_path = runner.MANIFEST_PATH
-    repo_root = Path(__file__).resolve().parents[_REPO_ROOT_DEPTH]
-    manifest = load_manifest(repo_root / manifest_path)
+    manifest = load_manifest(_MANIFEST_PATH)
     assert manifest.name == runner.APP_NAME
     assert manifest.instances is True
     assert manifest.instances_url is None

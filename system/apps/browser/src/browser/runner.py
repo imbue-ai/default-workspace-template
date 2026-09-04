@@ -47,7 +47,7 @@ import signal
 import threading
 from pathlib import Path
 from types import FrameType
-from typing import Any, Final
+from typing import Any
 
 from app_instances.blueprint import build_instances_blueprint
 from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
@@ -75,10 +75,6 @@ from browser.session import (
     set_proxy_server,
 )
 from browser.wsgi import make_threaded_server
-
-# The app's manifest (what the supervisord program line registers with
-# ``forward_port.py --manifest``); the wiring test pins ``APP_NAME`` to it.
-MANIFEST_PATH: Final[Path] = Path("system/apps/browser/app.toml")
 
 # The agent-facing CDP proxy port. Fixed by default so an attach URL an agent already
 # holds keeps resolving across a service restart; 0 picks an ephemeral port (tests).
