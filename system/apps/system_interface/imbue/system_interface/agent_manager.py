@@ -123,6 +123,16 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 
+# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
+# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
+# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
+# teardown (a partial destroy the user saw as a 500). Every internal mngr
+# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
+# generous cap only converts spurious kills into patience. ``mngr stop`` is
+# lighter work (no resource teardown) but rides the same CLI startup and
+# host-lock path, so the stop endpoint shares this bound.
+DESTROY_TIMEOUT_SECONDS = 120.0
+
 # How often the liveness sweep re-derives each app's ``is_running``. Stop and
 # start land through our own endpoints (which nudge the sweep), so the poll
 # only has to catch out-of-band transitions -- supervisorctl from a terminal,
@@ -274,6 +284,15 @@ def _build_chat_create_command(
     # lands after the first turn has already run on the wrong credential.
     cmd.extend(account_args)
     return cmd
+
+
+def _build_destroy_command(agent_name: str) -> list[str]:
+    """Build the ``mngr destroy --force`` argv for one agent.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``agent_manager_test.py``).
+    """
+    return ["mngr", "destroy", agent_name, "--force"]
 
 
 def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
@@ -1002,6 +1021,28 @@ class AgentManager:
         self._evict_watcher(agent_id)
         drop_live_user_turns(agent_id)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def destroy_agent_process(self, agent_id: AgentId, agent_name: str) -> str | None:
+        """Tear one agent's process down with ``mngr destroy --force``, then untrack it.
+
+        Returns None when the agent is gone, or the failure detail. This is the
+        PHYSICAL half of a destroy and deliberately says nothing about chats:
+        the agent behind a chat is replaceable, so retiring one (a harness
+        handoff) destroys the process while the chat's registry record and its
+        history live on. Deleting the chat itself is the caller's separate step,
+        which is why ``chat_registry.remove`` is not called here.
+        """
+        result = run_local_command_modern_version(
+            command=_build_destroy_command(agent_name),
+            cwd=None,
+            is_checked=False,
+            timeout=DESTROY_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            return f"Failed to destroy agent '{agent_name}': {result.stderr.strip()}"
+        # Reflect the destruction now rather than waiting for the observe stream.
+        self.remove_agent(agent_id)
+        return None
 
     def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
         """Give a chat agent the name the user just typed, keeping its name pair matched.
