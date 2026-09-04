@@ -87,9 +87,10 @@ def _browser_name_for_key(key: InstanceKey) -> BrowserName:
 class FleetInstanceSource(InstanceSourceInterface):
     """The browser's instances: one per browser in the fleet, with status from its ownership state.
 
-    Reads and the close and navigate verbs wait for the init gate, as the daemon's own routes
-    do; create does not, because the daemon takes a create during restore (it queues behind
-    the serialized relaunches), and the shell's next fetch picks the new browser up.
+    Reads and the close and navigate verbs are refused (NotReadyError, a 503) until the init
+    gate opens, as the daemon's own routes are; create is not, because the daemon takes a
+    create during restore (it queues behind the serialized relaunches), and the shell's next
+    fetch picks the new browser up.
     """
 
     fleet: FleetInterface = Field(
