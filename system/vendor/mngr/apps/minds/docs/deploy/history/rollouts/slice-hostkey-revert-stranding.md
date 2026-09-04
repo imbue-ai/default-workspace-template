@@ -223,6 +223,6 @@ leased host. Worth re-running the audit until the v1 population reaches zero.
 - [A slice VM restart wipes the owner's outer SSH key](./slice-restart-wipes-owner-ssh-key.md)
   -- the `authorized_keys` half of the same cidata-replay problem, and the
   `repair-keys` sweep that fixed it.
-- [Reboot-resilience rollout](./reboot-resilience-rollout.md) -- slice autostart
+- [Reboot-resilience rollout](reboot-resilience.md) -- slice autostart
   on box boot, which is what makes VM bounces routine.
 - `libs/mngr_imbue_cloud/README.md`, "Adoption and key rotation".

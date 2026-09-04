@@ -6,7 +6,7 @@ live in `specs/minds-bugsink-error-tracking.md`; the hosting pattern (OVH
 VPS + Cloudflare-fronted ingest + SSH-only UI) is shared with the
 OpenObserve instances (`observability-bringup.md`), and the CLI surface is
 documented in `apps/observability/README.md`. Track the per-tier status in
-[next_deploy.md](./next_deploy.md).
+[next_deploy.md](../next_deploy.md).
 
 Order matters: bring up **dev first** and run the validation gates below --
 the ingest path shapes and the tunneled-UI behavior are pinned best-effort
@@ -15,7 +15,7 @@ let it soak, then production.
 
 ## Prerequisites
 
-- `vault login` (see [vault-setup.md](./vault-setup.md)) and an activated
+- `vault login` (see [vault-setup.md](vault.md)) and an activated
   env for the target tier (`eval "$(uv run minds-admin env activate <env>)"`).
   Any `dev-*`/`ci-*` env maps to the single shared **dev** instance.
 - Access to the tier's Cloudflare account (origin certs + DNS), Neon org,
@@ -87,7 +87,7 @@ The deploy re-pushes the tier's `sentry` Vault entry as the stamped
 `sentry-<tier>-<deploy-id>` Modal Secret, which the connector and LiteLLM
 proxy read their DSNs from. Dev/ci envs pick the DSNs up on their next
 per-env deploy the same way; the dev oauth-redirector gets its DSN baked at
-its next `just deploy-oauth-redirector dev`.
+its next `just services-deploy-oauth-redirector dev`.
 
 ### 5. Sign in (and invite any additional humans)
 
@@ -141,7 +141,7 @@ Repeat the per-tier procedure with `staging` and then `production`
 activated. The tiers are fully isolated (own Cloudflare account, Neon
 project, OVH credentials) -- every resource in step 1 is created fresh per
 tier. Record completion (and any lessons) in
-[next_deploy.md](./next_deploy.md) / [history/](./history/).
+[next_deploy.md](../next_deploy.md) / [history/](../history/).
 
 ## Ongoing operations
 

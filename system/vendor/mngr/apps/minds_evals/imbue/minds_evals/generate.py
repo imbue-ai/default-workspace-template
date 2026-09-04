@@ -948,6 +948,8 @@ def render_oracle_trajectory_json(case_config: CaseConfig) -> str:
         ),
         workspace_usage=summarize_workspace_usage(()),
         timestamp=_ORACLE_TIMESTAMP,
+        # The oracle replays one canned conversation, with no steps to divide.
+        boundaries=(),
     )
     assert oracle_trajectory is not None, "an eval case always has at least one prompt"
     return json.dumps(oracle_trajectory.to_json_dict(), indent=2)

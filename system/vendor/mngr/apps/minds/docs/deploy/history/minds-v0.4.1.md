@@ -3,7 +3,7 @@
 Production deployment of the minds-v0.4.1 release (tag pair: mngr
 `c3df37b9d5`, default-workspace-template `6756ae19a`), per the standard
 playbook in
-[production-release-deployment.md](../production-release-deployment.md).
+[order-boxes.md](../setup/order-boxes.md).
 
 ## Deployment
 

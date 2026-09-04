@@ -63,7 +63,7 @@ The self-hosted Bugsink error tracker's own config lives in
 `secrets/minds/<tier>/bugsink` (every tier except ci; dev holds the SHARED
 dev/ci instance's config). Like `observability`, that entry is
 operator-only: it is read by the `just provision-bugsink` recipes and never
-pushed to Modal. See [bugsink-bringup.md](./bugsink-bringup.md).
+pushed to Modal. See [bugsink-bringup.md](bugsink.md).
 
 **Read only by `minds-admin env deploy` on a developer's laptop** (never
 pushed to Modal -- the connector's runtime doesn't need
@@ -87,7 +87,7 @@ secrets/minds/<tier>/ovh          # OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET,
                                   #   share-relay instances are provisioned in)
 secrets/minds/<tier>/relay-ssh    # RELAY_SSH_PRIVATE_KEY, RELAY_SSH_PUBLIC_KEY (the tier's
                                   #   share-relay SSH keypair; sourced by the operator for
-                                  #   `just provision-share-relay` / `just deploy-share-relay`
+                                  #   `just provision-share-relay` / `just services-deploy-share-relay`
                                   #   so relays can be redeployed from any machine)
 ```
 

@@ -7,7 +7,7 @@ test-results = "COPY"
 ".reviewer/settings.local.json" = "COPY"
 "CLAUDE.local.md" = "COPY"
 # Copy the gitignored per-user minds env (holds DEFAULT_WORKSPACE_TEMPLATE_DIR) into each agent so
-# `just default-workspace-template-worktree` / `bake-slice-dev` can reuse a local default_workspace_template clone. Skipped
+# `just default-workspace-template-worktree` / `pool-bake-from-worktree` can reuse a local default_workspace_template clone. Skipped
 # silently when absent; DEFAULT_WORKSPACE_TEMPLATE_DIR is a same-host path, harmless on remote hosts
 # (default_workspace_template_worktree.sh guards on the dir existing before using it as a clone reference).
 "apps/minds/.env" = "COPY"

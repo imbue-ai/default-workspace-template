@@ -26,7 +26,7 @@ tiers' keys can SSH, so each tier's operators and connector gain
 tier's reap will ever reclaim the other's slices. Baking a slice
 onto a box that carries another tier's slices -- or whose lima user
 authorizes more than that one tier's pool key -- is refused before
-anything is carved. `just audit-boxes` reports the same condition
+anything is carved. `just server-audit` reports the same condition
 without needing a bake to fail.
 
 ## Per-env data root
@@ -193,7 +193,7 @@ in any committed staging/production file. A unit test in
 `local_store_test.py` asserts this end-to-end.
 
 Secret values (API keys, DSNs, connection URIs) live in HCP Vault --
-see `apps/minds/docs/deploy/vault-setup.md`.
+see `apps/minds/docs/deploy/setup/vault.md`.
 
 ## Deploy mode
 
