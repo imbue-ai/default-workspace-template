@@ -44,8 +44,10 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium
   does this itself, we just point `user_data_dir` at a durable dir. A tiny manifest
-  (`data/.state/browser-fleet.json`) records which browsers existed and their tab
-  URLs. Both the profiles and the manifest live on the workspace volume and are
+  (`data/.apps/browser/instances.json`, the app's instance records; a workspace from
+  before the move still has it at `data/.state/browser-fleet.json`, which the daemon
+  reads until its first write to the new path) records which browsers existed and
+  their tab URLs. Both the profiles and the manifest live on the workspace volume and are
   captured by the restic host backup (`data/` is gitignored, so neither rides GitHub
   sync); a backup restore brings the tab list back (logged out only if the profiles
   themselves were lost). On daemon startup the

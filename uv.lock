@@ -454,6 +454,8 @@ name = "browser"
 version = "0.1.0"
 source = { editable = "system/apps/browser" }
 dependencies = [
+    { name = "app-instances" },
+    { name = "app-manifest" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "oom-priority" },
@@ -468,6 +470,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "app-instances", editable = "system/libs/app_instances" },
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
