@@ -42,10 +42,11 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   new page. Reads, delete, and location answer 503 until the restore finishes,
   like the daemon's own state-changing routes; create does not wait, like `POST
   /browsers`. A failure of the daemon itself underneath a verb (its loop not
-  answering in time, a startup error) is a 500 with a detail body. Every fleet event that changes the list or a status (a
-  registration, a launch reaching `running` or failing, a close, a crash, every
-  ownership write) nudges the shell (`POST <shell>/api/apps/browser/changed`) from a
-  daemon thread, so a slow shell never stalls the event loop. The existing
+  answering in time, a startup error) is a 500 with a detail body. Every fleet
+  event that changes the list or a status (a registration, a launch reaching
+  `running` or failing, a close, a crash, every ownership write) nudges the shell
+  (`POST <shell>/api/apps/browser/changed`) from a daemon thread, so a slow shell
+  never stalls the event loop. The existing
   `/browsers` routes stay for the CLI and the shell's passthroughs.
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
