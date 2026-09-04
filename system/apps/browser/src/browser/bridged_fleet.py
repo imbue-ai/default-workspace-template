@@ -1,6 +1,7 @@
 import threading
 
 from app_instances.interfaces import InstanceNudgerInterface
+from app_instances.primitives import AbsoluteHttpUrl
 from pydantic import Field
 
 from browser.data_types import BrowserSnapshot
@@ -56,7 +57,7 @@ class BridgedFleet(FleetInterface):
             self.manager.close_and_forget(name), timeout=self.route_timeout_seconds
         )
 
-    def navigate_browser(self, name: BrowserName, url: str) -> None:
+    def navigate_browser(self, name: BrowserName, url: AbsoluteHttpUrl) -> None:
         try:
             self.bridge.run(
                 self.manager.navigate_browser(name, url),

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+from app_instances.primitives import AbsoluteHttpUrl
 from imbue.imbue_common.mutable_model import MutableModel
 
 from browser.data_types import BrowserSnapshot
@@ -26,5 +27,5 @@ class FleetInterface(MutableModel, ABC):
         """Close the browser, retire its name, and delete its profile; an unknown name is not an error."""
 
     @abstractmethod
-    def navigate_browser(self, name: BrowserName, url: str) -> None:
+    def navigate_browser(self, name: BrowserName, url: AbsoluteHttpUrl) -> None:
         """Navigate the browser's active tab; raises UnknownBrowserError, BrowserNotDrivableError, BrowserHeldByAgentError, or NavigationFailedError."""
