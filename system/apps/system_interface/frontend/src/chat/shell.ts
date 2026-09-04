@@ -23,13 +23,9 @@ export function chatAddress(instanceKey: string): string {
 
 let connection: ShellConnection | null = null;
 let handshake: ShellHandshake | null = null;
+// Whether the shell says this page is on screen: true until told otherwise on a top-level
+// visit, and false from the moment a framed page connects, until the shell says shown.
 let isShown = true;
-let pageAgentId: string | null = null;
-
-/** Whether the shell says this page is on screen (true until told otherwise, and on a top-level visit). */
-export function isChatShown(): boolean {
-  return isShown;
-}
 
 /**
  * Whether the frame's document is laid out at all: what the transcript's scroll management
@@ -56,7 +52,6 @@ export function shellViewId(): string {
  * the tab.
  */
 export function connectChatToShell(agentId: string): ShellConnection {
-  pageAgentId = agentId;
   connection = connectToShell({
     onHandshake: (received) => {
       handshake = received;
@@ -131,9 +126,4 @@ export async function openSubagentTab(agentId: string, sessionId: string, descri
     console.warn(`[chat] could not create the subagent instance ${key}`, error);
   }
   connection?.open(chatAddress(key), description);
-}
-
-/** The chat this page shows, for callers that only hold the connection. */
-export function pageChatAgentId(): string | null {
-  return pageAgentId;
 }
