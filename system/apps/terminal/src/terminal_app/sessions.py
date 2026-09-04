@@ -17,7 +17,7 @@ from app_instances.primitives import (
     InstanceKey,
     InstanceKeyPrefix,
     InstanceTitle,
-    LocationPath,
+    LocationTarget,
     canonical_name_from_title,
     is_name_conflict,
 )
@@ -239,7 +239,7 @@ class TmuxSessionSource(InstanceSourceInterface):
             renamed,
         )
 
-    def set_location(self, key: InstanceKey, path: LocationPath) -> InstanceRecord:
+    def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
         raise LocationNotTrackedError("the terminal does not track where its pages are")
 
     def _user_sessions(self) -> list[TmuxSession]:

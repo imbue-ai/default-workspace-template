@@ -5,7 +5,7 @@ from app_manifest.primitives import ActionId
 from imbue.imbue_common.mutable_model import MutableModel
 
 from app_instances.data_types import InstanceRecord
-from app_instances.primitives import InstanceKey, InstanceTitle, LocationPath
+from app_instances.primitives import InstanceKey, InstanceTitle, LocationTarget
 
 
 class InstanceSourceInterface(MutableModel, ABC):
@@ -34,8 +34,8 @@ class InstanceSourceInterface(MutableModel, ABC):
         """Retitle the instance; raises NotRenameableError, UnknownInstanceError, or InstanceConflictError (a title collision)."""
 
     @abstractmethod
-    def set_location(self, key: InstanceKey, path: LocationPath) -> InstanceRecord:
-        """Record where the instance's page now is; raises LocationNotTrackedError or UnknownInstanceError."""
+    def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
+        """Record where the instance's page now is, or navigate it there; raises LocationNotTrackedError, InvalidInstanceValueError (a form of location this app does not take), or UnknownInstanceError."""
 
 
 class InstanceNudgerInterface(MutableModel, ABC):
