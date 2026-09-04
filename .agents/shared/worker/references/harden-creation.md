@@ -111,6 +111,16 @@ fallback is always more coverage, never less. A scoped-down or hand-rolled
 substitute reported as "review" is worse than no gate at all, because it reads as
 coverage that does not exist.
 
+When `type` is app, skill, or service, `{creation_context}` in the invocations
+below is this paragraph, pasted verbatim:
+
+    The creation is a user's own and lives only in this workspace. Judge it
+    against the conventions for its type (`type-<TYPE>.md`,
+    `system/apps/README.md`), not against `system_interface`'s patterns, and
+    do not flag portability to environments the creation will never run in.
+
+### Autofix
+
 Autofix's normal final step asks the user to keep or revert each proposed fix
 via AskUserQuestion, which is unavailable in a worker -- so split that decision
 out and make it yourself. Invoke autofix so it *applies* its fixes but leaves
@@ -119,13 +129,20 @@ the keep/revert judgment to you:
     /autofix Run fully unattended: never call AskUserQuestion. Run the fix
     loop a single time, not 10 times. Leave every fix commit applied, and
     report the fix commits (hash + full message). Do not revert anything yourself
-    -- the caller will decide.
+    -- the caller will decide. Include this context in the description you
+    pass to agents: {creation_context}
 
 Then review those fix commits against what this branch is meant to do. You hold
 the task context the fix subagents run without, so you are the right judge of
 whether each fix is correct. Keep fixes by default; revert only the ones that
 undo intended behavior or are otherwise wrong (`git revert --no-edit <hash>`,
 newest first). Record which you kept and which you reverted in your gate report.
+
+### Verify Architecture
+
+    /verify-architecture Run fully unattended: never call AskUserQuestion.
+    In Phase 3, pass the analysis agent the creation context verbatim
+    alongside the problem description: {creation_context}
 
 ## Preserve and surface captured data
 
