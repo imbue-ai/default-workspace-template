@@ -13,6 +13,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.chat_registry import ChatRegistry
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
@@ -87,6 +88,15 @@ class SystemInterfaceState(MutableModel):
         repoints the broadcaster too -- the two must never diverge.
         """
         return self.agent_manager.broadcaster
+
+    @property
+    def chat_registry(self) -> ChatRegistry:
+        """The agent manager's chat registry, kept paired with the manager itself.
+
+        Derived for the same reason ``broadcaster`` is: seeding a test manager
+        via ``state.agent_manager = ...`` must repoint the registry with it.
+        """
+        return self.agent_manager.chat_registry
 
     @property
     def latchkey_lock(self) -> threading.Lock:
