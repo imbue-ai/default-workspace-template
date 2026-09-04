@@ -12,6 +12,7 @@ from app_instances.errors import UnknownInstanceError
 from app_instances.primitives import InstanceKey
 from app_instances.primitives import InstanceTitle
 from app_instances.primitives import LocationPath
+from app_instances.primitives import MAX_INSTANCE_TITLE_LENGTH
 from app_instances.testing import RecordingNudger
 from app_manifest.primitives import ActionId
 
@@ -162,6 +163,26 @@ def test_subagent_create_is_idempotent_and_listed(agent_manager: AgentManager) -
     assert first.lifetime is InstanceLifetime.REFERENCED
     assert first.renameable is False
     assert [record.key for record in source.list_instances()] == [parent_id, first.key]
+
+
+def test_subagent_description_is_cut_to_fit_the_title_and_defaults_to_the_session(
+    agent_manager: AgentManager,
+) -> None:
+    parent_id = _agent_id()
+    _seed_agent(agent_manager, parent_id, "Chat-1")
+    source = _source(agent_manager)
+    session = uuid4().hex
+
+    long = source.create_instance(
+        ActionId("subagent"), {"parent": parent_id, "session": session, "description": "x" * 400}
+    )
+    blank = source.create_instance(
+        ActionId("subagent"), {"parent": parent_id, "session": "other", "description": "  "}
+    )
+
+    assert len(long.title) == MAX_INSTANCE_TITLE_LENGTH
+    assert long.title.startswith("Subagent: xxx")
+    assert blank.title == "Subagent: other"
 
 
 def test_subagent_create_requires_a_listed_parent_and_both_params(agent_manager: AgentManager) -> None:
