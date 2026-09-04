@@ -10,7 +10,6 @@ the workspace layout, not in memory.
 """
 
 import json
-import os
 import threading
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from loguru import logger as _loguru_logger
 from pydantic import PrivateAttr
 
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.system_interface.atomic_write import write_json_atomic
 
 _LEDGER_FILENAME = "auto_opened_chats.json"
 
@@ -67,9 +67,7 @@ class AutoOpenLedger(MutableModel):
             return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = self.path.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps({"delivered": sorted(self._delivered)}), encoding="utf-8")
-            os.replace(tmp_path, self.path)
+            write_json_atomic(self.path, json.dumps({"delivered": sorted(self._delivered)}))
         except OSError as e:
             _loguru_logger.opt(exception=e).warning("Failed to write the auto-open ledger at {}", self.path)
 
