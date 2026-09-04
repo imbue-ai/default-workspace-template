@@ -32,6 +32,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface import app_instances
+from imbue.system_interface import chat_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import member_last_used
@@ -94,6 +95,7 @@ from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
+from imbue.system_interface.models import ChatId
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
 from imbue.system_interface.models import DestroyAgentResponse
@@ -2952,6 +2954,11 @@ def _destroy_agent(agent_id: str) -> Response:
     # Remove the agent from the system_interface's tracked state immediately
     # so the frontend reflects the destruction without waiting for mngr observe.
     agent_manager.remove_agent(agent_id)
+    # Destroying a chat's only backing agent is what "delete this chat" means
+    # today, so the chat's registry record goes with it. Internal replacement
+    # of a backing agent, when it exists, will destroy without this. No-op for
+    # ids that were never chats (workers).
+    agent_manager.chat_registry.remove(ChatId(agent_id))
 
     return _json_response(DestroyAgentResponse(status="ok").model_dump())
 
@@ -3591,6 +3598,34 @@ def create_application(state: SystemInterfaceState) -> Flask:
     auth_endpoints.register_routes(application)
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
+    # The chat-facing twins of the agent routes above: /api/chats/<chat_id>/...
+    # resolves the chat's currently active agent at request time and dispatches
+    # to the very same view functions, so the two families cannot drift. The
+    # /api/agents family stays as the physical/internal contract. The agent
+    # list, create-chat, and proto-agent logs stay physical-only.
+    chat_endpoints.register_chat_routes(
+        application,
+        (
+            ("/events", _get_events, ("GET",)),
+            ("/events/<event_id>/detail", _get_event_detail, ("GET",)),
+            ("/stream", _stream_events, ("GET",)),
+            ("/message", _send_message_endpoint, ("POST",)),
+            ("/model", _set_model_choice_endpoint, ("POST",)),
+            ("/model-options", _get_model_options_endpoint, ("GET",)),
+            ("/powered-by", _get_powered_by_endpoint, ("GET",)),
+            ("/fast-mode-answered", _mark_fast_mode_prompt_answered, ("POST",)),
+            ("/interrupt", _interrupt_agent_endpoint, ("POST",)),
+            ("/flush-queue", _flush_queue_endpoint, ("POST",)),
+            ("/shoulder-tap-atomic", _shoulder_tap_atomic_endpoint, ("POST",)),
+            ("/drain-to-composer", _drain_to_composer_endpoint, ("POST",)),
+            ("/screen", _get_screen_capture, ("GET",)),
+            ("/destroy", _destroy_agent, ("POST",)),
+            ("/start", _start_agent, ("POST",)),
+            ("/stop", _stop_agent, ("POST",)),
+            ("/subagents/<subagent_session_id>/events", _get_subagent_events, ("GET",)),
+            ("/subagents/<subagent_session_id>/stream", _stream_subagent_events, ("GET",)),
+        ),
+    )
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(
         "/api/agents/<agent_id>/subagents/<subagent_session_id>/events",
