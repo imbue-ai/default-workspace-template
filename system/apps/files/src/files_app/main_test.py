@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Final
 
 from app_instances.data_types import InstanceLifetime
 from app_instances.sidecar import app_url_port
@@ -15,7 +16,7 @@ from files_app.main import (
     build_files_source,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[5]
 
 
 def test_the_fixed_wiring_agrees_with_the_manifest() -> None:
