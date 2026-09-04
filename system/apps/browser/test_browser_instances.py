@@ -2,6 +2,9 @@
 over the real manager and bridge (started once by the conftest), with fake in-memory
 browsers standing in for Chromium."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 from app_instances.testing import RecordingNudger
 from app_manifest.manifest import load_manifest
@@ -19,7 +22,7 @@ def _install_running_browser(name: str) -> bsession.LiveBrowser:
     return fake
 
 
-def _instances() -> list[dict]:
+def _instances() -> list[dict[str, Any]]:
     response = runner.application.test_client().get("/_instances")
     assert response.status_code == 200
     return response.get_json()["instances"]
@@ -27,7 +30,7 @@ def _instances() -> list[dict]:
 
 def test_the_daemon_names_itself_after_its_manifest() -> None:
     manifest_path = runner.MANIFEST_PATH
-    repo_root = __import__("pathlib").Path(__file__).resolve().parents[_REPO_ROOT_DEPTH]
+    repo_root = Path(__file__).resolve().parents[_REPO_ROOT_DEPTH]
     manifest = load_manifest(repo_root / manifest_path)
     assert manifest.name == runner.APP_NAME
     assert manifest.instances is True
