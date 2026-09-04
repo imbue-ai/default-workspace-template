@@ -104,6 +104,20 @@ jobs:
       - name: Run root tests
         run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest
 
+      # The harness-contract acceptance tests drive the REAL claude binary, so without
+      # it installed they would skip -- and a version bump would get no signal from the
+      # tests written to catch exactly that. The version is read from the workspace pin
+      # rather than written again here, so this is not another site to bump.
+      - name: Install tmux and the pinned Claude Code
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y tmux
+          version=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('.mngr/settings.toml').read_text())['agent_types']['claude']['version'])")
+          echo "Installing Claude Code $version"
+          curl -fsSL https://claude.ai/install.sh | bash -s "$version"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Run system/apps/system_interface tests
         working-directory: system/apps/system_interface
         run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest
