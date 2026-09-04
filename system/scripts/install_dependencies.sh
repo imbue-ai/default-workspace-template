@@ -35,5 +35,10 @@ cd "$REPO_ROOT"
 uv sync --all-packages --frozen --no-install-workspace --no-install-local
 
 # Frontend npm dependencies (exact, from the lockfile).
+# --no-audit: the audit is a per-install round trip to the registry that cannot
+# affect the outcome here -- the tree is pinned by the lockfile, so nothing the
+# audit reports changes what gets installed -- and when the registry's audit
+# endpoint is slow that round trip stalls the install for minutes.
+# --no-fund: funding output is noise in a build log.
 cd "$REPO_ROOT/system/apps/system_interface/frontend"
-npm ci
+npm ci --no-audit --no-fund
