@@ -20,7 +20,10 @@ vi.hoisted(() => {
 });
 
 const agentState: { agent: unknown } = { agent: null };
-vi.mock("../models/AgentManager", () => ({ getAgentById: () => agentState.agent }));
+vi.mock("../models/AgentManager", () => ({
+  getAgentById: () => agentState.agent,
+  chatIdOfAgent: (agent: { id: string; chat_id?: string }) => agent.chat_id ?? agent.id,
+}));
 
 const catalogState: { catalog: unknown } = { catalog: null };
 vi.mock("../models/HarnessCatalog", () => ({
@@ -264,19 +267,36 @@ describe("the card without a hand-cranked redraw", () => {
   });
 
   it("ignores a press on a locked provider, without closing anything", async () => {
-    providerState.accounts = [
-      ACCOUNT,
-      { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
-    ];
+    // Locked means "on the harness this chat already runs": a switch there would rebuild the
+    // agent to accomplish nothing. A row on a DIFFERENT harness is offered, and has its own test.
+    providerState.accounts = [ACCOUNT, { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2" }];
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');
-    const locked = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
+    const locked = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Anthropic 2"));
     if (locked === undefined) throw new Error("no locked row");
     locked.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     locked.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
     expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+  });
+
+  it("raises the harness-switch confirmation on the first press of an offered provider", async () => {
+    // The press has to draw the dialog on its own: it happens inside the flyout's portal, the
+    // one place mithril does not wire auto-redraw for free.
+    providerState.accounts = [
+      ACCOUNT,
+      { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
+    ];
+    await press(".model-selector-trigger");
+    await press('[data-card-row="providers"]');
+    const offered = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
+    if (offered === undefined) throw new Error("no offered row");
+    offered.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    offered.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle();
+
+    expect(document.body.textContent).toContain("Move this chat to Antigravity CLI?");
   });
 
   it("closes the whole stack on a click outside, and only on a click", async () => {

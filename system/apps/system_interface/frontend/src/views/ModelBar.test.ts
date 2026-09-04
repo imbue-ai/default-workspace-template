@@ -20,6 +20,23 @@ vi.hoisted(() => {
 const agentState: { agent: unknown } = { agent: null };
 vi.mock("../models/AgentManager", () => ({
   getAgentById: () => agentState.agent,
+  chatIdOfAgent: (agent: { id: string; chat_id?: string }) => agent.chat_id ?? agent.id,
+}));
+
+// The switch itself is a backend operation with its own tests; what the card is responsible for
+// is asking, and saying what the backend reports.
+const switchState: { inFlight: { phase: string; target_harness: string } | null; failure: string | null } = {
+  inFlight: null,
+  failure: null,
+};
+const switchRequests: unknown[][] = [];
+const dismissals: unknown[] = [];
+vi.mock("../models/HarnessSwitch", () => ({
+  harnessSwitchFor: () => switchState.inFlight,
+  isSwitchingHarness: () => switchState.inFlight !== null && switchState.inFlight.phase !== "failed",
+  harnessSwitchFailureFor: () => switchState.failure,
+  requestHarnessSwitch: (...args: unknown[]) => switchRequests.push(args),
+  dismissHarnessSwitchFailure: (agent: unknown) => dismissals.push(agent),
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
@@ -106,6 +123,10 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
   picks.length = 0;
   started.length = 0;
+  switchRequests.length = 0;
+  dismissals.length = 0;
+  switchState.inFlight = null;
+  switchState.failure = null;
   agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
@@ -229,24 +250,87 @@ describe("the combo card", () => {
     expect(picks).toHaveLength(1);
   });
 
-  it("locks every provider that is not this chat's, and says how to reach it", () => {
-    // A chat binds to its account when it is CREATED and nothing rebinds it, so there is no
-    // state in which switching would work. The row states that rather than doing something
-    // else by surprise -- the tooltip is the whole affordance.
-    providerState.accounts = [
-      ACCOUNT,
-      { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
-    ];
+  const OTHER_HARNESS = {
+    ...ACCOUNT,
+    id: "acct-2",
+    provider: "Google",
+    harness: "antigravity",
+    harness_label: "Antigravity CLI",
+    label: "Google (Antigravity CLI)",
+  };
+
+  function openProviders(): void {
     render();
     click(".model-selector-trigger");
     click('[data-card-row="providers"]');
-    const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Google"));
-    expect(rows).toHaveLength(1);
-    rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(started).toEqual([]);
+  }
+
+  function providerRow(text: string): HTMLElement {
+    const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes(text));
+    if (rows.length !== 1) throw new Error(`expected one row naming ${text}, found ${rows.length}`);
+    return rows[0];
+  }
+
+  it("asks before moving the chat to another harness, and only then asks the backend", () => {
+    // The switch retires the agent that has been answering, so a press on a menu row is a
+    // proposal; the dialog is where it becomes a decision.
+    providerState.accounts = [ACCOUNT, OTHER_HARNESS];
+    openProviders();
+    providerRow("Google").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(switchRequests).toEqual([]);
+    expect(screenText()).toContain("Move this chat to Antigravity CLI?");
+
+    click(".custom-url-dialog-open");
+    expect(switchRequests).toEqual([["a1", "acct-2", "antigravity"]]);
+  });
+
+  it("cancelling the confirmation asks for nothing", () => {
+    providerState.accounts = [ACCOUNT, OTHER_HARNESS];
+    openProviders();
+    providerRow("Google").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    click(".custom-url-dialog-cancel");
+    expect(switchRequests).toEqual([]);
+    expect(screenText()).not.toContain("Move this chat to");
+  });
+
+  it("locks another account on the harness the chat already runs", () => {
+    // A switch moves the HARNESS. Moving to the one already in use would destroy and rebuild
+    // the agent to accomplish nothing, so the backend refuses it and the row says so instead.
+    providerState.accounts = [ACCOUNT, { ...ACCOUNT, id: "acct-3", provider: "Anthropic 2" }];
+    openProviders();
+    providerRow("Anthropic 2").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(switchRequests).toEqual([]);
+    expect(screenText()).not.toContain("Move this chat to");
     // The hint itself is a hover-intent bubble on <body> (hoverTooltip.ts), so it is not in
     // the tree at render time -- what this pins is that pressing a locked row does NOTHING.
     expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+  });
+
+  it("states the switch in flight instead of the outgoing account, and takes no second one", () => {
+    // Mid-switch the account on the row is the one being replaced; naming it would be the one
+    // thing actively misleading. And a chat can only be switching once.
+    providerState.accounts = [ACCOUNT, OTHER_HARNESS];
+    switchState.inFlight = { phase: "preparing", target_harness: "antigravity" };
+    openProviders();
+    expect(screenText()).toContain("Moving to Antigravity CLI");
+    providerRow("Google").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(switchRequests).toEqual([]);
+  });
+
+  it("reports a switch that did not happen, and says the chat is untouched", () => {
+    switchState.failure = "Wait for the current turn to finish before switching harness";
+    render();
+    const text = screenText();
+    expect(text).toContain("The harness switch did not happen");
+    expect(text).toContain("Wait for the current turn to finish");
+    expect(text).toContain("still on the harness it was on");
+
+    click(".custom-url-dialog-cancel");
+    expect(dismissals).toHaveLength(1);
   });
 
   it("confirms a sign-out in a dialog, and closing the card takes the dialog with it", () => {
