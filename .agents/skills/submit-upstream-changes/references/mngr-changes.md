@@ -2,10 +2,13 @@
 
 mngr runs in this workspace as Python packages installed from the public mngr repo
 at the commit `pyproject.toml` pins (`[tool.uv.sources]`, `imbue-mngr`). There is
-no editable copy of it here: the installed files under the tool's `site-packages`
-are a build of that commit, and the next reinstall (any `mngr plugin add`, the
-update-self refresh, `uv sync`) puts that build back. An edit there can neither
-persist nor be submitted.
+no git checkout of it here. In a released workspace the installed files under the
+tool's `site-packages` are a build of that commit, and the next reinstall (any
+`mngr plugin add`, the update-self refresh, `uv sync`) puts that build back. In a
+workspace built against an mngr checkout (`system/vendor/mngr` exists; how
+`just minds-start` in the mngr repo builds them), that tree is an editable install,
+so an edit there runs -- but it is a copy with no `.git`, so it cannot be
+submitted either.
 
 **The rule: mngr changes are not template changes. They get their own PR on the
 mngr repo, developed in a standalone checkout.** Once that PR merges and reaches
@@ -39,10 +42,8 @@ usually needs to carry nothing but that pin bump, if anything.
    uv tool install -e .external_worktrees/mngr/libs/mngr \
        --with-editable .external_worktrees/mngr/libs/mngr_claude   # plus the other plugins you need
    # ...test...
-   # restore the pinned build
-   uv tool uninstall imbue-mngr
-   uv tool install "$(python3 system/scripts/list_mngr_plugins.py --base)" \
-       $(python3 system/scripts/list_mngr_plugins.py --tool mngr | sed 's/^/--with /')
+   # restore the build pyproject.toml calls for
+   bash system/scripts/install_mngr_tools.sh
    ```
 
 3. Commit in the checkout and follow mngr's own conventions from there (its
@@ -52,4 +53,4 @@ usually needs to carry nothing but that pin bump, if anything.
 
 4. After it merges: bump the pin here by editing the `rev` under
    `[tool.uv.sources]` in `pyproject.toml` to the public-mirror commit that
-   carries it, then `uv lock` and rebuild the tools as in step 2's restore.
+   carries it, then `uv lock` and `bash system/scripts/install_mngr_tools.sh`.
