@@ -20,7 +20,7 @@ from app_instances.testing import (
     wait_until,
     write_sidecar_manifest,
 )
-from app_manifest.primitives import AppName
+from app_manifest.primitives import AppName, InstancesUrl
 from app_manifest.registry import read_registry
 from files_app.testing import ENV_FAKE_DUFS_DIR, install_fake_dufs, read_fake_dufs_argv
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -37,7 +37,7 @@ class _FilesAppUnderTest(FrozenModel):
     app_name: AppName = Field(description="The unique name the app registers")
     dufs_port: int = Field(description="The port the fake dufs is told to serve on")
     instances_port: int = Field(description="The port the instances API is served on")
-    instances_url: str = Field(description="Where the instances API is served")
+    instances_url: InstancesUrl = Field(description="Where the instances API is served")
     store_path: Path = Field(description="The instances.json the app is told to use")
     dufs_record_dir: Path = Field(description="Where the fake dufs records its argv")
     log_path: Path = Field(description="Where the app's stderr is captured")
@@ -51,7 +51,7 @@ def _prepare(environment: SidecarEnvironment) -> _FilesAppUnderTest:
     app_name = AppName(f"files-{uuid4().hex[:8]}")
     dufs_port = free_port()
     instances_port = free_port()
-    instances_url = f"http://{LOOPBACK_HOST}:{instances_port}"
+    instances_url = InstancesUrl(f"http://{LOOPBACK_HOST}:{instances_port}")
     manifest_path = write_sidecar_manifest(
         environment.scratch_dir, app_name, instances_url
     )
