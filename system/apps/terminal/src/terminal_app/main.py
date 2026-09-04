@@ -1,6 +1,5 @@
 import os
 import sys
-import urllib.parse
 from pathlib import Path
 from typing import Final
 
@@ -9,13 +8,12 @@ from app_instances.blueprint import build_instances_app
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.json_store import app_store_path
 from app_instances.nudge import shell_base_url
-from app_instances.sidecar import run_sidecar_app
+from app_instances.sidecar import app_url_port, run_sidecar_app
 from app_manifest.manifest import AppManifest
 from app_manifest.primitives import AppName, AppUrl, InstancesUrl
 from flask import Flask
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
-from imbue.imbue_common.pure import pure
 from pydantic import Field
 
 from terminal_app.data_types import TerminalPaths
@@ -25,7 +23,6 @@ from terminal_app.dispatch import (
     install_dispatch_scripts,
     install_ttyd_web_client,
 )
-from terminal_app.errors import TerminalAppError
 from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
@@ -70,19 +67,6 @@ class TerminalAppArguments(FrozenModel):
     )
 
 
-@pure
-def ttyd_port(app_url: AppUrl) -> int:
-    try:
-        port = urllib.parse.urlsplit(app_url).port
-    except ValueError as e:
-        raise TerminalAppError(
-            f"the app URL {app_url!r} names no usable port for ttyd: {e}"
-        ) from e
-    if port is None:
-        raise TerminalAppError(f"the app URL {app_url!r} names no port for ttyd")
-    return port
-
-
 def run_terminal_app(arguments: TerminalAppArguments) -> int:
     """Do what the launcher script did (dispatch scripts, web client, discovery event), then run ttyd under the sidecar."""
     # The dispatch scripts bake the directory in, so it is anchored here rather than left to the
@@ -124,7 +108,7 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
         instances_url=arguments.instances_url,
         child_argv=build_ttyd_argv(
             ttyd_executable=arguments.ttyd_executable,
-            port=ttyd_port(arguments.app_url),
+            port=app_url_port(arguments.app_url),
             index_path=paths.ttyd_index_path if is_client_installed else None,
             commands_dir=paths.commands_dir,
         ),

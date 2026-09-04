@@ -1711,8 +1711,10 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
     assert terminal.directory == "system/apps/terminal"
     assert terminal.executable == "terminal-app"
     assert terminal.is_critical is True
-    # A directory without a pyproject (the files app) is not a tool.
-    assert "files" not in {app.directory.rsplit("/", 1)[1] for app in _APP_TOOLS}
+    files = by_name["files-app"]
+    assert files.directory == "system/apps/files"
+    assert files.executable == "files-app"
+    assert files.is_critical is False
 
 
 def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
@@ -1778,22 +1780,27 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         ("system/apps/browser/src/browser/static/app.js", set()),
         ("system/apps/terminal/src/terminal_app/main.py", {"terminal-app"}),
         ("system/apps/terminal/terminal_tmux.conf", {"terminal-app"}),
+        ("system/apps/files/src/files_app/main.py", {"files-app"}),
+        # The vendored dufs frontend is served as-is, but assets/ is not one of the
+        # excluded directories, so a beacon edit reinstalls the (editable) tool:
+        # harmless, and cheaper than a per-app exception to the rule.
+        ("system/apps/files/assets/index.js", {"files-app"}),
         # A shared backend manifest is part of every app tool's closure: the
         # vendored packages an app depends on editable, and the plugin table
         # that assigns plugins to its tool.
         (
             "system/apps/system_interface/pyproject.toml",
-            {"system-interface", "browser", "terminal-app"},
+            {"system-interface", "browser", "terminal-app", "files-app"},
         ),
         (
             "system/vendor/mngr/libs/mngr/pyproject.toml",
-            {"system-interface", "browser", "terminal-app"},
+            {"system-interface", "browser", "terminal-app", "files-app"},
         ),
         (
             update_layout.PLUGIN_MANIFEST_PATH,
-            {"system-interface", "browser", "terminal-app"},
+            {"system-interface", "browser", "terminal-app", "files-app"},
         ),
-        ("uv.lock", {"system-interface", "browser", "terminal-app"}),
+        ("uv.lock", {"system-interface", "browser", "terminal-app", "files-app"}),
     ],
 )
 def test_plan_apply_refreshes_the_tool_of_every_changed_app_directory(

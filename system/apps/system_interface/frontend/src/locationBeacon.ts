@@ -4,8 +4,9 @@
  *
  * This is the second sanctioned cross-frame message surface, beside the embed
  * contract (`src/embed.ts`, which owns the chrome<->workspace channel): a
- * framed app posts `{type: "minds-location", path}` to `window.parent` -- one
- * hop up, which is this shell -- on each page load, so the instance it shows
+ * framed app posts `{type: "shell:location", path}` (the workspace app model's
+ * contract message; the older `minds-location` spelling is still accepted) to
+ * `window.parent` -- one hop up, which is this shell -- on each page load, so the instance it shows
  * can reopen at the same place (see the vendored file viewer's beacon and the
  * `build-app` scaffold). It lives in its own module for the same reason the
  * embed contract does: every raw `message` listener is confined by the embed
@@ -28,7 +29,10 @@ import { IFRAME_PANEL_LIVE_KEY_ATTR } from "./views/IframePanel";
 
 function handleLocationBeaconMessage(event: MessageEvent): void {
   const data = event.data as { type?: unknown; path?: unknown } | null;
-  if (data === null || typeof data !== "object" || data.type !== "minds-location") return;
+  // CLEANUP: drop the "minds-location" spelling in phase 7 of the workspace app model, when
+  // this listener is replaced by the contract listener in DockviewWorkspace.ts.
+  if (data === null || typeof data !== "object") return;
+  if (data.type !== "shell:location" && data.type !== "minds-location") return;
   if (typeof data.path !== "string" || data.path === "") return;
   // The sender must be one of this workspace's own services: their origins
   // are derived from the registry exactly as the panes' URLs are, so the

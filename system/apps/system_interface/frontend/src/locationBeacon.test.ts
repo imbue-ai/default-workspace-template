@@ -65,6 +65,12 @@ beforeEach(() => {
 describe("the location-beacon listener", () => {
   it("records a framed instance's beacon under the pane's ref", () => {
     const paneWindow = mountPane(INSTANCE_REF);
+    postBeacon({ type: "shell:location", path: "/docs/guide" }, TRUSTED_ORIGIN, paneWindow);
+    expect(machine.recordMemberLocation).toHaveBeenCalledExactlyOnceWith(INSTANCE_REF, "/docs/guide");
+  });
+
+  it("still records the older minds-location spelling of the beacon", () => {
+    const paneWindow = mountPane(INSTANCE_REF);
     postBeacon({ type: "minds-location", path: "/docs/guide" }, TRUSTED_ORIGIN, paneWindow);
     expect(machine.recordMemberLocation).toHaveBeenCalledExactlyOnceWith(INSTANCE_REF, "/docs/guide");
   });
@@ -87,11 +93,11 @@ describe("the location-beacon listener", () => {
     expect(machine.recordMemberLocation).not.toHaveBeenCalled();
   });
 
-  it("drops payloads that are not a minds-location with a non-empty path", () => {
+  it("drops payloads that are not a location beacon with a non-empty path", () => {
     const paneWindow = mountPane(INSTANCE_REF);
     postBeacon({ type: "something-else", path: "/docs/guide" }, TRUSTED_ORIGIN, paneWindow);
-    postBeacon({ type: "minds-location", path: "" }, TRUSTED_ORIGIN, paneWindow);
-    postBeacon({ type: "minds-location", path: 42 }, TRUSTED_ORIGIN, paneWindow);
+    postBeacon({ type: "shell:location", path: "" }, TRUSTED_ORIGIN, paneWindow);
+    postBeacon({ type: "shell:location", path: 42 }, TRUSTED_ORIGIN, paneWindow);
     postBeacon(null, TRUSTED_ORIGIN, paneWindow);
     expect(machine.recordMemberLocation).not.toHaveBeenCalled();
   });

@@ -479,11 +479,15 @@ def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program
 def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
     conf = Path(__file__).resolve().parents[4] / "system" / "supervisord.conf"
     ports = migrate_workspace.parse_supervisord_ports(conf.read_text(encoding="utf-8"))
-    # The terminal registers from inside its own process, so the config itself names the other three.
+    # The terminal and the files app register from inside their own processes (the registry
+    # scan covers them), so the config itself names the other two.
     assert {(port.name, port.port) for port in ports} >= {
         ("system_interface", 8000),
-        ("files", 8300),
         ("browser", 8081),
+    }
+    assert not {name for name, _ in ((port.name, port.port) for port in ports)} & {
+        "terminal",
+        "files",
     }
 
 

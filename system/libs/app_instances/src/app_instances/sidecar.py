@@ -50,6 +50,22 @@ def child_exit_code(returncode: int) -> int:
 
 
 @pure
+def app_url_port(app_url: AppUrl) -> int:
+    """The port the wrapped server must listen on: the one the app URL names."""
+    try:
+        port = urllib.parse.urlsplit(app_url).port
+    except ValueError as e:
+        raise SidecarError(
+            f"the app URL {app_url!r} names no usable port for the wrapped server: {e}"
+        ) from e
+    if port is None:
+        raise SidecarError(
+            f"the app URL {app_url!r} names no port for the wrapped server"
+        )
+    return port
+
+
+@pure
 def split_instances_url(instances_url: InstancesUrl) -> tuple[str, int]:
     """The host and port an instances URL names."""
     parts = urllib.parse.urlsplit(instances_url)

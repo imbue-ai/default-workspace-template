@@ -13,6 +13,7 @@ from app_instances.blueprint import build_instances_app
 from app_instances.errors import SidecarError
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.sidecar import (
+    app_url_port,
     child_exit_code,
     register_app,
     run_sidecar,
@@ -238,3 +239,11 @@ def test_run_sidecar_app_serves_the_routes_the_app_mounts_beside_the_blueprint(
     assert seen_manifest_names == [
         row.name for row in read_registry(sidecar_environment.registry_path)
     ]
+
+
+def test_app_url_port_reads_the_wrapped_servers_port_from_the_app_url() -> None:
+    assert app_url_port(AppUrl("http://localhost:8080")) == 8080
+    with pytest.raises(SidecarError, match="names no port"):
+        app_url_port(AppUrl("http://localhost"))
+    with pytest.raises(SidecarError, match="names no usable port"):
+        app_url_port(AppUrl("http://localhost:seven"))
