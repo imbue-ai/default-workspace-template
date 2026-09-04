@@ -216,6 +216,31 @@ class CdpClient:
     async def close_target(self, target_id: str) -> None:
         await self.send("Target.closeTarget", {"targetId": target_id})
 
+    async def navigate(self, target_id: str, url: str) -> None:
+        """Point one tab at ``url`` (the instances API's location verb).
+
+        ``Page.navigate`` is a page-domain call, so it needs a session on the target: attach
+        flattened, navigate through that session, detach. Chromium reports a navigation it
+        could not even start (a bad host, a refused scheme) in ``errorText`` rather than as a
+        protocol error, so that is raised too.
+        """
+        attached = await self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+        session_id = attached["sessionId"]
+        try:
+            result = await self.send("Page.navigate", {"url": url}, session_id=session_id)
+        finally:
+            await self._detach_quietly(session_id)
+        error_text = result.get("errorText")
+        if error_text:
+            raise CdpError(f"Page.navigate to {url}: {error_text}")
+
+    async def _detach_quietly(self, session_id: str) -> None:
+        """Drop a session opened for one call; a detach that fails changes nothing for the caller."""
+        try:
+            await self.send("Target.detachFromTarget", {"sessionId": session_id})
+        except CdpError as e:
+            logger.debug("cdp detach of session {} ignored ({})", session_id, e)
+
 
 def _is_real_page(target: dict[str, Any]) -> bool:
     """A user-visible tab, as opposed to an extension or Chrome-internal target."""

@@ -33,3 +33,11 @@ Phase 4 of that model, "the files app" (nothing user-visible changes: the file v
 - `system/supervisord.conf`'s `[program:files]` runs `files-app`, the new Python package under `system/apps/files` (see its own changelog), instead of the `bash -c` line that registered the manifest and exec'd dufs; the root `pyproject.toml` no longer excludes the files app from the uv workspace (the `exclude` key is gone), so `uv.lock` gained the package.
 
 - `contracts.md` gained section 17, where app data and machine state live: every app's instance records at `data/.apps/<name>/instances.json`, machine state (the registry, the terminal's dispatch scripts and pty records, the shell's client layouts) under `data/.state/`; the root `CLAUDE.md` and `AGENTS.md` sentences on `data/` point at it, and the terminal's store moved from `data/.state/terminal/` to `data/.apps/terminal/instances.json` accordingly (see the terminal's changelog). `phase_04_files_app.md` records what landed; `system/apps/README.md` describes the files app as a package.
+
+Phase 5 of that model, "the browser app" (nothing user-visible changes: the browser tab, the fleet CLI, and the shell's browser routes behave as before):
+
+- The browser daemon serves the instances API over its fleet (see the browser's changelog), so `curl http://127.0.0.1:8081/_instances` lists the open browsers with `working`, `idle`, or `error` status; the root `uv.lock` gained the browser's `app-instances` and `app-manifest` dependencies.
+
+- `contracts.md` section 4.2 lets a location report carry an absolute `http(s)` URL for an app that navigates to other sites' pages, each app taking the form that fits it and answering `400` for the other, and section 4.3's browser row says what the browser does with one (navigates the active tab; `409` while an agent holds the browser or while it is launching or crashed) and lists a launching browser as `idle`. `phase_05_browser_app.md` records what landed.
+
+- The browser's fleet manifest moved from `data/.state/browser-fleet.json` to `data/.apps/browser/instances.json` per contracts section 17 (`data/.state/README.md` says so); the old file is read until the daemon first writes the new one.

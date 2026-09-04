@@ -15,7 +15,9 @@ Built-in apps:
   serves the instances API over the workspace's tmux sessions.
 - `files/` - The file viewer tab: the `files-app` package, the instances
   library's sidecar around dufs over `data/`.
-- `browser/` - The live browser tab: a headless Chromium streamed to the UI.
+- `browser/` - The live browser tab: a fleet of Chromium browsers streamed to
+  the UI, whose daemon (`browser-service`) also serves the instances API over
+  the fleet.
 
 Every app describes itself in an `app.toml` manifest beside its code: its
 registered name, the display name users see, its icon, whether it serves

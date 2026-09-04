@@ -26,6 +26,26 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   always wins and pins the browser to the human. For direct control ownership is a
   sticky lease (acquired on the first command, re-checked before every command, and
   auto-released when idle); for `task` it is bound to the live request connection.
+- **Instances** (`instances.py`, `bridged_fleet.py`): the daemon also serves the
+  instances API of the workspace app model (`/_instances`, mounted on the same
+  Flask app because the daemon serves its own origin; the manifest names no
+  separate `instances_url`). One instance per browser: key = the name, URL
+  `/?session=<name>`, title `Browser N` for a numbered name and a legacy name
+  verbatim, status `working` while an agent holds control, `idle` otherwise (a
+  browser still launching included), `error` once it crashed; `explicit`
+  lifetime, not renameable. `new` creates through the same path as `POST
+  /browsers` (409 with the reason while the fleet is full or Chromium is not
+  installed), delete is the same close as `DELETE /browsers/<name>`, and a
+  location report with an absolute `http(s)` URL navigates the live browser's
+  active tab (409 while an agent holds it or while it is launching or crashed;
+  a rooted path is 400) and checkpoints the manifest so a restart restores the
+  new page. Reads, delete, and location answer 503 until the restore finishes,
+  like the daemon's own state-changing routes; create does not wait, like `POST
+  /browsers`. Every fleet event that changes the list or a status (a
+  registration, a launch reaching `running`, a close, a crash, every ownership
+  write) nudges the shell (`POST <shell>/api/apps/browser/changed`) from a
+  daemon thread, so a slow shell never stalls the event loop. The existing
+  `/browsers` routes stay for the CLI and the shell's passthroughs.
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
   name of the browser it started); every other command takes that
