@@ -3,7 +3,7 @@
   packages from the public mngr repo, https://github.com/imbue-ai/mngr, at the
   one commit `pyproject.toml` pins under `[tool.uv.sources]`.
   `system/scripts/build_workspace.sh` derives the `mngr` and `system-interface`
-  tools (`system/scripts/install_mngr_tools.sh`, one `uv tool install` each so
+  tools (`system/scripts/build_mngr_tools.sh`, one `uv tool install` each so
   uv resolves the whole set at one commit) and the workspace venv from that pin;
   `system/config/mngr_plugins.toml` lists each plugin's package and repo
   subdirectory.

@@ -52,7 +52,7 @@ python3 "$REPO_ROOT/system/scripts/use_local_mngr.py" "$REPO_ROOT"
 # system/config/mngr_plugins.toml, which the update-self apply reads too, so a
 # release adding a plugin registers it in existing workspaces as well as here.
 # mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
-bash "$REPO_ROOT/system/scripts/install_mngr_tools.sh"
+bash "$REPO_ROOT/system/scripts/build_mngr_tools.sh"
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.
