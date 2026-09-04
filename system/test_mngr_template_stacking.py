@@ -148,3 +148,28 @@ def test_scalar_template_options_override_rather_than_stack() -> None:
     result = _apply(("main", "docker"))
     assert result["provider"] == "docker"
     assert result["target_path"] == "/home/user/workspace/"
+
+
+def test_worker_template_installs_claude_plugins_before_the_agent_starts() -> None:
+    """A worker gets exactly one claude session, in a worktree path no session has
+    seen before, and Claude Code resolves its plugin set at session startup. The
+    SessionStart-hook install is therefore too late for a worker: the review gates
+    its harden contract mandates (`/autofix`, `/verify-architecture`) come from the
+    code-guardian plugin, so the plugins must be installed at provision time,
+    after the venv converge that precedes every other provisioning step -- and
+    NOT strictly: a plugin or marketplace outage must never make a worker
+    undeployable, so the install is a warning on failure, not a failed launch."""
+    result = _apply(("worker",))
+    commands = result["extra_provision_command"]
+    plugin_commands = [cmd for cmd in commands if "claude_update_plugin.sh" in cmd]
+    assert len(plugin_commands) == 1, (
+        f"expected exactly one plugin-install provisioning command from worker, got {commands!r}"
+    )
+    assert plugin_commands[0].split() == [
+        "bash",
+        "system/scripts/claude_update_plugin.sh",
+    ]
+    sync_position = next(
+        idx for idx, cmd in enumerate(commands) if cmd == "uv sync --all-packages"
+    )
+    assert commands.index(plugin_commands[0]) > sync_position
