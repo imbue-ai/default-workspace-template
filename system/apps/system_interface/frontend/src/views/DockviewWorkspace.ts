@@ -95,6 +95,7 @@ import {
   createChatAgent,
   fetchTerminalSessions,
   getAgentById,
+  getAgentForChat,
   getAgents,
   getApps,
   getProtoAgents,
@@ -4985,8 +4986,20 @@ function renderLiveContent(surface: LiveSurface, kind: LiveContentKind): m.Child
           m(IframePanel, { url, title: params.title ?? "terminal", liveKey: surface.key }),
         ),
       ];
-    case "agent-terminal":
-      return m(AgentTerminalPanel, { agentId: params.agentId, url, title: params.title ?? "Tab" });
+    case "agent-terminal": {
+      // Bound to the tmux session of whichever agent backs this CHAT now. The url carries the
+      // agent's name, and a harness switch replaces the agent -- so re-deriving it here on each
+      // redraw is what makes a switched chat's open terminal tab reattach to the live session
+      // instead of a dead one. Falls back to the saved url for a panel that names no live chat
+      // (an agent terminal opened on something that is not a chat).
+      const terminalChatId = chatIdForPanel(params);
+      const liveAgent = terminalChatId === null ? undefined : getAgentForChat(terminalChatId);
+      return m(AgentTerminalPanel, {
+        agentId: liveAgent?.id ?? params.agentId,
+        url: liveAgent === undefined ? url : buildAgentTerminalUrl(liveAgent.name),
+        title: params.title ?? "Tab",
+      });
+    }
     case "iframe":
       return m(IframePanel, {
         url,

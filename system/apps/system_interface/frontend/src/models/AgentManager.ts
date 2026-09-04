@@ -6,6 +6,7 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
 import { asChatId } from "../ids";
+import type { ChatId } from "../ids";
 import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
@@ -60,6 +61,31 @@ export interface AgentState {
   // -- the frontend computes nothing about availability and there is no error path. Absent =
   // treat as unavailable (defensive; the button only renders when the queue is non-empty anyway).
   shoulder_tap_available?: boolean;
+  // The stable id of the CHAT this agent currently backs, which is the id of the
+  // first agent the chat ever had. Equal to ``id`` for a chat that has never
+  // switched harness (and absent on an older backend), which is why every reader
+  // goes through ``chatIdOfAgent`` rather than reading it directly.
+  chat_id?: string;
+  // The harness switch running on this chat right now, pushed by the backend, or
+  // absent when none is. Cleared as the last act of a switch, so its absence is
+  // the only "the switch is over" signal the frontend needs.
+  handoff?: HandoffState | null;
+}
+
+/** The state of one in-flight harness switch (the wire shape of the backend
+ *  ``HandoffState``). Reported on the agent currently backing the chat. */
+export interface HandoffState {
+  phase: "preparing" | "finishing" | "failed";
+  target_harness: string;
+  /** Why a failed switch failed; empty otherwise. */
+  detail?: string;
+}
+
+/** The chat this agent backs. Falls back to the agent's own id, which is the
+ *  right answer for a chat that has never switched -- and for a backend that
+ *  does not send the field at all. */
+export function chatIdOfAgent(agent: AgentState): ChatId {
+  return asChatId(agent.chat_id ?? agent.id);
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of
@@ -645,6 +671,18 @@ export function getAgents(): AgentState[] {
 
 export function getAgentById(id: string): AgentState | undefined {
   return agents.find((a) => a.id === id);
+}
+
+/**
+ * The agent currently backing a chat, which is not always the agent whose id the chat carries.
+ *
+ * For everything that goes through the backend this is unnecessary -- the ``/api/chats`` routes
+ * resolve the chat themselves. It is here for the few things the frontend has to bind to the
+ * PROCESS: a tmux session name, an agent's live state. Those follow a harness switch only if
+ * they are looked up by chat.
+ */
+export function getAgentForChat(chatId: ChatId): AgentState | undefined {
+  return agents.find((a) => chatIdOfAgent(a) === chatId);
 }
 
 /** The full snapshot of an agent's currently-queued messages, in enqueue order.
