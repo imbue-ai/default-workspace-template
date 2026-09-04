@@ -2077,7 +2077,9 @@ class BrowserSessionManager(MutableModel):
         a deleted profile. A manifest-write hiccup must not fail the close or skip the profile
         delete; the periodic checkpoint reconciles the manifest anyway. Every browser is created
         on demand (no permanent default), so closing one always forgets its persistent profile.
-        An unknown name is a no-op, like :meth:`close`.
+        An unknown name closes nothing (like :meth:`close`) but still forgets a profile left
+        under it, so one orphaned between a close and its delete frees its name now rather
+        than at the next boot's sweep.
         """
         await self.close(browser_id)
         try:
