@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Print the plugin paths ``system/config/mngr_plugins.toml`` assigns to one tool.
+"""Print the PEP 508 requirement for mngr, or for the plugins one tool registers.
 
-One path per line, relative to the workspace root, for ``build_workspace.sh``
-to feed ``uv tool install --with-editable`` and ``mngr plugin add --path``.
-The update-self apply reads the same file itself.
+``--base`` prints the requirement for ``imbue-mngr`` itself; ``--tool`` prints one
+requirement per plugin ``system/config/mngr_plugins.toml`` assigns to that tool, in
+file order. Either way each line is ready for ``uv tool install``:
+
+    imbue-mngr-claude @ git+https://github.com/imbue-ai/mngr@<rev>#subdirectory=libs/mngr_claude
+
+The repo and the commit come from ``pyproject.toml``'s ``[tool.uv.sources]`` entry
+for ``imbue-mngr`` -- the one place the mngr pin lives -- so the tool environments and
+the workspace venv can never resolve different commits. The manifest contributes only
+the package name and its subdirectory in that repo.
 """
 
 import argparse
@@ -12,30 +19,65 @@ import tomllib
 from pathlib import Path
 
 MANIFEST_PATH = "system/config/mngr_plugins.toml"
+PYPROJECT_PATH = "pyproject.toml"
+MNGR_PACKAGE = "imbue-mngr"
 
 
-def plugin_paths_for_tool(manifest_text: str, tool: str) -> list[str]:
-    """The manifest's plugin paths whose ``tools`` list names ``tool``, in file order."""
+class MngrPinError(Exception):
+    """The mngr pin could not be read from pyproject.toml."""
+
+
+def read_mngr_pin(pyproject_text: str) -> tuple[str, str]:
+    """The ``(git_url, rev)`` that ``[tool.uv.sources]`` pins ``imbue-mngr`` to."""
+    source = tomllib.loads(pyproject_text).get("tool", {}).get("uv", {}).get("sources", {}).get(MNGR_PACKAGE)
+    if not isinstance(source, dict) or "git" not in source or "rev" not in source:
+        raise MngrPinError(
+            f"{PYPROJECT_PATH} must pin {MNGR_PACKAGE} in [tool.uv.sources] as "
+            '{ git = "...", rev = "<commit>", subdirectory = "libs/mngr" }'
+        )
+    return str(source["git"]), str(source["rev"])
+
+
+def requirement(package: str, git_url: str, rev: str, subdirectory: str) -> str:
+    return f"{package} @ git+{git_url}@{rev}#subdirectory={subdirectory}"
+
+
+def base_requirement(pyproject_text: str) -> str:
+    git_url, rev = read_mngr_pin(pyproject_text)
+    source = tomllib.loads(pyproject_text)["tool"]["uv"]["sources"][MNGR_PACKAGE]
+    return requirement(MNGR_PACKAGE, git_url, rev, str(source["subdirectory"]))
+
+
+def plugin_requirements_for_tool(manifest_text: str, pyproject_text: str, tool: str) -> list[str]:
+    """The manifest's plugins whose ``tools`` list names ``tool``, as requirements, in file order."""
+    git_url, rev = read_mngr_pin(pyproject_text)
     manifest = tomllib.loads(manifest_text)
     return [
-        str(entry["path"])
+        requirement(str(entry["package"]), git_url, rev, str(entry["subdirectory"]))
         for entry in manifest.get("plugins", [])
         if tool in entry.get("tools", [])
     ]
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tool", required=True, help="mngr or system-interface")
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    what = parser.add_mutually_exclusive_group(required=True)
+    what.add_argument("--base", action="store_true", help="print the requirement for imbue-mngr itself")
+    what.add_argument("--tool", help="print the plugin requirements for this tool: mngr or system-interface")
     parser.add_argument(
         "--repo-root",
         default=".",
-        help="The workspace root the manifest is read under (default: cwd).",
+        help="The workspace root the manifest and pyproject.toml are read under (default: cwd).",
     )
     args = parser.parse_args(argv)
-    manifest = Path(args.repo_root) / MANIFEST_PATH
-    for path in plugin_paths_for_tool(manifest.read_text(), args.tool):
-        sys.stdout.write(f"{path}\n")
+    root = Path(args.repo_root)
+    pyproject_text = (root / PYPROJECT_PATH).read_text()
+    if args.base:
+        lines = [base_requirement(pyproject_text)]
+    else:
+        lines = plugin_requirements_for_tool((root / MANIFEST_PATH).read_text(), pyproject_text, args.tool)
+    for line in lines:
+        sys.stdout.write(f"{line}\n")
     return 0
 
 
