@@ -6,21 +6,25 @@ from collections.abc import Sequence
 from types import FrameType
 
 import httpx
+from app_instances.nudge import ShellNudger
+from app_instances.nudge import ThreadedNudger
+from app_instances.nudge import shell_base_url
 from flask import Flask
 from loguru import logger as _loguru_logger
 
 from imbue.system_interface import projects
+from imbue.system_interface.accounts import AccountError
+from imbue.system_interface.accounts import reconcile
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.auto_open import AutoOpenLedger
 from imbue.system_interface.auto_open import ledger_path_for_layout_dir
+from imbue.system_interface.chat_instances import CHAT_APP_NAME
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.accounts import AccountError
-from imbue.system_interface.accounts import reconcile
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
@@ -159,6 +163,13 @@ def main() -> None:
     application = build_application(config, args)
     with application.app_context():
         state = get_state()
+
+    # The chat app tells the shell when its instance list changes (contracts.md section
+    # 5.1). Installed here, at the process entry point, so a manager a test builds nudges
+    # nobody; on a thread of its own, so an agent event never waits on the shell.
+    state.agent_manager.set_nudger(
+        ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=shell_base_url()))
+    )
 
     # Start the ``mngr observe`` pipeline now that the app is assembled. This is
     # the one place observe is started; ``build_application`` only constructs, so

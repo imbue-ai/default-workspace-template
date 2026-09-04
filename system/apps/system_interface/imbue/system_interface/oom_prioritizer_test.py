@@ -1,15 +1,17 @@
 """Unit tests for the chat OOM prioritizer.
 
 The engine is exercised with injected collaborators: a fixed chat-id list, a pid
-resolver backed by a dict, a manually-advanced clock, a dict of process-start
-times, and a capturing ``set_adj`` so the exact ``oom_score_adj`` written per pid
-is asserted against the band policy.
+resolver backed by a dict, a manually-advanced clock, a presence tracker on that
+clock, a dict of process-start times, and a capturing ``set_adj`` so the exact
+``oom_score_adj`` written per pid is asserted against the band policy.
 """
 
 from oom_priority import bands
 
 from imbue.mngr.utils.polling import poll_until
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.presence import PresenceState
+from imbue.system_interface.presence import PresenceTracker
 
 _HOUR = 3600.0
 
@@ -32,7 +34,11 @@ class _Harness:
             resolve_process_started_at=self.process_started_at.get,
             clock=lambda: self.now,
             sweep_interval_seconds=sweep_interval_seconds,
+            presence=PresenceTracker(clock=lambda: self.now),
         )
+
+    def report(self, agent_id: str, state: PresenceState, client_id: str = "client-1") -> None:
+        self.prioritizer.record_presence(agent_id, client_id, state)
 
     def _set_adj(self, pid: int, adj: int) -> bool:
         self.writes.append((pid, adj))
@@ -61,7 +67,7 @@ def _fresh(*, is_open: bool, is_visible: bool, recency_rank: int | None) -> int:
 
 def test_open_and_visible_chat_is_more_protected_than_a_closed_one() -> None:
     h = _Harness(chat_ids=["a", "b"], pids={"a": 10, "b": 20})
-    h.prioritizer.record_activity(open_ids=["a"], visible_ids=["a"], messaged_id=None)
+    h.report("a", PresenceState.VISIBLE)
     latest = h.latest_adj_by_pid()
     # ``a`` is open+visible; ``b`` is closed. Neither messaged, so no recency bonus.
     assert latest[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
@@ -73,33 +79,63 @@ def test_more_recently_messaged_chat_ranks_more_protected() -> None:
     h = _Harness(chat_ids=["a", "b"], pids={"a": 10, "b": 20})
     # Message ``a`` first, then ``b``. Neither has an open tab, so only recency
     # differentiates them and ``b`` (newer) must end up more protected than ``a``.
-    h.prioritizer.record_activity(open_ids=[], visible_ids=[], messaged_id="a")
+    h.prioritizer.record_message("a")
     h.advance(60.0)
-    h.prioritizer.record_activity(open_ids=[], visible_ids=[], messaged_id="b")
+    h.prioritizer.record_message("b")
     latest = h.latest_adj_by_pid()
     assert latest[20] < latest[10]
     assert latest[20] == _fresh(is_open=False, is_visible=False, recency_rank=0)
 
 
-def test_visible_without_open_is_treated_as_open() -> None:
+def test_a_hidden_page_counts_as_open_but_not_visible() -> None:
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    # A report that lists ``a`` visible but not open (shouldn't happen, but be
-    # defensive): visible implies open, so it scores as open+visible.
-    h.prioritizer.record_activity(open_ids=[], visible_ids=["a"], messaged_id=None)
+    h.report("a", PresenceState.HIDDEN)
+    assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=False, recency_rank=None)
+
+
+def test_visible_in_any_client_makes_the_chat_visible() -> None:
+    h = _Harness(chat_ids=["a"], pids={"a": 10})
+    h.report("a", PresenceState.HIDDEN, client_id="desktop")
+    h.report("a", PresenceState.VISIBLE, client_id="phone")
+    assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
+    # The phone puts it away; the desktop still has it open.
+    h.report("a", PresenceState.CLOSED, client_id="phone")
+    assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=False, recency_rank=None)
+
+
+def test_an_unrefreshed_report_expires() -> None:
+    # A page that vanished without its pagehide (a crashed tab) stops counting once
+    # its heartbeat has been missing for the expiry window.
+    h = _Harness(chat_ids=["a"], pids={"a": 10})
+    h.report("a", PresenceState.VISIBLE)
+    h.advance(11 * 60.0)
+    h.prioritizer.reapply()
+    assert h.latest_adj_by_pid()[10] == _fresh(is_open=False, is_visible=False, recency_rank=None)
+
+
+def test_a_heartbeat_keeps_the_report_alive() -> None:
+    h = _Harness(chat_ids=["a"], pids={"a": 10})
+    h.report("a", PresenceState.VISIBLE)
+    for _ in range(12):
+        h.advance(60.0)
+        h.report("a", PresenceState.VISIBLE)
+    h.prioritizer.reapply()
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
 
 
 def test_dormant_chat_without_a_live_pid_is_skipped() -> None:
     # ``b`` has no live pid, so it is skipped while ``a`` is tagged.
     h = _Harness(chat_ids=["a", "b"], pids={"a": 10})
-    h.prioritizer.record_activity(open_ids=["a", "b"], visible_ids=[], messaged_id=None)
+    h.report("a", PresenceState.HIDDEN)
+    h.report("b", PresenceState.HIDDEN)
     assert set(h.latest_adj_by_pid()) == {10}
 
 
 def test_revived_chat_is_tagged_on_the_next_reapply() -> None:
     # Dormant: no pid yet, so the first report tags nothing.
     h = _Harness(chat_ids=["a"], pids={})
-    h.prioritizer.record_activity(open_ids=["a"], visible_ids=["a"], messaged_id="a")
+    h.report("a", PresenceState.VISIBLE)
+    h.prioritizer.record_message("a")
     assert h.writes == []
     # A later activity report (e.g. the user messages the now-revived chat) finds
     # its live process and re-tags it -- the re-resolution is idempotent per report.
@@ -113,17 +149,19 @@ def test_non_chat_ids_in_the_report_are_ignored() -> None:
     # The frontend reports every tab; a worker/primary id that slips into the sets
     # must never be written, because it is not among the managed chat ids.
     h = _Harness(chat_ids=["chat"], pids={"chat": 10, "worker": 99})
-    h.prioritizer.record_activity(open_ids=["chat", "worker"], visible_ids=["worker"], messaged_id="worker")
+    h.report("chat", PresenceState.HIDDEN)
+    h.report("worker", PresenceState.VISIBLE)
+    h.prioritizer.record_message("worker")
     assert set(h.latest_adj_by_pid()) == {10}
 
 
-def test_later_report_replaces_presence_wholesale() -> None:
+def test_a_closed_report_releases_the_chat() -> None:
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.prioritizer.record_activity(open_ids=["a"], visible_ids=["a"], messaged_id=None)
+    h.report("a", PresenceState.VISIBLE)
     protected = h.latest_adj_by_pid()[10]
-    # The tab is closed; the next report drops it from both sets and ``a`` becomes
-    # the most-expendable (base) chat again.
-    h.prioritizer.record_activity(open_ids=[], visible_ids=[], messaged_id=None)
+    # The tab is closed; the page's closed report drops the client's presence and ``a``
+    # becomes the most-expendable (base) chat again.
+    h.report("a", PresenceState.CLOSED)
     reverted = h.latest_adj_by_pid()[10]
     assert reverted > protected
     assert reverted == _fresh(is_open=False, is_visible=False, recency_rank=None)
@@ -138,9 +176,13 @@ def test_a_chat_left_alone_is_shed_before_a_freshly_spawned_worker() -> None:
     less.
     """
     h = _Harness(chat_ids=["stale", "live"], pids={"stale": 10, "live": 20})
-    h.prioritizer.record_activity(open_ids=["stale"], visible_ids=["stale"], messaged_id="stale")
-    h.advance(3 * 24 * _HOUR)
-    h.prioritizer.record_activity(open_ids=["stale", "live"], visible_ids=["live"], messaged_id="live")
+    h.report("stale", PresenceState.VISIBLE)
+    h.prioritizer.record_message("stale")
+    for _ in range(3 * 24 * 6):
+        h.advance(10 * 60.0)
+        h.report("stale", PresenceState.HIDDEN)
+    h.report("live", PresenceState.VISIBLE)
+    h.prioritizer.record_message("live")
 
     latest = h.latest_adj_by_pid()
     assert latest[10] > bands.WORKER_AGENT
@@ -153,7 +195,7 @@ def test_idle_time_alone_re_tags_a_chat_with_no_new_reports() -> None:
     # Nothing happens except time passing: the sweep's job. The same chat, same
     # presence, gets progressively more expendable on each reapply.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.prioritizer.record_activity(open_ids=[], visible_ids=[], messaged_id="a")
+    h.prioritizer.record_message("a")
     fresh = h.latest_adj_by_pid()[10]
     h.advance(6 * _HOUR)
     h.prioritizer.reapply()
@@ -170,7 +212,7 @@ def test_a_mid_turn_chat_does_not_age_out() -> None:
     # autonomous task another agent kicked off). Shedding it would destroy that
     # work, so it must stay below the worker band until the turn ends.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.prioritizer.record_activity(open_ids=[], visible_ids=[], messaged_id="a")
+    h.prioritizer.record_message("a")
     h.prioritizer.record_running_agents(["a"])
     h.advance(3 * 24 * _HOUR)
     h.prioritizer.reapply()
@@ -187,9 +229,9 @@ def test_a_mid_turn_chat_does_not_age_out() -> None:
 
 
 def test_entering_a_running_state_counts_as_engagement() -> None:
-    # A chat messaged outside the UI (by mngr or another agent) is never reported
-    # through /api/activity; the lifecycle transition into RUNNING is the only
-    # evidence it is still in use, and it must reset the staleness clock.
+    # A chat messaged outside the UI (by mngr or another agent) never passes through
+    # the send route; the lifecycle transition into RUNNING is the only evidence it
+    # is still in use, and it must reset the staleness clock.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
     h.advance(3 * 24 * _HOUR)
     h.prioritizer.reapply()
@@ -239,7 +281,7 @@ def test_seeding_never_moves_an_engagement_stamp_backwards() -> None:
     # A seed carrying an older timestamp than a live report must not un-engage the
     # chat (ordering between startup seeding and the first report is not fixed).
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.prioritizer.record_activity(open_ids=[], visible_ids=[], messaged_id="a")
+    h.prioritizer.record_message("a")
     h.prioritizer.seed_last_message_times({"a": h.now - 30 * 24 * _HOUR})
     h.prioritizer.reapply()
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=False, is_visible=False, recency_rank=0)
@@ -247,16 +289,17 @@ def test_seeding_never_moves_an_engagement_stamp_backwards() -> None:
 
 def test_a_visible_tab_is_only_stamped_when_it_becomes_visible() -> None:
     # A tab left visible is not continuing engagement -- re-stamping it on every
-    # report would make it permanently fresh and defeat the ramp entirely.
+    # heartbeat would make it permanently fresh and defeat the ramp entirely.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.prioritizer.record_activity(open_ids=["a"], visible_ids=["a"], messaged_id=None)
-    h.advance(24 * _HOUR)
-    h.prioritizer.record_activity(open_ids=["a"], visible_ids=["a"], messaged_id=None)
+    h.report("a", PresenceState.VISIBLE)
+    for _ in range(24 * 60):
+        h.advance(60.0)
+        h.report("a", PresenceState.VISIBLE)
     assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
 
     # Switching back to it does re-engage.
-    h.prioritizer.record_activity(open_ids=["a"], visible_ids=[], messaged_id=None)
-    h.prioritizer.record_activity(open_ids=["a"], visible_ids=["a"], messaged_id=None)
+    h.report("a", PresenceState.HIDDEN)
+    h.report("a", PresenceState.VISIBLE)
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
 
 
@@ -275,7 +318,7 @@ def test_the_sweep_re_tags_as_time_passes_and_stops_cleanly() -> None:
     # to be what notices. Nothing is reported here after the initial message; only
     # the clock moves.
     h = _Harness(chat_ids=["a"], pids={"a": 10}, sweep_interval_seconds=0.01)
-    h.prioritizer.record_activity(open_ids=[], visible_ids=[], messaged_id="a")
+    h.prioritizer.record_message("a")
     h.advance(24 * _HOUR)
     try:
         h.prioritizer.start()

@@ -1,0 +1,35 @@
+# The chat app: the agent harness UI. Its pages render inside iframes at this origin, served
+# by the system-interface process until phase 10 of the workspace app model gives it a
+# process of its own (docs/system/blueprint/workspace-app-model/phase_06_chat_as_document.md).
+name = "chat"
+display_name = "Chat"
+icon = "icon.svg"
+instances = true
+critical = true
+# CLEANUP: drop `internal` in phase 7, when the shell reads `critical` off the registry row
+# and lists the app itself; until then the shell would offer this row beside its built-in
+# Chat shortcut and let its Stop verb stop the shell's own program.
+internal = true
+# CLEANUP: phase 10 sets program = "chat" and priority = "chat" when the chat app runs as its
+# own supervisord program; while it shares the shell's process, the memory backstop must
+# resolve that program to the shell's band, not the chat band.
+program = "system_interface"
+priority = "system_interface"
+
+[default_shortcut]
+action = "new"
+mode = "new"
+
+[[actions]]
+id = "new"
+label = "New Chat"
+params = [{name = "account_id", label = "Provider account", required = false}]
+
+[[actions]]
+id = "subagent"
+label = "Open subagent"
+params = [
+    {name = "parent", label = "Parent chat", required = true},
+    {name = "session", label = "Subagent session", required = true},
+    {name = "description", label = "Description", required = false},
+]

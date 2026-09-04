@@ -182,6 +182,12 @@ class AgentRestartError(RuntimeError):
     ...
 
 
+class AgentDestroyError(RuntimeError):
+    """Raised when ``mngr destroy`` refuses or fails for a chat agent."""
+
+    ...
+
+
 class ActivityRequest(FrozenModel):
     """Request body for the /api/activity endpoint.
 

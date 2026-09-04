@@ -96,6 +96,8 @@ _VENDORED_MNGR_PREFIX = "system/vendor/mngr/"
 _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
     "system/services/oom_priority/",
+    "system/libs/app_instances/",
+    "system/libs/app_manifest/",
     "system/libs/tk_command_parsing/",
 )
 _LIVE_SETTINGS_FILE = ".mngr/settings.toml"
@@ -103,6 +105,8 @@ _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
         "system/services/oom_priority/pyproject.toml",
+        "system/libs/app_instances/pyproject.toml",
+        "system/libs/app_manifest/pyproject.toml",
         "system/libs/tk_command_parsing/pyproject.toml",
         "pyproject.toml",
         "uv.lock",

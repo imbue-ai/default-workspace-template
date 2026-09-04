@@ -31,13 +31,22 @@ from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.agent_manager import _build_chat_destroy_command
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
+from imbue.system_interface.chat_document import _DEFAULT_TAIL_COUNT
+from imbue.system_interface.chat_document import _agent_switch_options
+from imbue.system_interface.chat_document import _build_fast_mode_answered_label_command
+from imbue.system_interface.chat_document import _revive_and_retry_send
+from imbue.system_interface.chat_document import _stream_filtered_events
 from imbue.system_interface.config import Config
+from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.system_interface.harnesses.codex.ledger import ShoulderTapResult
@@ -56,29 +65,20 @@ from imbue.system_interface.harnesses.session import SessionDeps
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.member_titles import MAX_MEMBER_TITLE_LENGTH
 from imbue.system_interface.models import AgentStateItem
-from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
 from imbue.system_interface.projects import add_member
 from imbue.system_interface.projects import create_project
 from imbue.system_interface.projects import write_project_content
-from imbue.system_interface.server import FRONTEND_BUILT_HEADER
-from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
-from imbue.system_interface.server import _agent_switch_options
-from imbue.system_interface.server import _build_destroy_command
-from imbue.system_interface.server import _build_fast_mode_answered_label_command
 from imbue.system_interface.server import _build_stop_command
 from imbue.system_interface.server import _handle_client_state_message
-from imbue.system_interface.server import _revive_and_retry_send
-from imbue.system_interface.server import _stream_filtered_events
-from imbue.system_interface.accounts import commit_account
-from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.testing import FakeSupervisorServer
@@ -683,7 +683,7 @@ def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> N
         agent_state_dir=agent_state_dir,
         claude_config_dir=claude_config_dir,
     )
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.get("/api/agents/agent-123/events")
 
     assert response.status_code == 200
@@ -728,7 +728,7 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, tmp_path: Path) -
         agent_state_dir=agent_state_dir,
         claude_config_dir=claude_config_dir,
     )
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         events = client.get("/api/agents/agent-123/events").get_json()["events"]
         result_event = next(e for e in events if e["type"] == "tool_result")
         # Payload-free wire: the output is not on the event.
@@ -822,7 +822,7 @@ def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Pat
         claude_config_dir=claude_config_dir,
     )
 
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.get("/api/agents/agent-123/events")
         assert response.status_code == 200
         body = response.get_json()
@@ -887,7 +887,7 @@ def test_send_message_success() -> None:
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hello"})
 
     assert response.status_code == 200
@@ -978,7 +978,7 @@ def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
     ledger = _FakeCodexLedger()
     client = _codex_client(agent_info)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi", "message_id": "m1"})
@@ -1003,8 +1003,8 @@ def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: P
         raise MngrError("no such agent")
 
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch("imbue.system_interface.server.start_agent", failing_start),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document.start_agent", failing_start),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi"})
@@ -1031,8 +1031,8 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
         live.append(ledger)
 
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch("imbue.system_interface.server.start_agent", fake_start),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document.start_agent", fake_start),
         patch.object(AgentManager, "get_or_create_session", return_value=session),
     ):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi", "message_id": "m9"})
@@ -1040,9 +1040,7 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
     assert ledger.sent == [("hi", "m9")]
 
 
-def test_revive_and_retry_send_gives_up_after_the_budget(
-    tmp_path: Path, agent_manager: AgentManager
-) -> None:
+def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_manager: AgentManager) -> None:
     """A daemon that never comes up keeps the honest NOT_READY after the retry budget --
     the retries are paced by the injected sleep, never a spin."""
     agent_info = _model_agent_info("codex-agent-10", tmp_path, harness=HarnessType.CODEX)
@@ -1050,7 +1048,7 @@ def test_revive_and_retry_send_gives_up_after_the_budget(
     sleeps: list[float] = []
     request_body = SendMessageRequest(message="hi", message_id="m10")
 
-    with patch("imbue.system_interface.server.start_agent", lambda name: None):
+    with patch("imbue.system_interface.chat_document.start_agent", lambda name: None):
         outcome = _revive_and_retry_send(
             agent_info, agent_manager, session, request_body, "m10", sleep=sleeps.append, budget_seconds=0.0
         )
@@ -1065,7 +1063,7 @@ def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> N
     ledger = _FakeCodexLedger(tap_status="tapped")
     client = _codex_client(agent_info)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
@@ -1082,7 +1080,7 @@ def test_shoulder_tap_codex_is_a_benign_200_when_a_send_is_in_flight(tmp_path: P
     ledger = _FakeCodexLedger(sending=True, tap_status="send_in_flight")
     client = _codex_client(agent_info)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
@@ -1095,7 +1093,7 @@ def test_shoulder_tap_codex_no_ledger_is_a_noop(tmp_path: Path) -> None:
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     client = _codex_client(agent_info)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
@@ -1111,7 +1109,7 @@ def test_shoulder_tap_codex_resend_failure_hands_the_block_back_to_the_composer(
     ledger = _FakeCodexLedger(tap_status="tapped", tap_returned_block="first\nsecond")
     client = _codex_client(agent_info)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
@@ -1128,7 +1126,7 @@ def test_drain_to_composer_codex_returns_the_ledger_block(tmp_path: Path) -> Non
     ledger = _FakeCodexLedger(interrupt_block="bring me back to edit")
     client = _codex_client(agent_info)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/drain-to-composer")
@@ -1141,7 +1139,7 @@ def test_drain_to_composer_codex_no_ledger_returns_empty_block(tmp_path: Path) -
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     client = _codex_client(agent_info)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/agents/{agent_id}/drain-to-composer")
@@ -1210,7 +1208,7 @@ def test_powered_by_is_empty_for_a_harness_that_declares_no_credit(client: Flask
     """Claude declares "" as its credit text, so the endpoint returns it and nothing renders."""
     agent_id = "agent-00000000000000000000000000000010"
     agent_info = _model_agent_info(agent_id, tmp_path)
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.get(f"/api/agents/{agent_id}/powered-by")
     assert response.status_code == 200
     assert response.get_json() == {"label": ""}
@@ -1220,7 +1218,7 @@ def test_powered_by_resolves_the_text_per_harness(client: FlaskClient, tmp_path:
     """The text is a pure function of the agent's harness, prefix included."""
     agent_id = "agent-00000000000000000000000000000011"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.get(f"/api/agents/{agent_id}/powered-by")
     assert response.status_code == 200
     assert response.get_json() == {"label": "Powered by Codex"}
@@ -1228,7 +1226,7 @@ def test_powered_by_resolves_the_text_per_harness(client: FlaskClient, tmp_path:
 
 def test_powered_by_unknown_agent_returns_404(client: FlaskClient) -> None:
     """A proto-agent (not yet discoverable) 404s, so the frontend shows no credit."""
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=None):
         response = client.get("/api/agents/nonexistent/powered-by")
     assert response.status_code == 404
 
@@ -1243,7 +1241,7 @@ def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
     agent_info = _model_agent_info(agent_id, tmp_path)
     manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.post(
             f"/api/agents/{agent_id}/model",
             json={
@@ -1264,7 +1262,7 @@ def test_set_model_rejects_unknown_model(tmp_path: Path) -> None:
     agent_info = _model_agent_info(agent_id, tmp_path)
     manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.post(f"/api/agents/{agent_id}/model", json={"model_id": "gpt-4", "effort": "high"})
 
     assert response.status_code == 400
@@ -1277,7 +1275,7 @@ def test_set_model_rejects_fast_on_a_model_without_fast(tmp_path: Path) -> None:
     agent_info = _model_agent_info(agent_id, tmp_path)
     manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.post(
             f"/api/agents/{agent_id}/model", json={"model_id": "sonnet", "effort": "medium", "fast": True}
         )
@@ -1287,7 +1285,7 @@ def test_set_model_rejects_fast_on_a_model_without_fast(tmp_path: Path) -> None:
 
 
 def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=None):
         response = client.post("/api/agents/nonexistent/model", json={"model_id": "sonnet", "effort": "high"})
     assert response.status_code == 404
 
@@ -1335,7 +1333,7 @@ def test_set_model_switches_codex_via_thread_settings_update(tmp_path: Path) -> 
     )
     manager.get_or_create_session(agent_info).note_offered_options(codex_models_to_options(codex_models))
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch(
             "imbue.system_interface.harnesses.codex.model.open_bound_codex_client",
             return_value=switch_client,
@@ -1374,7 +1372,7 @@ def test_model_options_returns_full_per_agent_options_for_codex(tmp_path: Path) 
         CodexModel.model_validate({"id": "gpt-5.2", "model": "gpt-5.2", "displayName": "GPT-5.2"}),
     )
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch(
             "imbue.system_interface.harnesses.codex.model.open_bound_codex_client",
             return_value=dynamic_client,
@@ -1419,7 +1417,7 @@ def test_picker_open_reconciles_the_chip_and_switch_model_sets_for_codex(tmp_pat
         ),
     )
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch(
             "imbue.system_interface.harnesses.codex.model.open_bound_codex_client",
             return_value=picker_client,
@@ -1509,7 +1507,7 @@ def test_model_options_returns_null_models_for_claude(client: FlaskClient, tmp_p
     """A static/catalog-backed harness (claude) returns `models` (null = whole catalog), no options."""
     agent_id = "agent-00000000000000000000000000000013"
     agent_info = _model_agent_info(agent_id, tmp_path)
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.get(f"/api/agents/{agent_id}/model-options")
     assert response.status_code == 200
     data = response.get_json()
@@ -1536,7 +1534,7 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
 
     The prioritizer collaborator is swapped for one wired to a fake pid resolver
     and a capturing ``set_adj`` (mirrors how other tests seed ``_agents``), so a
-    POST to ``/api/activity`` drives the real endpoint -> ``record_activity`` ->
+    POST to the presence route drives the real endpoint -> ``record_presence`` ->
     prioritizer -> ``get_chat_agent_ids`` -> ``set_adj`` path without touching
     ``/proc``.
     """
@@ -1546,66 +1544,115 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
         resolve_pid=lambda cid: pids.get(cid),
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         # No process-start marker in this fake, so the chat's idle time comes from
-        # the reported activity alone -- which is what these tests are about.
+        # the reported presence alone -- which is what these tests are about.
         resolve_process_started_at=lambda _cid: None,
     )
     return manager
 
 
-def test_activity_endpoint_retags_a_chat_from_the_report() -> None:
-    """A well-formed report flows through to re-tag the reported chat's band."""
-    writes: list[tuple[int, int]] = []
-    manager = _manager_with_capturing_prioritizer(writes, pids={"chat": 4242})
+def _client_with_tracked_chat(writes: list[tuple[int, int]], agent_id: str, pid: int) -> FlaskClient:
+    manager = _manager_with_capturing_prioritizer(writes, pids={agent_id: pid})
     with manager._lock:
-        manager._agents["chat"] = AgentStateItem(
-            id="chat", name="chat", state="RUNNING", labels={"user_created": "true"}, work_dir=None
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="chat", state="RUNNING", labels={"user_created": "true"}, work_dir=None
         )
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    return create_application(build_test_state(agent_manager=manager)).test_client()
 
-    response = client.post("/api/activity", json={"open": ["chat"], "visible": ["chat"], "messaged": "chat"})
+
+def test_presence_endpoint_retags_a_chat_from_the_report() -> None:
+    """A visible report flows through to re-tag the reported chat's band."""
+    writes: list[tuple[int, int]] = []
+    client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
+
+    response = client.post("/api/agents/agent-c0ffee/presence", json={"client_id": "client-1", "state": "visible"})
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
-    # Open + visible + most-recently messaged -> the most-protected chat band.
+    # Open + visible, never messaged -> the open-and-visible chat band.
     assert writes == [
         (
             4242,
             bands.chat_agent_oom_score_adj(
-                is_open=True, is_visible=True, recency_rank=0, idle_seconds=0.0, is_mid_turn=False
+                is_open=True, is_visible=True, recency_rank=None, idle_seconds=0.0, is_mid_turn=False
             ),
         )
     ]
 
 
-def test_activity_endpoint_defaults_missing_fields() -> None:
-    """Omitted fields default to empty sets / no message, so a bare ping is valid
-    and re-tags a known chat as the most-expendable (closed, unmessaged) band."""
+def test_presence_endpoint_closed_report_releases_the_chat() -> None:
+    """A ``closed`` report drops the client's presence, so the chat reads as closed again."""
     writes: list[tuple[int, int]] = []
-    manager = _manager_with_capturing_prioritizer(writes, pids={"chat": 4242})
-    with manager._lock:
-        manager._agents["chat"] = AgentStateItem(
-            id="chat", name="chat", state="RUNNING", labels={"user_created": "true"}, work_dir=None
-        )
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
+    client.post("/api/agents/agent-c0ffee/presence", json={"client_id": "client-1", "state": "hidden"})
+    open_adj = writes[-1][1]
 
-    response = client.post("/api/activity", json={})
+    response = client.post("/api/agents/agent-c0ffee/presence", json={"client_id": "client-1", "state": "closed"})
 
     assert response.status_code == 200
-    # Nothing has ever engaged this chat and it has no process-start marker, so its
-    # idle time is unknown -- which counts as fresh, not abandoned.
-    assert writes == [
-        (
-            4242,
-            bands.chat_agent_oom_score_adj(
-                is_open=False, is_visible=False, recency_rank=None, idle_seconds=None, is_mid_turn=False
-            ),
+    assert writes[-1][1] > open_adj
+    assert writes[-1][1] == bands.chat_agent_oom_score_adj(
+        is_open=False, is_visible=False, recency_rank=None, idle_seconds=None, is_mid_turn=False
+    )
+
+
+def test_presence_endpoint_rejects_a_malformed_report() -> None:
+    writes: list[tuple[int, int]] = []
+    client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
+
+    response = client.post("/api/agents/agent-c0ffee/presence", json={"client_id": "client-1", "state": "gone"})
+
+    assert response.status_code == 400
+    assert "detail" in response.get_json()
+    assert writes == []
+
+
+def test_presence_endpoint_refuses_an_id_that_is_not_an_agent_id() -> None:
+    writes: list[tuple[int, int]] = []
+    client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
+
+    response = client.post("/api/agents/not-an-agent/presence", json={"client_id": "client-1", "state": "visible"})
+
+    assert response.status_code == 404
+
+
+def test_send_records_the_message_for_the_chats_recency() -> None:
+    """The send route stamps the chat as just-messaged, which the frontend's activity report used to do."""
+    writes: list[tuple[int, int]] = []
+    agent_id = "agent-c0ffee00000000000000000000c0ffee"
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager._oom_prioritizer = ChatOomPrioritizer(
+        list_chat_agent_ids=manager.get_chat_agent_ids,
+        resolve_pid=lambda cid: {agent_id: 4242}.get(cid),
+        set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
+        resolve_process_started_at=lambda _cid: None,
+    )
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="chat", state="RUNNING", labels={"user_created": "true"}, work_dir=None
         )
-    ]
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="chat",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
+        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert writes[-1] == (
+        4242,
+        bands.chat_agent_oom_score_adj(
+            is_open=False, is_visible=False, recency_rank=0, idle_seconds=0.0, is_mid_turn=False
+        ),
+    )
 
 
 def test_interrupt_agent_returns_404_for_unknown_agent(client: FlaskClient) -> None:
     """Interrupting a nonexistent agent returns 404."""
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=None):
         response = client.post("/api/agents/nonexistent/interrupt")
     assert response.status_code == 404
 
@@ -1627,9 +1674,9 @@ def test_interrupt_agent_success(client: FlaskClient) -> None:
         is_output_already_logged=False,
     )
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version",
+            "imbue.system_interface.chat_document.run_local_command_modern_version",
             return_value=fake_result,
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state") as mock_reset,
@@ -1665,8 +1712,8 @@ def test_interrupt_agent_rejects_is_primary_agent(client: FlaskClient) -> None:
         labels={"is_primary": "true", "workspace": "my-ws"},
     )
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=services_agent),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document._find_agent", return_value=services_agent),
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = client.post("/api/agents/services-1/interrupt")
 
@@ -1693,9 +1740,9 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
         is_output_already_logged=False,
     )
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version",
+            "imbue.system_interface.chat_document.run_local_command_modern_version",
             return_value=fake_result,
         ),
     ):
@@ -1784,7 +1831,7 @@ def _fake_queue_watcher(
 
 
 def test_flush_queue_returns_404_for_unknown_agent(client: FlaskClient) -> None:
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=None):
         response = client.post("/api/agents/nonexistent/flush-queue")
     assert response.status_code == 404
 
@@ -1793,10 +1840,10 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
     """Shoulder tap restarts the agent, clears the tracked set, and resends one combined turn."""
     fake_watcher = _fake_queue_watcher("first message\nsecond message")
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=_agent_info()),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+            "imbue.system_interface.chat_document.run_local_command_modern_version", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
@@ -1816,9 +1863,9 @@ def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> N
     """A flush with nothing queued neither restarts nor resends -- a clean 200."""
     fake_watcher = _fake_queue_watcher("")
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=_agent_info()),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
@@ -1831,10 +1878,10 @@ def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> N
 def test_flush_queue_rejects_is_primary_agent(client: FlaskClient) -> None:
     with (
         patch(
-            "imbue.system_interface.server._find_agent",
+            "imbue.system_interface.chat_document._find_agent",
             return_value=_agent_info(agent_id="services-1", name="system-services", labels={"is_primary": "true"}),
         ),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = client.post("/api/agents/services-1/flush-queue")
 
@@ -1853,9 +1900,9 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
         is_output_already_logged=False,
     )
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=_agent_info()),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=failed),
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version", return_value=failed),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
@@ -1866,7 +1913,7 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
 
 
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=None):
         response = client.post("/api/agents/nonexistent/shoulder-tap-atomic")
     assert response.status_code == 404
 
@@ -1879,9 +1926,9 @@ def test_shoulder_tap_atomic_rejects_non_atomic_harness(client: FlaskClient, tmp
     """
     agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch(
-            "imbue.system_interface.server.get_catalog",
+            "imbue.system_interface.chat_document.get_catalog",
             return_value=SimpleNamespace(native_atomic_shoulder_tap_possible=False),
         ),
     ):
@@ -1951,9 +1998,9 @@ def test_shoulder_tap_atomic_claude_nothing_queued_is_a_noop(client: FlaskClient
     agent_info = _agent_info(agent_state_dir=state_dir, claude_config_dir=config_dir)
     watcher = _FakeClaudeTapWatcher([[]])
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
@@ -1977,9 +2024,9 @@ def test_shoulder_tap_atomic_claude_flushed_presses_chord_and_never_restarts(
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     app = create_application(build_test_state(agent_manager=manager))
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
 
@@ -2010,9 +2057,9 @@ def test_shoulder_tap_atomic_claude_no_ops_benignly_when_a_send_is_in_flight(
     with (
         _hold_message_lock(state_dir),
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
 
@@ -2029,8 +2076,8 @@ def test_shoulder_tap_atomic_writes_sentinel_for_pi(client: FlaskClient, tmp_pat
     watcher ignores it), the status is ``tapped``, and the agent is NOT restarted."""
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
@@ -2049,7 +2096,7 @@ def test_shoulder_tap_atomic_rejects_is_primary_agent(client: FlaskClient, tmp_p
         harness=HarnessType.CODEX,
         agent_state_dir=tmp_path,
     )
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
         response = client.post("/api/agents/services-1/shoulder-tap-atomic")
 
     assert response.status_code == 400
@@ -2065,7 +2112,7 @@ def test_shoulder_tap_atomic_pi_no_ops_benignly_when_a_send_is_in_flight(client:
     with (
         _hold_message_lock(tmp_path),
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
     ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
@@ -2122,10 +2169,10 @@ def test_drain_to_composer_claude_nonempty_queue_delegates_to_base_restart(
         block="edit me before sending", queued=[{"queued_id": "q1", "content": "edit me before sending"}]
     )
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+            "imbue.system_interface.chat_document.run_local_command_modern_version", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
@@ -2161,9 +2208,9 @@ def test_drain_to_composer_claude_empty_queue_uses_the_chord_not_a_restart(tmp_p
     app = create_application(build_test_state(agent_manager=manager))
     idle_marks: list[bool] = []
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
         patch(
             "imbue.system_interface.harnesses.claude.tap.mark_claude_agent_idle",
             side_effect=lambda *_a, **_k: idle_marks.append(True),
@@ -2188,9 +2235,9 @@ def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(client:
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
     fake_watcher = _fake_queue_watcher("bring me back to edit")
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -2216,9 +2263,9 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
     fake_watcher = _fake_queue_watcher("")
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -2241,9 +2288,9 @@ def test_drain_to_composer_pi_native_retract_does_not_fold_in_flight_block(
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
     fake_watcher = _fake_queue_watcher("queued only", in_flight_block="must NOT be folded here")
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -2294,10 +2341,10 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
         _hold_message_lock(tmp_path),
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch.object(AgentManager, "get_or_create_session", return_value=in_flight_session),
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+            "imbue.system_interface.chat_document.run_local_command_modern_version", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
@@ -2329,10 +2376,10 @@ def test_drain_to_composer_claude_falls_back_to_restart_when_a_send_is_in_flight
     with (
         _hold_message_lock(state_dir),
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+            "imbue.system_interface.chat_document.run_local_command_modern_version", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
@@ -2365,9 +2412,9 @@ def test_drain_to_composer_claude_returns_in_flight_send_when_the_lock_stays_hel
     with (
         _hold_message_lock(state_dir),
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch("imbue.system_interface.chat_document.run_local_command_modern_version", return_value=_restart_ok()),
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
@@ -2427,7 +2474,7 @@ def test_send_message_records_client_activity_event(tmp_path: Path, monkeypatch:
     )
     try:
         test_client = app.test_client()
-        with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
             response = test_client.post(
                 f"/api/agents/{chat_agent_id}/message",
                 json={
@@ -3273,7 +3320,7 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
 
     try:
         test_client = app.test_client()
-        with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        with patch("imbue.system_interface.chat_document._find_agent", return_value=agent_info):
             response = test_client.get(f"/api/agents/{agent_id}/events")
         assert response.status_code == 200
 
@@ -3602,7 +3649,7 @@ def test_destroy_argv_accepted_by_live_cli() -> None:
     """Confront the ``mngr destroy`` argv with the live ``imbue.mngr.main.cli``
     tree, so a system/vendor/mngr rename of that subcommand/flag fails here at merge
     time rather than only surfacing at runtime."""
-    assert_mngr_argv_valid(_build_destroy_command("demo"))
+    assert_mngr_argv_valid(_build_chat_destroy_command("mngr", "demo"))
 
 
 def test_stop_argv_accepted_by_live_cli() -> None:
