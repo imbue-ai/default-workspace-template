@@ -3989,13 +3989,18 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
   // A restored layout re-derives every service/terminal origin from its
   // service label below, and the initial mount of a never-saved layout may open
   // the machine's chat, whose frame's origin is derived from the chat app's
-  // label the same way. On a share those labels only resolve once the app
-  // list has loaded (locally the bare name routes, so it never mattered
-  // before), so wait for it first -- bounded, so a workspace that reports no
-  // apps still proceeds -- to avoid mounting an unroutable ``<name>.<domain>``
-  // origin that the gateway 403s. A null layout on a later mount (an empty
-  // project) derives nothing, so it never waits.
-  if (saved || isInitialMount) await whenAppsLoaded();
+  // label the same way on a workspace host. On a share those labels only
+  // resolve once the app list has loaded (locally the bare name routes, so it
+  // never mattered before), so wait for it first -- bounded, so a workspace
+  // that reports no apps still proceeds -- to avoid mounting an unroutable
+  // ``<name>.<domain>`` origin that the gateway 403s. A host with no workspace
+  // coordinate (a direct loopback visit, the e2e suite) loads the chat frame
+  // from this document's own origin and derives nothing on the initial mount,
+  // so it does not wait for a list that may never arrive; nor does a null
+  // layout on a later mount (an empty project).
+  const isInitialMountOnWorkspaceHost =
+    isInitialMount && workspaceHostCoordinate(window.location.host) !== window.location.host;
+  if (saved || isInitialMountOnWorkspaceHost) await whenAppsLoaded();
   // ``dockview`` may have been torn down while awaiting; re-check before use.
   if (!dockview) return;
   const dv = dockview;
