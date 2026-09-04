@@ -20,6 +20,12 @@ Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
   branches on; see ``fleet._render_action``).
 * ``POST /browsers/{name}/release`` -- give a browser back (only its owner can).
 
+The workspace shell reads the same fleet through the instances API of the workspace app
+model (``/_instances``; see ``browser.instances``), mounted on this app because the
+daemon serves its own origin: one instance per browser, ``working`` while an agent holds
+it, ``idle`` otherwise, ``error`` once crashed; ``new`` creates, delete closes, location
+navigates the active tab. Every fleet event nudges the shell (``browser.bridged_fleet``).
+
 The service does NOT drive browsers. Agents drive with ``@playwright/cli`` over the
 gated CDP endpoint in cdp_proxy.py, which enforces the ownership lease per frame.
 
@@ -41,15 +47,20 @@ import signal
 import threading
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import Any, Final
 
+from app_instances.blueprint import build_instances_blueprint
+from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
+from app_manifest.primitives import AppName
 from flask import Flask, Response, jsonify, request
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
 from browser import mediastream, telemetry
+from browser.bridged_fleet import BridgedFleet, ManagerNudger
 from browser.cdp_proxy import ProxyServer
+from browser.instances import FleetInstanceSource
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
@@ -64,6 +75,12 @@ from browser.session import (
     set_proxy_server,
 )
 from browser.wsgi import make_threaded_server
+
+# The app's registered name and manifest (what the supervisord program line registers with
+# ``forward_port.py --manifest``); the shell nudge names the app by it. ``test_app_manifests.py``
+# and the wiring test pin the two to the manifest.
+APP_NAME: Final[AppName] = AppName("browser")
+MANIFEST_PATH: Final[Path] = Path("system/apps/browser/app.toml")
 
 # The agent-facing CDP proxy port. Fixed by default so an attach URL an agent already
 # holds keeps resolving across a service restart; 0 picks an ephemeral port (tests).
@@ -308,18 +325,7 @@ def close_browser(browser_id: str) -> Response:
     # profile directory (defense in depth for the delete path).
     if not is_valid_browser_name(browser_id):
         return jsonify({"error": "invalid browser name"}), 404
-    bridge.run(manager.close(browser_id), timeout=_ROUTE_TIMEOUT)
-    # Rewrite the manifest (name now gone) BEFORE deleting the profile, so a crash between
-    # them leaves an orphan dir (swept next boot), never a manifest entry pointing at a
-    # deleted profile. A manifest-write hiccup must not 500 the close or skip the
-    # profile delete -- the periodic checkpoint will reconcile the manifest anyway.
-    try:
-        bridge.run(manager._save_manifest(), timeout=_ROUTE_TIMEOUT)
-    except (OSError, *_STARTUP_ERRORS) as e:
-        logger.warning("manifest save during close of browser {} failed ({})", browser_id, e)
-    # Every browser is created on demand (no permanent default), so closing one always
-    # forgets its persistent profile.
-    manager.forget_profile_dir(browser_id)
+    bridge.run(manager.close_and_forget(browser_id), timeout=_ROUTE_TIMEOUT)
     return jsonify({"closed": True})
 
 
@@ -741,6 +747,16 @@ def _register_routes() -> None:
     sock.route("/browsers/<string:browser_id>/telemetry")(telemetry_socket)
     # Strip permessage-deflate so already-compressed H.264 stripes aren't re-deflated (#22).
     application.before_request(mediastream.strip_websocket_compression)
+    # The instances API of the workspace app model (``/_instances``), which the shell reads at
+    # the app URL (the manifest names no instances_url): an adapter over the fleet, reaching
+    # it through the bridge like every route above. Its nudges and the fleet's own go
+    # through whatever nudger the manager has installed (``main`` installs the real one).
+    fleet = BridgedFleet(
+        bridge=bridge, manager=manager, ready_gate=_init_done, route_timeout_seconds=_ROUTE_TIMEOUT
+    )
+    application.register_blueprint(
+        build_instances_blueprint(FleetInstanceSource(fleet=fleet), ManagerNudger(manager=manager))
+    )
 
 
 _register_routes()
@@ -809,6 +825,10 @@ def main() -> None:
     Replaces ``uvicorn.run``. The service is reached at its own workspace origin;
     the viewer uses relative URLs, so no prefix or root-path awareness is needed.
     """
+    # Fleet events fire on the loop thread, so the shell is told from a daemon thread; a slow
+    # shell never stalls a browser. Installed here, not in create_app, for the same reason
+    # as the OOM sweep below: tests that build the app must not post to the workspace shell.
+    manager.set_nudger(ThreadedNudger(inner=ShellNudger(app_name=APP_NAME, shell_url=shell_base_url())))
     app = create_app()
     # Chromium overwrites the inherited oom_score_adj with its own gradation;
     # session.py reports every event that can spawn Chromium processes and this

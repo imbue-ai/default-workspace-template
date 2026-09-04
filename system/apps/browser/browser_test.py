@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_instances.testing import RecordingNudger
 from browser import chrome_args
 from browser import chrome_launcher
 from browser import manifest
@@ -1505,3 +1506,64 @@ def test_a_new_browser_lands_on_a_blank_page() -> None:
     assert bsession._HOME_URL == "about:blank"
     # ...and it must not be persisted as a restorable tab, or every restart would reopen it.
     assert bsession._is_restorable_url(bsession._HOME_URL) is False
+
+
+# --- the shell nudge (every fleet event the instances API's status derives from) ---
+
+
+def test_every_ownership_write_nudges_the_shell_once() -> None:
+    browser = _running_browser(browser_id="b1")
+    nudger = RecordingNudger()
+    browser._nudger = nudger
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+        assert nudger.nudge_count == 1
+        # The same agent re-acquiring writes nothing, so it tells the shell nothing.
+        await browser.acquire("A", "Alice")
+        assert nudger.nudge_count == 1
+        await browser.release("A")
+        assert nudger.nudge_count == 2
+        await browser.take_control()
+        assert nudger.nudge_count == 3
+        await browser.return_to_agents()
+        assert nudger.nudge_count == 4
+
+    asyncio.run(go())
+
+
+def test_a_crash_nudges_the_shell_once() -> None:
+    browser = _running_browser(browser_id="b1")
+    nudger = RecordingNudger()
+    browser._nudger = nudger
+
+    browser._crashed = True
+    browser._crashed = True
+
+    assert nudger.nudge_count == 1
+
+
+def test_registering_and_closing_a_browser_nudge_the_shell_and_hand_it_the_nudger() -> None:
+    mgr = bsession.BrowserSessionManager()
+    nudger = RecordingNudger()
+    mgr.set_nudger(nudger)
+
+    registered = mgr._register_init_locked("browser-1")
+
+    assert nudger.nudge_count == 1
+    assert registered._nudger is nudger
+    asyncio.run(mgr.close("browser-1"))
+    assert nudger.nudge_count == 2
+    asyncio.run(mgr.close("browser-1"))  # an unknown name changes nothing
+    assert nudger.nudge_count == 2
+
+
+def test_set_nudger_reaches_browsers_registered_before_it() -> None:
+    mgr = bsession.BrowserSessionManager()
+    registered = mgr._register_init_locked("browser-1")
+    nudger = RecordingNudger()
+
+    mgr.set_nudger(nudger)
+    registered._crashed = True
+
+    assert nudger.nudge_count == 1
