@@ -359,7 +359,9 @@ class CreateChatRequest(FrozenModel):
 class CreatedChatAgent(FrozenModel):
     """A freshly-created chat agent's identity: its id and its name pair."""
 
-    agent_id: str = Field(description="The pre-generated agent ID")
+    agent_id: ChatId = Field(
+        description="The pre-generated agent ID, which is also the chat's stable ChatId"
+    )
     name: str = Field(description="The agent's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 
