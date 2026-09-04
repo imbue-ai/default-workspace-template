@@ -287,7 +287,7 @@ first one when the view shows none; "new"-mode shortcuts, the
 launcher's tiles, and `layout.py open <app> --new` always mint. An
 instance that beacons its location (the file viewer does; the
 `build-app` scaffold includes the one-liner) reopens at the path it was
-showing: the page posts `{type: "minds-location", path}` one hop up on
+showing: the page posts `{type: "shell:location", path}` (or the older `minds-location`, accepted until phase 7 of the workspace app model) one hop up on
 each load, the shell validates the origin against its own service
 origins, resolves the pane by its window, and stores the path by ref
 (`GET|POST /api/member-locations`), cleared when the instance is

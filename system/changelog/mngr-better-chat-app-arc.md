@@ -27,3 +27,9 @@ Phase 3 of that model, "the terminal app" (nothing user-visible changes: the sam
 - `system/test_app_manifests.py` accepts a program that registers from inside its own entry point (the console script's module exports `MANIFEST_PATH`), and `system/apps/README.md` and `system/services/app_watcher/README.md` describe the terminal as a package.
 
 - `contracts.md` section 4.3's terminal URL gained the leading `arg=_` (it lands in `$0` of the `bash -c` dispatch, as today's frontend sends it) and the optional trailing `workdir` argument, and its title column names the stored title; `phase_03_terminal_app.md` records what landed, including the terminal's own store (the library's `JsonStoreInstanceSource` cannot hold a renamed name or a `{tab}` URL) and the naming rule renames follow.
+
+Phase 4 of that model, "the files app" (nothing user-visible changes: the file viewer opens, browses, and reopens where it was, exactly as before):
+
+- `system/supervisord.conf`'s `[program:files]` runs `files-app`, the new Python package under `system/apps/files` (see its own changelog), instead of the `bash -c` line that registered the manifest and exec'd dufs; the root `pyproject.toml` no longer excludes the files app from the uv workspace (the `exclude` key is gone), so `uv.lock` gained the package.
+
+- `contracts.md` gained section 17, where app data and machine state live: every app's instance records at `data/.apps/<name>/instances.json`, machine state (the registry, the terminal's dispatch scripts and pty records, the shell's client layouts) under `data/.state/`; the root `CLAUDE.md` sentence on `data/` points at it, and the terminal's store moved from `data/.state/terminal/` to `data/.apps/terminal/instances.json` accordingly (see the terminal's changelog). `phase_04_files_app.md` records what landed; `system/apps/README.md` describes the files app as a package.

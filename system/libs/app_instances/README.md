@@ -79,7 +79,9 @@ The shell is the only caller of the API, over loopback, at the registry row's
   shell's tab routes (the terminal's) go through it too. `shell_base_url()`
   resolves the shell exactly as `system/scripts/layout.py` does
   (`MINDS_WORKSPACE_SERVER_URL`, default `http://127.0.0.1:8000`).
-- `app_instances.sidecar`: `run_sidecar(manifest_path, app_url, instances_url,
+- `app_instances.sidecar`: `app_url_port(app_url)` is the port the wrapped
+  server must listen on (the app URL's; a `SidecarError` when it names none).
+  `run_sidecar(manifest_path, app_url, instances_url,
   child_argv, source)` starts the blueprint at `instances_url` on a daemon
   thread (werkzeug's threaded server), registers the app by running
   `system/scripts/forward_port.py --manifest <path> --url <app_url>` under its
@@ -110,5 +112,6 @@ The shell is the only caller of the API, over loopback, at the registry row's
   <port>`) or runs the sidecar over a JSON store (`... sidecar --manifest ...
   --app-url ... --instances-url ... --store ... -- <child argv>`).
 
-The terminal app (`system/apps/terminal`, phase 3) is its first user; phase 4
-(files) and phase 5 (browser) of the model follow.
+The terminal app (`system/apps/terminal`, phase 3) and the files app
+(`system/apps/files`, phase 4, the sidecar around dufs) are its users; phase 5
+(browser) of the model follows.

@@ -15,3 +15,9 @@ Phase 3 of the workspace app model (the terminal app):
 - The migrate-workspace port scan (`migrate_workspace.py list-ports`) also reports a registry row's `instances_url` port beside its `url` port, so an app serving its instances API on a second port (the terminal's 7682) counts toward name and port collisions.
 
 - The update-self apply's tests know the terminal as a tool: `system/apps/terminal` has a `pyproject.toml` and an `app.toml` now, so a change under it reinstalls `terminal-app`, and it is `critical` (snapshot-and-rollback).
+
+Phase 4 of the workspace app model (the files app):
+
+- The update-self apply's tests know the files app as a tool: `system/apps/files` has a `pyproject.toml` beside its `app.toml` now, so a change under it (the vendored `assets/` included: they are not one of the excluded directories, and an editable reinstall is harmless) reinstalls `files-app`, and it is not `critical`.
+
+- The migrate-workspace port scan's test of the real `system/supervisord.conf` expects the files app, like the terminal, to register from inside its own process (`files-app`), so the config itself names ports only for the shell and the browser; the registry scan covers 8300 and 8301 through the row's `url` and `instances_url`.

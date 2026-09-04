@@ -69,8 +69,7 @@ def _entry_point_manifest_paths(command: str) -> list[str]:
 
 
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
-    # The files app has no Python yet, but it has a manifest: every built-in app
-    # describes itself.
+    # Every built-in app describes itself, whatever runs it.
     missing = [
         str(path.relative_to(_REPO_ROOT))
         for path in _built_in_manifest_paths()
