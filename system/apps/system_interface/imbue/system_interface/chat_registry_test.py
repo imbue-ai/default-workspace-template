@@ -207,3 +207,56 @@ def test_begin_segment_rejects_an_unrecorded_chat(tmp_path: Path) -> None:
             harness=HarnessType.CODEX,
             account_id=None,
         )
+
+
+def test_reverse_lookups_follow_the_active_agent_across_a_switch(tmp_path: Path) -> None:
+    """The inverse mapping names the CURRENT backing agent only.
+
+    The agents projection stamps a chat id on every row from this, so a retired agent
+    still matching would put two rows on one chat -- and on a first switch the retired
+    agent's id IS the chat id, which is the case most likely to go unnoticed.
+    """
+    registry = _make_registry(tmp_path)
+    chat_id = ChatId("agent-" + "b" * 32)
+    successor_id = "agent-" + "c" * 32
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+
+    assert registry.chat_id_for_active_agent(str(chat_id)) == chat_id
+    assert registry.chat_id_by_active_agent() == {str(chat_id): chat_id}
+
+    registry.begin_segment(chat_id, agent_id=successor_id, harness=HarnessType.CODEX, account_id=None)
+
+    assert registry.chat_id_for_active_agent(successor_id) == chat_id
+    assert registry.chat_id_for_active_agent(str(chat_id)) is None
+    assert registry.chat_id_by_active_agent() == {successor_id: chat_id}
+
+
+def test_reverse_lookup_of_an_unrecorded_agent_is_none(tmp_path: Path) -> None:
+    """None, not the id itself: an unrecorded chat resolves forward by identity, so the
+    projection must be able to tell "backs no recorded chat" from "backs this one"."""
+    registry = _make_registry(tmp_path)
+
+    assert registry.chat_id_for_active_agent("agent-" + "d" * 32) is None
+
+
+def test_retired_agent_ids_are_the_archive_read_order(tmp_path: Path) -> None:
+    """Oldest first, active excluded: the chat's whole history is this list then the
+    active agent, and the archive is keyed by exactly these ids."""
+    registry = _make_registry(tmp_path)
+    chat_id = ChatId("agent-" + "e" * 32)
+    second = "agent-" + "f" * 32
+    third = "agent-" + "0" * 32
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+
+    assert registry.retired_agent_ids(chat_id) == ()
+
+    registry.begin_segment(chat_id, agent_id=second, harness=HarnessType.CODEX, account_id=None)
+    registry.begin_segment(chat_id, agent_id=third, harness=HarnessType.CLAUDE, account_id=None)
+
+    assert registry.retired_agent_ids(chat_id) == (str(chat_id), second)
+
+
+def test_retired_agent_ids_of_an_unrecorded_chat_is_empty(tmp_path: Path) -> None:
+    registry = _make_registry(tmp_path)
+
+    assert registry.retired_agent_ids(ChatId("agent-" + "1" * 32)) == ()
