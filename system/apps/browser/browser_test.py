@@ -21,7 +21,9 @@ from browser.data_types import BrowserLifecycle
 from browser.data_types import BrowserSnapshot
 from browser.errors import FleetCreateRefusedError
 from browser.errors import FleetUnavailableError
+from browser.errors import NavigationFailedError
 from browser.primitives import BrowserName
+from mock_cdp_client_test import NavigatingCdpClient
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
@@ -1648,3 +1650,66 @@ def test_create_snapshot_reports_the_new_browser_as_launching() -> None:
         controller=BrowserController.HUMAN,
     )
     assert mgr.has_browser("browser-1")
+
+
+# --- the location verb (navigate the active tab, then checkpoint the manifest) ---
+
+
+def _page(target_id: str, url: str) -> dict[str, Any]:
+    return {"targetId": target_id, "url": url, "type": "page"}
+
+
+def test_navigate_browser_points_the_active_tab_at_the_url_and_checkpoints_the_manifest() -> None:
+    mgr = bsession.BrowserSessionManager()
+    browser = _running_browser(browser_id="browser-1")
+    cdp = NavigatingCdpClient(
+        targets=[_page("t1", "https://first.example/"), _page("t2", "https://second.example/")],
+        navigation_failure=None,
+    )
+    browser._cdp = cdp
+    browser._active_target_id = "t2"
+    mgr._browsers["browser-1"] = browser
+
+    async def go() -> None:
+        await mgr.navigate_browser("browser-1", "https://new.example/page")
+        # The checkpoint is fire-and-forget on the loop; let it land before the loop closes.
+        await asyncio.gather(*mgr._bg_save_tasks)
+
+    asyncio.run(go())
+
+    assert cdp.navigations == [("t2", "https://new.example/page")]
+    assert browser._active_target() == "t2"
+    saved = manifest.read_manifest()
+    assert saved is not None
+    assert [(entry.id, entry.tabs, entry.active_tab) for entry in saved.browsers] == [
+        ("browser-1", ["https://first.example/", "https://new.example/page"], 1)
+    ]
+
+
+def test_navigate_active_tab_falls_back_to_the_first_page_when_none_was_foregrounded() -> None:
+    browser = _running_browser(browser_id="browser-1")
+    cdp = NavigatingCdpClient(
+        targets=[_page("t1", "about:blank"), _page("t2", "https://second.example/")],
+        navigation_failure=None,
+    )
+    browser._cdp = cdp
+
+    asyncio.run(browser.navigate_active_tab("https://new.example/"))
+
+    assert cdp.navigations == [("t1", "https://new.example/")]
+    assert browser._active_target() == "t1"
+
+
+def test_navigate_active_tab_reports_a_refused_navigation_and_a_tabless_browser_as_failed() -> None:
+    refusing = _running_browser(browser_id="browser-1")
+    refusing._cdp = NavigatingCdpClient(
+        targets=[_page("t1", "about:blank")], navigation_failure="net::ERR_NAME_NOT_RESOLVED"
+    )
+    tabless = _running_browser(browser_id="browser-2")
+    tabless._cdp = NavigatingCdpClient(targets=[], navigation_failure=None)
+
+    with pytest.raises(NavigationFailedError, match="ERR_NAME_NOT_RESOLVED"):
+        asyncio.run(refusing.navigate_active_tab("https://nowhere.invalid/"))
+    with pytest.raises(NavigationFailedError, match="no tab to navigate"):
+        asyncio.run(tabless.navigate_active_tab("https://example.com/"))
+    assert refusing._active_target() is None
