@@ -1,3 +1,4 @@
+from app_instances.primitives import AbsoluteHttpUrl
 from browser.data_types import BrowserController, BrowserLifecycle, BrowserSnapshot
 from browser.errors import (
     BrowserHeldByAgentError,
@@ -32,7 +33,7 @@ class FakeFleet(FleetInterface):
     closed_names: list[BrowserName] = Field(
         default_factory=list, description="Every name close was asked for"
     )
-    navigations: list[tuple[BrowserName, str]] = Field(
+    navigations: list[tuple[BrowserName, AbsoluteHttpUrl]] = Field(
         default_factory=list, description="Every (name, url) navigated"
     )
 
@@ -62,7 +63,7 @@ class FakeFleet(FleetInterface):
             snapshot for snapshot in self.browsers if snapshot.name != name
         ]
 
-    def navigate_browser(self, name: BrowserName, url: str) -> None:
+    def navigate_browser(self, name: BrowserName, url: AbsoluteHttpUrl) -> None:
         snapshot = next(
             (snapshot for snapshot in self.browsers if snapshot.name == name), None
         )
