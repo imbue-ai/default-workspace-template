@@ -3980,13 +3980,15 @@ export function displayNameForView(viewId: string, projects: readonly ProjectInf
 async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boolean = false): Promise<void> {
   if (!dockview) return;
   // A restored layout re-derives every service/terminal origin from its
-  // service label below. On a share those labels only resolve once the app
+  // service label below, and the initial mount of a never-saved layout may open
+  // the machine's chat, whose frame's origin is derived from the chat app's
+  // label the same way. On a share those labels only resolve once the app
   // list has loaded (locally the bare name routes, so it never mattered
   // before), so wait for it first -- bounded, so a workspace that reports no
   // apps still proceeds -- to avoid mounting an unroutable ``<name>.<domain>``
-  // origin that the gateway 403s. A null (fresh-workspace) layout derives
-  // nothing, so it never waits.
-  if (saved) await whenAppsLoaded();
+  // origin that the gateway 403s. A null layout on a later mount (an empty
+  // project) derives nothing, so it never waits.
+  if (saved || isInitialMount) await whenAppsLoaded();
   // ``dockview`` may have been torn down while awaiting; re-check before use.
   if (!dockview) return;
   const dv = dockview;
@@ -4116,7 +4118,8 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
   if (isDockEmpty && isInitialMount && saved === null) {
     // A machine that has run before opens on whatever chat it has. A fresh one has none --
     // a chat needs a provider account and nothing creates one at boot -- so it opens on the
-    // launcher, where the provider chooser is. Nothing to wait for either way.
+    // launcher, where the provider chooser is. The app list was awaited above, so the chat
+    // frame's origin derives from the chat app's label rather than the bare name.
     if (!openInitialChatTab()) {
       openLauncherPanel(null);
     }
