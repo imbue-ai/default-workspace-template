@@ -54,7 +54,9 @@ substitutes the tab id, and `session.sh` receives it as its second argument.
   deriving their title (`Terminal 3` for `terminal-3`) until renamed.
 - Location is not tracked (400).
 
-The store, `data/.state/terminal/instances.json` (`store.py`), holds
+The store, `data/.apps/terminal/instances.json` (`store.py`; app data, beside
+every other app's instance records, while `data/.state/terminal/` holds only
+the dispatch scripts and pty records), holds
 `{name, title, workdir}` per remembered terminal and is written atomically
 through the `app_instances` JSON document helpers.
 

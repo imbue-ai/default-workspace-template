@@ -316,3 +316,15 @@ The `oom_tag_service.py <key>` prefix keeps working unchanged for every program 
 ## 16. Migration table
 
 See [phase_09_migration.md](phase_09_migration.md); the mapping is the table in section 9 of the meta spec, made exact there.
+
+## 17. Where app data and machine state live
+
+Everything a program persists goes under `data/` (gitignored, restic-backed), in one of two places, chosen by what the record is about rather than by which program writes it:
+
+- `data/.apps/<name>/`: everything an app persists about the user's things.
+  Every app's instance records live here, at `data/.apps/<name>/instances.json`, whatever document shape the app uses (the library's `JsonStoreInstanceSource` for the files app; the terminal's own `{name, title, workdir}` records).
+  A terminal's title and starting directory, and a file viewer's folder, are things the user chose, so they belong here even when the instance is backed by state elsewhere.
+  The update-app skill treats this directory as the user's real data: verification never writes to it.
+- `data/.state/<name>/`: what a program keeps about this machine and can rebuild, or must not outlive it: the registry (`data/.state/apps.toml`), the terminal's dispatch scripts and pty-to-tab files (`data/.state/terminal/commands/`), and the shell's client layouts and client records (section 7).
+
+A path an app takes on its command line (`--store`, `--state-dir`) defaults to these locations and is overridden only by tests.

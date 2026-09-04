@@ -37,8 +37,8 @@ def terminal_paths(tmp_path: Path) -> TerminalPaths:
 
 
 @pytest.fixture
-def session_store(terminal_paths: TerminalPaths) -> JsonTerminalSessionStore:
-    return JsonTerminalSessionStore(store_path=terminal_paths.store_path)
+def session_store(tmp_path: Path) -> JsonTerminalSessionStore:
+    return JsonTerminalSessionStore(store_path=tmp_path / "apps" / "instances.json")
 
 
 @pytest.fixture

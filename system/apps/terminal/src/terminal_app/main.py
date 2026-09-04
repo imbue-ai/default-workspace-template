@@ -7,6 +7,7 @@ from typing import Final
 import click
 from app_instances.blueprint import build_instances_app
 from app_instances.interfaces import InstanceNudgerInterface
+from app_instances.json_store import app_store_path
 from app_instances.nudge import shell_base_url
 from app_instances.sidecar import run_sidecar_app
 from app_manifest.manifest import AppManifest
@@ -37,6 +38,7 @@ APP_NAME: Final[AppName] = AppName("terminal")
 APP_URL: Final[AppUrl] = AppUrl("http://localhost:7681")
 INSTANCES_URL: Final[InstancesUrl] = InstancesUrl("http://127.0.0.1:7682")
 STATE_DIR: Final[Path] = Path("data/.state/terminal")
+STORE_PATH: Final[Path] = app_store_path(AppName("terminal"))
 TTYD_WEB_CLIENT_ARCHIVE: Final[Path] = Path(
     "system/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
 )
@@ -55,6 +57,7 @@ class TerminalAppArguments(FrozenModel):
     app_url: AppUrl = Field(description="Where ttyd serves the terminal pages")
     instances_url: InstancesUrl = Field(description="Where the instances API is served")
     state_dir: Path = Field(description="The app's state directory")
+    store_path: Path = Field(description="The instances.json of remembered terminals")
     ttyd_web_client_archive: Path = Field(
         description="The vendored, gzip-compressed OSC 52-capable ttyd web client"
     )
@@ -98,7 +101,7 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     tmux = SubprocessTmux()
     source = TmuxSessionSource(
         tmux=tmux,
-        store=JsonTerminalSessionStore(store_path=paths.store_path),
+        store=JsonTerminalSessionStore(store_path=arguments.store_path),
         agent_session_prefix=arguments.agent_session_prefix,
     )
 
@@ -155,7 +158,15 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     type=click.Path(path_type=Path),
     default=STATE_DIR,
     show_default=True,
-    help="The app's state directory (dispatch scripts, pty records, the instance store)",
+    help="The app's state directory (dispatch scripts and pty records)",
+)
+@click.option(
+    "--store",
+    "store_path",
+    type=click.Path(path_type=Path),
+    default=STORE_PATH,
+    show_default=True,
+    help="The instances.json the app remembers its terminals in",
 )
 @click.option(
     "--ttyd-web-client",
@@ -177,6 +188,7 @@ def main(
     app_url: str,
     instances_url: str,
     state_dir: Path,
+    store_path: Path,
     ttyd_web_client_archive: Path,
     ttyd_executable: str,
 ) -> None:
@@ -187,6 +199,7 @@ def main(
         app_url=AppUrl(app_url),
         instances_url=InstancesUrl(instances_url),
         state_dir=state_dir,
+        store_path=store_path,
         ttyd_web_client_archive=ttyd_web_client_archive,
         ttyd_executable=ttyd_executable,
         agent_state_dir=Path(agent_state_dir) if agent_state_dir else None,
