@@ -45,9 +45,11 @@ vi.mock("../../models/Providers", () => ({
   renameAccount: () => Promise.resolve(),
 }));
 
+// The card's "start a chat on that provider" ask goes to the shell through chat/shell.ts.
 const started: string[] = [];
-vi.mock("../../views/DockviewWorkspace", () => ({
+vi.mock("../shell", () => ({
   startChatOnAccount: (accountId: string) => started.push(accountId),
+  openSubagentTab: vi.fn(),
 }));
 
 import m from "mithril";

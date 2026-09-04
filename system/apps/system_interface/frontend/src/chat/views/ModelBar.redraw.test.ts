@@ -53,7 +53,7 @@ vi.mock("../../models/Providers", () => ({
   },
 }));
 
-vi.mock("../../views/DockviewWorkspace", () => ({ startChatOnAccount: () => undefined }));
+vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentTab: vi.fn() }));
 
 import m from "mithril";
 
