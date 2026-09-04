@@ -196,7 +196,7 @@ Each of these is a direct consequence, and each is independently worth fixing.
 ## Relationship to the reboot-resilience work
 
 This is the same August 2026 incident described in
-[reboot-resilience-rollout.md](./reboot-resilience-rollout.md) — box `9ef5ab2e`,
+[reboot-resilience-rollout.md](reboot-resilience.md) — box `9ef5ab2e`,
 147.135.97.121. mind-1's VM was restarted as part of that recovery, and that
 restart is what wiped the key.
 

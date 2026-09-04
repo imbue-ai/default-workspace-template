@@ -139,14 +139,15 @@ not a per-PR gate**. Handy knobs:
 
 Results land in `apps/minds_evals/jobs/<job>/<trial>/`: harbor's `result.json` and
 `verifier/reward-details.json` at the trial root, and everything the driver collects under `agent/`
--- `trajectory.json`, `state.json`, `snapshots/`, `usage.json`, `driver.log`, and
-`verification/` (plus `timeout_diagnostics.json` when the trial gave up). They stay there; the
+-- `trajectory.json`, `state.json`, `snapshots/`, `usage.json`, `driver.log`,
+`driver_events.jsonl`, `instruction.md`, and `verification/` (plus `timeout_diagnostics.json` when
+the trial gave up). They stay there; the
 recipe uploads nothing. Archiving belongs to whatever runs the eval on a schedule, which supplies
 its own credentials rather than reading a developer's.
 
 ## Diagnosing a trial that went wrong
 
-Four artifacts answer "what happened", in the order worth reading:
+Five artifacts answer "what happened", in the order worth reading:
 
 - `agent/state.json` -- `test_state`, and, when it is `timed_out`, `timed_out_reason`: prose naming
   what the trial gave up on. Preparation names its own wait (no key to sign in with, an auth
@@ -164,6 +165,14 @@ Four artifacts answer "what happened", in the order worth reading:
   reports once a minute that it is still waiting and what the workspace is answering meanwhile (the
   agents listing, the chat agent's state, or that the bridge is answering nothing at all), so a wait
   that never finishes says why.
+- `agent/driver_events.jsonl` -- what the harness saw, as distinct from what the workspace
+  recorded: the workspace UI feed the driver polled, followed by one record per decider-model call
+  with the message it produced (the trajectory's `extra.minds_evals.decider_turns` carries the same
+  calls without their text). Written host-side after every turn and again once the evidence phase is
+  done, never mirrored into the box, and touched by no grade-time reader. Reach for it when the
+  conversation went wrong on the harness's side of the wire: replies the driver could not make out, a
+  decider that answered with something other than the message that reached the workspace, or an eval
+  that has drifted from the workspace template it drives.
 - `agent/timeout_diagnostics.json` -- written only when the trial gave up, and only then: the
   workspace's `/api/agents` body, the chat agent's state, and the tails of the three box service
   logs, captured while the workspace still existed. Every capture is guarded and the whole bundle
@@ -175,6 +184,15 @@ Four artifacts answer "what happened", in the order worth reading:
   unlink `box.log` while the backend kept writing to the dead inode. Snapshots stay under
   `agent/snapshots/` instead, because a finished tarball has no writer holding it open and the
   service logs dir is re-collected in full on every step.
+
+`agent/instruction.md` sits beside these: the instruction harbor handed the driver, kept where a
+reader meets it next to the trajectory it drove. `harbor view` browses a trial's files under
+`agent/`, `artifacts/` and `verifier/` only, so a copy anywhere else in the trial would be listed by
+the API and shown by no tab. A stepped case gets each step's own instruction, since harbor gives each
+step its own agent directory; a case without steps gets the whole case's. It is written before the
+instruction is parsed, so one that cannot be parsed is still on disk to look at, and it is never
+mirrored into the box -- the expectations it carries have no business on the machine the agent under
+test runs on.
 
 Workspace preparation -- create, sign-in, creating the chat, waiting out its welcome -- runs against
 its own 1200s budget rather than the case's `timeout_seconds`, so a workspace that comes up dead is
@@ -219,6 +237,16 @@ workspace can provide it:
   `none` means no `trajectory.json` was written at all: the trial never exchanged a message, so
   there was no conversation to hand-build, and no captured document reached the box either.
 
+A multi-step task drives one workspace across several instructions, and every step's trajectory
+replays the conversation from its first turn, so the driver marks each step's first turn with a
+`system` step naming it (`Step: <name>`, tagged `extra.minds_evals.kind: "step_boundary"`), under a
+`MINDS EVALS` banner rule that sets it apart from the long `system` steps the workspace's own
+transcript contributes. The marker is cosmetic: `system` is the source every grade-time reader already skips, so no judge, gate,
+or word count sees it, and `final_metrics.total_steps` stays the conversation's own count. In the
+workspace's own document the marker is placed at the step's opening client message, or by timestamp
+when that message is not in the document; a boundary that resolves to neither is dropped rather than
+guessed at. A task without steps has nothing to divide and gets no marker.
+
 A workspace whose mngr predates ATIF cannot answer `mngr transcript --format atif`, and any other
 capture failure (bridge, pull, download) is recorded the same way: grading proceeds on the hand-built
 document, which carries the same `extra.minds_evals` block with `source: "hand_built"`. Two problems
@@ -238,6 +266,15 @@ A [stepped case](#stepped-cases) captures and publishes once per step, and each 
 share one workspace, so the document its agent builds is cumulative, and the hand-built shape is
 built from the same accumulating conversation. A worker still alive when a later step collects is
 captured again by that step, so every step's bundle and trajectory stand on their own.
+
+Because each step's trajectory replays the conversation from its first turn, the driver marks each
+step's first turn with a `system` step naming it (`Step: <name>`, tagged
+`extra.minds_evals.kind: "step_boundary"`) under a `MINDS EVALS` banner rule, so the step being
+graded is legible against the ones before it. The marker is cosmetic: `system` is the source every grade-time reader already skips, so
+no judge, gate, or word count sees it, and `final_metrics.total_steps` stays the conversation's own
+count. In the workspace's own document the marker is placed at the step's opening client message, or
+by timestamp when that message is not in the document; a boundary that resolves to neither is dropped
+rather than placed on a guess. A case without steps has nothing to divide and gets no marker.
 
 ## Eval config
 

@@ -26,7 +26,7 @@ The VM's contents are Linux and irrelevant here. What matters is that something 
 | `desync` | macOS host | assembles the image from the chunk store |
 | `uv`, `git`, `restic` | macOS host | Python env, cloning, backups |
 
-None of these runs inside the VM. See [desktop-app.md](../desktop-app.md) for how they are staged and signed.
+None of these runs inside the VM. See [desktop-app.md](../../desktop-app.md) for how they are staged and signed.
 
 Lima can drive a VM with either QEMU or **vz** (Apple's Virtualization.framework). On Apple Silicon it defaults to vz, so no QEMU is involved in running the VM -- `limactl` links `Virtualization.framework` directly.
 
@@ -75,7 +75,7 @@ This chunks the raw image into a content-addressed store, merges this arch's ent
 
 The minisign **private key is the trust anchor for code execution**: the app verifies the signature and then boots the image as a VM. Whoever holds that key can hand every user an image the app will run.
 
-So, per [release.md](./release.md)'s one-time tier setup, which is the authoritative runbook:
+So, per [app-release.md](../ops/app-release.md)'s one-time tier setup, which is the authoritative runbook:
 
 - **One keypair per tier.** A leaked dev key must not be able to sign something a production app will execute.
 - The private key lives **in a password manager or on the operator's machine -- never in the repo, never in CI**, and there is no reason to make it machine-readable: `publish.py` takes it as a local `--secret-key-file`, used by a human a few times a year.

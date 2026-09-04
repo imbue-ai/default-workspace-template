@@ -47,7 +47,7 @@ def test_the_pinned_fallback_is_the_url_the_live_feed_names() -> None:
     assert resolved is not None, "the stable channel manifest could not be read, so this says nothing about the pin"
     assert resolved == _DEFAULT_TARGET_BY_PLATFORM[_MAC_ARM64_PLATFORM], (
         "the pinned download fallback is not the url stable serves -- bump it per the Release "
-        "channels section of apps/minds/docs/deploy/release.md, or wait for CI to publish the "
+        "channels section of apps/minds/docs/deploy/ops/app-release.md, or wait for CI to publish the "
         "manifest if the promotion only just merged"
     )
 

@@ -397,7 +397,7 @@ default-workspace-template-worktree branch="" base="origin/main":
 # between verification and merge. The recipe archives HEAD, replaces system/vendor/mngr/
 # with that snapshot, relocks DEFAULT_WORKSPACE_TEMPLATE's root uv.lock, and commits both there.
 # Does not push. Aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty.
-# Full release flow: apps/minds/docs/deploy/release.md.
+# Full release flow: apps/minds/docs/deploy/ops/app-release.md.
 [group("minds dev")]
 sync-vendor-mngr default_workspace_template="":
     #!/bin/bash
@@ -529,7 +529,7 @@ sync-vendor-mngr-live default_workspace_template="":
 # (which require --yes-i-mean-<tier>) this only pushes Vault secrets
 # to Modal and runs `modal deploy`; no local files change.
 [group("minds ops")]
-deploy *args:
+services-deploy *args:
     uv run minds-admin env deploy {{args}}
 
 # Stand up the activated dev/ci env's OWN share relay in one shot:
@@ -687,7 +687,7 @@ provision-observability ovh_region="US-EAST-VA-1" ordinal="1":
     echo "     see 'Configure the Modal workspace integration' in the bring-up runbook"
     echo "     (endpoint https://$hostname -- the BARE base URL; secret observability-otel-ingest"
     echo "     carrying only OTEL_HEADER_Authorization; the ingest gate stamps stream-name)."
-    echo "  2. Roll the fleet collectors: re-run \`just prep-server <id>\` per box; relays pick it up on provision."
+    echo "  2. Roll the fleet collectors: re-run \`just server-prep <id>\` per box; relays pick it up on provision."
     echo "  3. Once data flows, run \`just provision-observability-accounts $ip\` to apply the"
     echo "     log-stream retention overrides (do NOT re-run this recipe: it provisions a new VPS)."
 
@@ -1016,7 +1016,7 @@ minds-start branch="" default_workspace_template="" debug_port="":
 # canonical default-workspace-template remote + FALLBACK_BRANCH (the
 # minds-v<version> release tag baked into production slices). Those shipped
 # defaults are exactly the identity stamped into a slice by
-# `just bake-slice-prod <region> minds-v<version>`, so an IMBUE_CLOUD create
+# `just pool-bake <region> minds-v<version>`, so an IMBUE_CLOUD create
 # gets a fast-path lease of that slice instead of falling back to the slow
 # rebuild path. (The local-worktree defaults that minds-start exports point
 # at a filesystem path + dev branch that no pool host can clone or match --
@@ -1471,7 +1471,7 @@ create-new-mind-repo repo_name parent_dir="$HOME/project":
 #   eval "$(uv run minds-admin env activate <name>)"
 #
 # Pool hosts are baked as bare-metal SLICES (recipes below). List them with
-# `just list-pool-hosts` and remove them with `just destroy-pool-hosts`.
+# `just pool-list` and remove them with `just pool-destroy`.
 
 # === minds bare-metal SLICES (carved on a pre-registered bare-metal box) ===
 #
@@ -1544,7 +1544,7 @@ deploy-oauth-redirector tier:
 # apps/minds/.env), else the .external_worktrees/default-workspace-template checkout
 # that `just default-workspace-template-worktree` creates. No personal path baked in.
 [group("minds ops")]
-bake-slice-dev region workspace_dir="" count="1" *extra_args:
+pool-bake-from-worktree region workspace_dir="" count="1" *extra_args:
     #!/usr/bin/env bash
     set -ueo pipefail
     wd="{{workspace_dir}}"
@@ -1571,7 +1571,7 @@ bake-slice-dev region workspace_dir="" count="1" *extra_args:
 # tag). Pass `--dry-run` through extra args first to confirm server selection +
 # per-slice sizing without baking.
 [group("minds ops")]
-bake-slice-prod region tag count="1" *extra_args:
+pool-bake region tag count="1" *extra_args:
     uv run minds-admin pool create \
         --count "{{count}}" \
         --region "{{region}}" \
@@ -1590,17 +1590,17 @@ add-paid-email email:
 
 # List pool_hosts rows for the activated minds env (read-only).
 [group("minds ops")]
-list-pool-hosts:
+pool-list:
     uv run minds-admin pool list
 
 # List bare-metal servers (per-server + fleet slot accounting) for the activated
 # minds env (read-only; DSN resolved from the env, no manual exports).
 #
 # NOTE: the slot columns are derived from THIS env's pool_hosts rows, so a box
-# shared with another env reads as emptier than it is. Use `just audit-boxes` for
+# shared with another env reads as emptier than it is. Use `just server-audit` for
 # true occupancy before deciding you have free slots.
 [group("minds ops")]
-list-servers:
+server-list:
     uv run minds-admin server list
 
 # Audit every bare-metal box for the activated env: SSH each one and report its
@@ -1615,41 +1615,41 @@ list-servers:
 # this is how you find one WITHOUT a failed bake.
 # Read-only. Activate first and `vault login` (the pool SSH key comes from Vault).
 #
-#   eval "$(uv run minds-admin env activate staging)" && just audit-boxes
+#   eval "$(uv run minds-admin env activate staging)" && just server-audit
 [group("minds ops")]
-audit-boxes:
+server-audit:
     uv run minds-admin server list --verify-occupancy
 
 # Preview + place a bare-metal box order with OVH (env-aware: OVH creds from the
 # activated tier's ovh Vault entry, pool DSN from the tier -- no manual exports).
 # Pass --dry-run first to print the real OVH price preview + derived specs
 # without charging; the real order records a bare_metal_servers row at 'ordered'
-# and echoes its server id for `just await-delivery` / `just setup-server`.
+# and echoes its server id for `just server-await-delivery` / `just server-setup`.
 #
-#   just order-server --dry-run --plan-code 24sys032-us --region vin --memory-gb 128 --storage softraid-2x960nvme ...
+#   just server-order --dry-run --plan-code 24sys032-us --region vin --memory-gb 128 --storage softraid-2x960nvme ...
 [group("minds ops")]
-order-server *args:
+server-order *args:
     uv run minds-admin server order {{args}}
 
 # Wait for OVH to deliver an ordered box (assign a serviceName + IP), then mark
 # its row 'delivered'. Resumable; a no-op once delivered. Env-aware like
-# `order-server` (OVH creds + DSN from the activated tier).
+# `server-order` (OVH creds + DSN from the activated tier).
 #
-#   just await-delivery <bare-metal-server-id>
+#   just server-await-delivery <bare-metal-server-id>
 [group("minds ops")]
-await-delivery server_id:
+server-await-delivery server_id:
     uv run minds-admin server await-delivery --server-id "{{server_id}}"
 
 # Provision a delivered box to 'ready': reinstall our OS (destructive, injects
 # our SSH host key), wait for SSH, then run the same composed prep as
-# `prep-server` (qemu/lima/tooling + image staging + the observability collector
+# `server-prep` (qemu/lima/tooling + image staging + the observability collector
 # when the tier has a boxes ingest credential, verified active -- a failed
 # collector fails the prep and the box is NOT marked ready). Env-aware: OVH
 # creds, pool DSN, and pool SSH key from the activated tier. Resumable via status.
 #
-#   just setup-server <bare-metal-server-id>
+#   just server-setup <bare-metal-server-id>
 [group("minds ops")]
-setup-server server_id *extra_args:
+server-setup server_id *extra_args:
     uv run minds-admin server setup --server-id "{{server_id}}" {{extra_args}}
 
 # (Re-)prep a bare-metal box for slice baking: qemu/lima/tooling + image staging +
@@ -1663,39 +1663,39 @@ setup-server server_id *extra_args:
 # is active (fail-closed); absent credential = clean skip. Re-prepping is also how
 # the collector rolls out to the existing fleet.
 #
-#   just prep-server <bare-metal-server-id>
+#   just server-prep <bare-metal-server-id>
 [group("minds ops")]
-prep-server server_id *extra_args:
+server-prep server_id *extra_args:
     uv run minds-admin server prep --server-id "{{server_id}}" {{extra_args}}
 
 # One-time host-key backfill for the activated minds env. Keyscans every
 # pre-existing pool host + bare-metal box whose recorded sshd host key columns
 # are still null and records them, so rows baked before host-key pinning become
 # leasable / prep-able again. Run ONCE per tier right after deploying the
-# host-key-pinning connector (`just deploy`); after it runs, leasing and prep
+# host-key-pinning connector (`just services-deploy`); after it runs, leasing and prep
 # fail closed on any row still missing a pinned key. Idempotent -- rows that
 # already have keys are skipped. Activate first (use-only is enough; this needs
 # Vault + the host_pool DB + ssh-keyscan, not Modal) and `vault login`.
 #
-#   eval "$(uv run minds-admin env activate staging)" && just backfill-pool-host-keys
+#   eval "$(uv run minds-admin env activate staging)" && just pool-backfill-host-keys
 [group("minds ops")]
-backfill-pool-host-keys:
+pool-backfill-host-keys:
     uv run minds-admin pool backfill-host-keys
 
 # Destroy pool hosts in parallel: atomically claim each row (so a user cannot lease
 # it mid-destroy), destroy its slice lima VM (freeing the box slot), then drop the
-# row. Find the ids with `just list-pool-hosts`. Extra flags forward to
+# row. Find the ids with `just pool-list`. Extra flags forward to
 # `minds-admin pool destroy` (e.g. --force to also destroy a leased row, --drop-row-only
 # for rows whose box record is gone or whose machine is permanently dead).
 #
-#   just destroy-pool-hosts <pool-host-id> [<pool-host-id> ...]
+#   just pool-destroy <pool-host-id> [<pool-host-id> ...]
 #
 # Note: the steady-state teardown is automatic -- the connector destroys a host's
 # slice VM when its lease ends. `minds-admin env destroy` tears down a whole env's
 # unleased slices. This recipe is the manual escape hatch (e.g. retiring the old
 # `available` rows after baking a new pool generation).
 [group("minds ops")]
-destroy-pool-hosts *args:
+pool-destroy *args:
     uv run minds-admin pool destroy {{args}}
 
 # Args forward as-is, e.g. `just release patch`, `just release patch --dry-run
@@ -1739,3 +1739,17 @@ changelog-trigger:
     uv run mngr schedule run changelog-consolidation --provider "$provider" $disable_args
 
 alias dwt-worktree := default-workspace-template-worktree
+
+# Transitional aliases for the pre-rename names (drop once nothing references them).
+alias deploy := services-deploy
+alias bake-slice-prod := pool-bake
+alias bake-slice-dev := pool-bake-from-worktree
+alias list-pool-hosts := pool-list
+alias destroy-pool-hosts := pool-destroy
+alias backfill-pool-host-keys := pool-backfill-host-keys
+alias list-servers := server-list
+alias audit-boxes := server-audit
+alias order-server := server-order
+alias await-delivery := server-await-delivery
+alias setup-server := server-setup
+alias prep-server := server-prep

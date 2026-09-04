@@ -71,7 +71,7 @@ backup credentials are minted.
 - Stopped cloud workspaces: their uploaded disk artifacts are encrypted
   under operator-held keys, not device-held ones, so a lost device does not
   affect them (see the addendum in
-  [security-boundaries-audit.md](../security-boundaries-audit.md)).
+  [security-boundaries-audit.md](../../security-boundaries-audit.md)).
 - An operator cannot substitute for step 3: adoption means only the user's
   devices are the pinning authority, and devices refuse a host re-keyed by
-  anyone else (see "adoption" in the [glossary](../workspace/glossary.md)).
+  anyone else (see "adoption" in the [glossary](../../workspace/glossary.md)).
