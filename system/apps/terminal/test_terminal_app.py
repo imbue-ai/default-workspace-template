@@ -48,6 +48,7 @@ class _TerminalAppUnderTest(FrozenModel):
     instances_port: int = Field(description="The port the instances API is served on")
     instances_url: str = Field(description="Where the instances API is served")
     paths: TerminalPaths = Field(description="The app's state directory layout")
+    store_path: Path = Field(description="The instances.json the app is told to use")
     agent_state_dir: Path = Field(
         description="The fake agent state dir the discovery event lands in"
     )
@@ -87,6 +88,7 @@ def _prepare(
         instances_port=instances_port,
         instances_url=instances_url,
         paths=TerminalPaths(state_dir=environment.scratch_dir / "state"),
+        store_path=environment.scratch_dir / "apps" / "terminal" / "instances.json",
         agent_state_dir=agent_state_dir,
         ttyd_record_dir=ttyd_record_dir,
         log_path=environment.scratch_dir / "terminal-app.log",
@@ -102,6 +104,8 @@ def _prepare(
             instances_url,
             "--state-dir",
             str(environment.scratch_dir / "state"),
+            "--store",
+            str(environment.scratch_dir / "apps" / "terminal" / "instances.json"),
             "--ttyd-web-client",
             str(archive),
             "--ttyd",
@@ -155,7 +159,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
     try:
         assert wait_until(
             lambda: (
-                app.paths.store_path.parent.exists()
+                app.paths.commands_dir.exists()
                 and terminal_environment.registry_path.exists()
             ),
             _STARTUP_TIMEOUT_SECONDS,
@@ -223,7 +227,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
         )
         assert [
             session["name"]
-            for session in json.loads(app.paths.store_path.read_text())["sessions"]
+            for session in json.loads(app.store_path.read_text())["sessions"]
         ] == ["terminal-1"]
 
         # The hook route is served by the same process.

@@ -74,7 +74,11 @@ class TerminalStoreDocument(FrozenModel):
 
 
 class TerminalPaths(FrozenModel):
-    """Where the terminal app keeps its machine state, all under one directory."""
+    """Where the terminal app keeps its machine state (the dispatch scripts and the pty-to-tab records), all under one directory.
+
+    The store of remembered terminals is app data rather than machine state and lives under
+    ``data/.apps/terminal/`` instead (contracts.md section 17).
+    """
 
     state_dir: Path = Field(
         description="The app's state directory (data/.state/terminal under the repo root), absolute so the dispatch scripts can embed it"
@@ -100,11 +104,6 @@ class TerminalPaths(FrozenModel):
     def clients_dir(self) -> Path:
         """One file per attached tab, named by tab id and holding the client's pty."""
         return self.commands_dir / "clients"
-
-    @computed_field
-    @cached_property
-    def store_path(self) -> Path:
-        return self.state_dir / "instances.json"
 
     @computed_field
     @cached_property
