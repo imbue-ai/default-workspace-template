@@ -25,7 +25,7 @@ from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 
-# A report that has not been refreshed for this long no longer counts. Six heartbeats,
+# A report that has not been refreshed for this long no longer counts. Ten heartbeats,
 # so a page has to miss every one before its chat reads as closed.
 PRESENCE_EXPIRY_SECONDS: Final[float] = 600.0
 
