@@ -77,19 +77,19 @@ describe("the location-beacon listener", () => {
 
   it("drops a beacon from an origin that is not one of the workspace's own services", () => {
     const paneWindow = mountPane(INSTANCE_REF);
-    postBeacon({ type: "minds-location", path: "/docs/guide" }, "https://evil.example", paneWindow);
+    postBeacon({ type: "shell:location", path: "/docs/guide" }, "https://evil.example", paneWindow);
     expect(machine.recordMemberLocation).not.toHaveBeenCalled();
   });
 
   it("drops a beacon whose window belongs to no pane this dock renders", () => {
     mountPane(INSTANCE_REF);
-    postBeacon({ type: "minds-location", path: "/docs/guide" }, TRUSTED_ORIGIN, null);
+    postBeacon({ type: "shell:location", path: "/docs/guide" }, TRUSTED_ORIGIN, null);
     expect(machine.recordMemberLocation).not.toHaveBeenCalled();
   });
 
   it("drops a beacon from a pane that shows no app instance", () => {
     const paneWindow = mountPane("service:docs-viewer");
-    postBeacon({ type: "minds-location", path: "/docs/guide" }, TRUSTED_ORIGIN, paneWindow);
+    postBeacon({ type: "shell:location", path: "/docs/guide" }, TRUSTED_ORIGIN, paneWindow);
     expect(machine.recordMemberLocation).not.toHaveBeenCalled();
   });
 
