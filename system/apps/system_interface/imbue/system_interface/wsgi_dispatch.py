@@ -24,8 +24,10 @@ from imbue.imbue_common.pure import pure
 
 WsgiApplication = Callable[[dict[str, Any], Callable[..., Any]], Iterable[bytes]]
 
-# A chat page: an agent id, or ``<agent-id>.<session-id>`` for a subagent view.
-CHAT_DOCUMENT_PATTERN: Final[re.Pattern[str]] = re.compile(r"^/agent-[a-f0-9]{1,64}(?:\.[A-Za-z0-9._-]+)?$")
+# A chat page: an agent id, or ``<agent-id>.<session-id>`` for a subagent view. mngr mints
+# ``agent-<32 hex>``; the wider alphabet is the instance-key rule's, so a test fixture's id
+# (``agent-test-123``) is a chat page too.
+CHAT_DOCUMENT_PATTERN: Final[re.Pattern[str]] = re.compile(r"^/agent-[A-Za-z0-9_-]{1,120}(?:\.[A-Za-z0-9._-]+)?$")
 
 # Path prefixes the chat app alone serves.
 _CHAT_PATH_PREFIXES: Final[tuple[str, ...]] = (

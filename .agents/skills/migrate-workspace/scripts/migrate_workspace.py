@@ -696,6 +696,13 @@ def _forward_port_calls_in(block: str, program: str | None) -> list[AppPort]:
         name = name_match.group("name") if name_match is not None else program
         if url_match is None or name is None:
             continue
+        # A program that registers two manifests at one port (the shell registers the
+        # chat app's beside its own) is one row here; the registry scan names them both.
+        if any(
+            port.name == name and port.port == int(url_match.group("port"))
+            for port in ports
+        ):
+            continue
         ports.append(
             AppPort(
                 name=name,

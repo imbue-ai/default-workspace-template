@@ -48,12 +48,13 @@ Built-in manifests:
 | App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` |
 |---|---|---|---|---|---|---|
 | `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` |
-| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional), `subagent` ("Open subagent", params `parent` and `session` required) |
+| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
 | `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
 | `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
 | `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional, from phase 8) |
 
 The `terminal` and `files` manifests keep `icon` pointing at the existing `icon.svg` files (the terminal gains one, drawn in the house style; today it registers with `--no-icon`).
+While the chat app is a second document of the shell's process (phases 6 to 9), its manifest also declares `program = "system_interface"`, `priority = "system_interface"` (the memory backstop resolves a program's band from the registry row that names it), and `internal = true` (the shell offers no row for it until phase 7 reads `critical` and lists apps from the inventory); each is a `# CLEANUP:` for phase 7 or 10.
 
 ## 3. The registry (`data/.state/apps.toml`)
 
@@ -132,7 +133,7 @@ Every mutating route, `DELETE` of an unknown key included, nudges the shell; the
 | terminal | tmux session name | `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]` (the leading `_` lands in `$0` of the `bash -c` dispatch snippet, as today's frontend sends it; `workdir` rides as the last argument when the create gave one) | the title the user gave it, else `Terminal <N>` for `terminal-<N>` and the name verbatim (see phase 3) | `idle`, or `stopped` when the session is absent from tmux and the store still holds the name | `explicit` | true | allocates the lowest free `terminal-<N>`, records it in the store; the session itself is created on first attach (`new-session -A`) as today; `params.workdir` optional | kills the session and drops the name | `400` |
 | files | `files-<N>` | the stored path | `File Viewer <N>` | `idle` | `referenced` | false | allocates the lowest free number, stores `params.path` or `/` | drops the record | records the path |
 | browser | browser name | `/?session=<key>` | `Browser <N>` or the legacy name | `working` while an agent holds control, else `idle` (a browser still launching included); `error` for a crashed browser | `explicit` | false | `POST /browsers`; `params.url` (optional, an absolute `http(s)` URL; from phase 8, `400` before it) is the first page the new browser opens on, so `layout.py open <url>` is one create rather than a create and a location the launching browser would refuse | `DELETE /browsers/<key>` | navigates the live browser's active tab to the absolute URL in `path` (a rooted path is `400` for this app) and checkpoints its fleet manifest; `409` while an agent holds the browser or while it is launching or crashed |
-| chat | agent id, or `<agent-id>.<session-id>` for a subagent | `/<key>` | the agent's display name; `Subagent: <description>` for a subagent; `New chat` for a provisional instance | thinking or tool-running `working`; pending permission `attention`; lifecycle stopped, done, or unknown `stopped`; provisional `attention`; subagent `idle` | `explicit` for agents, `referenced` for provisional and subagent instances | true for agents, false otherwise | `new` mints the agent id and a provisional record; `subagent` requires `parent` and `session` and returns an existing record when one exists | `mngr destroy` for an agent; drops the record for the others | `400` |
+| chat | agent id, or `<agent-id>.<session-id>` for a subagent | `/<key>` | the agent's display name; `Subagent: <description>` for a subagent (the session id when the create gave no description); the minted display name for a provisional instance (`New chat` when there is none yet) | lifecycle stopped, done, or unknown `stopped`; else pending permission `attention`; else thinking or tool-running `working`; else `idle`; provisional `attention`; subagent `idle` | `explicit` for agents, `referenced` for provisional and subagent instances | true for agents, false otherwise | `new` mints the agent id and a provisional record (`409` with no signed-in account); `subagent` requires `parent` (a listed chat) and `session`, takes an optional `description`, and returns an existing record when one exists | `mngr destroy` for an agent; drops the record for a subagent; a provisional key is a no-op | `400` |
 
 ## 5. Shell routes apps and scripts call
 
@@ -259,7 +260,7 @@ Unknown types are ignored; shipped types never change meaning.
 | shell to app | `shell:close-request` | `{}` |
 | app to shell | `shell:focused` | `{}` |
 | app to shell | `shell:location` | `{"path"}`; the shell resolves the frame to its tab, remembers the path as that tab's last reported path, and relays it to the owning app's location route |
-| app to shell | `shell:open` | `{"address"}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client |
+| app to shell | `shell:open` | `{"address", "title"?}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client. `title` is a display hint for the new tab, used until phase 7 titles tabs from the inventory (a `# CLEANUP:` on both sides) |
 
 A frame's `load` event also clears the tab's last reported path.
 The shell reloads a docked tab's frame when the instance's listed `url` differs from the tab's last reported path (with `{tab}` substituted), which is what makes an agent's `replace-url` land and a page's own reports inert.

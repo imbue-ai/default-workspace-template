@@ -15,6 +15,7 @@ _AGENT_ID = "agent-0123456789abcdef0123456789abcdef"
     [
         f"/{_AGENT_ID}",
         f"/{_AGENT_ID}.7f3a2c1e-session",
+        "/agent-test-123",
         "/_instances",
         f"/_instances/{_AGENT_ID}/rename",
         "/api/agents/create-chat",
@@ -59,8 +60,8 @@ def test_the_chat_document_serves_its_own_paths(path: str) -> None:
         "/api/apps/files/stop",
         "/api/layout/broadcast",
         "/home/user/workspace/data/notes.md",
-        "/agent-not-hex",
         "/agentic-browser",
+        "/agent-test-123/extra",
         "/_instances_extra",
         "/api/uploads_extra",
     ],

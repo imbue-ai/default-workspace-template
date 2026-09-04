@@ -26,7 +26,6 @@ import {
   toggleAppLifecycle,
 } from "./DockviewWorkspace";
 import { ProviderChooserModal } from "./ProviderChooserModal";
-import { FastModeModal } from "./FastModeModal";
 import { Sidebar } from "./Sidebar";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
@@ -38,7 +37,6 @@ import {
   loadAccountsWithRetry,
   openProviderChooser,
 } from "../models/Providers";
-import { getFastModePromptAgentId } from "../models/FastModePrompt";
 import { startChatOnAccount } from "./DockviewWorkspace";
 
 /** Marks that the workspace has already greeted this user. Local storage rather than a server
@@ -192,9 +190,6 @@ export function App(): m.Component {
           // because accounts are mind-global -- there is nothing per-chat about picking
           // one. It is the only sign-in surface; nothing opens it but the user.
           isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
-          // One chat reaching the end of its fast-mode grace period raises a single
-          // shared prompt here (see fast-mode-prompt.ts for when that happens).
-          getFastModePromptAgentId() !== null ? m(FastModeModal) : null,
         ],
       );
     },

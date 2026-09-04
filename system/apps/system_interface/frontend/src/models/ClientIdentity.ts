@@ -23,6 +23,7 @@ export function classifyDeviceKind(userAgentDataMobile: boolean | undefined, use
 }
 
 export function getDeviceKind(): DeviceKind {
+  if (adoptedDeviceKind !== null) return adoptedDeviceKind;
   // navigator.userAgentData is Chromium-only, hence the UA-string fallback.
   const uaData = (navigator as { userAgentData?: { mobile?: boolean } }).userAgentData;
   return classifyDeviceKind(uaData?.mobile, navigator.userAgent);
@@ -65,4 +66,25 @@ export function getActiveProjectId(): string {
 export function setActiveProjectId(projectId: string): void {
   activeProjectId = projectId;
   localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectId);
+}
+
+export interface AdoptedClientIdentity {
+  clientId: string;
+  deviceKind: DeviceKind | string;
+  viewId: string;
+}
+
+// The device kind the shell handed over, when it did; the UA classification otherwise.
+let adoptedDeviceKind: DeviceKind | null = null;
+
+/**
+ * Take on the identity the shell handed this page in its handshake (an app page framed by
+ * the shell). The chat document runs on its own origin with its own local storage, so
+ * minting an id of its own would make one browser two clients; the shell's id and view
+ * are the truth. Nothing is written to storage: the identity is the shell's to keep.
+ */
+export function adoptClientIdentity(identity: AdoptedClientIdentity): void {
+  cachedClientId = identity.clientId;
+  adoptedDeviceKind = identity.deviceKind === "mobile" ? "mobile" : "desktop";
+  activeProjectId = identity.viewId;
 }

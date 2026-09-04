@@ -10,6 +10,11 @@ Built-in apps:
 - `system_interface/` - The special one: the workspace UI itself. It hosts the
   tabs the other apps render in, so it is an app that also serves as the
   workspace chrome. Do not use it as a template for new apps.
+- `chat/` - The chat app: the agent harness UI, one page per chat, rendered
+  inside a tab's iframe at its own origin. Only its manifest and icon live
+  here for now; its code runs inside `system_interface`'s process, which
+  registers the chat row beside its own (phase 6 of the workspace app model),
+  until phase 10 gives it a package and program of its own.
 - `terminal/` - The terminal tab (ttyd over the web), including its named
   persistent sessions; a Python package (`terminal-app`) that runs ttyd and
   serves the instances API over the workspace's tmux sessions.

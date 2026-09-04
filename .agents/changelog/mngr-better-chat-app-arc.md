@@ -21,3 +21,7 @@ Phase 4 of the workspace app model (the files app):
 - The update-self apply's tests know the files app as a tool: `system/apps/files` has a `pyproject.toml` beside its `app.toml` now, so a change under it (the vendored `assets/` included: they are not one of the excluded directories, and an editable reinstall is harmless) reinstalls `files-app`, and it is not `critical`.
 
 - The migrate-workspace port scan's test of the real `system/supervisord.conf` expects the files app, like the terminal, to register from inside its own process (`files-app`), so the config itself names ports only for the shell and the browser; the registry scan covers 8300 and 8301 through the row's `url` and `instances_url`.
+
+Phase 6 of the workspace app model (chat as a document):
+
+- The migrate-workspace port scan (`migrate_workspace.py list-ports`) reports one row for a program that registers two manifests at one port: the shell's line now registers the chat app's manifest beside its own at port 8000, and the registry scan is what names the `chat` row.

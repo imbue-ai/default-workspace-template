@@ -23,9 +23,9 @@ from unittest.mock import patch
 import pytest
 
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import mint_account_dir
+from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
@@ -42,6 +42,8 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
 try:
+    from playwright.sync_api import Frame
+    from playwright.sync_api import FrameLocator
     from playwright.sync_api import Page
     from playwright.sync_api import expect
 
@@ -90,6 +92,35 @@ pytestmark = [
 
 _PORT = 18765
 _BASE_URL = f"http://127.0.0.1:{_PORT}"
+
+# The fixture chat's agent id (``_make_agent_fixture``'s default).
+_FIXTURE_AGENT_ID = "agent-test-123"
+
+
+def _chat(page: Page, agent_id: str = _FIXTURE_AGENT_ID) -> FrameLocator:
+    """The chat's page, framed at the chat origin (phase 6 of the workspace app model).
+
+    Every chat assertion goes through it: the shell document holds no chat markup any
+    more, only the iframe filed under the chat's live key.
+    """
+    return page.frame_locator(f'iframe[data-live-key="chat:{agent_id}"]')
+
+
+def _chat_frame(page: Page, agent_id: str = _FIXTURE_AGENT_ID) -> Frame:
+    """The chat page's own frame, for the evaluate and wait calls that need its document.
+
+    Polled through Playwright's own wait rather than ``wait_for``: the sync API only
+    processes the events that attach a frame while a Playwright call is running, so a
+    ``time.sleep`` loop would never see the frame arrive.
+    """
+    deadline = time.monotonic() + 15.0
+    while True:
+        for frame in page.frames:
+            if frame.url.rstrip("/").endswith(f"/{agent_id}"):
+                return frame
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"the chat page for {agent_id} never loaded in a frame")
+        page.wait_for_timeout(100)
 
 
 def _make_session_file(
@@ -342,15 +373,15 @@ def test_chat_transcript_area_is_pure_white(e2e_server: tuple[str, list[AgentInf
 
     # The transcript container must exist and actually hold the message list, so
     # the assertion below cannot pass against an empty or wrong tree.
-    content = page.locator(".app-content")
+    content = _chat(page).locator(".app-content")
     expect(content).to_be_visible(timeout=15000)
     expect(content.locator(".message-list")).to_have_count(1)
 
-    content_bg = page.eval_on_selector(".app-content", "e => getComputedStyle(e).backgroundColor")
+    content_bg = _chat_frame(page).eval_on_selector(".app-content", "e => getComputedStyle(e).backgroundColor")
     assert content_bg == "rgb(255, 255, 255)", f"chat transcript area should be pure white, got {content_bg}"
 
     # The composer footer strip is now unified with the transcript -- also pure white.
-    footer_bg = page.eval_on_selector(".app-footer", "e => getComputedStyle(e).backgroundColor")
+    footer_bg = _chat_frame(page).eval_on_selector(".app-footer", "e => getComputedStyle(e).backgroundColor")
     assert footer_bg == "rgb(255, 255, 255)", f"composer footer should be pure white, got {footer_bg}"
 
     # Scoping guard: the whitening went through --color-bg-chat, so the shared
@@ -430,7 +461,7 @@ def test_agent_chat_shows_conversation(e2e_server: tuple[str, list[AgentInfo], P
     page.goto(base_url)
 
     # The chat for the primary agent auto-opens, so its first user message renders.
-    user_message = page.locator(".message-user")
+    user_message = _chat(page).locator(".message-user")
     expect(user_message.first).to_be_visible(timeout=15000)
     expect(user_message.first).to_contain_text("Hello agent!")
 
@@ -441,7 +472,7 @@ def test_assistant_message_renders(e2e_server: tuple[str, list[AgentInfo], Path]
     base_url, _, _ = e2e_server
     page.goto(base_url)
 
-    assistant_message = page.locator(".message-assistant")
+    assistant_message = _chat(page).locator(".message-assistant")
     expect(assistant_message.first).to_be_visible(timeout=15000)
     expect(assistant_message.first).to_contain_text("Hello! How can I help you?")
 
@@ -463,7 +494,7 @@ def test_message_input_visible(e2e_server: tuple[str, list[AgentInfo], Path], pa
     base_url, _, _ = e2e_server
     page.goto(base_url)
 
-    textarea = page.locator(".message-input-textbox")
+    textarea = _chat(page).locator(".message-input-textbox")
     expect(textarea).to_be_visible(timeout=15000)
 
 
@@ -473,11 +504,11 @@ def test_send_button_appears_on_input(e2e_server: tuple[str, list[AgentInfo], Pa
     base_url, _, _ = e2e_server
     page.goto(base_url)
 
-    textarea = page.locator(".message-input-textbox")
+    textarea = _chat(page).locator(".message-input-textbox")
     expect(textarea).to_be_visible(timeout=15000)
 
     # The send button is not rendered until the composer can send (non-empty).
-    send_button = page.locator(".message-input-send-button")
+    send_button = _chat(page).locator(".message-input-send-button")
     expect(send_button).to_have_count(0)
 
     # Type some text -- the send button now appears.
@@ -505,7 +536,7 @@ def test_composer_bar_survives_a_shorter_window(e2e_server: tuple[str, list[Agen
     with page.expect_response(lambda response: response.url.endswith("/api/terminals"), timeout=15000):
         page.goto(base_url)
 
-    under_bar = page.locator(".composer-under-bar")
+    under_bar = _chat(page).locator(".composer-under-bar")
     expect(under_bar).to_be_visible(timeout=15000)
 
     page.set_viewport_size({"width": 1200, "height": 848})
@@ -514,7 +545,7 @@ def test_composer_bar_survives_a_shorter_window(e2e_server: tuple[str, list[Agen
     # next frame, so the settled geometry is what is asserted -- polled rather
     # than slept on. The wrong layout is stable, not slow: it never settles.
     wait_for(
-        lambda: page.eval_on_selector(
+        lambda: _chat_frame(page).eval_on_selector(
             ".composer-under-bar", "e => e.getBoundingClientRect().bottom <= window.innerHeight"
         ),
         timeout=10.0,
@@ -570,19 +601,19 @@ def test_tool_calls_render_as_collapsible(tmp_path: Path, page: Page) -> None:
         page.goto(base_url)
 
         # Wait for the assistant turn (which carries the tool call) to render.
-        expect(page.locator(".message-assistant").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-assistant").first).to_be_visible(timeout=15000)
 
-        tool_block = page.locator(".tool-call-block").first
+        tool_block = _chat(page).locator(".tool-call-block").first
         expect(tool_block).to_be_visible(timeout=10000)
         # The header names the tool.
         expect(tool_block).to_contain_text("Read")
 
         # Collapsed by default: the details are not visible until expanded.
-        tool_details = page.locator(".tool-call-details").first
+        tool_details = _chat(page).locator(".tool-call-details").first
         expect(tool_details).to_be_hidden()
 
         # Clicking the header expands the block, revealing the tool result.
-        page.locator(".tool-call-header").first.click()
+        _chat(page).locator(".tool-call-header").first.click()
         expect(tool_details).to_be_visible()
         expect(tool_details).to_contain_text("file contents here")
 
@@ -594,7 +625,7 @@ def test_live_stream_delivers_new_events(e2e_server: tuple[str, list[AgentInfo],
     page.goto(base_url)
 
     # Wait for initial content
-    expect(page.locator(".message-user").first).to_be_visible(timeout=15000)
+    expect(_chat(page).locator(".message-user").first).to_be_visible(timeout=15000)
 
     # Append a new event to the session file
     new_event = {
@@ -607,7 +638,7 @@ def test_live_stream_delivers_new_events(e2e_server: tuple[str, list[AgentInfo],
         f.write(json.dumps(new_event) + "\n")
 
     # Wait for the new message to appear (watcher polls every 1 second)
-    new_message = page.locator(".message-user", has_text="This is a new streamed message!")
+    new_message = _chat(page).locator(".message-user", has_text="This is a new streamed message!")
     expect(new_message).to_be_visible(timeout=10000)
 
 
@@ -785,7 +816,7 @@ def _make_long_conversation_events(pair_count: int) -> list[dict[str, Any]]:
 
 def _visible_user_messages(page: Page) -> list[str]:
     """Text of every rendered user-message bubble, in document order."""
-    return page.evaluate(
+    return _chat_frame(page).evaluate(
         "() => Array.from(document.querySelectorAll('.message-user')).map((e) => (e.textContent || '').trim())"
     )
 
@@ -828,8 +859,8 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
     probe_url = "https://hidden-probe.example/"
     with _running_e2e_server(tmp_path, port, session_events=events) as (base_url, _, session_file):
         page.goto(base_url)
-        page.wait_for_selector(".message-list", timeout=15000)
-        page.wait_for_function(
+        _chat_frame(page).wait_for_selector(".message-list", timeout=15000)
+        _chat_frame(page).wait_for_function(
             "() => { const el = document.querySelector('.app-content'); return el && el.scrollHeight > el.clientHeight * 2; }",
             timeout=15000,
         )
@@ -856,7 +887,7 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
         )
         # Make the chat the active tab and let its full-width layout settle.
         _broadcast_layout_op(base_url, "focus", {"ref": "chat:test-agent"}, agent_id="agent-test-123")
-        page.wait_for_function(
+        _chat_frame(page).wait_for_function(
             "() => { const el = document.querySelector('.app-content'); return el && el.clientHeight > 0; }",
             timeout=_TRIGGER_TIMEOUT_MS,
         )
@@ -864,12 +895,12 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
 
         # Scroll up into the middle of the loaded window to read history (well off
         # the live tail, but not so far that a backfill to offset 0 is triggered).
-        page.evaluate(
+        _chat_frame(page).evaluate(
             "() => { const el = document.querySelector('.app-content'); el.scrollTop = el.scrollHeight - el.clientHeight - 1500; }"
         )
         page.wait_for_timeout(1000)
         before_hidden = _visible_user_messages(page)
-        scroll_top_before = page.evaluate("() => document.querySelector('.app-content').scrollTop")
+        scroll_top_before = _chat_frame(page).evaluate("() => document.querySelector('.app-content').scrollTop")
         # Sanity: we are reading history, not parked at the start or the tail.
         assert before_hidden, "expected user messages to be rendered after scrolling up"
         assert "msg-0" not in before_hidden, f"setup should not be at the start: {before_hidden[:3]}"
@@ -878,7 +909,7 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
 
         # Hide the chat by switching to the sibling tab.
         _broadcast_layout_op(base_url, "focus", {"ref": probe_url}, agent_id="agent-test-123")
-        page.wait_for_function(
+        _chat_frame(page).wait_for_function(
             "() => { const el = document.querySelector('.app-content'); return el && el.clientHeight === 0; }",
             timeout=_TRIGGER_TIMEOUT_MS,
         )
@@ -910,13 +941,13 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
 
         # Show the chat tab again; the user must be exactly where they left off.
         _broadcast_layout_op(base_url, "focus", {"ref": "chat:test-agent"}, agent_id="agent-test-123")
-        page.wait_for_function(
+        _chat_frame(page).wait_for_function(
             "() => { const el = document.querySelector('.app-content'); return el && el.clientHeight > 0; }",
             timeout=_TRIGGER_TIMEOUT_MS,
         )
         page.wait_for_timeout(1000)
         after_restore = _visible_user_messages(page)
-        scroll_top_after = page.evaluate("() => document.querySelector('.app-content').scrollTop")
+        scroll_top_after = _chat_frame(page).evaluate("() => document.querySelector('.app-content').scrollTop")
         assert "msg-0" not in after_restore, (
             f"after showing the tab again the window jumped to the start: {after_restore[:3]}"
         )
@@ -965,7 +996,7 @@ def test_no_agents_shows_new_tab_launcher(page: Page, tmp_path: Path) -> None:
             expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
             expect(page.locator(".dv-default-tab-content")).to_have_count(1)
             expect(page.locator(".dv-default-tab-content").first).to_have_text("New tab")
-            expect(page.locator(".message-list")).to_have_count(0)
+            expect(_chat(page).locator(".message-list")).to_have_count(0)
             # No agent exists, so no chat is offered to jump to. (The rest of the
             # machine-wide table is whatever this host happens to be running, so
             # only the chat half is asserted on.)
@@ -1106,7 +1137,7 @@ def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -
 
         # The fixture chat auto-opens in the starter project and shows its
         # transcript, which the debounced autosave writes out.
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         page.wait_for_function(
             f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
@@ -1127,7 +1158,7 @@ def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -
         )
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
         page.locator(".new-tab-launcher-row:visible", has_text="test-agent").first.click()
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         wait_for(
             lambda: (layout_dir / "projects" / f"{EVERYTHING_VIEW_ID}.json").exists(),
             timeout=15.0,
@@ -1143,9 +1174,9 @@ def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -
 
         # The restored chat must show ITS transcript -- not the primary agent's
         # (which would render an empty / no-conversation state under the same tab).
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        expect(page.locator(".message-list-empty")).to_have_count(0)
-        expect(page.locator(".message-list-not-found")).to_have_count(0)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-list-empty")).to_have_count(0)
+        expect(_chat(page).locator(".message-list-not-found")).to_have_count(0)
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1207,9 +1238,9 @@ def test_layout_missing_panel_params_recovers_chat_binding(tmp_path: Path, page:
         page.goto(base_url)
 
         # The chat is rebuilt from its panel id, so it shows its own transcript.
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        expect(page.locator(".message-list-empty")).to_have_count(0)
-        expect(page.locator(".message-list-not-found")).to_have_count(0)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-list-empty")).to_have_count(0)
+        expect(_chat(page).locator(".message-list-not-found")).to_have_count(0)
 
 
 _LIVE_SURFACE_PORT = 18870
@@ -1251,7 +1282,7 @@ _WATCH_SURFACE_REMOVALS_JS = """
 _CHAT_SURFACE_REPORT_JS = """
 (stamp) => {
   const surfaces = Array.from(document.querySelectorAll('.si-live-surface'))
-    .filter((surface) => surface.querySelector('.message-user') !== null);
+    .filter((surface) => surface.querySelector('iframe[data-live-key^="chat:"]') !== null);
   if (stamp) {
     for (const surface of surfaces) surface.__e2eChatStamp = stamp;
   }
@@ -1347,8 +1378,10 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
         # Let the debounced autosave record the arrangement, so switching away
         # and back is a real round trip through the project's stored layout.
         wait_for(
-            lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").exists()
-            and "e2e-live-page.example" in (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").read_text(),
+            lambda: (
+                (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").exists()
+                and "e2e-live-page.example" in (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").read_text()
+            ),
             timeout=15.0,
             poll_interval=0.1,
             error_message="autosave never recorded the framed page in the starter project",
@@ -1465,7 +1498,7 @@ def test_one_object_is_one_element_in_every_view_showing_it(tmp_path: Path, page
         page.goto(base_url)
 
         # The starter project shows the chat; stamp the one surface holding it.
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         page.wait_for_function(
             f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
@@ -1488,7 +1521,7 @@ def test_one_object_is_one_element_in_every_view_showing_it(tmp_path: Path, page
         )
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
         page.locator(".new-tab-launcher-row:visible", has_text="test-agent").first.click()
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
 
         in_everything = page.evaluate(_CHAT_SURFACE_REPORT_JS, None)
         assert in_everything["count"] == 1, f"opening the chat in Everything forked its page: {in_everything}"
@@ -1503,7 +1536,7 @@ def test_one_object_is_one_element_in_every_view_showing_it(tmp_path: Path, page
         page.wait_for_function(
             f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
 
         back_in_project = page.evaluate(_CHAT_SURFACE_REPORT_JS, None)
         assert back_in_project["count"] == 1, f"switching back forked the chat page: {back_in_project}"
@@ -1708,7 +1741,7 @@ def test_double_click_renames_a_chat_and_the_name_survives_a_reload(tmp_path: Pa
         page.reload()
         expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=15000)
         # Still the chat that was renamed, not a tab that merely kept a string.
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         # And the old name is gone rather than restored onto a second tab.
         expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
 
@@ -2665,26 +2698,28 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
         page.goto(base_url)
 
         # The committed turn renders as usual...
-        expect(page.locator(".message-user", has_text="Kick off the big refactor").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-user", has_text="Kick off the big refactor").first).to_be_visible(
+            timeout=15000
+        )
 
         # ...and the queued message shows as a distinct group, reusing the
         # user-bubble view (not the transcript classifier).
-        group = page.locator(".queued-group")
+        group = _chat(page).locator(".queued-group")
         expect(group).to_be_visible(timeout=15000)
-        bubble = page.locator(".queued-message .message-user-bubble .message-content")
+        bubble = _chat(page).locator(".queued-message .message-user-bubble .message-content")
         expect(bubble).to_contain_text("actually also update the changelog")
 
         # The header row: 'Queued messages' label on the left, the shoulder-tap
         # button (with its exact tooltip) on the right. No interrupt button here --
         # interrupt-to-composer moved to the composer Stop button.
-        expect(page.locator(".queued-header-label")).to_contain_text("Queued messages")
-        flush_button = page.locator(".queued-action--flush")
+        expect(_chat(page).locator(".queued-header-label")).to_contain_text("Queued messages")
+        flush_button = _chat(page).locator(".queued-action--flush")
         expect(flush_button).to_be_visible()
         expect(flush_button).to_contain_text("Shoulder tap")
         expect(flush_button).to_have_attribute(
             "data-tooltip", "Gently interrupt your agent to send queued messages early"
         )
-        expect(page.locator(".queued-action--interrupt")).to_have_count(0)
+        expect(_chat(page).locator(".queued-action--interrupt")).to_have_count(0)
 
         page.screenshot(path=str(tmp_path / "queued_group.png"))
 
@@ -2862,7 +2897,7 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
         )
         page.goto(base_url)
 
-        error = page.locator(".message-list-error")
+        error = _chat(page).locator(".message-list-error")
         expect(error).to_be_visible(timeout=15000)
         # The message itself, not the whole panel: the Refresh below is part of it.
         expect(error.locator("p")).to_have_text("Error: request failed (HTTP 503)")
@@ -2872,8 +2907,8 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
 
         error.locator(".message-list-reload").click()
 
-        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        expect(page.locator(".message-list-error")).to_have_count(0)
+        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(_chat(page).locator(".message-list-error")).to_have_count(0)
 
         # Touch tmux deterministically for the module-wide mark, as above.
         with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:

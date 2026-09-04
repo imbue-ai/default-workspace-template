@@ -222,6 +222,11 @@ export function liveSurfaceParams(key: LiveKey): PanelParams | null {
 /** The live page's DOM element for ``key``, or null when it has none. For callers that
  *  address the page's content (e.g. granting a just-activated terminal focus) without
  *  owning the surface. */
+/** The panel currently standing in for the page filed under ``key``, or null when no pane shows it. */
+export function liveSurfaceBoundPanelId(key: LiveKey): string | null {
+  return surfacesByKey.get(key)?.boundPanelId ?? null;
+}
+
 export function liveSurfaceElement(key: LiveKey): HTMLElement | null {
   return surfacesByKey.get(key)?.element ?? null;
 }

@@ -59,9 +59,10 @@ DESCRIPTION_PARAM: Final[str] = "description"
 _NEW_PARAMS: Final[frozenset[str]] = frozenset({ACCOUNT_ID_PARAM})
 _SUBAGENT_PARAMS: Final[frozenset[str]] = frozenset({PARENT_PARAM, SESSION_PARAM, DESCRIPTION_PARAM})
 
-# An agent id as mngr mints it (``AgentId``); a subagent key is one followed by a dot and
-# the session id, which is why the key alphabet has a dot.
-AGENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^agent-[a-f0-9]{1,64}$")
+# An agent id: ``agent-<32 hex>`` as mngr mints it, with the instance-key alphabet so a test
+# fixture's id counts too. A subagent key is one followed by a dot and the session id, which
+# is why the key alphabet has a dot.
+AGENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^agent-[A-Za-z0-9_-]{1,120}$")
 SUBAGENT_KEY_SEPARATOR: Final[str] = "."
 
 PROVISIONAL_TITLE: Final[str] = "New chat"

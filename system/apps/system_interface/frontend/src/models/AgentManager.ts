@@ -8,8 +8,7 @@ import { apiUrl } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
-import type { ModelChoice } from "./ModelSettings";
-import { noteBackendArrivals } from "./OutgoingMessages";
+import type { ModelChoice } from "../chat/models/ModelSettings";
 import { parseJsonMessage } from "./ws-json";
 
 export interface AgentState {
@@ -359,6 +358,9 @@ let agentActivityListeners: AgentActivityListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
+// Whether this document registers itself as a client over the socket (the shell does; the
+// chat document, a page inside one of the shell's tabs, is not a client of its own).
+let isClientReported = true;
 
 const reconnectBackoff = new ReconnectBackoff();
 
@@ -390,7 +392,7 @@ function connect(): void {
     // Register this browser's identity + active layout with the server so
     // layout-targeted ops can find it. During startup the active layout may
     // not be chosen yet; DockviewWorkspace re-reports once it is.
-    reportClientState();
+    if (isClientReported) reportClientState();
     m.redraw();
   };
 
@@ -458,13 +460,6 @@ function handleEvent(event: WsEvent): void {
           for (const listener of agentActivityListeners) {
             listener(agent.id, previous, current);
           }
-        }
-        // Route a newly-queued message through the optimistic-send layer so its
-        // "Sending…" bubble drops the instant it becomes a real queued entry
-        // (no overlap). Deduped by queued_id, so re-pushed snapshots are harmless.
-        const queuedIds = (agent.queued_messages ?? []).map((queued) => queued.queued_id);
-        if (queuedIds.length > 0) {
-          noteBackendArrivals(agent.id, queuedIds);
         }
       }
       break;
@@ -614,7 +609,13 @@ export function reportClientState(previousLayoutSlug?: string): void {
   );
 }
 
-export function initAgentManager(): void {
+export interface AgentManagerOptions {
+  /** Whether this document registers as a client (`client_state`); the shell does, an app page does not. */
+  isClientReported: boolean;
+}
+
+export function initAgentManager(options: AgentManagerOptions = { isClientReported: true }): void {
+  isClientReported = options.isClientReported;
   connect();
 }
 
@@ -829,6 +830,25 @@ export function buildSessionTerminalUrl(sessionName: string, terminalId: string,
   params.append("arg", terminalId);
   params.append("arg", workdir);
   return `${deriveServiceOrigin(labelForService("terminal"))}?${params.toString()}`;
+}
+
+/** The terminal service's origin, where every terminal page (a session tab, an agent's
+ *  back face) is served from. */
+export function getTerminalUrl(): string {
+  return deriveServiceOrigin(labelForService("terminal"));
+}
+
+/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux
+ *  session. The ttyd dispatch reads ``$1`` ("_") then ``$2`` ("agent")
+ *  then ``$3`` (the agent name), so the args are written in that order.
+ *
+ *  One caller: the BACK FACE of that agent's chat. A terminal is reachable only there, because
+ *  two live ttyd clients on one tmux window keep resizing it out from under each other --
+ *  `window-size latest` means the most recent attach wins. */
+export function buildAgentTerminalUrl(agentName: string): string {
+  const baseUrl = getTerminalUrl();
+  const separator = baseUrl.includes("?") ? "&" : "?";
+  return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
 }
 
 /** Ask the backend to allocate the next free ``terminal-N`` session name. The
