@@ -261,7 +261,8 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         session = params.get(SESSION_PARAM, "")
         if not parent or not session:
             raise InvalidParamsError(f"action {SUBAGENT_ACTION_ID!r} requires {PARENT_PARAM!r} and {SESSION_PARAM!r}")
-        if not AGENT_ID_PATTERN.fullmatch(parent) or self.manager.get_agent_by_id(parent) is None:
+        parent_agent = self.manager.get_agent_by_id(parent) if AGENT_ID_PATTERN.fullmatch(parent) else None
+        if parent_agent is None or is_primary_agent(parent_agent):
             raise InvalidParamsError(f"{PARENT_PARAM!r} {parent!r} is not a chat this app lists")
         key = subagent_instance_key(parent, session)
         with self._lock:
