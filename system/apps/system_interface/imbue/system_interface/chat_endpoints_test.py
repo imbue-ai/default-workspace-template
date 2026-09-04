@@ -13,6 +13,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.app_context import state_of
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import ChatId
@@ -61,8 +62,6 @@ def client(app: Flask) -> FlaskClient:
 
 
 def _seed_agent(app: Flask, agent_id: str) -> None:
-    from imbue.system_interface.app_context import state_of
-
     manager = state_of(app).agent_manager
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
@@ -101,8 +100,6 @@ def test_a_seeded_agent_answers_identically_on_both_families(app: Flask, client:
 
 
 def test_resolution_follows_the_registry_record(app: Flask, client: FlaskClient) -> None:
-    from imbue.system_interface.app_context import state_of
-
     _seed_agent(app, _AGENT_ID)
     # Record the chat explicitly (what the bootstrap does); resolution must go
     # through the record rather than the identity fallback.

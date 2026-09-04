@@ -36,6 +36,17 @@ from imbue.system_interface.models import ChatId
 _CHATS_SUBDIR = "chats"
 
 
+class ChatRecordError(ValueError):
+    """Raised when a chat record violates the active-segment invariant.
+
+    A ``ValueError`` subclass so pydantic folds it into the record's
+    ``ValidationError`` and the registry's load path catches it like any other
+    malformed record.
+    """
+
+    ...
+
+
 def chats_dir_for_layout_dir(layout_dir: Path) -> Path:
     """Where chat records live for a workspace whose layouts are saved under ``layout_dir``."""
     return layout_dir / _CHATS_SUBDIR
@@ -70,15 +81,15 @@ class ChatRecord(FrozenModel):
     def _check_active_segment(self) -> "ChatRecord":
         """Exactly the last segment is active, and it names ``active_agent_id``."""
         if not self.segments:
-            raise ValueError(f"Chat {self.chat_id} has no segments")
+            raise ChatRecordError(f"Chat {self.chat_id} has no segments")
         for segment in self.segments[:-1]:
             if segment.ended_at is None:
-                raise ValueError(f"Chat {self.chat_id} has a non-final segment with no ended_at")
+                raise ChatRecordError(f"Chat {self.chat_id} has a non-final segment with no ended_at")
         last = self.segments[-1]
         if last.ended_at is not None:
-            raise ValueError(f"Chat {self.chat_id} has no active segment (last segment already ended)")
+            raise ChatRecordError(f"Chat {self.chat_id} has no active segment (last segment already ended)")
         if last.agent_id != self.active_agent_id:
-            raise ValueError(
+            raise ChatRecordError(
                 f"Chat {self.chat_id} names {self.active_agent_id} active but its last segment "
                 f"belongs to {last.agent_id}"
             )
