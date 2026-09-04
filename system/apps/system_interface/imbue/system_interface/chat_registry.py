@@ -110,9 +110,18 @@ class ChatRegistry(MutableModel):
     chats_dir: Path | None
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _records: dict[ChatId, ChatRecord] = PrivateAttr(default_factory=dict)
+    # Every agent that has ever backed a chat, active or retired, mapped to that chat.
+    # Kept beside ``_records`` rather than derived on demand because it answers the
+    # question ``ensure_chat`` has to ask on every discovery pass: has this agent
+    # already got a chat above it? Scanning all segments of all chats to answer that
+    # would make discovery quadratic.
+    _chat_id_by_any_agent: dict[str, ChatId] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, context: object, /) -> None:
         self._records = self._load()
+        self._chat_id_by_any_agent = {
+            segment.agent_id: chat_id for chat_id, record in self._records.items() for segment in record.segments
+        }
 
     def _load(self) -> dict[ChatId, ChatRecord]:
         if self.chats_dir is None or not self.chats_dir.is_dir():
@@ -197,14 +206,21 @@ class ChatRegistry(MutableModel):
         return tuple(segment.agent_id for segment in record.segments[:-1])
 
     def ensure_chat(self, chat_id: ChatId, agent_id: str, harness: HarnessType, account_id: str | None) -> None:
-        """Record a chat backed by ``agent_id``, if it has no record yet.
+        """Record a chat backed by ``agent_id``, if neither it nor the agent is known yet.
 
         Idempotent: an existing record is left untouched (its segments are its
         history; discovery must never rewrite them), which is what makes the
         bootstrap safe to run on every discovery pass and every restart.
+
+        An agent that already appears in some chat's segments is equally a no-op,
+        and that is the case that matters after a harness switch: the successor
+        agent's id is not the chat's id, so a bootstrap that only checked
+        ``chat_id`` would give it a second chat of its own -- which then wins the
+        agents projection's chat lookup and makes the chat's id appear to change
+        under the user at the commit point.
         """
         with self._lock:
-            if chat_id in self._records:
+            if chat_id in self._records or agent_id in self._chat_id_by_any_agent:
                 return
             record = ChatRecord(
                 chat_id=str(chat_id),
@@ -219,6 +235,7 @@ class ChatRegistry(MutableModel):
                 ),
             )
             self._records[chat_id] = record
+            self._chat_id_by_any_agent[agent_id] = chat_id
             self._save_record_unlocked(record)
 
     def begin_segment(
@@ -256,14 +273,18 @@ class ChatRegistry(MutableModel):
                 segments=(*record.segments[:-1], retired, successor),
             )
             self._records[chat_id] = updated
+            self._chat_id_by_any_agent[agent_id] = chat_id
             self._save_record_unlocked(updated)
             return updated
 
     def remove(self, chat_id: ChatId) -> None:
         """Drop a deleted chat's record and its file. No-op for an unrecorded chat."""
         with self._lock:
-            if self._records.pop(chat_id, None) is None:
+            removed = self._records.pop(chat_id, None)
+            if removed is None:
                 return
+            for segment in removed.segments:
+                self._chat_id_by_any_agent.pop(segment.agent_id, None)
             path = self._record_path(chat_id)
             if path is None:
                 return

@@ -260,3 +260,80 @@ def test_retired_agent_ids_of_an_unrecorded_chat_is_empty(tmp_path: Path) -> Non
     registry = _make_registry(tmp_path)
 
     assert registry.retired_agent_ids(ChatId("agent-" + "1" * 32)) == ()
+
+
+def test_discovery_after_a_switch_does_not_give_the_successor_a_chat_of_its_own(tmp_path: Path) -> None:
+    """A discovery pass over the post-switch agent must add nothing.
+
+    The successor's id is not the chat's id, so the bootstrap sees an agent it has no
+    record *under that key* for and would record a second chat -- which then competes
+    with the real one for the same active agent and makes the chat's id appear to change
+    at the commit point.
+    """
+    registry = _make_registry(tmp_path)
+    chat_id = ChatId("agent-" + "2" * 32)
+    successor_id = "agent-" + "3" * 32
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+    registry.begin_segment(chat_id, agent_id=successor_id, harness=HarnessType.CODEX, account_id="account-2")
+
+    registry.ensure_chat(
+        ChatId(successor_id), agent_id=successor_id, harness=HarnessType.CODEX, account_id="account-2"
+    )
+
+    assert registry.get(ChatId(successor_id)) is None
+    assert registry.chat_id_by_active_agent() == {successor_id: chat_id}
+    assert sorted(p.name for p in chats_dir_for_layout_dir(tmp_path).glob("*.json")) == [f"{chat_id}.json"]
+
+
+def test_a_retired_agent_never_gets_a_chat_of_its_own_again(tmp_path: Path) -> None:
+    """The retired agent's id IS the chat id on a first switch, so the ``chat_id`` guard
+    already covers it; a later segment's retired agent is only covered by knowing every
+    agent that has ever backed the chat."""
+    registry = _make_registry(tmp_path)
+    chat_id = ChatId("agent-" + "4" * 32)
+    second = "agent-" + "5" * 32
+    third = "agent-" + "6" * 32
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+    registry.begin_segment(chat_id, agent_id=second, harness=HarnessType.CODEX, account_id=None)
+    registry.begin_segment(chat_id, agent_id=third, harness=HarnessType.CLAUDE, account_id=None)
+
+    registry.ensure_chat(ChatId(second), agent_id=second, harness=HarnessType.CODEX, account_id=None)
+
+    assert registry.get(ChatId(second)) is None
+    assert registry.chat_id_by_active_agent() == {third: chat_id}
+
+
+def test_the_agent_guard_survives_a_reload_from_disk(tmp_path: Path) -> None:
+    """The index is rebuilt on load, so a restart mid-life of a switched chat does not
+    let the next discovery pass duplicate it."""
+    chat_id = ChatId("agent-" + "7" * 32)
+    successor_id = "agent-" + "8" * 32
+    registry = _make_registry(tmp_path)
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+    registry.begin_segment(chat_id, agent_id=successor_id, harness=HarnessType.CODEX, account_id=None)
+
+    reloaded = _make_registry(tmp_path)
+    reloaded.ensure_chat(
+        ChatId(successor_id), agent_id=successor_id, harness=HarnessType.CODEX, account_id=None
+    )
+
+    assert reloaded.get(ChatId(successor_id)) is None
+    assert reloaded.chat_id_by_active_agent() == {successor_id: chat_id}
+
+
+def test_removing_a_chat_frees_its_agents_from_the_guard(tmp_path: Path) -> None:
+    """A deleted chat must leave nothing behind that would stop a future agent id from
+    being recorded -- ids are unique in practice, but a stale guard entry would silently
+    swallow a chat rather than fail loudly."""
+    registry = _make_registry(tmp_path)
+    chat_id = ChatId("agent-" + "9" * 32)
+    successor_id = "agent-" + "a" * 32
+    registry.ensure_chat(chat_id, agent_id=str(chat_id), harness=HarnessType.CLAUDE, account_id=None)
+    registry.begin_segment(chat_id, agent_id=successor_id, harness=HarnessType.CODEX, account_id=None)
+
+    registry.remove(chat_id)
+    registry.ensure_chat(ChatId(successor_id), agent_id=successor_id, harness=HarnessType.CODEX, account_id=None)
+
+    record = registry.get(ChatId(successor_id))
+    assert record is not None
+    assert record.active_agent_id == successor_id
