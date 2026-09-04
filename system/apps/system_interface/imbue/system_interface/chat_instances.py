@@ -39,6 +39,7 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.chat_errors import ChatCreateRefusedError
 from imbue.system_interface.chat_errors import ChatDestroyFailedError
 from imbue.system_interface.chat_errors import ChatRenameFailedError
+from imbue.system_interface.chat_errors import ChatTitleConflictError
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentDestroyError
 from imbue.system_interface.models import AgentNameConflictError
@@ -221,7 +222,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         try:
             self.manager.rename_chat_agent(key, title)
         except AgentNameConflictError as e:
-            raise ChatCreateRefusedError(str(e)) from e
+            raise ChatTitleConflictError(str(e)) from e
         except AgentRenameError as e:
             raise ChatRenameFailedError(str(e)) from e
         renamed = self.manager.get_agent_by_id(key)
