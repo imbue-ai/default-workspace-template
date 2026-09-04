@@ -28,6 +28,7 @@ from pydantic import PrivateAttr
 from pydantic import model_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.atomic_write import write_json_atomic
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -241,7 +242,8 @@ class ChatRegistry(MutableModel):
             record = self._records.get(chat_id)
             if record is None:
                 raise ChatRecordError(f"Chat {chat_id} has no record to re-point")
-            retired = record.segments[-1].model_copy(update={"ended_at": now})
+            outgoing = record.segments[-1]
+            retired = outgoing.model_copy_update(to_update(outgoing.field_ref().ended_at, now))
             successor = ChatSegment(
                 agent_id=agent_id,
                 harness=harness,

@@ -124,7 +124,9 @@ def test_an_archived_row_with_no_event_id_is_skipped(tmp_path: Path) -> None:
 
 def _composite() -> CompositeChatWatcher:
     """One chat: three events on a retired agent, then two on the live one."""
-    return CompositeChatWatcher((_segment(_OLD_AGENT_ID, "a1", "a2", "a3"),), _segment(_NEW_AGENT_ID, "b1", "b2"))
+    return CompositeChatWatcher.build_over(
+        (_segment(_OLD_AGENT_ID, "a1", "a2", "a3"),), _segment(_NEW_AGENT_ID, "b1", "b2")
+    )
 
 
 def test_the_composite_reads_as_one_continuous_transcript() -> None:
@@ -192,7 +194,7 @@ def test_details_resolve_from_whichever_segment_holds_the_event() -> None:
 
 def test_live_only_state_comes_from_the_active_agent() -> None:
     live = _segment(_NEW_AGENT_ID, "b1")
-    composite = CompositeChatWatcher((_segment(_OLD_AGENT_ID, "a1"),), live)
+    composite = CompositeChatWatcher.build_over((_segment(_OLD_AGENT_ID, "a1"),), live)
 
     # The queue, the flush hooks and the SSE filter belong to the running agent alone;
     # a frozen segment has no process to answer for them.
