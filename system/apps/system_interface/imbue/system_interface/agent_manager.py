@@ -609,8 +609,9 @@ class AgentManager:
     # chat exactly once.
     _auto_open_ledger: AutoOpenLedger
     _pending_auto_open_name_by_id: dict[str, str]
-    # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: UI presence and
-    # messages (via ``record_activity``, from the ``/api/activity`` endpoint),
+    # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: page presence and
+    # messages (via ``record_presence`` and ``record_message_sent``, from the chat app's
+    # presence and send routes),
     # lifecycle changes (via ``record_running_agents``, from the observe stream),
     # and elapsed idle time (via its own slow sweep, started in ``start``). A chat
     # is protected while engaged and climbs past the worker band once it has been
