@@ -114,13 +114,12 @@ def _chat_frame(page: Page, agent_id: str = _FIXTURE_AGENT_ID) -> Frame:
     ``time.sleep`` loop would never see the frame arrive.
     """
     deadline = time.monotonic() + 15.0
-    while True:
+    while time.monotonic() < deadline:
         for frame in page.frames:
             if frame.url.rstrip("/").endswith(f"/{agent_id}"):
                 return frame
-        if time.monotonic() >= deadline:
-            raise TimeoutError(f"the chat page for {agent_id} never loaded in a frame")
         page.wait_for_timeout(100)
+    raise TimeoutError(f"the chat page for {agent_id} never loaded in a frame")
 
 
 def _make_session_file(
