@@ -1,5 +1,8 @@
-class BrowserFleetError(Exception):
-    """Base error for the fleet as the instances adapter drives it."""
+from app_instances.errors import AppInstancesError
+
+
+class BrowserFleetError(AppInstancesError):
+    """Base error for the fleet as the instances adapter drives it; a library error, so the instances blueprint answers one the adapter does not map with a detail body."""
 
 
 class InvalidBrowserNameValueError(BrowserFleetError, ValueError):
