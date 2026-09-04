@@ -239,6 +239,24 @@ def test_location_answers_200_with_the_relocated_record_and_nudges(
     assert recording_nudger.nudge_count == 1
 
 
+def test_location_hands_an_absolute_url_to_the_source(
+    instances_client: FlaskClient,
+    stub_source: StubInstanceSource,
+    recording_nudger: RecordingNudger,
+) -> None:
+    _create(stub_source, "/one/")
+
+    # The stub records paths under its own origin, so it refuses the URL (a 400 from the
+    # source, not from the body parser): the call reached it with the URL intact.
+    response = instances_client.post(
+        "/_instances/stub-1/location", json={"path": "https://example.com/page"}
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert stub_source.calls[-1] == "location:stub-1:https://example.com/page"
+    assert recording_nudger.nudge_count == 0
+
+
 def test_location_maps_unknown_untracked_and_bad_path(
     instances_client: FlaskClient,
     stub_source: StubInstanceSource,

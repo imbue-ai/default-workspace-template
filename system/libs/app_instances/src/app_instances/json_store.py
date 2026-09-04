@@ -29,11 +29,13 @@ from app_instances.errors import (
 )
 from app_instances.interfaces import InstanceSourceInterface
 from app_instances.primitives import (
+    AbsoluteHttpUrl,
     InstanceKey,
     InstanceKeyPrefix,
     InstanceTitle,
     InstanceUrl,
     LocationPath,
+    LocationTarget,
     TitleTemplate,
     render_title_template,
 )
@@ -199,10 +201,14 @@ class JsonStoreInstanceSource(InstanceSourceInterface):
             self._write_records(_replace_record(records, renamed))
         return renamed
 
-    def set_location(self, key: InstanceKey, path: LocationPath) -> InstanceRecord:
+    def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
         if not self.is_location_tracked:
             raise LocationNotTrackedError(
                 "this app does not track where its instances are"
+            )
+        if isinstance(path, AbsoluteHttpUrl):
+            raise InvalidInstanceValueError(
+                f"invalid path {path!r}: this app records paths under its own origin, not URLs"
             )
         with self._lock:
             records = self._read_records()

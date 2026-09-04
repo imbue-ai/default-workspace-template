@@ -11,7 +11,13 @@ from app_instances.data_types import (
     LocationRequest,
     RenameRequest,
 )
-from app_instances.primitives import InstanceKey, InstanceTitle, InstanceUrl
+from app_instances.primitives import (
+    AbsoluteHttpUrl,
+    InstanceKey,
+    InstanceTitle,
+    InstanceUrl,
+    LocationPath,
+)
 
 
 def _record(last_active: datetime | None) -> InstanceRecord:
@@ -89,3 +95,16 @@ def test_rename_and_location_requests_apply_the_primitive_rules() -> None:
         RenameRequest.model_validate({"title": " "})
     with pytest.raises(ValidationError, match="path"):
         LocationRequest.model_validate({"path": "docs"})
+
+
+def test_location_request_takes_a_rooted_path_or_an_absolute_url() -> None:
+    path = LocationRequest.model_validate({"path": "/docs/"}).path
+    url = LocationRequest.model_validate({"path": "https://example.com/a"}).path
+
+    assert isinstance(path, LocationPath)
+    assert isinstance(url, AbsoluteHttpUrl)
+    assert url == "https://example.com/a"
+    with pytest.raises(ValidationError, match="path"):
+        LocationRequest.model_validate({"path": "ftp://example.com/a"})
+    with pytest.raises(ValidationError, match="path"):
+        LocationRequest.model_validate({"path": "https://example.com/a b"})

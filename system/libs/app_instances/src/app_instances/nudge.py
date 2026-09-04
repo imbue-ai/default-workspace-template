@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from collections.abc import Mapping
 from typing import Any, Final
@@ -59,3 +60,23 @@ class ShellNudger(InstanceNudgerInterface):
 
     def nudge(self) -> None:
         post_to_shell(f"{self.shell_url}/api/apps/{self.app_name}/changed", None)
+
+
+class SilentNudger(InstanceNudgerInterface):
+    """Nudges nobody: the default for an app object built before its shell nudger is installed, and for tests."""
+
+    def nudge(self) -> None:
+        return None
+
+
+class ThreadedNudger(InstanceNudgerInterface):
+    """Hands each nudge to a daemon thread, so a caller on a latency-sensitive thread (an event loop) never waits on the shell."""
+
+    inner: InstanceNudgerInterface = Field(
+        frozen=True, description="The nudger that actually posts to the shell"
+    )
+
+    def nudge(self) -> None:
+        threading.Thread(
+            target=self.inner.nudge, name="instance-nudge", daemon=True
+        ).start()

@@ -1,6 +1,7 @@
 import re
+import urllib.parse
 from collections.abc import Iterable
-from typing import Any, Final, Self
+from typing import Any, Final, Self, TypeAlias
 
 from imbue.imbue_common.pure import pure
 from pydantic import GetCoreSchemaHandler
@@ -26,6 +27,10 @@ MAX_INSTANCE_KEY_PREFIX_LENGTH: Final[int] = 100
 # the tab placeholder once; the shell substitutes the id of the tab that opens it.
 MAX_INSTANCE_URL_LENGTH: Final[int] = 2048
 TAB_PLACEHOLDER: Final[str] = "{tab}"
+
+# A location an app navigates to rather than records: an absolute web URL, for an app whose
+# pages are other sites' pages (the browser). Held to the same length and character rules.
+ABSOLUTE_HTTP_URL_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 
 MAX_INSTANCE_TITLE_LENGTH: Final[int] = 256
 
@@ -164,6 +169,47 @@ class LocationPath(str):
         return core_schema.no_info_after_validator_function(
             cls, core_schema.str_schema()
         )
+
+
+@pure
+def describe_absolute_http_url_problem(value: str) -> str | None:
+    """Return why ``value`` cannot be an absolute http(s) URL, or None when it can."""
+    if len(value) > MAX_INSTANCE_URL_LENGTH:
+        return f"invalid url: {len(value)} characters is over the {MAX_INSTANCE_URL_LENGTH}-character limit"
+    if any(character <= " " or character == "\x7f" for character in value):
+        return f"invalid url {_preview(value)}: whitespace and control characters are not allowed"
+    try:
+        parts = urllib.parse.urlsplit(value)
+    except ValueError as e:
+        return f"invalid url {_preview(value)}: {e}"
+    if parts.scheme not in ABSOLUTE_HTTP_URL_SCHEMES or not parts.netloc:
+        return f"invalid url {_preview(value)}: expected an absolute http or https URL with a host"
+    return None
+
+
+class AbsoluteHttpUrl(str):
+    """A location an app navigates to: an absolute http(s) URL with a host, at most 2048 characters, no whitespace or control characters."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_absolute_http_url_problem(value)
+        if problem is not None:
+            raise InvalidInstanceValueError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+# What a location report may carry (contracts.md section 4.2): a rooted path under the app's
+# origin for an app that records where its page is, or an absolute URL for an app that
+# navigates to other sites' pages. Each app accepts the form that fits it and answers 400
+# for the other.
+LocationTarget: TypeAlias = LocationPath | AbsoluteHttpUrl
 
 
 class InstanceTitle(str):

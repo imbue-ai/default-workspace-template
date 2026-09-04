@@ -10,7 +10,7 @@ from app_instances.primitives import (
     InstanceKey,
     InstanceTitle,
     InstanceUrl,
-    LocationPath,
+    LocationTarget,
 )
 
 
@@ -77,4 +77,6 @@ class RenameRequest(FrozenModel):
 class LocationRequest(FrozenModel):
     """The body of ``POST /_instances/<key>/location``."""
 
-    path: LocationPath = Field(description="Where the instance's page is now")
+    path: LocationTarget = Field(
+        description="Where the instance's page is now: a rooted path, or an absolute URL for an app that navigates to one"
+    )

@@ -45,7 +45,11 @@ The shell is the only caller of the API, over loopback, at the registry row's
 - `app_instances.primitives`: `InstanceKey` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`),
   `InstanceKeyPrefix`, `InstanceUrl` (rooted with a single slash, at most 2048
   characters, no control characters, `{tab}` at most once), `LocationPath` (the
-  same without the placeholder), `InstanceTitle` (non-blank, trimmed, at most
+  same without the placeholder), `AbsoluteHttpUrl` (an absolute `http(s)` URL
+  with a host, under the same length and character rules) and `LocationTarget`,
+  the union a location report carries (a source takes the form that fits it:
+  the JSON store records paths and answers `400` for a URL; the browser
+  navigates to a URL), `InstanceTitle` (non-blank, trimmed, at most
   256 characters), `TitleTemplate` (must contain `{n}`),
   `render_title_template(template, number)`, which fills the placeholder in,
   and the workspace's naming rule as the shell applies it to chats:
@@ -76,7 +80,11 @@ The shell is the only caller of the API, over loopback, at the registry row's
   model the shell answers `404`, which is expected), a warning when the post
   took over half a second. `ShellNudger(app_name, shell_url)` posts
   `POST <shell>/api/apps/<name>/changed` through it; an app's own posts to the
-  shell's tab routes (the terminal's) go through it too. `shell_base_url()`
+  shell's tab routes (the terminal's) go through it too. `ThreadedNudger(inner)`
+  hands each nudge to a daemon thread, for an app whose list changes on a thread
+  that must not wait on the shell (the browser's event loop); `SilentNudger`
+  nudges nobody (the default before an app installs its shell nudger, and for
+  tests). `shell_base_url()`
   resolves the shell exactly as `system/scripts/layout.py` does
   (`MINDS_WORKSPACE_SERVER_URL`, default `http://127.0.0.1:8000`).
 - `app_instances.sidecar`: `app_url_port(app_url)` is the port the wrapped

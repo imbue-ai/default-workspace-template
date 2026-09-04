@@ -6,6 +6,7 @@ from app_instances.primitives import (
     MAX_INSTANCE_KEY_PREFIX_LENGTH,
     MAX_INSTANCE_TITLE_LENGTH,
     MAX_INSTANCE_URL_LENGTH,
+    AbsoluteHttpUrl,
     InstanceKey,
     InstanceKeyPrefix,
     InstanceTitle,
@@ -110,6 +111,38 @@ def test_location_path_accepts_a_rooted_path_and_rejects_the_placeholder() -> No
     assert LocationPath("/data/docs/?x=1") == "/data/docs/?x=1"
     with pytest.raises(InvalidInstanceValueError, match="not allowed here"):
         LocationPath("/?arg={tab}")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com",
+        "http://127.0.0.1:8080/path?query=1#fragment",
+        "https://example.com/"
+        + "x" * (MAX_INSTANCE_URL_LENGTH - len("https://example.com/")),
+    ],
+)
+def test_absolute_http_url_accepts_web_urls(value: str) -> None:
+    assert AbsoluteHttpUrl(value) == value
+
+
+@pytest.mark.parametrize(
+    ("value", "problem"),
+    [
+        ("/data/docs/", "expected an absolute http or https URL"),
+        ("ftp://example.com/file", "expected an absolute http or https URL"),
+        ("https:///no-host", "expected an absolute http or https URL"),
+        ("example.com", "expected an absolute http or https URL"),
+        ("https://example.com/a b", "whitespace and control characters"),
+        ("https://example.com/\x07", "whitespace and control characters"),
+        ("https://example.com/" + "x" * MAX_INSTANCE_URL_LENGTH, "over the"),
+    ],
+)
+def test_absolute_http_url_rejects_paths_other_schemes_and_bad_characters(
+    value: str, problem: str
+) -> None:
+    with pytest.raises(InvalidInstanceValueError, match=problem):
+        AbsoluteHttpUrl(value)
 
 
 def test_instance_title_is_trimmed_and_bounded() -> None:

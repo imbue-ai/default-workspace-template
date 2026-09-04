@@ -12,6 +12,7 @@ from app_instances.data_types import InstanceLifetime, InstanceStatus
 from app_instances.errors import (
     InstanceConflictError,
     InstanceStoreError,
+    InvalidInstanceValueError,
     InvalidParamsError,
     LocationNotTrackedError,
     NotRenameableError,
@@ -29,6 +30,7 @@ from app_instances.json_store import (
     write_json_document,
 )
 from app_instances.primitives import (
+    AbsoluteHttpUrl,
     InstanceKey,
     InstanceKeyPrefix,
     InstanceTitle,
@@ -207,6 +209,19 @@ def test_set_location_is_refused_when_the_store_does_not_track_it(
 
     with pytest.raises(LocationNotTrackedError):
         renameable_store.set_location(InstanceKey("note-1"), LocationPath("/"))
+
+
+def test_set_location_refuses_an_absolute_url_and_keeps_the_record(
+    files_store: JsonStoreInstanceSource,
+) -> None:
+    created = files_store.create_instance(_NEW, {"path": "/data/"})
+
+    with pytest.raises(InvalidInstanceValueError, match="not URLs"):
+        files_store.set_location(
+            InstanceKey("files-1"), AbsoluteHttpUrl("https://example.com/")
+        )
+
+    assert files_store.list_instances() == [created]
 
 
 def test_records_survive_a_reload_through_the_documented_file_shape(

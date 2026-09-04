@@ -51,7 +51,7 @@ from app_instances.primitives import (
     InstanceKeyPrefix,
     InstanceTitle,
     InstanceUrl,
-    LocationPath,
+    LocationTarget,
     TitleTemplate,
 )
 from app_instances.sidecar import run_sidecar, serve_in_background
@@ -145,7 +145,7 @@ class StubInstanceSource(InstanceSourceInterface):
             self._replace(renamed)
             return renamed
 
-    def set_location(self, key: InstanceKey, path: LocationPath) -> InstanceRecord:
+    def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
         with self._lock:
             self.calls.append(f"location:{key}:{path}")
             self._require_ready()
