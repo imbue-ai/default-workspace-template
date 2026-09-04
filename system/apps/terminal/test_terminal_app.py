@@ -73,6 +73,7 @@ def _prepare(
     archive = environment.scratch_dir / "ttyd_index.html.gz"
     archive.write_bytes(gzip.compress(b"<html>patched</html>"))
     ttyd_record_dir = install_fake_ttyd(environment.scratch_dir / "fake-ttyd")
+    store_path = environment.scratch_dir / "apps" / "terminal" / "instances.json"
     agent_state_dir = environment.scratch_dir / "agent-state"
     process_environment = {
         **os.environ,
@@ -88,7 +89,7 @@ def _prepare(
         instances_port=instances_port,
         instances_url=instances_url,
         paths=TerminalPaths(state_dir=environment.scratch_dir / "state"),
-        store_path=environment.scratch_dir / "apps" / "terminal" / "instances.json",
+        store_path=store_path,
         agent_state_dir=agent_state_dir,
         ttyd_record_dir=ttyd_record_dir,
         log_path=environment.scratch_dir / "terminal-app.log",
@@ -105,7 +106,7 @@ def _prepare(
             "--state-dir",
             str(environment.scratch_dir / "state"),
             "--store",
-            str(environment.scratch_dir / "apps" / "terminal" / "instances.json"),
+            str(store_path),
             "--ttyd-web-client",
             str(archive),
             "--ttyd",
