@@ -16,3 +16,12 @@ The `tk` task-management section is sharper about step records being the
 replacement for the disabled `TodoWrite`, and about step titles and summaries
 being user-facing copy -- with a worked example contrasting casual phrasing
 against technical precision.
+
+A repo-root `conftest.py` now overrides pytest-playwright's
+`browser_type_launch_args` to launch Fortress when it is present and to leave
+the args untouched otherwise, so every app suite collected under the root gets
+a working `page` fixture with no per-app browser setup and no skip. The root
+dev group declares `pytest-playwright`, which app suites previously reached
+only through `system_interface`'s dev group. A harden worker had re-derived
+this fixture, and the autofix gate then added a dependency declaration and a
+skip-when-no-browser guard on top of it, none of which is needed now.
