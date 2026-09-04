@@ -42,7 +42,7 @@ Modified:
 
 - Source tests over the fake fleet: the record mapping for numbered and legacy names, status per ownership and lifecycle, create delegation and its refusals, delete delegation (unknown and impossible keys included), rename refused, location navigating and returning the record, the `400` for a path, the `404` and `409` cases, and the init gate on reads, delete, and location but not create.
 - Blueprint tests on the daemon's Flask app: `503` before the gate, the list following acquire, release, and crash of a fake running browser, rename and a rooted location refused, a location `409` while an agent holds the browser, delete nudging and dropping the browser, create answering `409` with the install reason while Chromium is absent.
-- Bridged-fleet tests: a daemon failure and a stalled loop under a verb come back as `FleetUnavailableError`, and the fleet's own refusal passes through.
+- Bridged-fleet tests: a daemon failure and a stalled loop under a verb come back as `FleetUnavailableError`, the fleet's own refusal passes through `_run_on_loop`, a create over a full fleet is `FleetCreateRefusedError` with the daemon's reason, and `create_snapshot` reports the browser it registered as launching.
 - State-machine tests: one nudge per ownership write (none for a same-agent re-acquire), one per crash, one per registration and close, and `set_nudger` reaching browsers registered before it.
 - The existing `browser_test.py`, `fleet_test.py`, and `test_browser_integration.py` keep passing.
 
