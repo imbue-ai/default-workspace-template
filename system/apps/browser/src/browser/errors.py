@@ -18,7 +18,7 @@ class UnknownBrowserError(BrowserFleetError):
 
 
 class BrowserNotDrivableError(BrowserFleetError):
-    """The browser cannot be navigated: Chromium is still launching, or it crashed."""
+    """The browser cannot be navigated: Chromium is still launching, it crashed, or the fleet has no connection to it."""
 
 
 class BrowserHeldByAgentError(BrowserFleetError):
