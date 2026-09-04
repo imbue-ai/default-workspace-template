@@ -93,6 +93,17 @@ def test_location_is_a_conflict_while_an_agent_holds_the_browser() -> None:
     assert "held by Alice" in response.get_json()["detail"]
 
 
+def test_location_of_a_browser_the_fleet_does_not_hold_is_a_404() -> None:
+    _install_running_browser("browser-1")
+
+    response = runner.application.test_client().post(
+        "/_instances/browser-2/location", json={"path": "https://example.com/"}
+    )
+
+    assert response.status_code == 404
+    assert "browser-2" in response.get_json()["detail"]
+
+
 def test_delete_closes_the_browser_and_nudges_even_for_an_unknown_key() -> None:
     nudger = RecordingNudger()
     runner.manager.set_nudger(nudger)

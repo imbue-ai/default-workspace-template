@@ -73,6 +73,7 @@ from browser.errors import (
     BrowserHeldByAgentError,
     BrowserNotDrivableError,
     NavigationFailedError,
+    UnknownBrowserError,
 )
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
@@ -2095,8 +2096,10 @@ class BrowserSessionManager(MutableModel):
         return _snapshot_of(await self.create(None))
 
     async def navigate_browser(self, browser_id: str, url: str) -> None:
-        """Navigate a browser's active tab (see :meth:`LiveBrowser.navigate_active_tab`), then checkpoint the manifest so the new tab URL is what a restart restores. KeyError for an unknown name, as :meth:`get`."""
-        browser = self.get(browser_id)
+        """Navigate a browser's active tab (see :meth:`LiveBrowser.navigate_active_tab`), then checkpoint the manifest so the new tab URL is what a restart restores. UnknownBrowserError for a name no browser has."""
+        browser = self._browsers.get(browser_id)
+        if browser is None:
+            raise UnknownBrowserError(f"no browser named {browser_id!r}")
         await browser.navigate_active_tab(url)
         self._spawn_save()
 
