@@ -35,7 +35,7 @@ class InstanceSourceInterface(MutableModel, ABC):
 
     @abstractmethod
     def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
-        """Record where the instance's page now is, or navigate it there; raises LocationNotTrackedError, InvalidInstanceValueError (a form of location this app does not take), or UnknownInstanceError."""
+        """Record where the instance's page now is, or navigate it there; raises LocationNotTrackedError, InvalidInstanceValueError (a form of location this app does not take), UnknownInstanceError, or InstanceConflictError (the app cannot navigate there right now)."""
 
 
 class InstanceNudgerInterface(MutableModel, ABC):
