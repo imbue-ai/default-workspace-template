@@ -1931,7 +1931,9 @@ class AgentManager:
             self._evict_watcher(agent_id)
             with self._lock:
                 self._pending_auto_open_name_by_id.pop(agent_id, None)
+                self._pending_permission_ids_by_agent.pop(agent_id, None)
             self._auto_open_ledger.forget(agent_id)
+            self._oom_prioritizer.forget_agent(agent_id)
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the

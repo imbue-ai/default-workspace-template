@@ -73,6 +73,7 @@ from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.presence import PresenceState
 from imbue.system_interface.testing import seed_agent_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -2644,6 +2645,28 @@ def test_agent_removed_event_fires_removal_side_effects(agent_manager: AgentMana
     with agent_manager._lock:
         assert str_id not in agent_manager._activity_tracked_agents
         assert str_id not in agent_manager._activity_state_by_agent
+
+
+def test_agent_removed_event_drops_pending_permissions_and_presence(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The observe path forgets the same per-agent state ``remove_agent`` does: a chat destroyed
+    from the CLI must not keep a pending permission request or an open presence report."""
+    test_agent_id = MngrAgentId()
+    str_id = str(test_agent_id)
+    (tmp_path / "agents" / str_id).mkdir(parents=True)
+    agent = _agent_details("to-destroy", agent_id=test_agent_id)
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    with agent_manager._lock:
+        agent_manager._pending_permission_ids_by_agent[str_id] = {"evt-1"}
+    agent_manager.record_presence(str_id, "client-1", PresenceState.VISIBLE)
+    assert agent_manager.has_pending_permission(str_id)
+    assert agent_manager._oom_prioritizer._presence.is_open(str_id)
+
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
+
+    assert not agent_manager.has_pending_permission(str_id)
+    assert not agent_manager._oom_prioritizer._presence.is_open(str_id)
 
 
 def test_provider_snapshot_preserves_activity_state_for_tracked_agent(
