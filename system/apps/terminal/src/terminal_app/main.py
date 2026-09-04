@@ -35,7 +35,7 @@ APP_NAME: Final[AppName] = AppName("terminal")
 APP_URL: Final[AppUrl] = AppUrl("http://localhost:7681")
 INSTANCES_URL: Final[InstancesUrl] = InstancesUrl("http://127.0.0.1:7682")
 STATE_DIR: Final[Path] = Path("data/.state/terminal")
-STORE_PATH: Final[Path] = app_store_path(AppName("terminal"))
+STORE_PATH: Final[Path] = app_store_path(APP_NAME)
 TTYD_WEB_CLIENT_ARCHIVE: Final[Path] = Path(
     "system/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
 )
