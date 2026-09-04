@@ -4130,8 +4130,9 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
   if (isDockEmpty && isInitialMount && saved === null) {
     // A machine that has run before opens on whatever chat it has. A fresh one has none --
     // a chat needs a provider account and nothing creates one at boot -- so it opens on the
-    // launcher, where the provider chooser is. The app list was awaited above, so the chat
-    // frame's origin derives from the chat app's label rather than the bare name.
+    // launcher, where the provider chooser is. On a workspace host the app list was awaited
+    // above, so the chat frame's origin derives from the chat app's label rather than the
+    // bare name; a loopback host loads the frame from this document's own origin instead.
     if (!openInitialChatTab()) {
       openLauncherPanel(null);
     }
