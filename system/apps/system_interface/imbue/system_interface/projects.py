@@ -51,6 +51,7 @@ from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.agent_discovery import get_host_dir
 
 # The project every workspace starts on: the one a fresh machine seeds, and the
 # one a pre-projects machine's arrangement migrates into. Its name follows the
@@ -412,6 +413,18 @@ def primary_agent_layout_dir(host_dir: Path, agent_id: str) -> Path:
     kept beside it -- resolves the same path.
     """
     return host_dir / "agents" / agent_id / "workspace_layout"
+
+
+def primary_agent_layout_dir_from_env() -> Path | None:
+    """The layout directory of the primary agent this process serves, from ``MNGR_AGENT_ID``.
+
+    Returns None when the env var is missing, which should only happen in dev/test
+    setups that don't care about persistence.
+    """
+    agent_id = os.environ.get("MNGR_AGENT_ID", "")
+    if not agent_id:
+        return None
+    return primary_agent_layout_dir(get_host_dir(), agent_id)
 
 
 def _meta_path(layout_dir: Path) -> Path:

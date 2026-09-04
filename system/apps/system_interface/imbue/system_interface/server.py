@@ -3,16 +3,11 @@ import json
 import os
 import queue
 import shlex
-import socket
 import threading
 import time
-import traceback
-from collections.abc import Callable
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from typing import Final
-from uuid import uuid4
 
 import httpx
 from flask import Flask
@@ -20,52 +15,38 @@ from flask import Response
 from flask import request
 from flask import send_file
 from flask import send_from_directory
-from flask_sock import Sock
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
-from werkzeug.exceptions import HTTPException
 from werkzeug.exceptions import NotFound
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
-from imbue.mngr.primitives import AgentId
 from imbue.system_interface import app_instances
 from imbue.system_interface import client_activity
-from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import member_last_used
 from imbue.system_interface import member_locations
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.agent_discovery import SendFailedError
 from imbue.system_interface.agent_discovery import discover_agents
-from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.agent_manager import DESTROY_TIMEOUT_SECONDS
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.attachments import delete_upload
-from imbue.system_interface.attachments import get_uploads_directory
-from imbue.system_interface.attachments import resolve_upload_path
-from imbue.system_interface.attachments import store_uploaded_file
+from imbue.system_interface.chat_document import create_chat_application
 from imbue.system_interface.config import Config
-from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.documents import document_response
+from imbue.system_interface.documents import inject_base_path_meta_tag
+from imbue.system_interface.documents import inject_hostname_meta_tag
+from imbue.system_interface.documents import inject_meta_tag
+from imbue.system_interface.documents import inject_plugin_script_tags
+from imbue.system_interface.documents import inject_primary_agent_id_meta_tag
 from imbue.system_interface.file_serving import try_serve_file
-from imbue.system_interface import accounts_endpoints
-from imbue.system_interface.harnesses.claude import auth_endpoints
-from imbue.system_interface.harnesses.interrupt import restart_drain
-from imbue.system_interface.harnesses.model import ModelIdentity
-from imbue.system_interface.harnesses.model import ModelOption
-from imbue.system_interface.harnesses.registry import HARNESS_SPECS
-from imbue.system_interface.harnesses.registry import build_resolver
-from imbue.system_interface.harnesses.registry import get_catalog
-from imbue.system_interface.harnesses.registry import get_harness_spec
-from imbue.system_interface.harnesses.session import AgentHarnessSession
-from imbue.system_interface.harnesses.session import SendOutcome
-from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
@@ -83,47 +64,37 @@ from imbue.system_interface.liveness import SupervisorProgramActionError
 from imbue.system_interface.liveness import start_supervisor_program
 from imbue.system_interface.liveness import stop_supervisor_program
 from imbue.system_interface.liveness import supervisor_socket_path
-from imbue.system_interface.models import ActivityRequest
-from imbue.system_interface.models import ActivityResponse
-from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentDestroyError
 from imbue.system_interface.models import AgentListItem
 from imbue.system_interface.models import AgentListResponse
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
-from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AppEntry
-from imbue.system_interface.models import AttachmentError
-from imbue.system_interface.models import AttachmentUploadResponse
-from imbue.system_interface.models import CreateAgentResponse
-from imbue.system_interface.models import CreateChatRequest
 from imbue.system_interface.models import DestroyAgentResponse
-from imbue.system_interface.models import DrainToComposerResponse
 from imbue.system_interface.models import ErrorResponse
-from imbue.system_interface.models import FastModePromptAnsweredResponse
-from imbue.system_interface.models import InterruptAgentResponse
-from imbue.system_interface.models import ModelOptionsResponse
-from imbue.system_interface.models import PoweredByResponse
-from imbue.system_interface.models import SendMessageRequest
-from imbue.system_interface.models import SendMessageResponse
-from imbue.system_interface.models import SetModelChoiceRequest
-from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
+from imbue.system_interface.request_helpers import handle_unhandled_exception
+from imbue.system_interface.request_helpers import json_response
+from imbue.system_interface.request_helpers import parse_json_object_body
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+from imbue.system_interface.wsgi import build_sock
+from imbue.system_interface.wsgi_dispatch import PathDispatchingFlask
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+# The browser-side contract module (contracts.md section 10): built as its own library
+# entry into ``static/_static/`` and served with a permissive CORS header, since every
+# app page that speaks the contract loads it from the shell's origin.
+APP_CONTRACT_FILENAME: Final[str] = "app_contract.js"
+APP_CONTRACT_PATH: Final[str] = f"/_static/{APP_CONTRACT_FILENAME}"
+
 logger = _loguru_logger
 
-
-# Stamped on every app-shell response so a caller can tell the real app from
-# the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
-# response. The reveal flow's frontend health check reads it.
-FRONTEND_BUILT_HEADER = "X-Frontend-Built"
 
 # How often the placeholder asks whether the bundle is back. Also the interval
 # of the scriptless fallback below, so both routes behave the same.
@@ -366,8 +337,6 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
 </html>
 """
 
-# Default number of events for tail-first loading
-_DEFAULT_TAIL_COUNT = 50
 
 # Name under which the browser daemon registers itself (via forward_port.py)
 # in data/.state/apps.toml. The /api/browsers passthrough resolves the daemon's
@@ -403,130 +372,10 @@ _FORWARD_PORT_SCRIPT = WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forwar
 # concurrent registration before its (near-instant) TOML rewrite.
 _FORWARD_PORT_TIMEOUT_SECONDS = 60.0
 
-# How often flask-sock sends a keepalive ping on each WebSocket connection.
-# Pings detect (and tear down) half-dead peers without any asyncio machinery --
-# each connection owns its own thread, so a wedged send only stalls that thread.
-_WS_PING_INTERVAL_SECONDS = 25
-
-# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
-# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
-# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
-# teardown (a partial destroy the user saw as a 500). Every internal mngr
-# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
-# generous cap only converts spurious kills into patience.
-_DESTROY_TIMEOUT_SECONDS = 120.0
-# `mngr label` is a metadata write (data.json merge), fast even on a busy host.
-_LABEL_TIMEOUT_SECONDS = 30.0
 
 # The member-ref prefix that marks an object as an mngr agent. The rest of a
 # chat ref is the agent's id (``chat:<agent-id>``, as every UI surface files it).
 _CHAT_MEMBER_REF_PREFIX = "chat:"
-
-
-class _ReflectClientSubprotocols:
-    """A WebSocket subprotocols allow-list that accepts whatever the client offers.
-
-    ``flask_sock`` builds one ``simple_websocket.Server`` per connection from
-    ``SOCK_SERVER_OPTIONS`` and completes the WebSocket handshake (selecting and
-    echoing the subprotocol) *before* our route handler runs, so a handler cannot
-    choose the subprotocol per-connection. ``simple_websocket``'s default
-    ``choose_subprotocol`` echoes the first client-offered subprotocol that is
-    ``in`` this allow-list; making ``__contains__`` always true turns that into a
-    transparent passthrough -- the server echoes back whatever subprotocol the
-    client requested.
-
-    Chrome aborts a WebSocket handshake (close 1006) if the client offered a
-    subprotocol and the 101 response echoes none, so any future WS route that
-    negotiates a subprotocol works without touching this list. Today's own
-    endpoints (the ``/api/ws`` broadcaster and the proto-agent-logs stream)
-    offer no subprotocol, so the negotiation loop never runs and no
-    subprotocol is echoed -- the passthrough is inert for them but keeps the
-    server permissive for subprotocol-bearing clients.
-    """
-
-    def __contains__(self, _subprotocol: object) -> bool:
-        return True
-
-
-def _json_response(content: Any, status_code: int = 200) -> Response:
-    """Build a compact JSON response, matching the wire format the frontend expects."""
-    body = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
-    return Response(body, status=status_code, mimetype="application/json")
-
-
-def _html_response(html_content: str, status_code: int = 200) -> Response:
-    """Build an uncacheable HTML response for the app shell.
-
-    The shell is assembled per request (base path, hostname, agent id, and the
-    configured plugin script tags are injected into it), so it is never a
-    cacheable artifact to begin with. It is also the *only* thing standing
-    between a reload and a stale UI: the built assets it links are
-    content-hashed, so a freshly-fetched shell always names the current bundle,
-    and a cached one always names the old one.
-
-    That matters because a page cannot drop its own HTTP cache -- the
-    ``location.reload(true)`` form is a Firefox-only extension -- so
-    ``reloadInterface`` (see ``frontend/src/reload.ts``) can only reload and
-    trust the response to be fresh. ``no-store`` is what makes that trust
-    well-founded, including for viewers reaching the workspace through a
-    shared Cloudflare tunnel, where an intermediary is free to cache anything
-    we do not mark otherwise.
-    """
-    response = Response(html_content, status=status_code, mimetype="text/html")
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
-def _shell_response(html_content: str, *, is_frontend_built: bool) -> Response:
-    """Return an app-shell response, stamped with whether it is the real app.
-
-    Both the app and the not-built placeholder are HTTP 200 HTML, so nothing
-    downstream can tell them apart from the status line alone. The header says
-    which one this is, so a health check does not have to pattern-match markup
-    that is free to change.
-    """
-    response = _html_response(html_content)
-    response.headers[FRONTEND_BUILT_HEADER] = "true" if is_frontend_built else "false"
-    return response
-
-
-def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
-    meta_tag = f'<meta name="system-interface-base-path" content="{root_path}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
-
-
-def _read_host_name() -> str:
-    """Read the host name from $MNGR_HOST_DIR/data.json, falling back to socket.gethostname()."""
-    host_dir = os.environ.get("MNGR_HOST_DIR", "")
-    if host_dir:
-        data_path = Path(host_dir) / "data.json"
-        if data_path.exists():
-            try:
-                data = json.loads(data_path.read_text())
-                name = data.get("host_name")
-                if name:
-                    return str(name)
-            except (json.JSONDecodeError, OSError):
-                pass
-    return socket.gethostname()
-
-
-def _inject_hostname_meta_tag(html_content: str) -> str:
-    hostname = _read_host_name()
-    meta_tag = f'<meta name="system-interface-hostname" content="{hostname}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
-
-
-def _inject_plugin_script_tags(html_content: str, plugin_basenames: list[str], root_path: str) -> str:
-    script_tags = "\n".join(f'<script src="{root_path}/plugins/{basename}"></script>' for basename in plugin_basenames)
-    return html_content.replace("</body>", f"{script_tags}\n</body>")
-
-
-def _inject_agent_id_meta_tag(html_content: str) -> str:
-    """Inject the primary agent ID as a meta tag for the frontend."""
-    agent_id = os.environ.get("MNGR_AGENT_ID", "")
-    meta_tag = f'<meta name="system-interface-agent-id" content="{agent_id}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
 def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) -> str:
@@ -537,8 +386,7 @@ def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) 
     """
     if staleness is None:
         return html_content
-    meta_tag = f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{html.escape(staleness, quote=True)}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+    return inject_meta_tag(html_content, UPDATE_STALENESS_META_TAG, staleness)
 
 
 def _shell_update_staleness() -> str | None:
@@ -563,13 +411,13 @@ def _index() -> Response:
         config: Config = get_state().config
         root_path = (request.script_root or "").rstrip("/")
         html_content = index_path.read_text()
-        html_content = _inject_base_path_meta_tag(html_content, root_path)
-        html_content = _inject_hostname_meta_tag(html_content)
-        html_content = _inject_agent_id_meta_tag(html_content)
+        html_content = inject_base_path_meta_tag(html_content, root_path)
+        html_content = inject_hostname_meta_tag(html_content)
+        html_content = inject_primary_agent_id_meta_tag(html_content)
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         if config.javascript_plugin_basenames:
-            html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
-        return _shell_response(html_content, is_frontend_built=True)
+            html_content = inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
+        return document_response(html_content, is_frontend_built=True)
     return _frontend_not_built_response()
 
 
@@ -613,14 +461,14 @@ def _frontend_not_built_response() -> Response:
     body of a HEAD response anyway, so the caller sees no difference.
     """
     if request.method == "HEAD":
-        return _shell_response("", is_frontend_built=False)
+        return document_response("", is_frontend_built=False)
     # Logged with the resolved directory because the usual cause is that the
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
     _loguru_logger.warning(
         "Served the not-built placeholder: no frontend bundle at {}", get_state().static_directory / "index.html"
     )
-    return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
+    return document_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
 
 def _index_catch_all(path: str) -> Response:
@@ -632,6 +480,22 @@ def _index_catch_all(path: str) -> Response:
     if file_response is not None:
         return file_response
     return _index()
+
+
+def _health_endpoint() -> Response:
+    """The probe route of contracts.md section 5: alive, and whether the built frontend is being served."""
+    is_frontend_built = (get_state().static_directory / "index.html").exists()
+    return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
+
+
+def _serve_app_contract() -> Response:
+    """Serve the browser-side contract module (contracts.md section 10) for any origin's app page."""
+    contract_path = get_state().static_directory / "_static" / APP_CONTRACT_FILENAME
+    if not contract_path.is_file():
+        return Response(status=404)
+    response = send_file(contract_path, mimetype="text/javascript")
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
 
 
 def _favicon() -> Response:
@@ -671,7 +535,7 @@ def _list_agents_endpoint() -> Response:
     """List all mngr-managed agents."""
     agents = _discover_with_filters()
     items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
-    return _json_response(AgentListResponse(agents=items).model_dump())
+    return json_response(AgentListResponse(agents=items).model_dump())
 
 
 def _find_agent(agent_id: str) -> AgentInfo | None:
@@ -682,774 +546,7 @@ def _find_agent(agent_id: str) -> AgentInfo | None:
 
 def _agent_not_found_response(agent_id: str) -> Response:
     error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
-    return _json_response(error.model_dump(), status_code=404)
-
-
-def _get_event_detail(agent_id: str, event_id: str) -> Response:
-    """The full deferred payloads for one event: tool input(s), tool output, thinking.
-
-    Resident events are payload-free (the wire contract in ``harnesses/events``); this is
-    the on-demand read behind expanding a tool row or a thinking disclosure. The read is
-    stateless -- the watcher re-reads the source line (or re-queries agy's store) and
-    nothing is cached backend-side; only the frontend may cache what it fetched. When the
-    recorded byte range went stale the watcher falls back to scanning the source for the
-    event's own identity; only if that also fails does this answer 404, which the frontend
-    renders as a quiet "payload no longer available" placeholder.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    watcher = get_state().get_or_create_watcher(agent_info)
-    detail = watcher.get_event_detail(event_id)
-    if detail is None:
-        error = ErrorResponse(detail=f"Payload for event '{event_id}' is no longer available")
-        return _json_response(error.model_dump(), status_code=404)
-    return _json_response({"event_id": event_id, **detail})
-
-
-def _get_events(agent_id: str) -> Response:
-    """Get events for an agent. Supports tail-first loading and backfill."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    before_event_id = request.args.get("before")
-    after_event_id = request.args.get("after")
-    offset_str = request.args.get("offset")
-    limit_str = request.args.get("limit", str(_DEFAULT_TAIL_COUNT))
-    try:
-        limit = int(limit_str)
-    except ValueError:
-        limit = _DEFAULT_TAIL_COUNT
-    # A non-positive limit would defeat the window cap and break slicing, so fall
-    # back to the default.
-    if limit <= 0:
-        limit = _DEFAULT_TAIL_COUNT
-
-    watcher = get_state().get_or_create_watcher(agent_info)
-    if before_event_id:
-        # Page older: the `limit` events immediately before the cursor.
-        events = watcher.get_backfill_events(before_event_id, limit=limit)
-    elif after_event_id:
-        # Page newer: the `limit` events immediately after the cursor (used when
-        # the loaded window has been moved off the live tail by a jump).
-        events = watcher.get_forward_events(after_event_id, limit=limit)
-    elif offset_str is not None:
-        # Jump: a `limit`-event window starting at an arbitrary global index, so
-        # the client can land at a far scroll position in one bounded read.
-        try:
-            offset = int(offset_str)
-        except ValueError:
-            offset = 0
-        events = watcher.get_events_at_offset(offset, limit)
-    else:
-        # Initial load: the newest `limit` events (the live tail). Bounded read
-        # from the end; the client pages/jumps from here.
-        events = watcher.get_tail_events(limit)
-
-    # `total` is the full transcript length and `offset` is the global index of the
-    # first returned event. Together they place the loaded window in the whole
-    # conversation, so the client sizes the scrollbar for the full length and
-    # derives whether more history exists above (offset > 0) and below
-    # (offset + len < total) -- no separate has_more flag needed.
-    total = watcher.get_total_event_count()
-    offset = watcher.get_event_offset(events[0]["event_id"]) if events else total
-    return _json_response({"events": events, "offset": offset, "total": total})
-
-
-def _stream_filtered_events(
-    agent_id: str,
-    event_queues: AgentEventQueues,
-    event_queue: "queue.Queue[dict[str, Any] | None]",
-    should_forward: Callable[[dict[str, Any]], bool],
-) -> Iterator[str]:
-    """Yield SSE frames for queued events that pass ``should_forward``.
-
-    Shared by the main agent stream and the per-subagent stream, which differ
-    only in which events they keep: the main stream drops subagent-session
-    events (they belong to the per-subagent stream, and would otherwise render
-    the subagent's own prompt and tool calls inline in the parent thread),
-    while the subagent stream keeps only its own session. Filtered-out events
-    do not reset the keepalive counter. A ``None`` from the queue (shutdown
-    sentinel) ends the stream.
-    """
-    keepalive_counter = 0
-    _loguru_logger.info("SSE stream opened for agent {} (conn {})", agent_id, id(event_queue))
-    close_reason = "event-queues shutdown"
-    try:
-        while not event_queues.is_shutdown:
-            try:
-                event = event_queue.get(timeout=1)
-                if event is None:
-                    close_reason = "queue shutdown sentinel"
-                    break
-                if not should_forward(event):
-                    continue
-                keepalive_counter = 0
-                yield f"data: {json.dumps(event)}\n\n"
-            except queue.Empty:
-                keepalive_counter += 1
-                if keepalive_counter >= 8:
-                    keepalive_counter = 0
-                    yield ": keepalive\n\n"
-    except GeneratorExit:
-        close_reason = "client disconnected"
-    finally:
-        _loguru_logger.info(
-            "SSE stream closed for agent {} (conn {}, reason: {})", agent_id, id(event_queue), close_reason
-        )
-        event_queues.unregister(agent_id, event_queue)
-
-
-def _sse_response(generator: Iterator[str]) -> Response:
-    return Response(
-        generator,
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-def _stream_events(agent_id: str) -> Response:
-    """SSE stream for an agent's new events."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    state = get_state()
-    watcher = state.get_or_create_watcher(agent_info)
-
-    event_queues = state.event_queues
-    event_queue = event_queues.register(agent_id)
-
-    return _sse_response(_stream_filtered_events(agent_id, event_queues, event_queue, watcher.is_main_session_event))
-
-
-# A NOT_READY send's revive budget. ``start_agent`` returns once mngr has launched the
-# session WITHOUT awaiting the daemon handshake (codex readiness is only awaited on
-# create), so the daemon needs a few more seconds before the session can connect.
-_REVIVE_RETRY_INTERVAL_SECONDS: Final[float] = 0.5
-_REVIVE_RETRY_BUDGET_SECONDS: Final[float] = 15.0
-
-
-def _revive_and_retry_send(
-    agent_info: AgentInfo,
-    agent_manager: AgentManager,
-    session: AgentHarnessSession,
-    send_message_request: SendMessageRequest,
-    message_id: str,
-    sleep: Callable[[float], None] = time.sleep,
-    budget_seconds: float = _REVIVE_RETRY_BUDGET_SECONDS,
-) -> SendOutcome:
-    """Start a not-ready agent and retry the send, giving every harness the revive invariant.
-
-    The file-session harnesses auto-start a STOPPED agent inside mngr's own send
-    (``is_start_desired``) -- "sending the agent a message revives it". A live-connection
-    harness (codex) instead reports NOT_READY when its daemon is unreachable, so this
-    supplies the same behavior at the endpoint: start the agent through the exact path the
-    start endpoint and terminal-open use (a no-op when it is already running), then retry
-    while the daemon comes up. Returns the final outcome -- a daemon still unreachable at
-    the deadline keeps the honest NOT_READY -> 503, and a ``SendFailedError`` from a retry
-    propagates to the caller's handler like a first-attempt one.
-    """
-    try:
-        start_agent(agent_info.name)
-    except MngrError as e:
-        logger.warning("Could not revive agent {} for a send: {}", agent_info.name, e)
-        return SendOutcome.NOT_READY
-    # The observe stream will not see the revival for minutes (no pid to watch while the
-    # agent was stopped); reflect it now so the UI's liveness unblocks with the send.
-    agent_manager.note_agent_alive(agent_info.id)
-    deadline = time.monotonic() + budget_seconds
-    outcome = SendOutcome.NOT_READY
-    while outcome is SendOutcome.NOT_READY and time.monotonic() < deadline:
-        sleep(_REVIVE_RETRY_INTERVAL_SECONDS)
-        outcome = session.send(send_message_request.message, message_id)
-    return outcome
-
-
-def _send_message_endpoint(agent_id: str) -> Response:
-    """Send a message to an agent."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    send_message_request = SendMessageRequest.model_validate(request.get_json())
-    state = get_state()
-    agent_manager: AgentManager = state.agent_manager
-    message_id = send_message_request.message_id or uuid4().hex
-
-    # Ensure the watcher exists BEFORE the send, as the tap and stop endpoints already do. For
-    # a harness that holds its own queue (antigravity), the watcher owns the only thread that
-    # can ever deliver it -- so a send arriving here first (a headless client, or the first
-    # request after a restart) would otherwise enqueue a message with nothing running to drain
-    # it, and decide "is a turn open?" from an unpublished reading.
-    state.get_or_create_watcher(agent_info)
-
-    # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
-    # records the message as *Sending* around mngr's blocking delivery (greying the tap button
-    # for the duration); the codex session hands it to its live ledger, passing ``message_id``
-    # only as the correlation token the committed item echoes back (Fix 2).
-    session = agent_manager.get_or_create_session(agent_info)
-    try:
-        outcome = session.send(send_message_request.message, message_id)
-        if outcome is SendOutcome.NOT_READY:
-            outcome = _revive_and_retry_send(agent_info, agent_manager, session, send_message_request, message_id)
-    except SendFailedError as send_failure:
-        # The harness said why it refused, in words written for the person who has to fix it
-        # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
-        # than the generic failure below -- it is the only thing here the user can act on.
-        # The kind travels beside the detail so the chat can decide what to offer: trying again
-        # can clear a blocked input and cannot help when there is nothing left to talk to.
-        return _json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
-    if outcome is SendOutcome.NOT_READY:
-        failure = ErrorResponse(
-            detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
-        )
-        return _json_response(failure.model_dump(), status_code=503)
-    if outcome is SendOutcome.FAILED:
-        failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(failure.model_dump(), status_code=500)
-
-    _record_client_message_activity(agent_info, send_message_request)
-    return _json_response(SendMessageResponse(status="ok").model_dump())
-
-
-def _record_client_message_activity(agent_info: AgentInfo, send_message_request: SendMessageRequest) -> None:
-    """Record which client (and layout) a message came from, so agents can attribute requests to a
-    client via ``layout.py context``. Legacy callers without client metadata are not recorded."""
-    events_path = _client_activity_events_path()
-    if events_path is not None and send_message_request.client_id:
-        client_activity.append_message_event(
-            events_path,
-            client_id=send_message_request.client_id,
-            device_kind=send_message_request.device_kind,
-            layout_slug=send_message_request.active_layout,
-            agent_id=agent_info.id,
-            agent_name=agent_info.name,
-            message_text=send_message_request.message,
-        )
-
-
-def _get_harnesses_endpoint() -> Response:
-    """The static per-harness model catalogs -- the model bar's compile-time half.
-
-    One response covers every harness (each catalog dumped verbatim: options,
-    switch mode, picker mode, powered-by label, shoulder-tap capability); the
-    frontend keys in by an agent's harness.
-
-    Every harness is always included, deliberately: what the user has signed in to
-    decides what they can LAUNCH, not what the app can render. A codex or pi agent that
-    exists some other way (``mngr create``, or one left behind after its account was
-    removed) still needs its catalog for the model bar to resolve, so narrowing this to
-    the signed-in harnesses would strand that agent's chip on an unrecognized model.
-    """
-    catalogs: dict[str, Any] = {}
-    for harness in HARNESS_SPECS:
-        # A parsed catalog (pi) reads data files; a bad/absent one must be
-        # skipped, not 500 the endpoint for every other harness.
-        try:
-            catalog = get_catalog(harness).model_dump()
-        except (OSError, ValueError) as e:
-            logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
-            continue
-        # The catalog model is the wire shape for the model bar; the popup declarations
-        # live on the HarnessSpec and are merged in here so one response carries
-        # everything the frontend keys by harness.
-        spec = get_harness_spec(harness)
-        catalog["popups"] = [popup.model_dump() for popup in spec.popups]
-        catalogs[harness.value] = catalog
-    return _json_response(catalogs)
-
-
-def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) -> tuple[ModelOption, ...]:
-    """The option set the switch endpoint validates against: per-agent for codex, static otherwise.
-
-    Codex has no static catalog, so its valid model/effort/fast set is per-agent -- the ONE reconciled
-    set (:meth:`AgentManager.get_codex_model_options`) that the picker offered and the chip matches
-    against, seeded on connect and refreshed by each picker-open (D2), falling back to the persisted
-    sidecar while that in-memory set is empty (post-restart). Empty (no set and no sidecar) only until
-    first populated -- a switch then fails validation, which is correct: nothing to switch to until a
-    connect, a picker-open, or a persisted sidecar supplies the account's ``model/list``. Every other
-    harness validates against its static catalog options.
-    """
-    return agent_manager.get_or_create_session(agent_info).switch_options()
-
-
-def _set_model_choice_endpoint(agent_id: str) -> Response:
-    """Apply a model/effort/fast selection by asking the agent's resolver to switch.
-
-    Harness-blind: it validates the request against the agent's option set (the static catalog for
-    claude/pi, the per-agent ``model/list`` set for codex), then hands a concrete identity to the
-    resolver's ``switch`` (which decides how to apply it). Returns 400 for an invalid selection, 404
-    for an unknown agent, 500 when the switch fails. On success it forces one authoritative
-    model-choice broadcast so the frontend reconciles.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    req = SetModelChoiceRequest.model_validate(request.get_json())
-    agent_manager: AgentManager = get_state().agent_manager
-    options = _agent_switch_options(agent_manager, agent_info)
-    # The picker only ever sends a valid option id, so validation is an exact id lookup.
-    option = next((opt for opt in options if opt.id == req.model_id), None)
-    if option is None:
-        return _json_response(ErrorResponse(detail=f"Unknown model '{req.model_id}'").model_dump(), status_code=400)
-
-    # Flat guards (rather than a branch per axis-presence) so effort is validated
-    # against the model's declared set: required + in-set when the model has efforts,
-    # and absent when it does not.
-    declared_efforts = {choice.level for choice in option.efforts}
-    has_effort_axis = len(option.efforts) > 0
-    if has_effort_axis and req.effort is None:
-        return _json_response(ErrorResponse(detail="This model requires an effort level").model_dump(), 400)
-    if has_effort_axis and req.effort is not None and req.effort not in declared_efforts:
-        return _json_response(
-            ErrorResponse(detail=f"'{req.effort}' is not a valid effort for '{req.model_id}'").model_dump(), 400
-        )
-    if not has_effort_axis and req.effort is not None:
-        return _json_response(ErrorResponse(detail=f"'{req.model_id}' has no effort axis").model_dump(), 400)
-    if req.fast and not option.supports_fast:
-        return _json_response(ErrorResponse(detail=f"'{req.model_id}' does not support fast mode").model_dump(), 400)
-
-    # The live read is harness-neutral (shared reader), so the resolver -- which now owns
-    # only the switch/offer side -- is built inline from agent_info rather than cached.
-    resolver = build_resolver(agent_info)
-
-    identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
-    result = resolver.switch(
-        identity,
-        frozenset(req.axes),
-        lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line) is None,
-    )
-    if not result.ok:
-        detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
-        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
-
-    # Force one authoritative broadcast so the optimistic pick reconciles even when
-    # the resolved value is unchanged (see H1 in the model-bar plan).
-    agent_manager.refresh_model_choice(agent_info.id)
-    return _json_response(SendMessageResponse(status="ok").model_dump())
-
-
-def _get_model_options_endpoint(agent_id: str) -> Response:
-    """The models this agent should OFFER in the picker right now.
-
-    Recomputed per request (the frontend calls it each time the picker opens). Two shapes:
-
-    * a DYNAMIC harness (codex) has no static catalog, so it returns the FULL per-agent
-      :class:`ModelOption`s (``options``) -- id, label, per-model efforts, fast support -- fetched
-      fresh from ``model/list`` on this open (D2), so a subscription-tier change shows up live.
-    * a static/catalog-backed harness (claude, pi) returns ``models`` -- the ids to offer, matched
-      back to the static catalog for labels/efforts (``null`` = offer the whole catalog). This
-      reflects an account-gated set (pi's authenticated models) on a fresh login without a refetch.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    resolver = build_resolver(agent_info)
-    dynamic_options = resolver.list_offered_options()
-    if dynamic_options is not None:
-        # Reconcile (D2): this fresh per-open fetch becomes the ONE per-agent set the chip-match and
-        # the switch-validation also read, so immediately after this open all three agree. A failed
-        # fetch (empty) is NOT stored -- it must not clobber the last-known set (seeded on connect or
-        # from an earlier open) that the chip is still matching against. The RAW list behind these
-        # mapped options is also written through to the codex sidecar inside the resolver's
-        # ``list_offered_options`` (where the raw ``model/list`` is still in hand), so the chip
-        # resolves offline after a restart.
-        if dynamic_options:
-            get_state().agent_manager.get_or_create_session(agent_info).note_offered_options(dynamic_options)
-        return _json_response(ModelOptionsResponse(options=dynamic_options).model_dump())
-    return _json_response(ModelOptionsResponse(models=resolver.list_offered_models()).model_dump())
-
-
-def _get_powered_by_endpoint(agent_id: str) -> Response:
-    """The agent's credit text -- a per-agent path decoupled from the model bar.
-
-    The text is a pure function of the agent's harness, so it must never blink with the live
-    model choice or wait on the catalog fetch. This resolves the harness backend-side and
-    returns the harness's verbatim credit string, so the frontend can render it from ``agentId``
-    alone, independent of ``model_choice`` and of ``GET /api/harnesses``. A harness that shows
-    no credit (claude) declares "", which the frontend renders as nothing. 404 for an unknown
-    agent (e.g. a proto-agent), which the frontend also treats as "no credit".
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_text).model_dump())
-
-
-def _build_fast_mode_answered_label_command(agent_name: str) -> list[str]:
-    """Build the ``mngr label`` argv that latches the fast-mode prompt as answered.
-
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess (see ``server_test.py``).
-    """
-    return ["mngr", "label", agent_name, "-l", "fast_mode_prompt_answered=true"]
-
-
-def _mark_fast_mode_prompt_answered(agent_id: str) -> Response:
-    """Latch the fast-mode prompt as answered for one agent, via an agent label.
-
-    The prompt asks once per agent, ever: any exit from the modal routes here, so
-    the label is the durable record that the question was put to the user. The
-    label reaches the frontend with the next observe relist; the frontend keeps
-    its own in-session mark so the prompt cannot re-fire in the meantime.
-    """
-    agent_manager: AgentManager = get_state().agent_manager
-    agent_state = agent_manager.get_agent_by_id(agent_id)
-    if agent_state is None:
-        error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-
-    result = run_local_command_modern_version(
-        command=_build_fast_mode_answered_label_command(agent_state.name),
-        cwd=None,
-        is_checked=False,
-        timeout=_LABEL_TIMEOUT_SECONDS,
-    )
-    if result.returncode != 0:
-        detail = f"Failed to record the fast-mode answer for '{agent_state.name}': {result.stderr.strip()}"
-        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
-
-    return _json_response(FastModePromptAnsweredResponse(status="ok").model_dump())
-
-
-def _activity_endpoint() -> Response:
-    """Report the workspace UI's current agent-tab activity for OOM prioritization.
-
-    The frontend posts a snapshot ({open, visible, messaged}) whenever a tab
-    opens/closes, the visible tab changes, or a message is sent. The agent manager
-    hands it to the chat OOM prioritizer, which re-tags each chat agent's
-    ``oom_score_adj`` so more-engaged chats are more protected from a memory shed
-    (workers and the primary agent are excluded and never re-tagged). Best-effort
-    and idempotent: the endpoint just records the snapshot and returns ok.
-    """
-    activity_request = ActivityRequest.model_validate(request.get_json())
-    agent_manager: AgentManager = get_state().agent_manager
-    agent_manager.record_activity(
-        open_ids=activity_request.open,
-        visible_ids=activity_request.visible,
-        messaged_id=activity_request.messaged,
-    )
-    return _json_response(ActivityResponse(status="ok").model_dump())
-
-
-def _upload_attachment() -> Response:
-    """Store a file the user attached to a chat message under data/uploads/.
-
-    The frontend uploads each attachment here as soon as the user drops, pastes,
-    or picks it, then appends the returned absolute path to the message text it
-    sends to the agent. Returns the stored path and size so the composer can show
-    a preview and reference the file.
-    """
-    file_storage = request.files.get("file")
-    if file_storage is None or not file_storage.filename:
-        error = ErrorResponse(detail="No file provided in the 'file' field")
-        return _json_response(error.model_dump(), status_code=400)
-
-    uploads_directory = get_uploads_directory()
-    try:
-        stored_path = store_uploaded_file(uploads_directory, file_storage.filename, file_storage)
-    except AttachmentError as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=500)
-
-    size_bytes = stored_path.stat().st_size
-    response = AttachmentUploadResponse(path=str(stored_path), size=size_bytes)
-    return _json_response(response.model_dump(), status_code=201)
-
-
-def _serve_attachment(relative_path: str) -> Response:
-    """Serve a stored attachment for inline preview, confined to data/uploads/."""
-    resolved_path = resolve_upload_path(get_uploads_directory(), relative_path)
-    if resolved_path is None:
-        error = ErrorResponse(detail=f"Attachment '{relative_path}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    return send_file(resolved_path)
-
-
-def _delete_attachment(relative_path: str) -> Response:
-    """Delete a stored attachment when the user removes it before sending.
-
-    Idempotent: a path that is missing or escapes the uploads directory is a
-    no-op, so a double-remove or a stale id still reports success.
-    """
-    delete_upload(get_uploads_directory(), relative_path)
-    return _json_response({"status": "ok"})
-
-
-def _interrupt_agent_endpoint(agent_id: str) -> Response:
-    """Interrupt an agent's current turn by restarting it.
-
-    Runs ``mngr start <agent> --restart --no-resume``, which stops the agent
-    (ending any in-progress turn) and starts it fresh without sending a resume
-    message. Returns 404 if the agent is unknown, 400 if the agent carries the
-    ``is_primary=true`` label, 500 if the restart command fails, 200 otherwise.
-
-    Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
-    the services agent for the workspace, and restarting it would stop the
-    bootstrap, web, share-gateway, and other supervised services. The
-    frontend already hides ``is_primary=true`` agents from the visible agent
-    list; this is defense-in-depth for callers that hit the endpoint directly
-    (curl, scripted use, etc.).
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    if agent_info.labels.get("is_primary") == "true":
-        error = ErrorResponse(
-            detail=(
-                f"Refusing to interrupt agent '{agent_info.name}': it carries "
-                "the is_primary=true label (services agent for this workspace)"
-            )
-        )
-        return _json_response(error.model_dump(), status_code=400)
-
-    agent_name = agent_info.name
-
-    is_restarted, output = _restart_agent_process(agent_name)
-    if not is_restarted:
-        error = ErrorResponse(detail=f"Failed to interrupt agent '{agent_name}': {output}")
-        return _json_response(error.model_dump(), status_code=500)
-
-    # The restart abandons the session transcript mid-turn, so the
-    # transcript-derived activity state would stay pinned at THINKING /
-    # TOOL_RUNNING until the user sends another message. Reset it to IDLE
-    # now so the activity indicator clears immediately after the stop.
-    get_state().agent_manager.reset_activity_state(agent_id)
-
-    return _json_response(InterruptAgentResponse(status="ok").model_dump())
-
-
-def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
-    """Run ``mngr start <agent> --restart --no-resume``; return ``(is_restarted, output)``.
-
-    Stops the agent (ending any in-progress turn) and relaunches it fresh without
-    a resume prompt: conversation history is preserved (each harness resumes its
-    own on-disk session) and the in-harness queue is dropped by the SIGKILL.
-    ``output`` is stdout on success, stderr on failure (for the caller's message).
-    Refused by mngr for an ``is_primary=true`` agent; callers guard that with a
-    clearer 400 before calling.
-    """
-    result = run_local_command_modern_version(
-        command=["mngr", "start", agent_name, "--restart", "--no-resume"],
-        cwd=None,
-        is_checked=False,
-        timeout=60.0,
-    )
-    is_restarted = result.returncode == 0
-    return is_restarted, (result.stdout.strip() if is_restarted else result.stderr.strip())
-
-
-def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Response | None:
-    """A 400 refusing a restart-based queue action on the primary services agent, or None.
-
-    Both queue actions restart the agent; restarting the ``is_primary=true``
-    services agent would tear down the workspace's supervised services. The
-    frontend hides primary agents, so this is defense-in-depth for direct callers.
-    """
-    if agent_info.labels.get("is_primary") == "true":
-        error = ErrorResponse(
-            detail=(
-                f"Refusing to {action} agent '{agent_info.name}': it carries the "
-                "is_primary=true label (services agent for this workspace)"
-            )
-        )
-        return _json_response(error.model_dump(), status_code=400)
-    return None
-
-
-def _interrupt_capabilities(
-    agent_info: AgentInfo,
-) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
-    """The harness-neutral capabilities a queue action binds for one agent: the queue mirror,
-    a process restart (``mngr start --restart --no-resume``), and an activity-settle.
-
-    Shared by the restart-drain flush and the (per-harness) stop button, mirroring how the
-    switch endpoint binds its ``send`` callback.
-    """
-    state = get_state()
-    watcher = state.get_or_create_watcher(agent_info)
-    return (
-        watcher,
-        lambda: _restart_agent_process(agent_info.name),
-        lambda: state.agent_manager.reset_activity_state(agent_info.id),
-    )
-
-
-def _flush_queue_endpoint(agent_id: str) -> Response:
-    """Shoulder tap: restart the agent and resend the whole queue as one turn.
-
-    Combining is required: after the restart the agent is idle, so sending the
-    messages one at a time would let the first open a turn and the rest re-queue.
-    Returns 404 for an unknown agent, 400 for the primary services agent, 500 if
-    the restart or the resend fails, 200 otherwise.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    refusal = _refuse_queue_action_on_primary(agent_info, "flush the queue of")
-    if refusal is not None:
-        return refusal
-
-    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
-    # Empty-queue short-circuit lives HERE (not in the shared restart-drain): a flush with
-    # nothing queued would resend nothing, so it is a clean no-op. The stop button, by contrast,
-    # still interrupts an empty-queue turn -- so the restart-drain no longer short-circuits.
-    if not watcher.get_queued_block():
-        return _json_response(SendMessageResponse(status="ok").model_dump())
-
-    try:
-        block = restart_drain(agent_info, watcher, restart_process, settle_activity)
-    except AgentRestartError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
-
-    if block:
-        agent_manager: AgentManager = get_state().agent_manager
-        resend_failure = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
-        if resend_failure is not None:
-            # The harness said why; passing that on rather than a generic sentence is the whole
-            # point of carrying it this far.
-            return _json_response({"detail": resend_failure.reason, "kind": resend_failure.kind}, status_code=500)
-
-    return _json_response(SendMessageResponse(status="ok").model_dump())
-
-
-def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
-    """Atomic shoulder tap: merge the queue into the live turn without restarting the agent.
-
-    The gentle counterpart to :func:`_flush_queue_endpoint`: rather than SIGKILL-restart the
-    agent and resend the queue, the agent's session delivers the harness's native tap and the
-    agent stays alive. HOW each harness taps lives with its implementation -- claude's cancel
-    chord in ``harnesses/claude/tap.py`` (``ClaudeAtomicShoulderTap``), pi's locked
-    ``pi_inbox`` flush sentinel in ``harnesses/pi_coding/model.py`` (``PiAtomicShoulderTap``),
-    codex's live-ledger interrupt+resend in ``harnesses/codex/session.py`` -- not here.
-
-    Returns 404 for an unknown agent, 400 for a harness whose catalog declares no atomic tap
-    or for the primary services agent, an error status when the tap failed (e.g. a claude
-    dialog block maps to 409), and 200 otherwise with the harness's own verdict (``tapped``,
-    ``no_open_turn``, or the benign ``send_in_flight`` no-op a raced send produces).
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    if not get_catalog(agent_info.harness).native_atomic_shoulder_tap_possible:
-        error = ErrorResponse(
-            detail=(
-                f"Agent '{agent_info.name}' runs the {agent_info.harness.value} harness, which does not "
-                "support an atomic shoulder tap"
-            )
-        )
-        return _json_response(error.model_dump(), status_code=400)
-    refusal = _refuse_queue_action_on_primary(agent_info, "shoulder-tap the queue of")
-    if refusal is not None:
-        return refusal
-
-    # The session dispatches to the harness's native tap (claude's chord executor, pi's locked
-    # inbox sentinel, codex's live-ledger interrupt+resend). A retryable refusal racing an
-    # in-flight send is a benign 200 no-op status, never an error dialog -- the pushed
-    # ``shoulder_tap_available`` flag already greys the button while anything is Sending.
-    state = get_state()
-    watcher = state.get_or_create_watcher(agent_info)
-    agent_manager = state.agent_manager
-    outcome = agent_manager.get_or_create_session(agent_info).shoulder_tap(
-        agent_info,
-        watcher,
-        press_chord=lambda: agent_manager.press_key_chord_on_agent(
-            AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
-        ),
-        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
-    )
-    if outcome.error_detail is not None:
-        error = ErrorResponse(detail=outcome.error_detail)
-        return _json_response(error.model_dump(), status_code=outcome.error_status_code)
-    return _json_response(ShoulderTapAtomicResponse(status=outcome.status, block=outcome.block).model_dump())
-
-
-def _drain_to_composer_endpoint(agent_id: str) -> Response:
-    """Interrupt to composer: interrupt the running turn and hand the queued block back, unsent.
-
-    Dispatches through the harness's registered interrupt-to-composer implementation (the base
-    restart-drain by default; native overrides for pi, codex, and claude's empty-queue chord),
-    which returns the concatenated block the frontend drops into the composer for the user to
-    edit and send, rather than resent. Unlike the flush there is NO empty-queue short-circuit: a
-    stop mid-turn with nothing queued still interrupts (block comes back empty). The endpoint
-    binds the harness-neutral capabilities -- watcher, restart, activity-settle, and the native
-    cancel keypress (routed through mngr's locked message API, like the tap) -- and the
-    implementation uses whichever it needs. Returns 404 for an unknown agent, 400 for the primary
-    services agent, 500 if the interrupt fails, 200 with ``{block}`` otherwise.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    refusal = _refuse_queue_action_on_primary(agent_info, "interrupt the queue of")
-    if refusal is not None:
-        return refusal
-
-    agent_manager: AgentManager = get_state().agent_manager
-
-    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
-    try:
-        block = agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
-            agent_info,
-            watcher,
-            restart_process,
-            settle_activity,
-            lambda: agent_manager.press_key_chord_on_agent(
-                AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
-            ),
-        )
-    except AgentRestartError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
-    except OSError as e:
-        logger.opt(exception=e).error("Failed to record the interrupt for agent {}", agent_info.name)
-        error = ErrorResponse(detail=f"Failed to record the interrupt for agent '{agent_info.name}'")
-        return _json_response(error.model_dump(), status_code=500)
-
-    return _json_response(DrainToComposerResponse(block=block).model_dump())
-
-
-def _get_subagent_events(agent_id: str, subagent_session_id: str) -> Response:
-    """Get events for a specific subagent session."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    watcher = get_state().get_or_create_watcher(agent_info)
-    events = watcher.get_all_events(session_id=subagent_session_id)
-
-    # Include metadata in the response
-    metadata = watcher.get_subagent_metadata(subagent_session_id)
-
-    return _json_response({"events": events, "metadata": metadata})
-
-
-def _stream_subagent_events(agent_id: str, subagent_session_id: str) -> Response:
-    """SSE stream for a subagent's new events, filtered by session_id."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    state = get_state()
-    state.get_or_create_watcher(agent_info)
-
-    event_queues = state.event_queues
-    event_queue = event_queues.register(agent_id)
-
-    return _sse_response(
-        _stream_filtered_events(
-            agent_id,
-            event_queues,
-            event_queue,
-            lambda event: event.get("session_id") == subagent_session_id,
-        )
-    )
+    return json_response(error.model_dump(), status_code=404)
 
 
 # Stores the user's "never show again" choice for the terminal lifecycle banner,
@@ -1470,10 +567,7 @@ def _primary_agent_layout_dir() -> Path | None:
     Returns None if either env var is missing, which should only happen in
     dev/test setups that don't care about persistence.
     """
-    agent_id = os.environ.get("MNGR_AGENT_ID", "")
-    if not agent_id:
-        return None
-    return projects.primary_agent_layout_dir(get_host_dir(), agent_id)
+    return projects.primary_agent_layout_dir_from_env()
 
 
 def _client_activity_events_path() -> Path | None:
@@ -1482,20 +576,6 @@ def _client_activity_events_path() -> Path | None:
     if layout_dir is None:
         return None
     return client_activity.get_events_path(layout_dir)
-
-
-def _parse_json_object_body() -> dict[str, Any] | Response:
-    """Parse the request body as a JSON object, or return a 400 error response."""
-    try:
-        body = json.loads(request.get_data())
-    except (json.JSONDecodeError, ValueError) as e:
-        _loguru_logger.opt(exception=e).warning("Request to {} carried invalid JSON", request.path)
-        error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
-    if not isinstance(body, dict):
-        error = ErrorResponse(detail="Request body must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-    return body
 
 
 def _default_project_infos() -> list[dict[str, Any]]:
@@ -1524,7 +604,7 @@ def _parse_project_metadata_body() -> tuple[str, str, int] | Response:
     color, in-range glyph) belong to ``projects.py`` and surface as its own
     errors, so the two callers map them to HTTP identically.
     """
-    body = _parse_json_object_body()
+    body = parse_json_object_body()
     if isinstance(body, Response):
         return body
     name = body.get("name")
@@ -1532,26 +612,26 @@ def _parse_project_metadata_body() -> tuple[str, str, int] | Response:
     glyph = body.get("glyph")
     if not isinstance(name, str) or not name.strip():
         error = ErrorResponse(detail="'name' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     if not isinstance(color, str):
         error = ErrorResponse(detail="'color' must be a '#RRGGBB' string")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     # ``bool`` is an ``int`` subclass, so reject it explicitly rather than
     # letting ``true`` address the second glyph.
     if not isinstance(glyph, int) or isinstance(glyph, bool):
         error = ErrorResponse(detail="'glyph' must be an integer index into the glyph table")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     return name.strip(), color, glyph
 
 
 def _project_metadata_error_response(e: ValueError) -> Response:
     """Map a rejected name / color / glyph onto a 400 with the module's own message."""
-    return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
 
 
 def _project_not_found_response(project_id: str) -> Response:
     error = ErrorResponse(detail=f"Project '{project_id}' not found")
-    return _json_response(error.model_dump(), status_code=404)
+    return json_response(error.model_dump(), status_code=404)
 
 
 def _list_projects_endpoint() -> Response:
@@ -1560,9 +640,9 @@ def _list_projects_endpoint() -> Response:
     if layout_dir is None:
         # No primary agent configured (dev/test): expose the starter project so
         # the frontend can still pick an active one; nothing persists.
-        return _json_response({"projects": _default_project_infos(), "last_active_id": projects.DEFAULT_PROJECT_ID})
+        return json_response({"projects": _default_project_infos(), "last_active_id": projects.DEFAULT_PROJECT_ID})
     infos = projects.list_projects(layout_dir)
-    return _json_response(
+    return json_response(
         {
             "projects": [info.model_dump() for info in infos],
             "last_active_id": projects.get_last_active_id(layout_dir),
@@ -1579,7 +659,7 @@ def _create_project_endpoint() -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     parsed = _parse_project_metadata_body()
     if isinstance(parsed, Response):
         return parsed
@@ -1589,9 +669,9 @@ def _create_project_endpoint() -> Response:
     except (projects.ProjectNameError, projects.ProjectColorError, projects.ProjectGlyphError) as e:
         return _project_metadata_error_response(e)
     except projects.ProjectConflictError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     get_state().broadcaster.broadcast({"type": "project_updated", **info.model_dump()})
-    return _json_response(info.model_dump())
+    return json_response(info.model_dump())
 
 
 def _get_project_endpoint(project_id: str) -> Response:
@@ -1602,15 +682,15 @@ def _get_project_endpoint(project_id: str) -> Response:
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"layout": None})
+        return json_response({"layout": None})
     device = request.args.get("device", projects.DEFAULT_DEVICE)
     try:
         content = projects.read_project_content(layout_dir, project_id, device)
     except projects.ProjectDeviceError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     except projects.ProjectNotFoundError:
         return _project_not_found_response(project_id)
-    return _json_response({"layout": content})
+    return json_response({"layout": content})
 
 
 def _autosave_project_endpoint(project_id: str) -> Response:
@@ -1618,8 +698,8 @@ def _autosave_project_endpoint(project_id: str) -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
+        return json_response(error.model_dump(), status_code=500)
+    body = parse_json_object_body()
     if isinstance(body, Response):
         return body
     layout_content = body.get("layout")
@@ -1627,11 +707,11 @@ def _autosave_project_endpoint(project_id: str) -> Response:
     device = str(body.get("device") or projects.DEFAULT_DEVICE)
     if not isinstance(layout_content, dict):
         error = ErrorResponse(detail="'layout' must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     try:
         projects.write_project_content(layout_dir, project_id, layout_content, device)
     except projects.ProjectDeviceError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     except projects.ProjectNotFoundError:
         # The project was deleted while this client's autosave was in flight;
         # the client hears about the deletion over the WebSocket.
@@ -1639,7 +719,7 @@ def _autosave_project_endpoint(project_id: str) -> Response:
     get_state().broadcaster.broadcast(
         {"type": "project_saved", "project_id": project_id, "saved_by_client_id": client_id, "device": device}
     )
-    return _json_response({"status": "ok"})
+    return json_response({"status": "ok"})
 
 
 def _update_project_settings_endpoint(project_id: str) -> Response:
@@ -1651,7 +731,7 @@ def _update_project_settings_endpoint(project_id: str) -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     parsed = _parse_project_metadata_body()
     if isinstance(parsed, Response):
         return parsed
@@ -1663,7 +743,7 @@ def _update_project_settings_endpoint(project_id: str) -> Response:
     except projects.ProjectNotFoundError:
         return _project_not_found_response(project_id)
     get_state().broadcaster.broadcast({"type": "project_updated", **info.model_dump()})
-    return _json_response(info.model_dump())
+    return json_response(info.model_dump())
 
 
 def _parse_member_ref_body() -> str | Response:
@@ -1673,13 +753,13 @@ def _parse_member_ref_body() -> str | Response:
     frontend and ``layout_ops``, which own the grammar (``service:<name>``,
     ``chat:<agent-id>``, ``terminal:<name>``, ``url:<hash>``).
     """
-    body = _parse_json_object_body()
+    body = parse_json_object_body()
     if isinstance(body, Response):
         return body
     ref = body.get("ref")
     if not isinstance(ref, str) or not ref.strip():
         error = ErrorResponse(detail="'ref' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     return ref.strip()
 
 
@@ -1714,35 +794,35 @@ def _set_project_shortcut_endpoint(project_id: str) -> Response:
     validating the body this answers the same soft no-op the add-member
     endpoint does, rather than 500ing on every pin click.
     """
-    body = _parse_json_object_body()
+    body = parse_json_object_body()
     if isinstance(body, Response):
         return body
     shortcut = body.get("shortcut")
     is_pinned = body.get("is_pinned")
     mode = body.get("mode")
     if not isinstance(shortcut, str) or not shortcut.strip():
-        return _json_response(ErrorResponse(detail="'shortcut' must be a non-empty string").model_dump(), 400)
+        return json_response(ErrorResponse(detail="'shortcut' must be a non-empty string").model_dump(), 400)
     if is_pinned is not None and not isinstance(is_pinned, bool):
-        return _json_response(ErrorResponse(detail="'is_pinned' must be a boolean").model_dump(), 400)
+        return json_response(ErrorResponse(detail="'is_pinned' must be a boolean").model_dump(), 400)
     if mode is not None and not isinstance(mode, str):
-        return _json_response(ErrorResponse(detail="'mode' must be a string").model_dump(), 400)
+        return json_response(ErrorResponse(detail="'mode' must be a string").model_dump(), 400)
     if is_pinned is None and mode is None:
-        return _json_response(
+        return json_response(
             ErrorResponse(detail="At least one of 'is_pinned' and 'mode' must be present").model_dump(), 400
         )
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"project_id": project_id, "shortcut_overrides": {}})
+        return json_response({"project_id": project_id, "shortcut_overrides": {}})
     try:
         overrides = projects.set_shortcut_override(layout_dir, project_id, shortcut.strip(), is_pinned, mode)
     except projects.ProjectNotFoundError:
         return _project_not_found_response(project_id)
     except projects.ProjectShortcutError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     # The same broadcast a membership change rides: both move what a project's
     # rail shows, and a client with the project unmounted still has to catch up.
     _broadcast_members_changed([project_id])
-    return _json_response({"project_id": project_id, "shortcut_overrides": overrides})
+    return json_response({"project_id": project_id, "shortcut_overrides": overrides})
 
 
 def _add_project_member_endpoint(project_id: str) -> Response:
@@ -1759,7 +839,7 @@ def _add_project_member_endpoint(project_id: str) -> Response:
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"project_id": project_id, "members": []})
+        return json_response({"project_id": project_id, "members": []})
     parsed = _parse_member_ref_body()
     if isinstance(parsed, Response):
         return parsed
@@ -1768,7 +848,7 @@ def _add_project_member_endpoint(project_id: str) -> Response:
     except projects.ProjectNotFoundError:
         return _project_not_found_response(project_id)
     _broadcast_members_changed([project_id])
-    return _json_response({"project_id": project_id, "members": projects.list_members(layout_dir, project_id)})
+    return json_response({"project_id": project_id, "members": projects.list_members(layout_dir, project_id)})
 
 
 def _remove_project_member_endpoint(project_id: str) -> Response:
@@ -1781,7 +861,7 @@ def _remove_project_member_endpoint(project_id: str) -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     parsed = _parse_member_ref_body()
     if isinstance(parsed, Response):
         return parsed
@@ -1790,7 +870,7 @@ def _remove_project_member_endpoint(project_id: str) -> Response:
     except projects.ProjectNotFoundError:
         return _project_not_found_response(project_id)
     _broadcast_members_changed([project_id])
-    return _json_response({"project_id": project_id, "members": projects.list_members(layout_dir, project_id)})
+    return json_response({"project_id": project_id, "members": projects.list_members(layout_dir, project_id)})
 
 
 def _share_project_member_endpoint() -> Response:
@@ -1804,24 +884,24 @@ def _share_project_member_endpoint() -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
+        return json_response(error.model_dump(), status_code=500)
+    body = parse_json_object_body()
     if isinstance(body, Response):
         return body
     ref = body.get("ref")
     to_project_id = body.get("to_project_id")
     if not isinstance(ref, str) or not ref.strip():
         error = ErrorResponse(detail="'ref' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     if not isinstance(to_project_id, str) or not to_project_id:
         error = ErrorResponse(detail="'to_project_id' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     try:
         projects.add_member(layout_dir, to_project_id, ref.strip())
     except projects.ProjectNotFoundError:
         return _project_not_found_response(to_project_id)
     _broadcast_members_changed([to_project_id])
-    return _json_response(
+    return json_response(
         {
             "ref": ref.strip(),
             "to_project_id": to_project_id,
@@ -1841,8 +921,8 @@ def _list_project_members_endpoint() -> Response:
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"members": {}})
-    return _json_response({"members": projects.all_members(layout_dir)})
+        return json_response({"members": {}})
+    return json_response({"members": projects.all_members(layout_dir)})
 
 
 def _broadcast_member_title_changed(ref: str, title: str | None) -> None:
@@ -1865,8 +945,8 @@ def _list_member_titles_endpoint() -> Response:
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"titles": {}})
-    return _json_response({"titles": member_titles.read_titles(layout_dir)})
+        return json_response({"titles": {}})
+    return json_response({"titles": member_titles.read_titles(layout_dir)})
 
 
 def _rename_chat_agent_for_ref(layout_dir: Path, ref: str, title: str) -> Response:
@@ -1894,17 +974,17 @@ def _rename_chat_agent_for_ref(layout_dir: Path, ref: str, title: str) -> Respon
         # chat keeps its name and only a legacy stored shadow is dropped.
         member_titles.clear_title(layout_dir, ref)
         _broadcast_member_title_changed(ref, None)
-        return _json_response({"ref": ref, "title": None})
+        return json_response({"ref": ref, "title": None})
     agent_manager: AgentManager = get_state().agent_manager
     try:
         agent_manager.rename_chat_agent(ref[len(_CHAT_MEMBER_REF_PREFIX) :], chosen_title)
     except AgentNameConflictError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     except AgentRenameError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
     member_titles.clear_title(layout_dir, ref)
     _broadcast_member_title_changed(ref, chosen_title)
-    return _json_response({"ref": ref, "title": chosen_title})
+    return json_response({"ref": ref, "title": chosen_title})
 
 
 def _set_member_title_endpoint() -> Response:
@@ -1922,26 +1002,26 @@ def _set_member_title_endpoint() -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
+        return json_response(error.model_dump(), status_code=500)
+    body = parse_json_object_body()
     if isinstance(body, Response):
         return body
     ref = body.get("ref")
     title = body.get("title")
     if not isinstance(ref, str) or not ref.strip():
         error = ErrorResponse(detail="'ref' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     if not isinstance(title, str):
         error = ErrorResponse(detail="'title' must be a string (an empty one clears the name)")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     try:
         if ref.strip().startswith(_CHAT_MEMBER_REF_PREFIX):
             return _rename_chat_agent_for_ref(layout_dir, ref.strip(), title)
         stored_title = member_titles.set_title(layout_dir, ref, title)
     except member_titles.MemberTitleLengthError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     _broadcast_member_title_changed(ref.strip(), stored_title)
-    return _json_response({"ref": ref.strip(), "title": stored_title})
+    return json_response({"ref": ref.strip(), "title": stored_title})
 
 
 def _broadcast_member_last_used_changed(ref: str, at_ms: int | None) -> None:
@@ -1964,8 +1044,8 @@ def _list_member_last_used_endpoint() -> Response:
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"last_used": {}})
-    return _json_response({"last_used": member_last_used.read_last_used(layout_dir)})
+        return json_response({"last_used": {}})
+    return json_response({"last_used": member_last_used.read_last_used(layout_dir)})
 
 
 def _touch_member_last_used_endpoint() -> Response:
@@ -1981,17 +1061,17 @@ def _touch_member_last_used_endpoint() -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
+        return json_response(error.model_dump(), status_code=500)
+    body = parse_json_object_body()
     if isinstance(body, Response):
         return body
     ref = body.get("ref")
     if not isinstance(ref, str) or not ref.strip():
         error = ErrorResponse(detail="'ref' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     stored_ms = member_last_used.touch_last_used(layout_dir, ref, int(time.time() * 1000))
     _broadcast_member_last_used_changed(ref.strip(), stored_ms)
-    return _json_response({"ref": ref.strip(), "at_ms": stored_ms})
+    return json_response({"ref": ref.strip(), "at_ms": stored_ms})
 
 
 def _broadcast_member_location_changed(ref: str, path: str | None) -> None:
@@ -2013,8 +1093,8 @@ def _list_member_locations_endpoint() -> Response:
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"locations": {}})
-    return _json_response({"locations": member_locations.read_locations(layout_dir)})
+        return json_response({"locations": {}})
+    return json_response({"locations": member_locations.read_locations(layout_dir)})
 
 
 def _set_member_location_endpoint() -> Response:
@@ -2028,24 +1108,24 @@ def _set_member_location_endpoint() -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
+        return json_response(error.model_dump(), status_code=500)
+    body = parse_json_object_body()
     if isinstance(body, Response):
         return body
     ref = body.get("ref")
     path = body.get("path")
     if not isinstance(ref, str) or not ref.strip():
         error = ErrorResponse(detail="'ref' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     if not isinstance(path, str):
         error = ErrorResponse(detail="'path' must be a string (an empty one clears the location)")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     try:
         stored_path = member_locations.set_location(layout_dir, ref, path)
     except member_locations.MemberLocationError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     _broadcast_member_location_changed(ref.strip(), stored_path)
-    return _json_response({"ref": ref.strip(), "path": stored_path})
+    return json_response({"ref": ref.strip(), "path": stored_path})
 
 
 def _list_app_instances_endpoint() -> Response:
@@ -2058,8 +1138,8 @@ def _list_app_instances_endpoint() -> Response:
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"instances": {}})
-    return _json_response({"instances": app_instances.list_app_instances(layout_dir)})
+        return json_response({"instances": {}})
+    return json_response({"instances": app_instances.list_app_instances(layout_dir)})
 
 
 def _allocate_app_instance_endpoint(name: str) -> Response:
@@ -2074,12 +1154,12 @@ def _allocate_app_instance_endpoint(name: str) -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     if get_state().agent_manager.get_app_by_name(name) is None:
         error = ErrorResponse(detail=f"No registered app named {name!r}")
-        return _json_response(error.model_dump(), status_code=404)
+        return json_response(error.model_dump(), status_code=404)
     instance_name = app_instances.allocate_app_instance(layout_dir, name)
-    return _json_response(
+    return json_response(
         {"name": name, "instance": instance_name, "ref": app_instances.instance_ref(name, instance_name)}
     )
 
@@ -2097,7 +1177,7 @@ def _delete_project_endpoint(project_id: str) -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     try:
         fallback_id = projects.delete_project(layout_dir, project_id)
     except projects.ProjectNotFoundError:
@@ -2106,7 +1186,7 @@ def _delete_project_endpoint(project_id: str) -> Response:
     get_state().broadcaster.broadcast(
         {"type": "project_deleted", "project_id": project_id, "fallback_id": fallback_id}
     )
-    return _json_response({"fallback_id": fallback_id})
+    return json_response({"fallback_id": fallback_id})
 
 
 def _delete_project_panel_endpoint(panel_id: str) -> Response:
@@ -2130,13 +1210,13 @@ def _delete_project_panel_endpoint(panel_id: str) -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     try:
         body = json.loads(request.get_data() or b"{}")
     except (json.JSONDecodeError, ValueError) as e:
         _loguru_logger.opt(exception=e).warning("Panel delete for {} carried invalid JSON", panel_id)
         error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     raw_ref = body.get("ref") if isinstance(body, dict) else None
     ref = raw_ref.strip() if isinstance(raw_ref, str) and raw_ref.strip() else None
     changed_project_ids = projects.remove_panel_from_all_projects(layout_dir, panel_id, ref)
@@ -2171,7 +1251,7 @@ def _delete_project_panel_endpoint(panel_id: str) -> Response:
     parsed_instance = app_instances.parse_instance_ref(ref) if ref is not None else None
     if parsed_instance is not None:
         app_instances.release_app_instance(layout_dir, parsed_instance[1])
-    return _json_response({"project_ids": changed_project_ids})
+    return json_response({"project_ids": changed_project_ids})
 
 
 def _tmux_prefix() -> str:
@@ -2200,7 +1280,7 @@ def _list_terminals() -> Response:
     """List the live user-terminal tmux sessions (excludes mngr agent sessions)."""
     prefix = _tmux_prefix()
     sessions = filter_user_terminal_sessions(_list_tmux_sessions(), prefix)
-    return _json_response(
+    return json_response(
         {
             "terminals": [session.model_dump() for session in sessions],
             "prefix": prefix,
@@ -2225,7 +1305,7 @@ def _allocate_terminal() -> Response:
         taken = live_names | _recently_allocated_terminal_names
         name = allocate_next_terminal_name(taken, prefix)
         _recently_allocated_terminal_names.add(name)
-    return _json_response({"session_name": name})
+    return json_response({"session_name": name})
 
 
 def _kill_terminal_session(session_name: str) -> str | None:
@@ -2260,31 +1340,31 @@ def _destroy_terminal(session_name: str) -> Response:
     prefix = _tmux_prefix()
     if not is_destroyable_terminal_session(session_name, prefix):
         error = ErrorResponse(detail=f"Refusing to destroy non-terminal session: {session_name!r}")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     failure = _kill_terminal_session(session_name)
     if failure is not None:
         error = ErrorResponse(detail=f"Failed to destroy terminal {session_name!r}: {failure}")
-        return _json_response(error.model_dump(), status_code=500)
-    return _json_response({"status": "ok"})
+        return json_response(error.model_dump(), status_code=500)
+    return json_response({"status": "ok"})
 
 
 def _get_terminal_banner_dismissed() -> Response:
     """Whether the user has permanently dismissed the terminal lifecycle banner."""
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"dismissed": False})
+        return json_response({"dismissed": False})
     banner_file = layout_dir / _TERMINAL_BANNER_FILENAME
     if not banner_file.exists():
-        return _json_response({"dismissed": False})
+        return json_response({"dismissed": False})
     try:
         data = json.loads(banner_file.read_text())
     except (json.JSONDecodeError, OSError) as e:
         _loguru_logger.opt(exception=e).warning(
             "Failed to read terminal banner state at {}; treating as not dismissed", banner_file
         )
-        return _json_response({"dismissed": False})
+        return json_response({"dismissed": False})
     dismissed = bool(data.get("dismissed", False)) if isinstance(data, dict) else False
-    return _json_response({"dismissed": dismissed})
+    return json_response({"dismissed": dismissed})
 
 
 def _set_terminal_banner_dismissed() -> Response:
@@ -2292,17 +1372,17 @@ def _set_terminal_banner_dismissed() -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     try:
         body = json.loads(request.get_data() or b"{}")
     except (json.JSONDecodeError, ValueError) as e:
         _loguru_logger.opt(exception=e).warning("terminal banner-dismissed received invalid JSON body")
         error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     dismissed = bool(body.get("dismissed", False)) if isinstance(body, dict) else False
     layout_dir.mkdir(parents=True, exist_ok=True)
     (layout_dir / _TERMINAL_BANNER_FILENAME).write_text(json.dumps({"dismissed": dismissed}))
-    return _json_response({"dismissed": dismissed})
+    return json_response({"dismissed": dismissed})
 
 
 def _resolve_terminal_id_for_tty(client_tty: str) -> str | None:
@@ -2347,16 +1427,16 @@ def _terminal_notify_endpoint() -> Response:
     client_host = request.remote_addr or ""
     if client_host not in _LOOPBACK_CLIENT_HOSTS:
         error = ErrorResponse(detail="terminal notify is only callable from loopback")
-        return _json_response(error.model_dump(), status_code=403)
+        return json_response(error.model_dump(), status_code=403)
     try:
         body = json.loads(request.get_data())
     except (json.JSONDecodeError, ValueError) as e:
         _loguru_logger.opt(exception=e).warning("terminal notify received invalid JSON body")
         error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     if not isinstance(body, dict):
         error = ErrorResponse(detail="Request body must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     kind = body.get("kind")
     session_name = str(body.get("session_name") or "")
     session_id = str(body.get("session_id") or "")
@@ -2374,16 +1454,16 @@ def _terminal_notify_endpoint() -> Response:
         # update, so skip the broadcast entirely.
         terminal_id = provided_terminal_id or _resolve_terminal_id_for_tty(client_tty)
         if terminal_id is None:
-            return _json_response({"ok": True, "broadcast": False})
+            return json_response({"ok": True, "broadcast": False})
         broadcaster.broadcast_terminal_session(terminal_id, session_id, session_name)
-        return _json_response({"ok": True, "broadcast": True})
+        return json_response({"ok": True, "broadcast": True})
     if kind == "session-renamed":
         # A rename has no client context; the frontend matches the affected
         # tab by ``session_id``.
         broadcaster.broadcast_terminal_session(None, session_id, session_name)
-        return _json_response({"ok": True, "broadcast": True})
+        return json_response({"ok": True, "broadcast": True})
     error = ErrorResponse(detail=f"Unknown terminal notify kind: {kind!r}")
-    return _json_response(error.model_dump(), status_code=400)
+    return json_response(error.model_dump(), status_code=400)
 
 
 def _browser_backend_url(path: str) -> str | None:
@@ -2415,7 +1495,7 @@ def _browsers_passthrough() -> Response:
     backend_url = _browser_backend_url("browsers")
     if backend_url is None:
         error = ErrorResponse(detail="Browser service is not registered")
-        return _json_response(error.model_dump(), status_code=503)
+        return json_response(error.model_dump(), status_code=503)
     try:
         if request.method == "POST":
             backend_response = state.http_client.post(
@@ -2428,7 +1508,7 @@ def _browsers_passthrough() -> Response:
     except httpx.HTTPError as e:
         _loguru_logger.warning("Browser service request to {} failed: {}", backend_url, e)
         error = ErrorResponse(detail="Browser service is unreachable")
-        return _json_response(error.model_dump(), status_code=503)
+        return json_response(error.model_dump(), status_code=503)
     return Response(
         backend_response.content,
         status=backend_response.status_code,
@@ -2451,13 +1531,13 @@ def _destroy_browser_passthrough(name: str) -> Response:
     backend_url = _browser_backend_url(f"browsers/{name}")
     if backend_url is None:
         error = ErrorResponse(detail="Browser service is not registered")
-        return _json_response(error.model_dump(), status_code=503)
+        return json_response(error.model_dump(), status_code=503)
     try:
         backend_response = state.http_client.delete(backend_url)
     except httpx.HTTPError as e:
         _loguru_logger.warning("Browser service DELETE to {} failed: {}", backend_url, e)
         error = ErrorResponse(detail="Browser service is unreachable")
-        return _json_response(error.model_dump(), status_code=503)
+        return json_response(error.model_dump(), status_code=503)
     return Response(
         backend_response.content,
         status=backend_response.status_code,
@@ -2500,17 +1580,17 @@ def _deregister_app_endpoint(name: str) -> Response:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     if name == _SHELL_SERVICE_NAME:
         error = ErrorResponse(detail=f"Refusing to deregister the workspace shell itself: {name!r}")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     if get_state().agent_manager.get_service_url(name) is None:
         error = ErrorResponse(detail=f"No registered app named {name!r}")
-        return _json_response(error.model_dump(), status_code=404)
+        return json_response(error.model_dump(), status_code=404)
     failure = _run_forward_port_removal(name)
     if failure is not None:
         error = ErrorResponse(detail=f"Failed to deregister app {name!r}: {failure}")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
     ref = f"{_SERVICE_REF_PREFIX}{name}"
     project_ids = projects.projects_showing(layout_dir, ref)
     for project_id in project_ids:
@@ -2518,7 +1598,7 @@ def _deregister_app_endpoint(name: str) -> Response:
     if project_ids:
         _broadcast_members_changed(project_ids)
     logger.info("Deregistered app {} (left {} project(s); its process was not stopped)", name, len(project_ids))
-    return _json_response({"name": name, "project_ids": project_ids, "is_process_stopped": False})
+    return json_response({"name": name, "project_ids": project_ids, "is_process_stopped": False})
 
 
 def _resolve_stoppable_app(name: str) -> "AppEntry | Response":
@@ -2532,11 +1612,11 @@ def _resolve_stoppable_app(name: str) -> "AppEntry | Response":
     """
     if name in _ESSENTIAL_SERVICE_NAMES:
         error = ErrorResponse(detail=f"{name!r} is an essential service and cannot be stopped or started here")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     app_entry = get_state().agent_manager.get_app_by_name(name)
     if app_entry is None:
         error = ErrorResponse(detail=f"No registered app named {name!r}")
-        return _json_response(error.model_dump(), status_code=404)
+        return json_response(error.model_dump(), status_code=404)
     if not app_entry.program:
         error = ErrorResponse(
             detail=(
@@ -2544,7 +1624,7 @@ def _resolve_stoppable_app(name: str) -> "AppEntry | Response":
                 "stopped or started from the workspace (it is managed outside it)"
             )
         )
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     return app_entry
 
 
@@ -2558,7 +1638,7 @@ def _finish_app_lifecycle_action(name: str) -> Response:
     agent_manager: AgentManager = get_state().agent_manager
     agent_manager.refresh_app_liveness()
     refreshed = agent_manager.get_app_by_name(name)
-    return _json_response({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
+    return json_response({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
 
 
 def _stop_app_endpoint(name: str) -> Response:
@@ -2575,7 +1655,7 @@ def _stop_app_endpoint(name: str) -> Response:
     try:
         stop_supervisor_program(resolved.program, supervisor_socket_path())
     except SupervisorProgramActionError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=502)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=502)
     logger.info("Stopped app {} (program {})", name, resolved.program)
     return _finish_app_lifecycle_action(name)
 
@@ -2588,41 +1668,9 @@ def _start_app_endpoint(name: str) -> Response:
     try:
         start_supervisor_program(resolved.program, supervisor_socket_path())
     except SupervisorProgramActionError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=502)
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=502)
     logger.info("Started app {} (program {})", name, resolved.program)
     return _finish_app_lifecycle_action(name)
-
-
-def _get_screen_capture(agent_id: str) -> Response:
-    """Capture the tmux pane content for an agent.
-
-    Returns the visible screen content (and optionally scrollback) as plain
-    text. Useful for seeing what's on an agent's terminal when it has no
-    Claude session data (e.g., the agent crashed on startup).
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    prefix = os.environ.get("MNGR_PREFIX", "mngr-")
-    session_name = f"{prefix}{agent_info.name}"
-    include_scrollback = request.args.get("scrollback", "false").lower() == "true"
-    scrollback_flag = ["-S", "-"] if include_scrollback else []
-    command = ["tmux", "capture-pane", "-t", session_name, *scrollback_flag, "-p"]
-
-    result = run_local_command_modern_version(
-        command=command,
-        cwd=None,
-        is_checked=False,
-        timeout=5.0,
-    )
-    success = result.returncode == 0
-    if not success:
-        return _json_response(
-            {"screen": None, "error": f"tmux session not found: {session_name}"},
-            status_code=200,
-        )
-    return _json_response({"screen": result.stdout})
 
 
 def _serve_static_file(basename: str) -> Response:
@@ -2630,67 +1678,12 @@ def _serve_static_file(basename: str) -> Response:
     file_path_string = config.static_file_basename_to_path.get(basename)
     if file_path_string is None:
         error = ErrorResponse(detail=f"Static file '{basename}' not found")
-        return _json_response(error.model_dump(), status_code=404)
+        return json_response(error.model_dump(), status_code=404)
     file_path = Path(file_path_string)
     if not file_path.is_file():
         error = ErrorResponse(detail=f"Static file not found on disk: {file_path}")
-        return _json_response(error.model_dump(), status_code=404)
+        return json_response(error.model_dump(), status_code=404)
     return send_file(file_path)
-
-
-def _create_chat_agent() -> Response:
-    """Create a new chat agent in the primary agent's work directory.
-
-    One endpoint for every harness: the ``chat`` role is the same, and the request's
-    ``harness`` field (validated against :class:`HarnessType`, claude by default) picks
-    which harness template the server stacks under it.
-
-    The chat's display name is minted here (server-side) when the request names
-    none: the first free "<word> N" for the harness, counted against every name
-    on the machine -- agents, in-flight creates, and the member-title store's
-    chosen names -- so simultaneous creates cannot both mint "Chat 1". An
-    explicitly requested name that collides answers 409 so the caller can retry
-    with another. The response carries the resulting name pair (canonical
-    ``name`` + human-readable ``display_name``) beside the agent id.
-
-    A chat created inside a project carries that project's id in the agent's
-    ``project`` label, which is where chat membership lives (mngr already
-    propagates the label to the agent's own children). ``project_id`` rides
-    beside the request model rather than inside it for that reason: it is a
-    label on the created agent, not part of the chat's identity. A create with
-    no ``project_id`` leaves the chat filed in no project, which is ordinary:
-    Everything enumerates the machine, so it surfaces there anyway.
-    """
-    agent_manager: AgentManager = get_state().agent_manager
-    body = _parse_json_object_body()
-    if isinstance(body, Response):
-        return body
-    project_id = str(body.get("project_id") or "")
-    request_fields = {key: value for key, value in body.items() if key != "project_id"}
-
-    # Chosen member titles count as taken so an auto-minted "Chat 2" can never
-    # collide with, say, a terminal someone renamed to "Chat 2".
-    layout_dir = _primary_agent_layout_dir()
-    titled_names = tuple(member_titles.read_titles(layout_dir).values()) if layout_dir is not None else ()
-
-    try:
-        create_request = CreateChatRequest.model_validate(request_fields)
-        created = agent_manager.create_chat_agent(
-            create_request.name,
-            # The `first` create template belongs to the workspace's own first run, not to
-            # anything a client asks for -- bootstrap stacks it on its own `mngr create`.
-            extra_role_templates=(),
-            project_id=project_id,
-            extra_taken_names=titled_names,
-            account_id=create_request.account_id,
-        )
-        response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
-        return _json_response(response.model_dump(), status_code=201)
-    except AgentNameConflictError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=400)
 
 
 def _ws_endpoint(websocket: Any) -> None:
@@ -2872,53 +1865,6 @@ def _run_ws_broadcast_loop(
         ws_broadcaster.unregister(client_queue)
 
 
-def _proto_agent_logs_endpoint(websocket: Any, agent_id: str) -> None:
-    """WebSocket for streaming proto-agent creation logs."""
-    agent_manager: AgentManager = get_state().agent_manager
-    log_queue = agent_manager.get_log_queue(agent_id)
-    _run_proto_agent_logs_loop(websocket=websocket, log_queue=log_queue)
-
-
-def _run_proto_agent_logs_loop(
-    websocket: Any,
-    log_queue: "queue.Queue[str | None] | None",
-) -> None:
-    """Stream ``log_queue`` messages to ``websocket`` until the proto-agent finishes.
-
-    If ``log_queue`` is ``None`` the proto-agent does not exist; send a
-    structured not-found error and close the socket.
-    """
-    if log_queue is None:
-        try:
-            websocket.send(json.dumps({"done": True, "success": False, "error": "Proto-agent not found"}))
-        except ConnectionClosed:
-            pass
-        return
-
-    try:
-        finished = False
-        while not finished:
-            try:
-                message = log_queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-            if message is None:
-                finished = True
-            else:
-                websocket.send(message)
-    except ConnectionClosed:
-        pass
-
-
-def _build_destroy_command(agent_name: str) -> list[str]:
-    """Build the ``mngr destroy --force`` argv for one agent.
-
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess (see ``server_test.py``).
-    """
-    return ["mngr", "destroy", agent_name, "--force"]
-
-
 def _destroy_agent(agent_id: str) -> Response:
     """Destroy an agent by running mngr destroy --force.
 
@@ -2933,7 +1879,7 @@ def _destroy_agent(agent_id: str) -> Response:
     agent_state = agent_manager.get_agent_by_id(agent_id)
     if agent_state is None:
         error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
-        return _json_response(error.model_dump(), status_code=404)
+        return json_response(error.model_dump(), status_code=404)
 
     if agent_state.labels.get("is_primary") == "true":
         error = ErrorResponse(
@@ -2942,27 +1888,14 @@ def _destroy_agent(agent_id: str) -> Response:
                 "the is_primary=true label (services agent for this workspace)"
             )
         )
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
 
-    agent_name = agent_state.name
+    try:
+        agent_manager.destroy_chat_agent(agent_id)
+    except AgentDestroyError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
 
-    result = run_local_command_modern_version(
-        command=_build_destroy_command(agent_name),
-        cwd=None,
-        is_checked=False,
-        timeout=_DESTROY_TIMEOUT_SECONDS,
-    )
-    success = result.returncode == 0
-    output = result.stdout.strip() if success else result.stderr.strip()
-    if not success:
-        error = ErrorResponse(detail=f"Failed to destroy agent '{agent_name}': {output}")
-        return _json_response(error.model_dump(), status_code=500)
-
-    # Remove the agent from the system_interface's tracked state immediately
-    # so the frontend reflects the destruction without waiting for mngr observe.
-    agent_manager.remove_agent(agent_id)
-
-    return _json_response(DestroyAgentResponse(status="ok").model_dump())
+    return json_response(DestroyAgentResponse(status="ok").model_dump())
 
 
 def _build_stop_command(agent_name: str) -> list[str]:
@@ -2989,7 +1922,7 @@ def _stop_agent(agent_id: str) -> Response:
     agent_state = agent_manager.get_agent_by_id(agent_id)
     if agent_state is None:
         error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
-        return _json_response(error.model_dump(), status_code=404)
+        return json_response(error.model_dump(), status_code=404)
 
     if agent_state.labels.get("is_primary") == "true":
         error = ErrorResponse(
@@ -2998,7 +1931,7 @@ def _stop_agent(agent_id: str) -> Response:
                 "the is_primary=true label (services agent for this workspace)"
             )
         )
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
 
     # Stopping is lighter work than a destroy (no resource teardown), but it
     # rides the same mngr CLI startup and host-lock path, so it shares the
@@ -3007,13 +1940,13 @@ def _stop_agent(agent_id: str) -> Response:
         command=_build_stop_command(agent_state.name),
         cwd=None,
         is_checked=False,
-        timeout=_DESTROY_TIMEOUT_SECONDS,
+        timeout=DESTROY_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         error = ErrorResponse(detail=f"Failed to stop agent '{agent_state.name}': {result.stderr.strip()}")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
 
-    return _json_response(StopAgentResponse(status="ok").model_dump())
+    return json_response(StopAgentResponse(status="ok").model_dump())
 
 
 def _start_agent(agent_id: str) -> Response:
@@ -3039,12 +1972,12 @@ def _start_agent(agent_id: str) -> Response:
         start_agent(agent_info.name)
     except MngrError as e:
         error = ErrorResponse(detail=f"Failed to start agent '{agent_info.name}': {e}")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
 
     # The observe stream will not see the revival for minutes (no pid to watch while the
     # agent was stopped); reflect it now so the UI's liveness unblocks with the start.
     get_state().agent_manager.note_agent_alive(agent_info.id)
-    return _json_response(StartAgentResponse(status="ok").model_dump())
+    return json_response(StartAgentResponse(status="ok").model_dump())
 
 
 def _resolve_project_id_for_layout_arg(layout_dir: Path, requested: str) -> str | None:
@@ -3152,7 +2085,7 @@ def _resolve_requested_layout_slug(
             try:
                 return projects.slugify_project_name(requested), None
             except projects.ProjectNameError as e:
-                return None, _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+                return None, json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
         project_id = _resolve_project_id_for_layout_arg(layout_dir, requested)
         if project_id is not None:
             return project_id, None
@@ -3160,7 +2093,7 @@ def _resolve_requested_layout_slug(
             [info.name for info in projects.list_projects(layout_dir)] + [projects.EVERYTHING_VIEW_NAME]
         )
         error = ErrorResponse(detail=f"View {requested!r} not found (known views: {known_views})")
-        return None, _json_response(error.model_dump(), status_code=404)
+        return None, json_response(error.model_dump(), status_code=404)
     return _default_view_id(layout_dir), None
 
 
@@ -3194,7 +2127,7 @@ def _layout_broadcast_endpoint() -> Response:
     client_host = request.remote_addr or ""
     if client_host not in _LOOPBACK_CLIENT_HOSTS:
         error = ErrorResponse(detail="layout broadcast is only callable from loopback")
-        return _json_response(error.model_dump(), status_code=403)
+        return json_response(error.model_dump(), status_code=403)
 
     raw_body = request.get_data()
     try:
@@ -3202,20 +2135,20 @@ def _layout_broadcast_endpoint() -> Response:
     except (json.JSONDecodeError, ValueError) as e:
         _loguru_logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
         error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     if not isinstance(body, dict):
         error = ErrorResponse(detail="Request body must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
 
     op = body.get("op")
     args_raw = body.get("args", {})
     agent_id = body.get("agent_id") or request.headers.get("X-Mngr-Agent-Id") or ""
     if not isinstance(op, str) or not is_known_op(op):
         error = ErrorResponse(detail=f"Unknown layout op: {op!r}")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
     if not isinstance(args_raw, dict):
         error = ErrorResponse(detail="``args`` must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
 
     agent_manager: AgentManager = get_state().agent_manager
     agent_name_by_id = {a["id"]: a["name"] for a in agent_manager.get_agents_serialized()}
@@ -3229,7 +2162,7 @@ def _layout_broadcast_endpoint() -> Response:
         try:
             projects.validate_device(device)
         except projects.ProjectDeviceError as e:
-            return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+            return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
         layout_path = (
             projects.project_content_path(layout_dir, slug, device)
             if layout_dir is not None and slug is not None
@@ -3244,10 +2177,10 @@ def _layout_broadcast_endpoint() -> Response:
             )
             # Log the caller for telemetry; v1 has no enforcement.
             logger.info("layout op={} agent_id={} layout={} entries={}", op, agent_id, slug, len(entries))
-            return _json_response({"ok": True, "layout_slug": slug, "entries": entries})
+            return json_response({"ok": True, "layout_slug": slug, "entries": entries})
         summary = layout_inspect(layout_path, agent_name_by_id)
         logger.info("layout op={} agent_id={} layout={} panels={}", op, agent_id, slug, len(summary.get("panels", [])))
-        return _json_response({"ok": True, "layout_slug": slug, "layout": summary})
+        return json_response({"ok": True, "layout_slug": slug, "layout": summary})
 
     if op == "views":
         # Enumerate the views themselves: every registered project plus the
@@ -3255,7 +2188,7 @@ def _layout_broadcast_endpoint() -> Response:
         # content presence, and which connected clients have it in front.
         # ``context`` answers "who asked"; this answers "what views exist".
         if layout_dir is None:
-            return _json_response({"ok": True, "views": [], "last_active_id": None})
+            return json_response({"ok": True, "views": [], "last_active_id": None})
         clients_by_view: dict[str, list[str]] = {}
         for client_info in get_state().broadcaster.get_connected_client_infos():
             clients_by_view.setdefault(client_info["active_layout_slug"], []).append(client_info["client_id"])
@@ -3271,7 +2204,7 @@ def _layout_broadcast_endpoint() -> Response:
         )
         last_active_id = projects.get_last_active_id(layout_dir)
         logger.info("layout op={} agent_id={} views={}", op, agent_id, len(views))
-        return _json_response(
+        return json_response(
             {"ok": True, "views": [view.model_dump() for view in views], "last_active_id": last_active_id}
         )
 
@@ -3290,16 +2223,16 @@ def _layout_broadcast_endpoint() -> Response:
             if live_layout:
                 client_summary["current_layout"] = live_layout
         logger.info("layout op={} agent_id={} clients={}", op, agent_id, len(clients))
-        return _json_response({"ok": True, "clients": clients})
+        return json_response({"ok": True, "clients": clients})
 
     if op == "load":
         requested = args_raw.get("layout")
         if not isinstance(requested, str) or not requested:
             error = ErrorResponse(detail="'load' requires a layout name in args.layout")
-            return _json_response(error.model_dump(), status_code=400)
+            return json_response(error.model_dump(), status_code=400)
         if layout_dir is None:
             error = ErrorResponse(detail="No primary agent configured for this workspace")
-            return _json_response(error.model_dump(), status_code=500)
+            return json_response(error.model_dump(), status_code=500)
         slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
         if error_response is not None:
             return error_response
@@ -3307,7 +2240,7 @@ def _layout_broadcast_endpoint() -> Response:
             # Unreachable: an explicit layout name (validated above) always
             # resolves to a slug or an error response.
             error = ErrorResponse(detail="Failed to resolve the requested layout")
-            return _json_response(error.model_dump(), status_code=500)
+            return json_response(error.model_dump(), status_code=500)
         display_name = _layout_op_display_name(layout_dir, slug)
         # Target the explicitly-named client, else the client that most
         # recently messaged the requesting agent, else every client.
@@ -3320,13 +2253,13 @@ def _layout_broadcast_endpoint() -> Response:
             target_client_id = client_activity.find_client_id_for_agent(events, agent_id)
         get_state().broadcaster.broadcast_load_layout(slug, display_name, target_client_id)
         logger.info("layout op={} agent_id={} layout={} target_client={}", op, agent_id, slug, target_client_id)
-        return _json_response({"ok": True, "layout": slug, "target_client_id": target_client_id})
+        return json_response({"ok": True, "layout": slug, "target_client_id": target_client_id})
 
     if not is_broadcasting_op(op):
         # Defensive: every non-list/inspect op should broadcast. Catch
         # drift in the op-set definitions.
         error = ErrorResponse(detail=f"Op {op!r} has no broadcast handler")
-        return _json_response(error.model_dump(), status_code=500)
+        return json_response(error.model_dump(), status_code=500)
 
     # Terminal creation is the one path where the script returns a ref
     # synchronously: the frontend's "New terminal" button gives each
@@ -3350,7 +2283,7 @@ def _layout_broadcast_endpoint() -> Response:
                 "viewer bound to no browser."
             )
         )
-        return _json_response(error.model_dump(), status_code=400)
+        return json_response(error.model_dump(), status_code=400)
 
     allocated_ref: str | None = None
     if op in {"open", "split"} and args_raw.get("ref") == "service:terminal":
@@ -3395,7 +2328,7 @@ def _layout_broadcast_endpoint() -> Response:
                     f"Connected clients: {client_summary}."
                 )
             )
-            return _json_response(error.model_dump(), status_code=412)
+            return json_response(error.model_dump(), status_code=412)
         broadcast_args = {key: value for key, value in args_raw.items() if key != "layout"}
         holder = layout_mutex.try_acquire(agent_id, op, args_raw)
         if holder is not None:
@@ -3407,7 +2340,7 @@ def _layout_broadcast_endpoint() -> Response:
                 "retry_after_ms": layout_mutex.retry_after_ms(),
                 "in_flight": holder,
             }
-            return _json_response(error_body, status_code=409)
+            return json_response(error_body, status_code=409)
         try:
             broadcaster.broadcast_layout_op(
                 op, broadcast_args, requester_agent_id=agent_id, target_layout_slug=target_layout_slug
@@ -3421,20 +2354,7 @@ def _layout_broadcast_endpoint() -> Response:
     response_body: dict[str, Any] = {"ok": True}
     if allocated_ref is not None:
         response_body["ref"] = allocated_ref
-    return _json_response(response_body)
-
-
-def _handle_unhandled_exception(exc: Exception) -> Response | HTTPException:
-    # Let werkzeug's own HTTP errors (404 routing, 405, etc.) render normally;
-    # only genuine unhandled exceptions become a 500 JSON body. Returning the
-    # exception (not re-raising it) is how Flask keeps the real status code --
-    # a raise from inside the handler re-enters handle_exception and comes out
-    # as a 500.
-    if isinstance(exc, HTTPException):
-        return exc
-    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    logger.error("Unhandled exception on {} {}: {}\n{}", request.method, request.path, exc, "".join(tb))
-    return _json_response({"detail": f"Internal server error: {exc}"}, status_code=500)
+    return json_response(response_body)
 
 
 def create_application(state: SystemInterfaceState) -> Flask:
@@ -3449,64 +2369,23 @@ def create_application(state: SystemInterfaceState) -> Flask:
     """
     # static_folder=None disables Flask's default /static route; the system
     # interface serves its own static assets explicitly below.
-    application = Flask(__name__, static_folder=None)
-    application.config["SOCK_SERVER_OPTIONS"] = {
-        "ping_interval": _WS_PING_INTERVAL_SECONDS,
-        # Echo back whatever subprotocol a client offers so subprotocol-bearing
-        # WS clients can connect; see ``_ReflectClientSubprotocols``.
-        "subprotocols": _ReflectClientSubprotocols(),
-    }
+    application = PathDispatchingFlask(__name__, static_folder=None)
     attach_state(application, state)
 
     plugin_manager = get_plugin_manager()
     plugin_manager.hook.register_event_broadcaster(broadcaster=state.event_queues.broadcast)
 
-    application.register_error_handler(Exception, _handle_unhandled_exception)
+    application.register_error_handler(Exception, handle_unhandled_exception)
 
     plugin_manager.hook.endpoint(app=application)
 
-    sock = Sock(application)
+    sock = build_sock(application)
 
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
+    application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
+    application.add_url_rule(APP_CONTRACT_PATH, view_func=_serve_app_contract, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
-    application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
-    application.add_url_rule(
-        "/api/agents/<agent_id>/events/<event_id>/detail", view_func=_get_event_detail, methods=["GET"]
-    )
-    application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])
-    application.add_url_rule("/api/agents/<agent_id>/message", view_func=_send_message_endpoint, methods=["POST"])
-    application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_choice_endpoint, methods=["POST"])
-    application.add_url_rule(
-        "/api/agents/<agent_id>/model-options", view_func=_get_model_options_endpoint, methods=["GET"]
-    )
-    application.add_url_rule("/api/agents/<agent_id>/powered-by", view_func=_get_powered_by_endpoint, methods=["GET"])
-    application.add_url_rule(
-        "/api/agents/<agent_id>/fast-mode-answered",
-        view_func=_mark_fast_mode_prompt_answered,
-        methods=["POST"],
-    )
-    application.add_url_rule("/api/activity", view_func=_activity_endpoint, methods=["POST"])
-    application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
-    application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])
-    application.add_url_rule(
-        "/api/uploads/<path:relative_path>",
-        view_func=_delete_attachment,
-        methods=["DELETE"],
-        endpoint="_delete_attachment",
-    )
-    application.add_url_rule("/api/agents/<agent_id>/interrupt", view_func=_interrupt_agent_endpoint, methods=["POST"])
-    application.add_url_rule("/api/agents/<agent_id>/flush-queue", view_func=_flush_queue_endpoint, methods=["POST"])
-    application.add_url_rule(
-        "/api/agents/<agent_id>/shoulder-tap-atomic",
-        view_func=_shoulder_tap_atomic_endpoint,
-        methods=["POST"],
-    )
-    application.add_url_rule(
-        "/api/agents/<agent_id>/drain-to-composer", view_func=_drain_to_composer_endpoint, methods=["POST"]
-    )
     application.add_url_rule("/api/projects", view_func=_list_projects_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/projects", view_func=_create_project_endpoint, methods=["POST"], endpoint="_create_project"
@@ -3554,7 +2433,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
         methods=["POST"],
         endpoint="_touch_member_last_used",
     )
-    application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/stop", view_func=_stop_agent, methods=["POST"])
@@ -3597,22 +2475,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
         methods=["POST"],
         endpoint="_set_member_location_endpoint",
     )
-    auth_endpoints.register_routes(application)
-    accounts_endpoints.register_routes(application)
-    latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
-    application.add_url_rule(
-        "/api/agents/<agent_id>/subagents/<subagent_session_id>/events",
-        view_func=_get_subagent_events,
-        methods=["GET"],
-    )
-    application.add_url_rule(
-        "/api/agents/<agent_id>/subagents/<subagent_session_id>/stream",
-        view_func=_stream_subagent_events,
-        methods=["GET"],
-    )
     sock.route("/api/ws")(_ws_endpoint)
-    sock.route("/api/proto-agents/<agent_id>/logs")(_proto_agent_logs_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
 
     # Registered unconditionally, even when the bundle is absent at startup: the
@@ -3625,5 +2489,11 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
 
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
+
+    # The chat document is a second Flask app over the same state, picked per request by
+    # the path it alone serves (see wsgi_dispatch); the shell app stays the object callers hold.
+    # CLEANUP: drop the dispatch once phase 10 of the workspace app model moves the chat app
+    # into its own process.
+    application.chat_application = create_chat_application(state)
 
     return application

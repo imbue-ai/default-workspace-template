@@ -23,7 +23,7 @@ _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 # template may carry user-built apps (with a manifest whose priority is ``user``,
 # or scaffolded before manifests existed and not yet migrated), and this suite
 # runs there too.
-_BUILT_IN_APP_PACKAGES = ("browser", "files", "system_interface", "terminal")
+_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "system_interface", "terminal")
 
 
 def _built_in_manifest_paths() -> list[Path]:
@@ -137,6 +137,20 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
 
     assert by_name["system_interface"].internal is True
     assert by_name["system_interface"].critical is True
+    # The chat app is a second document the shell's own process serves in phases 6 to 9,
+    # so its row is hidden from the open surfaces and shares the shell's program and band.
+    # CLEANUP: phase 7 drops ``internal`` (the shell then reads ``critical`` off the row),
+    # phase 10 sets ``program = "chat"`` and ``priority = "chat"``.
+    assert by_name["chat"].internal is True
+    assert by_name["chat"].critical is True
+    assert by_name["chat"].program == "system_interface"
+    assert by_name["chat"].priority == "system_interface"
+    assert by_name["chat"].instances is True
+    assert by_name["chat"].instances_url is None
+    assert by_name["chat"].default_shortcut is not None
+    assert by_name["chat"].default_shortcut.action == "new"
+    assert by_name["chat"].default_shortcut.mode == "new"
+    assert [action.id for action in by_name["chat"].actions] == ["new", "subagent"]
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False

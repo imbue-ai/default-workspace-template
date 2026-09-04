@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_instances.interfaces import InstanceNudgerInterface
+from app_instances.nudge import SilentNudger
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
@@ -69,6 +71,7 @@ from imbue.system_interface.harnesses.binding import harness_for
 from imbue.system_interface.harnesses.binding import resolve_binding
 from imbue.system_interface.harnesses.codex.live_user_turns import drop_live_user_turns
 from imbue.system_interface.harnesses.codex.live_user_turns import note_live_user_turn
+from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -89,6 +92,7 @@ from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SessionDeps
 from imbue.system_interface.liveness import probe_all_app_liveness
 from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentDestroyError
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
@@ -100,6 +104,7 @@ from imbue.system_interface.naming import canonical_agent_name
 from imbue.system_interface.naming import first_free_numbered_name
 from imbue.system_interface.naming import is_name_conflict
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.presence import PresenceState
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The role template every UI-created agent gets. The harness is chosen separately via
@@ -135,6 +140,15 @@ _LIVENESS_POLL_INTERVAL_SECONDS: Final[float] = 10.0
 # host), so they are short local operations -- but they run inside a request the
 # user is waiting on, so they are bounded rather than left to hang.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
+
+# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
+# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
+# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
+# teardown (a partial destroy the user saw as a 500). Every internal mngr
+# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
+# generous cap only converts spurious kills into patience. ``mngr stop`` rides
+# the same CLI startup and host-lock path, so it shares the bound.
+DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 
 # Labels that ask for a chat's tab to be surfaced when the chat appears, so the
 # user lands on it without hunting. ``assist`` is the original, set by the minds
@@ -323,6 +337,15 @@ def _rename_failure_detail(cmd: list[str], result: FinishedProcess) -> str:
     if result.returncode is not None and result.returncode < 0:
         return f"'{cmd[1]}' was stopped by signal {-result.returncode}"
     return f"'{cmd[1]}' exited with code {result.returncode}"
+
+
+def _build_chat_destroy_command(mngr_binary: str, agent_name: str) -> list[str]:
+    """Build the ``mngr destroy --force`` argv for one agent.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``server_test.py``).
+    """
+    return [mngr_binary, "destroy", agent_name, "--force"]
 
 
 def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
@@ -593,6 +616,20 @@ class AgentManager:
     # is protected while engaged and climbs past the worker band once it has been
     # left alone long enough.
     _oom_prioritizer: ChatOomPrioritizer
+    # Tells the shell that the chat app's instance list changed (contracts.md section 5.1):
+    # every broadcast of the agent list is a change of that list or of a status in it, so the
+    # nudge rides ``_broadcast_agents_updated``. ``SilentNudger`` until ``main`` installs the
+    # real one, so a manager built by a test posts nothing to the workspace shell.
+    _nudger: InstanceNudgerInterface
+    # Whether the agent list has been read from mngr at least once (the initial discovery
+    # or the observe stream's first full snapshot). Before that the list is empty because
+    # nothing has been asked yet, not because there are no agents, and the instances API
+    # answers "not ready" rather than an empty list the shell would prune tabs against.
+    _is_agent_list_known: bool
+    # Per agent, the ids of the filed permission requests no verdict has landed for, folded
+    # from the transcript events the watcher parses. A non-empty set is the ``attention``
+    # status of the chat's instance record.
+    _pending_permission_ids_by_agent: dict[str, set[str]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -666,6 +703,9 @@ class AgentManager:
         manager._pending_auto_open_name_by_id = {}
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
+        manager._nudger = SilentNudger()
+        manager._is_agent_list_known = False
+        manager._pending_permission_ids_by_agent = {}
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
         # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
@@ -742,6 +782,29 @@ class AgentManager:
         application state (e.g. the system_interface lifespan when an
         externally-constructed AgentManager is injected for tests)."""
         return self._broadcaster
+
+    def set_nudger(self, nudger: InstanceNudgerInterface) -> None:
+        """Install the nudger every agent-list broadcast also fires; ``main`` installs the real one."""
+        self._nudger = nudger
+
+    def is_agent_list_known(self) -> bool:
+        """Whether the agent list has been read from mngr at least once."""
+        with self._lock:
+            return self._is_agent_list_known
+
+    def note_agent_list_known(self) -> None:
+        """Mark the agent list as read; the discovery paths call this, and a test that seeds ``_agents`` directly."""
+        with self._lock:
+            self._is_agent_list_known = True
+
+    def nudge_shell(self) -> None:
+        """Fire the installed nudger: the instance list changed with no agent-list broadcast to carry it."""
+        self._nudger.nudge()
+
+    def _broadcast_agents_updated(self) -> None:
+        """Push the agent list to every WebSocket client, then nudge the shell about the instance list."""
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._nudger.nudge()
 
     def get_agents(self) -> list[AgentStateItem]:
         """Return current agent list."""
@@ -826,19 +889,38 @@ class AgentManager:
                 if agent.labels.get("agent_created") != "true" and agent.labels.get("is_primary") != "true"
             ]
 
-    def record_activity(
-        self,
-        *,
-        open_ids: list[str],
-        visible_ids: list[str],
-        messaged_id: str | None = None,
-    ) -> None:
-        """Feed a frontend activity report to the OOM prioritizer (re-tags chats)."""
-        self._oom_prioritizer.record_activity(
-            open_ids=open_ids,
-            visible_ids=visible_ids,
-            messaged_id=messaged_id,
+    def record_presence(self, agent_id: str, client_id: str, state: PresenceState) -> None:
+        """Feed one chat page's presence report to the OOM prioritizer (re-tags chats)."""
+        self._oom_prioritizer.record_presence(agent_id, client_id, state)
+
+    def record_message_sent(self, agent_id: str) -> None:
+        """Stamp a chat as just-messaged for the OOM prioritizer's recency ranking."""
+        self._oom_prioritizer.record_message(agent_id)
+
+    def has_pending_permission(self, agent_id: str) -> bool:
+        """Whether a permission request the agent filed is still awaiting the user's verdict."""
+        with self._lock:
+            return bool(self._pending_permission_ids_by_agent.get(agent_id))
+
+    def destroy_chat_agent(self, agent_id: str) -> None:
+        """Run ``mngr destroy --force`` for a tracked agent and drop it from the tracked state at once.
+
+        Raises ``AgentDestroyError`` when mngr refuses or fails; the caller has already
+        refused the primary services agent, which is never a chat.
+        """
+        agent_state = self.get_agent_by_id(agent_id)
+        if agent_state is None:
+            raise AgentDestroyError(f"Agent '{agent_id}' not found")
+        result = run_local_command_modern_version(
+            command=_build_chat_destroy_command(self._mngr_binary, agent_state.name),
+            cwd=None,
+            is_checked=False,
+            timeout=DESTROY_TIMEOUT_SECONDS,
         )
+        if result.returncode != 0:
+            raise AgentDestroyError(f"Failed to destroy agent '{agent_state.name}': {result.stderr.strip()}")
+        # Reflect the destruction immediately rather than waiting for mngr observe.
+        self.remove_agent(agent_id)
 
     def _seed_oom_prioritizer(self) -> None:
         """Seed the prioritizer's per-chat message times from the client-activity log.
@@ -915,10 +997,8 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
             if agent_state is None or not is_lifecycle_dead(agent_state.state):
                 return
-            self._agents[agent_id] = agent_state.model_copy_update(
-                to_update(agent_state.field_ref().state, "WAITING")
-            )
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._agents[agent_id] = agent_state.model_copy_update(to_update(agent_state.field_ref().state, "WAITING"))
+        self._broadcast_agents_updated()
 
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
@@ -950,6 +1030,8 @@ class AgentManager:
         with self._lock:
             self._agents.pop(agent_id, None)
             self._match_by_agent_id.pop(agent_id, None)
+            self._pending_permission_ids_by_agent.pop(agent_id, None)
+        self._oom_prioritizer.forget_agent(agent_id)
 
         self._stop_app_watcher(agent_id)
         self._stop_activity_tracking(agent_id)
@@ -958,7 +1040,7 @@ class AgentManager:
         # and so does the codex live-user-turn record keyed by its id.
         self._evict_watcher(agent_id)
         drop_live_user_turns(agent_id)
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
     def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
         """Give a chat agent the name the user just typed, keeping its name pair matched.
@@ -1042,7 +1124,7 @@ class AgentManager:
                     to_update(renamed.field_ref().name, new_canonical_name),
                     to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
                 )
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
     def get_apps(self) -> list[AppEntry]:
         """Return the primary agent's app list."""
@@ -1391,6 +1473,7 @@ class AgentManager:
             creation_type=CHAT_CREATION_TYPE,
             parent_agent_id=None,
         )
+        self._nudger.nudge()
 
         # Mirror the labels the created mngr agent will carry (see
         # ``_build_chat_create_command``), so the pre-observe AgentStateItem below
@@ -1533,8 +1616,9 @@ class AgentManager:
         if success:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
-            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._broadcast_agents_updated()
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
+        self._nudger.nudge()
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start app-registry watchers."""
@@ -1551,6 +1635,7 @@ class AgentManager:
                         harness=agent_info.harness,
                     )
                     self._agents[agent_info.id] = agent_state
+                self._is_agent_list_known = True
             self._seed_auto_opens_at_startup(agents)
 
             for agent_info in agents:
@@ -1630,7 +1715,7 @@ class AgentManager:
                 self._stop_activity_tracking(agent_id)
                 self._stop_model_tracking(agent_id)
 
-            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._broadcast_agents_updated()
 
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Agent refresh failed")
@@ -1766,6 +1851,7 @@ class AgentManager:
             match event:
                 case FullAgentStateEvent():
                     self._agent_details_by_id = {str(agent.id): agent for agent in event.agents}
+                    self._is_agent_list_known = True
                 case AgentStateEvent():
                     self._agent_details_by_id[str(event.agent.id)] = event.agent
                 case AgentRemovedEvent():
@@ -1868,7 +1954,7 @@ class AgentManager:
         # Broadcast the updated agent list BEFORE any auto-open: the frontend's open
         # handler resolves ``chat:<name>`` against its known-agents list and drops the
         # open if the agent is not there yet, so the chat must be known first.
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
         # Hand the OOM prioritizer the current mid-turn set. This is its only view
         # of a chat messaged outside the workspace UI (by mngr or another agent):
@@ -2052,7 +2138,7 @@ class AgentManager:
             harness=harness,
             state_dir=state_dir,
             send_to_harness=lambda text: delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text)),
-            notify_agents_changed=lambda: self._broadcaster.broadcast_agents_updated(self.get_agents_serialized()),
+            notify_agents_changed=self._broadcast_agents_updated,
             is_tracked=lambda: self.is_activity_tracked(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
             on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),
@@ -2115,7 +2201,7 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(
                 to_update(agent_state.field_ref().queued_messages, ())
             )
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
     def set_transcript_broadcaster(self, broadcaster: Callable[[str, list[dict[str, Any]]], None]) -> None:
         """Wire the transcript-event fan-out (the composition root calls this once).
@@ -2216,7 +2302,7 @@ class AgentManager:
         # otherwise broadcast and stick. ``broadcast_on_change=False`` keeps the single
         # broadcast below authoritative -- it carries the post-sweep state.
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
         """Watch the agent's live model-state file once its state dir exists.
@@ -2297,7 +2383,7 @@ class AgentManager:
                 to_update(agent_state.field_ref().model_choice, choice)
             )
         if broadcast_on_change:
-            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._broadcast_agents_updated()
 
     def refresh_model_choice(self, agent_id: str) -> None:
         """Force one authoritative model-choice broadcast (bypassing the no-op guard).
@@ -2439,7 +2525,7 @@ class AgentManager:
                     )
 
         if broadcast_on_change:
-            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._broadcast_agents_updated()
 
     def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
         """Fold a batch of transcript events into the agent's activity signals.
@@ -2461,11 +2547,35 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
             if agent_state is not None:
                 _assert_special_kinds_declared(agent_state.harness, events)
+            is_permission_state_changed = self._fold_pending_permissions_locked(agent_id, events)
             tracker = self._activity_tracker_by_agent.get(agent_id)
-            if tracker is None or not tracker.observe(events):
-                return
+            is_activity_changed = tracker is not None and tracker.observe(events)
+        if is_activity_changed:
+            self._recompute_activity_state(agent_id, broadcast_on_change=True)
+        if is_permission_state_changed:
+            # No agents_updated carries the verdict (it is transcript-only), so the instance
+            # list's ``attention`` status changes with nothing else to announce it.
+            self._nudger.nudge()
 
-        self._recompute_activity_state(agent_id, broadcast_on_change=True)
+    def _fold_pending_permissions_locked(self, agent_id: str, events: list[dict[str, Any]]) -> bool:
+        """Fold a batch of events into the agent's pending permission requests; True when the set changed.
+
+        A tool result carrying the gateway's echoed ``permission_request`` object files a
+        request (the same field the card renders from); a user message classified as a
+        ``permission_resolution`` for that request id settles it. Must be called with the
+        lock held.
+        """
+        pending = self._pending_permission_ids_by_agent.setdefault(agent_id, set())
+        before = set(pending)
+        for event in events:
+            filed = event.get("permission_request")
+            if isinstance(filed, dict) and isinstance(filed.get("request_id"), str):
+                pending.add(filed["request_id"])
+            if event.get("display") == DisplayKind.PERMISSION_RESOLUTION.value:
+                resolved_id = event.get("request_id")
+                if isinstance(resolved_id, str):
+                    pending.discard(resolved_id)
+        return pending != before
 
     def reset_activity_state(self, agent_id: str) -> None:
         """Force ``agent_id`` back to IDLE after an interrupt/restart.

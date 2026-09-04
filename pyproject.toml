@@ -78,6 +78,11 @@ package = false
 # phase rewrites pre-manifest apps to the manifest form and takes apps out of
 # the workspace.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
+# CLEANUP: drop this exclusion in phase 10 of the workspace app model, when the chat app
+# gets its own pyproject; until then system/apps/chat holds only a manifest and an icon
+# (its code runs inside system_interface), and the member glob needs a pyproject in
+# every directory it matches.
+exclude = ["system/apps/chat"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }

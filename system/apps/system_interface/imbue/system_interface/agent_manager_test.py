@@ -5,9 +5,9 @@ import os
 import queue
 import shutil
 import signal
-import tomllib
 import threading
 import time
+import tomllib
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_instances.testing import RecordingNudger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from watchdog.events import FileClosedNoWriteEvent
@@ -42,12 +43,12 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
 from imbue.system_interface import projects
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
-from imbue.system_interface.accounts import commit_account
-from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_chat_display_label_command
 from imbue.system_interface.agent_manager import _build_chat_rename_command
@@ -3063,3 +3064,64 @@ def test_note_agent_alive_leaves_live_and_unknown_states_alone(agent_manager: Ag
 
     agent_manager.note_agent_alive("never-tracked")
     assert agent_manager.get_agent_by_id("never-tracked") is None
+
+
+def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The chat row's ``attention`` status: a filed request with no resolution yet."""
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    nudger = RecordingNudger()
+    agent_manager.set_nudger(nudger)
+    try:
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "tool_result", "tool_call_id": "x", "permission_request": {"request_id": "evt-1"}}],
+        )
+        assert agent_manager.has_pending_permission("agent-1")
+        nudges_after_filing = nudger.nudge_count
+        assert nudges_after_filing >= 1
+
+        agent_manager.update_session_events(
+            "agent-1",
+            [
+                {
+                    "type": "user_message",
+                    "content": "(resolution: granted, request_id: evt-1)",
+                    "display": "permission_resolution",
+                    "request_id": "evt-1",
+                }
+            ],
+        )
+        assert not agent_manager.has_pending_permission("agent-1")
+        assert nudger.nudge_count > nudges_after_filing
+    finally:
+        agent_manager.stop()
+
+
+def test_a_result_without_a_filed_request_leaves_nothing_pending(agent_manager: AgentManager, tmp_path: Path) -> None:
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    try:
+        agent_manager.update_session_events("agent-1", [{"type": "tool_result", "tool_call_id": "x"}])
+        assert not agent_manager.has_pending_permission("agent-1")
+    finally:
+        agent_manager.stop()
+
+
+def test_the_agent_list_is_known_after_the_first_full_snapshot(agent_manager: AgentManager) -> None:
+    assert not agent_manager.is_agent_list_known()
+    agent_manager._handle_observe_event(make_full_agent_state_event([]))
+    assert agent_manager.is_agent_list_known()
+
+
+def test_every_agent_list_broadcast_nudges_the_shell(agent_manager: AgentManager) -> None:
+    nudger = RecordingNudger()
+    agent_manager.set_nudger(nudger)
+    agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("chat-1")]))
+    assert nudger.nudge_count == 1
+    agent_manager.remove_agent(next(iter(agent_manager.get_agents())).id)
+    assert nudger.nudge_count == 2
