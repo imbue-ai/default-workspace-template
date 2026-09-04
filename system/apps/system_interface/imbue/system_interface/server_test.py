@@ -35,6 +35,7 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.agent_manager import _build_destroy_command
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
@@ -71,7 +72,6 @@ from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _agent_switch_options
-from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
 from imbue.system_interface.server import _build_stop_command
 from imbue.system_interface.server import _handle_client_state_message
