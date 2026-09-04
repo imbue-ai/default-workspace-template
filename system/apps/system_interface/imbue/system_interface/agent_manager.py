@@ -6,6 +6,7 @@ import shlex
 import threading
 import tomllib
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
@@ -356,6 +357,20 @@ def _build_observe_command_argv(mngr_binary: str) -> list[str]:
         "observe",
         "--stream-events",
     ]
+
+
+def _build_observe_env(base_env: Mapping[str, str]) -> dict[str, str]:
+    """Build the environment for the ``mngr observe`` subprocess. Pure.
+
+    The in-process config load (``agent_discovery._get_mngr_context``) parses
+    ``.mngr/settings.toml`` with ``strict=False``, so a settings file written for a
+    newer mngr degrades to a logged warning. The observe subprocess is mngr's CLI,
+    which takes that policy from ``MNGR_ALLOW_UNKNOWN_CONFIG`` instead; without it
+    the observer exits on the first unknown key and lifecycle detection is gone for
+    the life of this server (see ``_watch_observe_process``). Set it unconditionally
+    so both loads of the same file agree.
+    """
+    return {**base_env, "MNGR_ALLOW_UNKNOWN_CONFIG": "1"}
 
 
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
@@ -1683,6 +1698,7 @@ class AgentManager:
             process = self._observe_cg.run_process_in_background(
                 command=cmd,
                 cwd=self._resolve_observe_cwd(),
+                env=_build_observe_env(os.environ),
                 on_output=self._handle_observe_output_line,
                 shutdown_event=self._shutdown_event,
                 is_checked_by_group=False,

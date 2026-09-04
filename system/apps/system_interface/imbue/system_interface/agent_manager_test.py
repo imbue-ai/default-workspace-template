@@ -52,6 +52,7 @@ from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_chat_display_label_command
 from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
+from imbue.system_interface.agent_manager import _build_observe_env
 from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.agent_manager import _rename_failure_detail
@@ -1807,6 +1808,19 @@ def test_observe_argv_accepted_by_live_cli() -> None:
     argv = _build_observe_command_argv("mngr")
     assert_mngr_argv_valid(argv)
     assert "--stream-events" in argv
+
+
+def test_observe_env_tolerates_unknown_config_keys() -> None:
+    """The observe subprocess gets the same unknown-key tolerance as the in-process load.
+
+    ``agent_discovery`` parses ``.mngr/settings.toml`` with ``strict=False`` so a file
+    written for a newer mngr degrades to a warning. The spawned ``mngr observe`` reads its
+    strictness from ``MNGR_ALLOW_UNKNOWN_CONFIG`` instead; without it the observer exits on
+    the first unknown key and lifecycle detection is gone for the life of the server.
+    """
+    env = _build_observe_env({"PATH": "/usr/bin", "MNGR_ALLOW_UNKNOWN_CONFIG": "0"})
+    assert env["MNGR_ALLOW_UNKNOWN_CONFIG"] == "1"
+    assert env["PATH"] == "/usr/bin"
 
 
 def test_resolve_observe_cwd_prefers_existing_work_dir(
