@@ -3,10 +3,13 @@
 The chat page reports its own presence to the chat app (contracts.md section 10 and
 ``phase_06_chat_as_document.md``): ``hidden`` once the shell has handed it its handshake,
 ``visible`` on ``shell:shown``, ``hidden`` again on ``shell:hidden``, ``closed`` on
-``pagehide``, and a heartbeat of its current state every minute. The OOM prioritizer reads
-the aggregate: a chat is *open* while any client has an unexpired report, and *visible*
-while any client's last report says so. A report expires after ten minutes, so a page that
-vanished without its ``pagehide`` (a crashed tab, a lost laptop) stops counting on its own.
+``pagehide``, and a heartbeat of its current state every minute. Only the chat's own page
+reports: a subagent view is a second page of the same chat in the same client, and one
+standing report per chat and client is kept here, so its reports would overwrite the chat
+page's. The OOM prioritizer reads the aggregate: a chat is *open* while any client has an
+unexpired report, and *visible* while any client's last report says so. A report expires
+after ten minutes, so a page that vanished without its ``pagehide`` (a crashed tab, a lost
+laptop) stops counting on its own.
 """
 
 import threading
