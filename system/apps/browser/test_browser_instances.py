@@ -10,6 +10,7 @@ from app_instances.testing import RecordingNudger
 from app_manifest.manifest import load_manifest
 from browser import runner
 from browser import session as bsession
+from mock_cdp_client_test import NavigatingCdpClient
 
 # The manifest the supervisord program line registers with ``forward_port.py --manifest``.
 _APP_MANIFEST_PATH = Path(__file__).parent / "app.toml"
@@ -79,6 +80,24 @@ def test_rename_and_a_rooted_location_are_refused() -> None:
     assert renamed.status_code == 400
     assert relocated.status_code == 400
     assert "absolute http" in relocated.get_json()["detail"]
+
+
+def test_location_navigates_the_browser_and_answers_its_unchanged_record() -> None:
+    fake = _install_running_browser("browser-1")
+    cdp = NavigatingCdpClient(
+        targets=[{"targetId": "t1", "url": "https://old.example/", "type": "page"}],
+        navigation_failure=None,
+    )
+    fake._cdp = cdp
+
+    response = runner.application.test_client().post(
+        "/_instances/browser-1/location", json={"path": "https://new.example/page"}
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["instance"] == _instances()[0]
+    assert _instances()[0]["url"] == "/?session=browser-1"
+    assert cdp.navigations == [("t1", "https://new.example/page")]
 
 
 def test_location_is_a_conflict_while_an_agent_holds_the_browser() -> None:
