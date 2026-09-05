@@ -7,8 +7,9 @@ Subcommands:
     where <address>                     Show one panel: its group's tab-mates and the addresses in each direction.
     context                             Show each browser client's recent messages, device kind, and active view.
     views                               List the views (projects + Everything): tab sets and the clients on each.
-    load <view>                         Switch the requesting client (or --client / all clients) onto a view.
-    open <address>                      Dock an instance next to the caller's chat (a no-op when it is already open).
+    load <view>                         Switch the target client onto a view.
+    open <address|url>                  Dock an instance next to the caller's chat (a no-op when it is already open),
+                                        create one (--action / --param), or open a URL in a new browser.
     focus <address>                     Activate the named panel within its group.
     split <address> [...]               Add a panel relative to another panel; tabs into an adjacent group by default.
     close <address>                     Remove the named panel.
@@ -32,30 +33,35 @@ Every instance is named by one *address* (contracts.md section 1):
   ``app:docs``), or, as an ``open`` / ``split`` target, "a fresh instance of this app" for an
   app that has instances (``open app:terminal``, ``open app:files``).
 
-A bare word is shorthand for ``app:<word>``. The old ``chat:`` / ``terminal:`` /
-``service:`` / ``url:`` / ``subagent:`` spellings are refused with the address to use
-instead; ``list`` shows every address on the machine.
+A bare word is shorthand for ``app:<word>``; a bare ``https://`` URL opens a new browser on
+that page. The old ``chat:`` / ``terminal:`` / ``service:`` / ``url:`` / ``subagent:``
+spellings are refused with the address to use instead; ``list`` shows every address on the
+machine.
 
 The workspace shows one *view* at a time: a project, or ``Everything`` (the unfiltered
-home). Each connected browser client has one active, and that view is the arrangement the
-client saves into. An op with no target goes to the view the connected client is looking
-at; pass ``--view <name>`` (a project's name, or ``Everything``) to address a view no client
-has in front, and the op then takes effect only when a connected client has it active
-(failing with a clear error listing the connected clients otherwise). ``context`` tells you
-which client (and view, and device kind) recently messaged each chat.
+home). Every browser *client* (one per browser, shared by its windows) has one active view and
+its own arrangement of every view, kept in a file on the shell that is the truth of the
+arrangement. Every op targets exactly one client: ``--client <id>`` (from ``context``), else
+the client that most recently messaged you, else the one connected client; with several
+clients and no way to tell, the op is refused and lists them. The shell edits that client's
+file itself, so an op lands whether or not a browser is connected, and a connected window
+shows it within a redraw. An op edits the client's active view; ``--view <name>`` (a
+project's name, or ``Everything``) edits that view's arrangement and switches the client to
+it. ``context`` tells you which client (and view, and device kind) recently messaged each chat.
 
 ``--direction`` on ``split`` / ``move`` accepts five values: ``left`` / ``right`` /
 ``above`` / ``below`` target the *adjacent* group in that direction (tabbing into one that
 already lives there unless ``--new-group`` is passed), and ``within`` tabs the panel into
 the anchor's *own* group.
 
-Mutating dock ops (``open`` / ``split`` / ``move`` / ``focus`` / ``close`` / ``maximize`` /
-``restore`` / ``refresh``) wait for the resulting state to be observable via ``inspect``
-before returning; on success they print a concise diff on stderr, on a no-op they print
-``no change: ...`` and exit 0. ``maximize`` / ``restore`` / ``refresh`` have no observable
-layout-state change, so they confirm the broadcast was sent. ``rename`` / ``delete`` /
-``replace-url`` go through the shell's relay to the app that owns the instance and echo
-the app's refusal when it gives one.
+The document ops (``open`` / ``split`` / ``move`` / ``focus`` / ``close``) answer with the
+arrangement as the shell wrote it, so on success they print a concise description on stderr
+at once; ``open`` of an app (or a URL) creates the instance through the app inside the op and
+prints the new address to stdout, and an app's refusal is the op's error. ``maximize`` /
+``restore`` / ``refresh`` change what is on screen without changing the saved arrangement,
+so they are sent to the target client's windows and confirm the send. ``rename`` /
+``delete`` / ``replace-url`` go through the shell's relay to the app that owns the instance
+and echo the app's refusal when it gives one.
 
 All dock ops POST one body ``{op, args, agent_id}`` to a loopback-only endpoint on the
 shell. The caller's ``MNGR_AGENT_ID`` is sent both in the JSON body and as the
@@ -87,15 +93,15 @@ DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
 ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
 MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
-# Escape hatch for environments without a live frontend to apply dock ops (the acceptance
-# test that exercises the broadcast pipeline but has no DOM). When set to any non-empty
-# value, mutating ops skip the wait-stable poll, the diff print, and no-op detection -- the
-# script returns as soon as the HTTP POST succeeds. Production callers never set this.
-ENV_NO_WAIT_STABLE = "MINDS_LAYOUT_NO_WAIT_STABLE"
-
 ADDRESS_SCHEME = "app:"
 ADDRESS_INSTANCE_PARAMETER = "instance="
 EVERYTHING_VIEW_ID = "everything"
+
+# A bare URL opens a new browser on that page: the browser app's ``new`` action with its
+# ``url`` param (contracts.md section 4.3).
+_BROWSER_APP_NAME = "browser"
+_BROWSER_NEW_ACTION = "new"
+_BROWSER_URL_PARAM = "url"
 
 # The spellings addresses replaced. Each is refused by name, with the address to use
 # instead, so an agent working from an old note gets the new form rather than a five
@@ -129,11 +135,10 @@ _WITHIN_DIRECTION = "within"
 _CARDINAL_DIRECTIONS = ("left", "right", "above", "below")
 _DIRECTIONS = (*_CARDINAL_DIRECTIONS, _WITHIN_DIRECTION)
 
-# How long mutating ops wait for the resulting state to show up in ``inspect`` before
-# declaring a timeout. The frontend autosaves with a 1.5 s debounce, so a few seconds of
-# headroom covers the broadcast -> apply -> debounced save cycle.
-_WAIT_STABLE_CAP_SECONDS = 5.0
-_WAIT_STABLE_POLL_SECONDS = 0.25
+# A read answers from memory and the state files; a document op may run an app's create
+# through the relay (the relay itself waits up to 150 s on the app), so it gets the longer bound.
+_READ_TIMEOUT_SECONDS = 10.0
+_OP_TIMEOUT_SECONDS = 160.0
 
 _SHORTCUT_MODES = ("focus", "new")
 
@@ -195,7 +200,7 @@ def _retired_spelling_message(value: str) -> str:
         else:
             hint = f"use app:{name}"
     elif prefix == "url:":
-        hint = "external URLs land in phase 8 of the workspace app model; until then open them in a browser instance"
+        hint = "pass the URL itself: 'layout.py open https://...' opens it in a new browser"
     else:
         hint = "a subagent is an instance of the chat app: app:chat?instance=<parent-agent-id>.<session>"
     return (
@@ -204,16 +209,20 @@ def _retired_spelling_message(value: str) -> str:
     )
 
 
+def _is_external_url(value: str) -> bool:
+    return any(value.startswith(prefix) for prefix in _EXTERNAL_URL_PREFIXES)
+
+
 def _normalize_address(value: str) -> str:
     """Expand a bare app name into ``app:<name>``; refuse the retired spellings and external URLs by name."""
     if value == _SELF_REF or value.startswith(ADDRESS_SCHEME):
         return value
     if any(value.startswith(prefix) for prefix in _RETIRED_PREFIXES):
         _fail(_retired_spelling_message(value))
-    if any(value.startswith(prefix) for prefix in _EXTERNAL_URL_PREFIXES):
+    if _is_external_url(value):
         _fail(
-            f"{value!r} is an external URL; opening one lands in phase 8 of the workspace app model. "
-            "Until then open it in a browser instance (app:browser?instance=<name>)"
+            f"{value!r} is a URL: only 'open' takes one (it opens the page in a new browser); "
+            "an existing browser is addressed as app:browser?instance=<name>"
         )
     if _is_app_name(value):
         return f"{ADDRESS_SCHEME}{value}"
@@ -334,7 +343,10 @@ def _require_registered(app: str) -> int | None:
 
 
 def _request_json(
-    method: str, url: str, body: dict[str, Any] | None = None
+    method: str,
+    url: str,
+    body: dict[str, Any] | None = None,
+    timeout: float = _READ_TIMEOUT_SECONDS,
 ) -> tuple[int, dict[str, Any] | str]:
     data = None if body is None else json.dumps(body).encode("utf-8")
     headers = {
@@ -343,7 +355,7 @@ def _request_json(
     }
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=10.0) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", errors="replace")
             return response.status, _maybe_parse_json(raw)
     except urllib.error.HTTPError as e:
@@ -356,12 +368,15 @@ def _request_json(
         return -1, str(e)
 
 
-def _post_layout(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+def _post_layout(
+    op: str, args: dict[str, Any], timeout: float = _READ_TIMEOUT_SECONDS
+) -> tuple[int, dict[str, Any] | str]:
     """POST {op, args, agent_id} to /api/layout/broadcast and return (status, parsed_or_raw)."""
     return _request_json(
         "POST",
         f"{_workspace_base_url()}/api/layout/broadcast",
         {"op": op, "args": args, "agent_id": _mngr_agent_id()},
+        timeout=timeout,
     )
 
 
@@ -392,18 +407,12 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
         detail = str(body.get("detail", body))
         if status == 412:
             sys.stderr.write(
-                f"error: {op!r} has no client to apply it (HTTP 412): {detail}\n"
+                f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n"
             )
             return EXIT_ERROR
         if status == 409:
-            in_flight = body.get("in_flight") or {}
-            retry_ms = body.get("retry_after_ms")
-            sys.stderr.write(
-                f"error: {op!r} rejected (HTTP 409 conflict): {detail}\n"
-                f"  in-flight: agent_id={in_flight.get('agent_id')} op={in_flight.get('operation')} "
-                f"args={in_flight.get('args')} started_at={in_flight.get('started_at')}\n"
-                f"  retry_after_ms={retry_ms}\n"
-            )
+            # The app cannot do it right now (a full browser fleet, no signed-in account): retry later.
+            sys.stderr.write(f"error: {op!r} rejected (HTTP 409 conflict): {detail}\n")
             return EXIT_CONFLICT
         if status == 404:
             sys.stderr.write(f"error: {op!r} target not found (HTTP 404): {detail}\n")
@@ -433,9 +442,19 @@ def _view_args(view: str | None) -> dict[str, str]:
     return {"view": view} if view else {}
 
 
-def _fetch_layout(view: str | None = None) -> dict[str, Any] | None:
+def _target_args(view: str | None, client: str | None) -> dict[str, str]:
+    """The ``view`` and ``client`` an op names, when it names them."""
+    args = _view_args(view)
+    if client:
+        args["client"] = client
+    return args
+
+
+def _fetch_layout(
+    view: str | None = None, client: str | None = None
+) -> dict[str, Any] | None:
     """Run ``inspect`` once and return the parsed ``layout`` block, or None when the call failed."""
-    status, body = _post_layout("inspect", _view_args(view))
+    status, body = _post_layout("inspect", _target_args(view, client))
     if status != 200 or not isinstance(body, dict):
         return None
     layout = body.get("layout", {})
@@ -498,29 +517,6 @@ def _panel_addresses(layout: dict[str, Any]) -> set[str]:
     }
 
 
-def _require_open(op: str, *addresses: str, view: str | None = None) -> int | None:
-    """Pre-flight: every named address must already be a live panel; ``self`` is trusted.
-
-    Honors ``MINDS_LAYOUT_NO_WAIT_STABLE`` (no live frontend, so ``inspect`` says nothing
-    useful). A transient ``inspect`` failure is treated as "can't tell, proceed".
-    """
-    if os.environ.get(ENV_NO_WAIT_STABLE):
-        return None
-    layout = _fetch_layout(view)
-    if layout is None:
-        return None
-    missing = [
-        address
-        for address in addresses
-        if address != _SELF_REF and _find_panel_summary(layout, address) is None
-    ]
-    if not missing:
-        return None
-    listed = ", ".join(repr(address) for address in missing)
-    sys.stderr.write(f"error: {op}: {listed} is not open in the current layout\n")
-    return EXIT_ERROR
-
-
 def _addresses_in_group(leaf: dict[str, Any]) -> list[str]:
     """Tab-mate addresses in order, with the active tab marked by a trailing ``*``."""
     out: list[str] = []
@@ -538,189 +534,38 @@ def _describe_group(leaf: dict[str, Any] | None) -> str:
     return "tabs=[" + ", ".join(_addresses_in_group(leaf)) + "]"
 
 
-# ---------- Per-op predicates ----------
+# ---------- The runners: document ops answer with the arrangement, transient ops confirm the send ----------
 
 
-_Predicate = Callable[[dict[str, Any]], bool]
-_NoopMessage = Callable[[dict[str, Any]], str]
-_DiffMessage = Callable[[dict[str, Any], dict[str, Any]], str]
-
-
-def _predicate_present(address: str) -> _Predicate:
-    return lambda layout: _find_panel_summary(layout, address) is not None
-
-
-def _predicate_absent(address: str) -> _Predicate:
-    return lambda layout: _find_panel_summary(layout, address) is None
-
-
-def _predicate_focus(address: str) -> _Predicate:
-    def check(layout: dict[str, Any]) -> bool:
-        leaf = _find_leaf_for_address(layout, address)
-        if leaf is None:
-            return False
-        for panel in leaf.get("panels", []) or []:
-            if _address_matches(address, panel.get("address")):
-                return bool(panel.get("active"))
-        return False
-
-    return check
-
-
-def _predicate_share_group(address: str, anchor: str) -> _Predicate:
-    def check(layout: dict[str, Any]) -> bool:
-        leaf = _find_leaf_for_address(layout, address)
-        anchor_leaf = _find_leaf_for_address(layout, anchor)
-        return leaf is not None and anchor_leaf is not None and leaf is anchor_leaf
-
-    return check
-
-
-def _predicate_any_change(before: dict[str, Any]) -> _Predicate:
-    before_blob = json.dumps(before, sort_keys=True)
-    return lambda layout: json.dumps(layout, sort_keys=True) != before_blob
-
-
-def _new_instance_address(
-    app: str, before: set[str], layout: dict[str, Any]
-) -> str | None:
-    """An instance address of ``app`` docked now that was not docked before, or None."""
-    prefix = f"{ADDRESS_SCHEME}{app}?{ADDRESS_INSTANCE_PARAMETER}"
-    for address in sorted(_panel_addresses(layout) - before):
-        if address.startswith(prefix):
-            return address
-    return None
-
-
-# Marker predicate: "no observable layout-state change to confirm" (maximize / restore / refresh).
-_UNOBSERVABLE: _Predicate = lambda _layout: True  # noqa: E731
-
-
-# ---------- Wait-stable runner ----------
-
-
-def _wait_stable(
-    op: str,
-    predicate: _Predicate,
-    *,
-    view: str | None = None,
-    cap: float = _WAIT_STABLE_CAP_SECONDS,
-    poll: float = _WAIT_STABLE_POLL_SECONDS,
-) -> tuple[str, dict[str, Any] | None]:
-    """Poll ``inspect`` until ``predicate(layout)`` holds or ``cap`` elapses: ``changed`` / ``timeout`` / ``unknown``."""
-    deadline = time.monotonic() + cap
-    last: dict[str, Any] | None = None
-    while True:
-        layout = _fetch_layout(view)
-        if layout is None:
-            sys.stderr.write(
-                f"warning: inspect failed while waiting for {op!r} to settle\n"
-            )
-            return "unknown", last
-        last = layout
-        if predicate(layout):
-            return "changed", layout
-        if time.monotonic() >= deadline:
-            return "timeout", layout
-        time.sleep(poll)
-
-
-def _run_mutating_op(
+def _run_document_op(
     op: str,
     args: dict[str, Any],
-    predicate: _Predicate,
-    *,
-    on_success: _DiffMessage,
-    on_noop: _NoopMessage,
-    skip_pre_op_noop: bool = False,
+    describe: Callable[[dict[str, Any]], str],
 ) -> int:
-    """Snapshot, post, wait, diff.
+    """Post one document op; the shell edits the target client's file and answers with the arrangement.
 
-    ``_UNOBSERVABLE`` short-circuits to "post and confirm the broadcast".
-    ``MINDS_LAYOUT_NO_WAIT_STABLE`` bypasses the snapshot / wait / diff path entirely.
-    ``skip_pre_op_noop`` disables the pre-op no-op check for snapshot-relative predicates.
+    A create (``open`` / ``split`` of an app, or of a URL) prints the new address to stdout so a
+    later op can name it; ``describe`` renders the one-line stderr summary from the answer's layout.
     """
-    if predicate is _UNOBSERVABLE or os.environ.get(ENV_NO_WAIT_STABLE):
-        status, body = _post_layout(op, args)
-        if status != 200:
-            return _report_failure(op, status, body)
-        if predicate is _UNOBSERVABLE:
-            sys.stderr.write(
-                "(broadcast sent; no observable layout-state change to confirm)\n"
-            )
-        return EXIT_OK
-
-    view = args.get("view")
-    before = _fetch_layout(view)
-    if not skip_pre_op_noop and before is not None and predicate(before):
-        sys.stderr.write(on_noop(before))
-        return EXIT_OK
-
-    status, body = _post_layout(op, args)
-    if status != 200:
+    status, body = _post_layout(op, args, timeout=_OP_TIMEOUT_SECONDS)
+    if status != 200 or not isinstance(body, dict):
         return _report_failure(op, status, body)
-
-    wait_status, after = _wait_stable(op, predicate, view=view)
-    if wait_status == "changed" and after is not None:
-        sys.stderr.write(on_success(before or {}, after))
-        return EXIT_OK
-    if wait_status == "timeout":
-        sys.stderr.write(
-            f"error: timeout waiting for {op!r} to settle after {_WAIT_STABLE_CAP_SECONDS:.0f}s\n"
-        )
-        return EXIT_ERROR
-    sys.stderr.write("(broadcast sent; could not read inspect to confirm new state)\n")
+    created = body.get("created_address")
+    if isinstance(created, str) and created:
+        sys.stdout.write(f"{created}\n")
+    layout = body.get("layout")
+    sys.stderr.write(describe(layout if isinstance(layout, dict) else {}))
     return EXIT_OK
 
 
-def _run_creating_op(op: str, args: dict[str, Any], app: str) -> int:
-    """``open`` / ``split`` of a bare ``app:<name>`` for an app with instances: a fresh instance every time.
-
-    The instance's key is minted by the app when the frontend runs the action, so there is
-    nothing to predicate against beforehand: post first, then wait for an instance of the
-    app that was not docked before, and print its address to stdout for later ops.
-    """
-    if os.environ.get(ENV_NO_WAIT_STABLE):
-        status, body = _post_layout(op, args)
-        if status != 200:
-            return _report_failure(op, status, body)
-        return EXIT_OK
-    view = args.get("view")
-    before_layout = _fetch_layout(view)
+def _run_transient_op(op: str, args: dict[str, Any]) -> int:
+    """Post one of the verbs with nothing to store (maximize, restore, refresh); the target client's windows apply it."""
     status, body = _post_layout(op, args)
     if status != 200:
         return _report_failure(op, status, body)
-    if before_layout is None:
-        # Without the pre-op snapshot an instance docked earlier cannot be told from the new
-        # one, and printing the wrong address as created would be worse than printing none.
-        sys.stderr.write(
-            f"(broadcast sent; inspect could not be read before the {op}, so the new {app} "
-            "instance cannot be told apart. Run 'layout.py list' to find it)\n"
-        )
-        return EXIT_OK
-    before = _panel_addresses(before_layout)
-    wait_status, after = _wait_stable(
-        op,
-        lambda layout: _new_instance_address(app, before, layout) is not None,
-        view=view,
-    )
-    if wait_status == "changed" and after is not None:
-        created = _new_instance_address(app, before, after)
-        sys.stdout.write(f"{created}\n")
-        sys.stderr.write(
-            f"created {created} in {_describe_group(_find_leaf_for_address(after, str(created)))}\n"
-        )
-        return EXIT_OK
-    if wait_status == "timeout":
-        # The client runs the app's action itself; an app that refused the create (no signed-in
-        # account, a full fleet) shows up here as nothing new docked, not as an error body.
-        sys.stderr.write(
-            f"error: timeout waiting for {op!r} to settle after {_WAIT_STABLE_CAP_SECONDS:.0f}s: "
-            f"no new {app} instance was docked. The app may have refused the create; run "
-            "'layout.py list' to see its instances\n"
-        )
-        return EXIT_ERROR
-    sys.stderr.write("(broadcast sent; could not read inspect to confirm new state)\n")
+    target = body.get("target_client_id") if isinstance(body, dict) else None
+    where = f"client {target}" if target else "every window"
+    sys.stderr.write(f"(sent {op} to {where})\n")
     return EXIT_OK
 
 
@@ -813,19 +658,146 @@ def _neighbors_in_direction(
     return []
 
 
-# ---------- Read subcommands ----------
+# ---------- The inventory (list, views, Everything's rail) ----------
+
+
+def _fetch_inventory() -> dict[str, Any] | None:
+    status, body = _request_rest_json("GET", "/api/inventory")
+    if status != 200 or not isinstance(body, dict):
+        sys.stderr.write(
+            f"error: could not read the inventory (HTTP {status}): {body}\n"
+        )
+        return None
+    return body
+
+
+def _resolve_view_id(view: str | None, inventory: dict[str, Any]) -> str | None:
+    """A ``--view`` name or id as a view id; None with an error printed when it names nothing."""
+    if view is None:
+        return None
+    if view.strip().lower() == EVERYTHING_VIEW_ID:
+        return EVERYTHING_VIEW_ID
+    for project in inventory.get("projects", []) or []:
+        if (
+            project.get("id") == view
+            or str(project.get("name", "")).strip().lower() == view.strip().lower()
+        ):
+            return str(project.get("id"))
+    known = ", ".join(
+        str(project.get("name")) for project in inventory.get("projects", []) or []
+    )
+    sys.stderr.write(
+        f"error: view {view!r} not found (known views: {known or '<none>'}, Everything)\n"
+    )
+    return None
+
+
+def _listing_from_inventory(
+    inventory: dict[str, Any], view_id: str | None
+) -> list[dict[str, Any]]:
+    """Every app with its instances and the clients docking each (contracts.md section 12), from the inventory
+    document; ``view_id`` narrows ``docked_in`` to clients whose active view is that view."""
+    docked_in_by_address: dict[str, list[str]] = {}
+    for client in inventory.get("clients", []) or []:
+        if view_id is not None and client.get("active_view") != view_id:
+            continue
+        for address in client.get("docked", []) or []:
+            clients = docked_in_by_address.setdefault(str(address), [])
+            if str(client.get("id")) not in clients:
+                clients.append(str(client.get("id")))
+    listing: list[dict[str, Any]] = []
+    for app in inventory.get("apps", []) or []:
+        if app.get("internal"):
+            continue
+        name = str(app.get("name"))
+        instances = [
+            {
+                "key": instance.get("key", ""),
+                "address": _address_of(name, str(instance.get("key", ""))),
+                "title": instance.get("title"),
+                "status": instance.get("status"),
+                "docked_in": docked_in_by_address.get(
+                    _address_of(name, str(instance.get("key", ""))), []
+                ),
+            }
+            for instance in app.get("instances", []) or []
+        ]
+        listing.append(
+            {
+                "name": name,
+                "display_name": app.get("display_name", name),
+                "is_running": app.get("is_running"),
+                "actions": app.get("actions", []),
+                "instances": instances,
+            }
+        )
+    return listing
+
+
+def _address_of(app: str, key: str) -> str:
+    return (
+        f"{ADDRESS_SCHEME}{app}"
+        if key == ""
+        else f"{ADDRESS_SCHEME}{app}?{ADDRESS_INSTANCE_PARAMETER}{key}"
+    )
+
+
+def _views_from_inventory(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every view with its tab set and the connected clients on it."""
+    clients_by_view: dict[str, list[dict[str, str]]] = {}
+    for client in inventory.get("clients", []) or []:
+        if not client.get("is_connected"):
+            continue
+        clients_by_view.setdefault(str(client.get("active_view")), []).append(
+            {"id": str(client.get("id")), "device_kind": str(client.get("device_kind"))}
+        )
+    views = [
+        {
+            "id": project.get("id"),
+            "name": project.get("name"),
+            "is_everything": False,
+            "tabs": project.get("tabs", []),
+            "clients": clients_by_view.get(str(project.get("id")), []),
+        }
+        for project in inventory.get("projects", []) or []
+    ]
+    everything = inventory.get("everything", {}) or {}
+    views.append(
+        {
+            "id": EVERYTHING_VIEW_ID,
+            "name": "Everything",
+            "is_everything": True,
+            "tabs": everything.get("tabs", []),
+            "clients": clients_by_view.get(EVERYTHING_VIEW_ID, []),
+        }
+    )
+    return views
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    status, body = _post_layout("list", _view_args(args.view))
-    if status != 200 or not isinstance(body, dict):
-        return _report_failure("list", status, body)
-    _emit_structured(body.get("apps", []), args.json)
+    inventory = _fetch_inventory()
+    if inventory is None:
+        return EXIT_ERROR
+    view_id = _resolve_view_id(args.view, inventory)
+    if args.view is not None and view_id is None:
+        return EXIT_ERROR
+    _emit_structured(_listing_from_inventory(inventory, view_id), args.json)
     return EXIT_OK
 
 
+def _cmd_views(args: argparse.Namespace) -> int:
+    inventory = _fetch_inventory()
+    if inventory is None:
+        return EXIT_ERROR
+    _emit_structured(_views_from_inventory(inventory), args.json)
+    return EXIT_OK
+
+
+# ---------- Read subcommands over the op route ----------
+
+
 def _cmd_inspect(args: argparse.Namespace) -> int:
-    status, body = _post_layout("inspect", _view_args(args.view))
+    status, body = _post_layout("inspect", _target_args(args.view, args.client))
     if status != 200 or not isinstance(body, dict):
         return _report_failure("inspect", status, body)
     layout = body.get("layout", {})
@@ -847,27 +819,12 @@ def _cmd_context(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _cmd_views(args: argparse.Namespace) -> int:
-    status, body = _post_layout("views", {})
-    if status != 200 or not isinstance(body, dict):
-        return _report_failure("views", status, body)
-    _emit_structured(body.get("views", []), args.json)
-    return EXIT_OK
-
-
 def _cmd_load(args: argparse.Namespace) -> int:
-    load_args: dict[str, Any] = {"view": args.view_name}
-    if args.client:
-        load_args["client"] = args.client
-    status, body = _post_layout("load", load_args)
+    status, body = _post_layout("load", _target_args(args.view_name, args.client))
     if status != 200 or not isinstance(body, dict):
         return _report_failure("load", status, body)
-    target = body.get("target_client_id")
-    target_text = (
-        f"client {target}" if target else "all clients (requesting client unknown)"
-    )
     sys.stderr.write(
-        f"requested load of view {body.get('view_id')!r} on {target_text}\n"
+        f"switched client {body.get('target_client_id')} onto view {body.get('view_id')!r}\n"
     )
     return EXIT_OK
 
@@ -881,7 +838,7 @@ def _cmd_where(args: argparse.Namespace) -> int:
             "see every address\n"
         )
         return EXIT_ERROR
-    layout = _fetch_layout(args.view)
+    layout = _fetch_layout(args.view, args.client)
     if layout is None:
         sys.stderr.write("error: inspect failed; could not locate the panel\n")
         return EXIT_ERROR
@@ -932,40 +889,85 @@ def _cmd_where(args: argparse.Namespace) -> int:
 # ---------- Dock subcommands ----------
 
 
-def _cmd_open(args: argparse.Namespace) -> int:
-    address = _resolve_address(args.target)
+def _parse_params(raw_params: list[str] | None) -> dict[str, str]:
+    """``--param name=value`` pairs as the create body's ``params``."""
+    params: dict[str, str] = {}
+    for raw in raw_params or []:
+        name, separator, value = raw.partition("=")
+        if not separator or not name:
+            _fail(f"--param takes name=value, not {raw!r}")
+        params[name] = value
+    return params
+
+
+def _open_target(
+    target: str, action: str | None, raw_params: list[str] | None
+) -> tuple[str, dict[str, Any]]:
+    """The address an ``open`` / ``split`` names and the create arguments it carries.
+
+    A bare URL is the browser app's ``new`` with the URL as its ``url`` param; an app address
+    carries ``--action`` and every ``--param``; an instance address takes neither.
+    """
+    params = _parse_params(raw_params)
+    if _is_external_url(target):
+        if action or params:
+            _fail(
+                "a URL is opened in a new browser; --action and --param do not apply to it"
+            )
+        return f"{ADDRESS_SCHEME}{_BROWSER_APP_NAME}", {
+            "action": _BROWSER_NEW_ACTION,
+            "params": {_BROWSER_URL_PARAM: target},
+        }
+    address = _resolve_address(target)
     if address == _SELF_REF:
         _fail("open needs an address, not 'self'")
-    app, key = _address_parts(address)
+    _app, key = _address_parts(address)
+    if key is not None and (action or params):
+        _fail(
+            f"{address!r} names an existing instance; --action and --param are for creating one (app:<name>)"
+        )
+    create_args: dict[str, Any] = {}
+    if action:
+        create_args["action"] = action
+    if params:
+        create_args["params"] = params
+    return address, create_args
+
+
+def _describe_docked(address: str, verb: str) -> Callable[[dict[str, Any]], str]:
+    def describe(layout: dict[str, Any]) -> str:
+        leaf = _find_leaf_for_address(layout, address)
+        docked = _find_panel_summary(layout, address)
+        shown = (
+            str(docked.get("address"))
+            if docked and isinstance(docked.get("address"), str)
+            else address
+        )
+        return f"{verb} {shown} in {_describe_group(leaf)}\n"
+
+    return describe
+
+
+def _cmd_open(args: argparse.Namespace) -> int:
+    address, create_args = _open_target(args.target, args.action, args.param)
+    app, _key = _address_parts(address)
     if (err := _require_registered(app)) is not None:
         return err
     payload: dict[str, Any] = {
         "address": address,
         "new_group": bool(args.new_group),
-        "view": args.view,
+        **create_args,
+        **_target_args(args.view, args.client),
     }
-    if key is None and _has_instances(app):
-        return _run_creating_op("open", payload, app)
-    return _run_mutating_op(
-        "open",
-        payload,
-        _predicate_present(address),
-        on_success=lambda b,
-        a: f"opened {address} in {_describe_group(_find_leaf_for_address(a, address))}\n",
-        on_noop=lambda b: f"no change: {address} is already open in {_describe_group(_find_leaf_for_address(b, address))}\n",
-    )
+    return _run_document_op("open", payload, _describe_docked(address, "opened"))
 
 
 def _cmd_focus(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
-    if (err := _require_open("focus", address, view=args.view)) is not None:
-        return err
-    return _run_mutating_op(
+    return _run_document_op(
         "focus",
-        {"address": address, "view": args.view},
-        _predicate_focus(address),
-        on_success=lambda b, a: f"focused {address}\n",
-        on_noop=lambda b: f"no change: {address} is already the active tab in its group\n",
+        {"address": address, **_target_args(args.view, args.client)},
+        lambda layout: f"focused {address}\n",
     )
 
 
@@ -976,43 +978,29 @@ def _cmd_split(args: argparse.Namespace) -> int:
             f"(within tabs into the anchor's own group)\n"
         )
         return EXIT_ERROR
-    address = _resolve_address(args.target)
-    if address == _SELF_REF:
-        _fail("split needs an address to create, not 'self'")
-    app, key = _address_parts(address)
+    address, create_args = _open_target(args.target, args.action, args.param)
+    app, _key = _address_parts(address)
     if (err := _require_registered(app)) is not None:
         return err
     relative_to = _resolve_address(args.relative_to)
-    if (err := _require_open("split", relative_to, view=args.view)) is not None:
-        return err
     payload: dict[str, Any] = {
         "address": address,
         "relative_to": relative_to,
         "direction": args.direction,
         "ratio": args.ratio,
         "new_group": bool(args.new_group),
-        "view": args.view,
+        **create_args,
+        **_target_args(args.view, args.client),
     }
-    if key is None and _has_instances(app):
-        return _run_creating_op("split", payload, app)
-    return _run_mutating_op(
-        "split",
-        payload,
-        _predicate_present(address),
-        on_success=lambda b,
-        a: f"split: {address} now in {_describe_group(_find_leaf_for_address(a, address))}\n",
-        on_noop=lambda b: f"no change: {address} is already open in {_describe_group(_find_leaf_for_address(b, address))}\n",
-    )
+    return _run_document_op("split", payload, _describe_docked(address, "split:"))
 
 
 def _cmd_close(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
-    return _run_mutating_op(
+    return _run_document_op(
         "close",
-        {"address": address, "view": args.view},
-        _predicate_absent(address),
-        on_success=lambda b, a: f"closed {address}\n",
-        on_noop=lambda b: f"no change: {address} is already closed\n",
+        {"address": address, **_target_args(args.view, args.client)},
+        lambda layout: f"closed {address}\n",
     )
 
 
@@ -1025,84 +1013,31 @@ def _cmd_move(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     address = _resolve_address(args.address)
     relative_to = _resolve_address(args.relative_to)
-    if (err := _require_open("move", address, relative_to, view=args.view)) is not None:
-        return err
     payload: dict[str, Any] = {
         "address": address,
         "relative_to": relative_to,
         "direction": args.direction,
         "new_group": bool(args.new_group),
-        "view": args.view,
+        **_target_args(args.view, args.client),
     }
-    # ``within`` with an explicit anchor is a real invariant (the two share a leaf); every
-    # other form's end position depends on the live tree, so "something changed" against a
-    # snapshot taken right before the post is the honest predicate, and it cannot serve
-    # pre-op no-op detection.
-    skip_pre_op_noop = False
-    if args.direction == _WITHIN_DIRECTION and relative_to != _SELF_REF:
-        predicate: _Predicate = _predicate_share_group(address, relative_to)
-        on_noop: _NoopMessage = (
-            lambda b: f"no change: {address} is already in the same group as {relative_to}\n"
-        )
-    elif os.environ.get(ENV_NO_WAIT_STABLE):
-        predicate = lambda _layout: False  # noqa: E731
-        on_noop = lambda b: ""  # noqa: E731
-    else:
-        before_snapshot = _fetch_layout(args.view)
-        if before_snapshot is None:
-            sys.stderr.write(
-                "warning: inspect failed before move; will not detect a no-op\n"
-            )
-            before_snapshot = {}
-        predicate = _predicate_any_change(before_snapshot)
-        skip_pre_op_noop = True
-        on_noop = lambda b: ""  # noqa: E731
-    return _run_mutating_op(
-        "move",
-        payload,
-        predicate,
-        on_success=lambda b,
-        a: f"moved {address} into {_describe_group(_find_leaf_for_address(a, address))}\n",
-        on_noop=on_noop,
-        skip_pre_op_noop=skip_pre_op_noop,
-    )
+    return _run_document_op("move", payload, _describe_docked(address, "moved"))
 
 
 def _cmd_maximize(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
-    if (err := _require_open("maximize", address, view=args.view)) is not None:
-        return err
-    return _run_mutating_op(
-        "maximize",
-        {"address": address, "view": args.view},
-        _UNOBSERVABLE,
-        on_success=lambda b, a: "",
-        on_noop=lambda b: "",
+    return _run_transient_op(
+        "maximize", {"address": address, **_target_args(None, args.client)}
     )
 
 
 def _cmd_restore(args: argparse.Namespace) -> int:
-    return _run_mutating_op(
-        "restore",
-        {"view": args.view},
-        _UNOBSERVABLE,
-        on_success=lambda b, a: "",
-        on_noop=lambda b: "",
-    )
+    return _run_transient_op("restore", _target_args(None, args.client))
 
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
     address = _resolve_address(args.target)
-    # A bare app address reloads every iframe of that app on every client, so it need not
-    # itself be open; an instance address reloads one panel and must be.
-    if "?" in address and (err := _require_open("refresh", address)) is not None:
-        return err
-    return _run_mutating_op(
-        "refresh",
-        {"address": address},
-        _UNOBSERVABLE,
-        on_success=lambda b, a: "",
-        on_noop=lambda b: "",
+    return _run_transient_op(
+        "refresh", {"address": address, **_target_args(None, args.client)}
     )
 
 
@@ -1218,10 +1153,8 @@ def _resolve_project_view(
 
 def _primary_action_id(app: dict[str, Any]) -> str | None:
     """The action an app's rail row runs, as the shell picks it: its ``default_shortcut`` action
-    when declared, else its first declared action, else the synthesized ``open`` of a
-    single-instance app; None for an app with instances that declares no action."""
-    if not bool(app.get("instances", False)):
-        return "open"
+    when declared, else its first declared action; None for an app with instances that declares
+    no action (a single-instance app's inventory entry carries the synthesized ``open``)."""
     actions = app.get("actions")
     action_ids = (
         [str(action.get("id")) for action in actions if hasattr(action, "get")]
@@ -1236,10 +1169,13 @@ def _primary_action_id(app: dict[str, Any]) -> str | None:
     return action_ids[0] if action_ids else None
 
 
-def _everything_shortcut_rows() -> list[dict[str, Any]]:
+def _everything_shortcut_rows() -> list[dict[str, Any]] | None:
     """Everything's rail: every registered app's primary action, in registry order, in focus mode."""
+    inventory = _fetch_inventory()
+    if inventory is None:
+        return None
     rows: list[dict[str, Any]] = []
-    for app in _read_registry_rows(_apps_file()):
+    for app in inventory.get("apps", []) or []:
         if bool(app.get("internal", False)):
             continue
         action_id = _primary_action_id(app)
@@ -1259,6 +1195,8 @@ def _cmd_shortcuts(args: argparse.Namespace) -> int:
         if project is not None
         else _everything_shortcut_rows()
     )
+    if rows is None:
+        return EXIT_ERROR
     _emit_structured({"view": view_id, "shortcuts": rows}, args.json)
     return EXIT_OK
 
@@ -1330,11 +1268,33 @@ def _add_view_argument(subparser: argparse.ArgumentParser, help_text: str) -> No
 
 
 _MUTATING_VIEW_HELP = (
-    "View to mutate: a project's name, or ``Everything``. Defaults to the view the connected "
-    "client is on. Mutating ops only apply on connected clients that have the view active; "
-    "use ``context`` to see each client's current view."
+    "View whose arrangement to edit: a project's name, or ``Everything``. Defaults to the target "
+    "client's active view; naming another view edits that one and switches the client to it."
 )
-_READ_VIEW_HELP = "View (a project's name, or ``Everything``) to read; defaults to the view the connected client is on."
+_READ_VIEW_HELP = "View (a project's name, or ``Everything``) to read; defaults to the target client's active view."
+_CLIENT_HELP = (
+    "The client whose arrangement the op targets (an id from ``context``). Defaults to the client that "
+    "most recently messaged you, else the one connected client; refused when that settles nothing."
+)
+
+
+def _add_client_argument(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument("--client", default=None, help=_CLIENT_HELP)
+
+
+def _add_create_arguments(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument(
+        "--action",
+        default=None,
+        help="For an app address: the action to create the instance with (defaults to the app's primary action).",
+    )
+    subparser.add_argument(
+        "--param",
+        action="append",
+        default=None,
+        metavar="NAME=VALUE",
+        help="For an app address: a create param (repeatable), e.g. --param workdir=/data.",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1360,6 +1320,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Emit the full YAML tree instead of the compact view",
     )
     _add_view_argument(p_inspect, _READ_VIEW_HELP)
+    _add_client_argument(p_inspect)
     p_inspect.set_defaults(func=_cmd_inspect)
 
     p_context = subparsers.add_parser(
@@ -1388,12 +1349,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="view",
         help="The view to put in front: a project's name, or ``Everything``",
     )
-    p_load.add_argument(
-        "--client",
-        default=None,
-        help="Explicit client id to switch (see ``context``). Defaults to the client that most recently "
-        "messaged you; falls back to every connected client when that cannot be determined.",
-    )
+    _add_client_argument(p_load)
     p_load.set_defaults(func=_cmd_load)
 
     p_where = subparsers.add_parser(
@@ -1409,21 +1365,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Also include the full inspect layout under ``full_layout``",
     )
     _add_view_argument(p_where, _READ_VIEW_HELP)
+    _add_client_argument(p_where)
     p_where.set_defaults(func=_cmd_where)
 
     p_open = subparsers.add_parser("open", help="Surface an instance in the UI")
     p_open.add_argument(
         "target",
         help="An address (``app:terminal?instance=terminal-2`` docks that instance; ``app:docs`` docks a "
-        "single-instance app's one tab) or a bare app name. A bare name of an app with instances creates a "
-        "fresh one and prints its address.",
+        "single-instance app's one tab), a bare app name, or a URL. A bare name of an app with instances "
+        "creates a fresh one (with --action and --param) and prints its address; a URL opens a new browser on it.",
     )
     p_open.add_argument(
         "--new-group",
         action="store_true",
         help="Force a brand-new dock group instead of tabbing into an existing right-side group.",
     )
+    _add_create_arguments(p_open)
     _add_view_argument(p_open, _MUTATING_VIEW_HELP)
+    _add_client_argument(p_open)
     p_open.set_defaults(func=_cmd_open)
 
     p_focus = subparsers.add_parser(
@@ -1431,11 +1390,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_focus.add_argument("address", help="Panel address")
     _add_view_argument(p_focus, _MUTATING_VIEW_HELP)
+    _add_client_argument(p_focus)
     p_focus.set_defaults(func=_cmd_focus)
 
     p_split = subparsers.add_parser("split", help="Open a new panel as a split")
     p_split.add_argument(
-        "target", help="Address or bare app name to open as the new panel"
+        "target", help="Address, bare app name, or URL to open as the new panel"
     )
     p_split.add_argument(
         "--relative-to",
@@ -1459,12 +1419,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Force a brand-new dock group instead of tabbing into the group in the requested direction.",
     )
+    _add_create_arguments(p_split)
     _add_view_argument(p_split, _MUTATING_VIEW_HELP)
+    _add_client_argument(p_split)
     p_split.set_defaults(func=_cmd_split)
 
     p_close = subparsers.add_parser("close", help="Remove a panel")
     p_close.add_argument("address", help="Panel address")
     _add_view_argument(p_close, _MUTATING_VIEW_HELP)
+    _add_client_argument(p_close)
     p_close.set_defaults(func=_cmd_close)
 
     p_move = subparsers.add_parser(
@@ -1486,6 +1449,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Force a brand-new dock group instead of moving into an adjacent existing group.",
     )
     _add_view_argument(p_move, _MUTATING_VIEW_HELP)
+    _add_client_argument(p_move)
     p_move.set_defaults(func=_cmd_move)
 
     p_rename = subparsers.add_parser(
@@ -1505,13 +1469,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_delete.set_defaults(func=_cmd_delete)
 
-    p_max = subparsers.add_parser("maximize", help="Maximize a panel's group")
+    p_max = subparsers.add_parser(
+        "maximize", help="Maximize a panel's group on the target client's screen"
+    )
     p_max.add_argument("address", help="Panel address")
-    _add_view_argument(p_max, _MUTATING_VIEW_HELP)
+    _add_client_argument(p_max)
     p_max.set_defaults(func=_cmd_maximize)
 
-    p_restore = subparsers.add_parser("restore", help="Exit a maximized group")
-    _add_view_argument(p_restore, _MUTATING_VIEW_HELP)
+    p_restore = subparsers.add_parser(
+        "restore", help="Exit a maximized group on the target client's screen"
+    )
+    _add_client_argument(p_restore)
     p_restore.set_defaults(func=_cmd_restore)
 
     p_replace = subparsers.add_parser(
@@ -1532,8 +1500,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_refresh.add_argument(
         "target",
-        help="Panel address; a bare app address reloads every iframe of that app.",
+        help="Panel address; a bare app address reloads every iframe of that app on every client.",
     )
+    _add_client_argument(p_refresh)
     p_refresh.set_defaults(func=_cmd_refresh)
 
     p_shortcuts = subparsers.add_parser(

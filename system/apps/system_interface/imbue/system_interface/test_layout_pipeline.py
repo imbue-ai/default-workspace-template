@@ -17,11 +17,9 @@ from __future__ import annotations
 
 import json
 import os
-import queue as queue_module
 import subprocess
 import sys
 import threading
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -165,44 +163,9 @@ def _run_layout_script(args: list[str], harness: PipelineHarness, cwd: Path) -> 
             "MINDS_WORKSPACE_SERVER_URL": harness.base_url,
             "MINDS_APPS_FILE": str(harness.registry_path),
             "MNGR_AGENT_ID": _AGENT_ID,
-            # Mutating ops in production block until the layout state changes are observable
-            # via inspect; there is no frontend here to apply the op, so the script is told not
-            # to wait (``ENV_NO_WAIT_STABLE`` in ``system/scripts/layout.py``).
-            "MINDS_LAYOUT_NO_WAIT_STABLE": "1",
         },
         timeout=15,
     )
-
-
-def _await_layout_op(client_queue: queue_module.Queue[str | None], timeout: float) -> dict[str, Any]:
-    """Block until a ``layout_op`` message arrives, returning the parsed payload; other pushes are skipped."""
-    parsed_result: dict[str, Any] = {}
-
-    def _drain_once() -> bool:
-        try:
-            msg = client_queue.get(timeout=0.05)
-        except queue_module.Empty:
-            return False
-        assert msg is not None, "broadcaster shut down before a layout_op arrived"
-        parsed = json.loads(msg)
-        if parsed.get("type") != "layout_op":
-            return False
-        parsed_result.update(parsed)
-        return True
-
-    wait_for(_drain_once, timeout=timeout, poll_interval=0.0, error_message=f"no layout_op arrived within {timeout}s")
-    return parsed_result
-
-
-def _assert_no_layout_op(client_queue: queue_module.Queue[str | None]) -> None:
-    """Nothing addressed to the dock reached the client within half a second; unrelated pushes are fine."""
-    deadline = time.monotonic() + 0.5
-    while time.monotonic() < deadline:
-        try:
-            raw = client_queue.get(timeout=0.05)
-        except queue_module.Empty:
-            continue
-        assert raw is None or json.loads(raw).get("type") != "layout_op"
 
 
 def _listing(harness: PipelineHarness, cwd: Path) -> dict[str, dict[str, Any]]:
@@ -263,12 +226,12 @@ def test_inspect_and_context_round_trip_through_script_and_endpoint(
         layout_server.broadcaster.unregister(client_queue)
 
 
-def test_mutating_op_without_client_on_view_fails_with_412(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """With no connected client on the target view, the script reports the 412 clearly."""
+def test_an_op_with_no_client_to_target_fails_with_412(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """With no client connected or recorded, there is nobody's arrangement to edit, and the script says so."""
     result = _run_layout_script(["close", _CHAT_ADDRESS, "--view", "Everything"], layout_server, _sandbox(tmp_path))
 
     assert result.returncode == 1
-    assert "No connected client has view" in result.stderr
+    assert "Could not tell which client" in result.stderr and "--client" in result.stderr
 
 
 def test_list_shows_every_app_with_the_seeded_agent_as_a_chat_instance(
@@ -288,48 +251,60 @@ def test_list_shows_every_app_with_the_seeded_agent_as_a_chat_instance(
     assert listing[_STUB_APP_NAME]["is_running"] is True
 
 
-def test_open_of_a_bare_app_with_instances_broadcasts_the_creating_op(
+def _inspect_addresses(harness: PipelineHarness, cwd: Path, client_id: str) -> list[str]:
+    inspected = _run_layout_script(["inspect", "--json", "--client", client_id], harness, cwd)
+    assert inspected.returncode == 0, f"stderr={inspected.stderr!r}"
+    return [panel["address"] for panel in json.loads(inspected.stdout)["panels"]]
+
+
+def test_open_of_a_bare_app_creates_the_instance_and_docks_it_in_the_clients_file(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
-    """``open docs`` (a bare name, expanded to ``app:docs``) reaches the client as an ``open`` of that app.
-
-    The instance is minted when the frontend runs the action, so the broadcast carries the
-    app's address and the frontend creates through the relay from there.
-    """
+    """``open docs --param path=/notes`` creates through the app inside the op, prints the new address, and docks
+    it in the one connected client's arrangement; the write is announced to that client's windows."""
+    sandbox = _sandbox(tmp_path)
     client_queue = layout_server.broadcaster.register()
     layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
     try:
         result = _run_layout_script(
-            ["open", _STUB_APP_NAME, "--view", "Everything"], layout_server, _sandbox(tmp_path)
+            ["open", _STUB_APP_NAME, "--view", "Everything", "--param", "path=/notes"], layout_server, sandbox
         )
         assert result.returncode == 0, f"stderr={result.stderr!r}"
-
-        msg = _await_layout_op(client_queue, timeout=2.0)
-        assert msg["op"] == "open"
-        assert msg["args"] == {"address": f"app:{_STUB_APP_NAME}", "new_group": False}
+        created = result.stdout.strip()
+        assert created == f"app:{_STUB_APP_NAME}?instance=stub-1"
+        assert [str(record.url) for record in layout_server.stub_source.records] == ["/notes"]
+        assert _inspect_addresses(layout_server, sandbox, "client-1") == [created]
+        updates = [
+            json.loads(raw)
+            for raw in iter(lambda: client_queue.get_nowait() if not client_queue.empty() else None, None)
+            if raw is not None
+        ]
+        assert any(message["type"] == "layout_updated" and message["client_id"] == "client-1" for message in updates)
     finally:
         layout_server.broadcaster.unregister(client_queue)
 
 
-def test_open_close_of_an_instance_address_broadcasts_layout_ops(
+def test_open_and_close_of_an_instance_address_edit_the_clients_file(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
-    """``open`` and ``close`` against an instance address reach the broadcaster intact."""
+    """``open`` docks a listed instance and ``close`` removes it, whether or not a window is open: the client only
+    has to be one the shell knows."""
     sandbox = _sandbox(tmp_path)
+    _wait_for_instance_listed(layout_server, sandbox, "chat", _CHAT_ADDRESS)
     client_queue = layout_server.broadcaster.register()
     layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
     try:
         open_result = _run_layout_script(["open", _CHAT_ADDRESS, "--view", "Everything"], layout_server, sandbox)
         assert open_result.returncode == 0, f"stderr={open_result.stderr!r}"
-        open_msg = _await_layout_op(client_queue, timeout=2.0)
-        assert open_msg["op"] == "open"
-        assert open_msg["args"] == {"address": _CHAT_ADDRESS, "new_group": False}
+        assert f"opened {_CHAT_ADDRESS}" in open_result.stderr
+        assert _inspect_addresses(layout_server, sandbox, "client-1") == [_CHAT_ADDRESS]
 
         close_result = _run_layout_script(["close", _CHAT_ADDRESS, "--view", "Everything"], layout_server, sandbox)
         assert close_result.returncode == 0, f"stderr={close_result.stderr!r}"
-        close_msg = _await_layout_op(client_queue, timeout=2.0)
-        assert close_msg["op"] == "close"
-        assert close_msg["args"] == {"address": _CHAT_ADDRESS}
+        assert _inspect_addresses(layout_server, sandbox, "client-1") == []
+        # Closing what is not open is a 404 with the address named.
+        missing = _run_layout_script(["close", _CHAT_ADDRESS, "--view", "Everything"], layout_server, sandbox)
+        assert missing.returncode == 1 and _CHAT_ADDRESS in missing.stderr
     finally:
         layout_server.broadcaster.unregister(client_queue)
 
@@ -340,13 +315,12 @@ def test_open_close_of_an_instance_address_broadcasts_layout_ops(
         (f"chat:{_AGENT_NAME}", f"the one titled {_AGENT_NAME!r}"),
         ("service:docs?instance=docs-1", "app:docs?instance=docs-1"),
         ("terminal:terminal-1", "app:terminal?instance=terminal-1"),
-        ("https://example.com/", "phase 8"),
     ],
 )
-def test_retired_spellings_and_external_urls_are_refused_before_they_broadcast(
+def test_retired_spellings_are_refused_before_they_reach_the_shell(
     layout_server: PipelineHarness, tmp_path: Path, spelling: str, expected_hint: str
 ) -> None:
-    """A retired ref or an external URL fails at the script, naming the new form, and never reaches a client."""
+    """A retired ref fails at the script, naming the new form, and edits nobody's arrangement."""
     client_queue = layout_server.broadcaster.register()
     layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
     try:
@@ -354,20 +328,34 @@ def test_retired_spellings_and_external_urls_are_refused_before_they_broadcast(
         assert result.returncode != 0
         assert spelling in result.stderr
         assert expected_hint in result.stderr
-        _assert_no_layout_op(client_queue)
+        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
+    finally:
+        layout_server.broadcaster.unregister(client_queue)
+
+
+def test_a_url_needs_the_browser_app(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``open https://...`` is the browser's ``new``, so with no browser registered it fails naming the browser."""
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
+    try:
+        result = _run_layout_script(
+            ["open", "https://example.com/", "--view", "Everything"], layout_server, _sandbox(tmp_path)
+        )
+        assert result.returncode != 0 and "browser" in result.stderr
+        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
     finally:
         layout_server.broadcaster.unregister(client_queue)
 
 
 def test_unknown_app_is_refused_by_name(layout_server: PipelineHarness, tmp_path: Path) -> None:
-    """``open app:nowhere`` names the missing registration rather than broadcasting an op nobody can carry out."""
+    """``open app:nowhere`` names the missing registration and edits nobody's arrangement."""
     client_queue = layout_server.broadcaster.register()
     layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
     try:
         result = _run_layout_script(["open", "app:nowhere", "--view", "Everything"], layout_server, _sandbox(tmp_path))
         assert result.returncode != 0
         assert "nowhere" in result.stderr
-        _assert_no_layout_op(client_queue)
+        assert _inspect_addresses(layout_server, _sandbox(tmp_path), "client-1") == []
     finally:
         layout_server.broadcaster.unregister(client_queue)
 

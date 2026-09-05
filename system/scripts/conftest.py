@@ -1,4 +1,4 @@
-"""Fixtures for the layout.py tests: the wait-stable bypass, a registry file, and a fake shell over loopback."""
+"""Fixtures for the layout.py tests: a registry file and a fake shell over loopback."""
 
 from __future__ import annotations
 
@@ -17,12 +17,6 @@ _spec = importlib.util.spec_from_file_location("layout_for_fixtures", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 layout = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(layout)
-
-
-@pytest.fixture(autouse=True)
-def _skip_wait_stable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bypass the wait-stable poll; tests that want it remove the variable again."""
-    monkeypatch.setenv(layout.ENV_NO_WAIT_STABLE, "1")
 
 
 def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
@@ -83,6 +77,17 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
         if self.path == "/api/projects":
             self._respond(200, {"projects": server.projects})
             return
+        if self.path == "/api/inventory":
+            self._respond(
+                200,
+                {
+                    "projects": server.projects,
+                    "everything": {"id": "everything", "tabs": server.everything_tabs},
+                    "apps": server.inventory_apps,
+                    "clients": server.inventory_clients,
+                },
+            )
+            return
         self._respond(404, {"detail": f"unknown path {self.path}"})
 
     def do_POST(self) -> None:
@@ -91,7 +96,18 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(body_length) or b"{}")
         server.posted.append((self.path, body))
         if self.path == "/api/layout/broadcast":
-            self._respond(200, {"ok": True, "clients": server.context_clients})
+            self._respond(
+                200,
+                {
+                    "ok": True,
+                    "clients": server.context_clients,
+                    "view_id": "everything",
+                    "client_id": "c1",
+                    "target_client_id": "c1",
+                    "layout": server.op_layout,
+                    "created_address": server.created_address,
+                },
+            )
             return
         if self.path.startswith("/api/projects/") and "/shortcuts" in self.path:
             self._respond(
@@ -126,6 +142,11 @@ def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
     server.shortcuts_answer = []
     server.context_clients = []
     server.relay_refuses = False
+    server.everything_tabs = []
+    server.inventory_apps = []
+    server.inventory_clients = []
+    server.op_layout = {"active_panel": None, "panels": [], "tree": None}
+    server.created_address = None
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     monkeypatch.setenv(
