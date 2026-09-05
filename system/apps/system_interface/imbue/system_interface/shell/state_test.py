@@ -70,6 +70,25 @@ def test_unreferenced_referenced_instances_are_deleted_after_the_grace_period(
         shell.stop()
 
 
+def test_a_refused_delete_keeps_the_instance_listed_for_the_next_sweep(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_source: StubInstanceSource, stub_app_url: str
+) -> None:
+    stub_source.records.append(instance_record("stub-1", lifetime=InstanceLifetime.REFERENCED))
+    clock = [1000.0]
+    shell = _shell_over_stub(tmp_path, broadcaster, stub_app_url, clock)
+    try:
+        clock[0] += 60.0
+        stub_source.is_ready = False
+        assert shell.delete_unreferenced_instances() == []
+        assert [str(record.key) for record in stub_source.records] == ["stub-1"]
+        assert shell.inventory.listed_addresses() == {_STUB_1}
+        stub_source.is_ready = True
+        assert shell.delete_unreferenced_instances() == [_STUB_1]
+        assert stub_source.records == []
+    finally:
+        shell.stop()
+
+
 def test_instances_an_app_stopped_listing_leave_the_tab_sets_and_layouts(
     tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_source: StubInstanceSource, stub_app_url: str
 ) -> None:
