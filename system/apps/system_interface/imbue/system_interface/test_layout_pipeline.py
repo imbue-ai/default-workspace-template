@@ -41,6 +41,7 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
@@ -274,12 +275,10 @@ def test_open_of_a_bare_app_creates_the_instance_and_docks_it_in_the_clients_fil
         assert created == f"app:{_STUB_APP_NAME}?instance=stub-1"
         assert [str(record.url) for record in layout_server.stub_source.records] == ["/notes"]
         assert _inspect_addresses(layout_server, sandbox, "client-1") == [created]
-        updates = [
-            json.loads(raw)
-            for raw in iter(lambda: client_queue.get_nowait() if not client_queue.empty() else None, None)
-            if raw is not None
-        ]
-        assert any(message["type"] == "layout_updated" and message["client_id"] == "client-1" for message in updates)
+        assert any(
+            message["type"] == "layout_updated" and message["client_id"] == "client-1"
+            for message in drain_messages(client_queue)
+        )
     finally:
         layout_server.broadcaster.unregister(client_queue)
 
