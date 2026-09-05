@@ -356,9 +356,11 @@ The dock ops POST `{op, args, agent_id}` to the loopback-only
 client's own when unnamed), are delivered only to connected clients that have
 it active (HTTP 412 when there are none), and acquire an in-process advisory
 mutex (HTTP 409 on contention); reads bypass both. `rename`, `delete`, and
-`replace-url` call the relay routes under `/api/apps/<name>/instances/<key>/`
-and the `shortcut` subcommands the project routes, so they take no view and no
-mutex. A bare word is
+`replace-url` call the relay routes under `/api/apps/<name>/instances/<key>/`,
+and `shortcuts` and the `shortcut` subcommands the project routes, so none of
+them waits on a client or takes the mutex; the relay verbs take no `--view`,
+and the shortcut commands' `--view` names the project to read or configure
+(the connected client's view when unnamed) rather than a target. A bare word is
 `app:<word>`; the old spellings (`chat:`, `terminal:`, `service:`, `url:`,
 `subagent:`) are refused with an error naming the new form. See the
 `manage-layout` skill for end-to-end orientation.
