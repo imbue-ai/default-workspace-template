@@ -35,11 +35,11 @@ anything.
   /api/apps/<name>/stop` / `/start`), which changes no tab set; a stopped
   app's instances stay listed, dimmed. Critical apps (the shell, the chat)
   cannot be stopped from the workspace.
-- **Referenced instances** (a terminal, a files page) live only while some
-  tab set or client layout references them. Once the last reference goes,
-  the shell asks the app to delete the instance, after a short grace period
-  for a tab that was just created. Explicit instances (a chat, a browser)
-  stay until deleted.
+- **Referenced instances** (a file viewer, a chat's subagent view) live only
+  while some tab set or client layout references them. Once the last
+  reference goes, the shell asks the app to delete the instance, after a
+  short grace period for a tab that was just created. Explicit instances (a
+  chat, a terminal, a browser) stay until deleted.
 
 **Everything** is the unfiltered view and the home. It is not a project: it
 has no tab set of its own (its tabs are every instance on the machine), and
@@ -84,10 +84,11 @@ closed tab is backgrounded, not removed). `focus` / `maximize` / `restore` /
 `refresh` create no panel, so they change nothing either.
 
 ```bash
-# Dock the files app in the Research project (and file it in the tab set).
-python3 system/scripts/layout.py open files --view "Research"
+# Dock an existing file viewer in the Research project (and file it in the tab set).
+python3 system/scripts/layout.py open "app:files?instance=files-1" --view "Research"
 
 # Create a fresh terminal in Research; its address is printed to stdout.
+# (`open files` creates a fresh file viewer the same way.)
 python3 system/scripts/layout.py open terminal --view "Research"
 
 # Address one specific instance anywhere.
@@ -102,9 +103,9 @@ row's "remove from project" in the UI, or the shell's REST routes, which the
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/projects/research/tabs \
-    -H 'Content-Type: application/json' -d '{"address": "app:files"}'
+    -H 'Content-Type: application/json' -d '{"address": "app:files?instance=files-1"}'
 curl -s -X POST http://127.0.0.1:8000/api/projects/research/tabs/remove \
-    -H 'Content-Type: application/json' -d '{"address": "app:files"}'
+    -H 'Content-Type: application/json' -d '{"address": "app:files?instance=files-1"}'
 ```
 
 Creating, deleting, or renaming a *project itself* has no `layout.py`
@@ -116,8 +117,9 @@ routes (`POST /api/projects`, `POST /api/projects/<id>/settings`, `POST
 
 Each project's rail carries **shortcuts**: one row per (app, action), in
 rail order. A new project is seeded with every app's `default_shortcut` from
-its manifest (the chat's "New Chat", the terminal's "New terminal", the files
-app's "Open"). Each row has a **mode**: `focus` goes to the app's most recent
+its manifest (the chat's "New Chat" in new mode; the terminal's "New
+Terminal", the files app's "New File Viewer", and the browser's "New Browser"
+in focus mode). Each row has a **mode**: `focus` goes to the app's most recent
 tab in the view (running the action only when it has none); `new` always runs
 the action. Everything's rail is fixed: every app's primary action (its
 `default_shortcut` action, else its first declared action, else `open`), in
@@ -130,8 +132,8 @@ python3 system/scripts/layout.py shortcuts --view "Research"
 # Add the docs app's "open" to Research's rail, always creating anew.
 python3 system/scripts/layout.py shortcut set docs open --mode new --view "Research"
 
-# Put the terminal shortcut in focus mode (its default is new).
-python3 system/scripts/layout.py shortcut set terminal new --mode focus --view "Research"
+# Put the chat shortcut in focus mode (its default is new).
+python3 system/scripts/layout.py shortcut set chat new --mode focus --view "Research"
 
 # Take a row off the rail (it stays available from the "All apps" popover).
 python3 system/scripts/layout.py shortcut remove docs open --view "Research"
@@ -144,8 +146,9 @@ Everything.
 
 An instance's title belongs to the app that owns it, and `layout.py rename
 <address> "<title>"` asks that app to change it. A chat rename goes through
-`mngr rename`, so the agent's actual name changes; a browser's title is its
-name; a terminal's title is what its tmux session is called. Renaming never
+`mngr rename`, so the agent's actual name changes; a terminal's title is its
+own (its tmux session name stays its key); a browser is not renameable, so
+`rename` on one is refused. Renaming never
 changes an address: the key is stable for the instance's life, so a title you
 gave something is not a handle you can address it by. When the user names a
 tab by its title, find its address with `layout.py list` (the row whose
