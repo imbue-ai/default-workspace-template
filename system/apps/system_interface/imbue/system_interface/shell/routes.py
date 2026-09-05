@@ -819,7 +819,8 @@ def _requester_chat_address(agent_id: str) -> Address | None:
         return None
     try:
         return address_for(AppName(CHAT_APP_NAME_FOR_ATTRIBUTION), InstanceKey(agent_id))
-    except ValueError:
+    except ValueError as e:
+        logger.debug("Ignored an agent id that names no chat instance ({}): {}", agent_id, e)
         return None
 
 
