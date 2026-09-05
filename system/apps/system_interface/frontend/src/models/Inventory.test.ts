@@ -1,6 +1,6 @@
 import "../testing/dom";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   addressFor,
@@ -15,6 +15,7 @@ import {
   parseAddress,
   primaryActionForApp,
   resetInventoryForTesting,
+  whenAppsLoaded,
 } from "./Inventory";
 import type { AppRecord, InstanceRecord } from "./Inventory";
 import { appRecord, instanceRecord } from "../testing/records";
@@ -152,5 +153,25 @@ describe("primaryActionForApp", () => {
     expect(primaryActionForApp(chat({}))?.id).toBe("new");
     expect(primaryActionForApp(chat({ default_shortcut: { action: "gone", mode: "new" } }))?.id).toBe("new");
     expect(primaryActionForApp(chat({ actions: [] }))).toBeNull();
+  });
+});
+
+describe("whenAppsLoaded", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    resetInventoryForTesting();
+  });
+
+  it("answers true once a list arrives and false when the timeout passes first", async () => {
+    vi.useFakeTimers();
+    const pending = whenAppsLoaded(50);
+    applyApps([app("files")]);
+    await expect(pending).resolves.toBe(true);
+    await expect(whenAppsLoaded(50)).resolves.toBe(true);
+
+    resetInventoryForTesting();
+    const timedOut = whenAppsLoaded(50);
+    vi.advanceTimersByTime(50);
+    await expect(timedOut).resolves.toBe(false);
   });
 });

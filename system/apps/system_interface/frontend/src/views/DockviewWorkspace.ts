@@ -1511,7 +1511,7 @@ async function applyLayout(
   if (!dockview) return;
   // Every page url is derived from its app's origin label, which only resolves once the app
   // list has loaded; bounded, so a workspace that reports no apps still proceeds.
-  await whenAppsLoaded();
+  const isInventoryKnown = await whenAppsLoaded();
   if (!dockview) return;
   const dv = dockview;
   isApplyingLayout = true;
@@ -1523,7 +1523,11 @@ async function applyLayout(
   lastFocusedMsByPanelId.clear();
 
   if (layout !== null && layout.dockview !== null) {
-    const unlisted = new Set(panelsWithUnlistedAddresses(layout.tabs, (address) => !isAddressUnlisted(address)));
+    // Nothing is unlisted until the inventory has arrived: an empty seed is not an answer, and
+    // the apps_updated that brings the list prunes then (contracts section 8).
+    const unlisted = new Set(
+      isInventoryKnown ? panelsWithUnlistedAddresses(layout.tabs, (address) => !isAddressUnlisted(address)) : [],
+    );
     for (const [panelId, tab] of Object.entries(layout.tabs)) {
       if (unlisted.has(panelId)) continue;
       panelParams.set(panelId, { kind: "instance", address: tab.address, tabId: tab.tab_id });
