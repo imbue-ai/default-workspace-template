@@ -1253,6 +1253,32 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
         expect(held_field).to_have_value("typed-by-the-user")
 
 
+@pytest.mark.timeout(60, func_only=False)
+def test_a_tab_opened_right_before_a_view_switch_is_saved_into_the_view_it_was_opened_in(
+    tmp_path: Path, page: Page
+) -> None:
+    """Switching views flushes the outgoing view's pending autosave first.
+
+    Autosave is debounced; a switch inside that window must still write the edit into the
+    view it was made in, or the tab is gone when the user comes back (and a referenced
+    instance opened that way would be left with nothing referencing it).
+    """
+    address = _stub_address("stub-1")
+    with _running_e2e_server(tmp_path, _PORT + 21, is_stub_app_offered=True, stub_instances=("stub-1",)) as server:
+        _serve_stub_pages(page, server)
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _open_from_launcher(page, address)
+        expect(page.locator(f'iframe[data-address="{address}"]')).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        # Straight on to the switch, well inside the autosave debounce.
+        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+        _wait_for_view(page, EVERYTHING_VIEW_ID)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=address)
+        assert not any(
+            address in path.read_text() for path in _client_layout_files(server.state_dir, EVERYTHING_VIEW_ID)
+        ), "the outgoing view's arrangement was saved under the incoming view"
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, page: Page) -> None:
     """An instance shown by two views is ONE element, shown twice -- never two."""
