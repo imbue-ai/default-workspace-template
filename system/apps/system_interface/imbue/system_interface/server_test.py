@@ -2520,28 +2520,6 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert messages[1]["projects"] == []
 
 
-def _next_broadcast_message(client_queue: "queue.Queue[str | None]") -> dict[str, Any]:
-    """Pop the next broadcast off a fake client's queue as a parsed object."""
-    raw_message = client_queue.get_nowait()
-    assert raw_message is not None
-    parsed = json.loads(raw_message)
-    assert isinstance(parsed, dict)
-    return parsed
-
-
-def _register_fake_client(app: Flask, client_id: str, view_id: str) -> "queue.Queue[str | None]":
-    """Register a fake WS client on ``view_id`` and return its message queue.
-
-    Deterministic stand-in for the real WebSocket registration path: broadcast
-    messages land in the returned queue, so tests can assert targeted delivery
-    without a live socket or timing.
-    """
-    broadcaster = state_of(app).broadcaster
-    client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, client_id, view_id, "desktop")
-    return client_queue
-
-
 def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Hitting /api/agents/{id}/events for a Claude session with an unmatched tool_use
     seeds the AgentManager's transcript-derived signals so the activity indicator
