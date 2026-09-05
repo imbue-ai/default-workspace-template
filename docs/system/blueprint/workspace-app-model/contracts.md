@@ -263,7 +263,7 @@ Unknown types are ignored; shipped types never change meaning.
 | shell to app | `shell:close-request` | `{}` |
 | app to shell | `shell:focused` | `{}` |
 | app to shell | `shell:location` | `{"path"}`; the shell resolves the frame to its tab, remembers the path as that tab's last reported path, and relays it to the owning app's location route |
-| app to shell | `shell:open` | `{"address", "title"?}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client. `title` is a display hint for the new tab, used until phase 7 titles tabs from the inventory (a `# CLEANUP:` on both sides) |
+| app to shell | `shell:open` | `{"address"}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client, and titles the tab from the inventory (phase 6 carried a `title` hint, which phase 7 dropped) |
 
 A frame's `load` event also clears the tab's last reported path.
 The shell reloads a docked tab's frame when the instance's listed `url` differs from the tab's last reported path (with `{tab}` substituted), which is what makes an agent's `replace-url` land and a page's own reports inert.
