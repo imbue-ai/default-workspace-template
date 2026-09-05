@@ -339,6 +339,9 @@ def _request_json(
         return e.code, _maybe_parse_json(raw)
     except urllib.error.URLError as e:
         return -1, str(e.reason)
+    except OSError as e:
+        # A read timeout is a TimeoutError rather than a URLError; the shell is as gone either way.
+        return -1, str(e)
 
 
 def _post_layout(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
