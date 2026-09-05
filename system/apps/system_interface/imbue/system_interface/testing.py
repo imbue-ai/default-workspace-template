@@ -55,7 +55,6 @@ from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.harnesses.signed_in import SignedIn
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.shell.inventory import AppInventory
-from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -302,10 +301,6 @@ def build_test_state(
     # Match production: eviction drops a destroyed/stopped agent's watcher.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     return state
-
-
-def shell_of(state: SystemInterfaceState) -> ShellState:
-    return state.shell
 
 
 class FakeFinishedProcess:

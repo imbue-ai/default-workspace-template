@@ -17,7 +17,6 @@ from app_instances.data_types import InstanceStatus
 from app_instances.primitives import InstanceKey
 from app_instances.primitives import InstanceTitle
 from app_instances.primitives import InstanceUrl
-from app_manifest.registry import RegistryRow
 from pydantic import Field
 
 from imbue.system_interface.shell.data_types import LayoutRecord
@@ -170,7 +169,3 @@ def layout_showing(*addresses: Address) -> LayoutRecord:
         device_kind=DeviceKind.DESKTOP,
         updated_at=None,
     )
-
-
-def registry_rows_of(inventory: AppInventory) -> list[RegistryRow]:
-    return [entry.row for entry in inventory.entries()]
