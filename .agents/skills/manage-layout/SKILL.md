@@ -127,11 +127,13 @@ the dock (they take an instance address, never a bare app):
 |---|---|
 | Retitle an instance (the title shows in every view) | `python3 system/scripts/layout.py rename <address> "<title>"` |
 | Delete an instance (it leaves every view) | `python3 system/scripts/layout.py delete <address>` |
-| Point an instance at a path under its app | `python3 system/scripts/layout.py replace-url <address> /<path>` |
+| Point an instance at a path under its app, or at a URL for an app that browses to one | `python3 system/scripts/layout.py replace-url <address> </path-or-url>` |
 
 Not every app accepts every verb: a browser is not renameable (its title is
-its name), and an app that does not track locations (the terminal, the chat)
-refuses `replace-url`. The app's refusal is printed as the error.
+its name), an app that does not track locations (the terminal, the chat)
+refuses `replace-url`, and each app takes only the location form that fits it
+(a path under the app for the file viewer, an absolute `http(s)` URL for the
+browser). The app's refusal is printed as the error.
 
 ### Directions on `split` and `move`
 
