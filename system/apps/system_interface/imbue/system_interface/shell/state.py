@@ -88,7 +88,11 @@ class ShellState(MutableModel):
 
     def _run_client_prune(self) -> None:
         while not self._prune_stop.wait(timeout=self.client_prune_interval_seconds):
-            self.prune_unseen_clients()
+            # A state file that cannot be written today is logged and retried tomorrow.
+            try:
+                self.prune_unseen_clients()
+            except (OSError, ValueError) as e:
+                logger.opt(exception=e).error("The stale-client prune failed; the next run will retry")
 
     def broadcast_projects_updated(self) -> None:
         self.broadcaster.broadcast_projects_updated(

@@ -10,6 +10,7 @@ from watchdog.events import DirModifiedEvent
 from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 
+from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
@@ -330,3 +331,22 @@ def test_refetch_all_fetches_every_running_app_with_instances(
     inventory.refetch_all()
     # A stopped app is skipped too.
     assert fetcher.fetched_urls == [_TERMINAL_URL]
+
+
+def _raise_state_error(addresses: list[Address]) -> None:
+    raise ShellStateError(f"cannot write the tab sets after {addresses} left")
+
+
+def test_a_failing_pass_does_not_end_the_sweep(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    fetcher = FakeInstanceFetcher()
+    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"), instance_record("terminal-2"))
+    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    inventory.refetch_now("terminal")
+    inventory.add_removed_listener(_raise_state_error)
+
+    # The app dropped an instance, so folding the next list fires the listener, which raises.
+    fetcher.list(_TERMINAL_URL, instance_record("terminal-2"))
+    inventory.sweep_once(is_reconciling=True)
+    inventory.sweep_once(is_reconciling=True)
+    assert fetcher.fetched_urls == [_TERMINAL_URL] * 3
+    assert inventory.listed_addresses() == {Address("app:terminal?instance=terminal-2"), Address("app:files")}
