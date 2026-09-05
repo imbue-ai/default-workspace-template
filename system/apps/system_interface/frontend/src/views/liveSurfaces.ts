@@ -105,11 +105,6 @@ export function initializeLiveLayer(host: HTMLElement, visibilityListener: () =>
   onVisibilityChanged = visibilityListener;
 }
 
-/** What ``key``'s page is rendering, or null when it has none. */
-export function liveSurfaceParams(key: LiveKey): PanelParams | null {
-  return surfacesByKey.get(key)?.params ?? null;
-}
-
 /** The panel currently standing in for the page filed under ``key``, or null when no pane shows it. */
 export function liveSurfaceBoundPanelId(key: LiveKey): string | null {
   return surfacesByKey.get(key)?.boundPanelId ?? null;

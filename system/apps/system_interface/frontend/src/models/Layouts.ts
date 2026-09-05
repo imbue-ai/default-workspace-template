@@ -30,7 +30,6 @@ export interface LayoutRecord {
 
 const TAB_ID_PREFIX = "tab-";
 const TAB_ID_HEX_LENGTH = 16;
-const TAB_ID_PATTERN = /^tab-[0-9a-f]{16}$/;
 
 /** A fresh tab id: ``tab-<16 hex>``, never reused. */
 export function mintTabId(): string {
@@ -41,10 +40,6 @@ export function mintTabId(): string {
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
   }
   return `${TAB_ID_PREFIX}${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-}
-
-export function isTabId(value: string): boolean {
-  return TAB_ID_PATTERN.test(value);
 }
 
 /** Fetch this client's arrangement of ``viewId`` (the seed, or the empty layout, when it has
