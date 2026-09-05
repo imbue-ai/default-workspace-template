@@ -423,6 +423,12 @@ def test_mutating_ops_need_a_client_on_the_target_view(client: FlaskClient, app:
     ]
     assert drain_messages(everything_queue) == []
 
+    # ``self`` is the requester's own chat, resolved by the client rather than parsed here.
+    assert _broadcast(client, "focus", {"address": "self", "view": "alpha"}).status_code == 200
+    assert drain_messages(alpha_queue) == [
+        {"type": "layout_op", "op": "focus", "args": {"address": "self"}, "requester_agent_id": "agent-1"}
+    ]
+
     # Two clients on different views and no ``view`` named: nothing to default to.
     assert _broadcast(client, "focus", {"address": str(_TERMINAL_1)}).status_code == 412
     # A refresh is not a mutation: it reaches every client and takes no mutex.
