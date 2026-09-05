@@ -14,6 +14,8 @@
  */
 
 import m from "mithril";
+import { Button } from "./components/Button";
+import { bannerClass } from "./components/banner";
 
 const META_TAG_NAME = "system-interface-update-staleness";
 
@@ -59,18 +61,26 @@ export function UpdateStalenessBanner(): m.Component {
       if (hidden) return null;
       const message = STALENESS_MESSAGES.get(getUpdateStalenessVariant());
       if (message === undefined) return null;
-      return m("div.update-staleness-banner", [
-        m("span.update-staleness-banner-text", message),
-        m(
-          "button.update-staleness-banner-btn",
-          {
-            onclick: () => {
-              hidden = true;
+      return m(
+        "div",
+        {
+          class: bannerClass("update-staleness-banner", "warning"),
+        },
+        [
+          m("span", { class: "update-staleness-banner-text min-w-0" }, message),
+          m(
+            Button,
+            {
+              sm: true,
+              extra: "update-staleness-banner-btn",
+              onclick: () => {
+                hidden = true;
+              },
             },
-          },
-          "Dismiss",
-        ),
-      ]);
+            "Dismiss",
+          ),
+        ],
+      );
     },
   };
 }

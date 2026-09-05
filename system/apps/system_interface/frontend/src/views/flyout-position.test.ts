@@ -21,7 +21,7 @@ describe("placeFlyout", () => {
   });
 
   it("grows upward rather than being squeezed by the space below the row", () => {
-    // The whole reason this file diverges from the mockup: the card opens from the composer at
+    // The whole reason this file exists: the card opens from the composer at
     // the bottom of the panel, so downward there is nothing -- 560px of room sits ABOVE.
     const nearBottom = placeFlyout({ ...BASE, rowBottom: 780 });
     expect(nearBottom.bottom).toBe(20);

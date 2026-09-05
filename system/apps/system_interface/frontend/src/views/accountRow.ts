@@ -16,7 +16,7 @@
 import m from "mithril";
 import { deleteAccount, loadAccounts, renameAccount } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
-import { icon } from "./icons";
+import { icon } from "./components/icons";
 import * as css from "./modelCardStyles";
 import { removeAccountDialog } from "./removeAccountDialog";
 
@@ -146,7 +146,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
   // the name has the full width to be typed in, and so nothing destructive sits under a
   // pointer that is there to click into text.
   if (renaming) {
-    return m("div", { key: row.id, class: css.ROW_WRAP }, renameField(opts));
+    return m("div", { key: row.id, class: css.ROW_RENAME_WRAP }, renameField(opts));
   }
 
   return m("div", { key: row.id, class: css.ROW_WRAP }, [

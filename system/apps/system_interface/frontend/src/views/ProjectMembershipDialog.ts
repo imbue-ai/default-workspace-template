@@ -9,16 +9,18 @@
  * offered: it is the home, lists the whole machine, and an object leaves it
  * only by being deleted.
  *
- * Shell and class names follow the shared `.custom-url-dialog` markup, with
- * the shared backdrop-mousedown dismissal and a document-level Escape (as
- * ProjectSettingsModal does, and for the same reason: focus sits on a
- * checkbox row as easily as anywhere).
+ * Built on the shared Modal shell (views/components/Modal.ts): its backdrop-mousedown
+ * dismissal, and Escape through the shell's `onEscape` rather than a key
+ * handler on any one control, because focus sits on a checkbox row as easily
+ * as anywhere.
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { Modal } from "./components/Modal";
 import type { ProjectInfo } from "../models/Projects";
 import { squiggleMarkup } from "./squiggles";
+import { Button } from "./components/Button";
+import { MODAL_MESSAGE_CLASS } from "./components/Modal";
 
 const ROW_GLYPH_SIZE = 16;
 
@@ -37,13 +39,6 @@ export interface ProjectMembershipDialogAttrs {
 
 export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAttrs> {
   const selected = new Set<string>();
-  let latestAttrs: ProjectMembershipDialogAttrs | null = null;
-
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Escape" || latestAttrs === null) return;
-    latestAttrs.onCancel();
-    m.redraw();
-  }
 
   function projectRow(attrs: ProjectMembershipDialogAttrs, project: ProjectInfo): m.Vnode {
     // A project already showing the object is settled: its box stays checked
@@ -55,7 +50,7 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
       "label",
       {
         class:
-          "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-bg-hover " +
+          "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-fill-hover " +
           (isFixed ? "cursor-default opacity-60" : ""),
       },
       [
@@ -77,61 +72,54 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
           { class: "flex h-4 w-4 shrink-0 items-center justify-center" },
           m.trust(squiggleMarkup(project.glyph, project.color, ROW_GLYPH_SIZE)),
         ),
-        m("span", { class: "min-w-0 flex-1 truncate text-[13px] text-text-primary" }, project.name),
-        isFixed ? m("span", { class: "shrink-0 text-[11px] text-text-faint" }, "already added") : null,
+        m("span", { class: "min-w-0 flex-1 truncate text-(length:--font-size-row) text-primary" }, project.name),
+        isFixed ? m("span", { class: "shrink-0 text-[11px] text-faint" }, "already added") : null,
       ],
     );
   }
 
   return {
-    oninit(vnode) {
-      latestAttrs = vnode.attrs;
-    },
-
     view(vnode) {
       const attrs = vnode.attrs;
-      latestAttrs = attrs;
 
       return m(
-        "div.custom-url-dialog-overlay",
+        Modal,
         {
-          oncreate() {
-            document.addEventListener("keydown", handleKeydown);
-          },
-          onremove() {
-            document.removeEventListener("keydown", handleKeydown);
-          },
-          ...backdropDismissAttrs(attrs.onCancel),
+          onDismiss: attrs.onCancel,
+          onEscape: attrs.onCancel,
+          title: "Add to project",
+          actions: [
+            m(Button, { onclick: attrs.onCancel }, "Cancel"),
+            m(
+              Button,
+              {
+                variant: "primary",
+                disabled: selected.size === 0,
+                onclick() {
+                  attrs.onConfirm([...selected]);
+                },
+              },
+              "Add",
+            ),
+          ],
         },
         [
-          m("div.custom-url-dialog", [
-            m("h3.custom-url-dialog-title", "Add to project"),
-            m("p.destroy-dialog-message", [
-              "Choose the projects that should also show ",
-              m("strong", attrs.memberLabel),
-              ".",
-            ]),
-            attrs.projects.length === 0
-              ? m("p", { class: "py-2 text-[13px] text-text-faint" }, "There are no projects on this machine yet.")
-              : m(
-                  "div",
-                  { class: "mb-3 flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto" },
-                  attrs.projects.map((project) => projectRow(attrs, project)),
-                ),
-            m("div.custom-url-dialog-actions", [
-              m("button.custom-url-dialog-cancel", { onclick: attrs.onCancel }, "Cancel"),
-              m(
-                "button.custom-url-dialog-open",
-                {
-                  disabled: selected.size === 0,
-                  onclick() {
-                    attrs.onConfirm([...selected]);
-                  },
-                },
-                "Add",
-              ),
-            ]),
+          m("p", { class: MODAL_MESSAGE_CLASS }, [
+            "Choose the projects that should also show ",
+            m("strong", attrs.memberLabel),
+            ".",
           ]),
+          attrs.projects.length === 0
+            ? m(
+                "p",
+                { class: "py-2 text-(length:--font-size-row) text-faint" },
+                "There are no projects on this machine yet.",
+              )
+            : m(
+                "div",
+                { class: "mb-3 flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto" },
+                attrs.projects.map((project) => projectRow(attrs, project)),
+              ),
         ],
       );
     },

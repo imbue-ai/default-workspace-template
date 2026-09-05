@@ -252,7 +252,7 @@ describe("Sidebar switcher dropdown", () => {
     redraw();
     expect(switcherRow(root, "Alpha").querySelector(".project-rail-check")).not.toBeNull();
     expect(switcherRow(root, "Beta").querySelector(".project-rail-check")).toBeNull();
-    expect(switcherRow(root, "Alpha").className).not.toContain("bg-bg-sidebar");
+    expect(switcherRow(root, "Alpha").className).not.toContain("bg-sidebar");
     // The active row's pencil is still there (revealed on hover, swapping
     // places with the checkmark) -- rendered in the DOM either way, since the
     // swap is pure CSS opacity, not conditional rendering.
@@ -265,7 +265,7 @@ describe("Sidebar switcher dropdown", () => {
     redraw();
     const everythingRow = switcherRow(root, "Everything");
     expect(everythingRow.querySelector(".project-rail-check")).not.toBeNull();
-    expect(everythingRow.className).not.toContain("bg-bg-sidebar");
+    expect(everythingRow.className).not.toContain("bg-sidebar");
     expect(everythingRow.querySelector('[aria-label^="Edit"]')).toBeNull();
   });
 
@@ -295,7 +295,7 @@ describe("Sidebar switcher dropdown", () => {
     click(root.querySelector('[aria-label="Edit Beta"]'));
     redraw();
     expect(attrs.onSelectView).not.toHaveBeenCalled();
-    const nameField = root.querySelector("input.custom-url-dialog-input") as HTMLInputElement | null;
+    const nameField = root.querySelector('input[placeholder="project name"]') as HTMLInputElement | null;
     expect(nameField?.value).toBe("Beta");
   });
 
@@ -411,8 +411,8 @@ describe("Sidebar switcher dropdown", () => {
     click(root.querySelector(".project-rail-header"));
     redraw();
     const newProjectRow = switcherRow(root, "New project");
-    expect(newProjectRow.className).toContain("text-text-faint");
-    expect(newProjectRow.className).toContain("hover:text-text-primary");
+    expect(newProjectRow.className).toContain("text-faint");
+    expect(newProjectRow.className).toContain("hover:text-primary");
   });
 });
 
@@ -449,7 +449,7 @@ describe("Sidebar menus hold the rail open", () => {
 describe("Sidebar menu scrim", () => {
   it("renders no scrim when nothing is open", () => {
     const { root } = mountSidebar(makeAttrs());
-    expect(root.querySelector(".fixed.inset-0.z-40")).toBeNull();
+    expect(root.querySelector(".project-rail-menu-scrim")).toBeNull();
   });
 
   it("renders a scrim behind an open menu, and a press on it closes the menu and collapses the rail", () => {
@@ -458,7 +458,7 @@ describe("Sidebar menu scrim", () => {
     redraw();
     click(root.querySelector(".project-rail-header"));
     redraw();
-    const scrim = root.querySelector(".fixed.inset-0.z-40");
+    const scrim = root.querySelector(".project-rail-menu-scrim");
     expect(scrim).not.toBeNull();
 
     scrim?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
@@ -1178,7 +1178,7 @@ describe("Sidebar tooltips", () => {
     trigger.dispatchEvent(new MouseEvent("mouseenter"));
     // Past the hover-intent delay (TOOLTIP_DELAY_MS = 250ms in hoverTooltip.ts).
     await new Promise((resolve) => setTimeout(resolve, 260));
-    return document.querySelector(".minds-tooltip")?.textContent;
+    return document.querySelector(".hover-tooltip")?.textContent;
   }
 
   it("shows a static 'Switch projects' tooltip on the header, not the project's name", async () => {

@@ -484,6 +484,13 @@ def test_send_button_appears_on_input(e2e_server: tuple[str, list[AgentInfo], Pa
     textarea.fill("test message")
     expect(send_button).to_be_visible()
 
+    # The module-wide tmux mark (see pytestmark) requires every test here to
+    # actually reach tmux, but this test is short enough that the rail's
+    # machine fetch can still be in flight when it ends. Ask the server
+    # directly -- the same ``tmux ls`` the rail's table is built from.
+    with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:
+        assert response.status == 200
+
 
 @pytest.mark.timeout(60, func_only=False)
 def test_composer_bar_survives_a_shorter_window(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
@@ -1593,7 +1600,7 @@ def _create_terminal_from_launcher(page: Page, known_titles: set[str]) -> str:
         page.locator(".dockview-add-tab-button").first.click()
     expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
     page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
-    expect(page.locator(".custom-url-dialog")).to_have_count(0)
+    expect(page.locator(".modal-card")).to_have_count(0)
 
     found: dict[str, str] = {}
 
@@ -2682,7 +2689,7 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
         expect(flush_button).to_be_visible()
         expect(flush_button).to_contain_text("Shoulder tap")
         expect(flush_button).to_have_attribute(
-            "data-tooltip", "Gently interrupt your agent to send queued messages early"
+            "aria-label", "Gently interrupt your agent to send queued messages early"
         )
         expect(page.locator(".queued-action--interrupt")).to_have_count(0)
 

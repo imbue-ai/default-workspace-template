@@ -4,7 +4,8 @@
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { MODAL_MESSAGE_CLASS, Modal } from "./components/Modal";
+import { Button } from "./components/Button";
 
 interface DestroyConfirmDialogAttrs {
   agentName: string;
@@ -38,16 +39,20 @@ export const DestroyConfirmDialog: m.Component<DestroyConfirmDialogAttrs> = {
     ];
     const confirmLabel = vnode.attrs.confirmLabel ?? "Delete";
 
-    return m("div.destroy-dialog-overlay", backdropDismissAttrs(onCancel), [
-      m("div.destroy-dialog", [
-        m("h3.destroy-dialog-title", title),
-        m("p.destroy-dialog-message", question),
-        details === undefined ? null : m("p.destroy-dialog-message", details),
-        m("div.destroy-dialog-actions", [
-          m("button.destroy-dialog-btn.destroy-dialog-btn-cancel", { onclick: onCancel }, "Cancel"),
-          m("button.destroy-dialog-btn.destroy-dialog-btn-destroy", { onclick: onConfirm }, confirmLabel),
-        ]),
-      ]),
-    ]);
+    return m(
+      Modal,
+      {
+        onDismiss: onCancel,
+        title,
+        actions: [
+          m(Button, { extra: "destroy-dialog-btn-cancel", onclick: onCancel }, "Cancel"),
+          m(Button, { variant: "destructive", extra: "destroy-dialog-btn-destroy", onclick: onConfirm }, confirmLabel),
+        ],
+      },
+      [
+        m("p", { class: MODAL_MESSAGE_CLASS }, question),
+        details === undefined ? null : m("p", { class: MODAL_MESSAGE_CLASS }, details),
+      ],
+    );
   },
 };
