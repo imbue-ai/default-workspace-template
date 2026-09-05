@@ -47,6 +47,7 @@ from imbue.system_interface.shell.instance_relay import relay_create
 from imbue.system_interface.shell.instance_relay import relay_delete
 from imbue.system_interface.shell.instance_relay import relay_location
 from imbue.system_interface.shell.instance_relay import relay_rename
+from imbue.system_interface.shell.layout_ops import SELF_ADDRESS
 from imbue.system_interface.shell.layout_ops import is_broadcasting_op
 from imbue.system_interface.shell.layout_ops import is_known_op
 from imbue.system_interface.shell.layout_ops import is_mutating_op
@@ -652,7 +653,7 @@ def _op_load(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> Resp
 def _refuse_unregistered_address(shell: ShellState, args_raw: dict[str, Any]) -> ResponseReturnValue | None:
     """An addressed op names an instance or an app; the address must parse, and an app it names must be registered, before anything is broadcast."""
     raw_address = args_raw.get("address")
-    if raw_address is None:
+    if raw_address is None or raw_address == SELF_ADDRESS:
         return None
     try:
         address = Address(str(raw_address))

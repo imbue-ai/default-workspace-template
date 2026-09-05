@@ -60,6 +60,10 @@ BROADCASTING_OPS: Final[frozenset[str]] = frozenset(
 # Ops that name an instance or an app in ``args.address``.
 ADDRESSED_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "close", "move", "maximize", "refresh"})
 
+# The one non-address an addressed op accepts: the requester's own chat, which the connected
+# client resolves from the op's ``requester_agent_id`` (``layout.py`` passes it through).
+SELF_ADDRESS: Final[str] = "self"
+
 # The mutex TTL: comfortably longer than one dockview mutation round trip, short enough that
 # a wedged op cannot lock the workspace for an annoying length of time.
 _MUTEX_TTL_SECONDS: Final[float] = 0.5
