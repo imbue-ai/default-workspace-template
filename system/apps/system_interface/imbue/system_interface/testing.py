@@ -31,6 +31,7 @@ from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from typing import Final
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 
@@ -261,6 +262,17 @@ class RecordingClientActivityShell:
         return "", 204
 
 
+# The directories minted for states built without a ``shell_state_directory``; each is removed
+# by its finalizer when the test process exits, so a run leaves nothing under the temp root.
+_MINTED_SHELL_STATE_DIRECTORIES: Final[list[tempfile.TemporaryDirectory[str]]] = []
+
+
+def _fresh_shell_state_directory() -> Path:
+    directory = tempfile.TemporaryDirectory(prefix="si-shell-state-")
+    _MINTED_SHELL_STATE_DIRECTORIES.append(directory)
+    return Path(directory.name)
+
+
 def build_test_state(
     *,
     config: Config | None = None,
@@ -289,9 +301,7 @@ def build_test_state(
     # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     shell = build_shell_state(
-        state_directory=shell_state_directory
-        if shell_state_directory is not None
-        else Path(tempfile.mkdtemp(prefix="si-shell-state-")),
+        state_directory=shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory(),
         registry_path=registry_path(),
         broadcaster=manager.broadcaster,
         inventory=inventory,
