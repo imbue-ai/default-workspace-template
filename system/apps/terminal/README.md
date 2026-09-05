@@ -38,7 +38,10 @@ is skipped) plus every terminal the store remembers that tmux no longer has
 (`stopped`, which is how a tab reattaches after a container restart cleared
 the tmux server). The
 URL is `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]`; the shell
-substitutes the tab id, and `session.sh` receives it as its second argument.
+substitutes the tab id, and `session.sh` receives it as its second argument. A
+terminal created through `new` always carries a workdir: the `workdir` param
+when the create gave one, else the directory the app runs from (the workspace
+root under supervisord); only records written before that default lack one.
 
 - `new` (optional `workdir`) allocates the lowest free `terminal-<N>` over the
   live and remembered names and records it; the session itself is created on
@@ -69,13 +72,10 @@ from `~/.tmux.conf`, which the main create template writes. Its hooks call
 `{kind, client_tty, session_name, session_id}` to `POST /tmux-hook` on 7682
 (`hooks.py`) when a client switches sessions or a session is renamed. The route
 maps the client's pty to its tab through `commands/clients/`, re-points the tab
-through the shell's `POST /api/tabs/<tab_id>/instance` (contracts section 5;
-the shell answers 404 until phase 7 of the model), and nudges the shell, since
-either event may have changed the instance list (a switch may be the attach
-that created the session; a rename re-keys one). Until phase 7 it also
-forwards each event to the shell's
-`/api/terminals/notify`, with the resolved `terminal_id`, so today's
-`terminal_session` broadcast keeps tab titles live.
+through the shell's `POST /api/tabs/<tab_id>/instance` (contracts section 5),
+and nudges the shell, since either event may have changed the instance list (a
+switch may be the attach that created the session; a rename re-keys one). The
+tab's title follows from the shell's refetched list, so nothing else is posted.
 
 `notify_terminal_session.py` at this folder's root is a symlink into `bin/` for
 tmux servers that started before the helper moved (a server keeps the hook

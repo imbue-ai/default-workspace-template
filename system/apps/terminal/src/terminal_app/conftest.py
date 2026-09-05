@@ -16,7 +16,12 @@ from terminal_app.data_types import TerminalPaths
 from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
-from terminal_app.testing import ENV_FAKE_TMUX_DIR, FakeTmux, install_fake_tmux
+from terminal_app.testing import (
+    DEFAULT_TEST_WORKDIR,
+    ENV_FAKE_TMUX_DIR,
+    FakeTmux,
+    install_fake_tmux,
+)
 from terminal_app.tmux import SubprocessTmux
 
 
@@ -46,7 +51,10 @@ def session_source(
     fake_tmux: FakeTmux, session_store: JsonTerminalSessionStore
 ) -> TmuxSessionSource:
     return TmuxSessionSource(
-        tmux=SubprocessTmux(), store=session_store, agent_session_prefix="mngr-"
+        tmux=SubprocessTmux(),
+        store=session_store,
+        agent_session_prefix="mngr-",
+        default_workdir=DEFAULT_TEST_WORKDIR,
     )
 
 

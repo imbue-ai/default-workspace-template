@@ -1,4 +1,3 @@
-import os
 import urllib.parse
 from datetime import datetime, timezone
 
@@ -18,7 +17,7 @@ from app_manifest.primitives import ActionId
 from terminal_app.data_types import TmuxSession
 from terminal_app.sessions import TmuxSessionSource, is_agent_session
 from terminal_app.store import JsonTerminalSessionStore
-from terminal_app.testing import FakeTmux, make_terminal_record
+from terminal_app.testing import DEFAULT_TEST_WORKDIR, FakeTmux, make_terminal_record
 
 _NEW = ActionId("new")
 _ACTIVITY = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
@@ -109,9 +108,12 @@ def test_two_creates_before_any_attach_get_distinct_names(
     second = session_source.create_instance(_NEW, {"workdir": ""})
 
     assert (first.key, second.key) == ("terminal-1", "terminal-2")
-    # A create that names no directory starts the shell where this app runs.
-    own_directory = urllib.parse.quote(os.getcwd(), safe="")
-    assert second.url == f"/?arg=_&arg=session&arg=terminal-2&arg={{tab}}&arg={own_directory}"
+    # A create that names no directory starts the shell where the app runs (the source's default).
+    default_directory = urllib.parse.quote(DEFAULT_TEST_WORKDIR, safe="")
+    assert (
+        second.url
+        == f"/?arg=_&arg=session&arg=terminal-2&arg={{tab}}&arg={default_directory}"
+    )
 
 
 def test_create_refuses_other_actions_and_other_params(

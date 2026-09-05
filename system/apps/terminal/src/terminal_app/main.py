@@ -24,6 +24,7 @@ from terminal_app.dispatch import (
     install_ttyd_web_client,
 )
 from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
+from terminal_app.primitives import Workdir
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.tmux import SubprocessTmux
@@ -87,6 +88,7 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
         tmux=tmux,
         store=JsonTerminalSessionStore(store_path=arguments.store_path),
         agent_session_prefix=arguments.agent_session_prefix,
+        default_workdir=Workdir(os.getcwd()),
     )
 
     def build_app(manifest: AppManifest, nudger: InstanceNudgerInterface) -> Flask:
