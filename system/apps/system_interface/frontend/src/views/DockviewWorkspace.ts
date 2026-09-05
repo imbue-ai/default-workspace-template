@@ -16,7 +16,7 @@
  *     saved layouts and tab sets; this dock drops the live panel when the list arrives).
  *
  * The dock is never empty. A view with no panels gets a New Tab launcher, which is also what
- * the "+" opens and what a freshly-created project lands on.
+ * the "+" opens (a freshly-created project shows it only until its first chat is created).
  */
 
 import m from "mithril";
@@ -2381,9 +2381,9 @@ export const DockviewWorkspace: m.Component = {
 
         membershipDialog !== null
           ? m(ProjectMembershipDialog, {
-              memberLabel: membershipDialog.label,
+              instanceLabel: membershipDialog.label,
               projects: getAvailableProjects(),
-              memberProjectIds: membershipDialog.projectIds,
+              showingProjectIds: membershipDialog.projectIds,
               onConfirm(selectedProjectIds: string[]) {
                 const dialog = membershipDialog!;
                 membershipDialog = null;

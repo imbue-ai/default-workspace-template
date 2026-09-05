@@ -70,9 +70,9 @@ function makeDialog(attrs: ProjectMembershipDialogAttrs): { render: () => unknow
 
 function makeAttrs(overrides: Partial<ProjectMembershipDialogAttrs> = {}): ProjectMembershipDialogAttrs {
   return {
-    memberLabel: "Chat 1",
+    instanceLabel: "Chat 1",
     projects: PROJECTS,
-    memberProjectIds: ["alpha"],
+    showingProjectIds: ["alpha"],
     onConfirm: vi.fn(),
     onCancel: vi.fn(),
     ...overrides,
