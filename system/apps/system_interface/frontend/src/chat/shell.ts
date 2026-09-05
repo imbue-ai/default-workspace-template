@@ -1,9 +1,7 @@
 /**
  * The chat page's side of the workspace shell: the contract connection, and the two things a
- * chat page asks the shell for -- a sibling chat, and a subagent view.
- *
- * Before phase 6 these were calls into the dock (`focusOrCreateChatPanel`, `openSubagentTab`);
- * now the page lives in its own document and asks through `shell:open`.
+ * chat page asks the shell for -- a sibling chat, and a subagent view -- both through
+ * `shell:open`, since the page lives in its own document.
  */
 
 import m from "mithril";

@@ -7,9 +7,8 @@
  * to the agent's start endpoint and waits for it to resolve. The backend
  * no-ops for already-running agents, so this is cheap in the common case.
  *
- * This covers both ways an agent terminal opens: the chat-page "Open agent
- * terminal" link and terminal tabs restored from a saved dockview layout
- * (both routed here by DockviewWorkspace.createComponent).
+ * The chat page's "Open agent terminal" back face is the one way an agent
+ * terminal opens, so this is its only mount.
  */
 
 import m from "mithril";

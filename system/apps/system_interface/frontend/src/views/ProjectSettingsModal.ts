@@ -37,8 +37,8 @@ export interface ProjectSettingsModalAttrs {
   // normalizes the name).
   onSaved: (project: ProjectInfo) => void;
   // Fired once the project is gone server-side. The parent re-lists; a client
-  // mounted on the deleted project is moved off it by the `project_deleted`
-  // broadcast, the same path another client's delete takes.
+  // mounted on the deleted project is moved off it when the `projects_updated`
+  // push no longer names it, the same path another client's delete takes.
   onDeleted: (projectId: string) => void;
   onCancel: () => void;
 }

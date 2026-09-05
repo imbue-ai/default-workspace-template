@@ -15,8 +15,8 @@
  *   ``https://foo-x7k9q2w1.<share-label>.<user-hash>.<region>.<domain>/``
  *
  * The random suffix is the one hostname component that never leaks via CT, so
- * a share cannot be enumerated from the public cert name. Callers resolve a
- * service NAME to its LABEL via ``labelForService`` (AgentManager) before
+ * a share cannot be enumerated from the public cert name. Callers resolve an
+ * app's NAME to its LABEL via ``labelForApp`` (models/Inventory) before
  * calling this.
  *
  * The base is the workspace host COORDINATE -- the ``host-<hex>`` label and

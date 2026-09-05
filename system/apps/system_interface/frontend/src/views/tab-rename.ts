@@ -1,16 +1,15 @@
 /**
  * What a typed title becomes before it is filed as an object's name.
  *
- * Every rename path -- the chat tab's own double-click editor and the
- * agent-facing layout op alike -- goes through `renameMemberRef` in the end,
- * and both hand it a title normalized here first. Needs no DOM, panel or
- * project, which is why it lives apart from them.
+ * Every rename path -- the tab's own double-click editor and the rail row's
+ * editor alike -- hands the app's rename route (through the shell's relay) a
+ * title normalized here first. Needs no DOM, panel or project, which is why it
+ * lives apart from them.
  */
 
 /** Longest title kept. Far more than the 220px tab ceiling can show -- the
  *  strip fades the overflow rather than ellipsizing it -- but short enough that
- *  a pasted paragraph does not end up in the machine's title store. Matches the
- *  backend's ``MAX_MEMBER_TITLE_LENGTH``, which rejects anything longer. */
+ *  a pasted paragraph does not end up as an instance's title. */
 export const MAX_TAB_TITLE_LENGTH = 120;
 
 /**
