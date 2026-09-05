@@ -291,12 +291,18 @@ class AppInventory(MutableModel):
             for row in rows:
                 name = str(row.name)
                 known = previous.get(name)
-                if known is not None:
+                if known is not None and known.row.instances == row.instances:
                     entry = known.model_copy_update(to_update(known.field_ref().row, row))
                     is_changed = is_changed or known.row != row
                 else:
+                    # A row that flipped between single- and multi-instance starts its list over:
+                    # the old list belongs to the other mode. Its liveness carries over.
                     entry = AppInventoryEntry(
-                        row=row, is_running=True, instances=(), first_seen_at_by_key={}, is_listed=not row.instances
+                        row=row,
+                        is_running=True if known is None else known.is_running,
+                        instances=(),
+                        first_seen_at_by_key={},
+                        is_listed=not row.instances,
                     )
                     is_changed = True
                 if not row.instances:
