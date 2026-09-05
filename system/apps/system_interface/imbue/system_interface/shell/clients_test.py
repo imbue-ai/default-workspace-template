@@ -29,7 +29,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "id": "c1",
         "device_kind": "desktop",
         "active_view": "alpha",
-        "last_seen": "2026-09-04T12:02:00+00:00",
+        "last_seen": "2026-09-04T00:02:00+00:00",
     }
 
 
