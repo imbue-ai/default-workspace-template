@@ -19,7 +19,7 @@
  */
 
 import m from "mithril";
-import { addressFor, getApp, getOpenableApps } from "../models/Inventory";
+import { addressFor, getApp, getOpenableApps, primaryActionForApp } from "../models/Inventory";
 import type {
   AppAction,
   AppRecord,
@@ -230,16 +230,6 @@ function anchorForPointer(event: MouseEvent): MenuAnchor {
 
 // ---------- Shortcuts ----------
 
-/** The action an app's rail row runs when nothing else is said: its declared default
- *  shortcut's action, else its first action. Null for an app declaring none. */
-export function primaryActionOf(app: AppRecord): AppAction | null {
-  if (app.default_shortcut !== null) {
-    const declared = app.actions.find((action) => action.id === app.default_shortcut?.action);
-    if (declared !== undefined) return declared;
-  }
-  return app.actions[0] ?? null;
-}
-
 /**
  * The rail a view shows, resolved against the inventory.
  *
@@ -251,7 +241,7 @@ export function primaryActionOf(app: AppRecord): AppAction | null {
 export function effectiveShortcuts(project: ProjectInfo | null, apps: readonly AppRecord[]): ResolvedShortcut[] {
   if (project === null) {
     return apps.flatMap((app) => {
-      const action = primaryActionOf(app);
+      const action = primaryActionForApp(app);
       if (action === null) return [];
       return [{ app, action, mode: "focus" as const, shortcut: { app: app.name, action: action.id, mode: "focus" } }];
     });

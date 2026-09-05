@@ -13,6 +13,7 @@ import {
   isAppStoppable,
   listInstances,
   parseAddress,
+  primaryActionForApp,
   resetInventoryForTesting,
 } from "./Inventory";
 import type { AppRecord, InstanceRecord } from "./Inventory";
@@ -129,5 +130,27 @@ describe("instancePageUrl", () => {
       "http:",
     );
     expect(url).toBe("http://127.0.0.1:18765/agent-1");
+  });
+});
+
+describe("primaryActionForApp", () => {
+  function chat(overrides: Partial<AppRecord>): AppRecord {
+    return appRecord("chat", {
+      url: "http://127.0.0.1:8000",
+      program: "",
+      critical: true,
+      actions: [
+        { id: "new", label: "New Chat" },
+        { id: "subagent", label: "Open subagent" },
+      ],
+      ...overrides,
+    });
+  }
+
+  it("takes the declared default shortcut's action, else the first action, else nothing", () => {
+    expect(primaryActionForApp(chat({ default_shortcut: { action: "subagent", mode: "new" } }))?.id).toBe("subagent");
+    expect(primaryActionForApp(chat({}))?.id).toBe("new");
+    expect(primaryActionForApp(chat({ default_shortcut: { action: "gone", mode: "new" } }))?.id).toBe("new");
+    expect(primaryActionForApp(chat({ actions: [] }))).toBeNull();
   });
 });

@@ -178,6 +178,19 @@ export function isAddressOfApp(candidate: string, appName: string): boolean {
   return parseAddress(candidate)?.app === appName;
 }
 
+// ---------- Actions (pure) ----------
+
+/** The action an app's rail row and launcher tile run: its declared default shortcut's action
+ *  when the app declares one, else its first action, else the synthesized ``open``. Null for an
+ *  app with instances that declares no action at all. */
+export function primaryActionForApp(app: AppRecord): AppAction | null {
+  if (app.default_shortcut !== null) {
+    const declared = app.actions.find((action) => action.id === app.default_shortcut?.action);
+    if (declared !== undefined) return declared;
+  }
+  return app.actions[0] ?? null;
+}
+
 // ---------- Liveness (pure) ----------
 
 /** Whether the workspace can stop and start this app: supervised, and not critical to the workspace. */
