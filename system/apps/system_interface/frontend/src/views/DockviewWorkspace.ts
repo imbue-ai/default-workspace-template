@@ -1911,19 +1911,27 @@ async function openForAgent(address: string, placement: AddPanelPlacementOptions
   m.redraw();
 }
 
+/**
+ * Focus the panel already showing ``address`` (any instance of the app, for a bare address),
+ * or report that none does. A bare app address for an app with instances always creates (a
+ * fresh terminal each ``open terminal``), so it never counts as docked.
+ */
+function focusDockedPanel(address: string, requesterAgentId: string): boolean {
+  if (!dockview) return false;
+  const parsed = parseAddress(address);
+  const isCreating = parsed !== null && parsed.key === "" && getApp(parsed.app)?.has_instances === true;
+  if (isCreating) return false;
+  const existing = resolveAddressToPanelId(address, requesterAgentId);
+  if (existing === null) return false;
+  const panel = dockview.panels.find((p) => p.id === existing);
+  if (panel) dockview.setActivePanel(panel);
+  return true;
+}
+
 async function handleOpen(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
   const address = asString(args.address);
   if (!address || !dockview) return;
-  const existing = resolveAddressToPanelId(address, requesterAgentId);
-  // A bare app address for an app with instances always creates (a fresh terminal each
-  // ``open terminal``); an instance address or a single-instance app focuses what is open.
-  const parsed = parseAddress(address);
-  const isCreating = parsed !== null && parsed.key === "" && getApp(parsed.app)?.has_instances === true;
-  if (existing !== null && !isCreating) {
-    const panel = dockview.panels.find((p) => p.id === existing);
-    if (panel) dockview.setActivePanel(panel);
-    return;
-  }
+  if (focusDockedPanel(address, requesterAgentId)) return;
   await openForAgent(address, placementForAgentOpen(requesterAgentId, args.new_group === true));
 }
 
@@ -1970,6 +1978,8 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
   const ratio = asNumber(args.ratio);
   const forceNewGroup = args.new_group === true;
   if (!address || !relativeTo) return;
+  // An instance is one page: a second panel for it would take the page from the first.
+  if (focusDockedPanel(address, requesterAgentId)) return;
   // ``relative_to=self`` strictly anchors against the requester's own chat panel.
   const referencePanelId = resolveAddressToPanelId(relativeTo, requesterAgentId);
   if (referencePanelId === null) return;
