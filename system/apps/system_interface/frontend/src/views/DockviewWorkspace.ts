@@ -1396,8 +1396,9 @@ function fileIntoActiveProject(address: string): void {
   if (projectForViewId(availableProjects, viewId)?.tabs.includes(address) === true) return;
   void addProjectTab(viewId, address)
     .then(() => refreshProjectsList())
-    .catch(() => {
+    .catch((e: Error) => {
       // The tab is open regardless, and opening it again files it again.
+      console.warn(`[si] could not file ${address} into ${viewId}`, e);
     });
 }
 
@@ -1451,8 +1452,9 @@ async function persistLayout(): Promise<void> {
   try {
     await saveLayout(targetViewId, getClientId(), payload.dockview, payload.tabs);
     lastPersistedLayoutJson = serialized;
-  } catch {
+  } catch (e) {
     // Best-effort (the project was deleted mid-flight, say; the push switches us to the fallback).
+    console.warn(`[si] could not save the layout of ${targetViewId}`, e);
   }
 }
 
