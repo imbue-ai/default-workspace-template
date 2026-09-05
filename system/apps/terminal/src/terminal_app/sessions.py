@@ -1,3 +1,4 @@
+import os
 import threading
 from collections.abc import Mapping, Sequence
 from typing import Final
@@ -111,7 +112,9 @@ def _parse_workdir(params: Mapping[str, str]) -> Workdir | None:
         )
     raw_workdir = params.get(WORKDIR_PARAM)
     if raw_workdir is None or raw_workdir == "":
-        return None
+        # A create that names no directory starts the shell where this app runs: the workspace
+        # root under supervisord, rather than wherever the dispatch script would fall back to.
+        return Workdir(os.getcwd())
     try:
         return Workdir(raw_workdir)
     except InvalidTerminalValueError as e:

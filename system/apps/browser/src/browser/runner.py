@@ -59,6 +59,7 @@ from simple_websocket import ConnectionClosed
 from browser import mediastream, telemetry
 from browser.bridged_fleet import BridgedFleet, ManagerNudger
 from browser.cdp_proxy import ProxyServer
+from browser.errors import UnknownBrowserError
 from browser.instances import FleetInstanceSource
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
@@ -201,11 +202,11 @@ def _ndjson(event: dict[str, Any]) -> str:
 
 
 def _resolve_sync(browser_id: str) -> "LiveBrowser | Response":
-    """Resolve a browser on the loop, turning KeyError into 404 / startup errors into 503."""
+    """Resolve a browser on the loop, turning an unknown name into 404 / startup errors into 503."""
     try:
         return bridge.run(manager.resolve(browser_id), timeout=_ROUTE_TIMEOUT)
-    except KeyError:
-        return _error({"error": f"No browser {browser_id}"}, 404)
+    except UnknownBrowserError as e:
+        return _error({"error": str(e)}, 404)
     except _STARTUP_ERRORS as e:
         return _error({"error": f"Could not start browser {browser_id}: {e}"}, 503)
 
@@ -548,10 +549,10 @@ def cast_socket(ws: Any, browser_id: str) -> None:
 
 
 def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
-    """Resolve a browser for the cast socket; None on any KeyError/startup error."""
+    """Resolve a browser for the cast socket; None for an unknown name or a startup error."""
     try:
         return bridge.run(manager.resolve(browser_id), timeout=_ROUTE_TIMEOUT)
-    except (KeyError, *_STARTUP_ERRORS):
+    except (UnknownBrowserError, *_STARTUP_ERRORS):
         return None
 
 

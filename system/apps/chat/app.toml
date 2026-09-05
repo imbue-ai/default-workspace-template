@@ -6,10 +6,6 @@ display_name = "Chat"
 icon = "icon.svg"
 instances = true
 critical = true
-# CLEANUP: drop `internal` in phase 7, when the shell reads `critical` off the registry row
-# and lists the app itself; until then the shell would offer this row beside its built-in
-# Chat shortcut and let its Stop verb stop the shell's own program.
-internal = true
 # CLEANUP: phase 10 sets program = "chat" and priority = "chat" when the chat app runs as its
 # own supervisord program; while it shares the shell's process, the memory backstop must
 # resolve that program to the shell's band, not the chat band.

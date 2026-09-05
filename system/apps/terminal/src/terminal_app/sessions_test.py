@@ -1,3 +1,5 @@
+import os
+import urllib.parse
 from datetime import datetime, timezone
 
 import pytest
@@ -107,7 +109,9 @@ def test_two_creates_before_any_attach_get_distinct_names(
     second = session_source.create_instance(_NEW, {"workdir": ""})
 
     assert (first.key, second.key) == ("terminal-1", "terminal-2")
-    assert second.url == "/?arg=_&arg=session&arg=terminal-2&arg={tab}"
+    # A create that names no directory starts the shell where this app runs.
+    own_directory = urllib.parse.quote(os.getcwd(), safe="")
+    assert second.url == f"/?arg=_&arg=session&arg=terminal-2&arg={{tab}}&arg={own_directory}"
 
 
 def test_create_refuses_other_actions_and_other_params(

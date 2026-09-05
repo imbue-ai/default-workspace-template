@@ -199,7 +199,7 @@ is best-effort, and a failure is not a reason to stop:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    surface-chat-tab --name "$MNGR_AGENT_NAME"
+    surface-chat-tab --agent-id "$MNGR_AGENT_ID"
 ```
 
 Open a tracking ticket (note the id it prints), then `tk start <ticket-id>` as
