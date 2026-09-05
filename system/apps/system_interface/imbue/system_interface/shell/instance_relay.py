@@ -3,15 +3,16 @@
 from typing import Final
 
 import httpx
+from app_instances.blueprint import HTTP_SERVICE_UNAVAILABLE
+from app_instances.blueprint import INSTANCES_PATH
 from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.data_types import AppInventoryEntry
+from imbue.system_interface.shell.data_types import instances_url_of
 
-INSTANCES_PATH: Final[str] = "/_instances"
 RELAY_TIMEOUT_SECONDS: Final[float] = 30.0
-HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 JSON_CONTENT_TYPE: Final[str] = "application/json"
 
 
@@ -24,9 +25,7 @@ class RelayOutcome(FrozenModel):
 
 
 def _instances_base(entry: AppInventoryEntry) -> str:
-    row = entry.row
-    base = str(row.instances_url) if row.instances_url is not None else str(row.url)
-    return f"{base.rstrip('/')}{INSTANCES_PATH}"
+    return f"{instances_url_of(entry.row).rstrip('/')}{INSTANCES_PATH}"
 
 
 def _unreachable(entry: AppInventoryEntry, error: Exception) -> RelayOutcome:
