@@ -115,16 +115,27 @@ def test_open_waits_for_registration_then_posts_the_address(
     ]
 
 
+@pytest.mark.parametrize(
+    ("bad_name", "fragment"),
+    [
+        ("Foo.Bar", "not an address"),
+        ("app:Foo.Bar", "names no app"),
+        ("app:-leading", "names no app"),
+        ("a" * 33, "not an address"),
+    ],
+)
 def test_a_name_the_registry_could_never_hold_is_refused_without_waiting(
-    registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    registry: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    bad_name: str,
+    fragment: str,
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
-    for bad_name in ("Foo.Bar", "app:Foo.Bar", "app:-leading", "a" * 33):
-        with pytest.raises(SystemExit):
-            layout.main(["focus", bad_name])
-        err = capsys.readouterr().err
-        assert "not an address" in err or "names no app" in err, err
+    with pytest.raises(SystemExit):
+        layout.main(["focus", bad_name])
+    assert fragment in capsys.readouterr().err
     assert posted == []
 
 
