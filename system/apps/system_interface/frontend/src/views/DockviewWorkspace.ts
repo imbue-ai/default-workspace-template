@@ -154,8 +154,10 @@ const LAUNCHER_COMPONENT = "launcher";
 const DELETE_INSTANCE_DETAILS =
   "It leaves every project that shows it, not just this one. The app itself keeps running.";
 
-// How long an open waits for an address the inventory does not list yet: a create the page
-// itself ran (a chat's own create route) lands in the inventory on the next nudge.
+// How long an open waits for an address the inventory does not list yet. A create the page
+// itself ran (a chat's own create route) lands in the inventory on the next nudge; a create
+// the relay ran is in the ``apps_updated`` the shell pushes before it answers, which can still
+// reach this window after the answer does.
 const AWAIT_ADDRESS_TIMEOUT_MS = 4000;
 
 interface DeleteDialogState {
@@ -1298,6 +1300,7 @@ async function runActionInPane(
   try {
     const record = await createInstance(app.name, actionId, params);
     const address = addressFor(app.name, record.key);
+    await whenAddressListed(address);
     if (openAddressInGroup(address, targetGroup) !== null) retireLauncher(launcherPanelId);
   } catch (e) {
     alert(`Failed to open ${app.display_name}: ${(e as Error).message}`);
@@ -1359,8 +1362,8 @@ type AddPanelPlacementOptions = {
 
 /**
  * Dock ``address`` in a new panel with the supplied placement, filing it into the active
- * project's tab set. The instance must be listed; a create that just returned is listed by the
- * time the relay answers, and a page's own create is awaited by ``openAddressWhenListed``.
+ * project's tab set. The instance must be listed: a caller that just created it awaits
+ * ``whenAddressListed`` first.
  */
 function addPanelForAddress(address: string, placement: AddPanelPlacementOptions): string | null {
   if (!dockview) return null;
@@ -1692,22 +1695,27 @@ function openInstanceForChildFrame(frame: HTMLIFrameElement, payload: Record<str
   void openAddressWhenListed(address, targetGroup);
 }
 
-/** Dock ``address`` once the inventory lists it, waiting up to ``AWAIT_ADDRESS_TIMEOUT_MS``. */
+/** Resolve once the inventory lists ``address``, or after ``AWAIT_ADDRESS_TIMEOUT_MS`` so a
+ *  caller never hangs on an address that will not appear. */
+function whenAddressListed(address: string): Promise<void> {
+  if (findInstance(address) !== null) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      removeAppsUpdatedListener(listener);
+      clearTimeout(timer);
+      resolve();
+    };
+    const listener = (): void => {
+      if (findInstance(address) !== null) done();
+    };
+    const timer = setTimeout(done, AWAIT_ADDRESS_TIMEOUT_MS);
+    addAppsUpdatedListener(listener);
+  });
+}
+
+/** Dock ``address`` once the inventory lists it. */
 async function openAddressWhenListed(address: string, targetGroup: DockviewGroupPanel | null): Promise<void> {
-  if (findInstance(address) === null) {
-    await new Promise<void>((resolve) => {
-      const done = (): void => {
-        removeAppsUpdatedListener(listener);
-        clearTimeout(timer);
-        resolve();
-      };
-      const listener = (): void => {
-        if (findInstance(address) !== null) done();
-      };
-      const timer = setTimeout(done, AWAIT_ADDRESS_TIMEOUT_MS);
-      addAppsUpdatedListener(listener);
-    });
-  }
+  await whenAddressListed(address);
   openAddressInGroup(address, targetGroup);
   m.redraw();
 }
@@ -1872,7 +1880,9 @@ async function openForAgent(address: string, placement: AddPanelPlacementOptions
     m.redraw();
     try {
       const record = await createInstance(app.name, action.id, {});
-      addPanelForAddress(addressFor(app.name, record.key), placement);
+      const address = addressFor(app.name, record.key);
+      await whenAddressListed(address);
+      addPanelForAddress(address, placement);
     } catch (e) {
       console.warn(`[si] could not run ${action.id} on ${app.name} for an agent: ${(e as Error).message}`);
     } finally {
