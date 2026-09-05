@@ -314,11 +314,6 @@ def _is_app_registered(name: str) -> bool:
     return _registry_row(name) is not None
 
 
-def _has_instances(name: str) -> bool:
-    row = _registry_row(name)
-    return bool(row.get("instances", False)) if row is not None else False
-
-
 def _wait_for_registration(name: str, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while True:
@@ -507,14 +502,6 @@ def _find_panel_summary(layout: dict[str, Any], address: str) -> dict[str, Any] 
         if _address_matches(address, panel.get("address")):
             return panel
     return None
-
-
-def _panel_addresses(layout: dict[str, Any]) -> set[str]:
-    return {
-        str(panel["address"])
-        for panel in layout.get("panels", []) or []
-        if isinstance(panel.get("address"), str)
-    }
 
 
 def _addresses_in_group(leaf: dict[str, Any]) -> list[str]:
