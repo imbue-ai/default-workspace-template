@@ -9,56 +9,17 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import threading
 import urllib.request
-from http.server import BaseHTTPRequestHandler
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
-import tomlkit
 
 _SCRIPT = Path(__file__).parent / "layout.py"
 _spec = importlib.util.spec_from_file_location("layout", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 layout = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(layout)
-
-
-@pytest.fixture(autouse=True)
-def _skip_wait_stable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bypass the wait-stable poll; tests that want it remove the variable again."""
-    monkeypatch.setenv(layout.ENV_NO_WAIT_STABLE, "1")
-
-
-def _write_apps_toml(path: Path, rows: dict[str, bool]) -> None:
-    """A registry with one row per name; the value says whether the app has instances."""
-    doc = tomlkit.document()
-    apps = tomlkit.aot()
-    for name, has_instances in rows.items():
-        entry = tomlkit.table()
-        entry["name"] = name
-        entry["url"] = f"http://localhost:9000/{name}"
-        entry["instances"] = has_instances
-        if has_instances:
-            actions = tomlkit.aot()
-            action = tomlkit.table()
-            action["id"] = "new"
-            action["label"] = f"New {name}"
-            actions.append(action)
-            entry["actions"] = actions
-        apps.append(entry)
-    doc["apps"] = apps
-    path.write_text(tomlkit.dumps(doc))
-
-
-@pytest.fixture
-def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "apps.toml"
-    _write_apps_toml(path, {"files": False, "terminal": True, "chat": True})
-    monkeypatch.setenv(layout.ENV_APPS_FILE, str(path))
-    return path
 
 
 def _make_fake_post(
@@ -84,7 +45,9 @@ def _make_fake_post(
         ("self", "self"),
     ],
 )
-def test_bare_names_expand_and_addresses_pass_through(spelling: str, address: str) -> None:
+def test_bare_names_expand_and_addresses_pass_through(
+    spelling: str, address: str
+) -> None:
     assert layout._resolve_address(spelling) == address
 
 
@@ -111,7 +74,16 @@ def test_the_retired_spellings_are_refused_with_the_address_to_use(
     assert expected_hint in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("spelling", ["app:", "app:files?key=1", "app:files?instance=", "not an app", "app:files?instance=a b"])
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "app:",
+        "app:files?key=1",
+        "app:files?instance=",
+        "not an app",
+        "app:files?instance=a b",
+    ],
+)
 def test_malformed_addresses_are_refused(spelling: str) -> None:
     with pytest.raises(SystemExit):
         layout._resolve_address(spelling)
@@ -120,7 +92,9 @@ def test_malformed_addresses_are_refused(spelling: str) -> None:
 def test_address_matching_widens_a_bare_app_to_its_instances() -> None:
     assert layout._address_matches("app:files", "app:files")
     assert layout._address_matches("app:terminal", "app:terminal?instance=terminal-1")
-    assert not layout._address_matches("app:terminal?instance=terminal-1", "app:terminal?instance=terminal-2")
+    assert not layout._address_matches(
+        "app:terminal?instance=terminal-1", "app:terminal?instance=terminal-2"
+    )
     assert not layout._address_matches("app:term", "app:terminal?instance=terminal-1")
 
 
@@ -132,8 +106,13 @@ def test_open_waits_for_registration_then_posts_the_address(
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
-    assert layout.main(["open", "files", "--new-group", "--view", "Research"]) == layout.EXIT_OK
-    assert posted == [("open", {"address": "app:files", "new_group": True, "view": "Research"})]
+    assert (
+        layout.main(["open", "files", "--new-group", "--view", "Research"])
+        == layout.EXIT_OK
+    )
+    assert posted == [
+        ("open", {"address": "app:files", "new_group": True, "view": "Research"})
+    ]
 
 
 def test_open_of_an_unregistered_app_fails_without_posting(
@@ -160,7 +139,12 @@ def test_open_of_an_app_with_instances_prints_the_created_address(
                     {"address": "app:terminal?instance=terminal-1"},
                     {"address": "app:terminal?instance=terminal-2"},
                 ],
-                "tree": {"type": "leaf", "panels": [{"address": "app:terminal?instance=terminal-2", "active": True}]},
+                "tree": {
+                    "type": "leaf",
+                    "panels": [
+                        {"address": "app:terminal?instance=terminal-2", "active": True}
+                    ],
+                },
             },
         ]
     )
@@ -176,7 +160,9 @@ def test_open_of_an_app_with_instances_prints_the_created_address(
     captured = capsys.readouterr()
     assert captured.out == "app:terminal?instance=terminal-2\n"
     assert "created app:terminal?instance=terminal-2" in captured.err
-    assert posted == [("open", {"address": "app:terminal", "new_group": False, "view": None})]
+    assert posted == [
+        ("open", {"address": "app:terminal", "new_group": False, "view": None})
+    ]
 
 
 def test_open_of_an_instance_reports_a_noop_when_it_is_docked(
@@ -186,7 +172,10 @@ def test_open_of_an_instance_reports_a_noop_when_it_is_docked(
     posted: list[tuple[str, dict[str, Any]]] = []
     docked = {
         "panels": [{"address": "app:terminal?instance=terminal-1"}],
-        "tree": {"type": "leaf", "panels": [{"address": "app:terminal?instance=terminal-1", "active": True}]},
+        "tree": {
+            "type": "leaf",
+            "panels": [{"address": "app:terminal?instance=terminal-1", "active": True}],
+        },
     }
 
     def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
@@ -198,7 +187,10 @@ def test_open_of_an_instance_reports_a_noop_when_it_is_docked(
     monkeypatch.setattr(layout, "_post_layout", fake_post)
     assert layout.main(["open", "app:terminal?instance=terminal-1"]) == layout.EXIT_OK
     assert posted == []
-    assert "no change: app:terminal?instance=terminal-1 is already open" in capsys.readouterr().err
+    assert (
+        "no change: app:terminal?instance=terminal-1 is already open"
+        in capsys.readouterr().err
+    )
 
 
 def test_split_and_move_pass_the_anchor_and_direction_through(
@@ -206,8 +198,33 @@ def test_split_and_move_pass_the_anchor_and_direction_through(
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
-    assert layout.main(["split", "files", "--relative-to", "app:chat?instance=agent-1", "--direction", "within"]) == 0
-    assert layout.main(["move", "app:files", "--relative-to", "self", "--direction", "below", "--new-group"]) == 0
+    assert (
+        layout.main(
+            [
+                "split",
+                "files",
+                "--relative-to",
+                "app:chat?instance=agent-1",
+                "--direction",
+                "within",
+            ]
+        )
+        == 0
+    )
+    assert (
+        layout.main(
+            [
+                "move",
+                "app:files",
+                "--relative-to",
+                "self",
+                "--direction",
+                "below",
+                "--new-group",
+            ]
+        )
+        == 0
+    )
     assert posted == [
         (
             "split",
@@ -220,17 +237,46 @@ def test_split_and_move_pass_the_anchor_and_direction_through(
                 "view": None,
             },
         ),
-        ("move", {"address": "app:files", "relative_to": "self", "direction": "below", "new_group": True, "view": None}),
+        (
+            "move",
+            {
+                "address": "app:files",
+                "relative_to": "self",
+                "direction": "below",
+                "new_group": True,
+                "view": None,
+            },
+        ),
     ]
 
 
-def test_within_with_new_group_is_rejected(registry: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert layout.main(["split", "files", "--direction", "within", "--new-group"]) == layout.EXIT_ERROR
+def test_within_with_new_group_is_rejected(
+    registry: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert (
+        layout.main(["split", "files", "--direction", "within", "--new-group"])
+        == layout.EXIT_ERROR
+    )
     assert "--new-group is meaningless" in capsys.readouterr().err
-    assert layout.main(["move", "files", "--relative-to", "self", "--direction", "within", "--new-group"]) == 1
+    assert (
+        layout.main(
+            [
+                "move",
+                "files",
+                "--relative-to",
+                "self",
+                "--direction",
+                "within",
+                "--new-group",
+            ]
+        )
+        == 1
+    )
 
 
-def test_focus_close_maximize_restore_and_refresh_post_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_focus_close_maximize_restore_and_refresh_post_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
     assert layout.main(["focus", "app:files"]) == 0
@@ -252,7 +298,11 @@ def test_read_ops_pass_the_view_and_emit_the_servers_answer(
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     answers = {
-        "list": {"ok": True, "view_id": "alpha", "apps": [{"name": "files", "instances": []}]},
+        "list": {
+            "ok": True,
+            "view_id": "alpha",
+            "apps": [{"name": "files", "instances": []}],
+        },
         "views": {"ok": True, "views": [{"id": "everything"}]},
         "context": {"ok": True, "clients": [{"client_id": "c1"}]},
         "load": {"ok": True, "view_id": "alpha", "target_client_id": "c1"},
@@ -283,7 +333,11 @@ _TREE_LAYOUT = {
     "active_panel": "g1",
     "panels": [
         {"address": "app:chat?instance=agent-1", "tab_id": "tab-1", "title": "Alice"},
-        {"address": "app:terminal?instance=terminal-1", "tab_id": "tab-2", "title": "Terminal 1"},
+        {
+            "address": "app:terminal?instance=terminal-1",
+            "tab_id": "tab-2",
+            "title": "Terminal 1",
+        },
         {"address": "app:files", "tab_id": "tab-3", "title": "Files"},
     ],
     "tree": {
@@ -299,15 +353,26 @@ _TREE_LAYOUT = {
                     {"address": "app:terminal?instance=terminal-1", "active": False},
                 ],
             },
-            {"type": "leaf", "size_ratio": 0.6, "panels": [{"address": "app:files", "active": True}]},
+            {
+                "type": "leaf",
+                "size_ratio": 0.6,
+                "panels": [{"address": "app:files", "active": True}],
+            },
         ],
     },
 }
 
 
-def test_inspect_renders_one_line_per_group(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_inspect_renders_one_line_per_group(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
-        layout, "_post_layout", _make_fake_post([], (200, {"view_id": "everything", "client_id": "c1", "layout": _TREE_LAYOUT}))
+        layout,
+        "_post_layout",
+        _make_fake_post(
+            [],
+            (200, {"view_id": "everything", "client_id": "c1", "layout": _TREE_LAYOUT}),
+        ),
     )
     assert layout.main(["inspect"]) == 0
     captured = capsys.readouterr()
@@ -320,13 +385,25 @@ def test_inspect_renders_one_line_per_group(monkeypatch: pytest.MonkeyPatch, cap
     )
 
 
-def test_where_shows_tab_mates_and_neighbors(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setattr(layout, "_post_layout", _make_fake_post([], (200, {"layout": _TREE_LAYOUT})))
+def test_where_shows_tab_mates_and_neighbors(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        layout, "_post_layout", _make_fake_post([], (200, {"layout": _TREE_LAYOUT}))
+    )
     assert layout.main(["where", "app:chat?instance=agent-1", "--json"]) == 0
     view = json.loads(capsys.readouterr().out)
     assert view["title"] == "Alice"
-    assert view["group"]["tabs"] == ["app:chat?instance=agent-1*", "app:terminal?instance=terminal-1"]
-    assert view["neighbors"] == {"left": [], "right": ["app:files*"], "above": [], "below": []}
+    assert view["group"]["tabs"] == [
+        "app:chat?instance=agent-1*",
+        "app:terminal?instance=terminal-1",
+    ]
+    assert view["neighbors"] == {
+        "left": [],
+        "right": ["app:files*"],
+        "above": [],
+        "below": [],
+    }
     assert layout.main(["where", "app:browser?instance=x"]) == layout.EXIT_ERROR
     assert "not currently open" in capsys.readouterr().err
 
@@ -346,7 +423,14 @@ def test_move_within_an_anchor_is_a_noop_when_already_tab_mates(
     monkeypatch.setattr(layout, "_post_layout", fake_post)
     assert (
         layout.main(
-            ["move", "app:terminal?instance=terminal-1", "--relative-to", "app:chat?instance=agent-1", "--direction", "within"]
+            [
+                "move",
+                "app:terminal?instance=terminal-1",
+                "--relative-to",
+                "app:chat?instance=agent-1",
+                "--direction",
+                "within",
+            ]
         )
         == 0
     )
@@ -354,7 +438,9 @@ def test_move_within_an_anchor_is_a_noop_when_already_tab_mates(
     assert "already in the same group" in capsys.readouterr().err
 
 
-def test_focus_requires_the_panel_to_be_open(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_focus_requires_the_panel_to_be_open(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE)
     posted: list[tuple[str, dict[str, Any]]] = []
 
@@ -377,8 +463,23 @@ def test_focus_requires_the_panel_to_be_open(monkeypatch: pytest.MonkeyPatch, ca
     ("response", "exit_code", "fragment"),
     [
         ((-1, "connection refused"), layout.EXIT_ERROR, "could not reach"),
-        ((409, {"detail": "busy", "in_flight": {"agent_id": "a", "operation": "open"}, "retry_after_ms": 500}), layout.EXIT_CONFLICT, "409"),
-        ((404, {"detail": "No registered app named 'x'"}), layout.EXIT_ERROR, "not found"),
+        (
+            (
+                409,
+                {
+                    "detail": "busy",
+                    "in_flight": {"agent_id": "a", "operation": "open"},
+                    "retry_after_ms": 500,
+                },
+            ),
+            layout.EXIT_CONFLICT,
+            "409",
+        ),
+        (
+            (404, {"detail": "No registered app named 'x'"}),
+            layout.EXIT_ERROR,
+            "not found",
+        ),
         ((400, {"detail": "bad"}), layout.EXIT_ERROR, "400"),
         ((412, {"detail": "no client"}), layout.EXIT_ERROR, "412"),
     ],
@@ -395,7 +496,9 @@ def test_transport_failures_map_to_exit_codes(
     assert fragment in capsys.readouterr().err
 
 
-def test_post_layout_sends_the_agent_id_in_body_and_header(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_post_layout_sends_the_agent_id_in_body_and_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seen: dict[str, Any] = {}
 
     class _Response:
@@ -422,7 +525,11 @@ def test_post_layout_sends_the_agent_id_in_body_and_header(monkeypatch: pytest.M
     assert layout._post_layout("focus", {"address": "app:files"}) == (200, {"ok": True})
     assert seen == {
         "url": "http://127.0.0.1:1/api/layout/broadcast",
-        "body": {"op": "focus", "args": {"address": "app:files"}, "agent_id": "agent-42"},
+        "body": {
+            "op": "focus",
+            "args": {"address": "app:files"},
+            "agent_id": "agent-42",
+        },
         "header": "agent-42",
     }
 
@@ -430,69 +537,9 @@ def test_post_layout_sends_the_agent_id_in_body_and_header(monkeypatch: pytest.M
 # ---------- the REST-riding commands: the relay verbs and the shortcuts ----------
 
 
-class _FakeShellHandler(BaseHTTPRequestHandler):
-    """The shell's REST routes the relay verbs and the shortcut commands ride."""
-
-    def log_message(self, format: str, *args: Any) -> None:
-        return
-
-    def _respond(self, status: int, body: dict[str, Any]) -> None:
-        payload = json.dumps(body).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def do_GET(self) -> None:
-        server: Any = self.server
-        if self.path == "/api/projects":
-            self._respond(200, {"projects": server.projects})
-            return
-        self._respond(404, {"detail": f"unknown path {self.path}"})
-
-    def do_POST(self) -> None:
-        server: Any = self.server
-        body_length = int(self.headers.get("Content-Length", "0"))
-        body = json.loads(self.rfile.read(body_length) or b"{}")
-        server.posted.append((self.path, body))
-        if self.path == "/api/layout/broadcast":
-            self._respond(200, {"ok": True, "clients": server.context_clients})
-            return
-        if self.path.startswith("/api/projects/") and "/shortcuts" in self.path:
-            self._respond(200, {"id": self.path.split("/")[3], "shortcuts": server.shortcuts_answer})
-            return
-        if self.path.startswith("/api/apps/"):
-            if server.relay_refuses:
-                self._respond(404, {"detail": "no such instance"})
-            elif self.path.endswith("/delete"):
-                self._respond(204, {})
-            else:
-                self._respond(200, {"instance": {"key": self.path.split("/")[5], "title": body.get("title", "")}})
-            return
-        self._respond(404, {"detail": f"unknown path {self.path}"})
-
-
-@pytest.fixture
-def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeShellHandler)
-    server.projects = []
-    server.posted = []
-    server.shortcuts_answer = []
-    server.context_clients = []
-    server.relay_refuses = False
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    monkeypatch.setenv(layout.ENV_WORKSPACE_URL, f"http://127.0.0.1:{server.server_address[1]}")
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-
-def test_rename_delete_and_replace_url_ride_the_relay(fake_shell: Any, capsys: pytest.CaptureFixture[str]) -> None:
+def test_rename_delete_and_replace_url_ride_the_relay(
+    fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
     assert layout.main(["rename", "app:terminal?instance=terminal-1", "Build"]) == 0
     assert layout.main(["replace-url", "app:files?instance=files-1", "/notes"]) == 0
     assert layout.main(["delete", "app:terminal?instance=terminal-1"]) == 0
@@ -502,19 +549,29 @@ def test_rename_delete_and_replace_url_ride_the_relay(fake_shell: Any, capsys: p
         ("/api/apps/terminal/instances/terminal-1/delete", {}),
     ]
     err = capsys.readouterr().err
-    assert "renamed app:terminal?instance=terminal-1 to 'Build'" in err and "deleted app:terminal?instance=terminal-1" in err
+    assert (
+        "renamed app:terminal?instance=terminal-1 to 'Build'" in err
+        and "deleted app:terminal?instance=terminal-1" in err
+    )
 
     fake_shell.relay_refuses = True
-    assert layout.main(["rename", "app:terminal?instance=terminal-9", "x"]) == layout.EXIT_ERROR
+    assert (
+        layout.main(["rename", "app:terminal?instance=terminal-9", "x"])
+        == layout.EXIT_ERROR
+    )
     assert "refused (HTTP 404): no such instance" in capsys.readouterr().err
 
 
-def test_the_relay_verbs_need_an_instance_address(capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_relay_verbs_need_an_instance_address(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     with pytest.raises(SystemExit):
         layout.main(["rename", "files", "Docs"])
     assert "needs an instance address" in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        layout.main(["replace-url", "app:files?instance=files-1", "https://example.com"])
+        layout.main(
+            ["replace-url", "app:files?instance=files-1", "https://example.com"]
+        )
     assert "phase 8" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         layout.main(["replace-url", "app:files?instance=files-1", "notes"])
@@ -524,7 +581,12 @@ def test_shortcuts_list_a_projects_rail_and_everythings_fixed_rows(
     fake_shell: Any, registry: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake_shell.projects = [
-        {"id": "research", "name": "Research", "tabs": [], "shortcuts": [{"app": "terminal", "action": "new", "mode": "new"}]}
+        {
+            "id": "research",
+            "name": "Research",
+            "tabs": [],
+            "shortcuts": [{"app": "terminal", "action": "new", "mode": "new"}],
+        }
     ]
     assert layout.main(["shortcuts", "--view", "Research", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {
@@ -541,9 +603,15 @@ def test_shortcuts_list_a_projects_rail_and_everythings_fixed_rows(
     assert "no project named 'Nowhere'" in capsys.readouterr().err
 
 
-def test_shortcuts_default_to_the_connected_clients_view(fake_shell: Any, capsys: pytest.CaptureFixture[str]) -> None:
-    fake_shell.projects = [{"id": "alpha", "name": "Alpha", "tabs": [], "shortcuts": []}]
-    fake_shell.context_clients = [{"client_id": "c1", "is_connected": True, "active_view": "alpha"}]
+def test_shortcuts_default_to_the_connected_clients_view(
+    fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_shell.projects = [
+        {"id": "alpha", "name": "Alpha", "tabs": [], "shortcuts": []}
+    ]
+    fake_shell.context_clients = [
+        {"client_id": "c1", "is_connected": True, "active_view": "alpha"}
+    ]
     assert layout.main(["shortcuts", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["view"] == "alpha"
     fake_shell.context_clients = []
@@ -551,14 +619,31 @@ def test_shortcuts_default_to_the_connected_clients_view(fake_shell: Any, capsys
     assert "pass --view" in capsys.readouterr().err
 
 
-def test_shortcut_set_and_remove_post_to_the_project(fake_shell: Any, capsys: pytest.CaptureFixture[str]) -> None:
-    fake_shell.projects = [{"id": "research", "name": "Research", "tabs": [], "shortcuts": []}]
+def test_shortcut_set_and_remove_post_to_the_project(
+    fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_shell.projects = [
+        {"id": "research", "name": "Research", "tabs": [], "shortcuts": []}
+    ]
     fake_shell.shortcuts_answer = [{"app": "docs", "action": "open", "mode": "new"}]
-    assert layout.main(["shortcut", "set", "docs", "open", "--mode", "new", "--view", "Research"]) == 0
-    assert layout.main(["shortcut", "remove", "docs", "open", "--view", "research"]) == 0
+    assert (
+        layout.main(
+            ["shortcut", "set", "docs", "open", "--mode", "new", "--view", "Research"]
+        )
+        == 0
+    )
+    assert (
+        layout.main(["shortcut", "remove", "docs", "open", "--view", "research"]) == 0
+    )
     assert fake_shell.posted == [
-        ("/api/projects/research/shortcuts", {"app": "docs", "action": "open", "mode": "new"}),
+        (
+            "/api/projects/research/shortcuts",
+            {"app": "docs", "action": "open", "mode": "new"},
+        ),
         ("/api/projects/research/shortcuts/remove", {"app": "docs", "action": "open"}),
     ]
-    assert layout.main(["shortcut", "set", "docs", "open", "--view", "Everything"]) == layout.EXIT_ERROR
+    assert (
+        layout.main(["shortcut", "set", "docs", "open", "--view", "Everything"])
+        == layout.EXIT_ERROR
+    )
     assert "Everything's rail is fixed" in capsys.readouterr().err
