@@ -297,10 +297,14 @@ def _repair_grid(document: dict[str, Any], group_id: str) -> dict[str, Any]:
     return repaired
 
 
+def _repaired_document(document: dict[str, Any], group_id: str) -> dict[str, Any]:
+    """The document as it is when its grid has dockview's shape, else repaired into one group named ``group_id``."""
+    return document if _has_grid(document) else _repair_grid(document, group_id)
+
+
 def _dock(document: dict[str, Any], panel_id: str, placement: Placement) -> dict[str, Any]:
     """Put ``panel_id`` (already in ``panels``) where ``placement`` says, and make it the active tab of its group."""
-    if not _has_grid(document):
-        document = _repair_grid(document, f"{placement.group_id}-repaired")
+    document = _repaired_document(document, f"{placement.group_id}-repaired")
     grid = document["grid"]
     root = grid["root"]
     root_orientation = str(grid.get("orientation") or HORIZONTAL)
@@ -407,7 +411,8 @@ def remove_panel(layout: LayoutRecord, panel_id: str) -> LayoutRecord:
     """The layout without ``panel_id``; a grid that empties leaves ``dockview`` None."""
     if layout.dockview is None or panel_id not in layout.tabs:
         raise PanelNotFoundError(f"no panel {panel_id!r} in the arrangement")
-    detached = _detach_panel_from_grid(copy.deepcopy(layout.dockview), panel_id)
+    document = _repaired_document(copy.deepcopy(layout.dockview), f"{panel_id}-repaired")
+    detached = _detach_panel_from_grid(document, panel_id)
     if detached is not None:
         detached["panels"].pop(panel_id, None)
         if not detached["panels"]:
@@ -424,7 +429,7 @@ def focus_panel(layout: LayoutRecord, panel_id: str) -> LayoutRecord:
     """The layout with ``panel_id`` the active tab of its group and that group the active one."""
     if layout.dockview is None:
         raise PanelNotFoundError(f"no panel {panel_id!r} in the arrangement")
-    document = copy.deepcopy(layout.dockview)
+    document = _repaired_document(copy.deepcopy(layout.dockview), f"{panel_id}-repaired")
     path = _leaf_path_for_panel(document["grid"]["root"], panel_id)
     if path is None:
         raise PanelNotFoundError(f"no panel {panel_id!r} in the arrangement")
@@ -442,14 +447,15 @@ def move_panel(layout: LayoutRecord, panel_id: str, placement: Placement) -> Lay
         raise PanelNotFoundError(f"no panel {panel_id!r} in the arrangement")
     if placement.anchor_panel_id == panel_id:
         raise LayoutOpError(f"cannot move {panel_id!r} relative to itself")
-    root = layout.dockview["grid"]["root"]
+    document = _repaired_document(copy.deepcopy(layout.dockview), f"{panel_id}-repaired")
+    root = document["grid"]["root"]
     if (
         placement.anchor_panel_id is not None
         and (placement.direction is None or placement.direction is Direction.WITHIN)
         and _leaf_path_for_panel(root, panel_id) == _leaf_path_for_panel(root, placement.anchor_panel_id)
     ):
         return layout
-    detached = _detach_panel_from_grid(copy.deepcopy(layout.dockview), panel_id)
+    detached = _detach_panel_from_grid(document, panel_id)
     if detached is None:
         # The moved panel was the only one: nothing is left to place it relative to.
         return layout

@@ -205,6 +205,29 @@ def test_removing_a_panel_collapses_its_group_and_the_wrapper_it_leaves_behind()
         remove_panel(gone, "pa")
 
 
+def test_a_document_without_a_grid_is_repaired_into_one_group_by_every_op() -> None:
+    gridless = LayoutRecord(
+        dockview={"panels": {"pa": {"id": "pa"}, "pb": {"id": "pb"}}},
+        tabs={
+            "pa": TabRecord(address=_FILES, tab_id=_TAB_A, last_focused_ms=0),
+            "pb": TabRecord(address=_TERMINAL_1, tab_id=_TAB_B, last_focused_ms=0),
+        },
+        device_kind=DeviceKind.DESKTOP,
+        updated_at=None,
+    )
+    focused = focus_panel(gridless, "pb")
+    assert focused.dockview is not None
+    assert [leaf["data"] for leaf in _leaves(focused.dockview)] == [
+        {"views": ["pa", "pb"], "activeView": "pb", "id": "pb-repaired"}
+    ]
+    moved = move_panel(gridless, "pa", _placement("pb", Direction.BELOW))
+    assert moved.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(moved.dockview)] == [["pb"], ["pa"]]
+    removed = remove_panel(gridless, "pa")
+    assert removed.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(removed.dockview)] == [["pb"]] and set(removed.tabs) == {"pb"}
+
+
 def test_focus_marks_the_tab_and_its_group_active() -> None:
     layout = _two_groups_side_by_side()
     focused = focus_panel(layout, "pb")
