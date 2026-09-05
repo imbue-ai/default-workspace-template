@@ -38,7 +38,6 @@ from imbue.system_interface.shell.projects import project_wire_json
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
-from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import build_sock
 from imbue.system_interface.wsgi_dispatch import PathDispatchingFlask
 
@@ -465,12 +464,7 @@ def _serve_static_file(basename: str) -> Response:
 def _ws_endpoint(websocket: Any) -> None:
     """The one WebSocket per window (contracts.md section 8)."""
     state = get_state()
-    _run_ws_broadcast_loop(
-        websocket=websocket,
-        shell=state.shell,
-        agent_manager=state.agent_manager,
-        ws_broadcaster=state.broadcaster,
-    )
+    _run_ws_broadcast_loop(websocket=websocket, shell=state.shell, agent_manager=state.agent_manager)
 
 
 def _handle_client_state_message(
@@ -528,13 +522,8 @@ def _handle_client_state_message(
     return True
 
 
-def _run_ws_broadcast_loop(
-    websocket: Any,
-    shell: ShellState,
-    agent_manager: AgentManager,
-    ws_broadcaster: WebSocketBroadcaster,
-) -> None:
-    """Stream broadcaster messages to ``websocket`` until the client disconnects.
+def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, agent_manager: AgentManager) -> None:
+    """Stream the shell broadcaster's messages to ``websocket`` until the client disconnects.
 
     Each WebSocket connection owns its own thread (flask-sock + the threaded WSGI server), so
     this loop blocks on the per-client queue and forwards messages. flask-sock's keepalive
@@ -543,6 +532,7 @@ def _run_ws_broadcast_loop(
 
     Incoming ``client_state`` registrations are drained non-blockingly on each loop iteration.
     """
+    ws_broadcaster = shell.broadcaster
     client_queue = ws_broadcaster.register()
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
     disconnect_reason = "handler exited"
