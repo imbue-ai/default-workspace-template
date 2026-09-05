@@ -4,12 +4,9 @@
  * every load of its frame, told again when the tab or view showing it changes, and told
  * shown or hidden only when the pane's visibility changes.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../testing/dom";
 
-vi.hoisted(() => {
-  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-});
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
@@ -151,5 +148,51 @@ describe("IframePanel's side of the app contract", () => {
     contract.isVisible = false;
     m.redraw.sync();
     expect(sent).not.toHaveBeenCalled();
+  });
+});
+
+describe("IframePanel's frame url", () => {
+  function mountWithUrl(): { frame: () => HTMLIFrameElement; attrs: { url: string; isPageAtUrl: boolean } } {
+    const attrs = { url: "http://files.example/", isPageAtUrl: false };
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    m.mount(root, {
+      view: () =>
+        m(IframePanel, {
+          url: attrs.url,
+          isPageAtUrl: attrs.isPageAtUrl,
+          title: "Files",
+          appName: "files",
+          address: "app:files?instance=files-1",
+          contract: { ...contract, address: "app:files?instance=files-1" },
+        }),
+    });
+    return {
+      attrs,
+      frame: () => {
+        const frame = root.querySelector("iframe");
+        if (frame === null) throw new Error("the panel mounted no iframe");
+        return frame;
+      },
+    };
+  }
+
+  it("navigates the frame to a new url, but adopts one the page is already at", () => {
+    const { frame, attrs } = mountWithUrl();
+    expect(frame().getAttribute("src")).toBe("http://files.example/");
+
+    attrs.url = "http://files.example/notes/";
+    attrs.isPageAtUrl = true;
+    m.redraw.sync();
+    expect(frame().getAttribute("src")).toBe("http://files.example/");
+
+    attrs.url = "http://files.example/elsewhere/";
+    attrs.isPageAtUrl = false;
+    m.redraw.sync();
+    expect(frame().getAttribute("src")).toBe("http://files.example/elsewhere/");
+
+    // A redraw with nothing new never touches the src.
+    m.redraw.sync();
+    expect(frame().getAttribute("src")).toBe("http://files.example/elsewhere/");
   });
 });
