@@ -12,7 +12,11 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import instances_url_of
 
-RELAY_TIMEOUT_SECONDS: Final[float] = 30.0
+# The relay answers with whatever the app answers, so its bound must outlive the slowest verb
+# an app runs under it: a chat's delete is a synchronous ``mngr destroy`` that may take two
+# minutes under load. A relay that gave up sooner would report a delete that then completes
+# as the app being unreachable.
+RELAY_TIMEOUT_SECONDS: Final[float] = 150.0
 JSON_CONTENT_TYPE: Final[str] = "application/json"
 
 
