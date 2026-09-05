@@ -189,10 +189,10 @@ python3 system/scripts/layout.py refresh <name>
 ```
 
 `refresh` reloads every iframe for the service. If no tab is open yet and
-the change is ready to show, surface it instead by opening it on each named
-layout -- `open` requires `--layout` and only applies on clients with that
-layout active, so the layout the user is not on fails fast and harmlessly:
-`python3 system/scripts/layout.py open <name>`.
+the change is ready to show, surface it instead with
+`python3 system/scripts/layout.py open <name>`: with no `--view` it lands in
+the view the user is looking at, and `--view <name>` targets one view (it
+fails fast and harmlessly when no client has that view active).
 For any other tab manipulation, see `manage-layout`. Background daemons have
 no tab -- skip the tab refresh, but not the rest of this step.
 
