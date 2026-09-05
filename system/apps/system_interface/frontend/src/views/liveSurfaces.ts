@@ -236,13 +236,13 @@ export function destroyLiveSurface(key: LiveKey): void {
   surface.element.remove();
 }
 
-/** Step every surface out of the way of an in-flight tab drag, or back into it. Without this
- *  the drop would land inside a framed page rather than on the pane's drop target. */
 /** Whether a tab or group drag is under way (a pushed layout waits for it to end). */
 export function isDragInProgress(): boolean {
   return isDragUnderWay;
 }
 
+/** Step every surface out of the way of an in-flight tab drag, or back into it. Without this
+ *  the drop would land inside a framed page rather than on the pane's drop target. */
 export function setDragInProgress(active: boolean): void {
   if (isDragUnderWay === active) return;
   isDragUnderWay = active;
