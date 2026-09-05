@@ -1,8 +1,6 @@
 """Tests for the shell's HTTP routes (contracts.md sections 5 and 6) over a test state with a fake-fed inventory."""
 
 import queue
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +13,6 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import TabRecord
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
@@ -27,16 +23,17 @@ from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.shell.primitives import ViewId
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
+from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
+from imbue.system_interface.shell.testing import layout_showing
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-_NOW = datetime(2026, 9, 4, tzinfo=timezone.utc)
 _TERMINAL_URL = "http://localhost:7681"
 _TERMINAL_1 = Address("app:terminal?instance=terminal-1")
 _TERMINAL_2 = Address("app:terminal?instance=terminal-2")
@@ -79,18 +76,6 @@ def _register_client(app: Flask, client_id: str, view_id: str) -> "queue.Queue[s
     return client_queue
 
 
-def _layout_showing(*addresses: Address) -> LayoutRecord:
-    return LayoutRecord(
-        dockview={"panels": {f"p{index}": {} for index in range(len(addresses))}},
-        tabs={
-            f"p{index}": TabRecord(address=address, tab_id=TabId(f"tab-{index:016x}"), last_focused_ms=0)
-            for index, address in enumerate(addresses)
-        },
-        device_kind=DeviceKind.DESKTOP,
-        updated_at=None,
-    )
-
-
 @pytest.fixture
 def fetcher() -> FakeInstanceFetcher:
     fetcher = FakeInstanceFetcher()
@@ -125,8 +110,8 @@ def test_a_tab_report_rebinds_the_tab_everywhere_and_files_it_in_the_project(
 ) -> None:
     shell = _shell(app)
     shell.projects.create_project("Alpha", "#111111", 0, ())
-    shell.layouts.save_layout("alpha", "c1", _layout_showing(_TERMINAL_1), _NOW)
-    shell.layouts.save_layout("everything", "c2", _layout_showing(_TERMINAL_1), _NOW)
+    shell.layouts.save_layout("alpha", "c1", layout_showing(_TERMINAL_1), TEST_NOW)
+    shell.layouts.save_layout("everything", "c2", layout_showing(_TERMINAL_1), TEST_NOW)
     fetcher.list(_TERMINAL_URL, instance_record("terminal-1"), instance_record("terminal-2"))
     client_queue = _register_client(app, "c1", "alpha")
 
@@ -148,7 +133,7 @@ def test_a_tab_report_rebinds_the_tab_everywhere_and_files_it_in_the_project(
 
 
 def test_a_tab_report_is_refused_when_it_names_no_tab_or_the_wrong_app(client: FlaskClient, app: Flask) -> None:
-    _shell(app).layouts.save_layout("everything", "c1", _layout_showing(_FILES), _NOW)
+    _shell(app).layouts.save_layout("everything", "c1", layout_showing(_FILES), TEST_NOW)
     assert (
         client.post("/api/tabs/tab-00000000000000ff/instance", json={"app": "terminal", "key": "k"}).status_code == 404
     )
@@ -286,7 +271,7 @@ def test_projects_are_created_seeded_and_listed(client: FlaskClient, app: Flask)
 def test_project_settings_tabs_shortcuts_and_deletion(client: FlaskClient, app: Flask) -> None:
     client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
     client.post("/api/projects", json={"name": "Beta", "color": "#111111", "glyph": 1})
-    _shell(app).layouts.save_layout("alpha", "c1", _layout_showing(_TERMINAL_1), _NOW)
+    _shell(app).layouts.save_layout("alpha", "c1", layout_showing(_TERMINAL_1), TEST_NOW)
 
     settings = client.post("/api/projects/alpha/settings", json={"name": "Alpha 2", "color": "#222222", "glyph": 2})
     assert settings.status_code == 200 and settings.get_json()["name"] == "Alpha 2"
@@ -374,9 +359,10 @@ def test_the_read_ops_answer_from_the_inventory_and_the_state_files(client: Flas
     shell = _shell(app)
     client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
     client.post("/api/projects/alpha/tabs", json={"address": str(_TERMINAL_1)})
-    shell.layouts.save_layout("alpha", "c1", _layout_showing(_TERMINAL_1), _NOW)
+    shell.layouts.save_layout("alpha", "c1", layout_showing(_TERMINAL_1), TEST_NOW)
     shell.clients.record_report(
-        ClientStateReport(client_id=ClientId("c1"), device_kind=DeviceKind.DESKTOP, active_view=ViewId("alpha")), _NOW
+        ClientStateReport(client_id=ClientId("c1"), device_kind=DeviceKind.DESKTOP, active_view=ViewId("alpha")),
+        TEST_NOW,
     )
     shell.activity.append_message("c1", "desktop", "alpha", "chat", "agent-1", "hello")
     _register_client(app, "c1", "alpha")

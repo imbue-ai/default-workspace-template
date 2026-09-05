@@ -1,5 +1,3 @@
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +12,8 @@ from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
+from imbue.system_interface.shell.testing import TEST_NOW
 
-_NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 _FILES = Address("app:files")
 _TERMINAL_1 = Address("app:terminal?instance=terminal-1")
 _TAB_A = TabId("tab-000000000000000a")
@@ -52,8 +50,8 @@ def test_read_falls_back_from_own_to_seed_to_empty(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
     assert store.read_layout("everything", "c1", DeviceKind.DESKTOP) == empty_layout(DeviceKind.DESKTOP)
 
-    saved = store.save_layout("everything", "c1", _layout(), _NOW)
-    assert saved.updated_at == _NOW
+    saved = store.save_layout("everything", "c1", _layout(), TEST_NOW)
+    assert saved.updated_at == TEST_NOW
     assert store.read_layout("everything", "c1", DeviceKind.MOBILE) == saved
     # Another desktop client inherits the seed; a mobile one has no seed yet.
     assert store.read_layout("everything", "c2", DeviceKind.DESKTOP) == saved
@@ -64,8 +62,8 @@ def test_read_falls_back_from_own_to_seed_to_empty(tmp_path: Path) -> None:
 
 def test_all_client_layouts_skips_seeds_and_unreadable_files(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
-    store.save_layout("everything", "c1", _layout(), _NOW)
-    store.save_layout("alpha", "c2", _layout(DeviceKind.MOBILE), _NOW)
+    store.save_layout("everything", "c1", _layout(), TEST_NOW)
+    store.save_layout("alpha", "c2", _layout(DeviceKind.MOBILE), TEST_NOW)
     (tmp_path / "layouts" / "alpha" / "broken.json").write_text("{")
     stored = store.all_client_layouts()
     assert [(str(item.view_id), str(item.client_id)) for item in stored] == [("alpha", "c2"), ("everything", "c1")]
@@ -74,14 +72,14 @@ def test_all_client_layouts_skips_seeds_and_unreadable_files(tmp_path: Path) -> 
 
 def test_tabs_are_found_and_rebound_by_id(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
-    store.save_layout("everything", "c1", _layout(), _NOW)
-    store.save_layout("alpha", "c1", _layout(), _NOW)
+    store.save_layout("everything", "c1", _layout(), TEST_NOW)
+    store.save_layout("alpha", "c1", _layout(), TEST_NOW)
     assert [(str(stored.view_id), panel_id) for stored, panel_id in store.find_tab(_TAB_B)] == [
         ("alpha", "p2"),
         ("everything", "p2"),
     ]
     rebound = Address("app:terminal?instance=terminal-2")
-    rewritten = store.rebind_tab(_TAB_B, rebound, _NOW)
+    rewritten = store.rebind_tab(_TAB_B, rebound, TEST_NOW)
     assert {str(stored.view_id) for stored in rewritten} == {"alpha", "everything"}
     assert store.read_layout("alpha", "c1", DeviceKind.DESKTOP).tabs["p2"].address == rebound
     assert store.read_layout("alpha", "c1", DeviceKind.DESKTOP).tabs["p2"].tab_id == _TAB_B
@@ -90,8 +88,8 @@ def test_tabs_are_found_and_rebound_by_id(tmp_path: Path) -> None:
 
 def test_removed_addresses_leave_every_layout_and_its_grid(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
-    store.save_layout("everything", "c1", _layout(), _NOW)
-    rewritten = store.remove_addresses_everywhere([_TERMINAL_1], _NOW)
+    store.save_layout("everything", "c1", _layout(), TEST_NOW)
+    rewritten = store.remove_addresses_everywhere([_TERMINAL_1], TEST_NOW)
     assert len(rewritten) == 1
     layout = store.read_layout("everything", "c1", DeviceKind.DESKTOP)
     assert set(layout.tabs) == {"p1"}
@@ -99,11 +97,11 @@ def test_removed_addresses_leave_every_layout_and_its_grid(tmp_path: Path) -> No
     assert set(layout.dockview["panels"]) == {"p1"}
     assert layout.dockview["grid"]["root"]["data"][0]["data"]["views"] == ["p1"]
     # Removing the last panel leaves the empty layout rather than a grid with nothing in it.
-    store.remove_addresses_everywhere([_FILES], _NOW)
+    store.remove_addresses_everywhere([_FILES], TEST_NOW)
     emptied = store.read_layout("everything", "c1", DeviceKind.DESKTOP)
     assert emptied.dockview is None and emptied.tabs == {}
     # Nothing to remove rewrites nothing.
-    assert store.remove_addresses_everywhere([_FILES], _NOW) == []
+    assert store.remove_addresses_everywhere([_FILES], TEST_NOW) == []
 
 
 def test_strip_helpers_are_pure_over_the_dockview_shape() -> None:
@@ -119,9 +117,9 @@ def test_strip_helpers_are_pure_over_the_dockview_shape() -> None:
 
 def test_client_and_view_layouts_can_be_deleted(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
-    store.save_layout("everything", "c1", _layout(), _NOW)
-    store.save_layout("alpha", "c1", _layout(), _NOW)
-    store.save_layout("alpha", "c2", _layout(), _NOW)
+    store.save_layout("everything", "c1", _layout(), TEST_NOW)
+    store.save_layout("alpha", "c1", _layout(), TEST_NOW)
+    store.save_layout("alpha", "c2", _layout(), TEST_NOW)
     assert store.delete_client_layouts(ClientId("c1")) == 2
     assert [str(stored.client_id) for stored in store.all_client_layouts()] == ["c2"]
     store.delete_view_layouts("alpha")
