@@ -174,6 +174,11 @@ def _entry_or_raise(name: str) -> AppInventoryEntry:
     return entry
 
 
+def _instance_key_or_raise(raw_key: str) -> InstanceKey:
+    """The key of a keyed relay route, checked against the key rule before the app is consulted (a 400 otherwise)."""
+    return InstanceKey(raw_key)
+
+
 # ---------- section 5: routes apps and scripts call ----------
 
 
@@ -249,6 +254,7 @@ def relay_create_route(name: str) -> ResponseReturnValue:
 
 def relay_delete_route(name: str, key: str) -> ResponseReturnValue:
     entry = _entry_or_raise(name)
+    _instance_key_or_raise(key)
     outcome = relay_delete(_shell().http_client, entry, key)
     if outcome.status_code < HTTP_BAD_REQUEST:
         _shell().inventory.refetch_now(name)
@@ -257,6 +263,7 @@ def relay_delete_route(name: str, key: str) -> ResponseReturnValue:
 
 def relay_rename_route(name: str, key: str) -> ResponseReturnValue:
     entry = _entry_or_raise(name)
+    _instance_key_or_raise(key)
     outcome = relay_rename(_shell().http_client, entry, key, request.get_data())
     if outcome.status_code < HTTP_BAD_REQUEST:
         _shell().inventory.refetch_now(name)
@@ -265,6 +272,7 @@ def relay_rename_route(name: str, key: str) -> ResponseReturnValue:
 
 def relay_location_route(name: str, key: str) -> ResponseReturnValue:
     entry = _entry_or_raise(name)
+    _instance_key_or_raise(key)
     outcome = relay_location(_shell().http_client, entry, key, request.get_data())
     if outcome.status_code < HTTP_BAD_REQUEST:
         _shell().inventory.refetch_now(name)

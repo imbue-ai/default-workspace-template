@@ -203,6 +203,8 @@ def test_instance_verbs_are_relayed_and_the_list_refetched(
     assert inventory.find_instance(Address("app:stub?instance=stub-2")) is None
     assert client.post("/api/apps/stub/instances/stub-9/rename", json={"title": "x"}).status_code == 404
     assert client.post("/api/apps/unknown/instances", json={"action": "new", "params": {}}).status_code == 404
+    # A key that fails the key rule is refused by the shell, before the app (which would say 404) is asked.
+    assert client.post("/api/apps/stub/instances/-not-a-key/rename", json={"title": "x"}).status_code == 400
 
 
 # ---------- section 6: stop and start ----------
