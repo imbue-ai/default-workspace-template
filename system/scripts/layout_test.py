@@ -122,6 +122,8 @@ def test_open_waits_for_registration_then_posts_the_address(
         ("app:Foo.Bar", "names no app"),
         ("app:-leading", "names no app"),
         ("a" * 33, "not an address"),
+        ("localhost", "not an address"),
+        ("app:agent-abc", "names no app"),
     ],
 )
 def test_a_name_the_registry_could_never_hold_is_refused_without_waiting(

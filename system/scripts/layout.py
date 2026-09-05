@@ -110,10 +110,13 @@ _RETIRED_PREFIXES = (
 )
 _EXTERNAL_URL_PREFIXES = ("https://", "http://")
 # A bare word that may stand in for ``app:<word>``: the registry's name rule
-# (``forward_port.py``'s ``NAME_PATTERN`` and ``MAX_SERVICE_NAME_LENGTH``), so a name the
-# registry could never hold is refused here rather than waited for.
+# (``forward_port.py``'s ``NAME_PATTERN``, ``MAX_SERVICE_NAME_LENGTH``, ``RESERVED_NAMES``,
+# and ``RESERVED_NAME_PREFIXES``), so a name the registry could never hold is refused here
+# rather than waited for.
 _APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 _MAX_APP_NAME_LENGTH = 32
+_RESERVED_APP_NAMES = frozenset({"localhost", "auth"})
+_RESERVED_APP_NAME_PREFIXES = ("host-", "agent-")
 _INSTANCE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # How long ``open`` / ``split`` wait for a freshly-registered app to appear before giving
@@ -222,6 +225,8 @@ def _is_app_name(value: str) -> bool:
     return (
         len(value) <= _MAX_APP_NAME_LENGTH
         and _APP_NAME_PATTERN.fullmatch(value) is not None
+        and value not in _RESERVED_APP_NAMES
+        and not value.startswith(_RESERVED_APP_NAME_PREFIXES)
     )
 
 
