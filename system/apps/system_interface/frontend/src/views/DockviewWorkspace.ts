@@ -1646,9 +1646,10 @@ export async function switchToView(viewId: string): Promise<void> {
   if (!dockview) return;
   const previousViewId = mountedViewId ?? getActiveProjectId();
   if (previousViewId === viewId) return;
-  const generation = ++viewMountGeneration;
+  // Flush while the outgoing view is still the settled mount: a generation bumped first
+  // would make persistLayout refuse the save as one made mid-mount.
   await flushPendingSave();
-  if (generation !== viewMountGeneration) return;
+  const generation = ++viewMountGeneration;
   setActiveView(viewId);
   reportClientState(previousViewId);
   const layout = await fetchLayoutOrSuspendSaves(viewId);
