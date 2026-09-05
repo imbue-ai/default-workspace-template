@@ -10,10 +10,11 @@
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "../../views/modalBackdrop";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, Modal } from "../../views/components/Modal";
 import { getAgentById } from "../models/AgentManager";
 import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
-import { icon } from "../../views/icons";
+import { icon } from "../../views/components/icons";
+import { BTN_SELECTED, Button } from "../../views/components/Button";
 
 const FAST_MODE_DOC_URL = "https://code.claude.com/docs/en/fast-mode";
 
@@ -28,81 +29,81 @@ function promptingAgentName(): string | null {
 
 export function FastModeModal(): m.Component {
   return {
-    oncreate() {
-      document.addEventListener("keydown", handleKeydown);
-    },
-
-    onremove() {
-      document.removeEventListener("keydown", handleKeydown);
-    },
-
     view() {
       return m(
-        "div.fast-mode-modal-overlay",
-        backdropDismissAttrs(() => resolveFastModePrompt(false)),
+        Modal,
+        {
+          onDismiss: () => resolveFastModePrompt(false),
+          onEscape: () => resolveFastModePrompt(false),
+          width: 460,
+          card: {
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Keep fast mode on?",
+          },
+          header: [
+            m(
+              "span",
+              {
+                class:
+                  "fast-mode-modal-icon inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-lg bg-accent-light text-accent",
+              },
+              m.trust(icon("zap", { size: 16 })),
+            ),
+            m("h3", { class: MODAL_TITLE_CLASS }, "Keep fast mode on?"),
+          ],
+          actions: [
+            m(Button, { onclick: () => resolveFastModePrompt(true) }, "Keep fast mode on"),
+            m(
+              Button,
+              {
+                variant: "primary",
+                onclick: () => resolveFastModePrompt(false),
+                // The default action, so Enter takes it without a reach for the mouse.
+                oncreate: (vnode) => {
+                  (vnode.dom as HTMLButtonElement).focus();
+                },
+              },
+              "Switch to standard speed",
+            ),
+          ],
+        },
         [
-          m(
-            "div.fast-mode-modal",
-            {
-              role: "dialog",
-              "aria-modal": "true",
-              "aria-label": "Keep fast mode on?",
-            },
-            [
-              m("div.fast-mode-modal-header", [
-                m("span.fast-mode-modal-icon", m.trust(icon("zap", { size: 16 }))),
-                m("h3.fast-mode-modal-title", "Keep fast mode on?"),
-              ]),
-              m("p.fast-mode-modal-message", [
-                promptingAgentName() !== null ? [m("strong", promptingAgentName()), " has Fast Mode on. "] : null,
-                "Fast Mode is 2.5x faster and 2x more expensive (",
-                m(
-                  "a.fast-mode-modal-link",
-                  { href: FAST_MODE_DOC_URL, target: "_blank", rel: "noopener noreferrer" },
-                  [m("span", "learn more"), m.trust(icon("external-link", { size: 13 }))],
-                ),
-                ")",
-              ]),
-              m("p.fast-mode-modal-message", [
-                "You can toggle Fast Mode at any time with the ",
-                // A copy of the composer's toggle, so "the button" has something to
-                // point at. Decorative: hidden from assistive tech, which gets the
-                // sentence on its own.
-                m(
-                  "span.fast-toggle.fast-toggle--on.fast-toggle--inline",
-                  { "aria-hidden": "true" },
-                  m.trust(icon("zap", { size: 16 })),
-                ),
-                " button",
-              ]),
-              m("div.fast-mode-modal-actions", [
-                m(
-                  "button.fast-mode-modal-btn.fast-mode-modal-btn-fast",
-                  { onclick: () => resolveFastModePrompt(true) },
-                  "Keep fast mode on",
-                ),
-                m(
-                  "button.fast-mode-modal-btn.fast-mode-modal-btn-standard",
-                  {
-                    onclick: () => resolveFastModePrompt(false),
-                    // The default action, so Enter takes it without a reach for the mouse.
-                    oncreate: (vnode: m.VnodeDOM) => {
-                      (vnode.dom as HTMLButtonElement).focus();
-                    },
-                  },
-                  "Switch to standard speed",
-                ),
-              ]),
-            ],
-          ),
+          m("p", { class: MODAL_MESSAGE_CLASS }, [
+            promptingAgentName() !== null ? [m("strong", promptingAgentName()), " has Fast Mode on. "] : null,
+            "Fast Mode is 2.5x faster and 2x more expensive (",
+            m(
+              "a",
+              {
+                class: "fast-mode-modal-link inline-flex items-center gap-1 whitespace-nowrap text-accent underline",
+                href: FAST_MODE_DOC_URL,
+                target: "_blank",
+                rel: "noopener noreferrer",
+              },
+              [m("span", "learn more"), m.trust(icon("external-link", { size: 13 }))],
+            ),
+            ")",
+          ]),
+          m("p", { class: MODAL_MESSAGE_CLASS }, [
+            "You can toggle Fast Mode at any time with the ",
+            // A non-interactive copy of the composer's fast-mode button in its
+            // on state (the Button selected tint), sized down to sit in running
+            // text, so "the button" has something to point at. Decorative:
+            // hidden from assistive tech, which gets the sentence on its own.
+            m(
+              "span",
+              {
+                class:
+                  "fast-mode-modal-toggle-glyph inline-flex h-[26px] w-[26px] items-center justify-center " +
+                  `rounded-md border align-[-0.45em] ${BTN_SELECTED}`,
+                "aria-hidden": "true",
+              },
+              m.trust(icon("zap", { size: 16 })),
+            ),
+            " button",
+          ]),
         ],
       );
     },
   };
-}
-
-function handleKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") {
-    resolveFastModePrompt(false);
-  }
 }

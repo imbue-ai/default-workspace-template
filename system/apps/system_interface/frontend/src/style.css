@@ -1,1268 +1,302 @@
-@import "tailwindcss";
+/* DESIGN SYSTEM (optional) — how the DEFAULT UI stays coherent.
+ *
+ * Styling lives in the MARKUP as Tailwind utilities; this
+ * file is the token layer plus a small set of escape hatches, not a stylesheet
+ * of component classes. When you extend or maintain the default look:
+ *   - Style in the view: utility class strings on the m(...) markup, colours
+ *     via the semantic utility layer (text-primary, bg-fill-hover, ...), text
+ *     via the type-* roles, shared recipes via the component builders in
+ *     views/components/.
+ *   - Hand-written CSS here is only for what utilities cannot reach: vendor
+ *     DOM (dockview/xterm), markdown-rendered content, keyframes and
+ *     pseudo-element machines (the spinner), contextual rules over
+ *     shared markup, and cascade-critical overrides. In those, `@apply` the
+ *     semantic utilities where they cover the declarations; reference the
+ *     --c-* value tokens where no utility fits, never a raw hex.
+ *
+ * This is a convention for the default UI, not an enforced rule. If the user
+ * wants their interface restyled to their own taste, build exactly that and
+ * ignore these tokens freely — nothing enforces them. Background:
+ * ../style_guide.md. */
+@import "tailwindcss" source(none);
 @import "dockview-core/dist/styles/dockview.css";
 
-@theme {
-  --color-bg: #fafaf8;
-  --color-bg-sidebar: #f3f2ef;
-  --color-bg-hover: #edecea;
-  --color-bg-active: #e8e6e1;
-  --color-bg-user-bubble: #ededed;
-  --color-bg-composer: #ffffff;
-  --color-bg-chat: #ffffff;
-  --color-bg-code: #f0f0f0;
-  --color-text-primary: #202020;
-  --color-text-secondary: #666666;
-  --color-text-faint: #8c8c8c;
-  --color-border: #e4e3df;
-  --color-border-faint: #efeeeb;
-  --color-border-code: #e0e0e0;
-  --color-accent: #2f6b4f;
-  --color-accent-hover: #24573f;
-  --color-accent-light: #e9f2ee;
-  --color-surface: #ffffff;
-  --color-surface-secondary: #f3f2ef;
-  --color-stop-button: #64748b;
-  --color-stop-button-hover: #475569;
-  --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-family-heading: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-family-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  --spacing-page: 1.5rem;
+/* Why explicit sources (`source(none)` + `@source`): the utility classes live in
+   the TS views' class strings, so enumerating the sources keeps the scan
+   deterministic and off the rest of the tree. A class name
+   assembled by string concatenation is NOT detected — safelist any such case
+   with `@source inline("...")`. */
+@source "./**/*.ts";
+
+/* Colour tokens — two layers.
+ * 1. VALUE LAYER (--c-*, on :root below): the raw colour for each token. The
+ *    ONLY place a value lives, so a future theme swap (or dark mode) edits one
+ *    table. Hand-written CSS in this file references these directly.
+ * 2. UTILITY LAYER (@theme inline, below): registers each --c-* under a clean
+ *    semantic name, generating the colour utilities the views use
+ *    (text-primary, bg-fill-hover, border-default, ...). `inline` makes the
+ *    generated utility resolve THROUGH var(--c-*) at runtime, so re-declaring
+ *    a --c-* value on a subtree reskins it live.
+ * The palette itself is the system interface's own (warm neutrals + green
+ * accent). */
+:root {
+  --c-bg: #fafaf8;
+  --c-bg-sidebar: #f3f2ef;
+  /* State fills are translucent rather than opaque hexes so they
+     stack: a control's hover tint over an already-tinted row reads one step
+     deeper, which is what keeps a hover-revealed control's own hover visible.
+     Warmth comes from the surface underneath, not the tint. */
+  --c-fill-hover: rgb(0 0 0 / 0.07);
+  --c-fill-active: rgb(0 0 0 / 0.11);
+  --c-bg-user-bubble: #ededed;
+  --c-bg-composer: #ffffff;
+  --c-bg-chat: #ffffff;
+  --c-bg-code: #f0f0f0;
+  --c-text-primary: #202020;
+  --c-text-secondary: #666666;
+  --c-text-faint: #8c8c8c;
+  --c-border: #e4e3df;
+  --c-border-faint: #efeeeb;
+  --c-border-code: #e0e0e0;
+  --c-accent: #2f6b4f;
+  --c-accent-hover: #24573f;
+  --c-accent-light: #e9f2ee;
+  --c-surface: #ffffff;
+  --c-surface-secondary: #f3f2ef;
+  --c-stop-button: #64748b;
+  --c-stop-button-hover: #475569;
+  /* Semantic status colours. */
+  --c-danger: #d83a2c;
+  --c-danger-hover: #b62d22;
+  --c-danger-bg: #fdecea;
+  --c-danger-border: #f4c7c3;
+  --c-warning: #b45309;
+  --c-warning-bg: #fde68a;
+  --c-success: #22a06b;
+  --c-success-bg: #e0f2ea;
+  --c-success-border: #b2decb;
+  /* Foreground on accent/coloured surfaces (e.g. white button text). */
+  --c-text-on-accent: #ffffff;
+  /* Inverse surface — dark ("black") bg with on-accent text. */
+  --c-inverse-surface: #202020;
+  --c-inverse-surface-hover: #383838;
+  /* Typography scale — role-based; backs the type-* utilities below. Unit: px.
+     (Not --text-*: overriding Tailwind's --text-sm/lg would silently resize its
+     text-sm/text-lg utilities, which the views use at their stock values.) */
+  --font-size-heading-lg: 24px;
+  --font-size-heading: 18px;
+  --font-size-body: 14px;
+  /* Row text: the dense-chrome step between body and helper. */
+  --font-size-row: 13px;
+  --font-size-helper: 12px;
+  /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type
+     role uses it -- see the type-roles note below.) */
+  --weight-regular: 400;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  /* Motion scale — one unit (ms). Durations back the common UI transitions;
+     off-scale durations and the long looping animation timings stay raw. */
+  --dur-fast: 80ms;
+  --dur-base: 120ms;
+  --dur-slow: 200ms;
+  /* Z-index scale — names the workspace's stacking layers.
+     Modal backdrops + the image lightbox sit at --z-overlay; the JS hover-tooltip
+     clears them at --z-tooltip. */
+  --z-content: 1;
+  --z-sticky: 100;
+  --z-dropdown: 1000;
+  --z-overlay: 10000;
+  --z-tooltip: 10001;
   --width-message-column: 740px;
-  --width-sidebar: 250px;
-  --width-sidebar-collapsed: 3.25rem;
-  --duration-sidebar-transition: 200ms;
-  --radius-base: 6px;
-  --radius-bubble: 18px;
-  --radius-composer: 16px;
-  --logo-url: none;
 }
 
-/*
- * The mockup's token names, over this app's existing palette.
- *
- * `prototypes/minds-harness` in imbue-ai/mind-sketches is the design source, and the rule is
- * that a surface it defines is ported verbatim. Its class strings say `text-tertiary`,
- * `border-subtle`, `bg-fill-hover`; this app's `@theme` above says `--color-text-faint`,
- * `--color-border`, `--color-bg-hover`. Same intent, different names -- so "verbatim" was
- * being hand-translated hex by hex, and 60-odd arbitrary-value classes (`text-[#202020]`)
- * accumulated in the ported files.
- *
- * That translation fails SILENTLY: Tailwind v4 emits nothing at all for an unknown color
- * utility, so `hover:bg-fill-hover` simply has no hover state -- no build error, no lint, no
- * type error, nothing to notice in review.
- *
- * Registering the mockup's names here makes the rule followable and the diff meaningful. The
- * VALUES stay this app's -- the mockup is two-layer light/dark and this app is light only, so
- * a token whose point is the dark half (`--color-inverse-*`) is deliberately absent rather
- * than faked. A class using one of those is a signal to port the dark mode properly, not to
- * paper over it.
- */
+/* The colour-utility layer: clean semantic names over the --c-* values,
+ * grouped by role below. Utilities generate on demand: text-primary, bg-page,
+ * bg-fill-hover, border-default, bg-danger-surface, ... */
 @theme inline {
-  /* text: text-primary / -secondary / -tertiary */
-  --color-primary: var(--color-text-primary);
-  --color-secondary: var(--color-text-secondary);
-  --color-tertiary: var(--color-text-faint);
-  /* borders: border-subtle / -default / -strong */
-  --color-subtle: var(--color-border-faint);
-  --color-default: var(--color-border);
-  --color-strong: var(--color-border-code);
-  /* surfaces: bg-surface-primary, and the modal scrim */
-  --color-surface-primary: var(--color-surface);
-  --color-surface-overlay: rgb(0 0 0 / 0.35);
-  /* fills: the resting / hover / pressed tints over a surface */
-  --color-fill-subtle: var(--color-bg-sidebar);
-  --color-fill-hover: var(--color-bg-hover);
-  --color-fill-active: var(--color-bg-active);
-  /* status: text-/bg-/border-{important,success,warning,info} */
-  --color-important: #d90c00;
-  --color-success: #0c8106;
-  --color-warning: #b45300;
-  --color-info: #166fc7;
+  /* text: text-primary / -secondary / -faint / -on-accent */
+  --color-primary: var(--c-text-primary);
+  --color-secondary: var(--c-text-secondary);
+  --color-faint: var(--c-text-faint);
+  --color-on-accent: var(--c-text-on-accent);
+  /* borders: border-default / border-subtle */
+  --color-default: var(--c-border);
+  --color-subtle: var(--c-border-faint);
+  /* surfaces: bg-page / -sidebar / -chat / -composer / -code / -user-bubble /
+     -surface / -surface-secondary / -inverse / -inverse-hover */
+  --color-page: var(--c-bg);
+  --color-sidebar: var(--c-bg-sidebar);
+  --color-chat: var(--c-bg-chat);
+  --color-composer: var(--c-bg-composer);
+  --color-code: var(--c-bg-code);
+  --color-user-bubble: var(--c-bg-user-bubble);
+  --color-surface: var(--c-surface);
+  --color-surface-secondary: var(--c-surface-secondary);
+  --color-inverse: var(--c-inverse-surface);
+  --color-inverse-hover: var(--c-inverse-surface-hover);
+  /* fills: bg-fill-hover / bg-fill-active (control state tints) */
+  --color-fill-hover: var(--c-fill-hover);
+  --color-fill-active: var(--c-fill-active);
+  /* accent / interactive */
+  --color-accent: var(--c-accent);
+  --color-accent-hover: var(--c-accent-hover);
+  --color-accent-light: var(--c-accent-light);
+  --color-stop: var(--c-stop-button);
+  --color-stop-hover: var(--c-stop-button-hover);
+  /* status */
+  --color-danger: var(--c-danger);
+  --color-danger-hover: var(--c-danger-hover);
+  --color-danger-surface: var(--c-danger-bg);
+  --color-danger-border: var(--c-danger-border);
+  --color-warning: var(--c-warning);
+  --color-warning-surface: var(--c-warning-bg);
+  --color-success: var(--c-success);
+  --color-success-surface: var(--c-success-bg);
+  --color-success-border: var(--c-success-border);
 }
 
-/*
- * Elevation, copied from the mockup. `overlay` is the soft shadow for anything floating above
- * the page -- menus, modals, tooltips -- which is most of the combo card. Without it those
- * surfaces render as white boxes on white with only a hairline border, and nothing reports it.
- */
 @theme {
-  --shadow-raised: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-  --shadow-overlay: 0 0px 2px 0px rgb(0 0 0 / 0.08), 0 3px 8px 2px var(--tw-shadow-color, rgb(0 0 0 / 0.08));
+  /* Font stacks on Tailwind's own namespace: --font-sans re-bases the preflight
+     default (so body text needs no explicit font-family) and backs font-sans;
+     --font-mono re-bases the font-mono utility onto the workspace's mono stack. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
+     `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
+     references the same scale via the `--spacing(N)` function (e.g.
+     `padding: --spacing(3)` compiles to `calc(var(--spacing) * 3)`) -- so markup
+     and CSS share one source with no per-step token to define or keep in sync.
+     Off-grid strays stay raw as design-system-exceptions. */
+  --spacing: 0.25rem;
+  /* Radius scale. sm/md/lg equal Tailwind's own defaults, so overriding them
+     leaves the rounded-* utilities in the views at their stock values (only xl
+     differs from Tailwind's). md is the default control radius; lg carries
+     inputs, cards and modals; xl is reserved for the largest surfaces; pills
+     and circles are Tailwind's stock rounded-full. The 12px pane/chrome frame
+     keeps its own --si-pane-radius (defined later in this file). */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  /* Elevation -- two box-shadow steps. --shadow-raised is the subtle resting
+     lift on interactive cards; --shadow-overlay is the one soft floating
+     shadow shared by everything above the page -- menus, pickers, modals,
+     tooltips, the lightbox. */
+  --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --shadow-overlay: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);
 }
 
-/*
- * The mockup's type ramp, copied verbatim. Each bundles size + weight + line-height into one
- * utility; COLOR is orthogonal, composed with text-primary / -secondary / -tertiary.
- *
- * Registered for the same reason as the color tokens above: the mockup's markup says
- * `type-helper`, and an unknown utility in Tailwind v4 emits NOTHING -- so a ported row would
- * silently take the inherited font size and read as nearly-right rather than wrong.
- */
-@utility type-heading-lg {
-  font-size: var(--text-2xl);
-  line-height: 1.2;
-  font-weight: 700;
-}
-@utility type-heading {
-  font-size: var(--text-lg);
-  line-height: 1.333;
-  font-weight: 600;
-}
-@utility type-label {
-  font-size: var(--text-sm);
-  line-height: 1.4;
-  font-weight: 600;
-}
-@utility type-body {
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  font-weight: 400;
-}
-@utility type-helper {
-  font-size: var(--text-xs);
-  line-height: 1.4;
-  font-weight: 400;
-}
-@utility type-section {
-  font-size: var(--text-xs);
-  line-height: 1.3;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-@utility type-subsection {
-  font-size: 10px;
-  line-height: 1.3;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-}
-@utility type-badge {
-  font-size: 10px;
-  line-height: 12px;
-  font-weight: 700;
-}
-
+/* Font family comes from the preflight default (re-based onto --font-sans above). */
 body {
-  font-family: var(--font-family-base);
-  font-size: 15px;
-  color: var(--color-text-primary);
-  background-color: var(--color-bg);
+  font-size: var(--font-size-body);
+  color: var(--c-text-primary);
+  background-color: var(--c-bg);
   margin: 0;
   height: 100vh;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Spacer for the Minds desktop client title bar. When running inside the
-   Electron shell, --minds-titlebar-height is set to the title bar height
-   (38px). Outside the shell the variable is unset and the spacer collapses
-   to zero height. */
-.minds-titlebar-spacer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: var(--minds-titlebar-height, 0px);
-  pointer-events: none;
+/* Typography roles.
+ * The role-based type system, declared as Tailwind utilities so they
+ * compose with variants, sort under the prettier plugin,
+ * and work inside @apply. Each bundles font-size + weight + line-height; COLOR
+ * is orthogonal — compose with text-primary / text-secondary / text-faint.
+ * Prefer these (or the --font-size-* / --weight-* tokens) over hand-set
+ * font-size/weight. `medium` (500) is a valid weight but is intentionally NOT
+ * used on interactive controls (buttons/tabs) — that treatment comes with the
+ * Button/Tab primitive. */
+@utility type-heading-lg {
+  font-size: var(--font-size-heading-lg);
+  font-weight: var(--weight-bold);
+  line-height: 1.25;
 }
-
-/* ── Title bar ── */
-.app-header {
-  padding: 14px 32px;
-  border-bottom: 1px solid var(--color-border);
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex-shrink: 0;
-  background: var(--color-bg);
+@utility type-heading {
+  font-size: var(--font-size-heading);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
 }
-
-.app-header-title {
-  font-family: var(--font-family-heading);
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--color-text-primary);
+@utility type-label {
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
 }
-
-.app-header-model-badge {
-  font-size: 12px;
-  font-family: var(--font-family-mono);
-  color: var(--color-text-secondary);
-  background: var(--color-bg-sidebar);
-  padding: 2px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-}
-
-/* ── Messages area ── */
-.app-content {
-  /* The chat transcript area is pure white, distinct from the shared off-white
-     --color-bg used by the surrounding shell (footer, tabs, other panels). */
-  background: var(--color-bg-chat);
-  /* Native scroll anchoring stays ON (the browser default) so the viewport holds
-     steady when rows above it load or measure to their real height, with no
-     per-frame JS scrollTop writes. The virtualization spacers opt out of anchoring
-     individually (see the spacer divs in ChatPanel / SubagentView) so the browser
-     anchors to a real message row rather than a resizing spacer. The app only
-     writes scrollTop for the discrete tail-follow and jump pins. */
-}
-
-/* ── User bubble ── */
-.message {
-  margin-bottom: 20px;
-}
-
-.message-user {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.message-user-bubble {
-  max-width: 80%;
-  background: var(--color-bg-user-bubble);
-  border-radius: var(--radius-bubble) var(--radius-bubble) 4px var(--radius-bubble);
-  padding: 12px 18px;
-  font-size: 15px;
+@utility type-body {
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-regular);
   line-height: 1.5;
-  color: var(--color-text-primary);
-  /* Break long unbreakable tokens (e.g. API keys, URLs) so they wrap inside
-     the bubble instead of overflowing past its edge. */
-  overflow-wrap: break-word;
 }
-
-.message-user-bubble code {
-  font-family: var(--font-family-mono);
-  font-size: 0.85em;
-  background-color: var(--color-bg-code);
-  border: 1px solid var(--color-border-code);
-  border-radius: 0.25em;
-  padding: 0.08em 0.2em;
-}
-
-/* ── Queued messages (the shoulder-tap group) ── */
-/* Messages the harness has parked while the agent is mid-turn, rendered below the
-   last committed turn as a distinct group under a subtle header row. This is a full
-   snapshot from the backend. An entry the backend flags "is_sending" is NOT parked --
-   it is one it is about to type, or is typing -- and renders as the "Sending..."
-   bubble; a snapshot that is entirely is_sending gets no group chrome at all. */
-.queued-group {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  margin-bottom: 20px;
-}
-
-/* Header row spanning the message column's left..right bounds: 'Queued messages'
-   left-aligned with the chat message column / composer, the [Shoulder tap] button
-   pinned to the column's right. When the column is narrow the label truncates
-   rather than crowding the button -- space-between + gap keeps spacing between
-   them, and the button never shrinks. */
-.queued-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-/* Left group: the 'Queued messages' label plus its (i) info icon, kept together
-   and allowed to shrink/ellipsize so the [Shoulder tap] button on the right is
-   never crowded. */
-.queued-header-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.queued-header-label {
-  font-family: var(--font-family-base);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: var(--color-text-secondary);
-  /* Let the label shrink and ellipsize in a narrow column instead of overlapping
-     the button. */
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.queued-action {
-  position: relative;
-  flex-shrink: 0;
-  height: 28px;
-  padding: 0 12px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  background: none;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    color 0.15s ease,
-    background 0.15s ease,
-    border-color 0.15s ease;
-}
-
-.queued-action:hover:not(:disabled) {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-light);
-}
-
-.queued-action:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* CSS tooltip for the [Shoulder tap] button (native title= is unreliable in the
-   webview). Right-anchored so it never clips the panel's right edge; points down
-   from above the button, matching the progress-view marker tooltips. */
-.queued-action[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 7px);
-  right: 0;
-  z-index: 1000;
-  width: max-content;
-  max-width: 260px;
-  padding: 6px 9px;
-  border-radius: 6px;
-  background: var(--color-text-primary);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 400;
+@utility type-helper {
+  font-size: var(--font-size-helper);
+  font-weight: var(--weight-regular);
   line-height: 1.4;
-  white-space: normal;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
+}
+@utility type-section {
+  font-size: var(--font-size-helper);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
-.queued-action[data-tooltip]:hover::after,
-.queued-action[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
-}
-
-/* A queued bubble reuses the user-bubble view but is marked as not-yet-sent: a
-   slightly muted fill distinguishes it from a committed turn (the labeled 'Queued
-   messages' group is what sets it apart; no outline). */
-.queued-message {
-  margin-bottom: 0;
-}
-
-.queued-message .message-user-bubble {
-  opacity: 0.85;
-}
-
-/* The (i) info affordance next to 'Queued messages'. */
-.queued-info {
-  position: relative;
-  flex-shrink: 0;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--color-text-secondary);
-  opacity: 0.7;
-  cursor: help;
-}
-
-.queued-info:hover {
-  opacity: 1;
-}
-
-/* Its hover tooltip, same right-anchored CSS pattern as the [Shoulder tap] button
-   (native title= is unreliable in the webview). Left-anchored here since the icon
-   sits at the column's left edge, so the tooltip does not clip off-screen. */
-.queued-info[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 7px);
-  left: 0;
-  z-index: 1000;
-  width: max-content;
-  max-width: 300px;
-  padding: 6px 9px;
-  border-radius: 6px;
-  background: var(--color-text-primary);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.4;
-  white-space: normal;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-.queued-info[data-tooltip]:hover::after,
-.queued-info[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
-}
-
-/* Optimistic "Sending…" bubble: shown at the tail the instant the user sends,
-   until the real (queued/committed) state arrives or it fails. Reuses the
-   user-bubble view with a small status caption; a failed one turns its caption
-   red and stays put. */
-.outgoing-message {
-  margin-bottom: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.outgoing-message--sending {
-  opacity: 0.6;
-}
-
-.outgoing-message .message-user-bubble {
-  border: 1px dashed var(--color-border);
-}
-
-.outgoing-status {
-  margin-top: 3px;
-  font-family: var(--font-family-base);
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-/* ── Assistant message ── */
-.message-assistant {
-  margin-bottom: 20px;
-}
-
-/* ── Lifted Composer ── */
-/* The footer holds the composer and stops there. The under-bar below it used to live in here
-   too and now sits outside the flip card entirely, so the bottom gutter moved with it --
-   otherwise the 24px would fall BETWEEN the composer and the under-bar rather than under both. */
-.app-footer {
-  padding: 0 32px;
-  flex-shrink: 0;
-  background: var(--color-bg-chat);
-  border: none;
-}
-
-/* The under-bar's gutter, carrying what `.app-footer` used to supply. Separate from
-   `.composer-under-bar` because that element is max-width-constrained and centred: padding on it
-   would eat into the column rather than sit outside it. */
-.chat-under-bar {
-  flex-shrink: 0;
-  padding: 0 32px 24px;
-  background: var(--color-bg-chat);
-}
-
-/* The row below the chat input: model bar on the left, agent-terminal + harness-auth actions
-   right-aligned -- the original flex row, undisturbed. The "Powered by" credit is centered over
-   the bar as a non-interactive overlay (see .composer-under-bar-credit) rather than as a flow
-   element, so it never reshapes the row or clips the pickers. Shares the model bar's font; no
-   background of its own; text at the visible secondary color. */
-.composer-under-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 0 4px;
-  max-width: calc(var(--width-message-column) + 2 * var(--radius-composer));
-  margin-left: auto;
-  margin-right: auto;
-  width: 100%;
-  /* Containing block for the centered credit overlay. */
-  position: relative;
-}
-
-.composer-under-bar-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.composer-under-bar-action {
-  height: 30px;
-  padding: 0 8px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    color 120ms,
-    background 120ms;
-}
-
-.composer-under-bar-action:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-}
-
-/* A non-clickable credit sharing the action buttons' font, but static: no hover,
-   no pointer cursor, not focusable. */
-.composer-under-bar-credit {
-  /* Centered over the bar as an overlay: pointer-events:none so it never intercepts clicks on
-     the model bar or buttons beneath it, and being out of flow it leaves the original flex row
-     unchanged. max-width keeps it clear of the side groups; it ellipsizes if it would collide. */
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  max-width: 60%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: inline-flex;
-  align-items: center;
-  height: 30px;
-  padding: 0 8px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  user-select: none;
-}
-
-.message-input {
-  gap: 0;
-  max-width: calc(var(--width-message-column) + 2 * var(--radius-composer));
-}
-
-.message-input-box {
-  background: var(--color-bg-composer);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-composer);
-  box-shadow:
-    0 -4px 20px rgba(55, 53, 47, 0.06),
-    0 -1px 6px rgba(55, 53, 47, 0.04);
-  transition:
-    border-color 150ms,
-    box-shadow 200ms;
-}
-
-.message-input-box:focus-within {
-  border-color: var(--color-accent);
-  box-shadow:
-    0 -4px 24px rgba(47, 107, 79, 0.08),
-    0 -1px 8px rgba(47, 107, 79, 0.06);
-}
-
-.message-input-textbox {
-  font-family: var(--font-family-base);
-  font-size: 15px;
-  line-height: 1.5;
-  color: var(--color-text-primary);
-  background: transparent;
-  border: none;
-  padding: 14px 8px 14px 20px;
-}
-
-.message-input-textbox::placeholder {
-  color: var(--color-text-faint);
-}
-
-.message-input-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-right: 12px;
-  flex-shrink: 0;
-}
-
-/* Hover tooltips for the composer toolbar controls (model picker, fast-mode
-   toggle, attach, interrupt, send) and the under-bar row beneath the input
-   (the model/effort/fast slots live here, not in the toolbar). Uses the shared
-   CSS-tooltip pattern -- a `::after` bubble fed by `data-tooltip` -- rather than
-   native `title`, which is unreliable in the desktop webview (see
-   .pending-message-interrupt). Both rows sit at the composer's bottom, so the
-   bubble points upward. */
-.message-input-toolbar [data-tooltip],
-.composer-under-bar [data-tooltip] {
-  position: relative;
-}
-
-.message-input-toolbar [data-tooltip]::after,
-.composer-under-bar [data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  width: max-content;
-  max-width: 240px;
-  padding: 6px 9px;
-  border-radius: 6px;
-  background: var(--color-text-primary);
-  color: #fff;
-  font-family: var(--font-family-base);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.4;
-  white-space: nowrap;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-.message-input-toolbar [data-tooltip]:hover::after,
-.message-input-toolbar [data-tooltip]:focus-visible::after,
-.composer-under-bar [data-tooltip]:hover::after,
-.composer-under-bar [data-tooltip]:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
-}
-
-.message-input-send-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: #fff;
-  background: var(--color-accent);
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition:
-    background 120ms,
-    opacity 150ms,
-    visibility 150ms;
-  flex-shrink: 0;
-}
-
-.message-input-send-button:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-}
-
-.message-input-stop-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: #fff;
-  background: var(--color-stop-button);
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: background 120ms;
-  flex-shrink: 0;
-}
-
-.message-input-stop-button:hover:not(:disabled) {
-  background: var(--color-stop-button-hover);
-}
-
-.message-input-logo {
-  width: 32px;
-  height: 32px;
-  opacity: 0.28;
-  flex-shrink: 0;
-  user-select: none;
-  pointer-events: none;
-  transition: opacity 300ms;
-  background: var(--logo-url) center / contain no-repeat;
-}
-
-.message-input-logo--busy {
-  opacity: 0.28;
-  animation: logo-breathe 2s ease-in-out infinite;
-}
-
-@keyframes logo-breathe {
-  0%,
-  100% {
-    transform: scale(0.64);
-  }
-  50% {
-    transform: scale(1);
+/* Default border color. Tailwind v4 defaults un-colored
+   borders/dividers to `currentColor`; default them to the standard border token
+   instead so a bare `border` / `border-t` utility is legible without each call
+   site naming a color. */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--c-border);
   }
 }
 
-/* ── File attachments: composer ── */
-
-.message-input-file-input {
-  display: none;
-}
-
-.message-input-attach-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition:
-    color 120ms,
-    background 120ms;
-  flex-shrink: 0;
-}
-
-.message-input-attach-button:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-}
-
-.message-input-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 12px 0 16px;
-}
-
-.composer-attachment {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 240px;
-  padding: 6px 8px 6px 6px;
-  background: var(--color-bg-sidebar);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-}
-
-.composer-attachment--error {
-  border-color: #d4806a;
-}
-
-.composer-attachment-thumb {
-  width: 36px;
-  height: 36px;
-  object-fit: cover;
-  border-radius: 6px;
-  flex-shrink: 0;
-}
-
-.composer-attachment-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  color: var(--color-text-secondary);
-  flex-shrink: 0;
-}
-
-.composer-attachment-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-accent);
-  border-radius: 50%;
-  animation: composer-attachment-spin 0.7s linear infinite;
-}
-
-@keyframes composer-attachment-spin {
+/* Spinner primitive.
+ * One CSS ring spinner (+ one @keyframes spin).
+ * Size via --spinner-size (or .spinner--sm; add a size
+ * step when a use exists); the two-tone track/arc default to --c-border /
+ * --c-accent, overridable via --spinner-track / --spinner-arc.
+ * .spinner--current makes it monochrome (currentColor ring with a transparent
+ * gap) for use on coloured contexts. (The login screen's fancier SVG arc is
+ * its own svg drawing -- see loginSpinnerIcon in views/icons.ts -- but shares
+ * this @keyframes.) */
+@keyframes spin {
   to {
     transform: rotate(360deg);
   }
 }
-
-.composer-attachment-info {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.composer-attachment-name {
-  font-size: 13px;
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.composer-attachment-detail {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-.composer-attachment-detail--error {
-  color: #b3573c;
-}
-
-.composer-attachment-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
+.spinner {
+  display: block;
+  width: var(--spinner-size, 16px);
+  height: var(--spinner-size, 16px);
+  border: 2px solid var(--spinner-track, var(--c-border));
+  border-top-color: var(--spinner-arc, var(--c-accent));
   border-radius: 50%;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition:
-    color 120ms,
-    background 120ms;
-}
-
-.composer-attachment-remove:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-active);
-}
-
-/* ── File attachments: chat drop overlay ── */
-
-.chat-drop-overlay {
-  z-index: 50;
-  background: color-mix(in srgb, var(--color-accent-light) 70%, transparent);
-  border: 2px dashed var(--color-accent);
-  border-radius: 12px;
-  margin: 8px;
-}
-
-.chat-drop-overlay-label {
-  padding: 10px 18px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-accent);
-  border-radius: 999px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--color-accent);
-  box-shadow: 0 2px 12px rgba(55, 53, 47, 0.12);
-}
-
-/* ── File attachments: message bubble ── */
-
-.message-attachments {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.message-attachment-images {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.message-attachment-image {
-  max-width: 240px;
-  max-height: 240px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  display: block;
-}
-
-.message-attachment-files {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.message-attachment-file {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 100%;
-  padding: 8px 12px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  color: var(--color-text-primary);
-  text-decoration: none;
-  transition:
-    background 120ms,
-    border-color 120ms;
-}
-
-.message-attachment-file:hover {
-  background: var(--color-bg-hover);
-  border-color: var(--color-border);
-}
-
-.message-attachment-file-icon {
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-text-secondary);
+  animation: spin 0.7s linear infinite;
   flex-shrink: 0;
 }
-
-.message-attachment-file-meta {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
+.spinner--sm {
+  --spinner-size: 12px;
+}
+.spinner--current {
+  --spinner-track: currentColor;
+  --spinner-arc: transparent;
 }
 
-.message-attachment-file-name {
-  font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* On .app-content (ChatPanel / SubagentView), native scroll anchoring stays ON
+   (the browser default) so the viewport holds steady when rows above it load or
+   measure to their real height, with no per-frame JS scrollTop writes. The
+   virtualization spacers opt out of anchoring individually (see the spacer divs
+   in ChatPanel / SubagentView) so the browser anchors to a real message row
+   rather than a resizing spacer. The app only writes scrollTop for the discrete
+   tail-follow and jump pins. */
 
-.message-attachment-file-size {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-/* ── Model selector ── */
-.model-bar {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.model-bar-shrug {
-  display: inline-flex;
-  align-items: center;
-  height: 30px;
-  padding: 0 6px;
-  font-size: 15px;
-  color: var(--color-text-secondary);
-  user-select: none;
-}
-
-.model-selector-wrapper {
-  position: relative;
-  display: inline-block;
-}
-
-.model-selector-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 30px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
-  border-radius: 8px;
-  padding: 0 8px;
-  cursor: pointer;
-  transition:
-    color 120ms,
-    background 120ms;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.model-selector-trigger:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-}
-
-.model-selector-chevron {
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-text-faint);
-}
-
-.model-selector-dropdown {
-  --_option-height: 29px;
-  --_dropdown-padding: 6px;
-  position: absolute;
-  bottom: calc(100% + 8px);
-  /* Anchored to the trigger's left edge; ModelBar's positionDropdown() then nudges it
-     with a translateX to line its text up under the trigger label and clamp the whole
-     box inside the viewport (see dropdown-position.ts). */
-  left: 0;
-  min-width: 200px;
-  /* Bound the width so a long provider/model tag can't grow the menu leftward off the
-     edge of the screen; options past this width ellipsize (full text on hover). */
-  max-width: min(92vw, 460px);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  box-shadow:
-    0 4px 16px rgba(55, 53, 47, 0.1),
-    0 1px 4px rgba(55, 53, 47, 0.06);
-  padding: var(--_dropdown-padding);
-  z-index: 100;
-  overflow: hidden;
-}
-
-.model-selector-dropdown-header {
-  font-family: var(--font-family-base);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-text-faint);
-  padding: 4px 10px 6px;
-}
-
-/* The chat card and its two faces.
-   A chat and its agent's terminal are one conversation rendered two ways, so they are the front
-   and back of one surface rather than two places. The mockup's FlipSurface, ported: perspective
-   on the frame, preserve-3d on the turner, both faces backface-hidden with the back pre-turned
-   so it reads correctly once around. */
-.chat-flip {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  perspective: 2000px;
-}
-.chat-flip-inner {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-  transition: transform 600ms cubic-bezier(0.45, 0, 0.25, 1);
-}
-/* Both faces keep their SIZE while hidden. ttyd sizes the agent's tmux window to its client
-   viewport (`window-size latest`), so a display:none back face would hand the agent a
-   zero-column terminal; a zero-sized front face would lose the transcript's scroll offset.
-   backface-visibility is what hides them, and it costs no layout. */
-.chat-flip-face {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-  /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
-     as a hole with two pictures behind it. */
-  background: var(--color-surface);
-  border-radius: inherit;
-  overflow: hidden;
-}
-.chat-flip-back {
-  transform: rotateY(180deg);
-}
-
-/* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
-   turning goes away. */
-@media (prefers-reduced-motion: reduce) {
-  .chat-flip-inner {
-    transition: none;
-  }
-}
-
-/* The switch that turns the card over. Only the row around it is styled here -- the switch
-   itself is the shared one from `modelCardStyles`, at its own size. Overriding that size with
-   CSS is what broke it: the knob's offset comes from a Tailwind utility, so a `transform` here
-   simply lost to it and left the knob sitting outside the track. */
-.terminal-view-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 6px;
-  border: none;
-  background: none;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--color-text-secondary);
-  font-size: 0.8125rem;
-  transition: color 120ms;
-}
-.terminal-view-toggle:hover,
-.terminal-view-toggle[aria-checked="true"] {
-  color: var(--color-text-primary);
-}
-
-/* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its
-   base and grows upward, so its top edge is not somewhere the eye naturally checks for "more",
-   and an overlay scrollbar that only appears mid-scroll says nothing until it is too late. */
-.model-flyout-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-border-strong, #c4c4c4) transparent;
-}
-.model-flyout-scroll::-webkit-scrollbar {
-  width: 8px;
-}
-.model-flyout-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-.model-flyout-scroll::-webkit-scrollbar-thumb {
-  background-clip: content-box;
-  border: 2px solid transparent;
-  border-radius: 4px;
-  background-color: var(--color-border-strong, #c4c4c4);
-}
-.model-flyout-scroll::-webkit-scrollbar-thumb:hover {
-  background-color: var(--color-text-faint, #8c8c8c);
-}
-
-.model-selector-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 6px 2px 0;
-  padding: 0 8px;
-  height: 30px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg-hover);
-  transition:
-    border-color 120ms,
-    background 120ms;
-}
-
-.model-selector-search:focus-within {
-  border-color: var(--color-accent);
-  background: var(--color-surface);
-}
-
-.model-selector-search-icon {
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-text-faint);
-  flex: 0 0 auto;
-}
-
-.model-selector-search-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: none;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  color: var(--color-text-primary);
-}
-
-.model-selector-search-input::placeholder {
-  color: var(--color-text-faint);
-}
-
-.model-selector-dropdown-list {
-  max-height: calc(var(--_option-height) * 8);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  list-style: none;
-  margin: 0;
-  padding-right: 4px;
-  scrollbar-color: var(--color-border) transparent;
-}
-
-@supports (-moz-appearance: none) {
-  .model-selector-dropdown-list {
-    padding-right: 12px;
-  }
-}
-
-.model-selector-option {
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  color: var(--color-text-primary);
-  height: var(--_option-height);
-  line-height: var(--_option-height);
-  display: block;
-  padding: 0 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: background 80ms;
-}
-
-.model-selector-option:hover {
-  background: var(--color-bg-hover);
-}
-
-.model-selector-option--selected {
-  color: var(--color-accent);
-  font-weight: 500;
-  background: var(--color-accent-light);
-}
-
-.model-selector-option--selected:hover {
-  background: var(--color-accent-light);
-}
-
-.model-selector-trigger:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.model-selector-trigger:disabled:hover {
-  color: var(--color-text-secondary);
-  background: none;
-}
-
-/* A read-only slot (a read_only-switch-mode harness) is NOT `disabled` -- it renders at
-   normal weight/color and keeps its hover tooltip -- but it isn't interactive: default
-   cursor, no hover brighten/background. The model is switched from the agent's terminal. */
-.model-selector-trigger--readonly {
-  cursor: default;
-}
-
-.model-selector-trigger--readonly:hover {
-  color: var(--color-text-secondary);
-  background: none;
-}
-
-/* ── Composer fast-mode toggle (icon button in the toolbar) ── */
-.fast-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition:
-    color 120ms,
-    background 120ms;
-  flex-shrink: 0;
-}
-
-.fast-toggle:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-}
-
-.fast-toggle--on,
-.fast-toggle--on:hover {
-  color: var(--color-accent);
-  background: var(--color-accent-light);
-}
-
-/* Read-only fast toggle: not `disabled` (keeps its tooltip), default cursor, no hover
-   brighten. `:not(--on)` so a read-only harness with fast enabled still shows the accent. */
-.fast-toggle--readonly {
-  cursor: default;
-}
-
-.fast-toggle--readonly:not(.fast-toggle--on):hover {
-  color: var(--color-text-secondary);
-  background: none;
-}
-
-/* A non-interactive copy of the toggle, set inline in running text so a sentence
-   about "the button" can show which one. Reuses the rules above rather than
-   restating them, so the copy cannot drift from the real control. */
-.fast-toggle--inline {
-  width: 26px;
-  height: 26px;
-  cursor: default;
-  vertical-align: -0.45em;
-}
-
-/* ── Markdown content styling ── */
 .markdown-content {
   line-height: 1.5;
-  font-size: 15px;
-  color: var(--color-text-primary);
+  font-size: var(--font-size-body);
+  color: var(--c-text-primary);
 }
 
 .markdown-content p {
@@ -1332,10 +366,10 @@ body {
 }
 
 .markdown-content code {
-  font-family: var(--font-family-mono);
+  font-family: var(--font-mono);
   font-size: 0.85em;
-  background-color: var(--color-bg-code);
-  border: 1px solid var(--color-border-code);
+  background-color: var(--c-bg-code);
+  border: 1px solid var(--c-border-code);
   border-radius: 0.25em;
   padding: 0.08em 0.2em;
 }
@@ -1344,9 +378,9 @@ body {
   margin-top: 0.75em;
   margin-bottom: 0.75em;
   padding: 14px 16px;
-  background-color: var(--color-bg-sidebar);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
+  background-color: var(--c-bg-sidebar);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
   overflow-x: auto;
 }
 
@@ -1354,7 +388,7 @@ body {
   background-color: transparent;
   padding: 0;
   border-radius: 0;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   line-height: 1.55;
 }
 
@@ -1362,11 +396,18 @@ body {
   margin-top: 0.75em;
   margin-bottom: 0.75em;
   padding-left: 1em;
-  border-left: 3px solid var(--color-border);
-  color: var(--color-text-secondary);
+  border-left: 3px solid var(--c-border);
+  color: var(--c-text-secondary);
 }
 
-/* ── Collapsible tool call blocks ── */
+/* Inline chat images fit the message column and invite a click to enlarge
+   (opening the lightbox, src/lightbox.ts). */
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
 .markdown-content .tool-call-block {
   cursor: pointer;
   margin-top: 0.75em;
@@ -1384,10 +425,10 @@ body {
   position: absolute;
   left: 10px;
   top: 14px;
-  font-family: var(--font-family-mono);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body);
   line-height: 1.55;
-  color: var(--color-text-faint);
+  color: var(--c-text-faint);
   transition: transform 150ms;
   pointer-events: none;
 }
@@ -1411,16 +452,16 @@ body {
   margin-top: 1.25em;
   margin-bottom: 1.25em;
   border: none;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--c-border);
 }
 
 .markdown-content a {
-  color: var(--color-accent);
+  color: var(--c-accent);
   text-decoration: underline;
 }
 
 .markdown-content a:hover {
-  color: var(--color-accent-hover);
+  color: var(--c-accent-hover);
 }
 
 .markdown-content table {
@@ -1433,41 +474,16 @@ body {
 
 .markdown-content th,
 .markdown-content td {
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--c-border);
   padding: 0.5em 0.75em;
   text-align: left;
 }
 
 .markdown-content th {
   font-weight: 600;
-  background-color: var(--color-surface-secondary);
+  background-color: var(--c-surface-secondary);
 }
 
-/* ── Streaming indicator ── */
-@keyframes streaming-bounce {
-  0%,
-  60%,
-  100% {
-    opacity: 0.2;
-  }
-  30% {
-    opacity: 0.8;
-  }
-}
-
-.streaming-dot {
-  animation: streaming-bounce 1.2s ease-in-out infinite;
-}
-
-.streaming-dot-2 {
-  animation-delay: 0.15s;
-}
-
-.streaming-dot-3 {
-  animation-delay: 0.3s;
-}
-
-/* ── Scrollbar ── */
 .app-content::-webkit-scrollbar {
   width: 6px;
 }
@@ -1477,511 +493,17 @@ body {
 }
 
 .app-content::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
+  background: var(--c-border);
+  border-radius: var(--radius-sm);
 }
 
 .app-content::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
+  background: var(--c-text-faint);
 }
 
-/* ── Structured tool call blocks (non-markdown) ── */
-.tool-call-block {
-  margin-top: 0.25em;
-  margin-bottom: 0.25em;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  background: var(--color-bg-sidebar);
-  overflow: hidden;
-}
-
-.tool-call-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  font-family: var(--font-family-mono);
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  user-select: none;
-  transition: background 100ms;
-}
-
-/* System/hook messages shown as collapsed blocks instead of user bubbles */
-.message-system-collapsed {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  margin-bottom: 4px;
-}
-
-.message-system-collapsed .tool-call-block {
-  max-width: 80%;
-  margin: 0;
-}
-
-.tool-call-header:hover {
-  background: var(--color-bg-hover);
-}
-
-.tool-call-chevron {
-  font-size: 10px;
-  transition: transform 150ms;
-  display: inline-block;
-}
-
-.tool-call-block--expanded .tool-call-chevron {
-  transform: rotate(90deg);
-}
-
-.tool-call-details {
-  display: none;
-  border-top: 1px solid var(--color-border);
-}
-
-.tool-call-block--expanded .tool-call-details {
-  display: block;
-}
-
-.tool-call-input,
-.tool-call-output {
-  padding: 8px 12px;
-}
-
-/* A failed call's stamped first line: visible on the collapsed row, no fetch needed. */
-.tool-call-error-snippet {
-  padding: 2px 10px 4px 26px;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  color: var(--color-error, #b91c1c);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The quiet interim state of an on-demand payload section (loading / gone). */
-.tool-call-payload-note {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-style: italic;
-}
-
-/* The tiny muted thinking disclosure atop an assistant message. */
-.thinking-disclosure {
-  margin-bottom: 2px;
-}
-
-.thinking-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: none;
-  background: transparent;
-  padding: 0;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  opacity: 0.7;
-  cursor: pointer;
-}
-
-.thinking-toggle:hover {
-  opacity: 1;
-}
-
-.thinking-disclosure--expanded .tool-call-chevron {
-  transform: rotate(90deg);
-}
-
-/* Always in the DOM, revealed by the class the click handler toggles directly --
-   the memoized message wrapper skips re-patching, so a collapse must not need one. */
-.thinking-body {
-  display: none;
-  margin: 2px 0 6px;
-  padding: 6px 10px;
-  border-left: 2px solid var(--color-border);
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  white-space: pre-wrap;
-}
-
-.thinking-disclosure--expanded .thinking-body {
-  display: block;
-}
-
-.thinking-body--note {
-  font-style: italic;
-}
-
-.tool-call-input + .tool-call-output {
-  border-top: 1px solid var(--color-border-faint);
-}
-
-.tool-call-input pre,
-.tool-call-output pre {
-  margin: 0;
-  background: transparent;
-  border: none;
-  padding: 0;
-  overflow-x: auto;
-}
-
-.tool-call-input pre code,
-.tool-call-output pre code {
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-  background: transparent;
-  padding: 0;
-}
-
-.tool-call-output--error pre code {
-  color: #dc2626;
-}
-
-/* ── Model API error (e.g. "API Error: 529 Overloaded") ── */
-/* Light-red tint on the failure text; a grey note below when it's the model
-   provider's fault (a 5xx / overloaded) rather than our request. */
-.message-api-error {
-  border-radius: 6px;
-  padding: 0.5em 0.75em;
-  background: rgba(220, 38, 38, 0.08);
-  color: #dc2626;
-}
-
-.message-api-error-note {
-  margin-top: 0.4em;
-  font-size: 0.85em;
-  color: rgba(120, 120, 120, 0.95);
-}
-
-/* The re-auth affordance under an auth failure. A link rather than a button shape: it sits
-   inside a sentence, and the surrounding block is already the alarming part. */
-.message-api-error-action {
-  color: var(--color-accent);
-  cursor: pointer;
-  font: inherit;
-  padding: 0;
-  text-decoration: underline;
-  background: none;
-  border: none;
-}
-
-.message-api-error-action:hover {
-  color: var(--color-accent-hover);
-}
-
-/* ── Sub-agent link card ── */
-.subagent-card {
-  margin-top: 0.75em;
-  margin-bottom: 0.75em;
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-base);
-  background: var(--color-accent-light);
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.subagent-card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-
-/* Live status dot: pulsing green while the sub-agent works. Reuses the
-   agent-activity-pulse keyframes so it matches the main chat's activity dot. */
-.subagent-card-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.subagent-card-status-dot--running {
-  background: var(--color-accent);
-  animation: agent-activity-pulse 1.4s ease-in-out infinite;
-}
-
-/* Settled checkmark shown once the sub-agent finishes, mirroring a done progress step. */
-.subagent-card-status-check {
-  flex-shrink: 0;
-  color: var(--color-text-secondary);
-}
-
-/* Once finished, the card drops its green accent for neutral grey -- green reads as active. */
-.subagent-card--done {
-  border-color: var(--color-border);
-  background: var(--color-surface-secondary);
-}
-
-.subagent-card-description {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.subagent-card-type-badge {
-  font-size: 11px;
-  font-family: var(--font-family-mono);
-  color: var(--color-accent);
-  background: var(--color-bg);
-  border: 1px solid var(--color-accent);
-  border-radius: 10px;
-  padding: 1px 8px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.subagent-card-link {
-  font-size: 13px;
-  color: var(--color-accent);
-  text-decoration: none;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: color 120ms;
-}
-
-.subagent-card-link:hover {
-  color: var(--color-accent-hover);
-  text-decoration: underline;
-}
-
-/* The "View conversation" label before the subagent is linked to its session: there is no
-   conversation to open yet, so it renders muted and non-interactive until linkage lands. */
-.subagent-card-link--pending {
-  color: var(--color-text-faint);
-  cursor: default;
-}
-
-.subagent-card-link--pending:hover {
-  color: var(--color-text-secondary);
-  text-decoration: none;
-}
-
-/* ── Permission request card ──
-   An agent permission request, rendered as a standalone card (not a generic
-   tool block): an eyebrow, the request's title + rationale, a button that opens
-   the review modal (or the verdict receipt once decided), and a toggle
-   revealing the raw request/response. */
-.permission-request {
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-bg-composer);
-  padding: 12px 14px;
-  max-width: 560px;
-}
-
-/* The eyebrow every card state shares: a small key + "Permission request". */
-.permission-request-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.permission-request-status {
-  margin-top: 9px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-}
-
-/* Pending body: a rounded subject badge beside the title + rationale column. */
-.permission-request-body {
-  margin-top: 10px;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.permission-request-badge {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: var(--color-bg-hover);
-  color: var(--color-text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-/* The smaller badge on the resolved receipt row. */
-.permission-request-badge--sm {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-}
-
-.permission-request-info {
-  min-width: 0;
-  flex: 1;
-}
-
-.permission-request-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.permission-request-reason {
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--color-text-secondary);
-}
-
-.permission-request-actions {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-/* The raw toggle on its own row (unparsed and resolved states), kept subtle
-   at the right edge. */
-.permission-request-toggle-row {
-  margin-top: 8px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.permission-request-raw-toggle {
-  font-size: 12px;
-  color: var(--color-text-faint);
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  transition: color 120ms;
-}
-
-.permission-request-raw-toggle:hover {
-  color: var(--color-text-secondary);
-}
-
-.permission-request-raw {
-  margin-top: 10px;
-}
-
-.permission-request-raw > pre {
-  margin: 0;
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-sidebar);
-  border-radius: 6px;
-  padding: 8px;
-  overflow: auto;
-  white-space: pre-wrap;
-}
-
-.permission-request-button {
-  font-size: 13px;
-  font-weight: 500;
-  color: #fff;
-  background: var(--color-accent);
-  border: none;
-  border-radius: var(--radius-base);
-  padding: 6px 14px;
-  cursor: pointer;
-  transition: background 120ms;
-}
-
-.permission-request-button:hover {
-  background: var(--color-accent-hover);
-}
-
-.permission-request-icon {
-  flex-shrink: 0;
-}
-
-/* The service's own brand mark inside the badge. Drawn as an <img> and never
-   inlined: the artwork carries its own color, and marks that pair a white path
-   with an unfilled one would be repainted by a currentColor ancestor.
-   `object-fit` matters because several of the marks are non-square. */
-.permission-request-mark {
-  display: block;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-/* The resolved receipt, all on one compact line: badge, title, the verdict
-   right beside the title, and the raw toggle at the right edge. */
-.permission-request-receipt {
-  margin-top: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.permission-request-receipt-title {
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The raw toggle inside the receipt row, kept at the right edge. */
-.permission-request-receipt-toggle {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-/* The verdict beside the receipt title. Approved reads in the accent
-   green; denied reads neutral (a decision, not an error). */
-.permission-request-verdict {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.permission-request-verdict--granted {
-  color: var(--color-accent);
-}
-
-.permission-request-verdict--denied {
-  color: var(--color-text-secondary);
-}
-
-.permission-request-verdict--error {
-  color: #b45309;
-}
-
-.permission-request-verdict-icon {
-  flex-shrink: 0;
-}
-
-/* ── Machine rail ── */
-/* The narrow icon strip down the left edge. Its collapsed width (37px), the
-   width transition and the label fade all live on the element as utilities, so
-   the whole expansion animates off one state flag -- what is left here is the
-   part those cannot express.
-
-   The rail overlays the panels to its right while expanded, so a drag that
-   starts on a row must not select the labels it sweeps across, and the app
-   list's scrollbar must not eat into the 37px the icons need. The scrollbar is
-   therefore transparent until the rail is open. */
-.machine-sidebar {
-  user-select: none;
-}
-
+/* The machine rail's scrollbar. The rail overlays the panels to its right
+   while expanded, and the app list's scrollbar must not eat into the 37px the
+   icons need, so it is transparent until the rail is hovered. */
 .machine-sidebar ::-webkit-scrollbar {
   width: 6px;
 }
@@ -1992,18 +514,18 @@ body {
 
 .machine-sidebar ::-webkit-scrollbar-thumb {
   background: transparent;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .machine-sidebar:hover ::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: var(--c-border);
 }
 
 .machine-sidebar:hover ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
+  background: var(--c-text-faint);
 }
 
-/* ── Workspace surface: the connected tab card ──
+/* Workspace surface: the connected tab card.
    The whole content area is one flat grey canvas, and every pane is a white
    card floating on it whose active tab is physically part of the card. The
    pieces that make that read as one shape:
@@ -2029,10 +551,14 @@ body {
    DARK MODE IS UNDECIDED (§1 of the design says "dark mode TBD"), and this app
    carries no dark tokens of its own. The values below are therefore the light
    design serving as the default in both schemes; when the dark canvas is
-   settled it belongs here, as a `prefers-color-scheme` override. */
+   settled it belongs here, as a `prefers-color-scheme` override.
+
+   This rule is only the --si-* parameter table for the dockview theme below
+   (the canvas paint itself -- bg + edge padding -- is utilities in
+   views/App.ts). */
 .app-main {
   --si-canvas: rgb(245 245 245);
-  --si-pane-surface: #ffffff;
+  --si-pane-surface: var(--c-surface);
   --si-pane-border: rgba(0, 0, 0, 0.09);
   --si-pane-radius: 12px;
   /* A tab's own insets. Named because the drag ghost has to restate them from
@@ -2042,23 +568,12 @@ body {
   --si-tab-gap: 4px;
   /* The attention flash (see `si-tab-flash`). Amber is deliberately not in the
      palette's working set: it can only mean "look here for a moment". */
-  --si-tab-flash-color: #fde68a;
+  --si-tab-flash-color: var(--c-warning-bg);
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
-  /* The canvas runs edge to edge and the padding is the outermost pane gap, so
-     the grey is painted across the padding too. Clipping it to the content box
-     instead would let the app's off-white body show as a band around the dock,
-     which reads as a seam rather than as an inset. The top carries that gap
-     against the title bar, and the left carries a matching one so the rail has
-     a few pixels of canvas to hover into before it reaches the literal window
-     edge -- flush there makes the reveal awkward to land the pointer on. Right
-     and bottom stay flush against the viewport. */
-  padding: 4px 0 0 4px;
-  background: var(--si-canvas);
 }
 
-/* ── Dockview workspace ── */
 .dockview-workspace {
   position: relative;
 }
@@ -2069,17 +584,15 @@ body {
   left: 0;
 }
 
-/* ── Dockview theme overrides ──
-
+/* Dockview theme overrides.
    The class is doubled to win on specificity. dockview-core does not rely on
    the stylesheet we import at the top of this file: it *injects its own style
    element at runtime*, which therefore lands after our linked stylesheet and
-   beats a plain `.dockview-theme-light` rule on document order alone. That is
-   what used to leave the dock painted white over our grey canvas, and the tab
-   strip painted its own grey, no matter what this block said. Anything here
-   that overrides a `--dv-*` default has to stay inside this doubled selector. */
+   beats a plain `.dockview-theme-light` rule on document order alone. Anything
+   here that overrides a `--dv-*` default has to stay inside this doubled
+   selector. */
 .dockview-theme-light.dockview-theme-light {
-  --dv-paneview-header-border-color: var(--color-border);
+  --dv-paneview-header-border-color: var(--c-border);
   /* Everything dockview would paint itself is transparent: the canvas behind
      the dock is the app's, and the only surface is the pane card. */
   --dv-background-color: transparent;
@@ -2089,17 +602,17 @@ body {
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--si-pane-surface);
   --dv-activegroup-hiddenpanel-tab-background-color: transparent;
   --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
-  --dv-activegroup-visiblepanel-tab-color: var(--color-text-primary);
-  --dv-activegroup-hiddenpanel-tab-color: var(--color-text-secondary);
-  --dv-inactivegroup-visiblepanel-tab-color: var(--color-text-primary);
-  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-text-secondary);
+  --dv-activegroup-visiblepanel-tab-color: var(--c-text-primary);
+  --dv-activegroup-hiddenpanel-tab-color: var(--c-text-secondary);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--c-text-primary);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--c-text-secondary);
   /* Inactive tabs are bare labels: no dividers between them, and no line under
      the strip. The 4px gap is the separator, so that goes too. */
   --dv-tab-divider-color: transparent;
   --dv-separator-border: transparent;
-  --dv-tabs-container-scrollbar-color: var(--color-border);
-  --dv-drag-over-background-color: var(--color-accent-light);
-  --dv-drag-over-border-color: var(--color-accent);
+  --dv-tabs-container-scrollbar-color: var(--c-border);
+  --dv-drag-over-background-color: var(--c-accent-light);
+  --dv-drag-over-border-color: var(--c-accent);
 }
 
 /* The gap between panes. Padding rather than a margin so dockview's own sizing
@@ -2131,11 +644,7 @@ body {
 
    The overlay sits outside the group's subtree and carries nothing that says
    which pane it belongs to, so this clip cannot be the conditional one the card
-   above gets: it rounds all four corners. Where a card is square at the
-   top-left, a panel painted anything other than white therefore leaves the
-   card's own white showing in that corner -- directly under the white active
-   tab that squared it. The card's outline, which is what reads as the shape, is
-   still exactly right. */
+   above gets: it rounds all four corners. */
 .dockview-theme-light .dv-render-overlay {
   border: 1px solid transparent;
   border-radius: var(--si-pane-radius);
@@ -2153,23 +662,19 @@ body {
 
    The selector is doubled on purpose: dockview's own `.dv-render-overlay` rule
    declares `z-index: 1` at the same specificity and is loaded after this file,
-   so a bare `.si-live-surface` would lose the tie and sit at 1 alongside the
-   slot overlay -- which, being a later sibling, would then paint over the page
-   and swallow every click into it. */
+   so a bare `.si-live-surface` would lose the tie. */
 .dv-render-overlay.si-live-surface {
   position: absolute;
   display: flex;
   flex-direction: column;
   /* Above the (now empty) panel overlay standing in for it, which is a sibling
-     at z-index 1 and comes later in the DOM. Drop targets sit at 1000/9999 and
-     still paint over both. */
-  z-index: 2;
+     at z-index 1 and comes later in the DOM. */
+  z-index: 2; /* design-system-exception: must be exactly one above dockview's own z-index:1 render-overlay (see comment above); the z scale has no "content + 1" layer */
 }
 
 /* While a tab is being dragged the surface stops taking pointer events, so the
    drag reaches the panel overlay underneath -- which is what forwards it to the
-   pane's drop target. Without this a drop over a pane would land inside the
-   framed page instead. */
+   pane's drop target. */
 .si-live-surface--drag {
   pointer-events: none;
 }
@@ -2185,7 +690,7 @@ body {
   /* Above the pane, so the active tab's white closes over the 1px of card
      border the negative margin above tucked under the strip. */
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content);
 }
 
 /* The "+" belongs immediately after the pane's tabs; dockview's void container
@@ -2210,13 +715,11 @@ body {
    is now active" -- it usually already was, which is the whole reason nothing
    appeared to happen.
 
-   A wash of colour rather than the opacity blink this used to be: fading the
-   tab out and back read as the tab going away, which is the opposite of "here
-   it is". Amber because it is the one hue this workspace does not otherwise
-   use -- the accent means active and green, and grey is every resting state --
-   so the flash cannot be mistaken for a state the tab has entered and stayed
-   in. It paints ONLY for the animation's length, so the standing rule that an
-   inactive tab carries no background is untouched.
+   A wash of colour rather than an opacity blink: fading the tab out and back
+   reads as the tab going away, which is the opposite of "here it is". Amber
+   because it is the one hue this workspace does not otherwise use -- the
+   accent means active and green, and grey is every resting state -- so the
+   flash cannot be mistaken for a state the tab has entered and stayed in.
 
    Driven by a class rather than the Web Animations API so the keyframes sit
    with the rest of the tab's appearance, and so `prefers-reduced-motion` can
@@ -2260,15 +763,13 @@ body > .dv-tab.dv-dragged {
   border-radius: var(--si-pane-radius) !important;
 }
 
-/* The ghost's INSIDE, for the same reason and with a sharper edge to it: the
-   clone carries the outer `.dv-tab`'s computed style as inline styles, but
-   only that element's -- its descendants keep their classes and lose every
-   rule that was scoped under `.dockview-theme-light`, because the clone hangs
-   off `<body>` and no longer has that ancestor. `padding` and `gap` are not
-   inherited, so the inner `.dv-default-tab` rendered with neither: the icon
-   sat flush against the ghost's left edge with the title against it. Restated
-   here from the same variables the live tab uses, so a dragged tab looks like
-   the tab it came from. */
+/* The ghost's INSIDE, for the same reason: the clone carries the outer
+   `.dv-tab`'s computed style as inline styles, but only that element's -- its
+   descendants keep their classes and lose every rule that was scoped under
+   `.dockview-theme-light`, because the clone hangs off `<body>` and no longer
+   has that ancestor (and `padding`/`gap` are not inherited). Restated here
+   from the same variables the live tab uses, so a dragged tab looks like the
+   tab it came from. */
 body > .dv-tab.dv-dragged .dv-default-tab {
   padding: var(--si-tab-padding);
   gap: var(--si-tab-gap);
@@ -2279,8 +780,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* Hovering an inactive tab paints NOTHING. A fill at the strip's edges always
-   fights the pane's rounded corner below it (two attempts at that shape both
-   read as a boxy cutoff), so the hover affordance is everything except a
+   fights the pane's rounded corner below it and reads as a boxy cutoff,
+   so the hover affordance is everything except a
    background: the pointer cursor, the icon and title recoloring to the
    primary text color, and the tab's own action buttons appearing -- which the
    strip already reveals on hover. Spelled out down the whole chain because
@@ -2294,35 +795,32 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: pointer;
 }
 
-/* ── Tab overflow: the "N more" dropdown at the strip's right edge ──
+/* Tab overflow: the "N more" dropdown at the strip's right edge.
    dockview builds this from theme variables this app sets to transparent (the
    divider is the tab gap, the group background is the canvas), so untouched it
-   rendered as bare text floating over the pane. It is a menu, so it wears the
-   same chrome as every other floating card: primary surface, hairline border,
-   8px radius, the overlay shadow, and 32px rows with the shared hover fill. */
+   renders as bare text floating over the pane. It is a menu, so it wears the
+   same chrome as every other floating card. */
 .dockview-theme-light .dv-tabs-overflow-dropdown-default {
-  gap: 4px;
-  padding: 0 6px;
-  border-radius: 6px;
-  color: var(--color-text-secondary);
-  font-size: 12px;
+  gap: --spacing(1);
+  padding: 0 --spacing(1.5);
+  border-radius: var(--radius-md);
+  color: var(--c-text-secondary);
+  font-size: var(--font-size-helper);
   cursor: pointer;
 }
 
 .dockview-theme-light .dv-tabs-overflow-dropdown-default:hover {
-  background-color: var(--color-bg-hover);
-  color: var(--color-text-primary);
+  background-color: var(--c-fill-hover);
+  color: var(--c-text-primary);
 }
 
 .dockview-theme-light .dv-tabs-overflow-container {
   min-width: 160px;
-  padding: 4px 0;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background-color: var(--color-surface);
-  box-shadow:
-    0 1px 1px 0 rgba(0, 0, 0, 0.08),
-    0 3px 12px 0 rgba(0, 0, 0, 0.08);
+  padding: --spacing(1) 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background-color: var(--c-surface);
+  box-shadow: var(--shadow-overlay);
 }
 
 /* Rows. The strip's card shape does not belong here -- inside a menu a tab is
@@ -2332,7 +830,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .dockview-theme-light .dv-tabs-overflow-container .dv-tab {
   width: auto;
   height: 32px;
-  padding: 0 12px;
+  padding: 0 --spacing(3);
   border: none;
   border-radius: 0;
   background-color: transparent;
@@ -2340,7 +838,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .dockview-theme-light .dv-tabs-overflow-container .dv-tab:hover {
-  background-color: var(--color-bg-hover);
+  background-color: var(--c-fill-hover);
 }
 
 .dockview-theme-light .dv-tabs-overflow-container .dv-tab.dv-active-tab .dv-default-tab-content {
@@ -2354,23 +852,23 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    Both the icon and the title move to the primary text color together. */
 .dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-custom-tab-icon,
 .dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-default-tab-content {
-  color: var(--color-text-primary);
+  color: var(--c-text-primary);
 }
 
 /* dockview outlines a focused tab in the (now transparent) divider color, so
    the keyboard ring is spelled out here instead -- in the accent, which is
    where the accent is allowed. */
 .dockview-theme-light .dv-tab:focus-visible::after {
-  outline: 2px solid var(--color-accent) !important;
+  outline: 2px solid var(--c-accent) !important;
   outline-offset: -2px;
 }
 
 .dockview-theme-light .dv-default-tab {
-  font-family: var(--font-family-base);
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body);
   font-weight: 500;
   padding: var(--si-tab-padding);
-  gap: 8px;
+  gap: --spacing(2);
 }
 
 .dockview-theme-light .dv-default-tab-action svg {
@@ -2378,7 +876,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   height: 12px;
 }
 
-/* ── Drag and drop ──
+/* Drag and drop.
    A drop onto a PANE and a drop onto a TAB are different questions and get
    different answers. "Which side of this pane?" is a region, so it stays a
    filled wash -- but a neutral grey light enough to read the pane through,
@@ -2419,10 +917,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   top: 0;
   bottom: 0;
   width: 2px;
-  border-radius: 1px;
+  border-radius: 1px; /* design-system-exception: one-off; half of this 2px insertion caret's width, so it reads as a rounded line, not a scale radius */
   /* Neutral, like everything else on the dock: the accent is chrome's, and an
      insertion caret here would be the one accent-colored thing in the pane. */
-  background: var(--color-text-primary);
+  background: var(--c-text-primary);
 }
 
 .dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-left::after {
@@ -2444,7 +942,144 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-top: none;
 }
 
-/* ── Add tab button ── */
+/* The chat card and its two faces.
+   A chat and its agent's terminal are one conversation rendered two ways, so they are the front
+   and back of one surface rather than two places. The mockup's FlipSurface, ported: perspective
+   on the frame, preserve-3d on the turner, both faces backface-hidden with the back pre-turned
+   so it reads correctly once around. */
+.chat-flip {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  perspective: 2000px;
+}
+.chat-flip-inner {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 600ms cubic-bezier(0.45, 0, 0.25, 1);
+}
+/* Both faces keep their SIZE while hidden. ttyd sizes the agent's tmux window to its client
+   viewport (`window-size latest`), so a display:none back face would hand the agent a
+   zero-column terminal; a zero-sized front face would lose the transcript's scroll offset.
+   backface-visibility is what hides them, and it costs no layout. */
+.chat-flip-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
+     as a hole with two pictures behind it. */
+  background: var(--c-surface);
+  border-radius: inherit;
+  overflow: hidden;
+}
+.chat-flip-back {
+  transform: rotateY(180deg);
+}
+
+/* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
+   turning goes away. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-flip-inner {
+    transition: none;
+  }
+}
+
+/* The switch that turns the card over. Only the row around it is styled here -- the switch
+   itself is the shared one from `modelCardStyles`, at its own size. Overriding that size with
+   CSS is what broke it: the knob's offset comes from a Tailwind utility, so a `transform` here
+   simply lost to it and left the knob sitting outside the track. */
+.terminal-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--c-text-secondary);
+  font-size: var(--font-size-row);
+  transition: color var(--dur-base);
+}
+.terminal-view-toggle:hover,
+.terminal-view-toggle[aria-checked="true"] {
+  color: var(--c-text-primary);
+}
+
+/* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its
+   base and grows upward, so its top edge is not somewhere the eye naturally checks for "more",
+   and an overlay scrollbar that only appears mid-scroll says nothing until it is too late. */
+.model-flyout-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-border) transparent;
+}
+.model-flyout-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.model-flyout-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.model-flyout-scroll::-webkit-scrollbar-thumb {
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background-color: var(--c-border);
+}
+.model-flyout-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--c-text-faint);
+}
+
+/* The tiny muted thinking disclosure atop an assistant message
+   (views/message-renderers.ts renderThinkingDisclosure). */
+.thinking-disclosure {
+  margin-bottom: 2px;
+}
+
+.thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: var(--font-size-helper);
+  color: var(--c-text-secondary);
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.thinking-toggle:hover {
+  opacity: 1;
+}
+
+.thinking-disclosure--expanded .tool-call-chevron {
+  transform: rotate(90deg);
+}
+
+/* Always in the DOM, revealed by the class the click handler toggles directly --
+   the memoized message wrapper skips re-patching, so a collapse must not need one. */
+.thinking-body {
+  display: none;
+  margin: 2px 0 6px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--c-border);
+  font-size: var(--font-size-row);
+  color: var(--c-text-secondary);
+  white-space: pre-wrap;
+}
+
+.thinking-disclosure--expanded .thinking-body {
+  display: block;
+}
+
+.thinking-body--note {
+  font-style: italic;
+}
+
 .dockview-add-tab-wrapper {
   position: relative;
   display: flex;
@@ -2452,7 +1087,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   /* Full height so align-items:center vertically centers the + within the tab
      bar (its parent .dv-left-actions-container is display:block, 35px tall). */
   height: 100%;
-  padding: 0 4px;
+  padding: 0 --spacing(1);
 }
 
 .dockview-add-tab-button {
@@ -2463,154 +1098,32 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   height: 24px;
   border: none;
   background: none;
-  color: var(--color-text-secondary);
-  font-size: 18px;
+  color: var(--c-text-secondary);
+  font-size: 18px; /* design-system-exception: icon glyph (+ add-tab), not text */
   font-weight: 300;
   cursor: pointer;
   line-height: 1;
-  border-radius: var(--radius-base);
+  border-radius: var(--radius-md);
   transition:
     background 100ms,
     color 100ms;
 }
 
 .dockview-add-tab-button:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
+  background: var(--c-fill-hover);
+  color: var(--c-text-primary);
 }
 
-/* ── Custom URL dialog ── */
-.custom-url-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-}
-
-.custom-url-dialog {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 24px;
-  width: 400px;
-  max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-.custom-url-dialog-title {
-  font-family: var(--font-family-heading);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0 0 16px;
-}
-
-.custom-url-dialog-label {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  margin-bottom: 4px;
-}
-
-.custom-url-dialog-input {
-  display: block;
-  width: 100%;
-  padding: 8px 12px;
-  font-family: var(--font-family-base);
-  font-size: 14px;
-  color: var(--color-text-primary);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  margin-bottom: 12px;
-  outline: none;
-  box-sizing: border-box;
-}
-
-.custom-url-dialog-input:focus {
-  border-color: var(--color-accent);
-}
-
-.custom-url-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.custom-url-dialog-cancel,
-.custom-url-dialog-danger,
-.custom-url-dialog-open {
-  padding: 6px 16px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: var(--radius-base);
-  cursor: pointer;
-  border: 1px solid var(--color-border);
-  transition: background 100ms;
-}
-
-.custom-url-dialog-cancel {
-  background: var(--color-bg);
-  color: var(--color-text-primary);
-}
-
-.custom-url-dialog-cancel:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
-
-.custom-url-dialog-cancel:disabled,
-.custom-url-dialog-danger:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* Force, on the send-failure notice: it restarts the agent, ending any turn in progress and
-   losing that work, so it must not look like the easy button next to Cancel and Retry. */
-.custom-url-dialog-danger {
-  background: white;
-  color: #dc2626;
-  border-color: #fecaca;
-}
-
-.custom-url-dialog-danger:hover:not(:disabled) {
-  background: #fef2f2;
-}
-
-.custom-url-dialog-open {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.custom-url-dialog-open:hover {
-  background: var(--color-accent-hover);
-}
-
-.custom-url-dialog-open:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* ── Project settings pickers ── */
 /* The color swatches and the squiggle cells of the project settings modal. They
-   are the only toggles a dialog carries, so ``aria-pressed`` is what tells them
+   are the only toggles a modal carries, so ``aria-pressed`` is what tells them
    apart from its Cancel/Save row. Their size, fill and selection ring are set
    inline (the ring is the project's own color), leaving the grids' shared
    feedback here. */
-.custom-url-dialog button[aria-pressed] {
-  transition: transform 80ms ease-out;
+.modal-card button[aria-pressed] {
+  transition: transform var(--dur-fast) ease-out;
 }
 
-.custom-url-dialog button[aria-pressed]:hover {
+.modal-card button[aria-pressed]:hover {
   transform: scale(1.08);
 }
 
@@ -2618,22 +1131,20 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    carries its selection ring as ``outline`` and a squiggle cell carries its own
    as ``box-shadow``, so whichever property is spoken for on a given cell, the
    other one still shows the focus. */
-.custom-url-dialog button[aria-pressed]:focus-visible {
-  outline: 2px solid var(--color-accent);
+.modal-card button[aria-pressed]:focus-visible {
+  outline: 2px solid var(--c-accent);
   outline-offset: 2px;
   box-shadow:
-    0 0 0 2px var(--color-surface),
-    0 0 0 4px var(--color-accent);
+    0 0 0 2px var(--c-surface),
+    0 0 0 4px var(--c-accent);
 }
 
-/* ── Custom tab renderer ──
-   4px normalizes the tab's internal spacing (icon to title, and title to the
+/* 4px normalizes the tab's internal spacing (icon to title, and title to the
    hover-revealed actions) to the sidebar's own icon-to-label gap (`gap-1` on
    the rail's row classes in Sidebar.ts). The selector has to repeat both
    classes: `createCustomTab` sets `className = "dv-default-tab dv-custom-tab"`
    on the same element, so a bare `.dv-custom-tab` here loses on specificity to
-   `.dockview-theme-light .dv-default-tab`'s own `gap: 8px` above -- which is
-   what left this at 8px despite this rule. */
+   `.dockview-theme-light .dv-default-tab`'s own `gap` above. */
 .dockview-theme-light .dv-default-tab.dv-custom-tab {
   gap: var(--si-tab-gap);
 }
@@ -2648,75 +1159,29 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  color: var(--color-text-secondary);
+  color: var(--c-text-secondary);
   background: currentColor;
 }
 
 /* Working -- green, matching the chat's activity indicator. */
 .dv-tab-process-dot[data-status="working"] {
-  color: var(--color-accent);
+  color: var(--c-accent);
 }
 
 /* Waiting on the user -- yellow. */
 .dv-tab-process-dot[data-status="attention"] {
-  color: #ca8a04;
+  color: var(--c-warning);
 }
 
 /* Failed -- red. */
 .dv-tab-process-dot[data-status="error"] {
-  color: #dc2626;
+  color: var(--c-danger);
 }
 
 /* Stopped -- a hollow grey ring: the instance is known but nothing is running it. */
 .dv-tab-process-dot[data-status="stopped"] {
   background: transparent;
   border: 1.5px solid currentColor;
-}
-
-/* ── Hover tooltip ── */
-/* The one tooltip bubble in the workspace, built on <body> and positioned
-   (fixed) by views/hoverTooltip.ts. It stands in for native `title`
-   everywhere: dockview's draggable tabs suppress those, and a ::after bubble
-   is clipped by the tab strip's overflow.
-
-   The appearance is the minds shell's `.minds-tooltip`, so chrome and
-   workspace tooltips are indistinguishable -- inverse surface with matching
-   inverse text, 12px helper type, 6px radius, 8px/4px padding, the overlay
-   elevation shadow, and centered text wrapping at 400px. `display` is toggled
-   in JS (`inline-flex` when shown) and there is deliberately no transition:
-   the bubble appears after the 250ms hover-intent delay and disappears
-   instantly. It has to clear the modals, which sit at 10000.
-
-   This app has no theme tokens for an inverted surface, so both modes are
-   spelled out here off `prefers-color-scheme` -- the only theme signal that
-   reaches this iframe. */
-.minds-tooltip {
-  position: fixed;
-  z-index: 10001;
-  display: none;
-  align-items: center;
-  gap: 6px;
-  max-width: 400px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: #000000;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.4;
-  text-align: center;
-  white-space: normal;
-  pointer-events: none;
-  box-shadow:
-    0 1px 1px 0 rgba(0, 0, 0, 0.08),
-    0 3px 12px 0 rgba(0, 0, 0, 0.08);
-}
-
-@media (prefers-color-scheme: dark) {
-  .minds-tooltip {
-    background: #ffffff;
-    color: #000000;
-  }
 }
 
 /* The inline rename editor, swapped in for the title on a double-click. It
@@ -2728,236 +1193,32 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex: 1 1 auto;
   min-width: 0;
   padding: 0 3px;
-  border: 1px solid var(--color-accent);
-  border-radius: 3px;
+  border: 1px solid var(--c-accent);
+  border-radius: var(--radius-sm);
   outline: none;
-  background: var(--color-bg);
-  color: var(--color-text-primary);
+  background: var(--c-bg);
+  color: var(--c-text-primary);
   font: inherit;
 }
 
 .dv-custom-tab-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin-left: 4px;
+  gap: --spacing(0.5);
+  margin-left: --spacing(1);
 }
 
-.dv-custom-tab-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  border-radius: 3px;
-  transition:
-    background 80ms,
-    color 80ms;
-  flex-shrink: 0;
-}
+/* The tab-action buttons (close, kebab) wear the shared ghost icon-Button
+ * recipe (buttonClass in views/components/Button.ts) for their box, radius and
+ * hover square; `.dv-custom-tab-action` is only a bare marker the E2E
+ * selectors query, and the 12px glyph size is set on the icon markup at the
+ * call site. Only the `.dv-custom-tab-actions` container styling lives here. */
 
-.dv-custom-tab-action svg {
-  width: 12px;
-  height: 12px;
-}
-
-.dv-custom-tab-action:hover {
-  background: rgba(0, 0, 0, 0.08);
-  color: var(--color-text-primary);
-}
-
-/* ── Destroy confirmation dialog ── */
-.destroy-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-}
-
-.destroy-dialog {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 24px;
-  width: 420px;
-  max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-.destroy-dialog-title {
-  font-family: var(--font-family-heading);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0 0 12px;
-}
-
-.destroy-dialog-message {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  margin: 0 0 16px;
-  line-height: 1.5;
-}
-
-.destroy-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.destroy-dialog-btn {
-  padding: 8px 16px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: var(--radius-base);
-  cursor: pointer;
-  border: 1px solid var(--color-border);
-}
-
-.destroy-dialog-btn-cancel {
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-}
-
-.destroy-dialog-btn-cancel:hover {
-  background: var(--color-bg-hover);
-}
-
-.destroy-dialog-btn-destroy {
-  background: #dc2626;
-  color: #fff;
-  border-color: #dc2626;
-}
-
-.destroy-dialog-btn-destroy:hover {
-  background: #b91c1c;
-}
-
-/* ── Fast-mode grace-period prompt ── */
-.fast-mode-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-}
-
-.fast-mode-modal {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 24px;
-  width: 460px;
-  max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-.fast-mode-modal-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 12px;
-}
-
-.fast-mode-modal-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  color: var(--color-accent);
-  background: var(--color-accent-light);
-  flex-shrink: 0;
-}
-
-.fast-mode-modal-title {
-  font-family: var(--font-family-heading);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0;
-}
-
-.fast-mode-modal-message {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  margin: 0 0 16px;
-  line-height: 1.5;
-}
-
-.fast-mode-modal-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--color-accent);
-  text-decoration: underline;
-  white-space: nowrap;
-}
-
-.fast-mode-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.fast-mode-modal-btn {
-  padding: 8px 16px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: var(--radius-base);
-  cursor: pointer;
-  border: 1px solid var(--color-border);
-}
-
-.fast-mode-modal-btn:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-/* Standard speed is the default action -- the cheaper outcome, the one the
-   backdrop and Escape also take -- so it carries the accent. */
-.fast-mode-modal-btn-standard {
-  background: var(--color-accent);
-  color: #fff;
-  border-color: var(--color-accent);
-}
-
-.fast-mode-modal-btn-standard:hover {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
-}
-
-.fast-mode-modal-btn-fast {
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-}
-
-.fast-mode-modal-btn-fast:hover {
-  background: var(--color-bg-hover);
-}
-
-/* === Claude login modal === */
-
-@keyframes claude-login-overlay-in {
+/* Modal enter animations.
+ * The modal shell itself (overlay + card + header/title + body copy + actions)
+ * lives as utility class strings in views/Modal.ts. Only its @keyframes live
+ * here (Tailwind's animate-[...] utilities reference them by name). */
+@keyframes modal-overlay-in {
   from {
     opacity: 0;
   }
@@ -2966,172 +1227,34 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   }
 }
 
-@keyframes claude-login-spin {
+@keyframes modal-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────
-   PROGRESS VIEW (per-turn task timeline rendered from tk tickets)
-   ─────────────────────────────────────────────────────────────────── */
-
-.progress-block {
-  margin: 18px 0 28px;
-  --pv-fg: var(--color-text-primary);
-  --pv-fg-soft: #5a564a;
-  --pv-fg-muted: var(--color-text-secondary);
-  --pv-fg-faint: var(--color-text-faint);
-  --pv-line: var(--color-border);
-  --pv-line-faint: var(--color-border-faint);
-  --pv-active: var(--color-accent);
-  --pv-done: #5a564a;
-  --pv-pending: #c2bfb6;
-  /* The "glint" that sweeps across active-step narration. Kept independent of
-     the text scale so the shimmer stays visible against the muted caption. */
-  --pv-shimmer: #bcbcbc;
-  font-size: 14.5px;
-  line-height: 1.5;
-  color: var(--pv-fg);
-}
-
-/* Status icons */
-.pv-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.pv-icon--done {
-  color: var(--pv-done);
-}
-.pv-icon--active {
-  color: var(--pv-active);
-  width: 16px;
-  height: 16px;
-}
-.pv-icon--in-flight {
-  color: var(--pv-active);
-  width: 16px;
-  height: 16px;
-}
-.pv-icon--pending {
-  color: var(--pv-pending);
-}
-
-.pv-spinner {
-  display: block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
-  animation: pv-spin 0.9s linear infinite;
-}
-@keyframes pv-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Chevron */
-.pv-chev {
-  display: inline-block;
-  margin-left: 6px;
-  font-size: 18px;
-  color: var(--pv-fg-muted);
-  transition: transform 0.15s ease;
-  font-weight: 400;
-}
-.pv-chev--open {
-  transform: rotate(90deg);
-  color: var(--pv-fg);
-}
-
-/* Title button reset (timeline variant) */
-.pv-tl-title {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  font-size: 14.5px;
-  font-weight: 500;
-  color: var(--pv-fg);
-  line-height: 1.4;
-  display: inline-flex;
-  align-items: center;
-}
-.pv-tl-title:disabled {
-  cursor: default;
-}
-
-/* Timeline thread + nodes */
-.pv.pv--timeline {
-  position: relative;
-  padding-left: 0;
-}
-.pv-timeline-thread {
-  position: absolute;
-  left: 7.5px;
-  top: 8px;
-  bottom: 0;
-  width: 1px;
-  background: var(--pv-line);
-}
-.pv-tl-node {
-  position: relative;
-  display: flex;
-  gap: 14px;
-  padding: 0 0 18px 0;
-  align-items: flex-start;
-}
-.pv-tl-node--last {
-  padding-bottom: 0;
-}
-.pv-tl-bullet {
-  position: relative;
-  z-index: 1;
-  background: var(--color-bg-chat);
-  padding: 1px 0;
-  flex-shrink: 0;
-  width: 16px;
-}
-.pv-tl-body {
-  flex: 1;
-  min-width: 0;
-}
-.pv-tl-node--done .pv-tl-title {
-  color: var(--pv-fg-soft);
-  font-weight: 400;
-}
-.pv-tl-node--pending .pv-tl-title {
-  color: var(--pv-fg-muted);
-  font-weight: 400;
-}
-.pv-tl-node--active .pv-tl-title {
-  color: var(--pv-active);
-  font-weight: 600;
-}
-
-.pv-tl-summary {
-  margin-top: 3px;
-  padding-left: 2px;
-  font-size: 13px;
-  color: var(--pv-fg-muted);
-  line-height: 1.5;
-}
+/* Progress view (the per-turn task timeline rendered from tk tickets).
+   The timeline's structure lives as utilities in views/ProgressBlock.ts and
+   views/icons.ts. What stays here is what utilities cannot carry: the
+   narration classes (they style markdown-rendered children, and the live
+   one's shimmer is a keyframe + background-clip machine) and the expanded
+   panel's markdown/tool-block child rules. */
 
 .pv-tl-narration {
   margin-top: 3px;
-  padding-left: 2px;
-  font-size: 13px;
+  padding-left: --spacing(0.5);
+  font-size: var(--font-size-body);
   font-style: italic;
-  color: var(--pv-fg-muted);
+  color: var(--c-text-secondary);
   line-height: 1.5;
-  background: linear-gradient(90deg, var(--pv-fg-muted) 0%, var(--pv-shimmer) 40%, var(--pv-fg-muted) 80%);
+  /* The "glint" that sweeps across active-step narration: the faint tone as
+     the moving highlight over the muted caption color. */
+  background: linear-gradient(90deg, var(--c-text-secondary) 0%, var(--c-text-faint) 40%, var(--c-text-secondary) 80%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -3148,15 +1271,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* Static (settled) narration: an unclosed step that went idle still shows
-   its mid-work narration, but without the live shimmer -- muted italic, a
-   neutral left rule instead of the active-accent rule. The markdown child
-   styling below is shared with .pv-tl-narration via the grouped selectors. */
+   its mid-work narration, but without the live shimmer -- muted italic. */
 .pv-tl-narration--static {
   margin-top: 3px;
-  padding-left: 2px;
-  font-size: 13px;
+  padding-left: --spacing(0.5);
+  font-size: var(--font-size-body);
   font-style: italic;
-  color: var(--pv-fg-muted);
+  color: var(--c-text-secondary);
   line-height: 1.5;
 }
 .pv-tl-narration p,
@@ -3171,16 +1292,15 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-narration--static code {
   font-size: 0.9em;
   padding: 0.1em 0.35em;
-  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
-  border-radius: 3px;
+  background: var(--c-border-faint);
+  border-radius: var(--radius-sm);
   font-style: normal;
-  -webkit-text-fill-color: var(--pv-fg-muted);
+  -webkit-text-fill-color: var(--c-text-secondary);
   -webkit-background-clip: padding-box;
   background-clip: padding-box;
 }
-/* The live (shimmering) narration keeps its pre-unification borderless code
-   chip; only the settled/static narration adopts the bordered chip. Both still
-   draw their fill/text from the shared --pv-* tokens above. */
+/* Deliberate asymmetry: the live (shimmering) narration's code chip is
+   borderless; only the settled/static narration carries the bordered chip. */
 .pv-tl-narration code {
   border: none;
 }
@@ -3188,12 +1308,12 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-narration--static pre {
   margin: 0.4em 0;
   padding: 0.5em 0.7em;
-  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
-  border-radius: 4px;
+  background: var(--c-border-faint);
+  border-radius: var(--radius-sm);
   overflow-x: auto;
   font-size: 0.9em;
   font-style: normal;
-  -webkit-text-fill-color: var(--pv-fg-muted);
+  -webkit-text-fill-color: var(--c-text-secondary);
   -webkit-background-clip: padding-box;
   background-clip: padding-box;
 }
@@ -3204,7 +1324,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 .pv-tl-narration a,
 .pv-tl-narration--static a {
-  color: var(--pv-fg-muted);
+  color: var(--c-text-secondary);
   text-decoration: underline;
 }
 .pv-tl-narration ul,
@@ -3219,48 +1339,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-bottom: 0.15em;
 }
 
-/* Id badge in front of regular-ticket titles. Visually subtle -- the
-   title is the primary thing the user reads; the badge is the secondary
-   "which tk ticket is this" handle for users / agents who care. */
-.pv-tl-id-badge {
-  display: inline-block;
-  margin-right: 8px;
-  padding: 0 6px;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--pv-fg-muted);
-  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
-  border-radius: 4px;
-  vertical-align: middle;
-}
-
-/* Steps are creator-private progress markers -- they read like sub-items, so
-   we keep the title weight lighter and the typography slightly de-emphasized. */
-.pv-tl-node--step .pv-tl-title {
-  font-weight: 500;
-  font-size: 13.5px;
-  color: var(--pv-fg-soft);
-}
-
-.pv-tl-expanded {
-  margin-top: 6px;
-}
-
 /* Expanded panel: matches the rest of the chat -- interleaved markdown +
-   tool-call-blocks. We just contain it with a subtle indent + left rule
-   so it's visually distinct from the surrounding progress structure. */
-.pv-expanded {
-  margin-top: 10px;
-  padding: 4px 0 4px 14px;
-  border-left: 2px solid var(--pv-line-faint);
-  font-size: 14px;
-}
+   tool-call-blocks (the container's indent + left rule are utilities in
+   ProgressBlock.ts; these are its rendered-content children). */
 .pv-expanded p {
   margin: 0 0 0.6em;
   line-height: 1.5;
-  color: var(--pv-fg);
+  color: var(--c-text-primary);
 }
 .pv-expanded p:last-child {
   margin-bottom: 0;
@@ -3269,95 +1354,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin: 0.5em 0;
 }
 
-/* Final (trailing) assistant reply under the progress timeline */
-.pv-final {
-  margin-top: 16px;
-  padding: 0;
-  font-size: 15px;
-  line-height: 1.5;
-  color: var(--pv-fg);
-}
-
-/* Leading prose: emitted before the first step, rendered ABOVE the timeline
-   as plain chat-style prose. */
-.pv-lead {
-  margin-bottom: 16px;
-  padding: 0;
-  font-size: 15px;
-  line-height: 1.5;
-  color: var(--pv-fg);
-}
-
-/* Stop-hook chip woven into the timeline at the point the hook fired. Like
-   the ungrouped block it sits above the timeline thread (opaque background +
-   z-index) so the thread doesn't draw through the chip. The chip itself keeps
-   its own collapsible styling; this wrapper only handles positioning and
-   masking the thread. The background is the pure-white transcript color
-   (--color-bg-chat), not the shell's off-white --color-bg, so the mask blends
-   into the transcript instead of showing as a band. */
-.pv-stophook {
-  position: relative;
-  z-index: 2;
-  margin: 6px 0 14px 0;
-  background: var(--color-bg-chat);
-}
-
-/* Ungrouped work/prose: real work the agent did with no step open (e.g.
-   before declaring the first step, or in a gap between steps). Rendered
-   inline as plain chat-style messages, sitting above the timeline thread
-   (opaque background + z-index) so the thread doesn't draw through it. */
-.pv-ungrouped {
-  position: relative;
-  z-index: 2;
-  /* Top space as padding, not margin, so the white background extends up and
-     masks a bit of the timeline line above the ungrouped run. */
-  margin: 0 0 14px 0;
-  padding-top: 6px;
-  background: var(--color-bg-chat);
-}
-
-/* Agent permission request, lifted out of any open step so it is always
-   directly visible and breaks the timeline flow. Lifted above the timeline
-   thread with z-index so the thread doesn't draw through it; the permission-request
-   card carries its own opaque surface, so it masks the thread on its own and this
-   wrapper needs no background of its own (a background here would paint the shell's
-   off-white --color-bg over the pure-white --color-bg-chat transcript). */
-.pv-permission {
-  position: relative;
-  z-index: 2;
-  margin: 6px 0 14px 0;
-}
-
-/* ─────────────────────────────────────────────────────────────────────
-   ACTIVITY INDICATOR (replaces the generic "Running tool..." strip)
-   ─────────────────────────────────────────────────────────────────── */
-
-.agent-activity-indicator {
-  /* `display: flex` (not inline-flex) so the auto side-margins can
-     horizontally center the indicator within the footer; an inline-flex
-     box's auto margins do not center, so on wide screens the indicator
-     would stick to the footer's left edge instead of sitting above the
-     centered input. */
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 auto 8px auto;
-  width: 100%;
-  max-width: var(--width-message-column);
-  padding: 0 4px;
-  font-size: 12.5px;
-  color: var(--color-text-secondary);
-}
-
-.agent-activity-indicator__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  animation: agent-activity-pulse 1.4s ease-in-out infinite;
-  flex-shrink: 0;
-}
-
+/* The activity indicator's dot pulse (views/ActivityIndicator.ts), shared
+   with the sub-agent card's status dot (views/message-renderers.ts). */
 @keyframes agent-activity-pulse {
   0%,
   100% {
@@ -3369,182 +1367,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
     transform: scale(1.15);
   }
 }
-
-.agent-activity-indicator__label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.claude-login-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(20, 20, 20, 0.45);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  animation: claude-login-overlay-in 150ms ease-out;
-}
-
-/* One-line intro shown above a form's inputs */
-/* Provider selection: prominent subscription block + collapsed alternatives */
-
-/* "Other ways to sign in" disclosure */
-/* Numbered steps (OAuth flow) */
-/* "Copy the link" fallback under the Open-sign-in-page button */
-/* Raw OAuth URL fallback, shown when the clipboard write was rejected. */
-/* Inputs */
-/* Muted "currently signed in via ..." header on the provider-selection screen */
-/* Multi-line credential paste (the Imbue env-blob textarea) */
-/* Waiting-for-browser-approval indicator on the setup-token screen */
-/* Body copy for the /logout interception notice dialog */
-.logout-notice-body {
-  font-size: 0.875rem;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  margin: 8px 0 4px;
-  /* The send-failure notice puts a server's own words in here, and those are not always the one
-     tidy sentence the other users of this class pass. A proxy or an unhandled route answers with
-     a whole HTML page, and an unbroken token (a URL, a traceback line) would otherwise widen the
-     dialog past the viewport or push its OK button off the bottom. Harmless for fixed text. */
-  overflow-wrap: anywhere;
-  max-height: 40vh;
-  overflow-y: auto;
-}
-
-/* Step checklist shown while the background agent restart runs */
-/* Collapsed-by-default affordances (paste-code fallback, direct-token paste) */
-/* Buttons */
-/* Full-width button (subscription CTA, "Open sign-in page") */
-/* An <a> styled as a button -- strip link decoration */
-/* Inline error callout */
-/* Full-bleed status state (verifying / success / error) */
-.claude-login-spinner {
-  width: 32px;
-  height: 32px;
-  animation: claude-login-spin 800ms linear infinite;
-}
-
-/* ── Inline image lightbox ── */
-
-/* Inline chat images fit the message column and invite a click to enlarge. */
-.markdown-content img {
-  max-width: 100%;
-  height: auto;
-  cursor: zoom-in;
-}
-
-.image-lightbox-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  display: flex;
-  flex-direction: column;
-  background: rgba(0, 0, 0, 0.85);
-}
-
-/* Top bar: title centered, action icons pinned to the top right. */
-.image-lightbox-header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 10px 16px;
-}
-
-.image-lightbox-title {
-  max-width: 60%;
-  overflow: hidden;
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 14px;
-  font-weight: 500;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.image-lightbox-actions {
-  position: absolute;
-  top: 50%;
-  right: 12px;
-  transform: translateY(-50%);
-  display: flex;
-  gap: 4px;
-}
-
-.image-lightbox-iconbtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.85);
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.image-lightbox-iconbtn:hover {
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
-}
-
-.image-lightbox-body {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
-  padding: 0 2rem 2rem;
-}
-
-.image-lightbox-img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  border-radius: var(--radius-base);
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
-  cursor: default;
-}
-
-/* The update-staleness banner at the top of the shell. */
-.update-staleness-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  font-size: 0.8125rem;
-  line-height: 1.4;
-}
-
-.update-staleness-banner-text {
-  min-width: 0;
-}
-
-.update-staleness-banner-btn {
-  padding: 2px 8px;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-  background: transparent;
-  border: 1px solid var(--color-border, #e5e7eb);
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.update-staleness-banner-btn:hover {
-  background: var(--color-bg-hover, #eef2f7);
-}
-
 /* --- Transcript custom scrollbar (transcript-smooth-scroll spec) ----------- */
 
 /* The transcript scroll container hides its native scrollbar entirely; the
@@ -3572,9 +1394,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   bottom: 4px;
   right: 2px;
   width: 12px;
-  z-index: 20;
+  z-index: var(--z-content);
   opacity: 0;
-  transition: opacity 200ms ease;
+  transition: opacity var(--dur-slow) ease;
   touch-action: none;
 }
 
@@ -3588,20 +1410,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   left: 2px;
   right: 2px;
   border-radius: 5px;
-  background: var(--color-border);
+  background: var(--c-border);
   pointer-events: none;
 }
 
 .transcript-scrollbar:hover .transcript-scrollbar-thumb,
 .transcript-scrollbar-shown .transcript-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-text-secondary) 55%, transparent);
-}
-
-/* Update-staleness banner: amber, shown when the workspace's on-disk code has
-   moved under the running interface (an interrupted, not-yet-activated, or
-   emergency-exited update). Informational only. */
-.update-staleness-banner {
-  color: var(--color-text-primary, #1f2937);
-  background: var(--color-warning-bg, #fef3c7);
-  border-bottom: 1px solid var(--color-warning-border, #f59e0b);
+  background: color-mix(in srgb, var(--c-text-secondary) 55%, transparent);
 }

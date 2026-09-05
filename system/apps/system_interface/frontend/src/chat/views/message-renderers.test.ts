@@ -390,9 +390,11 @@ function collectClasses(node: unknown): string[] {
   if (node == null) return [];
   if (Array.isArray(node)) return node.flatMap(collectClasses);
   if (typeof node === "object") {
-    // Mithril normalizes the `class` hyperscript attr into `className` on the vnode.
+    // Mithril normalizes the `class` hyperscript attr into `className` on the
+    // vnode. Split into tokens so marker classes are found individually even
+    // when utilities share the class string.
     const v = node as { attrs?: { className?: unknown }; children?: unknown };
-    const own = typeof v.attrs?.className === "string" ? [v.attrs.className] : [];
+    const own = typeof v.attrs?.className === "string" ? v.attrs.className.split(/\s+/).filter(Boolean) : [];
     return [...own, ...collectClasses(v.children)];
   }
   return [];
@@ -461,11 +463,11 @@ describe("thinking disclosure", () => {
   it("renders a fresh mount in the recorded expansion state", () => {
     setBlockExpanded("think:th-5", true);
     const expanded = renderAssistantMessageChildren(assistantWithThinking("th-5", true), new Map(), "agent-1");
-    expect(collectClasses(expanded)).toContain("thinking-disclosure thinking-disclosure--expanded");
+    expect(collectClasses(expanded)).toContain("thinking-disclosure--expanded");
 
     const collapsed = renderAssistantMessageChildren(assistantWithThinking("th-6", true), new Map(), "agent-1");
     expect(collectClasses(collapsed)).toContain("thinking-disclosure");
-    expect(collectClasses(collapsed)).not.toContain("thinking-disclosure thinking-disclosure--expanded");
+    expect(collectClasses(collapsed)).not.toContain("thinking-disclosure--expanded");
   });
 
   it("collapses via the DOM class alone, so the memoized wrapper needs no repaint", () => {
@@ -508,7 +510,7 @@ describe("thinking disclosure", () => {
 
     // The recorded state followed both flips, so a fresh mount agrees with the DOM.
     const remount = renderAssistantMessageChildren(assistantWithThinking("th-7", true), new Map(), "agent-1");
-    expect(collectClasses(remount)).toContain("thinking-disclosure thinking-disclosure--expanded");
+    expect(collectClasses(remount)).toContain("thinking-disclosure--expanded");
     redraw.mockRestore();
   });
 });

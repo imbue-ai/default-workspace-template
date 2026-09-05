@@ -8,8 +8,9 @@
  * harness-agnostic intent (`POST /shoulder-tap-atomic`, which the backend dispatches
  * per harness) and paints nothing locally -- the next backend queue snapshot and the
  * committed turn reflect the result. Whether the tap is AVAILABLE is entirely the
- * backend's call, reported as ``shoulder_tap_available``; that flag alone greys the
- * button, so it can never be pressed in a state the backend would refuse (no error
+ * backend's call, reported as ``shoulder_tap_available``; that flag greys the button
+ * (aria-disabled, so the explanatory tooltip keeps working) and gates the click
+ * handler, so it can never be pressed in a state the backend would refuse (no error
  * path). The only thing the frontend adds is a local guard against double-firing its
  * own in-flight request.
  * (Interrupt-to-composer lives on the composer's Stop button -- see MessageInput.)
@@ -25,22 +26,27 @@ import m from "mithril";
 import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
+import { hoverTooltipAttrs } from "../../views/components/hoverTooltip";
 import { prependToComposer, raiseFailureNotice } from "./MessageInput";
+import { OUTGOING_BUBBLE_CLASS, OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
 import { describeRequestError, describeRequestErrorKind } from "../../models/request-error";
+import { Button } from "../../views/components/Button";
+import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
 const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
 
-// Agents with the shoulder-tap request in flight. While it runs the button is disabled so
-// it cannot double-fire; cleared when the request settles. This is the ONLY thing the
+// Agents with the shoulder-tap request in flight. While it runs the button is greyed and
+// the click gate refuses, so it cannot double-fire; cleared when the request settles. This is the ONLY thing the
 // frontend tracks here -- whether the tap is otherwise available is the backend's flag.
 const inFlightAgentIds = new Set<string>();
 
 async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
-  // Never fire while our own tap is already running. The button is greyed while it is,
-  // but ``disabled`` only takes effect on the next redraw, so a click can beat it --
-  // this synchronous re-check at click time is the actual double-fire guard.
-  if (inFlightAgentIds.has(agentId)) {
+  // Never fire while our own tap is already running or the backend reports the tap
+  // unavailable. The greyed button is aria-disabled (see the render site for why), so
+  // clicks still arrive -- this synchronous check is the real gate, and it also
+  // covers a click racing a redraw.
+  if (inFlightAgentIds.has(agentId) || !getShoulderTapAvailableForAgent(agentId)) {
     return;
   }
   inFlightAgentIds.add(agentId);
@@ -82,19 +88,17 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
  *  to the committed turn. */
 function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
   if (queued.is_sending === true) {
-    return m(
-      "div",
-      { class: "message message-user outgoing-message outgoing-message--sending", key: `queued-${queued.queued_id}` },
-      [
-        m("div", { class: "message-user-bubble" }, [
-          m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
-        ]),
-        m("div", { class: "outgoing-status" }, "Sending…"),
-      ],
-    );
+    return m("div", { class: OUTGOING_ROW_CLASS, key: `queued-${queued.queued_id}` }, [
+      m("div", { class: OUTGOING_BUBBLE_CLASS }, [
+        m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
+      ]),
+      m("div", { class: OUTGOING_STATUS_CLASS }, "Sending…"),
+    ]);
   }
-  return m("div", { class: "message message-user queued-message", key: `queued-${queued.queued_id}` }, [
-    m("div", { class: "message-user-bubble" }, [
+  // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
+  // is the rhythm between queued bubbles).
+  return m("div", { class: `${USER_MESSAGE_ROW_CLASS} queued-message`, key: `queued-${queued.queued_id}` }, [
+    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85` }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
     ]),
   ]);
@@ -125,34 +129,49 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   }
   // The button's enabled state = the backend's availability flag, AND-ed with the local
   // double-fire guard. The frontend computes nothing about availability itself: if the
-  // backend says a send is in flight (or the queue is empty), ``shoulder_tap_available`` is
-  // false and the button is greyed -- so it can never be pressed into a refusal/error.
+  // backend says a send is in flight (or the queue is empty), ``shoulder_tap_available``
+  // is false and the button is greyed. The greying is aria-disabled, not disabled: a
+  // disabled button suppresses the hover/focus events the explanatory tooltip needs,
+  // and the tooltip matters most exactly while the button is greyed; the click
+  // handler re-checks this condition synchronously, so it can never be pressed into
+  // a refusal/error.
   const isInFlight = inFlightAgentIds.has(agentId);
   const isDisabled = isInFlight || !getShoulderTapAvailableForAgent(agentId);
 
-  const header = m("div", { class: "queued-header", key: "queued-header" }, [
-    m("span", { class: "queued-header-title" }, [
-      m("span", { class: "queued-header-label" }, "Queued messages"),
-      // A subtle (i) explaining when queued messages get sent. CSS tooltip (native
-      // title= is unreliable in the webview), same data-tooltip pattern as the button.
+  // Header row spanning the message column's left..right bounds: the label (plus
+  // its (i) info icon) left-aligned and allowed to shrink/ellipsize, the
+  // [Shoulder tap] button pinned right and never crowded or shrunk.
+  const header = m("div", { class: "queued-header flex items-center justify-between gap-3", key: "queued-header" }, [
+    m("span", { class: "queued-header-title flex min-w-0 items-center gap-1.5" }, [
       m(
         "span",
         {
-          class: "queued-info",
+          class:
+            "queued-header-label min-w-0 truncate text-(length:--font-size-helper) font-medium tracking-[0.02em] text-secondary",
+        },
+        "Queued messages",
+      ),
+      // A subtle (i) explaining when queued messages get sent. JS hover tooltip
+      // (native title= is unreliable in the webview), same pattern as the button.
+      m(
+        "span",
+        {
+          class:
+            "queued-info shrink-0 cursor-help text-(length:--font-size-helper) leading-none text-secondary opacity-70 hover:opacity-100",
           tabindex: 0,
-          "data-tooltip": QUEUED_INFO_TOOLTIP,
+          ...hoverTooltipAttrs(QUEUED_INFO_TOOLTIP),
           "aria-label": QUEUED_INFO_TOOLTIP,
         },
         "ⓘ",
       ),
     ]),
     m(
-      "button",
+      Button,
       {
-        type: "button",
-        class: "queued-action queued-action--flush",
-        disabled: isDisabled,
-        "data-tooltip": SHOULDER_TAP_TOOLTIP,
+        sm: true,
+        extra: "queued-action queued-action--flush shrink-0",
+        ...(isDisabled ? { "aria-disabled": "true" } : {}),
+        ...hoverTooltipAttrs(SHOULDER_TAP_TOOLTIP),
         "aria-label": SHOULDER_TAP_TOOLTIP,
         onclick: () => shoulderTapQueuedMessages(agentId),
       },
@@ -161,7 +180,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   ]);
 
   return [
-    m("div", { class: "queued-group", key: "queued-group" }, [
+    m("div", { class: "queued-group mb-5 flex flex-col items-stretch gap-2", key: "queued-group" }, [
       header,
       ...queued.map((message) => renderQueuedBubble(message)),
     ]),

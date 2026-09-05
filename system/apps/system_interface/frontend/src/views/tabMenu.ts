@@ -12,7 +12,7 @@
 
 import type { AppRecord, InstanceRecord } from "../models/Inventory";
 import { isAppStoppable } from "../models/Inventory";
-import type { IconName } from "./icons";
+import type { IconName } from "./components/icons";
 
 /** One actionable row. */
 export interface TabMenuItem {

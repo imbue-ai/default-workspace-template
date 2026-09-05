@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The app list is the machine's, delivered over the WebSocket. Standing in for
 // it keeps these tests about the icon rule and away from the socket.
 const registry = vi.hoisted(() => ({ apps: [] as { name: string; url: string; label: string; icon?: string }[] }));
-vi.mock("../models/Inventory", () => ({
+vi.mock("../../models/Inventory", () => ({
   getApp: (name: string) => registry.apps.find((app) => app.name === name),
 }));
 
@@ -415,7 +415,6 @@ describe("a hostile icon, taken all the way into the document", () => {
       const host = document.createElement("div");
       document.body.appendChild(host);
       try {
-        // Exactly the call the sidebar row and the dock tab make.
         host.innerHTML = serviceIconMarkup("hostile", 16, FALLBACK);
         expect(host.querySelectorAll(FORBIDDEN_SELECTOR)).toHaveLength(0);
         for (const element of [host, ...Array.from(host.querySelectorAll("*"))]) {

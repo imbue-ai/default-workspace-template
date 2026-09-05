@@ -1,4 +1,5 @@
 import m from "mithril";
+import { Button } from "./components/Button";
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_SHOWN } from "../app_contract";
 import { getClientId, getDeviceKind } from "../models/ClientIdentity";
 import { sendToChildFrame } from "../relay";
@@ -189,21 +190,11 @@ export const StoppedAppPlaceholder: m.Component<StoppedAppPlaceholderAttrs & { a
         [IFRAME_PANEL_APP_ATTR]: appName,
       },
       [
-        m("div", { class: "text-[15px] font-medium text-text-primary" }, label),
-        m("div", { class: "text-[13px] text-text-faint" }, detail),
+        m("div", { class: "text-[15px] font-medium text-primary" }, label),
+        m("div", { class: "text-(length:--font-size-row) text-faint" }, detail),
         onStart === null
           ? null
-          : m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "si-stopped-app-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
-                  "border-border px-4 text-[13px] font-medium text-text-primary hover:bg-bg-hover",
-                onclick: onStart,
-              },
-              `Start ${label}`,
-            ),
+          : m(Button, { extra: "si-stopped-app-start mt-1", onclick: onStart }, `Start ${label}`),
       ],
     );
   },

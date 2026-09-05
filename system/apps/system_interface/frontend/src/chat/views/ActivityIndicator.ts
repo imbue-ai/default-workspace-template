@@ -15,6 +15,7 @@
  */
 
 import m from "mithril";
+import { activityDotClass } from "../../views/components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { getAgentById } from "../models/AgentManager";
 
@@ -77,10 +78,26 @@ export function labelForActivityState(state: string | null | undefined, events: 
 }
 
 function renderStrip(label: string, state: string | null | undefined): m.Vnode {
-  return m("div.agent-activity-indicator", { "data-state": state, role: "status", "aria-live": "polite" }, [
-    m("span.agent-activity-indicator__dot"),
-    m("span.agent-activity-indicator__label", label),
-  ]);
+  // `flex` (not inline-flex) so the auto side-margins can horizontally center
+  // the strip within the footer above the centered input. The dot's pulse
+  // keyframes (agent-activity-pulse) stay in style.css.
+  return m(
+    "div",
+    {
+      class:
+        "agent-activity-indicator mx-auto mb-2 flex w-full max-w-(--width-message-column) items-center gap-2 px-1 " +
+        "text-(length:--font-size-helper) text-secondary",
+      "data-state": state,
+      role: "status",
+      "aria-live": "polite",
+    },
+    [
+      m("span", {
+        class: `agent-activity-indicator__dot ${activityDotClass("h-1.5 w-1.5")}`,
+      }),
+      m("span", { class: "agent-activity-indicator__label truncate" }, label),
+    ],
+  );
 }
 
 // Minimum time a "Running X" caption stays up. A tool call that finishes in a
