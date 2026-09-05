@@ -378,8 +378,12 @@ def _send_message_endpoint(agent_id: str) -> Response:
 
 @pure
 def is_client_activity_reportable(send_message_request: SendMessageRequest) -> bool:
-    """Whether a send names the client and the view the shell's activity log keys on (a legacy or unframed caller names neither)."""
-    return send_message_request.client_id != "" and send_message_request.active_layout != ""
+    """Whether a send names the client, its device kind, and the view the shell's activity log keys on (a legacy or unframed caller names none)."""
+    return (
+        send_message_request.client_id != ""
+        and send_message_request.device_kind != ""
+        and send_message_request.active_layout != ""
+    )
 
 
 @pure
