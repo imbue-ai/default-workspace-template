@@ -30,6 +30,10 @@ from app_instances.testing import LOOPBACK_HOST
 from app_instances.testing import StubInstanceSource
 from app_instances.testing import free_port
 from app_manifest.primitives import AppName
+from playwright.sync_api import Frame
+from playwright.sync_api import FrameLocator
+from playwright.sync_api import Page
+from playwright.sync_api import expect
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -51,21 +55,9 @@ from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
-try:
-    from playwright.sync_api import Frame
-    from playwright.sync_api import FrameLocator
-    from playwright.sync_api import Page
-    from playwright.sync_api import expect
-
-    _PLAYWRIGHT_IMPORTABLE = True
-except ImportError:
-    _PLAYWRIGHT_IMPORTABLE = False
-
 
 def _playwright_browsers_installed() -> bool:
     """Check whether a launchable browser is present (Fortress or Playwright's cache)."""
-    if not _PLAYWRIGHT_IMPORTABLE:
-        return False
     return is_e2e_browser_installed()
 
 
