@@ -265,7 +265,7 @@ Unknown types are ignored; shipped types never change meaning.
 | app to shell | `shell:location` | `{"path"}`; the shell resolves the frame to its tab, remembers the path as that tab's last reported path, and relays it to the owning app's location route |
 | app to shell | `shell:open` | `{"address"}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client, and titles the tab from the inventory (phase 6 carried a `title` hint, which phase 7 dropped) |
 
-A frame's `load` event also clears the tab's last reported path.
+The shell clears the tab's last reported path when it points the frame at a url itself; a page's own navigation, and the report it posts while loading (before the frame's `load` event), leave it standing.
 The shell reloads a docked tab's frame when the instance's listed `url` differs from the tab's last reported path (with `{tab}` substituted), which is what makes an agent's `replace-url` land and a page's own reports inert.
 
 The dufs frontend keeps its inline beacon, now posting `{"type": "shell:location", "path": ...}` to `window.parent`; the ratchet allowlist names the vendored dufs asset.
