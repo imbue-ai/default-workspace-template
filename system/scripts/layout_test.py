@@ -1,8 +1,8 @@
 """Tests for the agent-facing layout.py helper.
 
 They cover what an agent depends on: the address grammar (bare names expand, the retired
-spellings are refused by name), the bodies the dock ops post, the wait-stable predicates
-over the ``inspect`` shape, the relay verbs, the shortcut commands, and the exit codes.
+spellings are refused by name, a URL opens a browser), the bodies the ops post and what they
+print from the shell's answer, the relay verbs, the shortcut commands, and the exit codes.
 """
 
 from __future__ import annotations
@@ -22,11 +22,19 @@ layout = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(layout)
 
 
+_EMPTY_LAYOUT = {"active_panel": None, "panels": [], "tree": None}
+
+
 def _make_fake_post(
     posted: list[tuple[str, dict[str, Any]]],
-    response: tuple[int, dict[str, Any] | str] = (200, {"ok": True}),
+    response: tuple[int, dict[str, Any] | str] = (
+        200,
+        {"ok": True, "layout": _EMPTY_LAYOUT},
+    ),
 ):
-    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+    def fake_post(
+        op: str, args: dict[str, Any], timeout: float = 0.0
+    ) -> tuple[int, dict[str, Any] | str]:
         posted.append((op, args))
         return response
 
@@ -69,9 +77,9 @@ def test_self_is_the_callers_chat_when_the_agent_id_is_known(
         ("service:files", "use app:files"),
         ("service:files?instance=files-2", "use app:files?instance=files-2"),
         ("service:browser?session=riley", "app:browser?instance=riley"),
-        ("url:abcd1234", "phase 8"),
+        ("url:abcd1234", "layout.py open https://"),
         ("subagent:abcd", "app:chat?instance=<parent-agent-id>.<session>"),
-        ("https://example.com", "phase 8"),
+        ("https://example.com", "only 'open' takes one"),
     ],
 )
 def test_the_retired_spellings_are_refused_with_the_address_to_use(
@@ -111,17 +119,106 @@ def test_address_matching_widens_a_bare_app_to_its_instances() -> None:
 
 
 def test_open_waits_for_registration_then_posts_the_address(
-    registry: Path, monkeypatch: pytest.MonkeyPatch
+    registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
-    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+    docked = {
+        "active_panel": "g1",
+        "panels": [{"address": "app:files", "tab_id": "tab-1", "title": "Files"}],
+        "tree": {"type": "leaf", "panels": [{"address": "app:files", "active": True}]},
+    }
+    monkeypatch.setattr(
+        layout,
+        "_post_layout",
+        _make_fake_post(posted, (200, {"ok": True, "layout": docked})),
+    )
     assert (
-        layout.main(["open", "files", "--new-group", "--view", "Research"])
+        layout.main(
+            ["open", "files", "--new-group", "--view", "Research", "--client", "c9"]
+        )
         == layout.EXIT_OK
     )
     assert posted == [
-        ("open", {"address": "app:files", "new_group": True, "view": "Research"})
+        (
+            "open",
+            {
+                "address": "app:files",
+                "new_group": True,
+                "view": "Research",
+                "client": "c9",
+            },
+        )
     ]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "opened app:files in tabs=[app:files*]\n"
+
+
+def test_open_of_an_app_or_a_url_creates_inside_the_op_and_prints_the_new_address(
+    registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posted: list[tuple[str, dict[str, Any]]] = []
+    created = "app:terminal?instance=terminal-2"
+    answer = {
+        "ok": True,
+        "created_address": created,
+        "layout": {
+            "active_panel": "g1",
+            "panels": [{"address": created, "tab_id": "tab-2", "title": "Terminal 2"}],
+            "tree": {"type": "leaf", "panels": [{"address": created, "active": True}]},
+        },
+    }
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted, (200, answer)))
+    assert (
+        layout.main(["open", "terminal", "--action", "new", "--param", "workdir=/data"])
+        == layout.EXIT_OK
+    )
+    captured = capsys.readouterr()
+    assert captured.out == f"{created}\n"
+    assert f"opened {created} in tabs=[{created}*]" in captured.err
+    assert posted == [
+        (
+            "open",
+            {
+                "address": "app:terminal",
+                "new_group": False,
+                "action": "new",
+                "params": {"workdir": "/data"},
+            },
+        )
+    ]
+    # A URL is the browser's ``new`` with the URL as its param; the browser must be registered.
+    monkeypatch.setattr(layout, "_REGISTRATION_TIMEOUT_SECONDS", 0.0)
+    assert layout.main(["open", "https://example.com/docs"]) == layout.EXIT_ERROR
+    assert "'browser' is not registered" in capsys.readouterr().err
+    monkeypatch.setattr(layout, "_is_app_registered", lambda name: True)
+    assert layout.main(["open", "https://example.com/docs"]) == layout.EXIT_OK
+    assert posted[-1] == (
+        "open",
+        {
+            "address": "app:browser",
+            "new_group": False,
+            "action": "new",
+            "params": {"url": "https://example.com/docs"},
+        },
+    )
+
+
+def test_create_arguments_are_refused_where_they_make_no_sense(
+    registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+    with pytest.raises(SystemExit):
+        layout.main(["open", "app:terminal?instance=terminal-1", "--action", "new"])
+    assert "names an existing instance" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        layout.main(["open", "https://example.com", "--param", "url=x"])
+    assert "do not apply" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        layout.main(["open", "terminal", "--param", "novalue"])
+    assert "name=value" in capsys.readouterr().err
+    assert posted == []
 
 
 @pytest.mark.parametrize(
@@ -159,94 +256,6 @@ def test_open_of_an_unregistered_app_fails_without_posting(
     assert layout.main(["open", "nope"]) == layout.EXIT_ERROR
     assert posted == []
     assert "not registered" in capsys.readouterr().err
-
-
-def test_open_of_an_app_with_instances_prints_the_created_address(
-    registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE)
-    posted: list[tuple[str, dict[str, Any]]] = []
-    layouts = iter(
-        [
-            {"panels": [{"address": "app:terminal?instance=terminal-1"}], "tree": None},
-            {
-                "panels": [
-                    {"address": "app:terminal?instance=terminal-1"},
-                    {"address": "app:terminal?instance=terminal-2"},
-                ],
-                "tree": {
-                    "type": "leaf",
-                    "panels": [
-                        {"address": "app:terminal?instance=terminal-2", "active": True}
-                    ],
-                },
-            },
-        ]
-    )
-
-    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
-        if op == "inspect":
-            return 200, {"layout": next(layouts)}
-        posted.append((op, args))
-        return 200, {"ok": True}
-
-    monkeypatch.setattr(layout, "_post_layout", fake_post)
-    assert layout.main(["open", "terminal"]) == layout.EXIT_OK
-    captured = capsys.readouterr()
-    assert captured.out == "app:terminal?instance=terminal-2\n"
-    assert "created app:terminal?instance=terminal-2" in captured.err
-    assert posted == [
-        ("open", {"address": "app:terminal", "new_group": False, "view": None})
-    ]
-
-
-def test_open_of_an_app_with_instances_prints_no_address_when_the_pre_op_inspect_fails(
-    registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Without a before-snapshot an already-docked instance could pass for the new one, so none is claimed."""
-    monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE)
-    posted: list[tuple[str, dict[str, Any]]] = []
-
-    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
-        if op == "inspect":
-            return 500, "boom"
-        posted.append((op, args))
-        return 200, {"ok": True}
-
-    monkeypatch.setattr(layout, "_post_layout", fake_post)
-    assert layout.main(["open", "terminal"]) == layout.EXIT_OK
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "cannot be told apart" in captured.err
-    assert [op for op, _args in posted] == ["open"]
-
-
-def test_open_of_an_instance_reports_a_noop_when_it_is_docked(
-    registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE)
-    posted: list[tuple[str, dict[str, Any]]] = []
-    docked = {
-        "panels": [{"address": "app:terminal?instance=terminal-1"}],
-        "tree": {
-            "type": "leaf",
-            "panels": [{"address": "app:terminal?instance=terminal-1", "active": True}],
-        },
-    }
-
-    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
-        if op == "inspect":
-            return 200, {"layout": docked}
-        posted.append((op, args))
-        return 200, {"ok": True}
-
-    monkeypatch.setattr(layout, "_post_layout", fake_post)
-    assert layout.main(["open", "app:terminal?instance=terminal-1"]) == layout.EXIT_OK
-    assert posted == []
-    assert (
-        "no change: app:terminal?instance=terminal-1 is already open"
-        in capsys.readouterr().err
-    )
 
 
 def test_split_and_move_pass_the_anchor_and_direction_through(
@@ -291,7 +300,6 @@ def test_split_and_move_pass_the_anchor_and_direction_through(
                 "direction": "within",
                 "ratio": 0.6,
                 "new_group": False,
-                "view": None,
             },
         ),
         (
@@ -301,7 +309,6 @@ def test_split_and_move_pass_the_anchor_and_direction_through(
                 "relative_to": "app:chat?instance=agent-42",
                 "direction": "below",
                 "new_group": True,
-                "view": None,
             },
         ),
     ]
@@ -338,52 +345,117 @@ def test_focus_close_maximize_restore_and_refresh_post_addresses(
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
     assert layout.main(["focus", "app:files"]) == 0
     assert layout.main(["close", "files", "--view", "Everything"]) == 0
-    assert layout.main(["maximize", "app:chat?instance=agent-1"]) == 0
+    assert layout.main(["maximize", "app:chat?instance=agent-1", "--client", "c2"]) == 0
     assert layout.main(["restore"]) == 0
     assert layout.main(["refresh", "files"]) == 0
     assert posted == [
-        ("focus", {"address": "app:files", "view": None}),
+        ("focus", {"address": "app:files"}),
         ("close", {"address": "app:files", "view": "Everything"}),
-        ("maximize", {"address": "app:chat?instance=agent-1", "view": None}),
-        ("restore", {"view": None}),
+        ("maximize", {"address": "app:chat?instance=agent-1", "client": "c2"}),
+        ("restore", {}),
         ("refresh", {"address": "app:files"}),
     ]
 
 
-def test_read_ops_pass_the_view_and_emit_the_servers_answer(
+def test_context_and_load_ride_the_op_route(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     answers = {
-        "list": {
-            "ok": True,
-            "view_id": "alpha",
-            "apps": [{"name": "files", "instances": []}],
-        },
-        "views": {"ok": True, "views": [{"id": "everything"}]},
         "context": {"ok": True, "clients": [{"client_id": "c1"}]},
         "load": {"ok": True, "view_id": "alpha", "target_client_id": "c1"},
     }
 
-    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+    def fake_post(
+        op: str, args: dict[str, Any], timeout: float = 0.0
+    ) -> tuple[int, dict[str, Any] | str]:
         posted.append((op, args))
         return 200, answers[op]
 
     monkeypatch.setattr(layout, "_post_layout", fake_post)
-    assert layout.main(["list", "--view", "Alpha", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == [{"name": "files", "instances": []}]
-    assert layout.main(["views", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == [{"id": "everything"}]
     assert layout.main(["context"]) == 0
     assert "client_id: c1" in capsys.readouterr().out
     assert layout.main(["load", "Alpha", "--client", "c1"]) == 0
-    assert "requested load of view 'alpha' on client c1" in capsys.readouterr().err
-    assert posted == [
-        ("list", {"view": "Alpha"}),
-        ("views", {}),
-        ("context", {}),
-        ("load", {"view": "Alpha", "client": "c1"}),
+    assert "switched client c1 onto view 'alpha'" in capsys.readouterr().err
+    assert posted == [("context", {}), ("load", {"view": "Alpha", "client": "c1"})]
+
+
+def test_list_and_views_read_the_inventory_document(
+    fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_shell.projects = [
+        {"id": "alpha", "name": "Alpha", "tabs": ["app:files"], "shortcuts": []}
     ]
+    fake_shell.inventory_apps = [
+        {
+            "name": "files",
+            "display_name": "Files",
+            "internal": False,
+            "is_running": True,
+            "actions": [{"id": "open", "label": "Open Files"}],
+            "instances": [{"key": "", "title": "Files", "status": "idle"}],
+        },
+        {
+            "name": "terminal",
+            "display_name": "Terminal",
+            "internal": False,
+            "is_running": True,
+            "actions": [{"id": "new", "label": "New Terminal"}],
+            "instances": [
+                {"key": "terminal-1", "title": "Terminal 1", "status": "idle"}
+            ],
+        },
+        {
+            "name": "owner-exec",
+            "internal": True,
+            "is_running": True,
+            "actions": [],
+            "instances": [],
+        },
+    ]
+    fake_shell.everything_tabs = ["app:files", "app:terminal?instance=terminal-1"]
+    fake_shell.inventory_clients = [
+        {
+            "id": "c1",
+            "device_kind": "desktop",
+            "active_view": "alpha",
+            "is_connected": True,
+            "docked": ["app:files"],
+        },
+        {
+            "id": "c2",
+            "device_kind": "mobile",
+            "active_view": "everything",
+            "is_connected": False,
+            "docked": ["app:files"],
+        },
+    ]
+    assert layout.main(["list", "--json"]) == 0
+    listing = json.loads(capsys.readouterr().out)
+    assert [app["name"] for app in listing] == ["files", "terminal"]
+    assert listing[0]["instances"] == [
+        {
+            "key": "",
+            "address": "app:files",
+            "title": "Files",
+            "status": "idle",
+            "docked_in": ["c1", "c2"],
+        }
+    ]
+    assert listing[1]["instances"][0]["address"] == "app:terminal?instance=terminal-1"
+    # ``--view`` narrows the docking clients to those on that view.
+    assert layout.main(["list", "--view", "Alpha", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["instances"][0]["docked_in"] == ["c1"]
+    assert layout.main(["list", "--view", "Nowhere"]) == layout.EXIT_ERROR
+    assert "not found" in capsys.readouterr().err
+    assert layout.main(["views", "--json"]) == 0
+    views = json.loads(capsys.readouterr().out)
+    assert [view["id"] for view in views] == ["alpha", "everything"]
+    assert views[0]["clients"] == [{"id": "c1", "device_kind": "desktop"}]
+    assert (
+        views[1]["tabs"] == ["app:files", "app:terminal?instance=terminal-1"]
+        and views[1]["clients"] == []
+    )
 
 
 _TREE_LAYOUT = {
@@ -465,54 +537,6 @@ def test_where_shows_tab_mates_and_neighbors(
     assert "not currently open" in capsys.readouterr().err
 
 
-def test_move_within_an_anchor_is_a_noop_when_already_tab_mates(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE)
-    posted: list[tuple[str, dict[str, Any]]] = []
-
-    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
-        if op == "inspect":
-            return 200, {"layout": _TREE_LAYOUT}
-        posted.append((op, args))
-        return 200, {"ok": True}
-
-    monkeypatch.setattr(layout, "_post_layout", fake_post)
-    assert (
-        layout.main(
-            [
-                "move",
-                "app:terminal?instance=terminal-1",
-                "--relative-to",
-                "app:chat?instance=agent-1",
-                "--direction",
-                "within",
-            ]
-        )
-        == 0
-    )
-    assert posted == []
-    assert "already in the same group" in capsys.readouterr().err
-
-
-def test_focus_requires_the_panel_to_be_open(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE)
-    posted: list[tuple[str, dict[str, Any]]] = []
-
-    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
-        if op == "inspect":
-            return 200, {"layout": _TREE_LAYOUT}
-        posted.append((op, args))
-        return 200, {"ok": True}
-
-    monkeypatch.setattr(layout, "_post_layout", fake_post)
-    assert layout.main(["focus", "app:browser?instance=x"]) == layout.EXIT_ERROR
-    assert posted == []
-    assert "is not open in the current layout" in capsys.readouterr().err
-
-
 # ---------- exit codes ----------
 
 
@@ -520,18 +544,7 @@ def test_focus_requires_the_panel_to_be_open(
     ("response", "exit_code", "fragment"),
     [
         ((-1, "connection refused"), layout.EXIT_ERROR, "could not reach"),
-        (
-            (
-                409,
-                {
-                    "detail": "busy",
-                    "in_flight": {"agent_id": "a", "operation": "open"},
-                    "retry_after_ms": 500,
-                },
-            ),
-            layout.EXIT_CONFLICT,
-            "409",
-        ),
+        ((409, {"detail": "2/2 browsers open"}), layout.EXIT_CONFLICT, "409"),
         (
             (404, {"detail": "No registered app named 'x'"}),
             layout.EXIT_ERROR,
@@ -651,7 +664,7 @@ def test_the_relay_verbs_need_an_instance_address(
 
 
 def test_shortcuts_list_a_projects_rail_and_everythings_fixed_rows(
-    fake_shell: Any, registry: Path, capsys: pytest.CaptureFixture[str]
+    fake_shell: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake_shell.projects = [
         {
@@ -661,12 +674,34 @@ def test_shortcuts_list_a_projects_rail_and_everythings_fixed_rows(
             "shortcuts": [{"app": "terminal", "action": "new", "mode": "new"}],
         }
     ]
+    fake_shell.inventory_apps = [
+        {
+            "name": "files",
+            "internal": False,
+            "actions": [{"id": "open", "label": "Open Files"}],
+        },
+        {
+            "name": "terminal",
+            "internal": False,
+            "actions": [{"id": "new", "label": "New Terminal"}],
+        },
+        {
+            "name": "chat",
+            "internal": False,
+            "actions": [
+                {"id": "subagent", "label": "Open subagent"},
+                {"id": "new", "label": "New Chat"},
+            ],
+            "default_shortcut": {"action": "new", "mode": "new"},
+        },
+        {"name": "hidden", "internal": True, "actions": [{"id": "new", "label": "x"}]},
+    ]
     assert layout.main(["shortcuts", "--view", "Research", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {
         "view": "research",
         "shortcuts": [{"app": "terminal", "action": "new", "mode": "new"}],
     }
-    # One row per app, running its primary action: the synthesized ``open`` of a
+    # One row per app, running its primary action: the ``open`` the inventory synthesizes for a
     # single-instance app, the one action of a one-action app, and the ``default_shortcut``
     # action of an app declaring several (the chat's ``new``, not its first-declared ``subagent``).
     assert layout.main(["shortcuts", "--view", "everything", "--json"]) == 0

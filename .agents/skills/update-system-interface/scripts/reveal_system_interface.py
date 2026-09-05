@@ -7,7 +7,7 @@ substrate every service flow shares). They hand it the system-interface
 specifics -- boot ``uv run system-interface`` from the worker's already-built
 ``--work-dir`` on a free port, with layout persistence neutered (drop
 MNGR_AGENT_ID so it can't clobber the live ``layout.json``) but agent discovery
-kept, probe ``/api/agents``, and register the inner app plus the labeled
+kept, probe ``/api/health``, and register the inner app plus the labeled
 "preview" wrapper frame the user opens. The shared script owns the ports, the
 process/service teardown, and the state file; no fetch, checkout, or rebuild
 happens, and the served tree and the worker's folder are never touched. The
@@ -83,10 +83,9 @@ _INSTANCE_STATE_FILENAME = "instance.json"
 # shared script injects the free port into PORT and 127.0.0.1 into HOST.
 PREVIEW_PORT_ENV = "SYSTEM_INTERFACE_PORT"
 PREVIEW_HOST_ENV = "SYSTEM_INTERFACE_HOST"
-# ``/api/agents`` exercises the mngr plugin discovery path, so a 200 there is a
-# strong "the backend actually works" signal; handed to the shared preview
-# script as its ``--health-path``.
-HEALTH_PATH = "/api/agents"
+# The shell's own probe route (contracts.md section 5): a 200 there says the
+# backend is serving; handed to the shared preview script as its ``--health-path``.
+HEALTH_PATH = "/api/health"
 
 
 class Runner:
@@ -133,7 +132,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     already-built app dir on a free port; neuter layout persistence by dropping
     MNGR_AGENT_ID (so the preview can't clobber the live ``layout.json``) while
     keeping discovery, so the real conversations still render; probe
-    ``/api/agents``; register the inner app and the labeled wrapper frame.
+    ``/api/health``; register the inner app and the labeled wrapper frame.
     ``work_dir`` must still exist -- run this before the worker is destroyed.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
