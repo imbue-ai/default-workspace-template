@@ -72,7 +72,9 @@ class SendMessageRequest(FrozenModel):
         ),
     )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
-    active_layout: str = Field(default="", description="The sender's active layout slug at send time")
+    active_layout: str = Field(
+        default="", description="The id of the view the sender was on at send time ('' for legacy callers)"
+    )
     device_kind: str = Field(default="", description="'mobile' or 'desktop', derived from the sender's user agent")
 
 
