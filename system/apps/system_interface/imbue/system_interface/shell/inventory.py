@@ -55,8 +55,8 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 # The nudge window of contracts.md section 5: the first nudge for an app starts it, one refetch
 # runs when it closes.
 NUDGE_COALESCE_SECONDS: Final[float] = 0.25
-# How often liveness is re-derived (the old agent manager's interval) and, every third pass,
-# every running app's list refetched (the 30 second reconciliation sweep of section 5).
+# How often liveness is re-derived and, every third pass, every running app's list refetched
+# (the 30 second reconciliation sweep of section 5).
 LIVENESS_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 RECONCILE_EVERY_SWEEPS: Final[int] = 3
 # A fetch is one loopback request an app answers from memory; past the first threshold it is

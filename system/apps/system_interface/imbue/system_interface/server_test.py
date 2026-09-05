@@ -1605,7 +1605,7 @@ def test_presence_endpoint_refuses_an_id_that_is_not_an_agent_id() -> None:
 
 
 def test_send_records_the_message_for_the_chats_recency() -> None:
-    """The send route stamps the chat as just-messaged, which the frontend's activity report used to do."""
+    """The send route stamps the chat as just-messaged."""
     writes: list[tuple[int, int]] = []
     agent_id = "agent-c0ffee00000000000000000000c0ffee"
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())

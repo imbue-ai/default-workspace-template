@@ -37,8 +37,7 @@ from terminal_app.primitives import (
     instance_url_for_session,
 )
 
-# The names the ``new`` action mints: the lowest free ``terminal-<N>``, as the shell's allocator
-# minted them until now.
+# The names the ``new`` action mints: the lowest free ``terminal-<N>``.
 TERMINAL_KEY_PREFIX: Final[InstanceKeyPrefix] = InstanceKeyPrefix("terminal")
 
 # The one parameter ``new`` accepts (contracts.md section 4.3).
@@ -184,7 +183,7 @@ class TmuxSessionSource(InstanceSourceInterface):
                 title=None,
                 workdir=workdir,
             )
-            # The session itself is created on first attach (tmux new-session -A), as today.
+            # The session itself is created on first attach (tmux new-session -A).
             self.store.save_record(record)
         return _stopped_instance_record(record)
 

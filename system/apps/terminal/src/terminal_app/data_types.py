@@ -11,7 +11,7 @@ from terminal_app.primitives import ClientTty, TmuxSessionName, Workdir
 
 
 class TmuxHookKind(StrEnum):
-    """Which tmux hook fired; the values are the wire strings the hook script has always posted."""
+    """Which tmux hook fired; the values are the wire strings the hook script posts."""
 
     SESSION_CHANGED = "session-changed"
     SESSION_RENAMED = "session-renamed"

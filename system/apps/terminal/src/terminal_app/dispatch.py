@@ -206,7 +206,7 @@ def install_ttyd_web_client(compressed_client: Path, destination: Path) -> bool:
 def build_ttyd_argv(
     ttyd_executable: str, port: int, index_path: Path | None, commands_dir: Path
 ) -> list[str]:
-    """Today's ttyd command line: URL-arg dispatch on, the leave alert off, the patched client when installed, writable."""
+    """The ttyd command line: URL-arg dispatch on, the leave alert off, the patched client when installed, writable."""
     argv = [ttyd_executable, "-p", str(port), "-a", "-t", "disableLeaveAlert=true"]
     if index_path is not None:
         argv.extend(["-I", str(index_path)])

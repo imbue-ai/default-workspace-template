@@ -21,9 +21,8 @@ TMUX_SESSION_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
     rf"^[A-Za-z0-9][A-Za-z0-9_-]{{0,{MAX_INSTANCE_KEY_LENGTH - 1}}}$"
 )
 
-# The per-tab id the dispatch receives and records a pty under: today the frontend's
-# ``term-<uuid>``, from phase 7 of the model the shell's ``tab-<hex>``. It names a file, so it is
-# held to the key alphabet.
+# The per-tab id the dispatch receives and records a pty under (the shell's ``tab-<hex>``). It
+# names a file, so it is held to the key alphabet.
 TERMINAL_TAB_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
     rf"^[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_INSTANCE_KEY_LENGTH - 1}}}$"
 )
@@ -136,11 +135,7 @@ class Workdir(str):
 
 @pure
 def derive_terminal_title(name: TmuxSessionName) -> InstanceTitle:
-    """The title a session wears when nobody named it: ``Terminal 3`` for ``terminal-3``, any other name verbatim.
-
-    The same rule the shell's frontend applies today (``derived-names.ts``), so no title moves
-    when the shell starts reading titles from this app.
-    """
+    """The title a session wears when nobody named it: ``Terminal 3`` for ``terminal-3``, any other name verbatim."""
     match = _NUMBERED_TERMINAL_PATTERN.fullmatch(name)
     if match is None:
         return InstanceTitle(name)
@@ -151,7 +146,7 @@ def derive_terminal_title(name: TmuxSessionName) -> InstanceTitle:
 def instance_url_for_session(
     name: TmuxSessionName, workdir: Workdir | None
 ) -> InstanceUrl:
-    """The URL a tab opens to attach to ``name``: today's ttyd argument shape, with the tab placeholder in the tab id slot."""
+    """The URL a tab opens to attach to ``name``: the ttyd argument shape, with the tab placeholder in the tab id slot."""
     arguments = [_URL_ARGUMENT_PLACEHOLDER, SESSION_DISPATCH_KEY, name, TAB_PLACEHOLDER]
     if workdir is not None:
         arguments.append(workdir)

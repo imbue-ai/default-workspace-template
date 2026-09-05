@@ -6,7 +6,7 @@
  * Two jobs, both over one `message` listener:
  *
  * - The embedder relay. The minds chrome accepts messages only from its direct child, the
- *   shell, so an app page (a chat, from phase 6 on) cannot reach it. Any `minds:` message
+ *   shell, so an app page (a chat) cannot reach it. Any `minds:` message
  *   from a child frame in the workspace origin family is forwarded up to `window.parent`
  *   unchanged, and any message from `window.parent` is rebroadcast to every child frame the
  *   shell created. No payload is inspected.

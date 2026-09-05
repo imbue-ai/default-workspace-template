@@ -248,7 +248,7 @@ def _pull_in_pane(browser_name: str) -> None:
     """
     reachable, view = _resolve_active_view()
     if not reachable:
-        return  # isolated sub-agent / no shell -- nothing of ours to surface into
+        return
     address = f"app:browser?instance={browser_name}"
     if view is not None:
         # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.

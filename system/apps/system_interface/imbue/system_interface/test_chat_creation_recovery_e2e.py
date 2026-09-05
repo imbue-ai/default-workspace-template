@@ -132,8 +132,8 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
 class _ReplayHidingAgentManager(AgentManager):
     """Hides in-flight creations from a fresh WebSocket client's connect-time replay.
 
-    The chat page is its own document now (phase 6 of the workspace app model) and connects
-    to the agents WebSocket after its tab opened, so the shell's replay of in-flight proto
+    The chat page is its own document and connects to the agents WebSocket after its tab
+    opened, so the shell's replay of in-flight proto
     agents would cover the creation window with the build log on its own. These tests model
     the window the replay cannot cover -- a page whose socket only comes up after the create
     finished, or that fell a whole creation window behind -- so the replay is what they hide.

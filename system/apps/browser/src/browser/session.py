@@ -1855,7 +1855,7 @@ class BrowserSessionManager(MutableModel):
         session._crash_save_hook = self._spawn_save  # checkpoint promptly if it crashes
         session._nudger = self._nudger
         self._browsers[name] = session
-        self._nudger.nudge()  # a new instance is listed the moment it registers
+        self._nudger.nudge()
         # A fresh registration supersedes any earlier launch-failure OR close for this name
         # (the user re-created it, or restore is retrying it), so it's no longer terminal for
         # a viewer -- drop it from both terminal rings so the cast handler stops 1008-ing it.
@@ -1919,7 +1919,7 @@ class BrowserSessionManager(MutableModel):
             except (BrowserStartupError, *_BROWSER_ERRORS) as e:
                 logger.warning("browser {} failed to launch ({}); removing it", session.browser_id, e)
                 self._browsers.pop(session.browser_id, None)
-                self._nudger.nudge()  # the instance is gone from the list
+                self._nudger.nudge()
                 # Remember the name as launch-failed (finding [7]) so a late/retrying
                 # optimistic viewer -- one still in 1013 reconnect-backoff when this failed,
                 # which never registered a cast queue and so missed the launch_failed
@@ -2053,7 +2053,7 @@ class BrowserSessionManager(MutableModel):
         session = self._browsers.pop(browser_id, None)
         if session is None:
             return
-        self._nudger.nudge()  # the instance is gone from the list
+        self._nudger.nudge()
         # Remember it as terminally gone so a still-open viewer tab is closed 1008 rather
         # than looping on 1013 "Starting browser..." (cleared if the name is re-created).
         self._closed_names.append(browser_id)

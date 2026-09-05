@@ -2182,7 +2182,7 @@ function renderLiveContent(surface: LiveSurface): m.Children {
 }
 
 /**
- * A dockview panel, now that a panel is only a place: an empty div dockview creates,
+ * A dockview panel is only a place: an empty div dockview creates,
  * positions, hides and disposes at will, standing in for a live page that outlives it.
  */
 function createLiveSlotRenderer(

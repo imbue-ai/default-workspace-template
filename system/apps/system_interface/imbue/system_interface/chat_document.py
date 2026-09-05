@@ -4,10 +4,6 @@ Phase 6 of the workspace app model (``docs/system/blueprint/workspace-app-model/
 splits the chat out of the shell's document: every chat renders inside an iframe at the registered
 ``chat`` origin, served by this app from the same process the shell runs in. ``wsgi_dispatch``
 picks this app for the paths only it serves; phase 10 moves it into its own process.
-
-The routes here moved verbatim from ``server.py`` (the agent list and the destroy, start,
-and stop verbs among them: loopback callers such as the evals bridge keep reaching them at
-port 8000); what is new is the document route, the presence route, and the instances blueprint.
 """
 
 import json
@@ -369,9 +365,8 @@ def _send_message_endpoint(agent_id: str) -> Response:
         return json_response(failure.model_dump(), status_code=500)
 
     _record_client_message_activity(agent_info, send_message_request)
-    # The frontend used to report the send for the OOM prioritizer's recency ranking; the
-    # send route knows the same fact and records it after the delivery, once the revived
-    # process (if any) is up and its pid can be found.
+    # Recorded after the delivery, once the revived process (if any) is up and its pid can be
+    # found.
     agent_manager.record_message_sent(agent_info.id)
     return json_response(SendMessageResponse(status="ok").model_dump())
 
