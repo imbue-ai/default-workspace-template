@@ -124,6 +124,19 @@ def project_wire_json(project: Project) -> dict[str, Any]:
     }
 
 
+@pure
+def _with_shortcut(project: Project, shortcut: Shortcut) -> Project:
+    is_present = any(
+        existing.app == shortcut.app and existing.action == shortcut.action for existing in project.shortcuts
+    )
+    replaced = tuple(
+        shortcut if existing.app == shortcut.app and existing.action == shortcut.action else existing
+        for existing in project.shortcuts
+    )
+    shortcuts = replaced if is_present else (*project.shortcuts, shortcut)
+    return project.model_copy_update(to_update(project.field_ref().shortcuts, shortcuts))
+
+
 class ProjectStore(MutableModel):
     """Reads and writes ``projects.json`` under the shell's state lock."""
 
@@ -223,19 +236,7 @@ class ProjectStore(MutableModel):
 
     def set_shortcut(self, project_id: str, shortcut: Shortcut) -> Project:
         """Add the shortcut at the end of the rail, or replace the entry for the same (app, action) in place."""
-
-        def with_shortcut(project: Project) -> Project:
-            is_present = any(
-                existing.app == shortcut.app and existing.action == shortcut.action for existing in project.shortcuts
-            )
-            replaced = tuple(
-                shortcut if existing.app == shortcut.app and existing.action == shortcut.action else existing
-                for existing in project.shortcuts
-            )
-            shortcuts = replaced if is_present else (*project.shortcuts, shortcut)
-            return project.model_copy_update(to_update(project.field_ref().shortcuts, shortcuts))
-
-        return self._replace(project_id, with_shortcut)
+        return self._replace(project_id, lambda project: _with_shortcut(project, shortcut))
 
     def remove_shortcut(self, project_id: str, app: str, action: str) -> Project:
         return self._replace(

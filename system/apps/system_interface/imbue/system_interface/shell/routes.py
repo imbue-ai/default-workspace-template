@@ -1,7 +1,6 @@
 """The shell's HTTP routes: contracts.md sections 5 and 6 (the inventory endpoint lands in phase 8)."""
 
 import json
-from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -23,6 +22,7 @@ from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.client_activity import find_client_id_for_instance
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.data_types import AppInventoryEntry
@@ -155,272 +155,351 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def register_shell_routes(application: Flask, shell_of: Callable[[], ShellState]) -> None:
-    """Register every shell route of contracts.md sections 5 and 6 on ``application``; ``shell_of`` resolves the state per request."""
+def _entry_or_raise(name: str) -> AppInventoryEntry:
+    entry = _shell().inventory.entry(name)
+    if entry is None:
+        raise UnknownAppError(f"No registered app named {name!r}")
+    return entry
+
+
+# ---------- section 5: routes apps and scripts call ----------
+
+
+def app_changed(name: str) -> ResponseReturnValue:
+    refusal = _require_loopback()
+    if refusal is not None:
+        return refusal
+    if not _shell().inventory.nudge(name):
+        return _detail(f"No registered app named {name!r}", HTTP_NOT_FOUND)
+    return "", HTTP_NO_CONTENT
+
+
+def tab_instance(tab_id: str) -> ResponseReturnValue:
+    refusal = _require_loopback()
+    if refusal is not None:
+        return refusal
+    report = parse_request_body(TabInstanceReport)
+    shell = _shell()
+    found = shell.layouts.find_tab(TabId(tab_id))
+    if not found:
+        raise LayoutNotFoundError(f"No tab {tab_id!r} in any client layout")
+    for stored, panel_id in found:
+        if stored.layout.tabs[panel_id].address.app != report.app:
+            return _detail(
+                f"tab {tab_id!r} shows {stored.layout.tabs[panel_id].address}, not the app {report.app!r}",
+                HTTP_BAD_REQUEST,
+            )
+    address = address_for(report.app, None if report.key == "" else InstanceKey(report.key))
+    for stored in shell.layouts.rebind_tab(TabId(tab_id), address, _now()):
+        if not is_everything_view(stored.view_id):
+            shell.projects.add_tab(stored.view_id, address)
+        shell.broadcaster.broadcast_tab_rebound(str(stored.client_id), str(stored.view_id), tab_id, str(address))
+    shell.broadcast_projects_updated()
+    shell.inventory.refetch_now(str(report.app))
+    return "", HTTP_NO_CONTENT
+
+
+def client_activity_route() -> ResponseReturnValue:
+    refusal = _require_loopback()
+    if refusal is not None:
+        return refusal
+    report = parse_request_body(ClientActivityReport)
+    shell = _shell()
+    if report.kind == "message":
+        shell.activity.append_message(
+            str(report.client_id),
+            report.device_kind.value,
+            str(report.view_id),
+            report.app,
+            report.key,
+            report.text,
+        )
+    elif report.kind == "view_switch":
+        shell.activity.append_view_switch(
+            str(report.client_id), report.device_kind.value, report.from_view_id, str(report.view_id)
+        )
+    else:
+        return _detail(f"unknown activity kind {report.kind!r}", HTTP_BAD_REQUEST)
+    return "", HTTP_NO_CONTENT
+
+
+# ---------- section 6: the relay ----------
+
+
+def relay_create_route(name: str) -> ResponseReturnValue:
+    entry = _entry_or_raise(name)
+    outcome = relay_create(_shell().http_client, entry, request.get_data())
+    if outcome.status_code < HTTP_BAD_REQUEST:
+        _shell().inventory.refetch_now(name)
+    return _relay_response(outcome)
+
+
+def relay_delete_route(name: str, key: str) -> ResponseReturnValue:
+    entry = _entry_or_raise(name)
+    outcome = relay_delete(_shell().http_client, entry, key)
+    if outcome.status_code < HTTP_BAD_REQUEST:
+        _shell().inventory.refetch_now(name)
+    return _relay_response(outcome)
+
+
+def relay_rename_route(name: str, key: str) -> ResponseReturnValue:
+    entry = _entry_or_raise(name)
+    outcome = relay_rename(_shell().http_client, entry, key, request.get_data())
+    if outcome.status_code < HTTP_BAD_REQUEST:
+        _shell().inventory.refetch_now(name)
+    return _relay_response(outcome)
+
+
+def relay_location_route(name: str, key: str) -> ResponseReturnValue:
+    entry = _entry_or_raise(name)
+    outcome = relay_location(_shell().http_client, entry, key, request.get_data())
+    if outcome.status_code < HTTP_BAD_REQUEST:
+        _shell().inventory.refetch_now(name)
+    return _relay_response(outcome)
+
+
+# ---------- section 6: stop and start ----------
+
+
+def _lifecycle(name: str, action: str) -> ResponseReturnValue:
+    shell = _shell()
+    entry = _entry_or_raise(name)
+    program = entry.row.program or ""
+    if not program:
+        raise AppLifecycleRefusedError(
+            f"App {name!r} has no supervised program registered, so it cannot be stopped or started from the workspace"
+        )
+    # A critical app is never stopped from here, and neither is any row running inside a
+    # critical app's program (the chat row shares the shell's program until phase 10).
+    critical_programs = {
+        other.row.program for other in shell.inventory.entries() if other.row.critical and other.row.program
+    }
+    if entry.row.critical or program in critical_programs:
+        raise AppLifecycleRefusedError(
+            f"App {name!r} is critical to the workspace and cannot be stopped or started here"
+        )
+    try:
+        if action == "stop":
+            stop_supervisor_program(program, supervisor_socket_path())
+        else:
+            start_supervisor_program(program, supervisor_socket_path())
+    except SupervisorProgramActionError as e:
+        return _detail(str(e), HTTP_BAD_GATEWAY)
+    logger.info("{} app {} (program {})", "Stopped" if action == "stop" else "Started", name, program)
+    shell.inventory.refresh_liveness()
+    refreshed = shell.inventory.entry(name)
+    return jsonify({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
+
+
+def stop_app(name: str) -> ResponseReturnValue:
+    return _lifecycle(name, "stop")
+
+
+def start_app(name: str) -> ResponseReturnValue:
+    return _lifecycle(name, "start")
+
+
+# ---------- section 6: projects ----------
+
+
+def list_projects() -> ResponseReturnValue:
+    return jsonify({"projects": [project_wire_json(project) for project in _shell().projects.list_projects()]})
+
+
+def create_project() -> ResponseReturnValue:
+    body = parse_request_body(ProjectMetadataRequest)
+    shell = _shell()
+    shortcuts = seed_shortcuts([entry.row for entry in shell.inventory.entries()])
+    project = shell.projects.create_project(body.name, body.color, body.glyph, shortcuts)
+    shell.broadcast_projects_updated()
+    return jsonify(project_wire_json(project)), HTTP_CREATED
+
+
+def update_project_settings(project_id: str) -> ResponseReturnValue:
+    body = parse_request_body(ProjectMetadataRequest)
+    shell = _shell()
+    project = shell.projects.update_project_settings(_project_id(project_id), body.name, body.color, body.glyph)
+    shell.broadcast_projects_updated()
+    return jsonify(project_wire_json(project))
+
+
+def delete_project(project_id: str) -> ResponseReturnValue:
+    shell = _shell()
+    fallback = shell.projects.delete_project(_project_id(project_id))
+    shell.layouts.delete_view_layouts(project_id)
+    logger.info("Deleted project {} (fallback {})", project_id, fallback)
+    shell.broadcast_projects_updated()
+    shell.delete_unreferenced_instances()
+    return jsonify({"fallback_view_id": str(fallback)})
+
+
+def add_project_tab(project_id: str) -> ResponseReturnValue:
+    body = parse_request_body(ProjectTabRequest)
+    shell = _shell()
+    project = shell.projects.add_tab(_project_id(project_id), body.address)
+    shell.broadcast_projects_updated()
+    return jsonify(project_wire_json(project))
+
+
+def remove_project_tab(project_id: str) -> ResponseReturnValue:
+    body = parse_request_body(ProjectTabRequest)
+    shell = _shell()
+    project = shell.projects.remove_tab(_project_id(project_id), body.address)
+    shell.broadcast_projects_updated()
+    shell.delete_unreferenced_instances()
+    return jsonify(project_wire_json(project))
+
+
+def set_project_shortcut(project_id: str) -> ResponseReturnValue:
+    body = parse_request_body(ProjectShortcutRequest)
+    shell = _shell()
+    entry = shell.inventory.entry(str(body.app))
+    shortcut = validated_shortcut(
+        Shortcut(app=body.app, action=body.action, mode=body.mode), entry.row if entry else None
+    )
+    project = shell.projects.set_shortcut(_project_id(project_id), shortcut)
+    shell.broadcast_projects_updated()
+    return jsonify(project_wire_json(project))
+
+
+def remove_project_shortcut(project_id: str) -> ResponseReturnValue:
+    body = parse_request_body(ProjectShortcutRemoveRequest)
+    shell = _shell()
+    project = shell.projects.remove_shortcut(_project_id(project_id), str(body.app), str(body.action))
+    shell.broadcast_projects_updated()
+    return jsonify(project_wire_json(project))
+
+
+# ---------- section 6: layouts ----------
+
+
+def get_layout(view_id: str) -> ResponseReturnValue:
+    shell = _shell()
+    view = ViewId(view_id)
+    if not shell.projects.is_view_known(view):
+        raise ProjectNotFoundError(view_id)
+    client_id = ClientId(request.args.get("client", ""))
+    client = shell.clients.get_client(client_id)
+    raw_device = request.args.get("device", "")
+    device_kind = (
+        client.device_kind if client is not None else (DeviceKind(raw_device) if raw_device else DeviceKind.DESKTOP)
+    )
+    return jsonify(layout_wire_json(shell.layouts.read_layout(view, client_id, device_kind)))
+
+
+def save_layout(view_id: str) -> ResponseReturnValue:
+    body = parse_request_body(LayoutSaveRequest)
+    shell = _shell()
+    view = ViewId(view_id)
+    if not shell.projects.is_view_known(view):
+        raise ProjectNotFoundError(view_id)
+    layout = LayoutRecord(dockview=body.dockview, tabs=body.tabs, device_kind=body.device_kind, updated_at=None)
+    shell.layouts.save_layout(view, body.client_id, layout, _now())
+    shell.delete_unreferenced_instances()
+    return "", HTTP_NO_CONTENT
+
+
+# ---------- the agent-facing broadcast endpoint ----------
+
+
+def layout_broadcast() -> ResponseReturnValue:
+    refusal = _require_loopback()
+    if refusal is not None:
+        return refusal
+    try:
+        body = json.loads(request.get_data())
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
+        return _detail("Invalid JSON in request body", HTTP_BAD_REQUEST)
+    if not isinstance(body, dict):
+        return _detail("Request body must be a JSON object", HTTP_BAD_REQUEST)
+    op = body.get("op")
+    args_raw = body.get("args", {})
+    agent_id = str(body.get("agent_id") or request.headers.get("X-Mngr-Agent-Id") or "")
+    if not isinstance(op, str) or not is_known_op(op):
+        return _detail(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
+    if not isinstance(args_raw, dict):
+        return _detail("``args`` must be a JSON object", HTTP_BAD_REQUEST)
+    return _dispatch_layout_op(_shell(), op, args_raw, agent_id)
+
+
+def _shell() -> ShellState:
+    return get_state().shell
+
+
+def register_shell_routes(application: Flask) -> None:
+    """Register every shell route of contracts.md sections 5 and 6 on ``application``."""
     application.register_error_handler(ShellError, _answer_shell_error)
     application.register_error_handler(AppInstancesError, answer_typed_error)
-
-    def _entry_or_raise(name: str) -> AppInventoryEntry:
-        entry = shell_of().inventory.entry(name)
-        if entry is None:
-            raise UnknownAppError(f"No registered app named {name!r}")
-        return entry
-
-    # ---------- section 5: routes apps and scripts call ----------
-
-    @application.post("/api/apps/<name>/changed")
-    def app_changed(name: str) -> ResponseReturnValue:
-        refusal = _require_loopback()
-        if refusal is not None:
-            return refusal
-        if not shell_of().inventory.nudge(name):
-            return _detail(f"No registered app named {name!r}", HTTP_NOT_FOUND)
-        return "", HTTP_NO_CONTENT
-
-    @application.post("/api/tabs/<tab_id>/instance")
-    def tab_instance(tab_id: str) -> ResponseReturnValue:
-        refusal = _require_loopback()
-        if refusal is not None:
-            return refusal
-        report = parse_request_body(TabInstanceReport)
-        shell = shell_of()
-        found = shell.layouts.find_tab(TabId(tab_id))
-        if not found:
-            raise LayoutNotFoundError(f"No tab {tab_id!r} in any client layout")
-        for stored, panel_id in found:
-            if stored.layout.tabs[panel_id].address.app != report.app:
-                return _detail(
-                    f"tab {tab_id!r} shows {stored.layout.tabs[panel_id].address}, not the app {report.app!r}",
-                    HTTP_BAD_REQUEST,
-                )
-        address = address_for(report.app, None if report.key == "" else InstanceKey(report.key))
-        for stored in shell.layouts.rebind_tab(TabId(tab_id), address, _now()):
-            if not is_everything_view(stored.view_id):
-                shell.projects.add_tab(stored.view_id, address)
-            shell.broadcaster.broadcast_tab_rebound(str(stored.client_id), str(stored.view_id), tab_id, str(address))
-        shell.broadcast_projects_updated()
-        shell.inventory.refetch_now(str(report.app))
-        return "", HTTP_NO_CONTENT
-
-    @application.post("/api/client-activity")
-    def client_activity() -> ResponseReturnValue:
-        refusal = _require_loopback()
-        if refusal is not None:
-            return refusal
-        report = parse_request_body(ClientActivityReport)
-        shell = shell_of()
-        if report.kind == "message":
-            shell.activity.append_message(
-                str(report.client_id),
-                report.device_kind.value,
-                str(report.view_id),
-                report.app,
-                report.key,
-                report.text,
-            )
-        elif report.kind == "view_switch":
-            shell.activity.append_view_switch(
-                str(report.client_id), report.device_kind.value, report.from_view_id, str(report.view_id)
-            )
-        else:
-            return _detail(f"unknown activity kind {report.kind!r}", HTTP_BAD_REQUEST)
-        return "", HTTP_NO_CONTENT
-
-    # ---------- section 6: the relay ----------
-
-    @application.post("/api/apps/<name>/instances")
-    def relay_create_route(name: str) -> ResponseReturnValue:
-        entry = _entry_or_raise(name)
-        outcome = relay_create(shell_of().http_client, entry, request.get_data())
-        if outcome.status_code < HTTP_BAD_REQUEST:
-            shell_of().inventory.refetch_now(name)
-        return _relay_response(outcome)
-
-    @application.post("/api/apps/<name>/instances/<key>/delete")
-    def relay_delete_route(name: str, key: str) -> ResponseReturnValue:
-        entry = _entry_or_raise(name)
-        outcome = relay_delete(shell_of().http_client, entry, key)
-        if outcome.status_code < HTTP_BAD_REQUEST:
-            shell_of().inventory.refetch_now(name)
-        return _relay_response(outcome)
-
-    @application.post("/api/apps/<name>/instances/<key>/rename")
-    def relay_rename_route(name: str, key: str) -> ResponseReturnValue:
-        entry = _entry_or_raise(name)
-        outcome = relay_rename(shell_of().http_client, entry, key, request.get_data())
-        if outcome.status_code < HTTP_BAD_REQUEST:
-            shell_of().inventory.refetch_now(name)
-        return _relay_response(outcome)
-
-    @application.post("/api/apps/<name>/instances/<key>/location")
-    def relay_location_route(name: str, key: str) -> ResponseReturnValue:
-        entry = _entry_or_raise(name)
-        outcome = relay_location(shell_of().http_client, entry, key, request.get_data())
-        if outcome.status_code < HTTP_BAD_REQUEST:
-            shell_of().inventory.refetch_now(name)
-        return _relay_response(outcome)
-
-    # ---------- section 6: stop and start ----------
-
-    def _lifecycle(name: str, action: str) -> ResponseReturnValue:
-        shell = shell_of()
-        entry = _entry_or_raise(name)
-        program = entry.row.program or ""
-        if not program:
-            raise AppLifecycleRefusedError(
-                f"App {name!r} has no supervised program registered, so it cannot be stopped or started from the workspace"
-            )
-        # A critical app is never stopped from here, and neither is any row running inside a
-        # critical app's program (the chat row shares the shell's program until phase 10).
-        critical_programs = {
-            other.row.program for other in shell.inventory.entries() if other.row.critical and other.row.program
-        }
-        if entry.row.critical or program in critical_programs:
-            raise AppLifecycleRefusedError(
-                f"App {name!r} is critical to the workspace and cannot be stopped or started here"
-            )
-        try:
-            if action == "stop":
-                stop_supervisor_program(program, supervisor_socket_path())
-            else:
-                start_supervisor_program(program, supervisor_socket_path())
-        except SupervisorProgramActionError as e:
-            return _detail(str(e), HTTP_BAD_GATEWAY)
-        logger.info("{} app {} (program {})", "Stopped" if action == "stop" else "Started", name, program)
-        shell.inventory.refresh_liveness()
-        refreshed = shell.inventory.entry(name)
-        return jsonify({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
-
-    @application.post("/api/apps/<name>/stop")
-    def stop_app(name: str) -> ResponseReturnValue:
-        return _lifecycle(name, "stop")
-
-    @application.post("/api/apps/<name>/start")
-    def start_app(name: str) -> ResponseReturnValue:
-        return _lifecycle(name, "start")
-
-    # ---------- section 6: projects ----------
-
-    @application.get("/api/projects")
-    def list_projects() -> ResponseReturnValue:
-        return jsonify({"projects": [project_wire_json(project) for project in shell_of().projects.list_projects()]})
-
-    @application.post("/api/projects")
-    def create_project() -> ResponseReturnValue:
-        body = parse_request_body(ProjectMetadataRequest)
-        shell = shell_of()
-        shortcuts = seed_shortcuts([entry.row for entry in shell.inventory.entries()])
-        project = shell.projects.create_project(body.name, body.color, body.glyph, shortcuts)
-        shell.broadcast_projects_updated()
-        return jsonify(project_wire_json(project)), HTTP_CREATED
-
-    @application.post("/api/projects/<project_id>/settings")
-    def update_project_settings(project_id: str) -> ResponseReturnValue:
-        body = parse_request_body(ProjectMetadataRequest)
-        shell = shell_of()
-        project = shell.projects.update_project_settings(_project_id(project_id), body.name, body.color, body.glyph)
-        shell.broadcast_projects_updated()
-        return jsonify(project_wire_json(project))
-
-    @application.post("/api/projects/<project_id>/delete")
-    def delete_project(project_id: str) -> ResponseReturnValue:
-        shell = shell_of()
-        fallback = shell.projects.delete_project(_project_id(project_id))
-        shell.layouts.delete_view_layouts(project_id)
-        logger.info("Deleted project {} (fallback {})", project_id, fallback)
-        shell.broadcast_projects_updated()
-        shell.delete_unreferenced_instances()
-        return jsonify({"fallback_view_id": str(fallback)})
-
-    @application.post("/api/projects/<project_id>/tabs")
-    def add_project_tab(project_id: str) -> ResponseReturnValue:
-        body = parse_request_body(ProjectTabRequest)
-        shell = shell_of()
-        project = shell.projects.add_tab(_project_id(project_id), body.address)
-        shell.broadcast_projects_updated()
-        return jsonify(project_wire_json(project))
-
-    @application.post("/api/projects/<project_id>/tabs/remove")
-    def remove_project_tab(project_id: str) -> ResponseReturnValue:
-        body = parse_request_body(ProjectTabRequest)
-        shell = shell_of()
-        project = shell.projects.remove_tab(_project_id(project_id), body.address)
-        shell.broadcast_projects_updated()
-        shell.delete_unreferenced_instances()
-        return jsonify(project_wire_json(project))
-
-    @application.post("/api/projects/<project_id>/shortcuts")
-    def set_project_shortcut(project_id: str) -> ResponseReturnValue:
-        body = parse_request_body(ProjectShortcutRequest)
-        shell = shell_of()
-        entry = shell.inventory.entry(str(body.app))
-        shortcut = validated_shortcut(
-            Shortcut(app=body.app, action=body.action, mode=body.mode), entry.row if entry else None
-        )
-        project = shell.projects.set_shortcut(_project_id(project_id), shortcut)
-        shell.broadcast_projects_updated()
-        return jsonify(project_wire_json(project))
-
-    @application.post("/api/projects/<project_id>/shortcuts/remove")
-    def remove_project_shortcut(project_id: str) -> ResponseReturnValue:
-        body = parse_request_body(ProjectShortcutRemoveRequest)
-        shell = shell_of()
-        project = shell.projects.remove_shortcut(_project_id(project_id), str(body.app), str(body.action))
-        shell.broadcast_projects_updated()
-        return jsonify(project_wire_json(project))
-
-    # ---------- section 6: layouts ----------
-
-    @application.get("/api/layouts/<view_id>")
-    def get_layout(view_id: str) -> ResponseReturnValue:
-        shell = shell_of()
-        view = ViewId(view_id)
-        if not shell.projects.is_view_known(view):
-            raise ProjectNotFoundError(view_id)
-        client_id = ClientId(request.args.get("client", ""))
-        client = shell.clients.get_client(client_id)
-        raw_device = request.args.get("device", "")
-        device_kind = (
-            client.device_kind
-            if client is not None
-            else (DeviceKind(raw_device) if raw_device else DeviceKind.DESKTOP)
-        )
-        return jsonify(layout_wire_json(shell.layouts.read_layout(view, client_id, device_kind)))
-
-    @application.post("/api/layouts/<view_id>")
-    def save_layout(view_id: str) -> ResponseReturnValue:
-        body = parse_request_body(LayoutSaveRequest)
-        shell = shell_of()
-        view = ViewId(view_id)
-        if not shell.projects.is_view_known(view):
-            raise ProjectNotFoundError(view_id)
-        layout = LayoutRecord(dockview=body.dockview, tabs=body.tabs, device_kind=body.device_kind, updated_at=None)
-        shell.layouts.save_layout(view, body.client_id, layout, _now())
-        shell.delete_unreferenced_instances()
-        return "", HTTP_NO_CONTENT
-
-    # ---------- the agent-facing broadcast endpoint ----------
-
-    @application.post("/api/layout/broadcast")
-    def layout_broadcast() -> ResponseReturnValue:
-        refusal = _require_loopback()
-        if refusal is not None:
-            return refusal
-        try:
-            body = json.loads(request.get_data())
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
-            return _detail("Invalid JSON in request body", HTTP_BAD_REQUEST)
-        if not isinstance(body, dict):
-            return _detail("Request body must be a JSON object", HTTP_BAD_REQUEST)
-        op = body.get("op")
-        args_raw = body.get("args", {})
-        agent_id = str(body.get("agent_id") or request.headers.get("X-Mngr-Agent-Id") or "")
-        if not isinstance(op, str) or not is_known_op(op):
-            return _detail(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
-        if not isinstance(args_raw, dict):
-            return _detail("``args`` must be a JSON object", HTTP_BAD_REQUEST)
-        return _dispatch_layout_op(shell_of(), op, args_raw, agent_id)
+    application.add_url_rule(
+        "/api/apps/<name>/changed", view_func=app_changed, methods=["POST"], endpoint="app_changed"
+    )
+    application.add_url_rule(
+        "/api/tabs/<tab_id>/instance", view_func=tab_instance, methods=["POST"], endpoint="tab_instance"
+    )
+    application.add_url_rule(
+        "/api/client-activity", view_func=client_activity_route, methods=["POST"], endpoint="client_activity_route"
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/instances", view_func=relay_create_route, methods=["POST"], endpoint="relay_create_route"
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/instances/<key>/delete",
+        view_func=relay_delete_route,
+        methods=["POST"],
+        endpoint="relay_delete_route",
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/instances/<key>/rename",
+        view_func=relay_rename_route,
+        methods=["POST"],
+        endpoint="relay_rename_route",
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/instances/<key>/location",
+        view_func=relay_location_route,
+        methods=["POST"],
+        endpoint="relay_location_route",
+    )
+    application.add_url_rule("/api/apps/<name>/stop", view_func=stop_app, methods=["POST"], endpoint="stop_app")
+    application.add_url_rule("/api/apps/<name>/start", view_func=start_app, methods=["POST"], endpoint="start_app")
+    application.add_url_rule("/api/projects", view_func=list_projects, methods=["GET"], endpoint="list_projects")
+    application.add_url_rule("/api/projects", view_func=create_project, methods=["POST"], endpoint="create_project")
+    application.add_url_rule(
+        "/api/projects/<project_id>/settings",
+        view_func=update_project_settings,
+        methods=["POST"],
+        endpoint="update_project_settings",
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/delete", view_func=delete_project, methods=["POST"], endpoint="delete_project"
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/tabs", view_func=add_project_tab, methods=["POST"], endpoint="add_project_tab"
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/tabs/remove",
+        view_func=remove_project_tab,
+        methods=["POST"],
+        endpoint="remove_project_tab",
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/shortcuts",
+        view_func=set_project_shortcut,
+        methods=["POST"],
+        endpoint="set_project_shortcut",
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/shortcuts/remove",
+        view_func=remove_project_shortcut,
+        methods=["POST"],
+        endpoint="remove_project_shortcut",
+    )
+    application.add_url_rule("/api/layouts/<view_id>", view_func=get_layout, methods=["GET"], endpoint="get_layout")
+    application.add_url_rule("/api/layouts/<view_id>", view_func=save_layout, methods=["POST"], endpoint="save_layout")
+    application.add_url_rule(
+        "/api/layout/broadcast", view_func=layout_broadcast, methods=["POST"], endpoint="layout_broadcast"
+    )
 
 
 def _clients_by_view(shell: ShellState) -> dict[str, list[dict[str, str]]]:

@@ -127,8 +127,8 @@ def build_inventory(
 ) -> AppInventory:
     """An inventory that has read the registry and probed liveness once, with no watcher or sweep running."""
     inventory = AppInventory(
-        registry_path,
-        broadcaster,
+        registry_path=registry_path,
+        broadcaster=broadcaster,
         liveness_prober=prober if prober is not None else FakeLivenessProber(),
         fetcher=fetcher if fetcher is not None else FakeInstanceFetcher(),
         coalesce_seconds=0.01,
@@ -142,13 +142,11 @@ def build_inventory(
 def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, Any]]:
     """Every message a registered fake client has been sent so far, parsed."""
     messages: list[dict[str, Any]] = []
-    while True:
-        try:
-            raw = client_queue.get_nowait()
-        except queue.Empty:
-            return messages
+    while not client_queue.empty():
+        raw = client_queue.get_nowait()
         if raw is not None:
             messages.append(json.loads(raw))
+    return messages
 
 
 def registry_rows_of(inventory: AppInventory) -> list[RegistryRow]:

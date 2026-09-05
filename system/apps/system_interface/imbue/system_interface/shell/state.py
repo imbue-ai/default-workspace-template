@@ -122,7 +122,9 @@ def build_shell_state(
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests."""
     return ShellState(
         state_directory=state_directory,
-        inventory=inventory if inventory is not None else AppInventory(registry_path, broadcaster),
+        inventory=inventory
+        if inventory is not None
+        else AppInventory(registry_path=registry_path, broadcaster=broadcaster),
         projects=ProjectStore(state_directory=state_directory),
         layouts=LayoutStore(state_directory=state_directory),
         clients=ClientStore(state_directory=state_directory),

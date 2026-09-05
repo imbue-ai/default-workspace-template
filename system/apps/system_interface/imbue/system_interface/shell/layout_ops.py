@@ -13,6 +13,10 @@ from collections.abc import Sequence
 from typing import Any
 from typing import Final
 
+from pydantic import Field
+from pydantic import PrivateAttr
+
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import LayoutRecord
@@ -76,7 +80,7 @@ def is_broadcasting_op(op: str) -> bool:
     return op in BROADCASTING_OPS
 
 
-class LayoutMutex:
+class LayoutMutex(MutableModel):
     """Advisory in-process mutex protecting layout-mutating ops.
 
     Acquisition is non-blocking and TTL-bounded: a holder that does not release is auto-released
@@ -84,16 +88,15 @@ class LayoutMutex:
     metadata so the caller can pick its own retry strategy.
     """
 
-    def __init__(self, ttl_seconds: float = _MUTEX_TTL_SECONDS) -> None:
-        self._ttl_seconds = ttl_seconds
-        self._lock = threading.Lock()
-        self._holder: dict[str, Any] | None = None
+    ttl_seconds: float = Field(default=_MUTEX_TTL_SECONDS, description="How long a holder keeps the mutex unreleased")
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _holder: dict[str, Any] | None = PrivateAttr(default=None)
 
     def try_acquire(self, agent_id: str, op: str, args: Mapping[str, Any]) -> dict[str, Any] | None:
         """Take the mutex; None on success, else the holder's description for a 409."""
         now = time.monotonic()
         with self._lock:
-            if self._holder is not None and now - self._holder["started_at_monotonic"] < self._ttl_seconds:
+            if self._holder is not None and now - self._holder["started_at_monotonic"] < self.ttl_seconds:
                 return {
                     "agent_id": self._holder["agent_id"],
                     "operation": self._holder["op"],
@@ -117,7 +120,7 @@ class LayoutMutex:
                 self._holder = None
 
     def retry_after_ms(self) -> int:
-        return int(self._ttl_seconds * 1000)
+        return int(self.ttl_seconds * 1000)
 
 
 @pure
