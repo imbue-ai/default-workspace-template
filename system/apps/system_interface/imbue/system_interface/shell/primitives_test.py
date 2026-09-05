@@ -17,7 +17,7 @@ def test_an_address_names_an_app_and_optionally_one_instance() -> None:
     single = Address("app:files")
     assert single.app == AppName("files")
     assert single.key is None
-    assert single.render() == "app:files"
+    assert single == "app:files"
 
     keyed = Address("app:terminal?instance=terminal-3")
     assert keyed.app == AppName("terminal")
