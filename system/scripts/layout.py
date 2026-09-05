@@ -699,28 +699,33 @@ def _listing_from_inventory(
         if app.get("internal"):
             continue
         name = str(app.get("name"))
-        instances = [
-            {
-                "key": instance.get("key", ""),
-                "address": _address_of(name, str(instance.get("key", ""))),
-                "title": instance.get("title"),
-                "status": instance.get("status"),
-                "docked_in": docked_in_by_address.get(
-                    _address_of(name, str(instance.get("key", ""))), []
-                ),
-            }
-            for instance in app.get("instances", []) or []
-        ]
         listing.append(
             {
                 "name": name,
                 "display_name": app.get("display_name", name),
                 "is_running": app.get("is_running"),
                 "actions": app.get("actions", []),
-                "instances": instances,
+                "instances": [
+                    _listed_instance(name, instance, docked_in_by_address)
+                    for instance in app.get("instances", []) or []
+                ],
             }
         )
     return listing
+
+
+def _listed_instance(
+    app: str, instance: dict[str, Any], docked_in_by_address: dict[str, list[str]]
+) -> dict[str, Any]:
+    key = str(instance.get("key", ""))
+    address = _address_of(app, key)
+    return {
+        "key": key,
+        "address": address,
+        "title": instance.get("title"),
+        "status": instance.get("status"),
+        "docked_in": docked_in_by_address.get(address, []),
+    }
 
 
 def _address_of(app: str, key: str) -> str:
