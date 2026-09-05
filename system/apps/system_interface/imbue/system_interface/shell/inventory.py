@@ -100,7 +100,7 @@ class HttpInstanceFetcher(InstanceFetcherInterface):
         try:
             response = httpx.get(url, timeout=FETCH_TIMEOUT_SECONDS)
         except httpx.HTTPError as e:
-            logger.debug("Failed to fetch instances from {}: {}", url, e)
+            logger.warning("Failed to fetch instances from {}: {}", url, e)
             return InstanceFetchOutcome(kind=FetchOutcomeKind.FAILED, records=())
         elapsed = time.monotonic() - started_at
         if elapsed > FETCH_SLOW_SECONDS:
@@ -108,7 +108,7 @@ class HttpInstanceFetcher(InstanceFetcherInterface):
         if response.status_code == HTTP_SERVICE_UNAVAILABLE:
             return InstanceFetchOutcome(kind=FetchOutcomeKind.NOT_READY, records=())
         if response.is_error:
-            logger.debug("Fetching instances from {} answered {}", url, response.status_code)
+            logger.warning("Fetching instances from {} answered {}", url, response.status_code)
             return InstanceFetchOutcome(kind=FetchOutcomeKind.FAILED, records=())
         return parse_instances_body(url, response.content)
 
