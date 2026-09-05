@@ -226,8 +226,8 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast a layout_op event telling the frontend to mutate the dockview layout.
 
         The frontend dispatches on ``op`` (``open``, ``focus``, ``split``, ``move``, ``close``,
-        ``maximize``, ``restore``, ``refresh``) and applies the corresponding dockview
-        primitive. ``args`` is an op-specific payload keyed by address.
+        ``maximize``, ``restore``, ``refresh``, ``reload_system_interface``) and applies the
+        corresponding dockview primitive. ``args`` is an op-specific payload keyed by address.
 
         ``requester_agent_id`` is the ``MNGR_AGENT_ID`` of the agent that invoked
         ``system/scripts/layout.py``; the frontend anchors splits against the requester's
