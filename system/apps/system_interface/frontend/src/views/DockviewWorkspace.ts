@@ -36,9 +36,11 @@ import {
   IFRAME_PANEL_ADDRESS_ATTR,
   IFRAME_PANEL_APP_ATTR,
   IframePanel,
+  StoppedAppPlaceholder,
   reloadIframeForAddress,
   reloadIframesForApp,
 } from "./IframePanel";
+import type { StoppedAppPlaceholderAttrs } from "./IframePanel";
 import {
   bindSlot,
   clearReportedPath,
@@ -423,6 +425,17 @@ export function requestAppLifecycle(appName: string, action: "stop" | "start"): 
   void setAppLifecycle(appName, action).catch((e: Error) => {
     alert(`Failed to ${action} ${appName}: ${e.message}`);
   });
+}
+
+/** What a pane shows in place of a not-running app's page, or null while the app runs. The
+ *  Start button is offered only where the workspace can honestly start the app. */
+export function stoppedPlaceholderForApp(app: AppRecord): StoppedAppPlaceholderAttrs | null {
+  if (app.is_running) return null;
+  return {
+    label: app.display_name,
+    detail: appStoppedDetail(app),
+    onStart: isAppStoppable(app) ? () => requestAppLifecycle(app.name, "start") : null,
+  };
 }
 
 /** Open the membership dialog over one address, with the projects already showing it. */
@@ -2044,6 +2057,14 @@ function renderLiveContent(surface: LiveSurface): m.Children {
   if (params.kind === "launcher") return null;
   const resolved = findInstance(params.address);
   if (resolved === null) {
+    // A stopped app's list is never fetched, so its addresses resolve to nothing until it
+    // runs again; the pane still says the app is stopped and offers the Start.
+    const appName = appNameFromAddress(params.address);
+    const app = appName === null ? undefined : getApp(appName);
+    const stopped = app === undefined ? null : stoppedPlaceholderForApp(app);
+    if (app !== undefined && stopped !== null) {
+      return m(StoppedAppPlaceholder, { ...stopped, appName: app.name });
+    }
     const note = isAddressUnlisted(params.address)
       ? "This tab's app no longer lists it."
       : "Waiting for this tab's app to list it.";
@@ -2062,13 +2083,7 @@ function renderLiveContent(surface: LiveSurface): m.Children {
     title: instance.title,
     appName: app.name,
     address: params.address,
-    stopped: app.is_running
-      ? null
-      : {
-          label: app.display_name,
-          detail: appStoppedDetail(app),
-          onStart: isAppStoppable(app) ? () => requestAppLifecycle(app.name, "start") : null,
-        },
+    stopped: stoppedPlaceholderForApp(app),
     contract: {
       address: params.address,
       tabId: params.tabId,

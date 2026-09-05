@@ -2,7 +2,14 @@ import "../testing/dom";
 
 import { describe, expect, it } from "vitest";
 
-import { actionKey, equalTabWidth, isTitleTruncated, mostRecentAddressOfApp } from "./DockviewWorkspace";
+import { appRecord } from "../testing/records";
+import {
+  actionKey,
+  equalTabWidth,
+  isTitleTruncated,
+  mostRecentAddressOfApp,
+  stoppedPlaceholderForApp,
+} from "./DockviewWorkspace";
 
 describe("equalTabWidth", () => {
   it("shares what is left of a strip once the '+' is accounted for", () => {
@@ -77,5 +84,25 @@ describe("mostRecentAddressOfApp", () => {
 describe("actionKey", () => {
   it("keys an in-flight action by app and action", () => {
     expect(actionKey("chat", "new")).toBe("chat:new");
+  });
+});
+
+describe("stoppedPlaceholderForApp", () => {
+  it("shows nothing in place of a running app's page", () => {
+    expect(stoppedPlaceholderForApp(appRecord("docs"))).toBeNull();
+  });
+
+  it("names a stopped app and offers Start only where the workspace can start it", () => {
+    const supervised = stoppedPlaceholderForApp(appRecord("docs", { is_running: false }));
+    expect(supervised?.label).toBe("Docs");
+    expect(supervised?.detail).toBe("stopped");
+    expect(supervised?.onStart).not.toBeNull();
+
+    const unsupervised = stoppedPlaceholderForApp(appRecord("docs", { is_running: false, program: "" }));
+    expect(unsupervised?.detail).toBe("not running (managed outside the workspace)");
+    expect(unsupervised?.onStart).toBeNull();
+
+    const critical = stoppedPlaceholderForApp(appRecord("docs", { is_running: false, critical: true }));
+    expect(critical?.onStart).toBeNull();
   });
 });

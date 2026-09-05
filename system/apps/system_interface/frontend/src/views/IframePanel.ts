@@ -177,7 +177,7 @@ export function IframePanel(): m.Component<IframePanelAttrs> {
  * rather than an error. The Start button appears only where the app is startable through the
  * workspace; the ``apps_updated`` push after a start swaps the iframe back in.
  */
-const StoppedAppPlaceholder: m.Component<StoppedAppPlaceholderAttrs & { appName: string }> = {
+export const StoppedAppPlaceholder: m.Component<StoppedAppPlaceholderAttrs & { appName: string }> = {
   view(vnode) {
     const { label, detail, onStart, appName } = vnode.attrs;
     return m(
