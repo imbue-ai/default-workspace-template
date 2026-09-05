@@ -84,6 +84,11 @@ def is_broadcasting_op(op: str) -> bool:
     return op in BROADCASTING_OPS
 
 
+@pure
+def is_addressed_op(op: str) -> bool:
+    return op in ADDRESSED_OPS
+
+
 class LayoutMutex(MutableModel):
     """Advisory in-process mutex protecting layout-mutating ops.
 
