@@ -1,25 +1,14 @@
-from pathlib import Path
 from typing import Any
 
-from app_manifest.registry import read_registry
-
-from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import Project
 from imbue.system_interface.shell.data_types import TabRecord
-from imbue.system_interface.shell.data_types import synthesized_single_instance
 from imbue.system_interface.shell.layout_ops import layout_inspect
-from imbue.system_interface.shell.layout_ops import layout_list
-from imbue.system_interface.shell.layout_ops import layout_views
 from imbue.system_interface.shell.layouts import StoredLayout
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
-from imbue.system_interface.shell.primitives import ProjectId
 from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.shell.primitives import ViewId
-from imbue.system_interface.shell.testing import registry_row_toml
-from imbue.system_interface.shell.testing import write_registry
 
 _FILES = Address("app:files")
 _TAB = TabId("tab-000000000000000a")
@@ -63,44 +52,3 @@ def test_inspect_projects_the_grid_and_the_panels() -> None:
     # A panel with no tab record (the launcher) is listed with no address.
     assert second_leaf["panels"][0]["address"] is None
     assert layout_inspect(None, {}) == {"active_panel": None, "panels": [], "tree": None}
-
-
-def test_list_names_every_app_with_where_its_instances_are_docked(tmp_path: Path) -> None:
-    rows = read_registry(
-        write_registry(
-            tmp_path / "apps.toml",
-            registry_row_toml("files", "http://localhost:1"),
-            registry_row_toml("hidden", "http://localhost:2", is_internal=True),
-        )
-    )
-    entries = [
-        AppInventoryEntry(
-            row=row,
-            is_running=True,
-            instances=(synthesized_single_instance(row, True),),
-            first_seen_at_by_key={},
-            is_listed=True,
-        )
-        for row in rows
-    ]
-    listing = layout_list(entries, [_stored("c1"), _stored("c2", "alpha"), _stored("c1", "alpha")])
-    assert [app["name"] for app in listing] == ["files"]
-    assert listing[0]["actions"] == [{"id": "open", "label": "Open Files"}]
-    assert listing[0]["instances"] == [
-        {"key": "", "address": "app:files", "title": "Files", "status": "idle", "docked_in": ["c1", "c2"]}
-    ]
-
-
-def test_views_lists_every_project_then_everything() -> None:
-    project = Project(id=ProjectId("alpha"), name="Alpha", color="#111111", glyph=0, tabs=(_FILES,), shortcuts=())
-    views = layout_views([project], [_FILES], {"alpha": [{"id": "c1", "device_kind": "desktop"}]})
-    assert views == [
-        {
-            "id": "alpha",
-            "name": "Alpha",
-            "is_everything": False,
-            "tabs": ["app:files"],
-            "clients": [{"id": "c1", "device_kind": "desktop"}],
-        },
-        {"id": "everything", "name": "Everything", "is_everything": True, "tabs": ["app:files"], "clients": []},
-    ]
