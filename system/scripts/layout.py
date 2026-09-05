@@ -1263,48 +1263,48 @@ def _project_for_shortcut_write(view_name: str | None) -> str | None:
     return project_id
 
 
-def _cmd_shortcut_set(args: argparse.Namespace) -> int:
-    project_id = _project_for_shortcut_write(args.view)
-    if project_id is None:
-        return EXIT_ERROR
-    body = {"app": args.app, "action": args.action, "mode": args.mode}
-    status, response = _request_rest_json(
-        "POST", f"/api/projects/{project_id}/shortcuts", body
-    )
+def _run_shortcut_write(
+    verb: str, path: str, body: dict[str, Any], project_id: str, done_line: str
+) -> int:
+    """POST one shortcut write to the shell and print the project's rail as it stands after it."""
+    status, response = _request_rest_json("POST", path, body)
     if status != 200 or not isinstance(response, dict):
         detail = (
             response.get("detail", response) if isinstance(response, dict) else response
         )
-        sys.stderr.write(f"error: shortcut set failed (HTTP {status}): {detail}\n")
+        sys.stderr.write(f"error: shortcut {verb} failed (HTTP {status}): {detail}\n")
         return EXIT_ERROR
-    sys.stderr.write(
-        f"set {args.app} {args.action} ({args.mode}) on project {project_id!r}\n"
-    )
+    sys.stderr.write(f"{done_line}\n")
     _emit_structured(
         {"project_id": project_id, "shortcuts": response.get("shortcuts", [])}, False
     )
     return EXIT_OK
+
+
+def _cmd_shortcut_set(args: argparse.Namespace) -> int:
+    project_id = _project_for_shortcut_write(args.view)
+    if project_id is None:
+        return EXIT_ERROR
+    return _run_shortcut_write(
+        "set",
+        f"/api/projects/{project_id}/shortcuts",
+        {"app": args.app, "action": args.action, "mode": args.mode},
+        project_id,
+        f"set {args.app} {args.action} ({args.mode}) on project {project_id!r}",
+    )
 
 
 def _cmd_shortcut_remove(args: argparse.Namespace) -> int:
     project_id = _project_for_shortcut_write(args.view)
     if project_id is None:
         return EXIT_ERROR
-    body = {"app": args.app, "action": args.action}
-    status, response = _request_rest_json(
-        "POST", f"/api/projects/{project_id}/shortcuts/remove", body
+    return _run_shortcut_write(
+        "remove",
+        f"/api/projects/{project_id}/shortcuts/remove",
+        {"app": args.app, "action": args.action},
+        project_id,
+        f"removed {args.app} {args.action} from project {project_id!r}",
     )
-    if status != 200 or not isinstance(response, dict):
-        detail = (
-            response.get("detail", response) if isinstance(response, dict) else response
-        )
-        sys.stderr.write(f"error: shortcut remove failed (HTTP {status}): {detail}\n")
-        return EXIT_ERROR
-    sys.stderr.write(f"removed {args.app} {args.action} from project {project_id!r}\n")
-    _emit_structured(
-        {"project_id": project_id, "shortcuts": response.get("shortcuts", [])}, False
-    )
-    return EXIT_OK
 
 
 # ---------- The parser ----------
