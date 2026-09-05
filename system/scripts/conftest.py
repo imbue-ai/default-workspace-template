@@ -25,22 +25,30 @@ def _skip_wait_stable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(layout.ENV_NO_WAIT_STABLE, "1")
 
 
-def _write_apps_toml(path: Path, rows: dict[str, bool]) -> None:
-    """A registry with one row per name; the value says whether the app has instances."""
+def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
+    """A registry with one row per name; the value is the app's declared action ids (none for a
+    single-instance app). An app declaring more than one action gets a ``default_shortcut`` on
+    its last one, so the primary-action rule has something to prefer over the first."""
     doc = tomlkit.document()
     apps = tomlkit.aot()
-    for name, has_instances in rows.items():
+    for name, action_ids in rows.items():
         entry = tomlkit.table()
         entry["name"] = name
         entry["url"] = f"http://localhost:9000/{name}"
-        entry["instances"] = has_instances
-        if has_instances:
+        entry["instances"] = len(action_ids) > 0
+        if action_ids:
             actions = tomlkit.aot()
-            action = tomlkit.table()
-            action["id"] = "new"
-            action["label"] = f"New {name}"
-            actions.append(action)
+            for action_id in action_ids:
+                action = tomlkit.table()
+                action["id"] = action_id
+                action["label"] = f"{action_id.capitalize()} {name}"
+                actions.append(action)
             entry["actions"] = actions
+        if len(action_ids) > 1:
+            default_shortcut = tomlkit.inline_table()
+            default_shortcut["action"] = action_ids[-1]
+            default_shortcut["mode"] = "focus"
+            entry["default_shortcut"] = default_shortcut
         apps.append(entry)
     doc["apps"] = apps
     path.write_text(tomlkit.dumps(doc))
@@ -49,7 +57,9 @@ def _write_apps_toml(path: Path, rows: dict[str, bool]) -> None:
 @pytest.fixture
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "apps.toml"
-    _write_apps_toml(path, {"files": False, "terminal": True, "chat": True})
+    _write_apps_toml(
+        path, {"files": (), "terminal": ("new",), "chat": ("subagent", "new")}
+    )
     monkeypatch.setenv(layout.ENV_APPS_FILE, str(path))
     return path
 
