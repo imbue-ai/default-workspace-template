@@ -22,6 +22,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.data_types import LayoutEditOutcome
 from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.errors import StaleLayoutSaveError
 from imbue.system_interface.shell.primitives import Address
@@ -214,6 +215,25 @@ class LayoutStore(MutableModel):
         with STATE_FILES_LOCK:
             write_json_atomic(self._client_path(view_id, client_id), layout_wire_json(stamped))
         return stamped
+
+    def edit_client_layout(
+        self,
+        view_id: str,
+        client_id: str,
+        device_kind: DeviceKind,
+        transform: Callable[[LayoutRecord], LayoutRecord],
+        now: datetime,
+    ) -> LayoutEditOutcome:
+        """Apply ``transform`` to the client's arrangement of the view (its own, else the seed of its device kind, else
+        the empty layout) and write the result when it changed. The read, the edit, and the write happen under the
+        state lock, so a browser's save or another op cannot land in between and be overwritten. The seed is untouched."""
+        with STATE_FILES_LOCK:
+            current = self.read_layout(view_id, client_id, device_kind)
+            edited = transform(current)
+            if is_same_arrangement(current, edited):
+                return LayoutEditOutcome(layout=current, is_written=False)
+            written = self.write_client_layout(view_id, client_id, edited, now)
+        return LayoutEditOutcome(layout=written, is_written=True)
 
     def save_browser_layout(
         self,
