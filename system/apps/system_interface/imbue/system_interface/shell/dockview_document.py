@@ -41,8 +41,11 @@ LAUNCHER_PANEL_ID_PREFIX: Final[str] = "new-tab-"
 HORIZONTAL: Final[str] = "HORIZONTAL"
 VERTICAL: Final[str] = "VERTICAL"
 
-# The share of the anchor a split gives the new panel when the op names none.
+# The share of the anchor a split gives the new panel when the op names none, and the bounds a
+# requested share is held to: a group of (nearly) no extent could not be dragged open again.
 DEFAULT_SPLIT_RATIO: Final[float] = 0.6
+MIN_SPLIT_RATIO: Final[float] = 0.05
+MAX_SPLIT_RATIO: Final[float] = 0.95
 
 _GridPath = tuple[int, ...]
 
@@ -356,7 +359,7 @@ def _split_beside(
     new_leaf = _new_leaf(placement.group_id, "")
     new_leaf["data"]["views"] = []
     new_leaf["data"].pop("activeView")
-    ratio = min(max(placement.ratio, 0.05), 0.95)
+    ratio = min(max(placement.ratio, MIN_SPLIT_RATIO), MAX_SPLIT_RATIO)
     if _axis_of(direction) == parent_orientation:
         anchor_extent = _extent(anchor, parent_orientation)
         new_extent = round(anchor_extent * ratio)
