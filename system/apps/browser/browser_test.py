@@ -22,6 +22,7 @@ from browser.data_types import BrowserSnapshot
 from browser.errors import FleetCreateRefusedError
 from browser.errors import FleetUnavailableError
 from browser.errors import NavigationFailedError
+from browser.errors import UnknownBrowserError
 from browser.primitives import BrowserName
 from mock_cdp_client_test import NavigatingCdpClient
 
@@ -973,7 +974,7 @@ def test_a_closed_name_is_gone_until_recreated(monkeypatch: pytest.MonkeyPatch) 
         assert a.browser_id == "alex-smith"
         await mgr.close("alex-smith")
         # The closed name is gone -- a command on it would 404.
-        with pytest.raises(KeyError):
+        with pytest.raises(UnknownBrowserError):
             mgr.get("alex-smith")
 
     asyncio.run(go())
