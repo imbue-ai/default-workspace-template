@@ -419,17 +419,10 @@ export function shareApp(appName: string): void {
 
 /** Fire one stop/start at the shell, surfacing a refusal. The ``apps_updated`` push the route
  *  triggers is what repaints every surface -- nothing optimistic. */
-function requestAppLifecycle(appName: string, action: "stop" | "start"): void {
+export function requestAppLifecycle(appName: string, action: "stop" | "start"): void {
   void setAppLifecycle(appName, action).catch((e: Error) => {
     alert(`Failed to ${action} ${appName}: ${e.message}`);
   });
-}
-
-/** The rail's route into the app-level Stop/Start: whichever direction the app's liveness calls for. */
-export function toggleAppLifecycle(appName: string): void {
-  const app = getApp(appName);
-  if (app === undefined || !isAppStoppable(app)) return;
-  requestAppLifecycle(appName, app.is_running ? "stop" : "start");
 }
 
 /** Open the membership dialog over one address, with the projects already showing it. */
