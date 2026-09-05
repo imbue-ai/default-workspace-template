@@ -5,7 +5,9 @@
  *
  * This is the one socket the shell holds. On connect the server sends ``apps_updated`` and
  * ``projects_updated``; the shell answers with its ``client_state`` (which client it is, on
- * which device, looking at which view) and re-sends it on every view switch.
+ * which device, looking at which view) and re-sends it on every view switch. ``layout_updated``
+ * and ``active_view_changed`` are how this client's other windows, and the shell's own edits,
+ * reach this one (contracts.md section 8).
  *
  * Nothing here knows what any app is: a chat, a terminal and a browser are apps with instances
  * like any other, and the surfaces that draw them read the app's own display name, icon,
@@ -97,17 +99,10 @@ export interface ProjectInfo {
   shortcuts: ProjectShortcut[];
 }
 
-// The names of the layout ops the agent-facing ``system/scripts/layout.py`` helper can emit.
-export type LayoutOpName =
-  | "open"
-  | "focus"
-  | "split"
-  | "close"
-  | "move"
-  | "maximize"
-  | "restore"
-  | "refresh"
-  | "reload_system_interface";
+// The transient layout ops that still reach the browser as messages (contracts.md section 12): the
+// verbs that change what is on screen without changing the saved document. Every other op is
+// applied by the shell to the layout file and arrives here as a ``layout_updated``.
+export type LayoutOpName = "maximize" | "restore" | "refresh" | "reload_system_interface";
 
 export interface LayoutOpEvent {
   op: LayoutOpName;
@@ -116,11 +111,17 @@ export interface LayoutOpEvent {
   requesterAgentId: string;
 }
 
-/** ``layout.py load <view>``: an agent switching a client onto a view. */
-export interface LoadViewEvent {
+/** A client layout was written on the shell (a save of ours or another window's, or the shell's own edit). */
+export interface LayoutUpdatedEvent {
   viewId: string;
-  displayName: string;
-  targetClientId: string | null;
+  clientId: string;
+  saveId: string;
+}
+
+/** A client's stored active view moved (a switch in another window, or an agent's ``load``). */
+export interface ActiveViewChangedEvent {
+  clientId: string;
+  viewId: string;
 }
 
 /** An app re-pointed a tab at another of its instances (the terminal app, when a tab's client
@@ -135,14 +136,22 @@ export interface TabReboundEvent {
 type WsEvent =
   | { type: "apps_updated"; apps: AppRecord[] }
   | { type: "projects_updated"; projects: ProjectInfo[] }
-  | { type: "layout_op"; op: LayoutOpName; args: Record<string, unknown>; requester_agent_id?: string }
-  | { type: "load_layout"; view_id: string; display_name: string; target_client_id: string | null }
+  | {
+      type: "layout_op";
+      op: LayoutOpName;
+      args: Record<string, unknown>;
+      requester_agent_id?: string;
+      target_client_id?: string | null;
+    }
+  | { type: "layout_updated"; view_id: string; client_id: string; save_id: string }
+  | { type: "active_view_changed"; client_id: string; view_id: string }
   | { type: "tab_rebound"; client_id: string; view_id: string; tab_id: string; address: string };
 
 export type AppsUpdatedListener = (apps: AppRecord[]) => void;
 export type ProjectsUpdatedListener = (projects: ProjectInfo[]) => void;
 export type LayoutOpListener = (event: LayoutOpEvent) => void;
-export type LoadViewListener = (event: LoadViewEvent) => void;
+export type LayoutUpdatedListener = (event: LayoutUpdatedEvent) => void;
+export type ActiveViewChangedListener = (event: ActiveViewChangedEvent) => void;
 export type TabReboundListener = (event: TabReboundEvent) => void;
 
 const ADDRESS_SCHEME = "app:";
@@ -240,7 +249,8 @@ let appsLoadedWaiters: (() => void)[] = [];
 let appsUpdatedListeners: AppsUpdatedListener[] = [];
 let projectsUpdatedListeners: ProjectsUpdatedListener[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
-let loadViewListeners: LoadViewListener[] = [];
+let layoutUpdatedListeners: LayoutUpdatedListener[] = [];
+let activeViewChangedListeners: ActiveViewChangedListener[] = [];
 let tabReboundListeners: TabReboundListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -312,13 +322,21 @@ function handleEvent(event: WsEvent): void {
       applyProjects(event.projects);
       break;
     case "layout_op":
+      // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app, the
+      // interface reload) is for every window.
+      if (event.target_client_id != null && event.target_client_id !== getClientId()) break;
       for (const listener of layoutOpListeners) {
         listener({ op: event.op, args: event.args, requesterAgentId: event.requester_agent_id ?? "" });
       }
       break;
-    case "load_layout":
-      for (const listener of loadViewListeners) {
-        listener({ viewId: event.view_id, displayName: event.display_name, targetClientId: event.target_client_id });
+    case "layout_updated":
+      for (const listener of layoutUpdatedListeners) {
+        listener({ viewId: event.view_id, clientId: event.client_id, saveId: event.save_id });
+      }
+      break;
+    case "active_view_changed":
+      for (const listener of activeViewChangedListeners) {
+        listener({ clientId: event.client_id, viewId: event.view_id });
       }
       break;
     case "tab_rebound":
@@ -332,6 +350,11 @@ function handleEvent(event: WsEvent): void {
       }
       break;
   }
+}
+
+/** Feed one socket message through the handler. Test-only. */
+export function dispatchSocketEventForTesting(event: WsEvent): void {
+  handleEvent(event);
 }
 
 /** Take a pushed (or fetched) app list. Exported so tests can seed the inventory without a socket. */
@@ -354,9 +377,10 @@ export function applyProjects(next: ProjectInfo[]): void {
 
 /**
  * Report this browser's identity and active view to the shell (a ``client_state`` message).
- * Called on connect and on every view switch; ``previousViewId`` is set on a switch so the
- * shell records a ``view_switch`` in its client-activity log. A no-op while the socket is down
- * or before a view has been chosen -- the next open re-reports.
+ * Called on connect and on every view switch; ``previousViewId`` is set on a switch the user made
+ * here so the shell records a ``view_switch`` in its client-activity log (a window following a
+ * pushed ``active_view_changed`` reports without one). A no-op while the socket is down or before
+ * a view has been chosen -- the next open re-reports.
  */
 export function reportClientState(previousViewId?: string): void {
   const activeView = getActiveProjectId();
@@ -465,8 +489,12 @@ export function addLayoutOpListener(listener: LayoutOpListener): void {
   layoutOpListeners.push(listener);
 }
 
-export function addLoadViewListener(listener: LoadViewListener): void {
-  loadViewListeners.push(listener);
+export function addLayoutUpdatedListener(listener: LayoutUpdatedListener): void {
+  layoutUpdatedListeners.push(listener);
+}
+
+export function addActiveViewChangedListener(listener: ActiveViewChangedListener): void {
+  activeViewChangedListeners.push(listener);
 }
 
 export function addTabReboundListener(listener: TabReboundListener): void {
@@ -481,6 +509,7 @@ export function resetInventoryForTesting(): void {
   appsUpdatedListeners = [];
   projectsUpdatedListeners = [];
   layoutOpListeners = [];
-  loadViewListeners = [];
+  layoutUpdatedListeners = [];
+  activeViewChangedListeners = [];
   tabReboundListeners = [];
 }
