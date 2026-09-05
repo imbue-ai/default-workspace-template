@@ -15,7 +15,7 @@
 
 import { apiUrl } from "../base-path";
 import { postJson } from "./http";
-import type { ProjectInfo, ProjectShortcut, ShortcutMode } from "./Inventory";
+import type { ProjectInfo, ShortcutMode } from "./Inventory";
 
 /** The id of the reserved unfiltered view, matching the backend's ``EVERYTHING_VIEW_ID``. */
 export const EVERYTHING_VIEW_ID = "everything";
@@ -126,19 +126,6 @@ export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: 
 /** The project backing a view id, or null for Everything and for a project since deleted. */
 export function projectForViewId(projects: readonly ProjectInfo[], viewId: string): ProjectInfo | null {
   return projects.find((project) => project.id === viewId) ?? null;
-}
-
-/** What to call a view in a message to the user: Everything by name, a project by its name,
- *  and a project the registry no longer holds by its id. */
-export function displayNameForView(viewId: string, projects: readonly ProjectInfo[]): string {
-  if (isEverythingView(viewId)) return EVERYTHING_VIEW_NAME;
-  return projectForViewId(projects, viewId)?.name ?? viewId;
-}
-
-/** The shortcut a project keeps for one (app, action), or null. */
-export function findShortcut(project: ProjectInfo | null, app: string, action: string): ProjectShortcut | null {
-  if (project === null) return null;
-  return project.shortcuts.find((shortcut) => shortcut.app === app && shortcut.action === action) ?? null;
 }
 
 /** A `[start, end)` slice of a label that the search query matched, for the view to render bold. */

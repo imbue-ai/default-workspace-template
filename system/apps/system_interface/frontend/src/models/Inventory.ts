@@ -233,7 +233,6 @@ export function labelForApp(app: Pick<AppRecord, "name" | "label">): string {
 // ---------- The socket ----------
 
 let apps: AppRecord[] = [];
-let projects: ProjectInfo[] = [];
 let appsLoaded = false;
 let appsLoadedWaiters: (() => void)[] = [];
 let appsUpdatedListeners: AppsUpdatedListener[] = [];
@@ -348,8 +347,7 @@ export function applyApps(next: AppRecord[]): void {
 
 /** Take a pushed (or fetched) project list. */
 export function applyProjects(next: ProjectInfo[]): void {
-  projects = next;
-  for (const listener of projectsUpdatedListeners) listener(projects);
+  for (const listener of projectsUpdatedListeners) listener(next);
 }
 
 /**
@@ -476,7 +474,6 @@ export function addTabReboundListener(listener: TabReboundListener): void {
 /** Forget every list and listener. Test-only. */
 export function resetInventoryForTesting(): void {
   apps = [];
-  projects = [];
   appsLoaded = false;
   appsLoadedWaiters = [];
   appsUpdatedListeners = [];

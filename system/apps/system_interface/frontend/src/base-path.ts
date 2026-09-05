@@ -24,17 +24,6 @@ export function apiUrl(path: string): string {
   return getBasePath() + path;
 }
 
-let cachedHostname: string | null = null;
-
-export function getHostname(): string {
-  if (cachedHostname !== null) {
-    return cachedHostname;
-  }
-  const metaElement = document.querySelector('meta[name="system-interface-hostname"]');
-  cachedHostname = metaElement?.getAttribute("content") ?? "localhost";
-  return cachedHostname;
-}
-
 /** The chat the chat document shows; "" on the shell's own document. */
 export function getChatAgentId(): string {
   return document.querySelector('meta[name="system-interface-chat-agent-id"]')?.getAttribute("content") ?? "";

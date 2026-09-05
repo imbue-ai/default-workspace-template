@@ -1,15 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProjectInfo } from "./Inventory";
-import {
-  EVERYTHING_VIEW_ID,
-  chooseInitialViewId,
-  displayNameForView,
-  findShortcut,
-  isEverythingView,
-  projectForViewId,
-  searchRows,
-} from "./Projects";
+import { EVERYTHING_VIEW_ID, chooseInitialViewId, isEverythingView, projectForViewId, searchRows } from "./Projects";
 
 function project(id: string, name: string): ProjectInfo {
   return { id, name, color: "#111111", glyph: 0, tabs: [], shortcuts: [] };
@@ -38,19 +30,6 @@ describe("views", () => {
     expect(isEverythingView(EVERYTHING_VIEW_ID)).toBe(true);
     expect(projectForViewId(projects, "alpha")?.name).toBe("Alpha");
     expect(projectForViewId(projects, EVERYTHING_VIEW_ID)).toBeNull();
-    expect(displayNameForView("alpha", projects)).toBe("Alpha");
-    expect(displayNameForView(EVERYTHING_VIEW_ID, [])).toBe("Everything");
-    expect(displayNameForView("gone", projects)).toBe("gone");
-  });
-
-  it("finds a project's shortcut by app and action", () => {
-    const withShortcut: ProjectInfo = {
-      ...project("alpha", "Alpha"),
-      shortcuts: [{ app: "terminal", action: "new", mode: "new" }],
-    };
-    expect(findShortcut(withShortcut, "terminal", "new")?.mode).toBe("new");
-    expect(findShortcut(withShortcut, "terminal", "open")).toBeNull();
-    expect(findShortcut(null, "terminal", "new")).toBeNull();
   });
 });
 
