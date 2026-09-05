@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import "../testing/dom";
 
 import { describe, expect, it } from "vitest";
