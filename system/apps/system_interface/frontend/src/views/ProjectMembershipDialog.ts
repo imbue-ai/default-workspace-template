@@ -1,12 +1,12 @@
 /**
- * Dialog for filing one machine object into more projects, reached from the
- * object menu's "Add to project..." row.
+ * Dialog for filing one instance's address into more projects' tab sets, reached
+ * from the tab menu's "Add to project..." row.
  *
  * A checkbox list of every project on the machine: the ones already showing
- * the object render checked and fixed (adding never removes -- taking the
- * object out of a project is its rail row's "Remove from project"), and
- * confirming adds the object to the newly checked rest. Everything is not
- * offered: it is the home, lists the whole machine, and an object leaves it
+ * the instance render checked and fixed (adding never removes -- taking the
+ * instance out of a project is its rail row's "Remove from project"), and
+ * confirming adds the address to the newly checked rest. Everything is not
+ * offered: it is the home, lists the whole machine, and an instance leaves it
  * only by being deleted.
  *
  * Shell and class names follow the shared `.custom-url-dialog` markup, with
@@ -23,13 +23,13 @@ import { squiggleMarkup } from "./squiggles";
 const ROW_GLYPH_SIZE = 16;
 
 export interface ProjectMembershipDialogAttrs {
-  // What the object is currently called, for the dialog copy.
-  memberLabel: string;
+  // What the instance is currently titled, for the dialog copy.
+  instanceLabel: string;
   // Every project on the machine (Everything is never in here).
   projects: readonly ProjectInfo[];
-  // Projects currently showing the object, by id.
-  memberProjectIds: readonly string[];
-  // Fired with the newly checked project ids. The caller adds the object to
+  // Projects whose tab set already holds the instance, by id.
+  showingProjectIds: readonly string[];
+  // Fired with the newly checked project ids. The caller files the address into
   // each and closes.
   onConfirm: (selectedProjectIds: string[]) => void;
   onCancel: () => void;
@@ -49,7 +49,7 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
     // A project already showing the object is settled: its box stays checked
     // and fixed, saying "already here" rather than offering a removal this
     // dialog does not do.
-    const isFixed = attrs.memberProjectIds.includes(project.id);
+    const isFixed = attrs.showingProjectIds.includes(project.id);
     const isChecked = isFixed || selected.has(project.id);
     return m(
       "label",
@@ -108,7 +108,7 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
             m("h3.custom-url-dialog-title", "Add to project"),
             m("p.destroy-dialog-message", [
               "Choose the projects that should also show ",
-              m("strong", attrs.memberLabel),
+              m("strong", attrs.instanceLabel),
               ".",
             ]),
             attrs.projects.length === 0

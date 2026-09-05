@@ -6,15 +6,15 @@
  * Reached from the sidebar's switcher header context menu, and only ever for a
  * real project. Creating no longer goes through here: the switcher's "New
  * project" mints "Project N" with the next unused glyph on the spot, so the
- * user lands in the New Tab launcher instead of on a form. Everything never
- * reaches here either -- it is a view rather than a project, with no name,
- * color, glyph or member list of its own and nothing to delete.
+ * user lands in the new project's first chat instead of on a form. Everything
+ * never reaches here either -- it is a view rather than a project, with no
+ * name, color, glyph or tab set of its own and nothing to delete.
  *
  * Deleting is confirm-gated in place -- a second, red button inside this same
  * dialog rather than a second stacked dialog -- because the modal already owns
  * the screen and the name being deleted is right there in the preview.
  * Deleting a project is itself a pure view operation now: it removes the
- * project's own view and member list and nothing more, so there is no longer
+ * project's own view and tab set and nothing more, so there is no longer
  * any consequence for the confirmation to enumerate beyond that.
  *
  * Shell and class names follow the shared `.custom-url-dialog`
