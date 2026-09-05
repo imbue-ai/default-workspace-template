@@ -103,7 +103,13 @@ class ShellState(MutableModel):
         """An app stopped listing these instances: drop them from every tab set and every client layout."""
         now = datetime.now(timezone.utc)
         changed_projects = self.projects.remove_addresses_everywhere(addresses)
-        self.layouts.remove_addresses_everywhere(addresses, now)
+        rewritten_layouts = self.layouts.remove_addresses_everywhere(addresses, now)
+        logger.info(
+            "Dropped {} from {} project tab set(s) and {} client layout(s) after their app stopped listing them",
+            [str(address) for address in addresses],
+            len(changed_projects),
+            len(rewritten_layouts),
+        )
         if changed_projects:
             self.broadcast_projects_updated()
 
