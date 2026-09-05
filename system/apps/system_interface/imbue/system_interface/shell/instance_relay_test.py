@@ -5,6 +5,8 @@ import httpx
 from app_instances.testing import StubInstanceSource
 from app_instances.testing import free_port
 
+from imbue.system_interface.agent_manager import DESTROY_TIMEOUT_SECONDS
+from imbue.system_interface.shell.instance_relay import RELAY_TIMEOUT_SECONDS
 from imbue.system_interface.shell.instance_relay import relay_create
 from imbue.system_interface.shell.instance_relay import relay_delete
 from imbue.system_interface.shell.instance_relay import relay_rename
@@ -39,6 +41,11 @@ def test_the_relay_passes_the_apps_answers_through(
         # A delete of an unknown key is idempotent under the contract.
         assert relay_delete(client, entry, "stub-9").status_code == 204
     assert [str(record.key) for record in stub_source.records] == ["stub-1"]
+
+
+def test_the_relay_outlives_the_chats_destroy() -> None:
+    """A chat's delete runs ``mngr destroy`` to completion; the relay must not give up on it first."""
+    assert RELAY_TIMEOUT_SECONDS > DESTROY_TIMEOUT_SECONDS
 
 
 def test_an_unreachable_app_is_a_503_with_a_detail(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
