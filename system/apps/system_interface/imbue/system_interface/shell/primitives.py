@@ -163,6 +163,13 @@ def mint_tab_id() -> TabId:
     return TabId(f"tab-{secrets.token_hex(_MINTED_ID_BYTES)}")
 
 
+class ClientActivityKind(LowerCaseStrEnum):
+    """What a client-activity report records: a message sent to an instance, or a view switch (a wire value)."""
+
+    MESSAGE = auto()
+    VIEW_SWITCH = auto()
+
+
 class DeviceKind(LowerCaseStrEnum):
     """Which arrangement a client saves into: desktop or mobile (a wire value)."""
 

@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import timezone
 from typing import Any
 from typing import Final
+from typing import assert_never
 
 from app_instances.blueprint import answer_typed_error
 from app_instances.blueprint import parse_request_body
@@ -59,6 +60,7 @@ from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
 from imbue.system_interface.shell.liveness import supervisor_socket_path
 from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_ID
@@ -205,21 +207,22 @@ def client_activity_route() -> ResponseReturnValue:
         return refusal
     report = parse_request_body(ClientActivityReport)
     shell = _shell()
-    if report.kind == "message":
-        shell.activity.append_message(
-            str(report.client_id),
-            report.device_kind.value,
-            str(report.view_id),
-            report.app,
-            report.key,
-            report.text,
-        )
-    elif report.kind == "view_switch":
-        shell.activity.append_view_switch(
-            str(report.client_id), report.device_kind.value, report.from_view_id, str(report.view_id)
-        )
-    else:
-        return _detail(f"unknown activity kind {report.kind!r}", HTTP_BAD_REQUEST)
+    match report.kind:
+        case ClientActivityKind.MESSAGE:
+            shell.activity.append_message(
+                str(report.client_id),
+                report.device_kind.value,
+                str(report.view_id),
+                report.app,
+                report.key,
+                report.text,
+            )
+        case ClientActivityKind.VIEW_SWITCH:
+            shell.activity.append_view_switch(
+                str(report.client_id), report.device_kind.value, report.from_view_id, str(report.view_id)
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
     return "", HTTP_NO_CONTENT
 
 

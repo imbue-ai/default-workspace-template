@@ -17,6 +17,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import ProjectId
@@ -205,7 +206,7 @@ class ClientActivityReport(FrozenModel):
     client_id: ClientId = Field(description="The client the activity belongs to")
     device_kind: DeviceKind = Field(description="Desktop or mobile")
     view_id: ViewId = Field(description="The view the client was on")
-    kind: str = Field(description="'message' or 'view_switch'")
+    kind: ClientActivityKind = Field(description="A message sent to an instance, or a view switch")
     app: str = Field(default="", description="The app a message went to")
     key: str = Field(default="", description="The instance key a message went to")
     text: str = Field(default="", description="The message text, truncated at write time")
