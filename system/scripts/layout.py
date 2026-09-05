@@ -54,8 +54,8 @@ Mutating dock ops (``open`` / ``split`` / ``move`` / ``focus`` / ``close`` / ``m
 before returning; on success they print a concise diff on stderr, on a no-op they print
 ``no change: ...`` and exit 0. ``maximize`` / ``restore`` / ``refresh`` have no observable
 layout-state change, so they confirm the broadcast was sent. ``rename`` / ``delete`` /
-``replace-url`` go through the shell's relay to the app that owns the instance and print
-the app's answer.
+``replace-url`` go through the shell's relay to the app that owns the instance and echo
+the app's refusal when it gives one.
 
 All dock ops POST one body ``{op, args, agent_id}`` to a loopback-only endpoint on the
 shell. The caller's ``MNGR_AGENT_ID`` is sent both in the JSON body and as the
