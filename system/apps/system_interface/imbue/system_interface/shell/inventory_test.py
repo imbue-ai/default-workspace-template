@@ -369,11 +369,11 @@ class _GatedFetcher(InstanceFetcherInterface):
     def fetch(self, instances_url: str) -> InstanceFetchOutcome:
         self._call_count += 1
         call_number = self._call_count
+        started = (self.first_call_started, self.second_call_started)
+        if call_number <= len(started):
+            started[call_number - 1].set()
         if call_number == 1:
-            self.first_call_started.set()
             self.gate.wait(timeout=5)
-        elif call_number == 2:
-            self.second_call_started.set()
         return self.outcomes[call_number - 1]
 
 
