@@ -1,4 +1,4 @@
-"""Liveness probes behind ``AppEntry.is_running``.
+"""Liveness probes behind ``AppInventoryEntry.is_running`` (see ``shell/data_types.py``).
 
 The registry row is an app's identity; whether it is running is derived state,
 never stored. A row carrying a ``program`` (see ``forward_port.py --program``)
