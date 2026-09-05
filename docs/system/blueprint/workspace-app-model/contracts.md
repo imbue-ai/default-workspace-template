@@ -286,7 +286,7 @@ Subcommands: `list`, `inspect`, `where`, `context`, `views`, `load`, `open`, `fo
 - `rename <address> <title>` and `delete <address>` call the shell's relay routes.
 - `replace-url <address> <path-or-url>` calls the relay's location route.
 - `list` prints, per app: `name`, `display_name`, `is_running`, `actions`, and `instances` with `key`, `address`, `title`, `status`, `docked_in` (client ids).
-- `views` prints every view with `tabs` (addresses) and `clients` (ids with device kind); `context` prints every client with `active_view`, `device_kind`, `connected`, and recent activity.
+- `views` prints every view with `tabs` (addresses) and `clients` (ids with device kind); `context` prints every client with `active_view`, `device_kind`, `is_connected`, and recent activity.
 - Exit codes stay `0`, `1`, `3`.
 - The old spellings (`chat:`, `terminal:`, `service:`, `url:`, `subagent:`, `chat-terminal:`) are errors that name the new form.
 
