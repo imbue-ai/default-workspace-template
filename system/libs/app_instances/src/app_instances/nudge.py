@@ -29,9 +29,9 @@ def shell_base_url() -> str:
 def post_to_shell(url: str, body: Mapping[str, Any] | None) -> None:
     """POST ``body`` as JSON (None for an empty body) to the shell route at ``url``.
 
-    An unreachable or refusing shell is a debug log, never an error (until phase 7 of the model
-    the shell has none of the routes apps post to), and a slow one a warning. Every post an app
-    makes to the shell goes through here: the nudge, and an app's own posts to the tab routes.
+    An unreachable or refusing shell is a debug log, never an error (an app must keep working
+    while the shell is down or restarting), and a slow one a warning. Every post an app makes
+    to the shell goes through here: the nudge, and an app's own posts to the tab routes.
     """
     started_at = time.monotonic()
     try:
