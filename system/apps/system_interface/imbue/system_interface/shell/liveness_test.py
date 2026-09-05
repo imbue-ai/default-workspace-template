@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from imbue.system_interface.shell.liveness import SupervisorProgramActionError
+from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.liveness import fetch_supervisor_program_states
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.liveness import probe_tcp_url

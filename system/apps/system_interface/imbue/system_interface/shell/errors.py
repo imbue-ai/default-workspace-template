@@ -44,3 +44,7 @@ class UnknownAppError(ShellError, LookupError):
 
 class AppLifecycleRefusedError(ShellError, ValueError):
     """The app cannot be stopped or started through the workspace."""
+
+
+class SupervisorProgramActionError(ShellError, RuntimeError):
+    """Supervisord refused, or could not be reached for, a stop or start."""
