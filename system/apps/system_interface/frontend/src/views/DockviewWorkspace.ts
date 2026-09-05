@@ -205,6 +205,10 @@ let isLayoutSaveSuspended = false;
 // on after an await abandons its remaining steps, so two overlapping switches (a double click,
 // a load pushed mid-switch) cannot leave one view's arrangement under the other's autosave.
 let viewMountGeneration = 0;
+// The generation whose content is mounted. Between a switch repointing ``mountedViewId`` and
+// its ``applyLayout`` finishing, the dock still shows the outgoing view, and a save then would
+// file that arrangement under the incoming view's id; autosave waits for the two to agree.
+let settledViewGeneration = 0;
 
 // Target fraction of horizontal space a newly-opened pane takes when it splits alongside the
 // requesting agent's chat.
@@ -1463,7 +1467,7 @@ function buildLayoutPayload(): { dockview: SerializedDockview; tabs: Record<stri
 }
 
 async function persistLayout(): Promise<void> {
-  if (!dockview || isLayoutSaveSuspended) return;
+  if (!dockview || isLayoutSaveSuspended || settledViewGeneration !== viewMountGeneration) return;
   const targetViewId = mountedViewId;
   if (targetViewId === null) return;
   const payload = buildLayoutPayload();
@@ -1580,6 +1584,7 @@ async function applyLayout(
     openLauncherPanel(null);
   }
   isApplyingLayout = false;
+  settledViewGeneration = generation;
   syncTabTitlesFromInventory();
   reconcileLiveSurfaces();
   scheduleTabWidthRecompute();
