@@ -101,8 +101,8 @@ def strip_panel_from_dockview(dockview: dict[str, Any], panel_id: str) -> dict[s
 
 
 @pure
-def strip_address_from_layout(layout: LayoutRecord, address: Address) -> LayoutRecord | None:
-    """The layout without every panel showing ``address``; None when the layout changed to nothing at all."""
+def strip_address_from_layout(layout: LayoutRecord, address: Address) -> LayoutRecord:
+    """The layout without every panel showing ``address``; a grid that empties out leaves ``dockview`` None."""
     doomed_panel_ids = [panel_id for panel_id, tab in layout.tabs.items() if tab.address == address]
     if not doomed_panel_ids:
         return layout
@@ -227,15 +227,12 @@ class LayoutStore(MutableModel):
         rewritten: list[StoredLayout] = []
         with STATE_FILES_LOCK:
             for stored in self.all_client_layouts():
-                layout: LayoutRecord | None = stored.layout
+                layout = stored.layout
                 for address in addresses:
-                    if layout is None:
-                        break
                     layout = strip_address_from_layout(layout, address)
                 if layout is stored.layout:
                     continue
-                replacement = layout if layout is not None else empty_layout(stored.layout.device_kind)
-                saved = self.save_layout(stored.view_id, stored.client_id, replacement, now)
+                saved = self.save_layout(stored.view_id, stored.client_id, layout, now)
                 rewritten.append(stored.model_copy_update(to_update(stored.field_ref().layout, saved)))
         return rewritten
 
