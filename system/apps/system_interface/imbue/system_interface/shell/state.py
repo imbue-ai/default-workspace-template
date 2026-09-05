@@ -25,6 +25,7 @@ from imbue.system_interface.shell.instance_relay import relay_delete
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.layouts import LayoutStore
 from imbue.system_interface.shell.layouts import StoredLayout
+from imbue.system_interface.shell.layouts import is_same_arrangement
 from imbue.system_interface.shell.layouts import unreferenced_addresses
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
@@ -114,7 +115,11 @@ class ShellState(MutableModel):
             self.broadcaster.broadcast_layout_updated(str(stored.view_id), str(stored.client_id), mint_save_id())
 
     def write_client_layout(self, view_id: ViewId, client_id: ClientId, layout: LayoutRecord) -> LayoutRecord:
-        """Write one client's arrangement (an agent op) and announce it."""
+        """Write one client's arrangement (an agent op) and announce it. An edit that leaves the stored arrangement
+        as it was is neither written nor announced, so the client's windows are not asked to refetch for nothing."""
+        stored = self.layouts.read_client_layout(view_id, client_id)
+        if stored is not None and is_same_arrangement(stored, layout):
+            return stored
         saved = self.layouts.write_client_layout(view_id, client_id, layout, datetime.now(timezone.utc))
         self._broadcast_layout_updated([StoredLayout(view_id=view_id, client_id=client_id, layout=saved)])
         return saved
