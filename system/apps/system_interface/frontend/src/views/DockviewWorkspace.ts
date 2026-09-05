@@ -1709,7 +1709,10 @@ async function initializeActiveView(): Promise<void> {
   // already have landed, is the list.
   if (listed !== null) availableProjects = listed;
   applyProjects(availableProjects);
-  const chosenId = chooseInitialViewId(availableProjects, deepLink.viewId ?? recordedViewId);
+  const chosenId = chooseInitialViewId(
+    availableProjects,
+    knownDeepLinkViewId(deepLink, availableProjects) ?? recordedViewId,
+  );
   setActiveView(chosenId);
   reportClientState();
   const layout = await fetchLayoutOrSuspendSaves(chosenId);
@@ -1717,6 +1720,12 @@ async function initializeActiveView(): Promise<void> {
   await applyLayout(layout, generation);
   m.redraw();
   if (generation === viewMountGeneration) void applyDeepLinkTargets(deepLink);
+}
+
+/** The view a deep link names when the shell still knows it; null for none or a stale one, which is ignored. */
+function knownDeepLinkViewId(link: DeepLink, projects: readonly ProjectInfo[]): string | null {
+  if (link.viewId === null) return null;
+  return isEverythingView(link.viewId) || projectForViewId(projects, link.viewId) !== null ? link.viewId : null;
 }
 
 /** The deep link the page was opened with (contracts.md section 13), removed from the URL as it is read. */
