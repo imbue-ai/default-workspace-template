@@ -431,7 +431,7 @@ def _emit_structured(data: Any, as_json: bool) -> None:
         yaml.safe_dump(data, sys.stdout, sort_keys=False, default_flow_style=False)
 
 
-# ---------- Inspect helpers (wait-stable, diff, where, compact view) ----------
+# ---------- Inspect helpers (fetch, where, compact view) ----------
 
 
 def _view_args(view: str | None) -> dict[str, str]:
