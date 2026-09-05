@@ -1574,8 +1574,11 @@ function setActiveView(viewId: string): void {
 /** Pick this client's initial view, register it with the shell, and mount its arrangement. */
 async function initializeActiveView(): Promise<void> {
   const generation = ++viewMountGeneration;
-  availableProjects = (await fetchProjectsList()) ?? [];
+  const listed = await fetchProjectsList();
   if (generation !== viewMountGeneration) return;
+  // A listing the shell could not answer changes nothing: the push on connect, which may
+  // already have landed, is the list.
+  if (listed !== null) availableProjects = listed;
   applyProjects(availableProjects);
   const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
   setActiveView(chosenId);
