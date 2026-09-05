@@ -673,7 +673,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       m("div", { class: css.SECTION_LABEL }, isPaste(primary) ? "Use an API key" : "Use your subscription"),
       isPaste(primary) ? apiKeyBody(current) : stepsBody(current, primary),
       others.length > 0
-        ? m("div", { class: "mt-6" }, [
+        ? m("div", { class: css.SECTION_BREAK }, [
             m("div", { class: css.SECTION_LABEL }, "Other ways to sign in"),
             m(
               "div",

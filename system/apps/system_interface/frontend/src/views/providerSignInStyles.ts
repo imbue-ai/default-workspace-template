@@ -82,6 +82,13 @@ export const OPTION_ROW_NAME = "type-body font-medium text-primary";
 export const OPTION_ROW_DESC = "mt-0.5 type-helper text-secondary";
 
 export const SECTION_LABEL = "mb-3.5 type-section text-secondary";
+/** The break above a section that is an aside to the one before it, with equal air on both
+ *  sides so the rule reads as a gap rather than as the lid on what follows.
+ *
+ *  DASHED, where the card's own section rules are solid: a solid line would split the screen
+ *  into two halves of equal standing, and the fallbacks under it are not that -- they are the
+ *  footnote to a method the screen has already picked out. */
+export const SECTION_BREAK = "mt-6 border-t border-dashed border-default pt-6";
 export const LEAD = "mb-4 type-body leading-relaxed text-primary";
 /** A link inside the lead. Where to GET the key, said in the sentence that explains the screen
  *  rather than promoted to a numbered step -- "go to a website if you have not already" is not
