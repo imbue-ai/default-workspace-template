@@ -22,6 +22,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-timeout>=2.0",
+    # Supplies the browser/context/page fixtures that app suites' browser tests
+    # build on; the root conftest.py points them at Fortress.
+    "pytest-playwright>=0.4",
     "ruff>=0.4",
     "pyright>=1.1",
     "inline-snapshot>=0.31",
@@ -126,6 +129,13 @@ norecursedirs = [
     "{arch}",
 ]
 timeout_func_only = true
+# The sub-projects register these through imbue_common's conftest hooks; the
+# root-level tests (system/*.py, system/scripts/, .agents/) have no conftest,
+# so the same markers are declared here for them.
+markers = [
+    "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
+    "release: marks tests as being required for release (but not for merging PRs)",
+]
 addopts = [
     "--timeout=10",
     "--ignore=system/vendor/mngr",
