@@ -1618,6 +1618,7 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         _open_fixture_chat(page)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
 
         for key in keys:
             _broadcast_layout_op(server.base_url, "open", {"address": _stub_address(key), "new_group": False})
@@ -1691,6 +1692,7 @@ def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Pat
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         _open_fixture_chat(page)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
         _broadcast_layout_op(server.base_url, "open", {"address": _stub_address("stub-1"), "new_group": False})
         expect(_tab(page, "Stub 1")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
 
