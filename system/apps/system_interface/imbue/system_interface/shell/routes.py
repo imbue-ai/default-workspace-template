@@ -48,6 +48,7 @@ from imbue.system_interface.shell.instance_relay import relay_delete
 from imbue.system_interface.shell.instance_relay import relay_location
 from imbue.system_interface.shell.instance_relay import relay_rename
 from imbue.system_interface.shell.layout_ops import SELF_ADDRESS
+from imbue.system_interface.shell.layout_ops import is_addressed_op
 from imbue.system_interface.shell.layout_ops import is_broadcasting_op
 from imbue.system_interface.shell.layout_ops import is_known_op
 from imbue.system_interface.shell.layout_ops import is_mutating_op
@@ -732,9 +733,10 @@ def _op_broadcast(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id
     """Every op the connected clients carry out: checked here, then sent as a ``layout_op`` message."""
     if not is_broadcasting_op(op):
         return _detail(f"Op {op!r} has no broadcast handler", HTTP_INTERNAL_ERROR)
-    refusal = _refuse_unregistered_address(shell, args_raw)
-    if refusal is not None:
-        return refusal
+    if is_addressed_op(op):
+        refusal = _refuse_unregistered_address(shell, args_raw)
+        if refusal is not None:
+            return refusal
     if is_mutating_op(op):
         failure = _broadcast_mutating_op(shell, op, args_raw, agent_id)
         if failure is not None:
