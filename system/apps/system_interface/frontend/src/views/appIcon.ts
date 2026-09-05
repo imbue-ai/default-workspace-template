@@ -29,9 +29,9 @@
  *   rejected whole -- the caller then draws its built-in glyph.
  *
  * This is defense in depth, not the only defense: `forward_port.py` validates
- * on the way into the registry and `agent_manager.py` backstops on the way
- * out. It is the last of the three because it is the one that runs against the
- * DOM the markup is about to enter.
+ * on the way into the registry, and the shell's inventory hands the row's
+ * markup through as it is. This is the last check because it is the one that
+ * runs against the DOM the markup is about to enter.
  *
  * Sizing and color live here too, since both are decided from the same parsed
  * tree. The icon is rendered at the caller's pixel size on the caller's own
@@ -46,9 +46,9 @@ import { getApp } from "../models/Inventory";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
-// The same cap `forward_port.py` (MAX_ICON_LENGTH) and `agent_manager.py`
-// enforce. Repeated here because this module is the last thing between the
-// markup and the DOM, and it must not depend on either having run.
+// The same cap `forward_port.py` (MAX_ICON_LENGTH) enforces on the way into
+// the registry. Repeated here because this module is the last thing between
+// the markup and the DOM, and it must not depend on that check having run.
 export const MAX_ICON_LENGTH = 16384;
 
 // Elements refused outright. Everything here either runs code, navigates,
