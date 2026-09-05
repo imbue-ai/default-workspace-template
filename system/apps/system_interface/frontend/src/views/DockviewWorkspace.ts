@@ -178,6 +178,10 @@ let dockviewContainer: HTMLElement | null = null;
 const panelParams = new Map<string, PanelParams>();
 // Epoch milliseconds each instance panel was last the active one, for the saved tab record.
 const lastFocusedMsByPanelId = new Map<string, number>();
+// The panels a restore in progress will remove as soon as ``fromJSON`` has rebuilt the grid:
+// their addresses left the inventory, so they get a silent placeholder rather than the
+// "could not be restored" warning a genuinely unknown panel earns.
+let panelsPrunedByRestore: ReadonlySet<string> = new Set();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let initialized = false;
 // True while a view's content is being mounted. The teardown half of that removes every
@@ -1547,6 +1551,7 @@ async function applyLayout(
       panelParams.set(panelId, { kind: "instance", address: tab.address, tabId: tab.tab_id });
       lastFocusedMsByPanelId.set(panelId, tab.last_focused_ms);
     }
+    panelsPrunedByRestore = unlisted;
     try {
       dv.fromJSON(layout.dockview);
     } catch {
@@ -1556,6 +1561,7 @@ async function applyLayout(
     for (const panel of dv.panels.slice()) {
       if (unlisted.has(panel.id)) dv.removePanel(panel);
     }
+    panelsPrunedByRestore = new Set();
     // An instance is a singleton with one page, so an arrangement naming the same one twice
     // would give two tabs a page to fight over. The first occurrence keeps it.
     for (const duplicatePanelId of duplicateLiveKeyPanelIds(
@@ -2182,7 +2188,7 @@ function closeActiveTabFromEmbedder(): void {
   activePanel.api.close();
 }
 
-function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
+function createPlaceholderPanelRenderer(text: string): IContentRenderer {
   const element = document.createElement("div");
   element.className = "dockview-panel-unrecoverable";
   element.style.display = "flex";
@@ -2191,13 +2197,19 @@ function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
   element.style.height = "100%";
   element.style.padding = "16px";
   element.style.textAlign = "center";
-  element.textContent = "This tab's contents could not be restored. Close it and open it again from the sidebar.";
-  console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
+  element.textContent = text;
   return {
     element,
     init() {},
     dispose() {},
   };
+}
+
+function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
+  console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
+  return createPlaceholderPanelRenderer(
+    "This tab's contents could not be restored. Close it and open it again from the sidebar.",
+  );
 }
 
 function initializeDockview(parentElement: HTMLElement): void {
@@ -2246,6 +2258,9 @@ function initializeDockview(parentElement: HTMLElement): void {
         if (options.name === LAUNCHER_COMPONENT || options.id.startsWith(LAUNCHER_PANEL_ID_PREFIX)) {
           panelParams.set(options.id, { kind: "launcher" });
           return createLauncherRenderer(options.id);
+        }
+        if (panelsPrunedByRestore.has(options.id)) {
+          return createPlaceholderPanelRenderer("This tab's app no longer lists it.");
         }
         return createUnrecoverablePanelRenderer(options.id);
       }
