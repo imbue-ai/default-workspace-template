@@ -398,6 +398,8 @@ def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_age
     assert [panel["address"] for panel in attributed["layout"]["panels"]] == [str(_TERMINAL_1)]
     assert _broadcast(client, "inspect", {"view": "alpha"}, agent_id="agent-2").get_json()["client_id"] is None
     assert _broadcast(client, "inspect", {"view": "alpha", "client": "c1"}).get_json()["client_id"] == "c1"
+    # A client id names a layout file, so one outside the id's alphabet is refused before any read.
+    assert _broadcast(client, "inspect", {"view": "alpha", "client": "../c1"}).status_code == 400
 
 
 def test_load_switches_the_requesting_agents_client(client: FlaskClient, app: Flask) -> None:
