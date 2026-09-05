@@ -1021,20 +1021,12 @@ function launcherRows(): LauncherRow[] {
   return listInstances().map(launcherRowFor);
 }
 
-/** The active project's tab set as launcher rows. Everything ignores these. */
+/** The active project's tab set as launcher rows (every sidebar row resolves: the rows are
+ *  built from the inventory). Everything ignores these. */
 function launcherMemberRows(): LauncherRow[] {
-  return getSidebarRows().map((row) => {
+  return getSidebarRows().flatMap((row) => {
     const resolved = findInstance(row.address);
-    return resolved === null
-      ? {
-          address: row.address,
-          appName: row.appName,
-          appDisplayName: row.appDisplayName,
-          label: row.label,
-          status: row.status,
-          lastActiveMs: null,
-        }
-      : launcherRowFor(resolved);
+    return resolved === null ? [] : [launcherRowFor(resolved)];
   });
 }
 
