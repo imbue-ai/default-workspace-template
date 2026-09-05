@@ -48,16 +48,15 @@ export function isTabId(value: string): boolean {
 }
 
 /** Fetch this client's arrangement of ``viewId`` (the seed, or the empty layout, when it has
- *  none). Returns null on any failure, which renders as the New Tab launcher. */
-export async function fetchLayout(viewId: string, clientId: string): Promise<LayoutRecord | null> {
-  try {
-    const query = `client=${encodeURIComponent(clientId)}&device=${encodeURIComponent(getDeviceKind())}`;
-    const response = await fetch(apiUrl(`/api/layouts/${encodeURIComponent(viewId)}?${query}`));
-    if (!response.ok) return null;
-    return (await response.json()) as LayoutRecord;
-  } catch {
-    return null;
+ *  none). Throws when the shell could not answer: that is not an empty layout, and a caller
+ *  must not save over the real one. */
+export async function fetchLayout(viewId: string, clientId: string): Promise<LayoutRecord> {
+  const query = `client=${encodeURIComponent(clientId)}&device=${encodeURIComponent(getDeviceKind())}`;
+  const response = await fetch(apiUrl(`/api/layouts/${encodeURIComponent(viewId)}?${query}`));
+  if (!response.ok) {
+    throw new Error(await errorDetailFromResponse(response));
   }
+  return (await response.json()) as LayoutRecord;
 }
 
 /** Save this client's arrangement of ``viewId``. Throws on failure (callers treat autosave as
