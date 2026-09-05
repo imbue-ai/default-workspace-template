@@ -38,6 +38,8 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 TEST_NOW: Final[datetime] = datetime(2026, 9, 4, tzinfo=timezone.utc)
 # The instances URL of the supervised multi-instance app of ``write_two_app_registry``.
 TEST_TERMINAL_URL: Final[str] = "http://localhost:7681"
+# The URL of the single-instance app of ``write_two_app_registry``.
+TEST_FILES_URL: Final[str] = "http://localhost:7000"
 
 
 def registry_row_toml(
@@ -92,7 +94,7 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
             actions=[("new", "New terminal")],
             default_shortcut=("new", "new"),
         ),
-        registry_row_toml("files", "http://localhost:7000", program="files", default_shortcut=("open", "focus")),
+        registry_row_toml("files", TEST_FILES_URL, program="files", default_shortcut=("open", "focus")),
         *extra_rows,
     )
 
