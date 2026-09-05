@@ -34,7 +34,7 @@ Phase 4 of that model, "the files app" (nothing user-visible changes: the file v
 
 - `contracts.md` gained section 17, where app data and machine state live: every app's instance records at `data/.apps/<name>/instances.json`, machine state (the registry, the terminal's dispatch scripts and pty records, the shell's client layouts) under `data/.state/`; the root `CLAUDE.md` and `AGENTS.md` sentences on `data/` point at it, and the terminal's store moved from `data/.state/terminal/` to `data/.apps/terminal/instances.json` accordingly (see the terminal's changelog). `phase_04_files_app.md` records what landed; `system/apps/README.md` describes the files app as a package.
 
-Phase 5 of that model, "the browser app" (nothing user-visible changes: the browser tab, the fleet CLI, and the shell's browser routes behave as before):
+Phase 5 of that model, "the browser app" (nothing user-visible changes: the browser tab and the fleet CLI behave as before, and so do the shell's browser routes until phase 7 retires them):
 
 - The browser daemon serves the instances API over its fleet (see the browser's changelog), so `curl http://127.0.0.1:8081/_instances` lists the open browsers with `working`, `idle`, or `error` status; the root `uv.lock` gained the browser's `app-instances` and `app-manifest` dependencies.
 
