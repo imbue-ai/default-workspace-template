@@ -19,6 +19,7 @@ from enum import auto
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import assert_never
 
 import httpx
 from app_instances.blueprint import HTTP_SERVICE_UNAVAILABLE
@@ -423,6 +424,8 @@ class AppInventory(MutableModel):
                     updated = entry.model_copy_update(
                         to_update(entry.field_ref().instances, _with_status(entry.instances, InstanceStatus.ERROR))
                     )
+                case _ as unreachable:
+                    assert_never(unreachable)
             self._entry_by_name[app_name] = updated
         if removed:
             for listener in self._removed_listeners:
