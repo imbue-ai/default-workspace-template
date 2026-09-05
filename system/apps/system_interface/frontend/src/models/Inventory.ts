@@ -429,20 +429,21 @@ export function listInstances(): ResolvedInstance[] {
   return listed;
 }
 
-/** Resolve once the app list has loaded, or after ``timeoutMs`` so a workspace that never
- *  reports any app still proceeds. Share-critical URL construction awaits this so a restored
- *  tab never mounts an unroutable bare-name origin on a share. */
-export function whenAppsLoaded(timeoutMs = 5000): Promise<void> {
-  if (appsLoaded) return Promise.resolve();
+/** Resolve to true once the app list has loaded, or to false after ``timeoutMs`` so a workspace
+ *  that never reports any app still proceeds -- and the caller knows the inventory is not an
+ *  answer yet. Share-critical URL construction awaits this so a restored tab never mounts an
+ *  unroutable bare-name origin on a share. */
+export function whenAppsLoaded(timeoutMs = 5000): Promise<boolean> {
+  if (appsLoaded) return Promise.resolve(true);
   return new Promise((resolve) => {
     let settled = false;
-    const wake = (): void => {
+    const settle = (isLoaded: boolean): void => {
       if (settled) return;
       settled = true;
-      resolve();
+      resolve(isLoaded);
     };
-    appsLoadedWaiters.push(wake);
-    setTimeout(wake, timeoutMs);
+    appsLoadedWaiters.push(() => settle(true));
+    setTimeout(() => settle(false), timeoutMs);
   });
 }
 
