@@ -457,10 +457,6 @@ class AppInventory(MutableModel):
                 self.refetch_all()
             sweep_count += 1
 
-    def wake_sweep(self) -> None:
-        """Cut the current sweep interval short (a stop or start just landed)."""
-        self._sweep_wake.set()
-
     # ---------- the broadcast ----------
 
     def _broadcast_if_changed(self) -> None:
