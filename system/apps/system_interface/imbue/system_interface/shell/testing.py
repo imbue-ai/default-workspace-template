@@ -2,12 +2,14 @@
 
 import json
 import queue
+import time
 from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 from app_instances.data_types import InstanceLifetime
 from app_instances.data_types import InstanceRecord
@@ -18,11 +20,19 @@ from app_instances.primitives import InstanceUrl
 from app_manifest.registry import RegistryRow
 from pydantic import Field
 
+from imbue.system_interface.shell.data_types import LayoutRecord
+from imbue.system_interface.shell.data_types import TabRecord
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import InstanceFetchOutcome
 from imbue.system_interface.shell.inventory import InstanceFetcherInterface
+from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.primitives import DeviceKind
+from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+
+# The one clock the shell tests stamp records with.
+TEST_NOW: Final[datetime] = datetime(2026, 9, 4, tzinfo=timezone.utc)
 
 
 def registry_row_toml(
@@ -123,7 +133,7 @@ def build_inventory(
     broadcaster: WebSocketBroadcaster,
     fetcher: InstanceFetcherInterface | None = None,
     prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] | None = None,
-    clock: Any = None,
+    clock: Callable[[], float] | None = None,
 ) -> AppInventory:
     """An inventory that has read the registry and probed liveness once, with no watcher or sweep running."""
     inventory = AppInventory(
@@ -132,7 +142,7 @@ def build_inventory(
         liveness_prober=prober if prober is not None else FakeLivenessProber(),
         fetcher=fetcher if fetcher is not None else FakeInstanceFetcher(),
         coalesce_seconds=0.01,
-        **({"clock": clock} if clock is not None else {}),
+        clock=clock if clock is not None else time.monotonic,
     )
     inventory.reload_registry()
     inventory.refresh_liveness()
@@ -147,6 +157,19 @@ def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, An
         if raw is not None:
             messages.append(json.loads(raw))
     return messages
+
+
+def layout_showing(*addresses: Address) -> LayoutRecord:
+    """A desktop arrangement with one panel per address (``p0``, ``p1``, ...), each under a fixed tab id."""
+    return LayoutRecord(
+        dockview={"panels": {f"p{index}": {} for index in range(len(addresses))}},
+        tabs={
+            f"p{index}": TabRecord(address=address, tab_id=TabId(f"tab-{index:016x}"), last_focused_ms=0)
+            for index, address in enumerate(addresses)
+        },
+        device_kind=DeviceKind.DESKTOP,
+        updated_at=None,
+    )
 
 
 def registry_rows_of(inventory: AppInventory) -> list[RegistryRow]:
