@@ -89,6 +89,7 @@ import {
   getApp,
   getOpenableApps,
   instancePageUrl,
+  isAddressUnlisted,
   isAppStoppable,
   listInstances,
   parseAddress,
@@ -1527,7 +1528,7 @@ async function applyLayout(
   lastFocusedMsByPanelId.clear();
 
   if (layout !== null && layout.dockview !== null) {
-    const unlisted = new Set(panelsWithUnlistedAddresses(layout.tabs, (address) => findInstance(address) !== null));
+    const unlisted = new Set(panelsWithUnlistedAddresses(layout.tabs, (address) => !isAddressUnlisted(address)));
     for (const [panelId, tab] of Object.entries(layout.tabs)) {
       if (unlisted.has(panelId)) continue;
       panelParams.set(panelId, { kind: "instance", address: tab.address, tabId: tab.tab_id });
@@ -1640,13 +1641,13 @@ function reconcilePanelsWithInventory(): void {
   for (const panel of [...dockview.panels]) {
     const params = panelParams.get(panel.id);
     if (params === undefined || params.kind === "launcher") continue;
-    if (findInstance(params.address) !== null) continue;
+    if (!isAddressUnlisted(params.address)) continue;
     destroyLiveSurface(params.address);
     dockview.removePanel(panel);
   }
   // Pages of instances that are gone but were not docked in this view go too.
   for (const key of liveSurfaceKeys()) {
-    if (findInstance(key) === null) destroyLiveSurface(key);
+    if (isAddressUnlisted(key)) destroyLiveSurface(key);
   }
   syncTabTitlesFromInventory();
 }
@@ -2048,10 +2049,13 @@ function renderLiveContent(surface: LiveSurface): m.Children {
   if (params.kind === "launcher") return null;
   const resolved = findInstance(params.address);
   if (resolved === null) {
+    const note = isAddressUnlisted(params.address)
+      ? "This tab's app no longer lists it."
+      : "Waiting for this tab's app to list it.";
     return m(
       "div",
       { class: "dockview-panel-unrecoverable flex h-full items-center justify-center p-4 text-center" },
-      ["This tab's app no longer lists it."],
+      [note],
     );
   }
   const { app, instance } = resolved;

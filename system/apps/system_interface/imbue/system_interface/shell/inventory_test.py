@@ -87,6 +87,24 @@ def test_a_fetched_list_replaces_the_apps_instances_and_reports_what_left(
     assert fetcher.fetched_urls == [_TERMINAL_URL, _TERMINAL_URL]
 
 
+def test_an_app_counts_as_listed_once_its_list_has_arrived(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    fetcher = FakeInstanceFetcher()
+    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    terminal, files = inventory.entries()
+    # The synthesized record of a single-instance app is its list; an instances app's seed is not.
+    assert files.is_listed and not terminal.is_listed
+    assert inventory.serialized()[0]["is_listed"] is False
+    fetcher.fail(_TERMINAL_URL)
+    inventory.refetch_now("terminal")
+    assert not inventory.entries()[0].is_listed
+    fetcher.list(_TERMINAL_URL)
+    inventory.refetch_now("terminal")
+    assert inventory.entries()[0].is_listed
+    # A registry re-read keeps the flag with the list it describes.
+    inventory.reload_registry()
+    assert inventory.entries()[0].is_listed
+
+
 def test_not_ready_keeps_the_list_and_a_failure_marks_it_error(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:

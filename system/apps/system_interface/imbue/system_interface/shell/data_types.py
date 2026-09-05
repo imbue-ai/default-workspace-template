@@ -122,6 +122,10 @@ class AppInventoryEntry(FrozenModel):
     row: RegistryRow = Field(description="The registry row, validated on read")
     is_running: bool = Field(description="Derived from supervisord or a TCP probe, never stored")
     instances: tuple[InventoryInstance, ...] = Field(description="The app's instances, in the app's list order")
+    # False until the app's instances API has answered a list once (a single-instance app's one
+    # record is synthesized, so it counts as listed): an empty list that was never fetched is
+    # not evidence that an address is gone, and a client must not prune on it.
+    is_listed: bool = Field(description="Whether the instance list is the app's own answer rather than the seed")
     # A record the shell has held for less than the grace period is not deleted for being
     # unreferenced: the create that made it has returned but the tab docking it may not have
     # been saved yet.
@@ -156,6 +160,7 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "actions": [action_wire_json(action) for action in effective_actions(row)],
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "is_running": entry.is_running,
+        "is_listed": entry.is_listed,
         "instances": [instance.model_dump(mode="json") for instance in entry.instances],
     }
 

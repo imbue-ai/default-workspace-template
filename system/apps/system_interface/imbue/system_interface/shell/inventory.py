@@ -282,7 +282,9 @@ class AppInventory(MutableModel):
                     entry = known.model_copy_update(to_update(known.field_ref().row, row))
                     is_changed = is_changed or known.row != row
                 else:
-                    entry = AppInventoryEntry(row=row, is_running=True, instances=(), first_seen_at_by_key={})
+                    entry = AppInventoryEntry(
+                        row=row, is_running=True, instances=(), first_seen_at_by_key={}, is_listed=not row.instances
+                    )
                     is_changed = True
                 if not row.instances:
                     entry = entry.model_copy_update(
@@ -410,6 +412,7 @@ class AppInventory(MutableModel):
                     updated = entry.model_copy_update(
                         to_update(entry.field_ref().instances, listed),
                         to_update(entry.field_ref().first_seen_at_by_key, first_seen),
+                        to_update(entry.field_ref().is_listed, True),
                     )
                 case FetchOutcomeKind.NOT_READY:
                     updated = entry

@@ -223,7 +223,8 @@ Outbound (shell to browser):
 | `tab_rebound` | `{"client_id", "view_id", "tab_id", "address"}` | after `POST /api/tabs/<tab_id>/instance`; the owning client re-addresses that tab, adds the address to the view's tab set through the projects route, and saves |
 | `layout_op` | as today: `{"op", "args", "requester_agent_id", "target_client_id"}` | from `/api/layout/broadcast` |
 
-`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "actions": [{"id", "label"}], "default_shortcut", "is_running", "instances": [record, ...]}`.
+`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "instances_url", "has_instances", "actions": [{"id", "label"}], "default_shortcut", "is_running", "is_listed", "instances": [record, ...]}`.
+`is_listed` is false until the app's instances API has answered a list once (a single-instance app's synthesized record counts): a client prunes a tab whose address is missing only from a list that has arrived, never from the empty seed.
 A single-instance app carries one synthesized record: key `""`, url `/`, title `display_name`, status `idle` while running and `stopped` otherwise, lifetime `explicit`, renameable `false`.
 
 Retired messages: `agents_updated`, `proto_agent_*`, `terminal_session`, `load_layout` (folded into `active_view_changed`), `project_saved`, `project_deleted`, `project_updated`, `project_members_changed`, `project_panel_removed`, `member_title_changed`, `member_last_used_changed`, `member_location_changed`.

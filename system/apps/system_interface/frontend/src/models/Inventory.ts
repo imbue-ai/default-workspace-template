@@ -68,6 +68,8 @@ export interface AppRecord {
   actions: AppAction[];
   default_shortcut: DefaultShortcut | null;
   is_running: boolean;
+  /** Whether ``instances`` is the app's own answer; false until its list has been fetched once. */
+  is_listed: boolean;
   instances: InstanceRecord[];
 }
 
@@ -404,6 +406,20 @@ export function findInstance(address: string): ResolvedInstance | null {
   const instance = app.instances.find((candidate) => candidate.key === parsed.key);
   if (instance === undefined) return null;
   return { app, instance, address };
+}
+
+/**
+ * Whether the inventory says ``address`` is gone: its app is not registered, or the app's list
+ * has arrived and does not carry it. False while the app's list is still pending, so a restored
+ * tab is kept until the shell can actually say (an empty seed list is not an answer).
+ */
+export function isAddressUnlisted(address: string): boolean {
+  const parsed = parseAddress(address);
+  if (parsed === null) return true;
+  const app = getApp(parsed.app);
+  if (app === undefined) return true;
+  if (!app.is_listed) return false;
+  return !app.instances.some((candidate) => candidate.key === parsed.key);
 }
 
 /** Every instance of every openable app, in registry order and each app's own list order. */
