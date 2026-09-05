@@ -345,7 +345,7 @@ def test_set_client_info_ignores_unregistered_queue() -> None:
     broadcaster = WebSocketBroadcaster()
     stray_queue: queue.Queue[str | None] = queue.Queue()
 
-    broadcaster.set_client_info(stray_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(stray_queue, "client-1", "everything", "desktop")
 
     assert broadcaster.get_connected_client_infos() == []
 
