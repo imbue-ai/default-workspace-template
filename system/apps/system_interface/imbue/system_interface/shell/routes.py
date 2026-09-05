@@ -159,6 +159,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _device_kind_from_query(raw: str) -> DeviceKind:
+    try:
+        return DeviceKind(raw)
+    except ValueError as e:
+        raise InvalidShellValueError(f"invalid device kind {raw!r}") from e
+
+
 def _entry_or_raise(name: str) -> AppInventoryEntry:
     entry = _shell().inventory.entry(name)
     if entry is None:
@@ -390,7 +397,9 @@ def get_layout(view_id: str) -> ResponseReturnValue:
     client = shell.clients.get_client(client_id)
     raw_device = request.args.get("device", "")
     device_kind = (
-        client.device_kind if client is not None else (DeviceKind(raw_device) if raw_device else DeviceKind.DESKTOP)
+        client.device_kind
+        if client is not None
+        else (_device_kind_from_query(raw_device) if raw_device else DeviceKind.DESKTOP)
     )
     return jsonify(layout_wire_json(shell.layouts.read_layout(view, client_id, device_kind)))
 

@@ -322,6 +322,7 @@ def test_project_settings_tabs_shortcuts_and_deletion(client: FlaskClient, app: 
 def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClient, app: Flask) -> None:
     assert client.get("/api/layouts/missing?client=c1").status_code == 404
     assert client.get("/api/layouts/everything").status_code == 400
+    assert client.get("/api/layouts/everything?client=c1&device=tablet").status_code == 400
     empty = client.get("/api/layouts/everything?client=c1&device=mobile").get_json()
     assert empty == {"dockview": None, "tabs": {}, "device_kind": "mobile", "updated_at": None}
 
