@@ -99,10 +99,12 @@ def client(app: Flask) -> FlaskClient:
 
 
 def test_an_app_nudge_is_accepted_from_loopback_only(client: FlaskClient, app: Flask) -> None:
-    assert client.post("/api/apps/terminal/changed").status_code == 204
-    assert client.post("/api/apps/unknown/changed").status_code == 404
-    assert client.post("/api/apps/terminal/changed", environ_base=_NOT_LOOPBACK).status_code == 403
-    _shell(app).inventory.stop()
+    try:
+        assert client.post("/api/apps/terminal/changed").status_code == 204
+        assert client.post("/api/apps/unknown/changed").status_code == 404
+        assert client.post("/api/apps/terminal/changed", environ_base=_NOT_LOOPBACK).status_code == 403
+    finally:
+        _shell(app).inventory.stop()
 
 
 def test_a_tab_report_rebinds_the_tab_everywhere_and_files_it_in_the_project(
@@ -436,3 +438,14 @@ def test_a_held_mutex_is_a_409_with_the_holder(client: FlaskClient, app: Flask) 
     assert conflict.status_code == 409
     assert conflict.get_json()["in_flight"]["agent_id"] == "agent-9"
     assert conflict.get_json()["retry_after_ms"] > 0
+
+
+def test_reload_system_interface_reaches_every_view_and_null_args_are_refused(client: FlaskClient, app: Flask) -> None:
+    everything_queue = _register_client(app, "c1", "everything")
+    alpha_queue = _register_client(app, "c2", "alpha")
+    response = client.post("/api/layout/broadcast", json={"op": "reload_system_interface", "agent_id": "agent-1"})
+    assert response.status_code == 200
+    for client_queue in (everything_queue, alpha_queue):
+        ops = [message["op"] for message in drain_messages(client_queue) if message["type"] == "layout_op"]
+        assert ops == ["reload_system_interface"]
+    assert client.post("/api/layout/broadcast", json={"op": "refresh", "args": None}).status_code == 400

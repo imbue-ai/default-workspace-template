@@ -4,9 +4,11 @@ from pathlib import Path
 
 from app_instances.data_types import InstanceLifetime
 from app_instances.data_types import InstanceStatus
+from app_instances.testing import StubInstanceSource
 from app_instances.testing import wait_until
 
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
+from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.inventory import parse_instances_body
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
@@ -190,3 +192,16 @@ def test_parsing_an_instances_body() -> None:
     assert [str(record.key) for record in listed.records] == ["k1"]
     assert parse_instances_body("u", b"not json").kind is FetchOutcomeKind.FAILED
     assert parse_instances_body("u", b'{"nope": []}').kind is FetchOutcomeKind.FAILED
+
+
+def test_the_fetcher_reads_a_503_as_not_ready_and_a_listing_as_listed(
+    stub_source: StubInstanceSource, stub_app_url: str
+) -> None:
+    stub_source.is_ready = False
+    assert HttpInstanceFetcher().fetch(stub_app_url).kind is FetchOutcomeKind.NOT_READY
+    stub_source.is_ready = True
+    stub_source.records.append(instance_record("k1"))
+    listed = HttpInstanceFetcher().fetch(stub_app_url)
+    assert listed.kind is FetchOutcomeKind.LISTED
+    assert [str(record.key) for record in listed.records] == ["k1"]
+    assert HttpInstanceFetcher().fetch("http://127.0.0.1:1").kind is FetchOutcomeKind.FAILED
