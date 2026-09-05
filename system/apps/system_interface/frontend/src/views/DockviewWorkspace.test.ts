@@ -64,6 +64,14 @@ describe("mostRecentAddressOfApp", () => {
   it("prefers the tab this client focused most recently, then the app's own recency", () => {
     expect(mostRecentAddressOfApp(candidates, "chat", {})).toBe("app:chat?instance=b");
     expect(mostRecentAddressOfApp(candidates, "chat", { "app:chat?instance=a": 7_000 })).toBe("app:chat?instance=a");
+    expect(
+      mostRecentAddressOfApp(candidates, "chat", { "app:chat?instance=a": 2_000, "app:chat?instance=b": 3_000 }),
+    ).toBe("app:chat?instance=b");
+  });
+
+  it("keeps an open tab ahead of an instance that was active more recently but is not open", () => {
+    // A restored tab may carry a focus stamp of 0 and still be the one the user has up.
+    expect(mostRecentAddressOfApp(candidates, "chat", { "app:chat?instance=a": 0 })).toBe("app:chat?instance=a");
   });
 
   it("ignores other apps' recency", () => {
