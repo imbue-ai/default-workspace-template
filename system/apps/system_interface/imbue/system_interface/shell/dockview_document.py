@@ -445,6 +445,22 @@ def focus_panel(layout: LayoutRecord, panel_id: str) -> LayoutRecord:
     return layout.model_copy_update(to_update(layout.field_ref().dockview, document))
 
 
+def _is_already_placed(document: dict[str, Any], panel_id: str, placement: Placement) -> bool:
+    """Whether ``panel_id`` already sits where ``placement`` would put it: in the anchor's own group for ``within``, or in
+    the anchor's neighbour group in the direction. Detaching it first would remove that group and dock it one further on."""
+    if placement.anchor_panel_id is None:
+        return False
+    root = document["grid"]["root"]
+    anchor_path = _leaf_path_for_panel(root, placement.anchor_panel_id)
+    if placement.direction is None or placement.direction is Direction.WITHIN:
+        return anchor_path is not None and _leaf_path_for_panel(root, panel_id) == anchor_path
+    if placement.is_new_group or anchor_path is None:
+        return False
+    root_orientation = str(document["grid"].get("orientation") or HORIZONTAL)
+    neighbor = _neighbor_leaf_path(root, root_orientation, anchor_path, placement.direction)
+    return neighbor is not None and panel_id in (_node_at(root, neighbor)["data"].get("views") or [])
+
+
 @pure
 def move_panel(layout: LayoutRecord, panel_id: str, placement: Placement) -> LayoutRecord:
     """The layout with ``panel_id`` taken out of its group and docked per ``placement`` (its page and tab record kept)."""
@@ -453,12 +469,7 @@ def move_panel(layout: LayoutRecord, panel_id: str, placement: Placement) -> Lay
     if placement.anchor_panel_id == panel_id:
         raise LayoutOpError(f"cannot move {panel_id!r} relative to itself")
     document = _repaired_document(copy.deepcopy(layout.dockview), f"{panel_id}-repaired")
-    root = document["grid"]["root"]
-    if (
-        placement.anchor_panel_id is not None
-        and (placement.direction is None or placement.direction is Direction.WITHIN)
-        and _leaf_path_for_panel(root, panel_id) == _leaf_path_for_panel(root, placement.anchor_panel_id)
-    ):
+    if _is_already_placed(document, panel_id, placement):
         return layout
     detached = _detach_panel_from_grid(document, panel_id)
     if detached is None:

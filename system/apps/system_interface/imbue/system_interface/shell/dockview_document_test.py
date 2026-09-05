@@ -249,6 +249,15 @@ def test_move_relocates_a_panel_keeping_its_record_and_is_a_noop_within_its_own_
     beside = move_panel(layout, "pa", _placement("pb", Direction.BELOW))
     assert beside.dockview is not None
     assert [leaf["data"]["id"] for leaf in _leaves(beside.dockview)] == ["g2", "g-new"]
+    # A panel already in the anchor's neighbour group in that direction stays put, rather than being detached (which
+    # removes its group) and docked into the group beyond it or into a fresh split.
+    assert move_panel(layout, "pb", _placement("pa", Direction.RIGHT)) == layout
+    three = add_panel(layout, _TERMINAL_2, _TAB_C, "Terminal 2", _placement("pb", Direction.RIGHT, is_new_group=True))
+    assert move_panel(three, "pb", _placement("pa", Direction.RIGHT)) == three
+    # The panel beyond that neighbour is moved into it.
+    moved_in = move_panel(three, str(_TAB_C), _placement("pa", Direction.RIGHT))
+    assert moved_in.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(moved_in.dockview)] == [["pa"], ["pb", str(_TAB_C)]]
     with pytest.raises(LayoutOpError):
         move_panel(layout, "pa", _placement("pa", Direction.WITHIN))
     with pytest.raises(PanelNotFoundError):
