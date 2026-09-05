@@ -38,7 +38,8 @@ Backend (`system/apps/system_interface/imbue/system_interface/shell/`):
 Frontend (`frontend/src/`):
 
 - `models/Layouts.ts`: `mintSaveId`, the save carries `save_id` and `base_updated_at`, a `409` surfaces as `StaleLayoutSaveError`.
-- `models/Inventory.ts`: `layout_updated` and `active_view_changed`; `load_layout` gone; `layout_op` narrowed to the transient verbs; `fetchOwnClientRecord`.
+- `models/Inventory.ts`: `layout_updated` and `active_view_changed`; `load_layout` gone; `layout_op` narrowed to the transient verbs.
+- `models/Clients.ts` (new): `fetchClients` and `fetchOwnActiveView` over `GET /api/clients`, the view a window reads on boot.
 - `models/ClientIdentity.ts`: the active view is module state only; nothing in local storage but the client id.
 - `views/DockviewWorkspace.ts`: the five document-op handlers and the geometric neighbour search are deleted; a `layout_updated` for this client's mounted view refetches and applies when the stamp differs, deferred while a tab drag or a title edit is in progress; a stale save refetches and applies; the initial view comes from the client record; deep links on load.
 
