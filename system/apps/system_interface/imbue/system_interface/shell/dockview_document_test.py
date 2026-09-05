@@ -226,6 +226,10 @@ def test_a_document_without_a_grid_is_repaired_into_one_group_by_every_op() -> N
     removed = remove_panel(gridless, "pa")
     assert removed.dockview is not None
     assert [leaf["data"]["views"] for leaf in _leaves(removed.dockview)] == [["pb"]] and set(removed.tabs) == {"pb"}
+    # The panel an add docks lands beside the repaired group only, not in it as well.
+    added = add_panel(gridless, _TERMINAL_2, _TAB_C, "Terminal 2", _placement("pb", Direction.BELOW))
+    assert added.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(added.dockview)] == [["pa", "pb"], [str(_TAB_C)]]
 
 
 def test_focus_marks_the_tab_and_its_group_active() -> None:
