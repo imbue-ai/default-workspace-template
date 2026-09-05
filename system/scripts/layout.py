@@ -164,7 +164,9 @@ def _fail(message: str) -> None:
 
 
 def _retired_spelling_message(value: str) -> str:
-    prefix = next(candidate for candidate in _RETIRED_PREFIXES if value.startswith(candidate))
+    prefix = next(
+        candidate for candidate in _RETIRED_PREFIXES if value.startswith(candidate)
+    )
     remainder = value[len(prefix) :]
     if prefix == "chat:":
         hint = f"a chat is addressed by its agent id: app:chat?instance=<agent-id> (this one may be app:chat?instance={remainder})"
@@ -203,7 +205,9 @@ def _normalize_address(value: str) -> str:
         )
     if _APP_NAME_PATTERN.fullmatch(value):
         return f"{ADDRESS_SCHEME}{value}"
-    _fail(f"{value!r} is not an address: expected app:<name>, app:<name>?instance=<key>, or a bare app name")
+    _fail(
+        f"{value!r} is not an address: expected app:<name>, app:<name>?instance=<key>, or a bare app name"
+    )
     return value
 
 
@@ -221,7 +225,9 @@ def _validate_address(address: str) -> None:
     if address == _SELF_REF:
         return
     if not address.startswith(ADDRESS_SCHEME):
-        _fail(f"{address!r} is not an address: expected app:<name> or app:<name>?instance=<key>")
+        _fail(
+            f"{address!r} is not an address: expected app:<name> or app:<name>?instance=<key>"
+        )
     body = address[len(ADDRESS_SCHEME) :]
     name, separator, remainder = body.partition("?")
     if not _APP_NAME_PATTERN.fullmatch(name):
@@ -244,7 +250,9 @@ def _instance_address(address: str, verb: str) -> tuple[str, str]:
     """``(app, key)`` of an address that must name one instance (the relay verbs)."""
     app, key = _address_parts(address)
     if key is None:
-        _fail(f"{verb} needs an instance address (app:<name>?instance=<key>), not the app {address!r}")
+        _fail(
+            f"{verb} needs an instance address (app:<name>?instance=<key>), not the app {address!r}"
+        )
     return app, str(key)
 
 
@@ -306,7 +314,10 @@ def _request_json(
     method: str, url: str, body: dict[str, Any] | None = None
 ) -> tuple[int, dict[str, Any] | str]:
     data = None if body is None else json.dumps(body).encode("utf-8")
-    headers = {"Content-Type": "application/json", MNGR_AGENT_ID_HEADER: _mngr_agent_id()}
+    headers = {
+        "Content-Type": "application/json",
+        MNGR_AGENT_ID_HEADER: _mngr_agent_id(),
+    }
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=10.0) as response:
@@ -322,7 +333,9 @@ def _request_json(
 def _post_layout(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
     """POST {op, args, agent_id} to /api/layout/broadcast and return (status, parsed_or_raw)."""
     return _request_json(
-        "POST", f"{_workspace_base_url()}/api/layout/broadcast", {"op": op, "args": args, "agent_id": _mngr_agent_id()}
+        "POST",
+        f"{_workspace_base_url()}/api/layout/broadcast",
+        {"op": op, "args": args, "agent_id": _mngr_agent_id()},
     )
 
 
@@ -352,7 +365,9 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
     if isinstance(body, dict):
         detail = str(body.get("detail", body))
         if status == 412:
-            sys.stderr.write(f"error: {op!r} has no client to apply it (HTTP 412): {detail}\n")
+            sys.stderr.write(
+                f"error: {op!r} has no client to apply it (HTTP 412): {detail}\n"
+            )
             return EXIT_ERROR
         if status == 409:
             in_flight = body.get("in_flight") or {}
@@ -432,7 +447,9 @@ def _address_matches(requested: str, panel_address: Any) -> bool:
     return panel_address.startswith(f"{requested}?{ADDRESS_INSTANCE_PARAMETER}")
 
 
-def _find_leaf_for_address(layout: dict[str, Any], address: str) -> dict[str, Any] | None:
+def _find_leaf_for_address(
+    layout: dict[str, Any], address: str
+) -> dict[str, Any] | None:
     for leaf in _walk_tree_leaves(layout.get("tree")):
         for panel in leaf.get("panels", []) or []:
             if _address_matches(address, panel.get("address")):
@@ -538,7 +555,9 @@ def _predicate_any_change(before: dict[str, Any]) -> _Predicate:
     return lambda layout: json.dumps(layout, sort_keys=True) != before_blob
 
 
-def _new_instance_address(app: str, before: set[str], layout: dict[str, Any]) -> str | None:
+def _new_instance_address(
+    app: str, before: set[str], layout: dict[str, Any]
+) -> str | None:
     """An instance address of ``app`` docked now that was not docked before, or None."""
     prefix = f"{ADDRESS_SCHEME}{app}?{ADDRESS_INSTANCE_PARAMETER}"
     for address in sorted(_panel_addresses(layout) - before):
@@ -568,7 +587,9 @@ def _wait_stable(
     while True:
         layout = _fetch_layout(view)
         if layout is None:
-            sys.stderr.write(f"warning: inspect failed while waiting for {op!r} to settle\n")
+            sys.stderr.write(
+                f"warning: inspect failed while waiting for {op!r} to settle\n"
+            )
             return "unknown", last
         last = layout
         if predicate(layout):
@@ -598,7 +619,9 @@ def _run_mutating_op(
         if status != 200:
             return _report_failure(op, status, body)
         if predicate is _UNOBSERVABLE:
-            sys.stderr.write("(broadcast sent; no observable layout-state change to confirm)\n")
+            sys.stderr.write(
+                "(broadcast sent; no observable layout-state change to confirm)\n"
+            )
         return EXIT_OK
 
     view = args.get("view")
@@ -616,7 +639,9 @@ def _run_mutating_op(
         sys.stderr.write(on_success(before or {}, after))
         return EXIT_OK
     if wait_status == "timeout":
-        sys.stderr.write(f"error: timeout waiting for {op!r} to settle after {_WAIT_STABLE_CAP_SECONDS:.0f}s\n")
+        sys.stderr.write(
+            f"error: timeout waiting for {op!r} to settle after {_WAIT_STABLE_CAP_SECONDS:.0f}s\n"
+        )
         return EXIT_ERROR
     sys.stderr.write("(broadcast sent; could not read inspect to confirm new state)\n")
     return EXIT_OK
@@ -641,15 +666,21 @@ def _run_creating_op(op: str, args: dict[str, Any], app: str) -> int:
     if status != 200:
         return _report_failure(op, status, body)
     wait_status, after = _wait_stable(
-        op, lambda layout: _new_instance_address(app, before, layout) is not None, view=view
+        op,
+        lambda layout: _new_instance_address(app, before, layout) is not None,
+        view=view,
     )
     if wait_status == "changed" and after is not None:
         created = _new_instance_address(app, before, after)
         sys.stdout.write(f"{created}\n")
-        sys.stderr.write(f"created {created} in {_describe_group(_find_leaf_for_address(after, str(created)))}\n")
+        sys.stderr.write(
+            f"created {created} in {_describe_group(_find_leaf_for_address(after, str(created)))}\n"
+        )
         return EXIT_OK
     if wait_status == "timeout":
-        sys.stderr.write(f"error: timeout waiting for {op!r} to settle after {_WAIT_STABLE_CAP_SECONDS:.0f}s\n")
+        sys.stderr.write(
+            f"error: timeout waiting for {op!r} to settle after {_WAIT_STABLE_CAP_SECONDS:.0f}s\n"
+        )
         return EXIT_ERROR
     sys.stderr.write("(broadcast sent; could not read inspect to confirm new state)\n")
     return EXIT_OK
@@ -763,7 +794,9 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     if not isinstance(layout, dict):
         layout = {}
     if not args.json:
-        sys.stderr.write(f"(view: {body.get('view_id')}, client: {body.get('client_id')})\n")
+        sys.stderr.write(
+            f"(view: {body.get('view_id')}, client: {body.get('client_id')})\n"
+        )
     _emit_layout_view(layout, as_json=args.json, verbose=args.verbose)
     return EXIT_OK
 
@@ -792,8 +825,12 @@ def _cmd_load(args: argparse.Namespace) -> int:
     if status != 200 or not isinstance(body, dict):
         return _report_failure("load", status, body)
     target = body.get("target_client_id")
-    target_text = f"client {target}" if target else "all clients (requesting client unknown)"
-    sys.stderr.write(f"requested load of view {body.get('view_id')!r} on {target_text}\n")
+    target_text = (
+        f"client {target}" if target else "all clients (requesting client unknown)"
+    )
+    sys.stderr.write(
+        f"requested load of view {body.get('view_id')!r} on {target_text}\n"
+    )
     return EXIT_OK
 
 
@@ -818,7 +855,10 @@ def _cmd_where(args: argparse.Namespace) -> int:
         "address": panel_summary.get("address", address),
         "title": panel_summary.get("title"),
         "tab_id": panel_summary.get("tab_id"),
-        "group": {"size_ratio": leaf.get("size_ratio"), "tabs": _addresses_in_group(leaf)},
+        "group": {
+            "size_ratio": leaf.get("size_ratio"),
+            "tabs": _addresses_in_group(leaf),
+        },
         "neighbors": {
             direction: [
                 tab
@@ -843,7 +883,9 @@ def _cmd_where(args: argparse.Namespace) -> int:
     sys.stdout.write(f"group:   [{' '.join(view['group']['tabs'])}]\n")
     for direction in _CARDINAL_DIRECTIONS:
         neighbor_addresses = view["neighbors"][direction]
-        rendered = "[" + " ".join(neighbor_addresses) + "]" if neighbor_addresses else "-"
+        rendered = (
+            "[" + " ".join(neighbor_addresses) + "]" if neighbor_addresses else "-"
+        )
         sys.stdout.write(f"{direction:<8} {rendered}\n")
     return EXIT_OK
 
@@ -858,14 +900,19 @@ def _cmd_open(args: argparse.Namespace) -> int:
     app, key = _address_parts(address)
     if (err := _require_registered(app)) is not None:
         return err
-    payload: dict[str, Any] = {"address": address, "new_group": bool(args.new_group), "view": args.view}
+    payload: dict[str, Any] = {
+        "address": address,
+        "new_group": bool(args.new_group),
+        "view": args.view,
+    }
     if key is None and _has_instances(app):
         return _run_creating_op("open", payload, app)
     return _run_mutating_op(
         "open",
         payload,
         _predicate_present(address),
-        on_success=lambda b, a: f"opened {address} in {_describe_group(_find_leaf_for_address(a, address))}\n",
+        on_success=lambda b,
+        a: f"opened {address} in {_describe_group(_find_leaf_for_address(a, address))}\n",
         on_noop=lambda b: f"no change: {address} is already open in {_describe_group(_find_leaf_for_address(b, address))}\n",
     )
 
@@ -913,7 +960,8 @@ def _cmd_split(args: argparse.Namespace) -> int:
         "split",
         payload,
         _predicate_present(address),
-        on_success=lambda b, a: f"split: {address} now in {_describe_group(_find_leaf_for_address(a, address))}\n",
+        on_success=lambda b,
+        a: f"split: {address} now in {_describe_group(_find_leaf_for_address(a, address))}\n",
         on_noop=lambda b: f"no change: {address} is already open in {_describe_group(_find_leaf_for_address(b, address))}\n",
     )
 
@@ -954,14 +1002,18 @@ def _cmd_move(args: argparse.Namespace) -> int:
     skip_pre_op_noop = False
     if args.direction == _WITHIN_DIRECTION and relative_to != _SELF_REF:
         predicate: _Predicate = _predicate_share_group(address, relative_to)
-        on_noop: _NoopMessage = lambda b: f"no change: {address} is already in the same group as {relative_to}\n"
+        on_noop: _NoopMessage = (
+            lambda b: f"no change: {address} is already in the same group as {relative_to}\n"
+        )
     elif os.environ.get(ENV_NO_WAIT_STABLE):
         predicate = lambda _layout: False  # noqa: E731
         on_noop = lambda b: ""  # noqa: E731
     else:
         before_snapshot = _fetch_layout(args.view)
         if before_snapshot is None:
-            sys.stderr.write("warning: inspect failed before move; will not detect a no-op\n")
+            sys.stderr.write(
+                "warning: inspect failed before move; will not detect a no-op\n"
+            )
             before_snapshot = {}
         predicate = _predicate_any_change(before_snapshot)
         skip_pre_op_noop = True
@@ -970,7 +1022,8 @@ def _cmd_move(args: argparse.Namespace) -> int:
         "move",
         payload,
         predicate,
-        on_success=lambda b, a: f"moved {address} into {_describe_group(_find_leaf_for_address(a, address))}\n",
+        on_success=lambda b,
+        a: f"moved {address} into {_describe_group(_find_leaf_for_address(a, address))}\n",
         on_noop=on_noop,
         skip_pre_op_noop=skip_pre_op_noop,
     )
@@ -991,7 +1044,11 @@ def _cmd_maximize(args: argparse.Namespace) -> int:
 
 def _cmd_restore(args: argparse.Namespace) -> int:
     return _run_mutating_op(
-        "restore", {"view": args.view}, _UNOBSERVABLE, on_success=lambda b, a: "", on_noop=lambda b: ""
+        "restore",
+        {"view": args.view},
+        _UNOBSERVABLE,
+        on_success=lambda b, a: "",
+        on_noop=lambda b: "",
     )
 
 
@@ -1002,30 +1059,37 @@ def _cmd_refresh(args: argparse.Namespace) -> int:
     if "?" in address and (err := _require_open("refresh", address)) is not None:
         return err
     return _run_mutating_op(
-        "refresh", {"address": address}, _UNOBSERVABLE, on_success=lambda b, a: "", on_noop=lambda b: ""
+        "refresh",
+        {"address": address},
+        _UNOBSERVABLE,
+        on_success=lambda b, a: "",
+        on_noop=lambda b: "",
     )
 
 
 # ---------- Relay subcommands (the instance verbs) ----------
 
 
-def _relay(verb: str, app: str, key: str, suffix: str, body: dict[str, Any] | None) -> int:
+def _relay(verb: str, address: str, suffix: str, body: dict[str, Any] | None) -> int:
+    """POST one relay verb for the instance ``address`` names; the app's refusal is printed with the address."""
+    app, key = _instance_address(address, verb)
     path = f"/api/apps/{urllib.parse.quote(app)}/instances/{urllib.parse.quote(key)}{suffix}"
     status, response = _request_rest_json("POST", path, body)
     if status == -1:
         sys.stderr.write(f"error: could not reach the workspace shell: {response}\n")
         return EXIT_ERROR
     if status >= 400:
-        detail = response.get("detail", response) if isinstance(response, dict) else response
-        sys.stderr.write(f"error: {verb} {app}:{key} refused (HTTP {status}): {detail}\n")
+        detail = (
+            response.get("detail", response) if isinstance(response, dict) else response
+        )
+        sys.stderr.write(f"error: {verb} {address} refused (HTTP {status}): {detail}\n")
         return EXIT_ERROR
     return EXIT_OK
 
 
 def _cmd_rename(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
-    app, key = _instance_address(address, "rename")
-    exit_code = _relay("rename", app, key, "/rename", {"title": args.title})
+    exit_code = _relay("rename", address, "/rename", {"title": args.title})
     if exit_code == EXIT_OK:
         sys.stderr.write(f"renamed {address} to {args.title!r}\n")
     return exit_code
@@ -1033,8 +1097,7 @@ def _cmd_rename(args: argparse.Namespace) -> int:
 
 def _cmd_delete(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
-    app, key = _instance_address(address, "delete")
-    exit_code = _relay("delete", app, key, "/delete", None)
+    exit_code = _relay("delete", address, "/delete", None)
     if exit_code == EXIT_OK:
         sys.stderr.write(f"deleted {address}\n")
     return exit_code
@@ -1042,15 +1105,16 @@ def _cmd_delete(args: argparse.Namespace) -> int:
 
 def _cmd_replace_url(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
-    app, key = _instance_address(address, "replace-url")
     if any(args.path.startswith(prefix) for prefix in _EXTERNAL_URL_PREFIXES):
         _fail(
             f"{args.path!r} is an external URL; pointing a tab at one lands in phase 8 of the "
             "workspace app model. replace-url takes a path under the instance's app, starting with '/'"
         )
     if not args.path.startswith("/"):
-        _fail(f"replace-url takes a path under the instance's app, starting with '/' (got {args.path!r})")
-    exit_code = _relay("replace-url", app, key, "/location", {"path": args.path})
+        _fail(
+            f"replace-url takes a path under the instance's app, starting with '/' (got {args.path!r})"
+        )
+    exit_code = _relay("replace-url", address, "/location", {"path": args.path})
     if exit_code == EXIT_OK:
         sys.stderr.write(f"pointed {address} at {args.path}\n")
     return exit_code
@@ -1061,7 +1125,11 @@ def _cmd_replace_url(args: argparse.Namespace) -> int:
 
 def _fetch_projects() -> list[dict[str, Any]] | None:
     status, body = _request_rest_json("GET", "/api/projects")
-    if status != 200 or not isinstance(body, dict) or not isinstance(body.get("projects"), list):
+    if (
+        status != 200
+        or not isinstance(body, dict)
+        or not isinstance(body.get("projects"), list)
+    ):
         sys.stderr.write(f"error: could not list projects (HTTP {status}): {body}\n")
         return None
     return list(body["projects"])
@@ -1073,12 +1141,18 @@ def _active_view_of_a_connected_client() -> str | None:
     if status != 200 or not isinstance(body, dict):
         return None
     for client in body.get("clients", []) or []:
-        if isinstance(client, dict) and client.get("is_connected") and client.get("active_view"):
+        if (
+            isinstance(client, dict)
+            and client.get("is_connected")
+            and client.get("active_view")
+        ):
             return str(client["active_view"])
     return None
 
 
-def _resolve_project_view(view_name: str | None) -> tuple[str, dict[str, Any] | None] | None:
+def _resolve_project_view(
+    view_name: str | None,
+) -> tuple[str, dict[str, Any] | None] | None:
     """``(view_id, project)`` for ``--view``; ``project`` is None for Everything. None on error."""
     projects = _fetch_projects()
     if projects is None:
@@ -1086,16 +1160,23 @@ def _resolve_project_view(view_name: str | None) -> tuple[str, dict[str, Any] | 
     if view_name is None:
         view_name = _active_view_of_a_connected_client()
         if view_name is None:
-            sys.stderr.write("error: no connected client to take the view from; pass --view <project name>\n")
+            sys.stderr.write(
+                "error: no connected client to take the view from; pass --view <project name>\n"
+            )
             return None
     if view_name.strip().lower() == EVERYTHING_VIEW_ID:
         return EVERYTHING_VIEW_ID, None
     wanted = view_name.strip().lower()
     for project in projects:
-        if str(project.get("name", "")).strip().lower() == wanted or project.get("id") == view_name:
+        if (
+            str(project.get("name", "")).strip().lower() == wanted
+            or project.get("id") == view_name
+        ):
             return str(project.get("id")), project
     known = ", ".join(repr(str(p.get("name", p.get("id", "?")))) for p in projects)
-    sys.stderr.write(f"error: no project named {view_name!r} (projects: {known or '<none>'}, or 'Everything')\n")
+    sys.stderr.write(
+        f"error: no project named {view_name!r} (projects: {known or '<none>'}, or 'Everything')\n"
+    )
     return None
 
 
@@ -1106,7 +1187,11 @@ def _everything_shortcut_rows() -> list[dict[str, Any]]:
         if bool(app.get("internal", False)):
             continue
         actions = app.get("actions") if bool(app.get("instances", False)) else None
-        action_ids = [str(action.get("id")) for action in actions] if isinstance(actions, list) else ["open"]
+        action_ids = (
+            [str(action.get("id")) for action in actions]
+            if isinstance(actions, list)
+            else ["open"]
+        )
         for action_id in action_ids:
             rows.append({"app": str(app["name"]), "action": action_id, "mode": "focus"})
     return rows
@@ -1117,7 +1202,11 @@ def _cmd_shortcuts(args: argparse.Namespace) -> int:
     if resolved is None:
         return EXIT_ERROR
     view_id, project = resolved
-    rows = project.get("shortcuts", []) if project is not None else _everything_shortcut_rows()
+    rows = (
+        project.get("shortcuts", [])
+        if project is not None
+        else _everything_shortcut_rows()
+    )
     _emit_structured({"view": view_id, "shortcuts": rows}, args.json)
     return EXIT_OK
 
@@ -1128,7 +1217,9 @@ def _project_for_shortcut_write(view_name: str | None) -> str | None:
         return None
     project_id, project = resolved
     if project is None:
-        sys.stderr.write("error: Everything's rail is fixed (every app's actions); pass --view <project name>\n")
+        sys.stderr.write(
+            "error: Everything's rail is fixed (every app's actions); pass --view <project name>\n"
+        )
         return None
     return project_id
 
@@ -1138,13 +1229,21 @@ def _cmd_shortcut_set(args: argparse.Namespace) -> int:
     if project_id is None:
         return EXIT_ERROR
     body = {"app": args.app, "action": args.action, "mode": args.mode}
-    status, response = _request_rest_json("POST", f"/api/projects/{project_id}/shortcuts", body)
+    status, response = _request_rest_json(
+        "POST", f"/api/projects/{project_id}/shortcuts", body
+    )
     if status != 200 or not isinstance(response, dict):
-        detail = response.get("detail", response) if isinstance(response, dict) else response
+        detail = (
+            response.get("detail", response) if isinstance(response, dict) else response
+        )
         sys.stderr.write(f"error: shortcut set failed (HTTP {status}): {detail}\n")
         return EXIT_ERROR
-    sys.stderr.write(f"set {args.app} {args.action} ({args.mode}) on project {project_id!r}\n")
-    _emit_structured({"project_id": project_id, "shortcuts": response.get("shortcuts", [])}, False)
+    sys.stderr.write(
+        f"set {args.app} {args.action} ({args.mode}) on project {project_id!r}\n"
+    )
+    _emit_structured(
+        {"project_id": project_id, "shortcuts": response.get("shortcuts", [])}, False
+    )
     return EXIT_OK
 
 
@@ -1153,13 +1252,19 @@ def _cmd_shortcut_remove(args: argparse.Namespace) -> int:
     if project_id is None:
         return EXIT_ERROR
     body = {"app": args.app, "action": args.action}
-    status, response = _request_rest_json("POST", f"/api/projects/{project_id}/shortcuts/remove", body)
+    status, response = _request_rest_json(
+        "POST", f"/api/projects/{project_id}/shortcuts/remove", body
+    )
     if status != 200 or not isinstance(response, dict):
-        detail = response.get("detail", response) if isinstance(response, dict) else response
+        detail = (
+            response.get("detail", response) if isinstance(response, dict) else response
+        )
         sys.stderr.write(f"error: shortcut remove failed (HTTP {status}): {detail}\n")
         return EXIT_ERROR
     sys.stderr.write(f"removed {args.app} {args.action} from project {project_id!r}\n")
-    _emit_structured({"project_id": project_id, "shortcuts": response.get("shortcuts", [])}, False)
+    _emit_structured(
+        {"project_id": project_id, "shortcuts": response.get("shortcuts", [])}, False
+    )
     return EXIT_OK
 
 
@@ -1167,7 +1272,9 @@ def _cmd_shortcut_remove(args: argparse.Namespace) -> int:
 
 
 def _add_view_argument(subparser: argparse.ArgumentParser, help_text: str) -> None:
-    subparser.add_argument("--view", "--layout", dest="view", metavar="VIEW", default=None, help=help_text)
+    subparser.add_argument(
+        "--view", "--layout", dest="view", metavar="VIEW", default=None, help=help_text
+    )
 
 
 _MUTATING_VIEW_HELP = (
@@ -1175,13 +1282,13 @@ _MUTATING_VIEW_HELP = (
     "client is on. Mutating ops only apply on connected clients that have the view active; "
     "use ``context`` to see each client's current view."
 )
-_READ_VIEW_HELP = (
-    "View (a project's name, or ``Everything``) to read; defaults to the view the connected client is on."
-)
+_READ_VIEW_HELP = "View (a project's name, or ``Everything``) to read; defaults to the view the connected client is on."
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_list = subparsers.add_parser("list", help="List every app with its instances")
@@ -1189,24 +1296,46 @@ def main(argv: list[str] | None = None) -> int:
     _add_view_argument(p_list, _READ_VIEW_HELP)
     p_list.set_defaults(func=_cmd_list)
 
-    p_inspect = subparsers.add_parser("inspect", help="Describe the live dock (compact text by default)")
-    p_inspect.add_argument("--json", action="store_true", help="Emit JSON (full detail)")
-    p_inspect.add_argument("--verbose", action="store_true", help="Emit the full YAML tree instead of the compact view")
+    p_inspect = subparsers.add_parser(
+        "inspect", help="Describe the live dock (compact text by default)"
+    )
+    p_inspect.add_argument(
+        "--json", action="store_true", help="Emit JSON (full detail)"
+    )
+    p_inspect.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Emit the full YAML tree instead of the compact view",
+    )
     _add_view_argument(p_inspect, _READ_VIEW_HELP)
     p_inspect.set_defaults(func=_cmd_inspect)
 
     p_context = subparsers.add_parser(
-        "context", help="Show each browser client's recent messages, device kind, and active view"
+        "context",
+        help="Show each browser client's recent messages, device kind, and active view",
     )
-    p_context.add_argument("--json", action="store_true", help="Emit JSON instead of YAML")
+    p_context.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of YAML"
+    )
     p_context.set_defaults(func=_cmd_context)
 
-    p_views = subparsers.add_parser("views", help="List the views: every project plus Everything, their tab sets, and who is on each")
-    p_views.add_argument("--json", action="store_true", help="Emit JSON instead of YAML")
+    p_views = subparsers.add_parser(
+        "views",
+        help="List the views: every project plus Everything, their tab sets, and who is on each",
+    )
+    p_views.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of YAML"
+    )
     p_views.set_defaults(func=_cmd_views)
 
-    p_load = subparsers.add_parser("load", help="Switch a client onto a view (a project, or ``Everything``)")
-    p_load.add_argument("view_name", metavar="view", help="The view to put in front: a project's name, or ``Everything``")
+    p_load = subparsers.add_parser(
+        "load", help="Switch a client onto a view (a project, or ``Everything``)"
+    )
+    p_load.add_argument(
+        "view_name",
+        metavar="view",
+        help="The view to put in front: a project's name, or ``Everything``",
+    )
     p_load.add_argument(
         "--client",
         default=None,
@@ -1215,10 +1344,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_load.set_defaults(func=_cmd_load)
 
-    p_where = subparsers.add_parser("where", help="Show one panel's group tab-mates and its neighbors")
+    p_where = subparsers.add_parser(
+        "where", help="Show one panel's group tab-mates and its neighbors"
+    )
     p_where.add_argument("address", help="Panel address (bare app name accepted)")
-    p_where.add_argument("--json", action="store_true", help="Emit JSON instead of text")
-    p_where.add_argument("--verbose", action="store_true", help="Also include the full inspect layout under ``full_layout``")
+    p_where.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of text"
+    )
+    p_where.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Also include the full inspect layout under ``full_layout``",
+    )
     _add_view_argument(p_where, _READ_VIEW_HELP)
     p_where.set_defaults(func=_cmd_where)
 
@@ -1236,13 +1373,17 @@ def main(argv: list[str] | None = None) -> int:
     _add_view_argument(p_open, _MUTATING_VIEW_HELP)
     p_open.set_defaults(func=_cmd_open)
 
-    p_focus = subparsers.add_parser("focus", help="Activate the named panel within its group")
+    p_focus = subparsers.add_parser(
+        "focus", help="Activate the named panel within its group"
+    )
     p_focus.add_argument("address", help="Panel address")
     _add_view_argument(p_focus, _MUTATING_VIEW_HELP)
     p_focus.set_defaults(func=_cmd_focus)
 
     p_split = subparsers.add_parser("split", help="Open a new panel as a split")
-    p_split.add_argument("target", help="Address or bare app name to open as the new panel")
+    p_split.add_argument(
+        "target", help="Address or bare app name to open as the new panel"
+    )
     p_split.add_argument(
         "--relative-to",
         default=_SELF_REF,
@@ -1273,9 +1414,13 @@ def main(argv: list[str] | None = None) -> int:
     _add_view_argument(p_close, _MUTATING_VIEW_HELP)
     p_close.set_defaults(func=_cmd_close)
 
-    p_move = subparsers.add_parser("move", help="Relocate an existing panel (state-preserving)")
+    p_move = subparsers.add_parser(
+        "move", help="Relocate an existing panel (state-preserving)"
+    )
     p_move.add_argument("address", help="Panel address to move")
-    p_move.add_argument("--relative-to", required=True, help="Address to move relative to")
+    p_move.add_argument(
+        "--relative-to", required=True, help="Address to move relative to"
+    )
     p_move.add_argument(
         "--direction",
         required=True,
@@ -1290,13 +1435,21 @@ def main(argv: list[str] | None = None) -> int:
     _add_view_argument(p_move, _MUTATING_VIEW_HELP)
     p_move.set_defaults(func=_cmd_move)
 
-    p_rename = subparsers.add_parser("rename", help="Retitle an instance through its app")
-    p_rename.add_argument("address", help="Instance address (app:<name>?instance=<key>)")
+    p_rename = subparsers.add_parser(
+        "rename", help="Retitle an instance through its app"
+    )
+    p_rename.add_argument(
+        "address", help="Instance address (app:<name>?instance=<key>)"
+    )
     p_rename.add_argument("title", help="New title, shown in every view")
     p_rename.set_defaults(func=_cmd_rename)
 
-    p_delete = subparsers.add_parser("delete", help="Delete an instance through its app")
-    p_delete.add_argument("address", help="Instance address (app:<name>?instance=<key>)")
+    p_delete = subparsers.add_parser(
+        "delete", help="Delete an instance through its app"
+    )
+    p_delete.add_argument(
+        "address", help="Instance address (app:<name>?instance=<key>)"
+    )
     p_delete.set_defaults(func=_cmd_delete)
 
     p_max = subparsers.add_parser("maximize", help="Maximize a panel's group")
@@ -1308,39 +1461,69 @@ def main(argv: list[str] | None = None) -> int:
     _add_view_argument(p_restore, _MUTATING_VIEW_HELP)
     p_restore.set_defaults(func=_cmd_restore)
 
-    p_replace = subparsers.add_parser("replace-url", help="Point an instance at a path under its app")
-    p_replace.add_argument("address", help="Instance address (app:<name>?instance=<key>)")
+    p_replace = subparsers.add_parser(
+        "replace-url", help="Point an instance at a path under its app"
+    )
+    p_replace.add_argument(
+        "address", help="Instance address (app:<name>?instance=<key>)"
+    )
     p_replace.add_argument("path", help="A path under the app, starting with '/'")
     p_replace.set_defaults(func=_cmd_replace_url)
 
-    p_refresh = subparsers.add_parser("refresh", help="Reload an iframe (or every iframe of an app)")
-    p_refresh.add_argument("target", help="Panel address; a bare app address reloads every iframe of that app.")
+    p_refresh = subparsers.add_parser(
+        "refresh", help="Reload an iframe (or every iframe of an app)"
+    )
+    p_refresh.add_argument(
+        "target",
+        help="Panel address; a bare app address reloads every iframe of that app.",
+    )
     p_refresh.set_defaults(func=_cmd_refresh)
 
-    p_shortcuts = subparsers.add_parser("shortcuts", help="List a view's rail shortcuts: app, action, mode")
-    _add_view_argument(
-        p_shortcuts, "View to read: a project's name, or ``Everything``. Defaults to the connected client's view."
+    p_shortcuts = subparsers.add_parser(
+        "shortcuts", help="List a view's rail shortcuts: app, action, mode"
     )
-    p_shortcuts.add_argument("--json", action="store_true", help="Emit JSON instead of YAML")
+    _add_view_argument(
+        p_shortcuts,
+        "View to read: a project's name, or ``Everything``. Defaults to the connected client's view.",
+    )
+    p_shortcuts.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of YAML"
+    )
     p_shortcuts.set_defaults(func=_cmd_shortcuts)
 
-    p_shortcut = subparsers.add_parser("shortcut", help="Configure one rail shortcut on a project")
-    shortcut_subparsers = p_shortcut.add_subparsers(dest="shortcut_command", required=True)
-    p_shortcut_set = shortcut_subparsers.add_parser("set", help="Add a shortcut to a project's rail, or change its mode")
+    p_shortcut = subparsers.add_parser(
+        "shortcut", help="Configure one rail shortcut on a project"
+    )
+    shortcut_subparsers = p_shortcut.add_subparsers(
+        dest="shortcut_command", required=True
+    )
+    p_shortcut_set = shortcut_subparsers.add_parser(
+        "set", help="Add a shortcut to a project's rail, or change its mode"
+    )
     p_shortcut_set.add_argument("app", help="The registered app")
-    p_shortcut_set.add_argument("action", help="One of the app's actions (``open`` for a single-instance app)")
+    p_shortcut_set.add_argument(
+        "action", help="One of the app's actions (``open`` for a single-instance app)"
+    )
     p_shortcut_set.add_argument(
         "--mode",
         choices=_SHORTCUT_MODES,
         default="focus",
         help="What clicking the row does: ``focus`` the app's most recent tab (creating only when it has none), or always create (``new``)",
     )
-    _add_view_argument(p_shortcut_set, "Project to configure, by name. Defaults to the connected client's view; Everything is refused.")
+    _add_view_argument(
+        p_shortcut_set,
+        "Project to configure, by name. Defaults to the connected client's view; Everything is refused.",
+    )
     p_shortcut_set.set_defaults(func=_cmd_shortcut_set)
-    p_shortcut_remove = shortcut_subparsers.add_parser("remove", help="Take a shortcut off a project's rail")
+    p_shortcut_remove = shortcut_subparsers.add_parser(
+        "remove", help="Take a shortcut off a project's rail"
+    )
     p_shortcut_remove.add_argument("app", help="The registered app")
     p_shortcut_remove.add_argument("action", help="The action the row runs")
-    _add_view_argument(p_shortcut_remove, "Project to configure, by name. Defaults to the connected client's view; Everything is refused.")
+    _add_view_argument(
+        p_shortcut_remove,
+        "Project to configure, by name. Defaults to the connected client's view; Everything is refused.",
+    )
     p_shortcut_remove.set_defaults(func=_cmd_shortcut_remove)
 
     args = parser.parse_args(argv)
