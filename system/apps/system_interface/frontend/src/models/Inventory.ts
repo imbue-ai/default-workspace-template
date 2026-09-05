@@ -188,9 +188,11 @@ export function primaryActionForApp(app: AppRecord): AppAction | null {
 
 // ---------- Liveness (pure) ----------
 
-/** Whether the workspace can stop and start this app: supervised, and not critical to the workspace. */
+/** Whether the workspace can stop and start this app: supervised, not critical to the workspace,
+ *  and not running inside a critical app's program (the shell refuses those the same way). */
 export function isAppStoppable(app: AppRecord): boolean {
-  return app.program !== "" && !app.critical;
+  if (app.program === "" || app.critical) return false;
+  return !apps.some((other) => other.critical && other.program === app.program);
 }
 
 /** Why a stopped app is not answering, in the row's tooltip. */

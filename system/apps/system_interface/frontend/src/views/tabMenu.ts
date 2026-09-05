@@ -54,8 +54,8 @@ export interface TabMenuActions {
  *
  * Delete is offered only for an instance of an app that has instances: a single-instance app
  * IS its one record, and the record goes only when the app is unregistered. Stop and Start
- * are offered only for an app the workspace can honestly stop (supervised and not critical),
- * and read from the app's liveness.
+ * are offered only for an app the workspace can honestly stop (supervised, not critical, and
+ * not inside a critical app's program), and read from the app's liveness.
  */
 export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions: TabMenuActions): TabMenuEntry[] {
   const opening: TabMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
