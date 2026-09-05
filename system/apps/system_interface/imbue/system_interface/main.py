@@ -1,26 +1,23 @@
 import argparse
 import atexit
-import os
 import signal
 from collections.abc import Sequence
+from pathlib import Path
 from types import FrameType
 
 import httpx
 from app_instances.nudge import ShellNudger
 from app_instances.nudge import ThreadedNudger
 from app_instances.nudge import shell_base_url
+from app_manifest.registry import registry_path
 from flask import Flask
 from loguru import logger as _loguru_logger
 
-from imbue.system_interface import projects
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import reconcile
-from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.auto_open import AutoOpenLedger
-from imbue.system_interface.auto_open import ledger_path_for_layout_dir
 from imbue.system_interface.chat_instances import CHAT_APP_NAME
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
@@ -28,8 +25,11 @@ from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
-from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.message_stamps import DEFAULT_STAMPS_PATH
+from imbue.system_interface.message_stamps import MessageStampStore
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.state import build_shell_state
+from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -51,11 +51,18 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--provider", action="append", default=[], help="Filter agents by provider name (repeatable)")
     parser.add_argument("--include", action="append", default=[], help="CEL include filter for agents (repeatable)")
     parser.add_argument("--exclude", action="append", default=[], help="CEL exclude filter for agents (repeatable)")
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        default=DEFAULT_STATE_DIRECTORY,
+        help="Where the shell keeps its projects, layouts, and client records (contracts.md section 7)",
+    )
     return parser.parse_args(argv)
 
 
 def build_production_state(
     config: Config,
+    state_directory: Path,
     provider_names: tuple[str, ...] | None = None,
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
@@ -69,15 +76,7 @@ def build_production_state(
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
-    # The ledger lives beside the workspace's saved layouts; without a primary
-    # agent to name that dir (dev/test setups) it is memory-only.
-    own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
-    ledger_path = (
-        ledger_path_for_layout_dir(projects.primary_agent_layout_dir(get_host_dir(), own_agent_id))
-        if own_agent_id
-        else None
-    )
-    agent_manager = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
+    agent_manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH))
     # The codex ledger owns live user-turns (Fix 1); route each committed user-turn it emits onto
     # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
@@ -90,10 +89,10 @@ def build_production_state(
         exclude_filters=exclude_filters,
         agent_manager=agent_manager,
         event_queues=event_queues,
-        # Advisory in-process mutex serializing layout-mutating ops. The agent
-        # script never auto-retries on contention -- it surfaces the 409 to the
-        # agent along with the in-flight holder's metadata.
-        layout_mutex=LayoutMutex(),
+        # The shell's own collaborators over its state directory and the app registry.
+        shell=build_shell_state(
+            state_directory=state_directory, registry_path=registry_path(), broadcaster=broadcaster
+        ),
         # One long-lived ClaudeAuthService per app so the in-flight OAuth
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
         # start call and the polls that advance it. A successful re-auth restarts the agents
@@ -102,9 +101,8 @@ def build_production_state(
         # Read-only: it reports claude's auth state and writes and restarts nothing, so it
         # needs no collaborators.
         claude_auth_service=ClaudeAuthService(),
-        # Single shared synchronous httpx client for server-side API calls to
-        # local services (e.g. the /api/browsers passthrough to the browser
-        # daemon); a separate one for the latchkey catalog proxy.
+        # One shared synchronous httpx client for server-side calls to local services; a
+        # separate one for the latchkey catalog proxy.
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=httpx.Client(timeout=30.0),
     )
@@ -124,6 +122,7 @@ def build_application(config: Config, args: argparse.Namespace) -> Flask:
     """
     state = build_production_state(
         config,
+        state_directory=args.state_dir,
         provider_names=tuple(args.provider) if args.provider else None,
         include_filters=tuple(args.include),
         exclude_filters=tuple(args.exclude),
@@ -173,8 +172,10 @@ def main() -> None:
 
     # Start the ``mngr observe`` pipeline now that the app is assembled. This is
     # the one place observe is started; ``build_application`` only constructs, so
-    # tests that build an app never spawn it.
+    # tests that build an app never spawn it. The shell's inventory starts here too:
+    # the registry watch, the liveness sweep, and the instance fetches.
     state.agent_manager.start()
+    state.shell.start()
 
     # Tear down the broadcaster, watchers, agent manager, and http clients on
     # exit. ``atexit`` covers a normal return; the signal handlers cover

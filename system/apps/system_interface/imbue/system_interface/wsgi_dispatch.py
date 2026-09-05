@@ -4,8 +4,8 @@ The chat app has its own origin in the browser (the registered ``chat`` row's la
 process cannot route on it: the desktop client's forwarder replaces the ``Host`` header with
 the backend's before handing a request over, and every loopback caller (the evals bridge,
 the update probes, ``curl``) has no label to send. So the dispatcher looks only at the path:
-the chat pages, the instances API, and the API routes only the chat app serves go to it, and
-everything else goes to the shell. Each origin's browser context still sees only its own
+the chat pages, the instances API, and the API routes only the chat app serves (every
+``/api/agents`` route among them) go to it, and everything else goes to the shell. Each origin's browser context still sees only its own
 document, because the shell frames ``/<agent-id>`` at the chat origin and never at its own.
 
 CLEANUP: delete this module in phase 10 of the workspace app model, when the chat app runs
@@ -32,7 +32,7 @@ CHAT_DOCUMENT_PATTERN: Final[re.Pattern[str]] = re.compile(r"^/agent-[A-Za-z0-9_
 # Path prefixes the chat app alone serves.
 _CHAT_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "/_instances",
-    "/api/agents/create-chat",
+    "/api/agents",
     "/api/harnesses",
     "/api/uploads",
     "/api/claude-auth",
@@ -42,24 +42,13 @@ _CHAT_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "/api/proto-agents",
 )
 
-# The per-agent verbs the shell keeps until phase 7 replaces them with the instances API;
-# every other ``/api/agents/<id>/...`` route is the chat app's.
-_SHELL_AGENT_VERBS: Final[frozenset[str]] = frozenset({"destroy", "start", "stop"})
-_AGENT_ROUTE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^/api/agents/([^/]+)/([^/]+)")
-
 
 @pure
 def is_chat_path(path: str) -> bool:
     """Whether the chat document serves ``path`` (the shell serves everything else)."""
     if CHAT_DOCUMENT_PATTERN.fullmatch(path):
         return True
-    for prefix in _CHAT_PATH_PREFIXES:
-        if path == prefix or path.startswith(f"{prefix}/"):
-            return True
-    agent_route = _AGENT_ROUTE_PATTERN.match(path)
-    if agent_route is None:
-        return False
-    return agent_route.group(2) not in _SHELL_AGENT_VERBS
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _CHAT_PATH_PREFIXES)
 
 
 class PathDispatchingFlask(Flask):

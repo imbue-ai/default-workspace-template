@@ -26,6 +26,10 @@ _AGENT_ID = "agent-0123456789abcdef0123456789abcdef"
         f"/api/agents/{_AGENT_ID}/presence",
         f"/api/agents/{_AGENT_ID}/subagents/abc/events",
         f"/api/agents/{_AGENT_ID}/screen",
+        "/api/agents",
+        f"/api/agents/{_AGENT_ID}/destroy",
+        f"/api/agents/{_AGENT_ID}/start",
+        f"/api/agents/{_AGENT_ID}/stop",
         "/api/harnesses",
         "/api/uploads",
         "/api/uploads/2026/photo.png",
@@ -49,15 +53,13 @@ def test_the_chat_document_serves_its_own_paths(path: str) -> None:
         "/assets/index-abc123.js",
         "/_static/app_contract.js",
         "/api/health",
-        "/api/agents",
-        f"/api/agents/{_AGENT_ID}/destroy",
-        f"/api/agents/{_AGENT_ID}/start",
-        f"/api/agents/{_AGENT_ID}/stop",
         "/api/ws",
         "/api/projects",
-        "/api/terminals",
-        "/api/browsers",
         "/api/apps/files/stop",
+        "/api/apps/files/instances",
+        "/api/tabs/tab-0123456789abcdef/instance",
+        "/api/client-activity",
+        "/api/layouts/everything",
         "/api/layout/broadcast",
         "/home/user/workspace/data/notes.md",
         "/agentic-browser",
@@ -97,7 +99,8 @@ def test_the_shell_app_hands_each_request_to_one_document() -> None:
     assert client.get(f"/{_AGENT_ID}").data == b"chat"
     assert client.get("/_instances").data == b"chat"
     assert client.get("/").data == b"shell"
-    assert client.get(f"/api/agents/{_AGENT_ID}/destroy").data == b"shell"
+    assert client.get(f"/api/agents/{_AGENT_ID}/destroy").data == b"chat"
+    assert client.get("/api/projects").data == b"shell"
 
 
 def test_every_path_is_the_shells_until_a_chat_app_is_installed() -> None:
