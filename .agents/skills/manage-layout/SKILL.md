@@ -210,7 +210,8 @@ commands. Descriptions always go to stderr.
   which client this op is for", for which you pass `--client <id>` from
   `context`, and an address that is not open or that no app lists)
 - `3` the app cannot do it right now (a full browser fleet, no signed-in
-  account for a new chat): retry after a short backoff, or tell the user
+  account for a new chat, an app still starting up; its 409 or 503): retry
+  after a short backoff, or tell the user
 
 ## When NOT to use this skill
 
