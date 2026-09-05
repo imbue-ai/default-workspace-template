@@ -173,11 +173,6 @@ export function appNameFromAddress(address: string): string | null {
   return parseAddress(address)?.app ?? null;
 }
 
-/** Whether ``candidate`` is an instance of the app ``address`` names (or that very address). */
-export function isAddressOfApp(candidate: string, appName: string): boolean {
-  return parseAddress(candidate)?.app === appName;
-}
-
 // ---------- Actions (pure) ----------
 
 /** The action an app's rail row and launcher tile run: its declared default shortcut's action
@@ -248,7 +243,6 @@ let loadViewListeners: LoadViewListener[] = [];
 let tabReboundListeners: TabReboundListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let connected = false;
 
 const reconnectBackoff = new ReconnectBackoff();
 
@@ -269,7 +263,6 @@ function connect(): void {
   ws = new WebSocket(url);
 
   ws.onopen = () => {
-    connected = true;
     console.info("[si-ws] connected");
     reconnectBackoff.reset();
     // During startup the active view may not be chosen yet; the dock re-reports once it is.
@@ -289,7 +282,6 @@ function connect(): void {
       `[si-ws] closed (code=${event.code} reason=${JSON.stringify(event.reason)} wasClean=${event.wasClean})`,
     );
     ws = null;
-    connected = false;
     scheduleReconnect();
     m.redraw();
   };
@@ -390,16 +382,7 @@ export function initInventory(): void {
   connect();
 }
 
-export function isConnected(): boolean {
-  return connected;
-}
-
 // ---------- Reads ----------
-
-/** Every registered app, in registry order, internal rows included. */
-export function getApps(): AppRecord[] {
-  return apps;
-}
 
 /** The apps a user can open from: every non-internal row, in registry order. */
 export function getOpenableApps(): AppRecord[] {
@@ -446,11 +429,6 @@ export function listInstances(): ResolvedInstance[] {
   return listed;
 }
 
-/** Whether the app list has arrived at least once with something in it. */
-export function areAppsLoaded(): boolean {
-  return appsLoaded;
-}
-
 /** Resolve once the app list has loaded, or after ``timeoutMs`` so a workspace that never
  *  reports any app still proceeds. Share-critical URL construction awaits this so a restored
  *  tab never mounts an unroutable bare-name origin on a share. */
@@ -486,32 +464,16 @@ export function addProjectsUpdatedListener(listener: ProjectsUpdatedListener): v
   projectsUpdatedListeners.push(listener);
 }
 
-export function removeProjectsUpdatedListener(listener: ProjectsUpdatedListener): void {
-  projectsUpdatedListeners = projectsUpdatedListeners.filter((l) => l !== listener);
-}
-
 export function addLayoutOpListener(listener: LayoutOpListener): void {
   layoutOpListeners.push(listener);
-}
-
-export function removeLayoutOpListener(listener: LayoutOpListener): void {
-  layoutOpListeners = layoutOpListeners.filter((l) => l !== listener);
 }
 
 export function addLoadViewListener(listener: LoadViewListener): void {
   loadViewListeners.push(listener);
 }
 
-export function removeLoadViewListener(listener: LoadViewListener): void {
-  loadViewListeners = loadViewListeners.filter((l) => l !== listener);
-}
-
 export function addTabReboundListener(listener: TabReboundListener): void {
   tabReboundListeners.push(listener);
-}
-
-export function removeTabReboundListener(listener: TabReboundListener): void {
-  tabReboundListeners = tabReboundListeners.filter((l) => l !== listener);
 }
 
 /** Forget every list and listener. Test-only. */

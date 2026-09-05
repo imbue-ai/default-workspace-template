@@ -1087,11 +1087,6 @@ export function getSidebarRows(): SidebarTabRow[] {
   }));
 }
 
-/** Whether the active view shows an instance of ``appName`` (what "Focus last X" needs). */
-export function viewShowsInstanceOf(appName: string): boolean {
-  return getSidebarRows().some((row) => row.appName === appName);
-}
-
 /**
  * Focus the tab an address already has, or open one for it in the active pane. Flashes the
  * tab when it was already open, so the click visibly does something.

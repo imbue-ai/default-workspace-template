@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { isTabId, mintTabId, panelsWithUnlistedAddresses } from "./Layouts";
+import { mintTabId, panelsWithUnlistedAddresses } from "./Layouts";
 
 describe("tab ids", () => {
   it("mints ids in the fixed shape, never twice", () => {
     const first = mintTabId();
-    expect(isTabId(first)).toBe(true);
+    expect(first).toMatch(/^tab-[0-9a-f]{16}$/);
     expect(mintTabId()).not.toBe(first);
-    expect(isTabId("panel-1")).toBe(false);
   });
 });
 

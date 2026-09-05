@@ -229,12 +229,6 @@ export function getAgentById(id: string): AgentState | undefined {
   return agents.find((a) => a.id === id);
 }
 
-/** What a chat agent's page reads as its name: the ``display_name`` label mngr holds for it
- *  (what the user typed / the minted "Chat N"), else its true name. */
-export function chatDisplayName(agent: { name: string; display_name?: string | null }): string {
-  return agent.display_name != null && agent.display_name !== "" ? agent.display_name : agent.name;
-}
-
 /** The full snapshot of an agent's currently-queued messages, in enqueue order. */
 export function getQueuedMessagesForAgent(agentId: string): QueuedMessage[] {
   return getAgentById(agentId)?.queued_messages ?? [];
