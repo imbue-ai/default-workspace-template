@@ -1,5 +1,12 @@
-"""Client layouts: one arrangement per view per client, plus a seed per device kind (contracts.md sections 6 and 7)."""
+"""Client layouts: one arrangement per view per client, plus a seed per device kind (contracts.md sections 6 and 7).
 
+The client's layout file is the truth of the arrangement. A browser writes it through
+``save_browser_layout`` for the user's own gestures (and that write alone rewrites the seed of
+its device kind); the shell writes it through ``write_client_layout`` for agent ops and its own
+bookkeeping, and edits the seed files directly when it prunes an address or rebinds a tab.
+"""
+
+from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
@@ -16,6 +23,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import LayoutRecord
+from imbue.system_interface.shell.errors import StaleLayoutSaveError
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
@@ -46,6 +54,12 @@ def empty_layout(device_kind: DeviceKind) -> LayoutRecord:
 @pure
 def layout_wire_json(layout: LayoutRecord) -> dict[str, Any]:
     return layout.model_dump(mode="json")
+
+
+@pure
+def is_same_arrangement(first: LayoutRecord, second: LayoutRecord) -> bool:
+    """Whether two layouts arrange the same panels the same way (the stamp and device kind aside)."""
+    return first.dockview == second.dockview and first.tabs == second.tabs
 
 
 @pure
@@ -118,9 +132,40 @@ def strip_address_from_layout(layout: LayoutRecord, address: Address) -> LayoutR
 
 
 @pure
+def strip_addresses_from_layout(layout: LayoutRecord, addresses: Sequence[Address]) -> LayoutRecord:
+    """The layout without every panel showing any of ``addresses``; the same object when none is shown."""
+    stripped = layout
+    for address in addresses:
+        stripped = strip_address_from_layout(stripped, address)
+    return stripped
+
+
+@pure
+def rebind_tab_in_layout(layout: LayoutRecord, tab_id: TabId, address: Address) -> LayoutRecord:
+    """The layout with every tab record carrying ``tab_id`` pointed at ``address``; unchanged when none does."""
+    tabs = {
+        panel_id: (tab.model_copy_update(to_update(tab.field_ref().address, address)) if tab.tab_id == tab_id else tab)
+        for panel_id, tab in layout.tabs.items()
+    }
+    if tabs == layout.tabs:
+        return layout
+    return layout.model_copy_update(to_update(layout.field_ref().tabs, tabs))
+
+
+@pure
 def unreferenced_addresses(candidates: Sequence[Address], referenced: set[Address]) -> list[Address]:
     """The candidates no project tab set and no client layout references (the referenced-lifetime rule)."""
     return [address for address in candidates if address not in referenced]
+
+
+@pure
+def is_stale_save(stored: LayoutRecord | None, base_updated_at: datetime | None) -> bool:
+    """Whether a save based on ``base_updated_at`` would clobber a newer stored arrangement."""
+    if stored is None or stored.updated_at is None:
+        return False
+    if base_updated_at is None:
+        return True
+    return stored.updated_at > base_updated_at.astimezone(timezone.utc)
 
 
 class LayoutStore(MutableModel):
@@ -147,6 +192,11 @@ class LayoutStore(MutableModel):
             logger.warning("Ignored an unreadable layout at {}: {}", path, e.errors()[0]["msg"])
             return None
 
+    def read_client_layout(self, view_id: str, client_id: str) -> LayoutRecord | None:
+        """The client's own arrangement of the view, or None when it has never saved one."""
+        with STATE_FILES_LOCK:
+            return self._read_file(self._client_path(view_id, client_id))
+
     def read_layout(self, view_id: str, client_id: str, device_kind: DeviceKind) -> LayoutRecord:
         """The client's own arrangement, else the seed for its device kind, else the empty layout."""
         with STATE_FILES_LOCK:
@@ -158,11 +208,34 @@ class LayoutStore(MutableModel):
                 return seed
         return empty_layout(device_kind)
 
-    def save_layout(self, view_id: str, client_id: str, layout: LayoutRecord, now: datetime) -> LayoutRecord:
-        """Write the client's arrangement and rewrite the seed for its device kind."""
+    def write_client_layout(self, view_id: str, client_id: str, layout: LayoutRecord, now: datetime) -> LayoutRecord:
+        """Write the client's arrangement (the shell's own writes: an op, a rebind, a prune). The seed is untouched."""
         stamped = layout.model_copy_update(to_update(layout.field_ref().updated_at, now.astimezone(timezone.utc)))
-        document = layout_wire_json(stamped)
         with STATE_FILES_LOCK:
+            write_json_atomic(self._client_path(view_id, client_id), layout_wire_json(stamped))
+        return stamped
+
+    def save_browser_layout(
+        self,
+        view_id: str,
+        client_id: str,
+        layout: LayoutRecord,
+        base_updated_at: datetime | None,
+        now: datetime,
+    ) -> LayoutRecord | None:
+        """A browser's save: refused when the stored arrangement is newer than the one it was based on, skipped when
+        it changes nothing, and otherwise written together with the seed of its device kind. None when skipped."""
+        with STATE_FILES_LOCK:
+            stored = self._read_file(self._client_path(view_id, client_id))
+            if is_stale_save(stored, base_updated_at):
+                raise StaleLayoutSaveError(
+                    f"the stored arrangement of {view_id!r} for client {client_id!r} is newer than the one this save "
+                    "was based on; fetch it again before saving"
+                )
+            if stored is not None and is_same_arrangement(stored, layout):
+                return None
+            stamped = layout.model_copy_update(to_update(layout.field_ref().updated_at, now.astimezone(timezone.utc)))
+            document = layout_wire_json(stamped)
             write_json_atomic(self._client_path(view_id, client_id), document)
             write_json_atomic(self._seed_path(view_id, layout.device_kind), document)
         return stamped
@@ -207,34 +280,50 @@ class LayoutStore(MutableModel):
                     found.append((stored, panel_id))
         return found
 
-    def rebind_tab(self, tab_id: TabId, address: Address, now: datetime) -> list[StoredLayout]:
-        """Point every tab record carrying ``tab_id`` at ``address``; returns the layouts rewritten."""
-        rewritten: list[StoredLayout] = []
-        with STATE_FILES_LOCK:
-            for stored, panel_id in self.find_tab(tab_id):
-                tab = stored.layout.tabs[panel_id]
-                tabs = {
-                    **stored.layout.tabs,
-                    panel_id: tab.model_copy_update(to_update(tab.field_ref().address, address)),
-                }
-                layout = stored.layout.model_copy_update(to_update(stored.layout.field_ref().tabs, tabs))
-                saved = self.save_layout(stored.view_id, stored.client_id, layout, now)
-                rewritten.append(stored.model_copy_update(to_update(stored.field_ref().layout, saved)))
-        return rewritten
+    def _rewrite_seeds(self, transform: Callable[[LayoutRecord], LayoutRecord], now: datetime) -> None:
+        """Apply ``transform`` to every seed file that it changes. Caller holds the state lock."""
+        layouts_dir = self._layouts_dir()
+        if not layouts_dir.is_dir():
+            return
+        for view_dir in layouts_dir.iterdir():
+            if not view_dir.is_dir():
+                continue
+            for path in view_dir.iterdir():
+                if not path.name.startswith(SEED_FILENAME_PREFIX) or not path.name.endswith(LAYOUT_FILE_SUFFIX):
+                    continue
+                seed = self._read_file(path)
+                if seed is None:
+                    continue
+                transformed = transform(seed)
+                if transformed is seed:
+                    continue
+                stamped = transformed.model_copy_update(
+                    to_update(transformed.field_ref().updated_at, now.astimezone(timezone.utc))
+                )
+                write_json_atomic(path, layout_wire_json(stamped))
 
-    def remove_addresses_everywhere(self, addresses: Sequence[Address], now: datetime) -> list[StoredLayout]:
-        """Strip the panels showing addresses no app lists any more from every client layout."""
+    def _rewrite_client_layouts(
+        self, transform: Callable[[LayoutRecord], LayoutRecord], now: datetime
+    ) -> list[StoredLayout]:
+        """Apply ``transform`` to every client layout it changes; returns the layouts rewritten."""
         rewritten: list[StoredLayout] = []
         with STATE_FILES_LOCK:
             for stored in self.all_client_layouts():
-                layout = stored.layout
-                for address in addresses:
-                    layout = strip_address_from_layout(layout, address)
-                if layout is stored.layout:
+                transformed = transform(stored.layout)
+                if transformed is stored.layout:
                     continue
-                saved = self.save_layout(stored.view_id, stored.client_id, layout, now)
+                saved = self.write_client_layout(stored.view_id, stored.client_id, transformed, now)
                 rewritten.append(stored.model_copy_update(to_update(stored.field_ref().layout, saved)))
+            self._rewrite_seeds(transform, now)
         return rewritten
+
+    def rebind_tab(self, tab_id: TabId, address: Address, now: datetime) -> list[StoredLayout]:
+        """Point every tab record carrying ``tab_id`` at ``address``, in the seeds too; returns the client layouts rewritten."""
+        return self._rewrite_client_layouts(lambda layout: rebind_tab_in_layout(layout, tab_id, address), now)
+
+    def remove_addresses_everywhere(self, addresses: Sequence[Address], now: datetime) -> list[StoredLayout]:
+        """Strip the panels showing addresses no app lists any more from every client layout and every seed."""
+        return self._rewrite_client_layouts(lambda layout: strip_addresses_from_layout(layout, addresses), now)
 
     def delete_client_layouts(self, client_id: ClientId) -> int:
         """Remove every layout file a client owns; returns how many went."""

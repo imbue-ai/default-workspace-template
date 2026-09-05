@@ -2,72 +2,52 @@
 
 ``system/scripts/layout.py`` posts ``{op, args, agent_id}`` to ``POST /api/layout/broadcast``
 (``routes.py``): the read ops (``list``, ``inspect``, ``views``, ``context``) are answered from
-the inventory and the state files, ``load`` switches a client's view, and every other op is
-broadcast to the connected clients of the target view, which apply it to their dock. This
-module holds the op tables, the advisory mutex, and the pure summaries the read ops answer with.
+the inventory and the state files, ``load`` switches a client's view, the document ops are applied
+by the shell to the target client's layout file (``dockview_document.py``), and the transient ops
+are sent to that client's windows. This module holds the op tables, the op arguments, and the pure
+summaries the read ops answer with.
 """
 
-import threading
-import time
 from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 from typing import Final
 
 from pydantic import Field
-from pydantic import PrivateAttr
 
-from imbue.imbue_common.mutable_model import MutableModel
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import Project
 from imbue.system_interface.shell.data_types import action_wire_json
 from imbue.system_interface.shell.data_types import effective_actions
+from imbue.system_interface.shell.dockview_document import DEFAULT_SPLIT_RATIO
+from imbue.system_interface.shell.dockview_document import Direction
 from imbue.system_interface.shell.layouts import StoredLayout
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_ID
 from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_NAME
 
 # The ops the endpoint dispatches on. Anything else is a 400.
-KNOWN_OPS: Final[frozenset[str]] = frozenset(
-    {
-        "list",
-        "inspect",
-        "open",
-        "focus",
-        "split",
-        "close",
-        "move",
-        "maximize",
-        "restore",
-        "refresh",
-        "reload_system_interface",
-        "context",
-        "load",
-        "views",
-    }
-)
-
-# Ops that mutate a client's arrangement and therefore acquire the mutex. ``focus`` is here
-# because dockview persists the active panel, so a focus changes the next save's bytes.
-MUTATING_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "close", "move", "maximize", "restore"})
-
-# Ops that reach the frontend as a ``layout_op`` message.
-BROADCASTING_OPS: Final[frozenset[str]] = frozenset(
-    {"open", "focus", "split", "close", "move", "maximize", "restore", "refresh", "reload_system_interface"}
-)
+READ_OPS: Final[frozenset[str]] = frozenset({"list", "inspect", "views", "context"})
+LOAD_OP: Final[str] = "load"
+# Ops the shell applies to the target client's layout file (the file is the truth of the arrangement).
+DOCUMENT_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "close", "move"})
+# Ops that change what is on screen without changing the saved document: they alone still reach the
+# browser as a ``layout_op`` message.
+TRANSIENT_OPS: Final[frozenset[str]] = frozenset({"maximize", "restore", "refresh", "reload_system_interface"})
+KNOWN_OPS: Final[frozenset[str]] = READ_OPS | {LOAD_OP} | DOCUMENT_OPS | TRANSIENT_OPS
 
 # Ops that name an instance or an app in ``args.address``.
 ADDRESSED_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "close", "move", "maximize", "refresh"})
 
-# The one non-address an addressed op accepts: the requester's own chat, which the connected
-# client resolves from the op's ``requester_agent_id`` (``layout.py`` passes it through).
-SELF_ADDRESS: Final[str] = "self"
+# Ops that dock a panel, and may therefore create the instance it shows.
+CREATING_OPS: Final[frozenset[str]] = frozenset({"open", "split"})
 
-# The mutex TTL: comfortably longer than one dockview mutation round trip, short enough that
-# a wedged op cannot lock the workspace for an annoying length of time.
-_MUTEX_TTL_SECONDS: Final[float] = 0.5
+# The one non-address an addressed op accepts: the requester's own chat, which the shell resolves
+# from the op's ``agent_id``.
+SELF_ADDRESS: Final[str] = "self"
 
 
 @pure
@@ -76,13 +56,18 @@ def is_known_op(op: str) -> bool:
 
 
 @pure
-def is_mutating_op(op: str) -> bool:
-    return op in MUTATING_OPS
+def is_read_op(op: str) -> bool:
+    return op in READ_OPS
 
 
 @pure
-def is_broadcasting_op(op: str) -> bool:
-    return op in BROADCASTING_OPS
+def is_document_op(op: str) -> bool:
+    return op in DOCUMENT_OPS
+
+
+@pure
+def is_transient_op(op: str) -> bool:
+    return op in TRANSIENT_OPS
 
 
 @pure
@@ -90,47 +75,21 @@ def is_addressed_op(op: str) -> bool:
     return op in ADDRESSED_OPS
 
 
-class LayoutMutex(MutableModel):
-    """Advisory in-process mutex protecting layout-mutating ops.
+@pure
+def is_creating_op(op: str) -> bool:
+    return op in CREATING_OPS
 
-    Acquisition is non-blocking and TTL-bounded: a holder that does not release is auto-released
-    after the TTL. Conflicting requests fail at once with HTTP 409 and the in-flight op's
-    metadata so the caller can pick its own retry strategy.
-    """
 
-    ttl_seconds: float = Field(default=_MUTEX_TTL_SECONDS, description="How long a holder keeps the mutex unreleased")
-    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _holder: dict[str, Any] | None = PrivateAttr(default=None)
+class DocumentOpArguments(FrozenModel):
+    """The arguments of a document op, as ``layout.py`` posts them (contracts.md section 12)."""
 
-    def try_acquire(self, agent_id: str, op: str, args: Mapping[str, Any]) -> dict[str, Any] | None:
-        """Take the mutex; None on success, else the holder's description for a 409."""
-        now = time.monotonic()
-        with self._lock:
-            if self._holder is not None and now - self._holder["started_at_monotonic"] < self.ttl_seconds:
-                return {
-                    "agent_id": self._holder["agent_id"],
-                    "operation": self._holder["op"],
-                    "args": self._holder["args"],
-                    "started_at": self._holder["started_at_wall"],
-                }
-            self._holder = {
-                "agent_id": agent_id,
-                "op": op,
-                "args": dict(args),
-                "started_at_monotonic": now,
-                "started_at_wall": time.time(),
-            }
-            return None
-
-    def release(self, agent_id: str, op: str) -> None:
-        """Best-effort release: a no-op when the slot was already taken over after the TTL."""
-        with self._lock:
-            holder = self._holder
-            if holder is not None and holder["agent_id"] == agent_id and holder["op"] == op:
-                self._holder = None
-
-    def retry_after_ms(self) -> int:
-        return int(self.ttl_seconds * 1000)
+    address: str = Field(default="", description="The instance or app the op names; ``self`` for the requester's chat")
+    relative_to: str = Field(default=SELF_ADDRESS, description="The anchor of a split or a move")
+    direction: Direction = Field(default=Direction.RIGHT, description="Where a split or a move lands")
+    ratio: float = Field(default=DEFAULT_SPLIT_RATIO, description="The share of the anchor a split takes")
+    new_group: bool = Field(default=False, description="Split even when a group already lies in the direction")
+    action: str = Field(default="", description="The action a create runs; empty for the app's primary action")
+    params: dict[str, str] = Field(default_factory=dict, description="The create's params")
 
 
 @pure

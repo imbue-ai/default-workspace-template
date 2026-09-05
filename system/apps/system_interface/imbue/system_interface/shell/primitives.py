@@ -160,6 +160,16 @@ def mint_tab_id() -> TabId:
     return TabId(f"tab-{secrets.token_hex(_MINTED_ID_BYTES)}")
 
 
+def mint_group_id() -> str:
+    """A dockview group id for a group the shell creates in a client's document."""
+    return f"group-{secrets.token_hex(_MINTED_ID_BYTES)}"
+
+
+def mint_save_id() -> SaveId:
+    """A save id for a write the shell makes itself (a window mints its own)."""
+    return SaveId(f"save-{secrets.token_hex(_MINTED_ID_BYTES)}")
+
+
 class ClientActivityKind(LowerCaseStrEnum):
     """What a client-activity report records: a message sent to an instance, or a view switch (a wire value)."""
 

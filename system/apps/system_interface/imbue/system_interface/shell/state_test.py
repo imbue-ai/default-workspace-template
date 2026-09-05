@@ -56,10 +56,11 @@ def test_unreferenced_referenced_instances_are_deleted_after_the_grace_period(
     try:
         shell.projects.create_project("Alpha", "#111111", 0, ())
         shell.projects.add_tab("alpha", _STUB_1)
-        shell.layouts.save_layout("everything", "c1", layout_showing(_STUB_2), TEST_NOW)
+        first = shell.layouts.save_browser_layout("everything", "c1", layout_showing(_STUB_2), None, TEST_NOW)
         # Everything is referenced, and stub-3 is explicit: nothing goes.
         assert shell.delete_unreferenced_instances() == []
-        shell.layouts.save_layout("everything", "c1", layout_showing(), TEST_NOW)
+        assert first is not None
+        shell.layouts.save_browser_layout("everything", "c1", layout_showing(), first.updated_at, TEST_NOW)
         # stub-2 is unreferenced now but within its grace period.
         assert shell.delete_unreferenced_instances() == []
         clock[0] += 60.0
@@ -98,7 +99,7 @@ def test_instances_an_app_stopped_listing_leave_the_tab_sets_and_layouts(
         shell.projects.create_project("Alpha", "#111111", 0, ())
         shell.projects.add_tab("alpha", _STUB_1)
         shell.projects.add_tab("alpha", _STUB_2)
-        shell.layouts.save_layout("alpha", "c1", layout_showing(_STUB_1, _STUB_2), TEST_NOW)
+        shell.layouts.save_browser_layout("alpha", "c1", layout_showing(_STUB_1, _STUB_2), None, TEST_NOW)
         shell.inventory.add_removed_listener(shell.on_instances_removed)
         client_queue = broadcaster.register()
 
@@ -125,7 +126,7 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
         ClientStateReport(client_id=ClientId("old"), device_kind=DeviceKind.DESKTOP, active_view=ViewId("everything")),
         stale_at,
     )
-    shell.layouts.save_layout("everything", "old", layout_showing(_STUB_1), stale_at)
+    shell.layouts.save_browser_layout("everything", "old", layout_showing(_STUB_1), None, stale_at)
     shell.start()
     try:
         # The prune at start took the stale client and its layout file.

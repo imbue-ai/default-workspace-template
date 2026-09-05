@@ -21,6 +21,7 @@ from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import ProjectId
+from imbue.system_interface.shell.primitives import SaveId
 from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.shell.primitives import ViewId
 from imbue.system_interface.shell.primitives import address_for
@@ -229,7 +230,18 @@ class LayoutSaveRequest(FrozenModel):
     """The body of ``POST /api/layouts/<view_id>`` (contracts.md section 6)."""
 
     client_id: ClientId = Field(description="The saving client")
-    save_id: str = Field(default="", description="The save id the window minted")
+    save_id: SaveId = Field(description="The save id the window minted, echoed in the layout_updated broadcast")
+    base_updated_at: AwareDatetime | None = Field(
+        default=None,
+        description="The updated_at of the arrangement the window last fetched or saved; None for one it only saw empty",
+    )
     device_kind: DeviceKind = Field(description="The device kind the arrangement was made on")
     dockview: dict[str, Any] | None = Field(description="The serialized dockview grid")
     tabs: dict[str, TabRecord] = Field(description="Each panel's tab record")
+
+
+class ClientReportOutcome(FrozenModel):
+    """What recording a ``client_state`` report came to: the record, and whether its active view moved."""
+
+    record: ClientRecord = Field(description="The client record as written")
+    is_active_view_changed: bool = Field(description="Whether the stored active view differs from before the report")

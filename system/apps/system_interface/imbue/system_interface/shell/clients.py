@@ -16,7 +16,9 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import ClientRecord
+from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import ViewId
@@ -47,13 +49,14 @@ class ClientsDocument(FrozenModel):
 
 
 @pure
-def client_wire_json(record: ClientRecord) -> dict[str, Any]:
+def client_wire_json(record: ClientRecord, is_connected: bool) -> dict[str, Any]:
     """The ``client`` object of contracts.md section 6."""
     return {
         "id": str(record.id),
         "device_kind": record.device_kind.value,
         "active_view": str(record.active_view),
         "last_seen": record.last_seen.isoformat(),
+        "is_connected": is_connected,
     }
 
 
@@ -102,11 +105,12 @@ class ClientStore(MutableModel):
                 return record
         return None
 
-    def record_report(self, report: ClientStateReport, now: datetime) -> ClientRecord:
+    def record_report(self, report: ClientStateReport, now: datetime) -> ClientReportOutcome:
         """Record a ``client_state`` report: the client's device kind, active view, and last-seen stamp."""
         stamped = now.astimezone(timezone.utc)
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
+            previous = document.clients.get(str(report.client_id))
             clients = {
                 **document.clients,
                 str(report.client_id): _StoredClient(
@@ -114,9 +118,29 @@ class ClientStore(MutableModel):
                 ),
             }
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        return ClientRecord(
+        record = ClientRecord(
             id=report.client_id, device_kind=report.device_kind, active_view=report.active_view, last_seen=stamped
         )
+        return ClientReportOutcome(
+            record=record, is_active_view_changed=previous is None or previous.active_view != report.active_view
+        )
+
+    def set_active_view(self, client_id: ClientId, view_id: ViewId, now: datetime) -> ClientReportOutcome:
+        """Move a recorded client onto a view (a ``load`` op, or an op's ``--view``); raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            previous = document.clients.get(str(client_id))
+            if previous is None:
+                raise ClientNotFoundError(f"No client record for {client_id!r}")
+            updated = previous.model_copy_update(
+                to_update(previous.field_ref().active_view, view_id),
+                to_update(previous.field_ref().last_seen, stamped),
+            )
+            clients = {**document.clients, str(client_id): updated}
+            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
+        record = ClientRecord(id=client_id, device_kind=previous.device_kind, active_view=view_id, last_seen=stamped)
+        return ClientReportOutcome(record=record, is_active_view_changed=previous.active_view != view_id)
 
     def prune_unseen(self, now: datetime) -> list[ClientId]:
         """Drop every client unseen for the retention period; returns their ids so the caller can drop their layouts."""

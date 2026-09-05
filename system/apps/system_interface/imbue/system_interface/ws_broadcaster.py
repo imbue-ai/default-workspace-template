@@ -108,31 +108,31 @@ class WebSocketBroadcaster(MutableModel):
             info = self._client_info_by_queue_id.get(id(client_queue))
             return dict(info) if info is not None else None
 
-    def has_client_on_view(self, view_id: str) -> bool:
-        """Whether any registered client currently has ``view_id`` active."""
+    def connected_client_ids(self) -> set[str]:
+        """The ids of every registered client with at least one open window."""
         with self._lock:
-            return any(info["active_view"] == view_id for info in self._client_info_by_queue_id.values())
+            return {info["client_id"] for info in self._client_info_by_queue_id.values()}
 
     def broadcast(self, message: dict[str, Any]) -> None:
         """Serialize and send a message to all connected clients. Thread-safe."""
-        self._broadcast_to_matching(message, target_view=None)
+        self._broadcast_to_matching(message, target_client_id=None)
 
-    def broadcast_to_view(self, message: dict[str, Any], view_id: str) -> None:
-        """Send a message only to registered clients whose active view is ``view_id``.
+    def broadcast_to_client(self, message: dict[str, Any], client_id: str) -> None:
+        """Send a message only to the windows of one client (every registered connection carrying its id).
 
-        Clients that have not (yet) sent their ``client_state`` registration
-        never match: without a report there is no view to compare against.
+        Connections that have not (yet) sent their ``client_state`` registration never match:
+        without a report there is no client id to compare against.
         """
-        self._broadcast_to_matching(message, target_view=view_id)
+        self._broadcast_to_matching(message, target_client_id=client_id)
 
-    def _broadcast_to_matching(self, message: dict[str, Any], target_view: str | None) -> None:
+    def _broadcast_to_matching(self, message: dict[str, Any], target_client_id: str | None) -> None:
         text = json.dumps(message)
         with self._lock:
             dead_queues: list[queue.Queue[str | None]] = []
             for client_queue in self._client_queues:
-                if target_view is not None:
+                if target_client_id is not None:
                     info = self._client_info_by_queue_id.get(id(client_queue))
-                    if info is None or info["active_view"] != target_view:
+                    if info is None or info["client_id"] != target_client_id:
                         continue
                 try:
                     client_queue.put_nowait(text)
@@ -187,6 +187,14 @@ class WebSocketBroadcaster(MutableModel):
             {"type": "tab_rebound", "client_id": client_id, "view_id": view_id, "tab_id": tab_id, "address": address}
         )
 
+    def broadcast_layout_updated(self, view_id: str, client_id: str, save_id: str) -> None:
+        """A client layout was written (a browser's save or the shell's own edit); the owning windows refetch it."""
+        self.broadcast({"type": "layout_updated", "view_id": view_id, "client_id": client_id, "save_id": save_id})
+
+    def broadcast_active_view_changed(self, client_id: str, view_id: str) -> None:
+        """A client's stored active view moved; its other windows switch to it."""
+        self.broadcast({"type": "active_view_changed", "client_id": client_id, "view_id": view_id})
+
     def broadcast_proto_agent_created(
         self,
         agent_id: str,
@@ -221,42 +229,26 @@ class WebSocketBroadcaster(MutableModel):
         op: str,
         args: dict[str, Any],
         requester_agent_id: str = "",
-        target_view: str | None = None,
+        target_client_id: str | None = None,
     ) -> None:
-        """Broadcast a layout_op event telling the frontend to mutate the dockview layout.
-
-        The frontend dispatches on ``op`` (the tables in ``shell/layout_ops.py``) and applies
-        the corresponding dockview primitive. ``args`` is an op-specific payload keyed by address.
+        """Send a transient ``layout_op`` (maximize, restore, refresh, the interface reload) to the browser.
 
         ``requester_agent_id`` is the ``MNGR_AGENT_ID`` of the agent that invoked
-        ``system/scripts/layout.py``; the frontend anchors splits against the requester's
-        own chat tab and resolves the ``self`` address with it.
-
-        ``target_view`` restricts delivery to clients whose active view matches (mutating
-        ops are view-targeted); None broadcasts to everyone (``refresh``,
-        ``reload_system_interface``).
+        ``system/scripts/layout.py``; the frontend resolves the ``self`` address with it.
+        ``target_client_id`` names the client whose windows apply the op; None reaches every
+        window (``refresh`` of a whole app, ``reload_system_interface``).
         """
-        message = {"type": "layout_op", "op": op, "args": args, "requester_agent_id": requester_agent_id}
-        if target_view is None:
+        message = {
+            "type": "layout_op",
+            "op": op,
+            "args": args,
+            "requester_agent_id": requester_agent_id,
+            "target_client_id": target_client_id,
+        }
+        if target_client_id is None:
             self.broadcast(message)
         else:
-            self.broadcast_to_view(message, target_view)
-
-    def broadcast_load_layout(self, view_id: str, display_name: str, target_client_id: str | None) -> None:
-        """Broadcast an agent-driven request that a client switch to a view.
-
-        ``target_client_id`` names the one client that should switch; None means every
-        client switches (the fallback when the requesting client could not be resolved).
-        CLEANUP: phase 8 of the workspace app model folds this into ``active_view_changed``.
-        """
-        self.broadcast(
-            {
-                "type": "load_layout",
-                "view_id": view_id,
-                "display_name": display_name,
-                "target_client_id": target_client_id,
-            }
-        )
+            self.broadcast_to_client(message, target_client_id)
 
     def shutdown(self) -> None:
         """Signal all clients to disconnect by sending None sentinel."""

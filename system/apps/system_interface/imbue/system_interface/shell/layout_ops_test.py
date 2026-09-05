@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any
 
-from app_instances.testing import wait_until
 from app_manifest.registry import read_registry
 
 from imbue.system_interface.shell.data_types import AppInventoryEntry
@@ -9,7 +8,6 @@ from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import Project
 from imbue.system_interface.shell.data_types import TabRecord
 from imbue.system_interface.shell.data_types import synthesized_single_instance
-from imbue.system_interface.shell.layout_ops import LayoutMutex
 from imbue.system_interface.shell.layout_ops import layout_inspect
 from imbue.system_interface.shell.layout_ops import layout_list
 from imbue.system_interface.shell.layout_ops import layout_views
@@ -110,17 +108,3 @@ def test_views_and_display_names() -> None:
     assert view_display_name("alpha", [project]) == "Alpha"
     assert view_display_name("everything", [project]) == "Everything"
     assert view_display_name("gone", [project]) == "gone"
-
-
-def test_the_mutex_is_exclusive_until_released_or_expired() -> None:
-    mutex = LayoutMutex(ttl_seconds=0.05)
-    assert mutex.try_acquire("a", "open", {"address": "app:files"}) is None
-    holder = mutex.try_acquire("b", "close", {})
-    assert holder is not None and holder["agent_id"] == "a" and holder["operation"] == "open"
-    mutex.release("b", "close")
-    assert mutex.try_acquire("b", "close", {}) is not None
-    mutex.release("a", "open")
-    assert mutex.try_acquire("b", "close", {}) is None
-    # The unreleased hold expires on its own once the TTL passes.
-    assert wait_until(lambda: mutex.try_acquire("c", "focus", {}) is None, timeout_seconds=2.0)
-    assert mutex.retry_after_ms() == 50
