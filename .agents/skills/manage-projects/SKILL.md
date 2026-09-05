@@ -10,7 +10,7 @@ The workspace shows one *view* at a time: a **project**, or **Everything**
 itself: what a project is, how to query it, how its tab set and rail
 shortcuts change, and what deleting an instance or a project does. For the
 mechanics of `system/scripts/layout.py` (addresses, `split`/`move`
-directions, exit codes, wait-stable diffs) see the `manage-layout` skill;
+directions, exit codes, which client an op targets) see the `manage-layout` skill;
 this one assumes you've read it.
 
 ## What a project is
