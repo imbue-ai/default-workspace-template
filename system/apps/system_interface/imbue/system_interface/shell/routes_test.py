@@ -346,6 +346,8 @@ def test_the_read_ops_answer_from_the_inventory_and_the_state_files(client: Flas
     )
     shell.activity.append_message("c1", "desktop", "alpha", "chat", "agent-1", "hello")
     _register_client(app, "c1", "alpha")
+    # A second client that has connected and done nothing else: it has no event in the log.
+    _register_client(app, "c9", "everything")
 
     views = _broadcast(client, "views").get_json()["views"]
     assert [view["id"] for view in views] == ["alpha", "everything"]
@@ -364,8 +366,17 @@ def test_the_read_ops_answer_from_the_inventory_and_the_state_files(client: Flas
     ]
 
     context = _broadcast(client, "context").get_json()["clients"]
-    assert context[0]["client_id"] == "c1" and context[0]["is_connected"] is True
+    assert [entry["client_id"] for entry in context] == ["c1", "c9"]
+    assert context[0]["is_connected"] is True and context[0]["active_view"] == "alpha"
     assert context[0]["recent_messages"][0]["address"] == "app:chat?instance=agent-1"
+    assert context[1] == {
+        "client_id": "c9",
+        "device_kind": "desktop",
+        "active_view": "everything",
+        "last_seen": "",
+        "is_connected": True,
+        "recent_messages": [],
+    }
 
 
 def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_agent(
