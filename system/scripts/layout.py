@@ -28,8 +28,9 @@ Every instance is named by one *address* (contracts.md section 1):
 - ``app:<name>?instance=<key>`` -- one instance of an app: a chat by its agent id
   (``app:chat?instance=agent-...``), a terminal by its tmux session name
   (``app:terminal?instance=terminal-3``), a browser by its name.
-- ``app:<name>`` -- a single-instance app's one tab (``app:files``), or, as an ``open`` /
-  ``split`` target, "a fresh instance of this app" for an app that has instances.
+- ``app:<name>`` -- a single-instance app's one tab (an app built without instances, say
+  ``app:docs``), or, as an ``open`` / ``split`` target, "a fresh instance of this app" for an
+  app that has instances (``open app:terminal``, ``open app:files``).
 
 A bare word is shorthand for ``app:<word>``. The old ``chat:`` / ``terminal:`` /
 ``service:`` / ``url:`` / ``subagent:`` spellings are refused with the address to use
@@ -1378,8 +1379,9 @@ def main(argv: list[str] | None = None) -> int:
     p_open = subparsers.add_parser("open", help="Surface an instance in the UI")
     p_open.add_argument(
         "target",
-        help="An address (``app:files``, ``app:terminal?instance=terminal-2``) or a bare app name. A bare "
-        "name of an app with instances creates a fresh one and prints its address.",
+        help="An address (``app:terminal?instance=terminal-2`` docks that instance; ``app:docs`` docks a "
+        "single-instance app's one tab) or a bare app name. A bare name of an app with instances creates a "
+        "fresh one and prints its address.",
     )
     p_open.add_argument(
         "--new-group",
