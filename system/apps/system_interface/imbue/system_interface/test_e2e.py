@@ -1449,8 +1449,8 @@ def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: 
     """
     with _running_e2e_server(tmp_path, _PORT + 15, is_stub_app_offered=True) as server:
         page.on("dialog", lambda dialog: dialog.accept())
-        # The project was created before the stub app was listed, so its seeded rail
-        # holds only the chat's default shortcut: the stub is there to pin.
+        # The project was created before the shell read the registry, so its rail was
+        # seeded with nothing: the stub is there to pin.
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         assert (_STUB_APP_NAME, "new", "focus") not in _project_shortcuts(server.base_url)
