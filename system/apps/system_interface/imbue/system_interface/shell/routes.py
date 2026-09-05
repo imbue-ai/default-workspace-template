@@ -694,7 +694,9 @@ def _active_view_of_client(shell: ShellState, client_id: ClientId) -> str | None
     return None
 
 
-def _resolve_op_view(shell: ShellState, args_raw: dict[str, Any], client_id: ClientId) -> tuple[str | None, Any]:
+def _resolve_op_view(
+    shell: ShellState, args_raw: dict[str, Any], client_id: ClientId
+) -> tuple[str | None, ResponseReturnValue | None]:
     """The view a document op edits: ``args.view``, else the client's active view."""
     requested = args_raw.get("view")
     if isinstance(requested, str) and requested:
