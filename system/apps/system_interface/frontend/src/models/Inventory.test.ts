@@ -103,6 +103,10 @@ describe("the inventory", () => {
     expect(isAppStoppable(app("files", { program: "files" }))).toBe(true);
     expect(isAppStoppable(app("files"))).toBe(false);
     expect(isAppStoppable(app("chat", { program: "system_interface", critical: true }))).toBe(false);
+    // A row running inside a critical app's program cannot be stopped without stopping that app.
+    applyApps([app("system_interface", { program: "system_interface", critical: true })]);
+    expect(isAppStoppable(app("chat", { program: "system_interface" }))).toBe(false);
+    expect(isAppStoppable(app("files", { program: "files" }))).toBe(true);
     expect(appStoppedDetail(app("files", { program: "files" }))).toBe("stopped");
     expect(appStoppedDetail(app("files"))).toContain("managed outside");
   });
