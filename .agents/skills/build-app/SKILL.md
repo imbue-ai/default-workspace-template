@@ -202,12 +202,13 @@ What gets generated:
   are what let a future edit boot a throwaway instance on a spare port
   against a data copy (see `update-app`). The scaffolded index page also
   carries the **location beacon** one-liner -- a script that posts
-  `{type: "minds-location", path: location.pathname + location.search}`
+  `{type: "shell:location", path: location.pathname + location.search}`
   to `window.parent` on page load. Keep that line on every page the app
   serves: it is what lets the workspace shell reopen the app's tab at
   the place it was showing (the shell validates the sender's origin and
-  stores the path per tab, machine-wide). An app that drops it simply
-  always reopens at its origin.
+  relays the path to the app's own instances API, which stores it on the
+  instance's record). An app that drops it simply always reopens at its
+  origin.
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `system/apps/<package>/README.md` -- one-line description.

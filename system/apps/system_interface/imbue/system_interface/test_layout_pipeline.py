@@ -21,6 +21,7 @@ import queue as queue_module
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -34,7 +35,6 @@ from app_instances.testing import LOOPBACK_HOST
 from app_instances.testing import RecordingNudger
 from app_instances.testing import StubInstanceSource
 from app_instances.testing import free_port
-
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -195,12 +195,13 @@ def _await_layout_op(client_queue: queue_module.Queue[str | None], timeout: floa
 
 
 def _assert_no_layout_op(client_queue: queue_module.Queue[str | None]) -> None:
-    """Nothing addressed to the dock reached the client; unrelated pushes (``apps_updated``) are fine."""
-    while True:
+    """Nothing addressed to the dock reached the client within half a second; unrelated pushes are fine."""
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline:
         try:
             raw = client_queue.get(timeout=0.05)
         except queue_module.Empty:
-            return
+            continue
         assert raw is None or json.loads(raw).get("type") != "layout_op"
 
 
@@ -214,7 +215,8 @@ def _listing(harness: PipelineHarness, cwd: Path) -> dict[str, dict[str, Any]]:
 def _wait_for_instance_listed(harness: PipelineHarness, cwd: Path, app: str, address: str) -> None:
     """The inventory fetches instance lists off the request thread, so a listing is polled for."""
     wait_for(
-        lambda: address in {instance["address"] for instance in _listing(harness, cwd).get(app, {"instances": []})["instances"]},
+        lambda: address
+        in {instance["address"] for instance in _listing(harness, cwd).get(app, {"instances": []})["instances"]},
         timeout=10.0,
         poll_interval=0.2,
         error_message=f"{address} never listed under {app}",
@@ -227,7 +229,9 @@ def _sandbox(tmp_path: Path) -> Path:
     return sandbox
 
 
-def test_inspect_and_context_round_trip_through_script_and_endpoint(layout_server: PipelineHarness, tmp_path: Path) -> None:
+def test_inspect_and_context_round_trip_through_script_and_endpoint(
+    layout_server: PipelineHarness, tmp_path: Path
+) -> None:
     """``inspect --json`` and ``context --json`` answer with the empty shapes for a machine nobody has opened."""
     sandbox = _sandbox(tmp_path)
 
@@ -257,7 +261,9 @@ def test_list_shows_every_app_with_the_seeded_agent_as_a_chat_instance(
 
     listing = _listing(layout_server, sandbox)
     chat = listing["chat"]
-    assert [instance["title"] for instance in chat["instances"] if instance["address"] == _CHAT_ADDRESS] == [_AGENT_NAME]
+    assert [instance["title"] for instance in chat["instances"] if instance["address"] == _CHAT_ADDRESS] == [
+        _AGENT_NAME
+    ]
     assert [action["id"] for action in chat["actions"]] == ["new", "subagent"]
     assert listing[_STUB_APP_NAME]["instances"] == []
     assert listing[_STUB_APP_NAME]["is_running"] is True
@@ -274,7 +280,9 @@ def test_open_of_a_bare_app_with_instances_broadcasts_the_creating_op(
     client_queue = layout_server.broadcaster.register()
     layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
     try:
-        result = _run_layout_script(["open", _STUB_APP_NAME, "--view", "Everything"], layout_server, _sandbox(tmp_path))
+        result = _run_layout_script(
+            ["open", _STUB_APP_NAME, "--view", "Everything"], layout_server, _sandbox(tmp_path)
+        )
         assert result.returncode == 0, f"stderr={result.stderr!r}"
 
         msg = _await_layout_op(client_queue, timeout=2.0)
@@ -284,7 +292,9 @@ def test_open_of_a_bare_app_with_instances_broadcasts_the_creating_op(
         layout_server.broadcaster.unregister(client_queue)
 
 
-def test_open_close_of_an_instance_address_broadcasts_layout_ops(layout_server: PipelineHarness, tmp_path: Path) -> None:
+def test_open_close_of_an_instance_address_broadcasts_layout_ops(
+    layout_server: PipelineHarness, tmp_path: Path
+) -> None:
     """``open`` and ``close`` against an instance address reach the broadcaster intact."""
     sandbox = _sandbox(tmp_path)
     client_queue = layout_server.broadcaster.register()

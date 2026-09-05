@@ -54,7 +54,7 @@ Built-in manifests:
 | `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional, from phase 8) |
 
 The `terminal` and `files` manifests keep `icon` pointing at the existing `icon.svg` files (the terminal gains one, drawn in the house style; today it registers with `--no-icon`).
-While the chat app is a second document of the shell's process (phases 6 to 9), its manifest also declares `program = "system_interface"`, `priority = "system_interface"` (the memory backstop resolves a program's band from the registry row that names it), and `internal = true` (the shell offers no row for it until phase 7 reads `critical` and lists apps from the inventory); each is a `# CLEANUP:` for phase 7 or 10.
+While the chat app is a second document of the shell's process (phases 6 to 9), its manifest also declares `program = "system_interface"` and `priority = "system_interface"` (the memory backstop resolves a program's band from the registry row that names it); each is a `# CLEANUP:` for phase 10. (Phase 6 also declared `internal = true`, which phase 7 dropped when the shell started listing apps from the inventory.)
 
 ## 3. The registry (`data/.state/apps.toml`)
 
@@ -228,6 +228,8 @@ A single-instance app carries one synthesized record: key `""`, url `/`, title `
 
 Retired messages: `agents_updated`, `proto_agent_*`, `terminal_session`, `load_layout` (folded into `active_view_changed`), `project_saved`, `project_deleted`, `project_updated`, `project_members_changed`, `project_panel_removed`, `member_title_changed`, `member_last_used_changed`, `member_location_changed`.
 
+Two of those outlive phase 7 as marked carve-outs: `agents_updated` and `proto_agent_*` stay on the shell's socket for the chat pages until phase 10 gives the chat app a socket of its own (a `# CLEANUP:` in `server.py` and `chat/models/AgentManager.ts`), and `load_layout` (`{"view_id", "display_name", "target_client_id"}`) carries the `load` op until phase 8 lands `active_view_changed` and `layout_updated`.
+
 ## 9. The inventory document
 
 `GET /api/inventory` returns:
@@ -279,7 +281,7 @@ The shell inspects no payloads.
 Subcommands: `list`, `inspect`, `where`, `context`, `views`, `load`, `open`, `focus`, `split`, `close`, `move`, `rename`, `delete`, `maximize`, `restore`, `replace-url`, `refresh`, `shortcuts`, `shortcut set`, `shortcut remove`.
 
 - Every op takes `--client <id>` (default: the client that most recently messaged the requesting agent, per `context`; else every connected client) and `--view <name>` (switch that client first).
-- `open <address> [--action <id>] [--param name=value]...`: `app:<name>` runs `--action` or the app's `default_shortcut.action` or its first declared action, in focus mode; `app:<name>?instance=<key>` docks an existing instance; a bare `https://` URL means `open app:browser --action new --param url=<url>`; a bare word that is an app name means `app:<word>`.
+- `open <address> [--action <id>] [--param name=value]...`: `app:<name>` runs `--action` or the app's `default_shortcut.action` or its first declared action, in focus mode; `app:<name>?instance=<key>` docks an existing instance; a bare `https://` URL means `open app:browser --action new --param url=<url>`; a bare word that is an app name means `app:<word>`. (Phase 7 landed the address grammar, the relay verbs, and the shortcut subcommands; `--client`, `--action`, `--param`, and the bare-URL form land in phase 8, and until then `open app:<name>` of an app with instances runs its primary action through the connected client and a URL is refused with an error naming phase 8.)
 - `rename <address> <title>` and `delete <address>` call the shell's relay routes.
 - `replace-url <address> <path-or-url>` calls the relay's location route.
 - `list` prints, per app: `name`, `display_name`, `is_running`, `actions`, and `instances` with `key`, `address`, `title`, `status`, `docked_in` (client ids).

@@ -451,7 +451,8 @@ def _wait_for_layout_saved(state_dir: Path, view_id: str, containing: str | None
         _saved,
         timeout=15.0,
         poll_interval=0.1,
-        error_message=f"autosave never wrote a layout for {view_id}" + (f" holding {containing}" if containing else ""),
+        error_message=f"autosave never wrote a layout for {view_id}"
+        + (f" holding {containing}" if containing else ""),
     )
 
 
@@ -919,7 +920,9 @@ def test_new_tab_opens_in_clicked_split(tmp_path: Path, page: Page) -> None:
         expect(_tab(page, "Stub 1")).to_be_visible(timeout=10000)
 
         _tab(page, _FIXTURE_AGENT_NAME).click()
-        left_group = page.locator(".dv-groupview", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME))
+        left_group = page.locator(
+            ".dv-groupview", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME)
+        )
         expect(left_group).to_have_class(re.compile(r"\bdv-active-group\b"))
 
         boxes = [add_buttons.nth(i).bounding_box() for i in range(2)]
@@ -1079,7 +1082,9 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
         page.wait_for_timeout(1000)
         after_restore = _visible_user_messages(page)
         scroll_top_after = _chat_frame(page).evaluate("() => document.querySelector('.app-content').scrollTop")
-        assert "msg-0" not in after_restore, f"after showing the tab again the window jumped to the start: {after_restore[:3]}"
+        assert "msg-0" not in after_restore, (
+            f"after showing the tab again the window jumped to the start: {after_restore[:3]}"
+        )
         assert anchor_message in after_restore, (
             f"after showing the tab again the reader was not returned to their place: {after_restore[:3]}"
         )
@@ -1112,7 +1117,9 @@ def test_load_op_switches_the_clients_view(tmp_path: Path, page: Page) -> None:
                     return False
                 raise
 
-        wait_for(_attempt, timeout=15.0, poll_interval=0.2, error_message="the load op never got past client registration")
+        wait_for(
+            _attempt, timeout=15.0, poll_interval=0.2, error_message="the load op never got past client registration"
+        )
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
 
@@ -1229,7 +1236,9 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
             timeout=15000,
         )
         while_away = _surface_report(page, address)
-        assert while_away["count"] == 1, f"the page was taken out of the DOM by a view that does not include it: {while_away}"
+        assert while_away["count"] == 1, (
+            f"the page was taken out of the DOM by a view that does not include it: {while_away}"
+        )
         assert while_away["stamps"] == ["the-original-element"], f"the element was rebuilt while hidden: {while_away}"
         assert while_away["removals"] == 0, f"a live surface left the DOM on the way out: {while_away}"
 
@@ -1249,7 +1258,9 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
         )
         on_return = _surface_report(page, address)
         assert on_return["count"] == 1, f"the page forked into a second copy: {on_return}"
-        assert on_return["stamps"] == ["the-original-element"], f"the element was re-created on the way back: {on_return}"
+        assert on_return["stamps"] == ["the-original-element"], (
+            f"the element was re-created on the way back: {on_return}"
+        )
         assert on_return["removals"] == 0, f"a live surface left the DOM during the round trip: {on_return}"
         expect(held_field).to_have_value("typed-by-the-user")
 
@@ -1291,7 +1302,9 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
         assert back_in_project["stamps"] == ["the-original-element"], (
             f"switching back re-created the chat's element: {back_in_project}"
         )
-        assert back_in_project["removals"] == 0, f"a live surface left the DOM during the round trip: {back_in_project}"
+        assert back_in_project["removals"] == 0, (
+            f"a live surface left the DOM during the round trip: {back_in_project}"
+        )
 
 
 # ---------- verbs ----------
@@ -1378,7 +1391,9 @@ def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: P
             error_message="the deleted instance stayed in the project's tab set",
         )
         wait_for(
-            lambda: not any(address in path.read_text() for path in _client_layout_files(server.state_dir, EVERYTHING_VIEW_ID)),
+            lambda: not any(
+                address in path.read_text() for path in _client_layout_files(server.state_dir, EVERYTHING_VIEW_ID)
+            ),
             timeout=15.0,
             poll_interval=0.1,
             error_message="the deleted instance stayed in Everything's saved layout",
@@ -1653,7 +1668,9 @@ def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Pat
         expect(_tab(page, "Stub 1")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
 
         dragged = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 1")).first
-        target_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME)).first
+        target_tab = page.locator(
+            ".dv-tab", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME)
+        ).first
         source_box = dragged.bounding_box()
         assert source_box is not None, "the dragged tab has no box"
         page.mouse.move(source_box["x"] + source_box["width"] / 2, source_box["y"] + source_box["height"] / 2)
@@ -1661,20 +1678,28 @@ def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Pat
 
         target_box = target_tab.bounding_box()
         assert target_box is not None, "the target tab has no box"
-        page.mouse.move(target_box["x"] + target_box["width"] * 0.2, target_box["y"] + target_box["height"] / 2, steps=25)
+        page.mouse.move(
+            target_box["x"] + target_box["width"] * 0.2, target_box["y"] + target_box["height"] / 2, steps=25
+        )
         page.wait_for_timeout(400)
         target_box = target_tab.bounding_box()
         assert target_box is not None, "the target tab lost its box mid-drag"
         tab_overlay = _drop_overlay_styles(page)
         assert tab_overlay is not None, "no drop overlay appeared over the tab"
-        assert tab_overlay["background"] == "rgba(0, 0, 0, 0)", f"a tab drop should not wash the tab, got {tab_overlay}"
+        assert tab_overlay["background"] == "rgba(0, 0, 0, 0)", (
+            f"a tab drop should not wash the tab, got {tab_overlay}"
+        )
         assert tab_overlay["afterContent"] not in ("none", ""), "the tab drop drew no insertion line"
         assert tab_overlay["afterWidth"] == "2px", f"the insertion line should be 2px, got {tab_overlay['afterWidth']}"
         assert tab_overlay["afterBackground"] != "rgba(0, 0, 0, 0)", "the insertion line is invisible"
-        assert tab_overlay["side"] in ("left", "right"), f"a drop onto a tab should pick a side, got {tab_overlay['side']}"
+        assert tab_overlay["side"] in ("left", "right"), (
+            f"a drop onto a tab should pick a side, got {tab_overlay['side']}"
+        )
         line_x = tab_overlay["left"] if tab_overlay["side"] == "left" else tab_overlay["right"]
         seam_x = target_box["x"] if tab_overlay["side"] == "left" else target_box["x"] + target_box["width"]
-        assert abs(line_x - seam_x) <= 1, f"the {tab_overlay['side']} line should sit on that edge ({seam_x}), got {line_x}"
+        assert abs(line_x - seam_x) <= 1, (
+            f"the {tab_overlay['side']} line should sit on that edge ({seam_x}), got {line_x}"
+        )
 
         pane_box = page.locator(".dv-content-container").first.bounding_box()
         assert pane_box is not None, "the pane has no box"

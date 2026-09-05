@@ -69,6 +69,24 @@ _ALLOWED_FILES = (
     "terminalFocus.ts",
 )
 
+_SHELL_PACKAGE = Path(__file__).parent / "shell"
+
+_RETIRED_ADDRESS_RULE = RatchetRuleInfo(
+    rule_name="retired panel refs (chat:, terminal:, service:, url:, subagent:) in the shell",
+    rule_description=(
+        "The shell addresses everything as app:<name> or app:<name>?instance=<key> (contracts.md "
+        "section 1); the per-kind refs of the old workspace are gone with the code that knew what a "
+        "chat or a terminal was. Do not spell one in the shell package or the frontend -- resolve the "
+        "address through the inventory instead."
+    ),
+)
+
+# A string literal that starts with a retired ref prefix. Anchored on the opening quote so
+# ordinary keys such as ``url: string`` and prose in comments do not count.
+_RETIRED_ADDRESS_PATTERN = RegexPattern(
+    r"""["'`](?:chat|chat-terminal|terminal|service|url|subagent):""", multiline=False
+)
+
 _SHELL_IMPORTS_CHAT_RULE = RatchetRuleInfo(
     rule_name="shell bundle files importing the chat document's sources",
     rule_description=(
@@ -123,3 +141,12 @@ def test_prevent_raw_post_message_outside_embed_boundary() -> None:
     pattern = RegexPattern(r"""postMessage\(|addEventListener\(\s*["']message["']""", multiline=False)
     chunks = check_regex_ratchet(_FRONTEND_SRC, FileExtension(".ts"), pattern, _ALLOWED_FILES)
     assert len(chunks) <= snapshot(0), _RAW_POST_MESSAGE_RULE.format_failure(chunks)
+
+
+def test_prevent_retired_address_spellings() -> None:
+    # Tests spell the retired forms on purpose, to assert they are refused.
+    test_files = ("*.test.ts", "*_test.py", "test_*.py")
+    frontend_chunks = check_regex_ratchet(_FRONTEND_SRC, FileExtension(".ts"), _RETIRED_ADDRESS_PATTERN, test_files)
+    shell_chunks = check_regex_ratchet(_SHELL_PACKAGE, FileExtension(".py"), _RETIRED_ADDRESS_PATTERN, test_files)
+    chunks = (*frontend_chunks, *shell_chunks)
+    assert len(chunks) <= snapshot(0), _RETIRED_ADDRESS_RULE.format_failure(chunks)
