@@ -296,8 +296,14 @@ Every open in a project files the address into its tab set, whichever way it
 was opened (a launcher row, a rail shortcut, a layout op, a page's own
 `shell:open`); "Remove from project" unfiles it and nothing else. Each client
 keeps its own arrangement of each view (`layouts/<view>/<client>.json`, with
-a per-device seed beside it) and autosaves it; a saved tab whose address the
-machine no longer lists is pruned on the next observation. An instance whose
+a per-device seed beside it); the browser saves the user's own gestures into
+it with a save id and the stamp it was based on (a save over a newer
+arrangement is refused with 409 and the window refetches), the shell writes
+it for agent ops and its own pruning, and every write is announced as
+`layout_updated` so the client's other windows mirror it. The active view
+lives on the client record (`clients.json`), read on boot and pushed as
+`active_view_changed` when it moves. A saved tab whose address the machine no
+longer lists is pruned on the next observation. An instance whose
 record says `lifetime = "referenced"` is deleted through its app once nothing
 references it any more. First landing after a fresh install is the New Tab
 page; there is no starter project until phase 9's migration creates one.
@@ -362,17 +368,25 @@ python3 system/scripts/layout.py inspect --view Everything
 ```
 
 The dock ops POST `{op, args, agent_id}` to the loopback-only
-`/api/layout/broadcast` endpoint. Mutating ops target a view (the connected
-client's own when unnamed), are delivered only to connected clients that have
-it active (HTTP 412 when there are none), and acquire an in-process advisory
-mutex (HTTP 409 on contention); reads bypass both. `rename`, `delete`, and
-`replace-url` call the relay routes under `/api/apps/<name>/instances/<key>/`,
-and `shortcuts` and the `shortcut` subcommands the project routes, so none of
-them waits on a client or takes the mutex; the relay verbs take no `--view`,
-and the shortcut commands' `--view` names the project to read or configure
-(the connected client's view when unnamed) rather than a target. A bare word is
-`app:<word>`; the old spellings (`chat:`, `terminal:`, `service:`, `url:`,
-`subagent:`) are refused with an error naming the new form. See the
+`/api/layout/broadcast` endpoint (the path is historical). The client's layout
+file is the truth of the arrangement: `open`, `focus`, `split`, `close`, and
+`move` are applied by the shell to the target client's file
+(`shell/dockview_document.py` is the pure editor over dockview's document) and
+announced as `layout_updated`, which the client's windows apply without
+reloading any page, so an op lands whether or not a browser is connected.
+Every op targets exactly one client: `--client <id>`, else the client that
+last messaged the requesting agent, else the one connected client, and is
+refused with the connected clients listed (HTTP 412) when nothing settles it.
+`--view` edits that view's file and switches the client to it. `open` of an
+app with instances creates the instance through the relay inside the op
+(`--action`, `--param`; a bare URL is the browser's `new` with `url`) and
+answers with the address. Only `maximize`, `restore`, `refresh`, and the
+interface reload still reach the browser as `layout_op` messages, to the target
+client's windows. `rename`, `delete`, and `replace-url` call the relay routes
+under `/api/apps/<name>/instances/<key>/`; `list` and `views` read
+`GET /api/inventory`; the `shortcut` subcommands use the project routes. A bare
+word is `app:<word>`; the old spellings (`chat:`, `terminal:`, `service:`,
+`url:`, `subagent:`) are refused with an error naming the new form. See the
 `manage-layout` skill for end-to-end orientation.
 
 ## Building
