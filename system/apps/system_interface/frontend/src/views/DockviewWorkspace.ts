@@ -2089,6 +2089,8 @@ function handleRestore(): void {
 function handleRefresh(args: Record<string, unknown>, requesterAgentId: string): void {
   const address = asString(args.address);
   if (!address) return;
+  // ``self`` with no requester would read as the bare chat app and reload every chat.
+  if (address === "self" && !requesterAgentId) return;
   const target = address === "self" ? addressFor(CHAT_APP_NAME, requesterAgentId) : address;
   const parsed = parseAddress(target);
   if (parsed === null) return;
