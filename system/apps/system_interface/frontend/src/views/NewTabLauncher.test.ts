@@ -143,6 +143,19 @@ describe("NewTabLauncher", () => {
     expect(attrs.onRunAction).not.toHaveBeenCalled();
   });
 
+  it("closes the filter menu from its own toggle", () => {
+    mount({ isEverything: true });
+    const toggle = root.querySelector<HTMLElement>('[data-section="on-machine"] button[aria-expanded]')!;
+    toggle.click();
+    m.redraw.sync();
+    expect(root.querySelector('input[type="checkbox"]')).not.toBeNull();
+    // A real press is a pointerdown (which the open menu listens for on the document) then a click.
+    toggle.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    toggle.click();
+    m.redraw.sync();
+    expect(root.querySelector('input[type="checkbox"]')).toBeNull();
+  });
+
   it("filters one table by app without touching the other", () => {
     mount({ isEverything: true });
     root.querySelector<HTMLElement>('[data-section="on-machine"] button[aria-expanded]')!.click();
