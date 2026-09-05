@@ -757,6 +757,9 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       tabHandlesByPanelId.set(options.id, { element, refreshTitleFade, beginTitleEdit });
     },
     dispose() {
+      // A tab torn down mid-edit (a pushed view switch, a rebind, a prune) gets no blur for its
+      // editor, so the edit ends here or the pushed-layout deferral would never lift.
+      endTitleEdit(false);
       if (!isOverflowRow) tabHandlesByPanelId.delete(options.id);
       for (const d of disposables) {
         d.dispose();
