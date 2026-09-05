@@ -1,15 +1,14 @@
 """Server-side support for the agent-driven layout surface, over addresses.
 
 ``system/scripts/layout.py`` posts ``{op, args, agent_id}`` to ``POST /api/layout/broadcast``
-(``routes.py``): the read ops (``list``, ``inspect``, ``views``, ``context``) are answered from
-the inventory and the state files, ``load`` switches a client's view, the document ops are applied
-by the shell to the target client's layout file (``dockview_document.py``), and the transient ops
-are sent to that client's windows. This module holds the op tables, the op arguments, and the pure
-summaries the read ops answer with.
+(``routes.py``): the read ops (``inspect``, ``context``) are answered from the state files and the
+client-activity log, ``load`` switches a client's view, the document ops are applied by the shell to
+the target client's layout file (``dockview_document.py``), and the transient ops are sent to that
+client's windows. The script's ``list`` and ``views`` read ``GET /api/inventory`` instead. This module
+holds the op tables, the op arguments, and the pure summary ``inspect`` answers with.
 """
 
 from collections.abc import Mapping
-from collections.abc import Sequence
 from typing import Any
 from typing import Final
 
@@ -17,20 +16,12 @@ from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import Project
-from imbue.system_interface.shell.data_types import action_wire_json
-from imbue.system_interface.shell.data_types import effective_actions
 from imbue.system_interface.shell.dockview_document import DEFAULT_SPLIT_RATIO
 from imbue.system_interface.shell.dockview_document import Direction
-from imbue.system_interface.shell.layouts import StoredLayout
-from imbue.system_interface.shell.primitives import Address
-from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_ID
-from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_NAME
 
 # The ops the endpoint dispatches on. Anything else is a 400.
-READ_OPS: Final[frozenset[str]] = frozenset({"list", "inspect", "views", "context"})
+READ_OPS: Final[frozenset[str]] = frozenset({"inspect", "context"})
 LOAD_OP: Final[str] = "load"
 # Ops the shell applies to the target client's layout file (the file is the truth of the arrangement).
 DOCUMENT_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "close", "move"})
@@ -149,72 +140,3 @@ def layout_inspect(layout: LayoutRecord | None, title_by_address: Mapping[str, s
         ],
         "tree": tree,
     }
-
-
-@pure
-def layout_list(
-    entries: Sequence[AppInventoryEntry],
-    layouts: Sequence[StoredLayout],
-) -> list[dict[str, Any]]:
-    """Every app with its instances, statuses, and which clients dock each (the ``list`` op, contracts.md section 12)."""
-    docked_in_by_address: dict[str, list[str]] = {}
-    for stored in layouts:
-        for tab in stored.layout.tabs.values():
-            clients = docked_in_by_address.setdefault(str(tab.address), [])
-            if str(stored.client_id) not in clients:
-                clients.append(str(stored.client_id))
-    listing: list[dict[str, Any]] = []
-    for entry in entries:
-        if entry.row.internal:
-            continue
-        instances = [
-            {
-                "key": instance.key,
-                "address": str(entry.address_of(instance)),
-                "title": instance.title,
-                "status": instance.status.value,
-                "docked_in": docked_in_by_address.get(str(entry.address_of(instance)), []),
-            }
-            for instance in entry.instances
-        ]
-        listing.append(
-            {
-                "name": str(entry.row.name),
-                "display_name": str(entry.row.display_name)
-                if entry.row.display_name is not None
-                else str(entry.row.name),
-                "is_running": entry.is_running,
-                "actions": [action_wire_json(action) for action in effective_actions(entry.row)],
-                "instances": instances,
-            }
-        )
-    return listing
-
-
-@pure
-def layout_views(
-    projects: Sequence[Project],
-    everything_tabs: Sequence[Address],
-    clients_by_view: Mapping[str, Sequence[dict[str, str]]],
-) -> list[dict[str, Any]]:
-    """Every view with its tab set and the clients on it (the ``views`` op)."""
-    views = [
-        {
-            "id": str(project.id),
-            "name": project.name,
-            "is_everything": False,
-            "tabs": [str(address) for address in project.tabs],
-            "clients": list(clients_by_view.get(str(project.id), [])),
-        }
-        for project in projects
-    ]
-    views.append(
-        {
-            "id": EVERYTHING_VIEW_ID,
-            "name": EVERYTHING_VIEW_NAME,
-            "is_everything": True,
-            "tabs": [str(address) for address in everything_tabs],
-            "clients": list(clients_by_view.get(EVERYTHING_VIEW_ID, [])),
-        }
-    )
-    return views

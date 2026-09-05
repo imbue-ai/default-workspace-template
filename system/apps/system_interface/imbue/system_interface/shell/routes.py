@@ -74,8 +74,6 @@ from imbue.system_interface.shell.layout_ops import is_document_op
 from imbue.system_interface.shell.layout_ops import is_known_op
 from imbue.system_interface.shell.layout_ops import is_transient_op
 from imbue.system_interface.shell.layout_ops import layout_inspect
-from imbue.system_interface.shell.layout_ops import layout_list
-from imbue.system_interface.shell.layout_ops import layout_views
 from imbue.system_interface.shell.layouts import layout_wire_json
 from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
@@ -604,15 +602,6 @@ def register_shell_routes(application: Flask) -> None:
 # ---------- resolving the target: which view, which client ----------
 
 
-def _clients_by_view(shell: ShellState) -> dict[str, list[dict[str, str]]]:
-    clients_by_view: dict[str, list[dict[str, str]]] = {}
-    for info in shell.broadcaster.get_connected_client_infos():
-        clients_by_view.setdefault(info["active_view"], []).append(
-            {"id": info["client_id"], "device_kind": info["device_kind"]}
-        )
-    return clients_by_view
-
-
 def _find_view(shell: ShellState, requested: str) -> tuple[str | None, ResponseReturnValue | None]:
     """The view a name or id names: a project's name or id, or Everything; a 404 naming the known views otherwise."""
     projects = shell.projects.list_projects()
@@ -632,8 +621,8 @@ def _requested_view(args_raw: dict[str, Any]) -> str | None:
 
 
 def _resolve_view(shell: ShellState, args_raw: dict[str, Any]) -> tuple[str | None, ResponseReturnValue | None]:
-    """The view a read op targets: ``args.view``, else the one connected view, else the newest client's; None when
-    nothing settles it (a read then spans every view)."""
+    """The view ``inspect`` reads: ``args.view``, else the one connected view, else the newest client's; None when
+    nothing settles it (the read then answers with no arrangement)."""
     requested = _requested_view(args_raw)
     if requested is not None:
         return _find_view(shell, requested)
@@ -718,12 +707,8 @@ def _resolve_op_view(
 
 def _dispatch_layout_op(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
     match op:
-        case "list":
-            return _op_list(shell, args_raw, agent_id)
         case "inspect":
             return _op_inspect(shell, args_raw, agent_id)
-        case "views":
-            return _op_views(shell, agent_id)
         case "context":
             return _op_context(shell, agent_id)
         case "load":
@@ -742,16 +727,6 @@ def _title_by_address(shell: ShellState) -> dict[str, str]:
         for entry in shell.inventory.entries()
         for instance in entry.instances
     }
-
-
-def _op_list(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
-    view_id, error = _resolve_view(shell, args_raw)
-    if error is not None:
-        return error
-    layouts = [stored for stored in shell.layouts.all_client_layouts() if view_id is None or stored.view_id == view_id]
-    listing = layout_list(shell.inventory.entries(), layouts)
-    logger.info("layout op=list agent_id={} view={} apps={}", agent_id, view_id, len(listing))
-    return jsonify({"ok": True, "view_id": view_id, "apps": listing})
 
 
 def _op_inspect(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
@@ -775,16 +750,6 @@ def _op_inspect(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> R
         len(summary["panels"]),
     )
     return jsonify({"ok": True, "view_id": view_id, "client_id": client_id, "layout": summary})
-
-
-def _op_views(shell: ShellState, agent_id: str) -> ResponseReturnValue:
-    projects = shell.projects.list_projects()
-    everything_tabs = [
-        address for entry in shell.inventory.entries() if not entry.row.internal for address in entry.addresses()
-    ]
-    views = layout_views(projects, everything_tabs, _clients_by_view(shell))
-    logger.info("layout op=views agent_id={} views={}", agent_id, len(views))
-    return jsonify({"ok": True, "views": views})
 
 
 def _op_context(shell: ShellState, agent_id: str) -> ResponseReturnValue:

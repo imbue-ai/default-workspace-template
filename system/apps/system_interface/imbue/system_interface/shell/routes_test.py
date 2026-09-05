@@ -383,14 +383,14 @@ def _broadcast(client: FlaskClient, op: str, args: dict[str, Any] | None = None,
 
 
 def test_the_broadcast_endpoint_validates_its_input(client: FlaskClient) -> None:
-    assert _broadcast(client, "views").status_code == 200
-    assert client.post("/api/layout/broadcast", json={"op": "views"}, environ_base=_NOT_LOOPBACK).status_code == 403
+    assert _broadcast(client, "context").status_code == 200
+    assert client.post("/api/layout/broadcast", json={"op": "context"}, environ_base=_NOT_LOOPBACK).status_code == 403
     assert _broadcast(client, "explode").status_code == 400
     assert client.post("/api/layout/broadcast", json={"op": "open", "args": []}).status_code == 400
     assert client.post("/api/layout/broadcast", data="{", content_type="application/json").status_code == 400
 
 
-def test_the_read_ops_answer_from_the_inventory_and_the_state_files(client: FlaskClient, app: Flask) -> None:
+def test_the_read_ops_answer_from_the_state_files_and_the_activity_log(client: FlaskClient, app: Flask) -> None:
     shell = _shell(app)
     client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
     client.post("/api/projects/alpha/tabs", json={"address": str(_TERMINAL_1)})
@@ -404,15 +404,9 @@ def test_the_read_ops_answer_from_the_inventory_and_the_state_files(client: Flas
     # A second client that has connected and done nothing else: it has no event in the log.
     _register_client(app, "c9", "everything")
 
-    views = _broadcast(client, "views").get_json()["views"]
-    assert [view["id"] for view in views] == ["alpha", "everything"]
-    assert views[0]["tabs"] == [str(_TERMINAL_1)] and views[0]["clients"] == [{"id": "c1", "device_kind": "desktop"}]
-    assert views[1]["tabs"] == [str(_TERMINAL_1), str(_FILES)]
-
-    listing = _broadcast(client, "list").get_json()
-    assert listing["view_id"] == "alpha"
-    assert listing["apps"][0]["instances"][0]["docked_in"] == ["c1"]
-    assert _broadcast(client, "list", {"view": "Nowhere"}).status_code == 404
+    # The script's list and views read GET /api/inventory; the op route's reads are inspect and context.
+    assert _broadcast(client, "list").status_code == 400
+    assert _broadcast(client, "views").status_code == 400
 
     inspected = _broadcast(client, "inspect", {"view": "Alpha"}).get_json()
     assert inspected["client_id"] == "c1"
