@@ -307,8 +307,8 @@ def _repaired_document(document: dict[str, Any], group_id: str) -> dict[str, Any
 
 
 def _dock(document: dict[str, Any], panel_id: str, placement: Placement) -> dict[str, Any]:
-    """Put ``panel_id`` (already in ``panels``) where ``placement`` says, and make it the active tab of its group."""
-    document = _repaired_document(document, f"{placement.group_id}-repaired")
+    """Put ``panel_id`` (already in ``panels``, and in no group of the grid) where ``placement`` says, and make it the
+    active tab of its group. The caller hands a document whose grid has dockview's shape."""
     grid = document["grid"]
     root = grid["root"]
     root_orientation = str(grid.get("orientation") or HORIZONTAL)
@@ -394,8 +394,10 @@ def _split_beside(
 def add_panel(layout: LayoutRecord, address: Address, tab_id: TabId, title: str, placement: Placement) -> LayoutRecord:
     """The layout with a new panel (its id the tab id) showing ``address``, docked per ``placement`` and focused."""
     panel_id = str(tab_id)
+    # The stored document is repaired before the new panel is named in it, so a repair gathers only the panels that
+    # were there and the new one lands where the placement says rather than in the repaired group as well.
     document = (
-        copy.deepcopy(layout.dockview)
+        _repaired_document(copy.deepcopy(layout.dockview), f"{panel_id}-repaired")
         if layout.dockview is not None
         else _empty_document(placement.group_id, panel_id)
     )
