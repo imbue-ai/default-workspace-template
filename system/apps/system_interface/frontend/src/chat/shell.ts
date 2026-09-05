@@ -33,9 +33,9 @@ let isShown = true;
  * drops the document's layout in the same pass that the page's scroll container starts
  * reporting zero sizes (the frame's viewport, `innerHeight`, keeps its old value); the
  * shell's `shell:shown` and `shell:hidden` follow a redraw later and feed presence instead.
- * Reading the layout keeps the panel's visibility in lockstep with the element, as the
- * shell's own surface state was before the split, so a redraw while hidden (a streamed
- * event) never runs the scroll management against a zero-height element.
+ * Reading the layout keeps the panel's visibility in lockstep with the element, so a redraw
+ * while hidden (a streamed event) never runs the scroll management against a zero-height
+ * element.
  */
 export function isFrameRendered(): boolean {
   return document.documentElement.getBoundingClientRect().height > 0;
@@ -50,8 +50,7 @@ export interface ChatShellOptions {
   /**
    * Whether this page reports its presence for `agentId`. A chat's own page does; a subagent
    * view does not, because the chat app keeps one report per chat and client, and a second
-   * page of the same chat in the same client would overwrite the chat page's own (as the
-   * dock's chat panels alone counted before the split).
+   * page of the same chat in the same client would overwrite the chat page's own.
    */
   isPresenceReported: boolean;
 }

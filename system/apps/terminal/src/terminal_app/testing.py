@@ -85,7 +85,7 @@ elif command == "rename-session":
 else:
     error = f"fake tmux: unknown command {{command}}"
 
-# The fake's stdout and stderr are tmux's answers, which is the one thing this script is for.
+# The fake's stdout and stderr are tmux's answers.
 if error:
     sys.stderr.write(error + "\\n")
     sys.exit(1)

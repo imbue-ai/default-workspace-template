@@ -16,8 +16,8 @@ from imbue.system_interface.shell.errors import ShellStateError
 # supervised process runs from; ``main.py`` takes ``--state-dir`` so a test can point elsewhere.
 DEFAULT_STATE_DIRECTORY: Final[Path] = Path("data/.state/system_interface")
 
-# One process-wide lock serializes every read-modify-write of every shell state file, exactly
-# as the old projects module did: the files are small and the writers are request threads.
+# One process-wide lock serializes every read-modify-write of every shell state file: the
+# files are small and the writers are request threads.
 STATE_FILES_LOCK: Final[threading.RLock] = threading.RLock()
 
 

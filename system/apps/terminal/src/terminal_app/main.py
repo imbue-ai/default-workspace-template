@@ -69,7 +69,7 @@ class TerminalAppArguments(FrozenModel):
 
 
 def run_terminal_app(arguments: TerminalAppArguments) -> int:
-    """Do what the launcher script did (dispatch scripts, web client, discovery event), then run ttyd under the sidecar."""
+    """Install the dispatch scripts and the web client, append the discovery event, then run ttyd under the sidecar."""
     # The dispatch scripts bake the directory in, so it is anchored here rather than left to the
     # cwd of every shell ttyd spawns.
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())

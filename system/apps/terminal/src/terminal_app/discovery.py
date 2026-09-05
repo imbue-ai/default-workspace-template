@@ -15,8 +15,8 @@ from imbue.imbue_common.event_envelope import (
 from imbue.imbue_common.pure import pure
 from pydantic import Field
 
-# The hand-written discovery stream the terminal has always appended to under the agent state
-# directory (distinct from the app watcher's ``events/services`` stream).
+# The hand-written discovery stream under the agent state directory (distinct from the app
+# watcher's ``events/services`` stream).
 SERVERS_EVENTS_PATH: Final[Path] = Path("events/servers/events.jsonl")
 SERVER_REGISTERED_EVENT_TYPE: Final[EventType] = EventType("server_registered")
 SERVERS_EVENT_SOURCE: Final[EventSource] = EventSource("servers")
@@ -43,7 +43,7 @@ def _nanosecond_timestamp(now_ns: int) -> IsoTimestamp:
 def build_server_registered_event(
     now_ns: int, server: AppName, url: AppUrl
 ) -> ServerRegisteredEvent:
-    """The event as the shell script always wrote it: the id hashes the full-precision timestamp so it is unique fleet-wide."""
+    """The ``server_registered`` event: the id hashes the full-precision timestamp so it is unique fleet-wide."""
     timestamp = _nanosecond_timestamp(now_ns)
     digest = hashlib.sha256(f"{timestamp}:{server}:{url}".encode()).hexdigest()
     return ServerRegisteredEvent(

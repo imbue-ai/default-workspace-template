@@ -267,8 +267,8 @@ export function getTerminalUrl(): string {
 /** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The ttyd
  *  dispatch reads ``$1`` ("_") then ``$2`` ("agent") then ``$3`` (the agent name).
  *
- *  One caller: the BACK FACE of that agent's chat. A terminal is reachable only there, because
- *  two live ttyd clients on one tmux window keep resizing it out from under each other. */
+ *  Only the back face of that agent's chat attaches one: two live ttyd clients on one tmux
+ *  window keep resizing it out from under each other. */
 export function buildAgentTerminalUrl(agentName: string): string {
   const baseUrl = getTerminalUrl();
   const separator = baseUrl.includes("?") ? "&" : "?";

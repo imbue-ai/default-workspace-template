@@ -6,9 +6,6 @@
  * fails immediately. So before mounting the terminal iframe this panel POSTs
  * to the agent's start endpoint and waits for it to resolve. The backend
  * no-ops for already-running agents, so this is cheap in the common case.
- *
- * The chat page's "Open agent terminal" back face is the one way an agent
- * terminal opens, so this is its only mount.
  */
 
 import m from "mithril";

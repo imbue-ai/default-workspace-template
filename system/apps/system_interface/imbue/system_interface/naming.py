@@ -40,12 +40,12 @@ def canonical_agent_name(name: str) -> str:
     """The true-name form of a human-readable chat name ("Chat 2" -> "Chat-2").
 
     The workspace app model's naming rule, shared with every app through the
-    instances library (phase 3 lifted it out of here). It mirrors mngr's own
-    canonicalization rather than importing it: a workspace's vendored mngr may
-    predate free-form names, and passing it a name it would reject fails the
-    create outright. Sending the canonical name (plus the typed one as a
-    ``display_name`` label) is accepted by every mngr version. Returns "" when
-    nothing usable remains (e.g. the input was all emoji).
+    instances library. It mirrors mngr's own canonicalization rather than
+    importing it: a workspace's vendored mngr may predate free-form names, and
+    passing it a name it would reject fails the create outright. Sending the
+    canonical name (plus the typed one as a ``display_name`` label) is accepted
+    by every mngr version. Returns "" when nothing usable remains (e.g. the
+    input was all emoji).
     """
     return canonical_name_from_title(name)
 

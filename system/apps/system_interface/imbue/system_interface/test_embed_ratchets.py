@@ -19,8 +19,7 @@ test set across every project (enforced by ``test_meta_ratchets.py``).
 The chat document (``src/chat/``) is an app page like any other: it reaches
 the shell only through ``app_contract.ts`` and the chrome only through
 ``embed.ts`` (whose messages the shell relays), and the shell's bundle
-imports nothing from under ``src/chat/`` -- the split phase 6 of the
-workspace app model made.
+imports nothing from under ``src/chat/``.
 """
 
 import re

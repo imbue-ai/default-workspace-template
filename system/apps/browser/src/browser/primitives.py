@@ -14,8 +14,7 @@ from browser.names import NUMBERED_NAME_STEM, is_valid_browser_name
 # supervisord program line registers): the shell nudge and the instance store are named by it.
 APP_NAME: Final[AppName] = AppName("browser")
 
-# The names the daemon mints, whose titles derive back from the number ("Browser 3"), as the
-# workspace UI has always shown them.
+# The names the daemon mints, whose titles derive back from the number ("Browser 3").
 _NUMBERED_BROWSER_PATTERN: Final[re.Pattern[str]] = re.compile(
     rf"^{NUMBERED_NAME_STEM}-([0-9]+)$"
 )
