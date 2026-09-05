@@ -68,13 +68,13 @@ These four forks were decided with the user before writing this spec.
 ## The environment (box)
 
 * The box image is the new app's adapted copy of the box `Dockerfile` with its desktop stack; the entrypoint is NOT auto-started (harbor keeps its default `sleep infinity` keepalive).
-* The driver's `setup()` starts the backend itself: `environment.exec("setsid nohup /usr/local/bin/entrypoint.sh > /logs/agent/box.log 2>&1 < /dev/null &", env={...})`.
+* The driver's `setup()` starts the backend itself: `environment.exec("setsid nohup /usr/local/bin/entrypoint.sh > /logs/artifacts/minds/box.log 2>&1 < /dev/null &", env={...})`. The log goes under `/logs/artifacts/`, not `/logs/agent/`: harbor empties the agent logs dir before every step of a multi-step task, which would unlink the file while the backend kept writing to the dead inode.
 * The env supplied at that exec carries everything the box needs: `MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET` (parsed from the host `~/.modal.toml`), `ANTHROPIC_API_KEY` (host env), `MNGR__PROVIDERS__MODAL__USER_ID` (below), `MINDS_ENV=staging`, `MINDS_MODAL_EXTRA_TEMPLATE=modal_eval`, and `MINDS_BOX_MNGR_REF=<mngr_sha>`. **Correction (PR1):** the dwt `modal` template carries no `pass_host_env` of its own, so the key is named in `MINDS_EXTRA_PASS_HOST_ENV` (which the in-box minds backend turns into `--pass-host-env` per create). That alone was insufficient: dwt pins claude agents to shared config-dir mode, in which mngr_claude skips the create-time step that pre-approves the key, so the workspace's claude chat agent deadlocked on Claude Code's custom-API-key TUI dialog. The manifest therefore also forwards `MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR=true` (a config-override that outranks the dwt settings file), which restores the approval. See the Implementation corrections section.
 * `USER_ID` is the sanitized trial name (derived from `logs_dir`, `jobs/<job>/<trial>/agent`) plus a fresh per-`run()` salt: harbor trial names already carry a random shortuuid, and the salt guarantees that re-runs or resumes can never collide even if a trial name repeats, since the old harness's atomic `modal environment create` uniqueness claim has no harbor equivalent.
 * Starting the backend from `setup()` rather than the image entrypoint is what makes the Modal-provider `USER_ID` unique per trial, so each trial's Minds discovery only ever sees its own workspaces. This replaces the old per-batch Modal environment isolation; no `modal environment create` is needed anymore.
 * `setup()` then polls for the backend port (port of `minds_client.discover_api_port`, driven through `environment.exec` reading `/proc/net/tcp`) before returning. There is no `[environment.healthcheck]` because the service starts in the agent phase, after env-level healthchecks run.
 * Agent setup has a 360s default timeout in harbor; the job config sets the agent-level `agents[].override_setup_timeout_sec` high enough for Electron plus backend boot (measured in PR1).
-* Run-scoped knobs: `--ek sandbox_timeout_secs` is set to agent timeout + verifier timeout + 30 min slack; `-n` controls concurrent boxes (each is 6 CPU / 16 GB, so the default of 4 is a reasonable cost ceiling for dev runs).
+* Run-scoped knobs: `--ek sandbox_timeout_secs` is fixed at 14400 in the run recipe, which covers a flat case's agent and verifier budgets with room to spare and a stepped case's every step but the last; `-n` controls concurrent boxes (each is 6 CPU / 16 GB, so the default of 4 is a reasonable cost ceiling for dev runs).
 * The watchable noVNC desktop URL does not survive the conversion (harbor's Modal provider opens no tunnels); debugging uses `harbor task start-env -e modal -i` and `modal shell`. Nothing replaces the watchable desktop the old app's `box` utility gave (tracked on #708).
 
 ## The driver agent
@@ -154,7 +154,7 @@ class GoalTurnSource(TurnSource):
 * Separate mode is required for `harbor trial regrade` (harbor rejects regrade on shared-mode tasks), and it lets the heavyweight box be torn down before verification instead of idling through it.
 * In separate mode `tests/` is the verifier image's build context, so the generator emits a small `tests/Dockerfile` (slim base with uv) that copies `test.sh`, `checks.py`, `judge.toml`, and `case.json` to `/tests`.
 * The transcript and state files reach the verifier via declared artifacts: `artifacts = ["/logs/agent/full_transcript.jsonl", "/logs/agent/state.json"]` in `task.toml`, re-materialized at their original paths in the verifier container.
-* `tests/test.sh` runs `uvx --from 'harbor-rewardkit==0.1.*' rewardkit /tests`.
+* `tests/verifier/test.sh` runs `uvx --from 'harbor-rewardkit==0.1.*' rewardkit /tests`.
 * The criteria descriptions are written fresh in rewardkit's idiom but preserve the intent of the current `_JUDGE_PROMPT` dimensions ("how an AI agent talks to a non-technical client it is building software for").
 * Raw judge answers and per-criterion values live in each trial's `verifier/reward-details.json`; the raw avg-word-count value also lands in `agent_result.metadata`.
 * The judge model is pinned in `judge.toml`; its key arrives through `[verifier.env]`.
@@ -238,7 +238,7 @@ the old-vs-new justification lives in that PR's description.
 * **Per-trial backend boot**: every trial boots its own box (Electron + backend), adding a few minutes per trial that the shared-box design amortized across a batch. Image-build cost is amortized by the Modal layer cache; boot cost is accepted for isolation.
 * **Workspace sandbox leaks**: if the harbor runner is killed hard (no `finally`), nested sandboxes survive until their 3h timeout; the driver's cleanup plus the timeout backstop bound the cost.
 * **Judge nondeterminism**: rewardkit likert judges make oracle assertions and cross-run comparisons statistical, not exact; PR2 must report means over multiple trials (`-k/--n-attempts`) rather than single runs.
-* **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run --project apps/minds_evals harbor`), and the only remaining uvx call -- rewardkit inside `tests/test.sh` -- pins its version explicitly.
+* **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run --project apps/minds_evals harbor`), and the only remaining uvx call -- rewardkit inside `tests/verifier/test.sh` -- pins its version explicitly.
 
 ## Resolved questions
 

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from loguru import logger
 from pydantic import SecretStr
 from pydantic import ValidationError
 
+from imbue.imbue_common.model_update import to_update
 from imbue.minds_evals import decider
 from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import minds_bridge
@@ -21,24 +23,34 @@ from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import GoalEntry
 from imbue.minds_evals.data_types import PromptEntry
+from imbue.minds_evals.data_types import StepBoxFile
+from imbue.minds_evals.data_types import StepPosition
 from imbue.minds_evals.data_types import Transcript
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import TurnOutcome
 from imbue.minds_evals.data_types import WorkerCapture
 from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.data_types import WorkerState
+from imbue.minds_evals.data_types import cross_step_lifetime_seconds
 from imbue.minds_evals.data_types import entry_exchange_budget
+from imbue.minds_evals.driver import DRIVER_LOG_FILENAME
 from imbue.minds_evals.driver import Done
 from imbue.minds_evals.driver import FALLBACK_ENTRY_DETAIL
 from imbue.minds_evals.driver import GoalTurnSource
 from imbue.minds_evals.driver import LiteralTurnSource
 from imbue.minds_evals.driver import MindsPersonaDriver
+from imbue.minds_evals.driver import PROXY_TUNNEL_GRACE_SECONDS
 from imbue.minds_evals.driver import PersonaLLMTurnSource
+from imbue.minds_evals.driver import STATE_FILENAME
 from imbue.minds_evals.driver import Say
 from imbue.minds_evals.driver import SnapshotMode
 from imbue.minds_evals.driver import SnapshotPoint
+from imbue.minds_evals.driver import TIMEOUT_DIAGNOSTICS_FILENAME
+from imbue.minds_evals.driver import TRAJECTORY_FILENAME
 from imbue.minds_evals.driver import TurnAction
 from imbue.minds_evals.driver import TurnSource
+from imbue.minds_evals.driver import WORKSPACE_READINESS_TIMEOUT_SECONDS
+from imbue.minds_evals.driver import _DRIVER_LOG_TRIAL_KEY
 from imbue.minds_evals.driver import _case_clone_dir
 from imbue.minds_evals.driver import _embedded_workers
 from imbue.minds_evals.driver import _new_agent_reply_texts
@@ -55,7 +67,9 @@ from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.driver import parse_snapshot_mode
 from imbue.minds_evals.driver import resolve_turn_sources
 from imbue.minds_evals.driver import sanitize_user_id
+from imbue.minds_evals.driver import workspace_readiness_deadline
 from imbue.minds_evals.errors import AgentKwargError
+from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import InstructionParseError
 from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
@@ -90,6 +104,7 @@ from imbue.minds_evals.testing import worker_listing_json
 from imbue.minds_evals.testing import worker_listing_output
 from imbue.minds_evals.testing import worker_trial_downloads
 from imbue.minds_evals.testing import workspace_state_output
+from imbue.minds_evals.trajectory import STEP_BOUNDARY_BANNER
 
 
 def _case_config(
@@ -109,6 +124,7 @@ def _case_config(
         dwt_branch="main",
         dwt_sha="c" * 40,
         avg_word_count_baseline=100.0,
+        step=None,
         expectations=expand_expectations(expectations) if expectations is not None else None,
         authored_expectations=expectations,
     )
@@ -431,6 +447,8 @@ def _setup_rules(
             ],
         ),
         ScriptedExecRule("tar czf /tmp/post_message", [ok_result(mngr_exec_json(""))]),
+        # The uploads tree a step's files are placed into, made before the first push.
+        ScriptedExecRule("mkdir -p /home/user/workspace/data/uploads", [ok_result(mngr_exec_json(""))]),
         # The evidence-collection phase, which runs against the live workspace before teardown.
         ScriptedExecRule(
             "MINDS_EVALS_SECTION:repo_root",
@@ -542,6 +560,62 @@ def _proxy_rules(usage_log: str) -> list[ScriptedExecRule]:
     ]
 
 
+# The key the driver signs the workspace in with, supplied the way harbor supplies it.
+_TRIAL_API_KEY: Final[str] = "sk-eval-test"
+
+
+def _driver_kwargs(
+    tmp_path: Path,
+    trial_name: str,
+    is_proxy_enabled: bool = False,
+    snapshot_mode: str = "per-turn",
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """The kwargs every driver in this file is built with.
+
+    They live in one place because a kwarg added to only some of the call sites would change what
+    part of the suite exercises without failing anything, since the sites serve disjoint sets of
+    tests. `logs_dir` follows harbor's `jobs/<job>/<trial>/agent` layout, which the driver derives
+    the trial's user id from. Pass `extra_env` only to vary the environment a test is about -- an
+    empty mapping is a trial with no key to sign in with.
+    """
+    logs_dir = tmp_path / "jobs" / trial_name / "agent"
+    logs_dir.mkdir(parents=True)
+    return {
+        "logs_dir": logs_dir,
+        "modal_config_path": str(_write_modal_config(tmp_path)),
+        "poll_seconds": 0.01,
+        "proxy": is_proxy_enabled,
+        "snapshot_mode": snapshot_mode,
+        "extra_env": {"ANTHROPIC_API_KEY": _TRIAL_API_KEY} if extra_env is None else extra_env,
+    }
+
+
+def _make_driver(
+    tmp_path: Path,
+    trial_name: str,
+    is_proxy_enabled: bool = False,
+    snapshot_mode: str = "per-turn",
+    extra_env: dict[str, str] | None = None,
+) -> MindsPersonaDriver:
+    """The production driver, for tests that let it resolve its own turn sources."""
+    return MindsPersonaDriver(**_driver_kwargs(tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env))
+
+
+def _make_scripted_driver(
+    tmp_path: Path,
+    trial_name: str,
+    scripted_sources: list[TurnSource],
+    is_proxy_enabled: bool = False,
+    snapshot_mode: str = "per-turn",
+    extra_env: dict[str, str] | None = None,
+) -> ScriptedSourceDriver:
+    """The same driver with its turn sources supplied, so the loop runs without any model call."""
+    return ScriptedSourceDriver(
+        scripted_sources, **_driver_kwargs(tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env)
+    )
+
+
 def _run_driver(
     tmp_path: Path,
     prompts: tuple[PromptEntry, ...],
@@ -556,23 +630,12 @@ def _run_driver(
     scripted_sources: list[TurnSource] | None = None,
     snapshot_mode: str = "per-turn",
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, AgentContext]:
-    logs_dir = tmp_path / "jobs" / trial_name / "agent"
-    logs_dir.mkdir(parents=True)
-    # Shared by both arms below: a kwarg added to only one of them would change what half the suite
-    # exercises without failing anything, since the two arms serve disjoint sets of tests.
-    driver_kwargs: dict[str, Any] = {
-        "logs_dir": logs_dir,
-        "modal_config_path": str(_write_modal_config(tmp_path)),
-        "poll_seconds": 0.01,
-        "proxy": is_proxy_enabled,
-        "snapshot_mode": snapshot_mode,
-        # The key the driver signs the workspace in with, supplied the way harbor supplies it.
-        "extra_env": {"ANTHROPIC_API_KEY": "sk-eval-test"},
-    }
     driver = (
-        MindsPersonaDriver(**driver_kwargs)
+        _make_driver(tmp_path, trial_name, is_proxy_enabled=is_proxy_enabled, snapshot_mode=snapshot_mode)
         if scripted_sources is None
-        else ScriptedSourceDriver(scripted_sources, **driver_kwargs)
+        else _make_scripted_driver(
+            tmp_path, trial_name, scripted_sources, is_proxy_enabled=is_proxy_enabled, snapshot_mode=snapshot_mode
+        )
     )
     environment = MockBoxEnvironment(
         tmp_path, rules if rules is not None else _setup_rules(), conversation=conversation
@@ -1522,14 +1585,7 @@ def test_driver_creates_the_evidence_directory_even_when_collection_never_runs(t
     # harbor records a missing declared artifact path as a failed entry and refuses to regrade any
     # trial carrying one, while an EMPTY directory is fine. A trial that dies before ever creating
     # a workspace must therefore still leave the directory behind, or it can never be regraded.
-    logs_dir = tmp_path / "jobs" / "todo-app__nows1" / "agent"
-    logs_dir.mkdir(parents=True)
-    driver = MindsPersonaDriver(
-        logs_dir=logs_dir,
-        modal_config_path=str(_write_modal_config(tmp_path)),
-        poll_seconds=0.01,
-        extra_env={"ANTHROPIC_API_KEY": "sk-eval-test"},
-    )
+    driver = _make_driver(tmp_path, "todo-app__nows1")
     environment = MockBoxEnvironment(tmp_path, _setup_rules())
 
     # setup() alone -- no conversation, no workspace, so the collection phase never runs.
@@ -1658,6 +1714,36 @@ def test_driver_captures_work_the_agent_does_after_it_reports_waiting(tmp_path: 
     # And its tokens are accounted for, rather than being spend with no record.
     assert context.n_input_tokens == 17
     assert context.n_output_tokens == 170
+
+
+def test_driver_keeps_the_host_trajectory_current_while_a_reply_is_still_coming(tmp_path: Path) -> None:
+    """A turn the box dies under is the one case no later write can rescue: the workspace holding
+    the events is gone, and the raised transport failure skips every write that would otherwise
+    have happened at the end of the turn. So whatever the agent said before the box went has to
+    already be on the host, written as the events arrived rather than once the reply was complete.
+    """
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[_reply_events("Scaffolding the app; the database is next.")],
+        box_lost_after_turn=1,
+    )
+    trial_name = "todo-app__lostbox"
+
+    with pytest.raises(BoxCommandError):
+        # A budget far longer than the trial takes, so nothing here rests on a deadline expiring:
+        # what ends this trial is the box, not the clock.
+        _run_driver(tmp_path, ("Build it",), conversation, trial_name=trial_name, timeout_seconds=1800.0)
+
+    logs_dir = tmp_path / "jobs" / trial_name / "agent"
+    trajectory = json.loads((logs_dir / TRAJECTORY_FILENAME).read_text())
+    assert [(step["source"], step["message"]) for step in trajectory["steps"]] == [
+        ("user", "Build it"),
+        ("agent", "Scaffolding the app; the database is next."),
+    ]
+    # The agent step above is the in-flight reply, written from the polled events rather than from
+    # a completed turn: the turn never finished, which is what "ongoing" records.
+    state = json.loads((logs_dir / STATE_FILENAME).read_text())
+    assert state["test_state"] == "ongoing"
 
 
 def test_driver_runs_the_verification_agent_on_the_decider_model_by_default(tmp_path: Path) -> None:
@@ -2144,3 +2230,994 @@ def test_literal_turn_source_says_its_message_once_then_reports_completed() -> N
 
     assert source.next_action(case_config, transcript) == Say(text="Build it")
     assert source.next_action(case_config, transcript) == Done(reason=TurnOutcome.COMPLETED)
+
+
+def _step_case_config(
+    prompts: tuple[PromptEntry, ...],
+    step_index: int,
+    step_total: int,
+    timeout_seconds: float,
+    files: tuple[StepBoxFile, ...] = (),
+    entries_before: int = 0,
+    expectations: Expectations | None = None,
+) -> CaseConfig:
+    """One step's config, in the shape the generator writes into steps/<name>/instruction.md."""
+    case_config = _case_config(prompts, timeout_seconds, expectations)
+    return case_config.model_copy_update(
+        to_update(
+            case_config.field_ref().step,
+            StepPosition(
+                name="step-{}".format(step_index + 1),
+                index=step_index,
+                total=step_total,
+                trial_lifetime_seconds=timeout_seconds * step_total,
+                entries_before=entries_before,
+                files=files,
+            ),
+        )
+    )
+
+
+def _run_stepped_driver(
+    tmp_path: Path,
+    step_prompts: tuple[tuple[PromptEntry, ...], ...],
+    conversation: ConversationModel,
+    trial_name: str,
+    scripted_sources_by_step: list[list[TurnSource]] | None = None,
+    step_files: tuple[tuple[StepBoxFile, ...], ...] = (),
+    rules: list[ScriptedExecRule] | None = None,
+    timeout_seconds: float = 900.0,
+    is_proxy_enabled: bool = False,
+    downloadable_content_by_source: dict[str, str] | None = None,
+) -> tuple[MindsPersonaDriver, MockBoxEnvironment, list[AgentContext]]:
+    """Drive the driver the way MultiStepTrial does: one setup, then one run() per step, against the
+    same driver instance and a fresh AgentContext each time.
+
+    An all-literal stepped case is the common shape, so a caller that names no turn sources gets one
+    LiteralTurnSource per prompt; pass them only to script a goal entry."""
+    driver = _make_scripted_driver(tmp_path, trial_name, [], is_proxy_enabled=is_proxy_enabled)
+    environment = MockBoxEnvironment(
+        tmp_path, rules if rules is not None else _setup_rules(), conversation=conversation
+    )
+    environment.downloadable_content_by_source = dict(downloadable_content_by_source or {})
+    contexts = [AgentContext() for _ in step_prompts]
+    files_by_step = step_files or tuple(() for _ in step_prompts)
+    sources_by_step: list[list[TurnSource]] = scripted_sources_by_step or [
+        [LiteralTurnSource(prompt=str(prompt)) for prompt in prompts] for prompts in step_prompts
+    ]
+
+    async def _drive() -> None:
+        await driver.setup(environment)
+        entries_before = 0
+        for index, prompts in enumerate(step_prompts):
+            driver._scripted_sources = sources_by_step[index]
+            step_config = _step_case_config(
+                prompts,
+                index,
+                len(step_prompts),
+                timeout_seconds=timeout_seconds,
+                files=files_by_step[index],
+                entries_before=entries_before,
+            )
+            entries_before += len(prompts)
+            await driver.run(_instruction_for(step_config), environment, contexts[index])
+
+    asyncio.run(_drive())
+    return driver, environment, contexts
+
+
+_UPLOAD = StepBoxFile(upload_id="pull-two", box_path="/work/step_files/updated-dataset/pull-two")
+
+
+def test_driver_places_a_steps_files_before_that_steps_first_message(tmp_path: Path) -> None:
+    """A step's prompts refer to its upload by the path it appears at, so the copy has to land
+    before the client says anything -- and it must not have happened on the earlier step, or the
+    agent could have seen the data before it was given."""
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build me a roadmap", "Looks right."), ("Here is an updated pull.",)),
+        _goal_conversation(("On it.", "Here it is.", "Updated.")),
+        trial_name="project-roadmap__files1",
+        step_files=((), (_UPLOAD,)),
+    )
+
+    push_indexes = [
+        index
+        for index, command in enumerate(environment.exec_commands)
+        if "mngr rsync --uncommitted-changes clobber" in command
+    ]
+    assert len(push_indexes) == 1
+    push_command = environment.exec_commands[push_indexes[0]]
+    # Contents into an exact absolute path inside the workspace, which is where Minds keeps the
+    # files a user uploaded.
+    assert "/work/step_files/updated-dataset/pull-two/" in push_command
+    assert "ws-1:/home/user/workspace/data/uploads/pull-two/" in push_command
+
+    message_indexes = [
+        index
+        for index, command in enumerate(environment.exec_commands)
+        if "/message" in command and "-X POST" in command
+    ]
+    # Two messages went before the upload was placed (the first step's), and the step that
+    # introduces it placed it before saying anything.
+    assert sum(1 for index in message_indexes if index < push_indexes[0]) == 2
+
+
+def test_driver_gives_up_when_a_steps_files_cannot_be_placed(tmp_path: Path) -> None:
+    """A conversation about an upload that is not there measures nothing, so a failed placement ends
+    the trial instead of letting the step run against a workspace its prompts describe wrongly."""
+    rules = [
+        ScriptedExecRule("mngr rsync --uncommitted-changes clobber", [failed_result("no such agent")]),
+        *_setup_rules(),
+    ]
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build me a roadmap",), ("Here is an updated pull.",)),
+        _goal_conversation(("On it.", "Updated.")),
+        trial_name="project-roadmap__files2",
+        step_files=((), (_UPLOAD,)),
+        rules=rules,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert "could not place the step's upload pull-two" in state["timed_out_reason"]
+    # The first step's message went; the second step never spoke.
+    assert state["waits_done"] == 1
+
+
+def test_driver_makes_the_uploads_tree_before_pushing_into_it(tmp_path: Path) -> None:
+    """The push is what needs the tree, so the driver asks for it first and asks only once: a
+    workspace that will not take the directory at all is then reported as that rather than as a
+    transfer that broke."""
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build me a roadmap",), ("Here is an updated pull.",)),
+        _goal_conversation(("On it.", "Updated.")),
+        trial_name="project-roadmap__files3",
+        step_files=((), (_UPLOAD,)),
+    )
+
+    mkdir_index = next(
+        index
+        for index, command in enumerate(environment.exec_commands)
+        if "mkdir -p /home/user/workspace/data/uploads" in command
+    )
+    push_index = next(
+        index
+        for index, command in enumerate(environment.exec_commands)
+        if "mngr rsync --uncommitted-changes clobber" in command
+    )
+    assert mkdir_index < push_index
+    # Only the step that introduces files asks for it; a step with none never touches the workspace.
+    assert (
+        sum(1 for command in environment.exec_commands if "mkdir -p /home/user/workspace/data/uploads" in command) == 1
+    )
+
+
+def test_driver_gives_up_when_the_uploads_tree_cannot_be_made(tmp_path: Path) -> None:
+    rules = [
+        ScriptedExecRule("mkdir -p /home/user/workspace/data/uploads", [failed_result("read-only file system")]),
+        *_setup_rules(),
+    ]
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build me a roadmap",), ("Here is an updated pull.",)),
+        _goal_conversation(("On it.", "Updated.")),
+        trial_name="project-roadmap__files4",
+        step_files=((), (_UPLOAD,)),
+        rules=rules,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert "could not create the workspace's uploads directory" in state["timed_out_reason"]
+    assert state["waits_done"] == 1
+
+
+def _conversation_credentials(environment: MockBoxEnvironment) -> list[str]:
+    """Every sign-in the driver submitted, which must be exactly one per trial however many steps
+    the task declares."""
+    return [command for command in environment.exec_commands if "submit-credentials" in command]
+
+
+def test_driver_runs_one_conversation_across_two_steps(tmp_path: Path) -> None:
+    """The composition this whole shape rests on: harbor calls run() once per step, the driver
+    prepares the workspace on the first call only, and the Minds conversation simply carries on --
+    the workspace, and the chat inside it, outlive the step that created them."""
+    second_step_source = ScriptedTurnSource(
+        actions=[say("Does it filter by team?"), done(TurnOutcome.SATISFIED)],
+        entry_kind=TurnEntryKind.GOAL,
+        budget_outcome=TurnOutcome.BUDGET_EXHAUSTED,
+    )
+    driver, environment, contexts = _run_stepped_driver(
+        tmp_path,
+        (
+            ("Build me a roadmap", "Looks right."),
+            ("There is more data.", GoalEntry(goal="See it filter", max_exchanges=3)),
+        ),
+        _goal_conversation(("On it.", "Here it is.", "Folded in.", "Filtering works.")),
+        trial_name="project-roadmap__step1",
+        scripted_sources_by_step=[
+            [LiteralTurnSource(prompt="Build me a roadmap"), LiteralTurnSource(prompt="Looks right.")],
+            [LiteralTurnSource(prompt="There is more data."), second_step_source],
+        ],
+    )
+
+    # One workspace for the whole trial, created and signed in on the first step only.
+    assert sum(1 for command in environment.exec_commands if "-X POST" in command and "/workspaces" in command) == 1
+    assert sum(1 for command in environment.exec_commands if "git clone --no-checkout" in command) == 1
+    assert len(_conversation_credentials(environment)) == 1
+
+    # The second step's client saw everything the first step said, without the driver doing anything
+    # to carry it: the conversation lives in the workspace.
+    assert second_step_source.seen_conversations[0].startswith("Build me a roadmap | On it. | Looks right.")
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "finished"
+    assert state["step_name"] == "step-2"
+    # Entries and messages accumulate across the steps, so the final step's state.json reconciles
+    # with the task-level case.json the structural gates read (which holds the WHOLE case).
+    assert state["num_turns"] == 4
+    assert [entry["index"] for entry in state["entries"]] == [0, 1, 2, 3]
+    assert state["waits_done"] == 4
+    assert contexts[0].metadata is not None and contexts[0].metadata["turn_count"] == 2
+    assert contexts[1].metadata is not None and contexts[1].metadata["turn_count"] == 4
+    assert driver.logs_dir.joinpath("trajectory.json").is_file()
+
+
+def test_each_step_records_the_elapsed_time_its_own_timeout_bounds(tmp_path: Path) -> None:
+    """`timeout_seconds` in a step's state.json is only that step's share of the conversation
+    budget, so the elapsed figure beside it has to span the same thing. Read against the trial-wide
+    one, a healthy later step looks like it overran."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[_reply_events("On it."), _reply_events("Done.")],
+        # Everything a mock trial does is instant, so without a wait the two figures would round to
+        # the same zero whether or not the per-step clock was ever restarted. The welcome runs
+        # inside the FIRST step, which is exactly the span the second step must not be charged for.
+        welcome_delay_polls=30,
+    )
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        conversation,
+        trial_name="project-roadmap__elapsed1",
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["step_name"] == "step-2"
+    # Strictly less: a driver that never restarted the per-step clock would report the trial-wide
+    # figure here, and the two would be equal.
+    assert state["elapsed_seconds"] > 0.0
+    assert state["step_elapsed_seconds"] < state["elapsed_seconds"]
+
+
+def test_a_flat_case_measures_the_step_and_the_trial_over_the_same_span(tmp_path: Path) -> None:
+    """A single-step case has one run(), so the two figures describe the same thing."""
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        _one_turn_conversation(reply_text="Done."),
+        trial_name="todo-app__elapsed2",
+        timeout_seconds=900.0,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["step_elapsed_seconds"] == state["elapsed_seconds"]
+
+
+def test_a_later_step_does_not_inherit_the_previous_steps_finish(tmp_path: Path) -> None:
+    """A step reopens the conversation, so the trial is not finished until its last step is. Left at
+    the previous step's "finished", a step that died mid-conversation would write a state.json
+    contradicting its own entry records, and would be read as one that completed -- which is what
+    decides whether the expensive expectations-driven evidence phase runs."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[_reply_events("On it."), _reply_events("Scaffolding the app.")],
+        # The first step completes; the box goes under the second step's turn.
+        box_lost_after_turn=2,
+    )
+    trial_name = "project-roadmap__state1"
+
+    with pytest.raises(BoxCommandError):
+        _run_stepped_driver(tmp_path, (("Build it",), ("Ship it",)), conversation, trial_name=trial_name)
+
+    state = json.loads((tmp_path / "jobs" / trial_name / "agent" / STATE_FILENAME).read_text())
+    assert state["step_name"] == "step-2"
+    assert state["test_state"] == "ongoing"
+    # And the record is self-consistent: one entry, from the step that really did finish.
+    assert [entry["index"] for entry in state["entries"]] == [0]
+
+
+def test_each_step_reports_only_the_spend_it_added(tmp_path: Path) -> None:
+    """Harbor sums one AgentContext per step into the trial's totals, while the driver's account of
+    the workspace is the whole conversation's -- one chat, one proxy. A step that reported the
+    running total would have every earlier step's tokens and dollars counted again, and the
+    published cost of an N-step trial would grow with N rather than with what it spent."""
+    # Distinct per turn: consecutive agent messages reporting identical usage are one API response
+    # fanned out across content blocks, and the summarizer collapses them.
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[
+            _reply_events("On it.", {"input_tokens": 10, "output_tokens": 100, "cache_read_tokens": 0}),
+            _reply_events("Done.", {"input_tokens": 7, "output_tokens": 70, "cache_read_tokens": 0}),
+        ],
+    )
+    _driver, _environment, contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        conversation,
+        trial_name="project-roadmap__spend1",
+    )
+
+    assert (contexts[0].n_input_tokens, contexts[0].n_output_tokens) == (10, 100)
+    # The second step's own turn, not the 17/170 the transcript now accounts for in total.
+    assert (contexts[1].n_input_tokens, contexts[1].n_output_tokens) == (7, 70)
+
+
+def test_cross_step_lifetime_is_the_whole_trials_for_a_step_and_the_case_budget_for_a_flat_one() -> None:
+    """The one answer to "how long must something started on the first step live", whichever step's
+    config is in hand. A flat case has nothing outliving its single run(), so its own budget is it."""
+    step_config = _step_case_config(("Build it",), 0, 3, timeout_seconds=900.0)
+
+    assert step_config.step is not None
+    assert cross_step_lifetime_seconds(step_config) == step_config.step.trial_lifetime_seconds
+    assert cross_step_lifetime_seconds(_case_config(("Build it",), timeout_seconds=900.0)) == 900.0
+
+
+def test_the_proxy_tunnel_is_sized_to_outlive_every_step_it_has_to_serve(tmp_path: Path) -> None:
+    """The tunnel is opened once, on the first step, and every later step's conversation runs over
+    it. Sized against that step's own share it would close under a later one, and the trial would
+    then report an agent that stopped answering rather than the tunnel that went away."""
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        _goal_conversation(("On it.", "Done.")),
+        trial_name="project-roadmap__tunnel1",
+        rules=_proxy_rules("") + _setup_rules(),
+        is_proxy_enabled=True,
+    )
+
+    step_config = _step_case_config(("Build it",), 0, 2, timeout_seconds=900.0)
+    assert step_config.step is not None
+    expected_hold = step_config.step.trial_lifetime_seconds + PROXY_TUNNEL_GRACE_SECONDS
+    # The probe tunnel goes up first with its own short hold, so it is the LAST one that carries the
+    # trial's conversations.
+    tunnel_commands = [command for command in environment.exec_commands if "--hold-seconds" in command]
+    assert "--hold-seconds {}".format(expected_hold) in tunnel_commands[-1]
+    assert expected_hold > step_config.timeout_seconds
+
+
+def test_driver_collects_evidence_every_step_and_tears_down_only_on_the_final_one(tmp_path: Path) -> None:
+    """Every step is graded by its own verifier against its own expectations, so every step collects
+    its own evidence -- while the workspace is still alive. Only the last step may tear it down: the
+    next step talks to the same workspace."""
+    driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        _goal_conversation(("On it.", "Done.")),
+        trial_name="project-roadmap__step2",
+    )
+
+    # Torn down once, and only after the last step's message went.
+    destroy_indexes = [index for index, command in enumerate(environment.exec_commands) if "mngr destroy" in command]
+    last_message_index = max(
+        index
+        for index, command in enumerate(environment.exec_commands)
+        if "/message" in command and "-X POST" in command
+    )
+    assert len(destroy_indexes) == 1
+    assert destroy_indexes[0] > last_message_index
+    assert (driver.logs_dir / evidence_collection.VERIFICATION_DIRNAME / "manifest.json").is_file()
+    # The workspace-state probe runs at boot and then once per step's collection phase.
+    state_probe_count = sum(
+        1 for command in environment.exec_commands if evidence_collection.section_marker("repo_root") in command
+    )
+    assert state_probe_count == 3
+
+
+def test_driver_re_creates_the_evidence_directory_on_every_step(tmp_path: Path) -> None:
+    """harbor empties the box's /logs/agent between steps, so a directory created once at setup is
+    gone by the second step's artifact collection -- and harbor records a missing declared artifact
+    as a failed one, which permanently blocks `harbor trial regrade`."""
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        _goal_conversation(("On it.", "Done.")),
+        trial_name="project-roadmap__step3",
+    )
+
+    # Matched on the box path rather than on the directory name, so the workspace-side staging
+    # directory the transcript capture creates is not counted as one of these.
+    ensure_commands = [
+        command
+        for command in environment.exec_commands
+        if "mkdir -p" in command and evidence_collection.box_verification_dir() in command
+    ]
+    # Three sources, and the count has to be exact or removing the per-step one still passes: once
+    # at setup, once at the top of each step's run(), and once inside each step's evidence
+    # collection (which re-ensures the directory for a collector run against a box that skipped
+    # setup). Drop the per-step call and this falls to 3.
+    assert len(ensure_commands) == 5
+
+
+def test_driver_does_not_re_enter_a_later_step_after_giving_up(tmp_path: Path) -> None:
+    """A step that gave up left a workspace that will not answer. Without a gate to abort the trial,
+    harbor would still call the next step; re-entering the loop would spend that step's whole budget
+    rediscovering the same dead workspace."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        # No reply to the first message, so the first step times out waiting for one.
+        turn_reply_events=[[]],
+    )
+    driver = _make_scripted_driver(tmp_path, "project-roadmap__step4", [])
+    environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=conversation)
+    state_uploads_by_step: list[int] = []
+
+    async def _drive() -> None:
+        await driver.setup(environment)
+        for index, prompt in enumerate(("Build it", "Ship it")):
+            driver._scripted_sources = [LiteralTurnSource(prompt=prompt)]
+            await driver.run(
+                # Matches the file's other timeout tests. The budget also caps workspace
+                # preparation, which happens before the first message, so a tighter one turns a
+                # slow CI box into "the chat agent was never created" instead of "no reply came".
+                _instruction_for(_step_case_config((prompt,), index, 2, timeout_seconds=0.3)),
+                environment,
+                AgentContext(),
+            )
+            state_uploads_by_step.append(environment.uploaded_targets.count("/logs/agent/state.json"))
+
+    asyncio.run(_drive())
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    # Only the first step's message was ever sent; the second step declined to try.
+    assert state["waits_done"] == 1
+    # It still wrote its own copy of the declared artifacts, though: harbor empties the box's
+    # /logs/agent between steps, so a step that skipped its turns without writing them would be
+    # archived with no trajectory and would hand its verifier nothing to read.
+    assert state_uploads_by_step[1] > state_uploads_by_step[0]
+
+
+def test_a_step_that_collected_nothing_does_not_publish_an_earlier_steps_capture(tmp_path: Path) -> None:
+    """Each step says which shape its own trajectory.json has. The capture outlives the run() call
+    that made it, so a step that skipped collection -- its workspace already torn down by the step
+    that gave up -- would otherwise report the earlier step's captured document as its own."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        # No reply to the first message, so the first step gives up and tears the workspace down.
+        turn_reply_events=[[]],
+    )
+
+    _driver, _environment, contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build it",), ("Ship it",)),
+        conversation,
+        trial_name="project-roadmap__capture1",
+        timeout_seconds=0.3,
+        downloadable_content_by_source=captured_transcript_downloads(),
+    )
+
+    assert contexts[0].metadata is not None
+    assert contexts[0].metadata["trajectory_source"] == "workspace"
+    assert contexts[1].metadata is not None
+    assert contexts[1].metadata["trajectory_source"] == "hand_built"
+    assert contexts[1].metadata["transcript_capture"]["document"]["is_captured"] is False
+
+
+def test_a_step_that_gave_up_tears_the_workspace_down_itself(tmp_path: Path) -> None:
+    """The trial's workspaces are nested sandboxes that outlive the box, and harbor stops calling
+    run() the moment a step misses its min_reward -- which a timed-out step's zeroed gates do. With
+    teardown reserved for the final step, an aborted trial would leave them running for nobody."""
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[[]])
+    driver = _make_scripted_driver(tmp_path, "project-roadmap__abort1", [LiteralTurnSource(prompt="Build it")])
+    environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=conversation)
+
+    async def _drive() -> None:
+        await driver.setup(environment)
+        # The FIRST of three steps, so nothing about being last can explain the teardown below.
+        await driver.run(
+            _instruction_for(_step_case_config(("Build it",), 0, 3, timeout_seconds=0.3)),
+            environment,
+            AgentContext(),
+        )
+
+    asyncio.run(_drive())
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert any("mngr destroy" in command for command in environment.exec_commands)
+
+
+def _run_two_steps_where_the_first_raises(
+    tmp_path: Path, trial_name: str
+) -> tuple[MindsPersonaDriver, MockBoxEnvironment, list[AgentContext]]:
+    """Two steps against one driver, where the first raises on its way out and the second still runs.
+
+    The snapshot pull is the one unguarded box call at the end of an entry, so the first step is one
+    that got its reply and then died on the way out -- with the box itself still answering
+    afterwards. Harbor behaves this way whenever the raising step declared no min_reward: it records
+    the exception, runs that step's verifier anyway, and calls the next step.
+    """
+    environment = MockBoxEnvironment(
+        tmp_path,
+        _setup_rules(),
+        conversation=_goal_conversation(("On it.", "Done.")),
+        raising_substrings=("tar czf",),
+    )
+    driver = _make_scripted_driver(tmp_path, trial_name, [])
+    contexts = [AgentContext(), AgentContext()]
+
+    async def _drive() -> None:
+        await driver.setup(environment)
+        driver._scripted_sources = [LiteralTurnSource(prompt="Build it")]
+        with pytest.raises(BoxCommandError):
+            await driver.run(
+                _instruction_for(_step_case_config(("Build it",), 0, 2, timeout_seconds=900.0)),
+                environment,
+                contexts[0],
+            )
+        driver._scripted_sources = [LiteralTurnSource(prompt="Ship it")]
+        await driver.run(
+            _instruction_for(_step_case_config(("Ship it",), 1, 2, timeout_seconds=900.0, entries_before=1)),
+            environment,
+            contexts[1],
+        )
+
+    asyncio.run(_drive())
+    return driver, environment, contexts
+
+
+def test_a_step_after_one_that_raised_does_not_drive_the_workspace_it_destroyed(tmp_path: Path) -> None:
+    """A step whose conversation raises tears the workspace down on its way out, but harbor does not
+    necessarily stop: it records the exception, runs the step's verifier anyway, and -- with no
+    min_reward on that step -- calls the next one. That step must read the workspace as gone rather
+    than spend its whole budget polling a sandbox that no longer exists.
+    """
+    _driver, environment, _contexts = _run_two_steps_where_the_first_raises(tmp_path, "project-roadmap__raised1")
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert "tore the workspace down" in state["timed_out_reason"]
+    # Only the first step ever spoke, and the workspace was destroyed exactly once.
+    assert state["waits_done"] == 1
+    assert sum(1 for command in environment.exec_commands if "mngr destroy" in command) == 1
+
+
+def test_the_diagnostics_do_not_probe_a_workspace_an_earlier_step_destroyed(tmp_path: Path) -> None:
+    """Every probe against a torn-down workspace runs to its own transport timeout before saying
+    so, which would spend the whole diagnostics budget on failures that diagnose nothing. The box
+    outlives the workspace, so its service logs are still read."""
+    driver, environment, _contexts = _run_two_steps_where_the_first_raises(tmp_path, "project-roadmap__raised2")
+
+    destroy_index = next(index for index, command in enumerate(environment.exec_commands) if "mngr destroy" in command)
+    assert not any(minds_bridge.AGENTS_PATH in command for command in environment.exec_commands[destroy_index:])
+    captures = json.loads((driver.logs_dir / TIMEOUT_DIAGNOSTICS_FILENAME).read_text())["captures"]
+    # Recorded rather than omitted: an absent key cannot be told apart from a capture never tried.
+    assert "torn down" in captures["workspace_agents"]
+    assert "torn down" in captures["chat_agent_state"]
+    assert "box_log_tail" in captures
+
+
+def test_a_step_that_collected_no_evidence_does_not_report_the_previous_steps(tmp_path: Path) -> None:
+    """The verification counts outlive the run() call that produced them, so a step that collected
+    nothing would publish the last step that did as its own -- and those counts are exactly what an
+    analyst reads to decide whether a step's evidence can be trusted. The flow agent's spend goes
+    with them: each step's collection builds its own agent, so re-reporting an earlier step's would
+    count that harness spend twice over the trial."""
+    _driver, _environment, contexts = _run_two_steps_where_the_first_raises(tmp_path, "project-roadmap__evidence1")
+
+    assert contexts[0].metadata is not None and contexts[0].metadata["verification"]["entry_count"] > 0
+    assert contexts[0].metadata["verifier_agent_usage"] != {}
+    # The second step's workspace was gone before it started, so it has nothing of its own to report.
+    assert contexts[1].metadata is not None and contexts[1].metadata["verification"] == {}
+    assert contexts[1].metadata["verifier_agent_usage"] == {}
+
+
+def test_a_step_tears_the_workspace_down_even_when_writing_its_records_fails(tmp_path: Path) -> None:
+    """The nested sandboxes outlive the box and nothing else reclaims them, so no bookkeeping the
+    driver does on its way out may cost the trial its teardown."""
+    environment = MockBoxEnvironment(
+        tmp_path,
+        _setup_rules(),
+        conversation=_one_turn_conversation(reply_text="Done."),
+        # Reading the proxy usage log is the record-writing step most able to fail on its own: the
+        # proxy is still appending to the file the driver is reading.
+        raising_substrings=("usage_proxy.jsonl",),
+    )
+    driver = _make_driver(
+        tmp_path,
+        "todo-app__teardown1",
+        extra_env={"ANTHROPIC_API_KEY": _TRIAL_API_KEY, "MINDS_EVAL_PROXY_KEY": "sk-trial"},
+    )
+
+    async def _drive() -> None:
+        await driver.setup(environment)
+        await driver.run(
+            _instruction_for(_case_config(("Build it",), timeout_seconds=900.0)), environment, AgentContext()
+        )
+
+    asyncio.run(_drive())
+
+    assert any("mngr destroy" in command for command in environment.exec_commands)
+
+
+# The part of a preparation reason that names the budget it ran under, derived from the constant so
+# that moving the budget cannot read as a behaviour failure.
+_PREPARATION_CEILING_TEXT: Final[str] = "capped at {:.0f}s".format(WORKSPACE_READINESS_TIMEOUT_SECONDS)
+
+
+def test_workspace_readiness_deadline_takes_whichever_ceiling_comes_first() -> None:
+    """Preparation must not outlive the conversation it is preparing for, and must not wait the
+    whole conversation out on a workspace that will never answer."""
+    now = 1_000.0
+    generous_conversation_deadline = now + 10 * WORKSPACE_READINESS_TIMEOUT_SECONDS
+
+    assert workspace_readiness_deadline(generous_conversation_deadline, now) == (
+        now + WORKSPACE_READINESS_TIMEOUT_SECONDS
+    )
+    assert workspace_readiness_deadline(now + 30.0, now) == now + 30.0
+
+
+def test_the_readiness_budget_is_well_above_a_healthy_trials_whole_conversation() -> None:
+    """Sized so a slow-but-alive workspace is never cut off: successful four-turn trials complete in
+    10-13 minutes, so a preparation phase alone exceeding this is a dead workspace, not a slow one."""
+    assert WORKSPACE_READINESS_TIMEOUT_SECONDS >= 900.0
+
+
+def test_driver_records_why_it_gave_up_on_a_workspace_that_never_became_usable(tmp_path: Path) -> None:
+    """`timed_out: true` on its own cannot tell a workspace that never came up from an agent that
+    stopped replying halfway through, so the reason is persisted everywhere the state is."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[],
+    )
+    # A workspace that was created but came up dead answers nothing on its agents endpoints, so the
+    # chat the trial would drive can never be created.
+    conversation.is_agents_endpoint_up = False
+    driver, environment, _context = _run_driver(
+        tmp_path, ("Build it",), conversation, trial_name="todo-app__unready1", timeout_seconds=0.3
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert "could not create the workspace chat agent" in state["timed_out_reason"]
+    # The reason names the preparation ceiling, so a reader can tell a dead workspace from one that
+    # was merely slower than preparation allows.
+    assert _PREPARATION_CEILING_TEXT in state["timed_out_reason"]
+    # And the log says what the workspace was answering while the wait ran, rather than falling
+    # silent for the whole budget.
+    driver_log = (driver.logs_dir / DRIVER_LOG_FILENAME).read_text()
+    assert "Still waiting for the workspace's create-chat endpoint to answer" in driver_log
+    assert "nothing readable from /api/agents/create-chat" in driver_log
+
+
+def test_driver_records_a_welcome_that_never_arrived_as_a_preparation_failure(tmp_path: Path) -> None:
+    """The welcome gate is the last step of bring-up, so a chat that is created and reaches WAITING
+    but is never welcomed has to read as a preparation failure with its own reason -- not as an
+    agent that stopped replying, which is what a bare `timed_out` would suggest."""
+    # More polls than the budget allows, so the welcome never lands.
+    conversation = _one_turn_conversation(welcome_delay_polls=1_000_000)
+    driver, environment, _context = _run_driver(
+        tmp_path, ("Build it",), conversation, trial_name="todo-app__welcome1", timeout_seconds=2.0
+    )
+
+    assert conversation.is_chat_created
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert "the workspace chat never answered its welcome" in state["timed_out_reason"]
+    assert _PREPARATION_CEILING_TEXT in state["timed_out_reason"]
+    # Nothing was sent into the un-welcomed chat.
+    assert not any("/message" in command for command in environment.exec_commands)
+    driver_log = (driver.logs_dir / DRIVER_LOG_FILENAME).read_text()
+    assert "Still waiting for the workspace chat to answer its welcome" in driver_log
+
+
+def test_driver_does_not_blame_a_budget_for_a_sign_in_it_could_never_have_attempted(tmp_path: Path) -> None:
+    """The reason is the first thing a reader of a failed trial looks at. A missing key is known
+    before any endpoint is polled, so quoting the preparation ceiling would send them after
+    infrastructure timing when the answer is an environment variable."""
+    driver = _make_driver(tmp_path, "todo-app__nokey1", extra_env={})
+    environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=_one_turn_conversation())
+
+    async def _drive() -> None:
+        await driver.setup(environment)
+        await driver.run(
+            _instruction_for(_case_config(("Build it",), timeout_seconds=900.0)), environment, AgentContext()
+        )
+
+    asyncio.run(_drive())
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["timed_out_reason"] == "no ANTHROPIC_API_KEY to sign the workspace in with"
+
+
+def test_driver_leaves_the_timeout_reason_empty_while_the_trial_is_going_well(tmp_path: Path) -> None:
+    conversation = _one_turn_conversation(reply_text="Done.")
+    _driver, environment, context = _run_driver(
+        tmp_path, ("Build it",), conversation, trial_name="todo-app__reason0", timeout_seconds=1800.0
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "finished"
+    assert state["timed_out_reason"] == ""
+    assert context.metadata is not None
+    assert context.metadata["timed_out_reason"] == ""
+
+
+def test_driver_carries_the_timeout_reason_into_the_metadata_and_the_state(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
+    )
+    _driver, environment, context = _run_driver(
+        tmp_path, ("Build it",), conversation, trial_name="todo-app__reason1", timeout_seconds=0.3
+    )
+
+    assert context.metadata is not None
+    assert context.metadata["timed_out_reason"] == "no reply to message 1"
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["timed_out_reason"] == "no reply to message 1"
+    # How far the trial got before it gave up: the reason alone does not say which message it was.
+    assert state["waits_done"] == 1
+
+
+def test_driver_captures_what_the_workspace_looked_like_when_it_gave_up(tmp_path: Path) -> None:
+    """A dead-workspace timeout is unexplainable after the fact: the workspace is destroyed and the
+    box is gone, so whatever it looked like has to be recorded at the moment of the failure."""
+    rules = [*_setup_rules(), ScriptedExecRule("tail -c", [ok_result("Traceback: the backend died\n")])]
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
+    )
+    driver, _environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__diag1",
+        timeout_seconds=0.3,
+        rules=rules,
+    )
+
+    diagnostics = json.loads((driver.logs_dir / TIMEOUT_DIAGNOSTICS_FILENAME).read_text())
+    assert diagnostics["reason"] == "no reply to message 1"
+    assert diagnostics["capture_error"] == ""
+    assert diagnostics["workspace_agent_id"] == "ws-1"
+    captures = diagnostics["captures"]
+    assert captures["chat_agent_state"] == "WAITING"
+    assert [agent["id"] for agent in captures["workspace_agents"]["agents"]] == ["sys-1", "chat-1"]
+    assert "the backend died" in captures["box_log_tail"]
+    assert set(captures) >= {"reverse_tunnel_log_tail", "proxy_log_tail"}
+
+
+def test_driver_records_a_failed_capture_instead_of_losing_the_whole_bundle(tmp_path: Path) -> None:
+    """One capture failing says nothing about the next -- a workspace that has stopped answering
+    still has box logs -- and a trial that has already given up must never be turned into a crash by
+    the attempt to explain itself."""
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[[{"type": "user_message", "content": "sent"}]],
+    )
+    driver = _make_driver(tmp_path, "todo-app__diag2")
+    environment = MockBoxEnvironment(
+        tmp_path, _setup_rules(), conversation=conversation, raising_substrings=("tail -c",)
+    )
+
+    async def _drive() -> None:
+        await driver.setup(environment)
+        await driver.run(
+            _instruction_for(_case_config(("Build it",), timeout_seconds=0.3)), environment, AgentContext()
+        )
+
+    asyncio.run(_drive())
+
+    captures = json.loads((driver.logs_dir / TIMEOUT_DIAGNOSTICS_FILENAME).read_text())["captures"]
+    assert captures["chat_agent_state"] == "WAITING"
+    assert "capture failed -- BoxCommandError" in captures["box_log_tail"]
+
+
+def test_driver_writes_its_own_log_beside_the_transcript(tmp_path: Path) -> None:
+    """loguru otherwise goes only to the harbor process's stderr, which no trial artifact retains --
+    so a trial that wedged before writing anything into the transcript would leave nothing at all."""
+    conversation = _one_turn_conversation(reply_text="Done.")
+    driver, _environment, _context = _run_driver(
+        tmp_path, ("Build it",), conversation, trial_name="todo-app__log1", timeout_seconds=1800.0
+    )
+
+    driver_log = (driver.logs_dir / DRIVER_LOG_FILENAME).read_text()
+    assert "Sending entry 1 exchange 1 as message 1: Build it" in driver_log
+    # Timestamped and levelled, so the log says when each step happened and which lines are failures.
+    assert re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \S+ INFO", driver_log, re.MULTILINE)
+
+
+def test_driver_starts_a_fresh_log_on_every_step(tmp_path: Path) -> None:
+    """harbor moves every file out of the host agent dir after each step. A sink held open across
+    that boundary keeps appending to the previous step's archived file, so the current step's log
+    would be missing entirely."""
+    driver = _make_scripted_driver(tmp_path, "project-roadmap__log2", [])
+    logs_dir = driver.logs_dir
+    archive_dir = tmp_path / "jobs" / "project-roadmap__log2" / "steps"
+    archive_dir.mkdir(parents=True)
+    environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=_goal_conversation(("On it.", "Done.")))
+
+    async def _drive() -> None:
+        await driver.setup(environment)
+        for index, prompt in enumerate(("Build it", "Ship it")):
+            driver._scripted_sources = [LiteralTurnSource(prompt=prompt)]
+            await driver.run(
+                _instruction_for(_step_case_config((prompt,), index, 2, timeout_seconds=900.0)),
+                environment,
+                AgentContext(),
+            )
+            if index == 0:
+                # What harbor's per-step archiving does to the file the sink was writing to.
+                (logs_dir / DRIVER_LOG_FILENAME).rename(archive_dir / DRIVER_LOG_FILENAME)
+
+    asyncio.run(_drive())
+
+    assert "Sending entry 1 exchange 1 as message 1: Build it" in (archive_dir / DRIVER_LOG_FILENAME).read_text()
+    second_step_log = (logs_dir / DRIVER_LOG_FILENAME).read_text()
+    assert "Sending entry 2 exchange 1 as message 2: Ship it" in second_step_log
+    assert "Build it" not in second_step_log
+
+
+def test_driver_removes_its_log_sink_even_when_the_step_raises(tmp_path: Path) -> None:
+    """A leaked sink would keep every later trial's loguru output flowing into this trial's file."""
+    driver = _make_driver(tmp_path, "todo-app__log3")
+    environment = MockBoxEnvironment(tmp_path, _setup_rules())
+
+    with pytest.raises(InstructionParseError):
+        asyncio.run(driver.run("# Task with no config block", environment, AgentContext()))
+    # Stamped with this trial's marker, so the sink's own filter would accept it. Logged without
+    # the marker the line is dropped whether or not the sink is still there, and the assertion
+    # below would hold against a sink that leaked.
+    with logger.contextualize(**{_DRIVER_LOG_TRIAL_KEY: driver._salt}):
+        logger.info("a line logged after the failed step")
+
+    assert "a line logged after the failed step" not in (driver.logs_dir / DRIVER_LOG_FILENAME).read_text()
+
+
+def test_concurrent_trials_do_not_write_into_each_others_logs(tmp_path: Path) -> None:
+    """loguru's sinks are process-global and harbor runs concurrent trials as asyncio tasks in one
+    process, so an unfiltered sink would give every trial every other trial's lines."""
+
+    async def _drive_one(case_id: str, prompt: str) -> Path:
+        driver = _make_driver(tmp_path, case_id)
+        environment = MockBoxEnvironment(
+            tmp_path / case_id, _setup_rules(), conversation=_goal_conversation(("On it.",))
+        )
+        await driver.setup(environment)
+        await driver.run(
+            _instruction_for(_case_config((prompt,), timeout_seconds=1800.0)), environment, AgentContext()
+        )
+        return driver.logs_dir / DRIVER_LOG_FILENAME
+
+    async def _drive_both() -> tuple[Path, Path]:
+        alpha, beta = await asyncio.gather(_drive_one("alpha", "Build alpha"), _drive_one("beta", "Build beta"))
+        return alpha, beta
+
+    alpha_log, beta_log = asyncio.run(_drive_both())
+
+    assert "Build alpha" in alpha_log.read_text()
+    assert "Build beta" not in alpha_log.read_text()
+    assert "Build beta" in beta_log.read_text()
+    assert "Build alpha" not in beta_log.read_text()
+
+
+# --- the step boundary, the driver's own view, and the instruction ---
+
+
+def test_each_step_marks_its_boundary_as_a_system_step(tmp_path: Path) -> None:
+    """Both trajectory shapes are cumulative, so without a marker a later step's trajectory reads as
+    one undivided conversation."""
+    _driver, environment, _contexts = _run_stepped_driver(
+        tmp_path,
+        (("Build me a roadmap",), ("Here is an updated pull.",)),
+        _goal_conversation(("On it.", "Updated.")),
+        trial_name="project-roadmap__bounds1",
+    )
+
+    steps = _box_trajectory(environment)["steps"]
+    assert [(step["step_id"], step["source"]) for step in steps] == [
+        (1, "system"),
+        (2, "user"),
+        (3, "agent"),
+        (4, "system"),
+        (5, "user"),
+        (6, "agent"),
+    ]
+    assert steps[0]["message"].startswith(STEP_BOUNDARY_BANNER)
+    assert "Step: step-1" in steps[0]["message"]
+    assert steps[3]["message"].startswith(STEP_BOUNDARY_BANNER)
+    assert "Step: step-2" in steps[3]["message"]
+
+
+def test_a_trial_without_steps_has_no_boundary_to_mark(tmp_path: Path) -> None:
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[_reply_events("Built it.")])
+
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__flat1",
+        timeout_seconds=1800.0,
+    )
+
+    assert [step["source"] for step in _box_trajectory(environment)["steps"]] == ["user", "agent"]
+
+
+def test_the_driver_writes_its_own_view_of_the_trial_beside_the_trajectory(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        turn_reply_events=[_reply_events("Building it now."), _reply_events("All done.")],
+    )
+
+    driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it", "Sounds good."),
+        conversation,
+        trial_name="todo-app__view1",
+        timeout_seconds=1800.0,
+    )
+
+    records = [json.loads(line) for line in (driver.logs_dir / "driver_events.jsonl").read_text().splitlines()]
+
+    # The feed the driver polled, verbatim -- the half that shows a workspace whose replies the
+    # driver could not make out.
+    assert "All done." in json.dumps(records)
+    # Operational only: nothing in the box grades it, so it is never mirrored there.
+    assert "/logs/agent/driver_events.jsonl" not in environment.uploaded_content_by_target
+
+
+def test_the_driver_view_records_each_decider_call_with_the_message_it_produced(tmp_path: Path) -> None:
+    goal_source = ScriptedTurnSource(
+        actions=[say("Where is it?"), done(TurnOutcome.SATISFIED, "It is running.")],
+        entry_kind=TurnEntryKind.GOAL,
+        budget_outcome=TurnOutcome.BUDGET_EXHAUSTED,
+        is_decider_call_simulated=True,
+    )
+    driver, _environment, _context = _run_driver(
+        tmp_path,
+        (_OPENING_PROMPT, GoalEntry(goal="See the app running", max_exchanges=2)),
+        _goal_conversation(("Here.", "Running.")),
+        trial_name="todo-app__view2",
+        timeout_seconds=1800.0,
+        scripted_sources=[LiteralTurnSource(prompt=_OPENING_PROMPT), goal_source],
+    )
+
+    records = [json.loads(line) for line in (driver.logs_dir / "driver_events.jsonl").read_text().splitlines()]
+    decider_records = [record for record in records if record.get("type") == "decider_message"]
+
+    # Every call the decider made, including the one that ended the entry without speaking. The text
+    # is what the trajectory's provenance block leaves out, and what makes this a debugging record.
+    assert [record["text"] for record in decider_records] == ["Where is it?", ""]
+    assert [record["entry_kind"] for record in decider_records] == ["goal", "goal"]
+    assert [record["detail"] for record in decider_records] == ["", "It is running."]
+
+
+def test_the_instruction_is_kept_beside_the_results_it_drove(tmp_path: Path) -> None:
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[_reply_events("Built it.")])
+
+    driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__instr1",
+        timeout_seconds=1800.0,
+    )
+
+    assert "Build it" in (driver.logs_dir / "instruction.md").read_text()
+    # The expectations it carries never reach the machine the agent under test runs on.
+    assert "/logs/agent/instruction.md" not in environment.uploaded_content_by_target
+
+
+def test_an_unparsable_instruction_is_still_written_for_a_reader(tmp_path: Path) -> None:
+    driver = _make_driver(tmp_path, "todo-app__instr2")
+    environment = MockBoxEnvironment(tmp_path, _setup_rules(), conversation=_one_turn_conversation())
+
+    with pytest.raises(InstructionParseError):
+        asyncio.run(driver.run("no fenced json here", environment, AgentContext()))
+
+    assert (driver.logs_dir / "instruction.md").read_text() == "no fenced json here"

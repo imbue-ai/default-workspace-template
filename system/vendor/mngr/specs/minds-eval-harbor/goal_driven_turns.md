@@ -90,8 +90,18 @@ The mechanism composes cleanly with harbor `[[steps]]`, and better than harbor's
 First, the expansion lives entirely inside one `run()` invocation -- exactly the unit `MultiStepTrial` invokes per step -- so a multi-step adoption where the driver is the per-step agent runs each step's own `prompts` list through this machinery unchanged, with no bridge lifecycle, no `SUPPORTS_RESUME`, and no exclusion guard to remove.
 Second, the Minds conversation lives in the workspace, and the workspace persists with the environment across steps; target-side conversational continuity between steps is therefore automatic, unlike harbor-native agents whose sessions reset per step.
 
-Adopting `[[steps]]` remains a separate decision with its own costs, unchanged by this spec: per-step case-config transport (multi-step tasks have no top-level `instruction.md`, so each `steps/<name>/instruction.md` carries that step's fenced JSON), workspace preparation guarded to run only on the driver's first `run()` call (driver instance state survives across steps), workspace teardown and the evidence phase moved from a single `finally` to the final step (the step index rides the per-step config), and per-step verifier content.
-Nothing in this spec forecloses or depends on that adoption.
+Adopting `[[steps]]` is a separate, additive layer on top of this spec, specified in [step_based_tasks.md](step_based_tasks.md): per-step case-config transport (multi-step tasks have no top-level `instruction.md`, so each `steps/<name>/instruction.md` carries that step's fenced JSON), workspace preparation guarded to run only on the driver's first `run()` call (driver instance state survives across steps), workspace teardown moved from a single `finally` to the final step, or to whichever step the trial gave up on (the step position rides the per-step config), and per-step verifier content.
+A stepped case declares `steps` instead of a flat `prompts` list; each step names itself and carries its own prompt entries (goal entries included, and a non-opening step may open with one).
+
+The composition is governed by facts of harbor's multi-step runner that are easy to get wrong:
+
+- Harbor empties the box's `/logs/agent` between steps and archives each step's agent dir into `steps/<name>/agent/`, so anything created at `setup()` time (the evidence directory in particular) must be re-created on every `run()` call, and the archived transcript, conversation and state files are cumulative prefixes of the trial rather than step-local slices -- unlike the driver log and the evidence bundle, which really are per-step because the log sink and the collection both start fresh on each call.
+- In `separate` verifier mode a step's `tests/` *replaces* the task's tests as the whole build context (overlay semantics exist only in `shared` mode), so a step that ships one ships the whole verifier.
+- `min_reward` only aborts *later* steps, so a threshold on the final step is meaningless and is rejected at generation time.
+- Per-step agent timeouts fall back to the task-level value, silently multiplying an N-step case's budget by N; the case's `timeout_seconds` is instead split across steps by worst-case exchange count, and any resource that must outlive one step (the proxy tunnel) is sized from the trial's whole lifetime -- the conversation total plus the evidence phase, cleanup grace and verifier container every step spends between two conversations.
+- A judge *error* must remove the reward file so harbor errors the trial; rewardkit's soft-fail 0.0 would otherwise abort a passing agent.
+- An ungated non-final step has no abort path: after an earlier failure harbor runs the next step against a dead workspace, so every non-final step should carry a threshold, and the driver fails fast when it finds the workspace timed out.
+- Aborted and completed trials are different populations and must not be pooled.
 
 ## Testing
 

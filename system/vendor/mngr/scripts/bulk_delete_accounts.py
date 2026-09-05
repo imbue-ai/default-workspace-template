@@ -62,6 +62,8 @@ import re
 import subprocess
 import threading
 import time
+from abc import ABC
+from abc import abstractmethod
 from collections.abc import Iterator
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -107,6 +109,10 @@ _USER_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 
 # Connector tables keyed by the FULL SuperTokens user id (the hyphenated UUID).
+# Mirrored in delete_accounts.py and pinned to it by a test in
+# delete_accounts_test.py: both tools must clear the same connector-DB rows.
+# (Outside the connector DB they diverge on purpose -- only delete_accounts.py
+# touches LiteLLM users and analytics transcripts.)
 _TABLES_KEYED_BY_USER_ID: Final[tuple[str, ...]] = (
     "account_entitlements",
     "workspace_records",
@@ -321,7 +327,19 @@ def _delete_db_rows_for_listed_accounts(connection: Any, existing_tables: set[st
     return counts
 
 
-class SupertokensCoreClient:
+class SupertokensCoreClientInterface(ABC):
+    """The two per-user SuperTokens core calls that ``_PhaseRunner`` fans out."""
+
+    @abstractmethod
+    def revoke_all_sessions(self, user_id: str) -> int:
+        """Revoke every session of the account; returns how many session handles were revoked."""
+
+    @abstractmethod
+    def remove_user(self, user_id: str) -> None:
+        """Delete the user and all their core data (sessions included). OK for absent users."""
+
+
+class SupertokensCoreClient(SupertokensCoreClientInterface):
     """Thread-safe client for the two per-user SuperTokens core calls this tool issues."""
 
     def __init__(self, core_uri: str, api_key: str, max_connections: int) -> None:
@@ -375,7 +393,7 @@ class _PhaseRunner:
 
     def __init__(
         self,
-        core_client: SupertokensCoreClient,
+        core_client: SupertokensCoreClientInterface,
         phase: TakedownPhase,
         tier: str,
         progress_file: Path,

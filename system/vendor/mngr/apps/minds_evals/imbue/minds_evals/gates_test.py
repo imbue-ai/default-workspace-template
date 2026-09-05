@@ -161,6 +161,7 @@ def _goal_case_config() -> CaseConfig:
         dwt_branch="main",
         dwt_sha="c" * 40,
         avg_word_count_baseline=100.0,
+        step=None,
         expectations=None,
         authored_expectations=None,
     )
@@ -179,6 +180,49 @@ def test_the_oracles_fabricated_state_passes_the_re_founded_gates(gate_checks: M
         # is the thing the oracle's records have to reconcile against.
         case_config.model_dump(mode="json"),
     )
+
+
+def test_all_turns_completed_holds_a_step_answerable_for_the_entries_before_it(gate_checks: ModuleType) -> None:
+    """A step's case file holds only that step's own turns while the entry records accumulate across
+    the whole conversation, so the count a step owes is its own entries plus every earlier step's."""
+    second_step_case = {"prompts": ["A third have two teams.", {"goal": "g"}], "step": {"entries_before": 2}}
+    entries = [
+        _entry(0, "literal", 1, "completed"),
+        _entry(1, "goal", 2, "satisfied"),
+        _entry(2, "literal", 1, "completed"),
+        _entry(3, "goal", 1, "satisfied"),
+    ]
+
+    assert gate_checks.is_every_entry_completed(_state(entries, waits_done=5), second_step_case)
+    # The same records at the FIRST step would mean the trial ran ahead of its own instruction.
+    assert not gate_checks.is_every_entry_completed(
+        _state(entries, waits_done=5), {"prompts": ["Build it", {"goal": "g"}], "step": {"entries_before": 0}}
+    )
+
+
+def test_all_turns_completed_holds_only_this_steps_prompts_to_the_one_message_floor(
+    gate_checks: ModuleType,
+) -> None:
+    """The one-message floor is dispatched on the prompt beside the record. A step's case file names
+    only its own prompts, so the records it inherits from earlier steps must be lined up behind
+    those prompts rather than against them."""
+    second_step_case = {"prompts": ["A third have two teams.", {"goal": "g"}], "step": {"entries_before": 2}}
+    # The step's own goal entry sends two messages; the earlier step's goal entry sent none.
+    entries = [
+        _entry(0, "literal", 1, "completed"),
+        _entry(1, "goal", 0, "satisfied"),
+        _entry(2, "literal", 1, "completed"),
+        _entry(3, "goal", 2, "satisfied"),
+    ]
+
+    assert gate_checks.is_every_entry_completed(_state(entries, waits_done=4), second_step_case)
+
+
+def test_all_turns_completed_reads_a_flat_case_as_owing_only_its_own_entries(gate_checks: ModuleType) -> None:
+    """A single-step case carries no step block, and its one state.json describes the whole trial."""
+    entries = [_entry(0, "literal", 1, "completed")]
+
+    assert gate_checks.is_every_entry_completed(_state(entries, waits_done=1), {"prompts": ["Build it"], "step": None})
 
 
 def test_agent_engaged_substantively_keys_off_the_messages_sent_not_the_entries(gate_checks: ModuleType) -> None:

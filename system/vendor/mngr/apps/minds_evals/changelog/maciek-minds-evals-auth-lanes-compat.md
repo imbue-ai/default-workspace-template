@@ -10,9 +10,13 @@ chat through `/api/agents/create-chat` -- named after the workspace host and bou
 issued the other way round is refused for want of an account, so the order is load-bearing rather
 than cosmetic.
 
-Failures are named separately, so a trial says which step it fell at: `could not authenticate the
-workspace`, `could not create the workspace chat agent`, `the workspace chat agent never reached
-WAITING`, `the workspace chat never answered its welcome`.
+Failures are named separately, so a trial says which step it fell at: the sign-in's own three
+reasons (no key to sign in with, an auth endpoint that never came up, credentials the workspace
+refused), `could not create the workspace chat agent`, `the workspace chat agent never reached
+WAITING`, and `the workspace chat never answered its welcome`. Each one that actually waited is
+recorded with the preparation budget it ran under, so a dead workspace reads differently from a
+merely slow one; a failure the driver could tell immediately -- having no key at all -- names no
+budget, because there was none to run out.
 
 The chat the driver creates is the workspace's first, which is the one the product gives `/welcome`
 to. `conversation.jsonl` -- the eval's own turns, which the gates and the wordiness check read --
@@ -21,8 +25,8 @@ draws, as its first agent message. The driver waits for that welcome to be *answ
 sends turn 1. A new chat reports WAITING as soon as its agent process is up, which is before the
 workspace has typed `/welcome` into it, and that window is as wide as the workspace takes to reach
 the agent's input box. Turn 1 sent into it would race the delivery, and the greeting would then
-arrive where turn 1's reply is read from -- so
-the greeting, not the agent's answer, would be the graded reply to turn 1.
+arrive where turn 1's reply is read from -- so the greeting, not the agent's answer, would be the
+graded reply to turn 1.
 
 Two behaviours of the create are worth knowing when reading a trial log:
 

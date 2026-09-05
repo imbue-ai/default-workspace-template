@@ -4,6 +4,7 @@ one repeats). An optional ConversationModel additionally serves the workspace sy
 stateful sign-in, chat-creation, message, events, and agents endpoints, so the driver's whole
 bring-up and turn loop can be exercised end to end."""
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -13,6 +14,8 @@ from harbor.environments.base import BaseEnvironment
 from harbor.environments.base import ExecResult
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
+
+from imbue.minds_evals.errors import BoxCommandError
 
 
 class ScriptedExecRule:
@@ -75,6 +78,11 @@ class ConversationModel:
     A chat binds to a provider account at creation and only the sign-in endpoint mints one, so a
     create issued before sign-in is refused for want of an account -- the product behaviour that
     makes the driver's ordering load-bearing.
+
+    ``box_lost_after_turn`` makes the box go away the moment that turn's events have been read:
+    the workspace said something, the reader took it, and then the sandbox holding all of it
+    vanished before the turn could finish. Every later command raises rather than answering, which
+    is the difference between a box the host has lost and a workspace that merely refuses.
     """
 
     def __init__(
@@ -84,6 +92,7 @@ class ConversationModel:
         trailing_events: list[dict] | None = None,
         is_first_create_answer_lost: bool = False,
         welcome_delay_polls: int = 0,
+        box_lost_after_turn: int | None = None,
     ) -> None:
         self.chat_agent_id = chat_agent_id
         # The name the chat is listed under, which it only has once a create has given it one.
@@ -104,6 +113,10 @@ class ConversationModel:
         # What the workspace reports after a submit; a mode other than the one the driver asked for
         # is how a bad credential shows up, since the endpoint itself never validates.
         self.expected_auth_mode = "api_key"
+        # Whether the workspace's agents endpoints answer at all. A workspace that was created but
+        # never became usable answers nothing on any of them -- creating a chat included, not just
+        # listing them -- so the trial never gets a chat to drive.
+        self.is_agents_endpoint_up = True
         # The 1-based client message the message endpoint refuses to accept, if any. The driver
         # retries a send until its deadline, so this is how a send that never lands is exercised.
         self.refused_send_index: int | None = None
@@ -120,6 +133,10 @@ class ConversationModel:
         # The state the created chat reports; a chat that never reaches WAITING is one the driver
         # can never send a turn to.
         self.chat_state = "WAITING"
+        # The 1-based client message after which the box goes, or None for a box that stays.
+        self._box_lost_after_turn = box_lost_after_turn
+        # Whether the box has gone away; MockBoxEnvironment raises on every command once it has.
+        self.is_box_lost = False
 
     def _deliver_welcome_if_due(self) -> None:
         """The welcome the workspace gives its first chat, once it is due."""
@@ -190,6 +207,9 @@ class ConversationModel:
                 # No status line at all is what the bridge sees while the endpoint is still coming up.
                 return mngr_exec_json("")
             return curl_stdout(json.dumps({"logged_in": False, "auth_mode": "none"}))
+        if "/api/agents" in command and not self.is_agents_endpoint_up:
+            # No status line at all: the bridged call reached nothing that could answer it.
+            return mngr_exec_json("")
         if "/api/agents/create-chat" in command:
             return self._handle_create_chat(command)
         if "/api/agents/{}/message".format(self.chat_agent_id) in command:
@@ -210,8 +230,17 @@ class ConversationModel:
         if events_match:
             self._deliver_welcome_if_due()
             offset, limit = int(events_match.group(1)), int(events_match.group(2))
-            body = {"total": len(self.events), "events": self.events[offset : offset + limit]}
-            return curl_stdout(json.dumps(body))
+            served = self.events[offset : offset + limit]
+            # Armed only once a sent turn's events have all been handed over, so this answer is the
+            # last one the reader gets: the events reach it, and the box is gone by its next call.
+            if (
+                self._box_lost_after_turn is not None
+                and self._turn_index >= self._box_lost_after_turn
+                and served
+                and offset + len(served) == len(self.events)
+            ):
+                self.is_box_lost = True
+            return curl_stdout(json.dumps({"total": len(self.events), "events": served}))
         if "/api/agents" in command and "curl" in command:
             if self._trailing_events and self._turn_index >= len(self._turn_reply_events):
                 self.events.extend(self._trailing_events)
@@ -228,6 +257,7 @@ class MockBoxEnvironment(BaseEnvironment):
         tmp_path: Path,
         rules: list[ScriptedExecRule],
         conversation: ConversationModel | None = None,
+        raising_substrings: tuple[str, ...] = (),
     ) -> None:
         trial_dir = tmp_path / "trial"
         trial_dir.mkdir(parents=True, exist_ok=True)
@@ -242,9 +272,16 @@ class MockBoxEnvironment(BaseEnvironment):
         )
         self.rules = rules
         self.conversation = conversation
+        # Commands whose exec raises rather than answering. A canned ExecResult can only express a
+        # command that ran and failed; this is the transport itself failing, which is what a box the
+        # host has lost contact with looks like.
+        self.raising_substrings = raising_substrings
         self.exec_commands: list[str] = []
         self.exec_envs: list[dict[str, str] | None] = []
         self.uploaded_content_by_target: dict[str, str] = {}
+        # Every upload in order. The mapping above keeps only the latest write to each path, which
+        # cannot say whether a later step wrote its own copy of a file an earlier one already had.
+        self.uploaded_targets: list[str] = []
         # What a `download_file` of a box path yields; a path not listed here is a missing file.
         self.downloadable_content_by_source: dict[str, str] = {}
         # An upload whose content contains this fails the way a transport hiccup does; empty means
@@ -269,6 +306,7 @@ class MockBoxEnvironment(BaseEnvironment):
         if self.rejected_upload_content_substring and self.rejected_upload_content_substring in content:
             raise RuntimeError("upload of {} failed".format(target_path))
         self.uploaded_content_by_target[target_path] = content
+        self.uploaded_targets.append(target_path)
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         pass
@@ -300,6 +338,14 @@ class MockBoxEnvironment(BaseEnvironment):
     ) -> ExecResult:
         self.exec_commands.append(command)
         self.exec_envs.append(env)
+        # A real exec is a network round trip and always yields; without this every scripted answer
+        # is instant and a test of two concurrent drivers would never actually interleave them.
+        await asyncio.sleep(0)
+        for substring in self.raising_substrings:
+            if substring in command:
+                raise BoxCommandError("mock transport failure for {!r}".format(substring))
+        if self.conversation is not None and self.conversation.is_box_lost:
+            raise BoxCommandError("the box is gone; nothing in it can be reached")
         if self.conversation is not None:
             handled = self.conversation.handle(command)
             if handled is not None:

@@ -15,6 +15,7 @@ import time
 import uuid
 from abc import ABC
 from abc import abstractmethod
+from collections.abc import Coroutine
 from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
@@ -36,6 +37,7 @@ from pydantic import SecretStr
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
@@ -56,6 +58,7 @@ from imbue.minds_evals.data_types import EntryRecord
 from imbue.minds_evals.data_types import EvidenceManifest
 from imbue.minds_evals.data_types import GoalEntry
 from imbue.minds_evals.data_types import PromptEntry
+from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TrajectorySource
 from imbue.minds_evals.data_types import Transcript
@@ -63,9 +66,12 @@ from imbue.minds_evals.data_types import TranscriptCapture
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import TurnOutcome
 from imbue.minds_evals.data_types import UsageSource
+from imbue.minds_evals.data_types import WORKSPACE_UPLOADS_DIR
 from imbue.minds_evals.data_types import WorkerCapture
 from imbue.minds_evals.data_types import WorkerState
+from imbue.minds_evals.data_types import cross_step_lifetime_seconds
 from imbue.minds_evals.data_types import entry_exchange_budget
+from imbue.minds_evals.data_types import is_final_step
 from imbue.minds_evals.errors import AgentKwargError
 from imbue.minds_evals.errors import InstructionParseError
 from imbue.minds_evals.errors import TrajectoryDocumentError
@@ -79,11 +85,49 @@ STATE_FILENAME: Final[str] = "state.json"
 # Token and cost accounting, written host-side beside the trajectory (the verifier does not grade
 # it, so unlike the trajectory and state files it is not mirrored into the box).
 USAGE_FILENAME: Final[str] = "usage.json"
+# This driver's own loguru output, captured per run() call. Without it loguru goes only to the
+# harbor process's stderr, which no trial artifact retains -- so a trial that wedged before it could
+# write anything into the transcript would leave nothing that says where it was.
+DRIVER_LOG_FILENAME: Final[str] = "driver.log"
+_DRIVER_LOG_FORMAT: Final[str] = "{time:YYYY-MM-DD HH:mm:ss.SSS!UTC} | {level: <8} | {name}:{line} - {message}"
+# The `extra` key each trial stamps its own log records with. loguru's sinks are process-global and
+# harbor runs concurrent trials as asyncio tasks in ONE process, so without a per-trial marker every
+# trial's driver.log would carry every other trial's lines. The marker is set with
+# logger.contextualize, whose contextvar asyncio copies per task, so a record's marker is the trial
+# whose task emitted it.
+_DRIVER_LOG_TRIAL_KEY: Final[str] = "minds_evals_trial"
+# What the workspace looked like at the moment the trial gave up, written host-side beside the
+# transcript. A dead-workspace timeout otherwise leaves only `timed_out: true`.
+TIMEOUT_DIAGNOSTICS_FILENAME: Final[str] = "timeout_diagnostics.json"
+# The whole diagnostics capture's wall-clock ceiling. Each capture is a bridged exec round trip, and
+# against an unresponsive workspace every one of them runs to its own transport timeout, so the
+# ceiling -- not the sum of the parts -- is what keeps a timed-out trial from stalling its teardown.
+TIMEOUT_DIAGNOSTICS_BUDGET_SECONDS: Final[float] = 120.0
+# What the diagnostics record in place of a workspace-side capture that could not be taken. Every
+# key is always written, because an absent key cannot be told apart from a capture never attempted,
+# and which of these three the reader sees is itself the first half of the diagnosis.
+_WORKSPACE_GONE_CAPTURE: Final[str] = "not captured -- the workspace was torn down before this step"
+_NO_WORKSPACE_CAPTURE: Final[str] = "not captured -- the trial gave up before a workspace existed"
+_NO_CHAT_CAPTURE: Final[str] = "not captured -- the workspace never got a chat agent"
 MINDS_ENV: Final[str] = "staging"
 
 # Electron plus the backend need several minutes on first boot; the agent-level
 # override_setup_timeout_sec in the run recipe must cover this.
 BACKEND_BOOT_TIMEOUT_SECONDS: Final[float] = 600.0
+
+# How long the workspace has to become usable -- created, its chat agent resolved, and signed in --
+# before the trial gives up. It bounds workspace preparation ONLY; the case's own timeout_seconds
+# still governs the conversation once the workspace answers.
+#
+# A workspace that will never answer is otherwise indistinguishable from a slow one, so without this
+# every readiness poll simply runs to the conversation deadline and a dead workspace costs the trial
+# its entire budget without sending a message. Sized well above what a healthy trial needs (whole
+# four-turn conversations complete in 10-13 minutes) so a slow-but-alive workspace is never cut off.
+WORKSPACE_READINESS_TIMEOUT_SECONDS: Final[float] = 1200.0
+
+# What making one directory inside the workspace gets. It is a bridged round trip rather than a
+# local mkdir, so the budget is the transport's, not the command's.
+_WORKSPACE_MKDIR_TIMEOUT_SECONDS: Final[int] = 60
 
 # The box-local port an in-box LLM proxy would listen on, reverse-forwarded to the same port inside
 # the workspace so Claude Code can reach it as a loopback address.
@@ -100,6 +144,14 @@ PROXY_TUNNEL_READY_TIMEOUT_SECONDS: Final[float] = 120.0
 PROXY_TUNNEL_GRACE_SECONDS: Final[float] = 600.0
 # The proxy's per-request metering record, written host-side beside usage.json.
 PROXY_USAGE_FILENAME: Final[str] = "usage_proxy.jsonl"
+# The driver's own view of the trial: the workspace feed it polled and the decider calls it made,
+# beside the other operational artifacts (mngr_forward.jsonl, driver.log). Written host-side only
+# and never mirrored into the box: nothing grades it, and it exists to explain a trial that went
+# wrong -- an eval/workspace-template mismatch above all -- from the harness's side of the wire.
+DRIVER_EVENTS_FILENAME: Final[str] = "driver_events.jsonl"
+# The instruction this run was handed, kept beside the results it produced. Host-side only, like
+# the driver's view above.
+INSTRUCTION_FILENAME: Final[str] = "instruction.md"
 
 # Each bridge poll is a Modal exec round trip; a run of consecutive failures
 # means the bridge is broken, not just a transient blip. Log every few and give
@@ -582,6 +634,47 @@ def build_eval_case_commit_command(clone_dir: str, commit_message: str) -> str:
 
 
 @pure
+def workspace_readiness_deadline(conversation_deadline: float, now: float) -> float:
+    """When workspace preparation gives up: its own budget, or the conversation deadline if that is
+    sooner. Preparation can never outlive the conversation it is preparing for, and a conversation
+    with time to spare never waits longer than the budget on a workspace that will not answer."""
+    return min(conversation_deadline, now + WORKSPACE_READINESS_TIMEOUT_SECONDS)
+
+
+class WorkspaceAuthentication(FrozenModel):
+    """What signing the trial's workspace in produced.
+
+    The account is what the workspace's chat is then created against, and the failure is what the
+    trial record keeps when there is no account because the sign-in did not happen.
+    """
+
+    failure: str = Field(default="", description="Which way the sign-in failed; empty when it worked")
+    # Whether the failure came from a wait that ran out, as opposed to one the sign-in could tell
+    # immediately. The trial record names the preparation ceiling only for the former: quoting a
+    # budget for a failure that never consulted a clock sends the reader after infrastructure
+    # timing when the answer is a missing environment variable.
+    is_failure_from_waiting: bool = Field(default=True, description="Whether the failure was a wait running out")
+    # Empty on a signed-in workspace that named no account, which leaves the choice of account to
+    # the workspace itself.
+    account_id: str = Field(default="", description="The provider account the sign-in minted")
+
+
+class PublishedSpend(FrozenModel):
+    """The workspace spend already published to harbor by this trial's earlier run() calls.
+
+    Harbor sums one AgentContext per step into a multi-step trial's totals, while this driver's
+    account of the workspace is the whole conversation's -- one chat and one proxy serve every step
+    -- so a step that published the running total would have every earlier step's spend counted
+    again.
+    """
+
+    input_tokens: int = Field(default=0, description="Input tokens published so far, cache included")
+    cache_tokens: int = Field(default=0, description="Cache-read tokens published so far")
+    output_tokens: int = Field(default=0, description="Output tokens published so far")
+    cost_usd: float = Field(default=0.0, description="USD published so far; a step that cannot price adds nothing")
+
+
+@pure
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -816,6 +909,9 @@ class MindsPersonaDriver(BaseAgent):
         # the whole run's.
         self._decider_results: list[DeciderResult] = []
         self._decider_turns: list[DeciderTurn] = []
+        # Where each step of a multi-step task began, in order, so the trajectory can mark the
+        # boundaries in a conversation every step replays from its first turn.
+        self._step_boundaries: list[StepBoundary] = []
         # How each prompts entry played out: its kind, the exchanges it actually sent, and why it
         # stopped. The structural gates are founded on these.
         self._entry_records: list[EntryRecord] = []
@@ -829,7 +925,20 @@ class MindsPersonaDriver(BaseAgent):
         # copy back to exactly what the verifier will read.
         self._box_trajectory_json: str | None = None
         self._case: CaseConfig | None = None
+        # Whether the trial's workspace has been created and signed in. A multi-step task calls
+        # run() once per step against this same instance; only the first call prepares.
+        self._is_workspace_prepared: bool = False
+        # Whether the workspace has been torn down. One-way: a step that destroyed it, having failed
+        # or been the last, leaves nothing a later run() call may drive or probe.
+        self._is_workspace_destroyed: bool = False
+        # The prompts entries every run() call so far declared, which for a stepped case is not the
+        # entry count of the config currently in hand.
+        self._configured_entry_count: int = 0
         self._started_at: float = 0.0
+        # When the run() call currently in flight began. Separate from the trial's own start because
+        # a stepped case's `timeout_seconds` is only this step's share, and an elapsed figure beside
+        # it has to be measured over the same span or it reads as an overrun on a healthy trial.
+        self._step_started_at: float = 0.0
         # Client messages actually sent across the whole conversation, which is not the same thing
         # as the entry count: one goal entry can send several.
         self._waits_done: int = 0
@@ -846,6 +955,18 @@ class MindsPersonaDriver(BaseAgent):
         self._preexisting_registrations: frozenset[str] | None = None
         self._verification_metadata: dict[str, Any] = {}
         self._verifier_usage: ui_flows.VerifierUsage | None = None
+        # Why the trial gave up, or empty while it has not. Carried in state.json and the trial
+        # metadata: "timed_out: true" on its own says nothing about which wait ran out.
+        self._timed_out_reason: str = ""
+        # What the agent has said in a turn that has not finished yet. The hand-built trajectory
+        # carries it as one more agent step, so a turn the box or the workspace dies under still
+        # leaves what was said on the host; it is cleared once the turn's merged reply joins the
+        # conversation. The workspace's own document records those messages either way, so keeping
+        # them here is what makes the two shapes describe the same conversation.
+        self._partial_reply_texts: tuple[str, ...] = ()
+        # What earlier run() calls already reported to harbor as this trial's spend, so a stepped
+        # trial reports each step's share rather than the running total N times over.
+        self._published_spend: PublishedSpend = PublishedSpend()
 
     @staticmethod
     def name() -> str:
@@ -889,24 +1010,97 @@ class MindsPersonaDriver(BaseAgent):
         logger.info("Minds backend is up on port {}", self._api_port)
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        """Drive one instruction's turns, with this driver's own log captured beside the transcript.
+
+        A multi-step task calls this once per step, against the same driver instance and the same
+        workspace. Every call collects its own verification evidence, since every step is graded by
+        its own verifier; the case config's step position decides only which call may tear the
+        workspace down.
+
+        The log sink is added and removed per call rather than once per trial because harbor moves
+        every file out of the host agent dir after each step: a sink held open across the boundary
+        would keep appending to the previous step's archived file, and the current step would have
+        no log at all.
+        """
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        sink_id = logger.add(
+            self.logs_dir / DRIVER_LOG_FILENAME,
+            level="DEBUG",
+            format=_DRIVER_LOG_FORMAT,
+            mode="a",
+            filter=self._is_own_log_record,
+        )
+        try:
+            with logger.contextualize(**{_DRIVER_LOG_TRIAL_KEY: self._salt}):
+                await self._run_step(instruction, environment, context)
+        finally:
+            logger.remove(sink_id)
+
+    def _is_own_log_record(self, record: Mapping[str, Any]) -> bool:
+        """Whether a loguru record belongs to this trial, and so to this trial's driver.log."""
+        return bool(record["extra"].get(_DRIVER_LOG_TRIAL_KEY) == self._salt)
+
+    async def _run_step(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        # Before the parse, so an instruction that cannot be parsed is still on disk to look at.
+        self._write_instruction(instruction)
         case = parse_case_config(instruction)
         self._case = case
-        self._started_at = time.time()
-        deadline = self._started_at + case.timeout_seconds
+        self._record_step_boundary(case)
+        self._configured_entry_count += len(case.prompts)
+        # A step reopens the conversation, so the trial is not finished until its last step is.
+        # Left at "finished" this step would write a state.json contradicting its own entry records,
+        # and a step that died mid-conversation would still be read as one that completed -- which
+        # is what decides whether the expensive expectations-driven evidence phase runs.
+        if self._test_state == "finished":
+            self._test_state = "ongoing"
+        self._step_started_at = time.time()
+        if self._started_at == 0.0:
+            self._started_at = self._step_started_at
+        # Every step gets its own budget, so the deadline is measured from the start of THIS call.
+        deadline = self._step_started_at + case.timeout_seconds
+        # Re-created per step, not just at setup: harbor empties the box's /logs/agent between
+        # steps, so a directory created once would be gone by the time the second step's artifact
+        # collection looked for it -- and harbor refuses to regrade a trial with a missing artifact.
+        await evidence_collection.ensure_evidence_dir(environment)
+        is_final = is_final_step(case.step)
+        is_conversation_returned = False
         try:
             await self._run_conversation(case, environment, deadline)
+            is_conversation_returned = True
         finally:
-            # Before anything is torn down: the workspace (and the app inside it) is only alive
-            # here, and the verifier runs long after it is gone.
-            await self._collect_verification_evidence(environment)
-            if self._is_proxy_enabled:
-                await self._collect_proxy_usage(environment)
-            # Written here rather than in populate_context_post_run: harbor only
-            # calls that hook when the agent context is still empty, and this
-            # driver always populates the context below.
-            trajectory_source = await self._publish_trajectory(case, environment)
-            self._populate_context_metadata(context, trajectory_source)
-            await self._teardown(environment)
+            # Nested so that the teardown decision sits in the inner finally: everything above it
+            # writes records, and none of those writes may cost the trial its workspace. Nothing is
+            # swallowed -- a raise here still propagates -- but it propagates after the nested
+            # sandboxes have been reclaimed rather than instead of it.
+            try:
+                # Every step is graded by its own verifier against its own expectations, so every
+                # step collects its own evidence -- and it must be collected here, while the
+                # workspace and the app inside it are still alive, since the verifier runs long
+                # after they are gone.
+                await self._collect_verification_evidence(environment)
+                if self._is_proxy_enabled:
+                    await self._collect_proxy_usage(environment)
+                # Each step publishes the whole conversation so far, since both trajectory shapes
+                # are cumulative: the workspace's own document describes the one workspace the
+                # steps share, and the hand-built one describes the driver's accumulated
+                # conversation.
+                trajectory_source = await self._publish_trajectory(case, environment)
+                # After the evidence phase, so the driver's view covers the whole step rather than
+                # the last state the conversation loop happened to leave behind.
+                self._write_driver_events()
+                # Written here rather than in populate_context_post_run: harbor only calls that
+                # hook when the agent context is still empty, and this driver always fills it.
+                self._populate_context_metadata(context, trajectory_source)
+            finally:
+                # The workspace outlives a step only while a later step can still use it. Harbor
+                # stops calling run() the moment a step misses its min_reward or raises without a
+                # verifier result, and there is no trial-end hook to tear down in, so a step that
+                # already knows the trial cannot go on destroys the workspace itself -- otherwise
+                # the nested sandboxes run to their own timeout with nobody left to reclaim them. A
+                # step that merely scored below its floor is not visible from here and still relies
+                # on that backstop.
+                if is_final or not is_conversation_returned or self._test_state == "timed_out":
+                    await self._teardown(environment)
 
     def _build_verification_agent(self) -> ui_flows.VerificationAgent | None:
         """The UI-flow agent, or None when there is no key to run it with. The upstream key is used
@@ -925,13 +1119,34 @@ class MindsPersonaDriver(BaseAgent):
     async def _collect_verification_evidence(self, environment: BaseEnvironment) -> None:
         """Capture what the delivered workspace actually is, while it still exists.
 
+        Runs at the end of every step, against that step's own expectations and within its own
+        verification budget, because every step is graded by its own verifier. A worker still alive
+        from an earlier step is captured again by every later step, so each step's bundle stands on
+        its own.
+
         The cheap registry/service/inventory/transcript capture runs for every trial that got as far
         as a workspace; the expectations-driven probes only run when the conversation finished, since an
         unfinished trial's structural gates already zero its reward. Any failure here is swallowed:
         evidence is best-effort and must never discard an already-completed trial or block the
         teardown that stops the nested sandboxes from leaking.
         """
+        # Cleared before anything can return early or fail, because all three outlive the call: a
+        # step that collected nothing would otherwise publish the last step that did collect
+        # something as its own. Two of them say whether a step's evidence can be trusted -- the
+        # counts for the bundle, the capture for which shape trajectory.json has and why -- and the
+        # third is a quantity, so a stale copy is not merely misleading: each step's flow agent is
+        # its own, and re-reporting an earlier one's spend double-counts it across the trial. The
+        # worker captures deliberately survive: the token account they carry is the trial's,
+        # cumulative across steps, and a step that dropped it would publish a negative spend delta.
+        self._verification_metadata = {}
+        self._transcript_capture = evidence_collection.not_attempted_transcript_capture()
+        self._verifier_usage = None
+        # A destroyed workspace has nothing left to capture, and every probe against it would run to
+        # its own transport timeout before saying so.
         if self._box_env is None or self._case is None or not self._workspace_agent_id:
+            return
+        if self._is_workspace_destroyed:
+            logger.info("Skipping evidence collection: the workspace was torn down by an earlier step")
             return
         collector = evidence_collection.EvidenceCollector(
             environment=environment,
@@ -985,9 +1200,16 @@ class MindsPersonaDriver(BaseAgent):
     async def _teardown(self, environment: BaseEnvironment) -> None:
         """Destroy the trial's workspace sandboxes, swallowing any teardown error so a transport
         hiccup at cleanup never discards an already-completed trial or masks the original failure
-        (the nested sandboxes' own timeout is the backstop)."""
-        if self._box_env is None:
+        (the nested sandboxes' own timeout is the backstop).
+
+        Once per trial, and one-way: a later step has to read the workspace as gone rather than
+        drive it, and a second sweep would only re-confirm an empty listing.
+        """
+        if self._box_env is None or self._is_workspace_destroyed:
             return
+        # Marked before the sweep rather than after it: a sweep that failed still leaves a workspace
+        # no later step may assume is there.
+        self._is_workspace_destroyed = True
         try:
             await minds_bridge.destroy_workspaces(environment, self._box_env)
         except Exception as exc:
@@ -995,8 +1217,80 @@ class MindsPersonaDriver(BaseAgent):
 
     async def _run_conversation(self, case: CaseConfig, environment: BaseEnvironment, deadline: float) -> None:
         assert self._box_env is not None, "setup() must run before run()"
+        # Before anything else, including the skip below: harbor empties the box's /logs/agent
+        # between steps, and these files are declared artifacts, so a step that wrote none of them
+        # would be archived with no trajectory and hand its verifier no state to read.
         await self._sync_trial_files(environment)
+        # An earlier step that gave up left a workspace that will not answer. Re-entering the loop
+        # would spend this step's whole budget rediscovering that, so the trial stays where it is.
+        if self._test_state == "timed_out":
+            logger.warning("Skipping the step's turns: an earlier step already marked the trial timed out")
+            return
+        # A step whose conversation RAISED tore the workspace down on its way out without marking
+        # the trial anything, and harbor keeps calling run() when that step declared no min_reward
+        # (its verifier still produced a result, so the abort path does not fire). Without this the
+        # step would drive a sandbox that no longer exists and report the agent as unresponsive.
+        if self._is_workspace_destroyed:
+            await self._mark_timed_out(
+                environment, "an earlier step failed and tore the workspace down, so this step has none to drive"
+            )
+            return
 
+        is_workspace_ready = await self._prepare_workspace_once(case, environment, deadline)
+        if not is_workspace_ready:
+            return
+
+        is_files_placed = await self._place_step_files(case, environment)
+        if not is_files_placed:
+            return
+
+        sources = self.build_turn_sources(case)
+
+        # Outer loop over the config's entries, inner loop over one entry's exchanges. A string
+        # entry is one exchange; a goal entry keeps going until its client is satisfied or the
+        # budget stops it. Entry indices run across the whole trial, not the step, so the per-entry
+        # records reconcile with the case's full prompts list.
+        entry_index_offset = len(self._entry_records)
+        for local_index, (entry, source) in enumerate(zip(case.prompts, sources, strict=True)):
+            is_entry_done = await self._run_entry(
+                case,
+                entry,
+                entry_index_offset + local_index,
+                is_final_entry=local_index == len(case.prompts) - 1,
+                source=source,
+                environment=environment,
+                deadline=deadline,
+            )
+            if not is_entry_done:
+                return
+
+        self._test_state = "finished"
+        # The agent can keep working after it reports WAITING -- the workspace's own turn-end flow
+        # runs then -- so pull once more before the trial files are written for the last time.
+        # Without this the polled events end at the final reply while the proxy keeps metering,
+        # which shows up as the proxy accounting for requests the events have no messages for.
+        await self._refresh_events(environment)
+        await self._sync_trial_files(environment)
+        logger.info("Finished {} entr(ies) in {} exchange(s)", len(sources), self._waits_done)
+
+    async def _prepare_workspace_once(self, case: CaseConfig, environment: BaseEnvironment, deadline: float) -> bool:
+        """Bring the trial's workspace up on the first run() call only; False means the trial was
+        marked timed out.
+
+        Every later step reuses what this left behind. That is the whole reason a multi-step adoption
+        is cheap here: the Minds conversation lives in the workspace, the workspace outlives the step,
+        and so conversational continuity across steps costs nothing -- unlike a harbor-native agent,
+        whose session resets when its process does.
+
+        Preparation runs against its own readiness budget rather than the conversation deadline, so a
+        workspace that never becomes usable is reported as such within that budget instead of
+        consuming the whole case. The conversation deadline still caps it: whichever comes first wins.
+        """
+        assert self._box_env is not None
+        if self._is_workspace_prepared:
+            return True
+
+        readiness_deadline = workspace_readiness_deadline(deadline, time.time())
         # Prepare the per-case dwt clone inside the box and create the workspace
         # through the production Minds API path.
         await self._prepare_workspace_clone(case, environment)
@@ -1008,7 +1302,7 @@ class MindsPersonaDriver(BaseAgent):
         )
         logger.info("Creating the workspace for case {}", case.case_id)
         self._workspace_agent_id = await minds_bridge.create_workspace_and_wait(
-            environment, self._box_env, self._api_port, payload, deadline, self._poll_seconds
+            environment, self._box_env, self._api_port, payload, readiness_deadline, self._poll_seconds
         )
         logger.info("Workspace is up (agent {})", self._workspace_agent_id)
 
@@ -1018,12 +1312,17 @@ class MindsPersonaDriver(BaseAgent):
             is_proxy_up = await self._start_proxy(environment, case)
             if not is_proxy_up:
                 await self._mark_timed_out(environment, "the in-box LLM proxy did not come up")
-                return
+                return False
 
-        sign_in = await self._authenticate_workspace(environment, deadline)
-        if not sign_in.is_signed_in:
-            await self._mark_timed_out(environment, "could not authenticate the workspace")
-            return
+        authentication = await self._authenticate_workspace(environment, readiness_deadline)
+        if authentication.failure:
+            reason = (
+                self._readiness_reason(authentication.failure)
+                if authentication.is_failure_from_waiting
+                else authentication.failure
+            )
+            await self._mark_timed_out(environment, reason)
+            return False
 
         # A workspace boots with no chat, and a chat binds to the account it is created against, so
         # this can only happen once the sign-in above has minted one.
@@ -1032,13 +1331,15 @@ class MindsPersonaDriver(BaseAgent):
             self._box_env,
             self._workspace_agent_id,
             workspace_host_name,
-            sign_in.account_id,
-            deadline,
+            authentication.account_id,
+            readiness_deadline,
             self._poll_seconds,
         )
         if chat_agent_id is None:
-            await self._mark_timed_out(environment, "could not create the workspace chat agent")
-            return
+            await self._mark_timed_out(
+                environment, self._readiness_reason("could not create the workspace chat agent")
+            )
+            return False
         self._chat_agent_id = chat_agent_id
 
         is_chat_ready = await minds_bridge.wait_for_chat_state(
@@ -1047,12 +1348,14 @@ class MindsPersonaDriver(BaseAgent):
             self._workspace_agent_id,
             self._chat_agent_id,
             is_waiting_desired=True,
-            deadline=deadline,
+            deadline=readiness_deadline,
             poll_seconds=self._poll_seconds,
         )
         if not is_chat_ready:
-            await self._mark_timed_out(environment, "the workspace chat agent never reached WAITING")
-            return
+            await self._mark_timed_out(
+                environment, self._readiness_reason("the workspace chat agent never reached WAITING")
+            )
+            return False
 
         # WAITING alone does not mean the chat is done being set up. The workspace's first chat is
         # created with `/welcome` as its initial message and types it in only once the agent reports
@@ -1063,31 +1366,82 @@ class MindsPersonaDriver(BaseAgent):
         # separates the two; polling for a RUNNING edge would miss a welcome that finished between
         # two polls.
         # The baseline is the whole stream: this chat is new, so every event in it is the welcome's.
-        is_welcomed = await self._wait_for_reply(environment, deadline, baseline_event_count=0)
+        is_welcomed = await self._wait_for_reply(
+            environment,
+            readiness_deadline,
+            baseline_event_count=0,
+            wait_label="the workspace chat to answer its welcome",
+        )
         if not is_welcomed:
-            await self._mark_timed_out(environment, "the workspace chat never answered its welcome")
-            return
+            await self._mark_timed_out(
+                environment, self._readiness_reason("the workspace chat never answered its welcome")
+            )
+            return False
 
         await self._capture_preexisting_registrations(environment)
+        self._is_workspace_prepared = True
+        return True
 
-        sources = self.build_turn_sources(case)
+    async def _place_step_files(self, case: CaseConfig, environment: BaseEnvironment) -> bool:
+        """Copy this step's uploads into the running workspace; False means the trial gave up.
 
-        # Outer loop over the config's entries, inner loop over one entry's exchanges. A string
-        # entry is one exchange; a goal entry keeps going until its client is satisfied or the
-        # budget stops it.
-        for entry_index, (entry, source) in enumerate(zip(case.prompts, sources, strict=True)):
-            is_entry_done = await self._run_entry(case, entry, entry_index, source, environment, deadline)
-            if not is_entry_done:
-                return
+        Run after the workspace is up and before the step's first message, because the prompts refer
+        to these files by the path they appear at. A conversation about an upload that is not there
+        measures nothing, so a placement that fails ends the trial rather than letting the step run
+        against a workspace the prompts describe wrongly.
 
-        self._test_state = "finished"
-        # The agent can keep working after it reports WAITING -- the workspace's own turn-end flow
-        # runs then -- so pull once more before the transcript is written for the last time. Without
-        # this the transcript ends at the final reply while the proxy keeps metering, which shows up
-        # as the proxy accounting for requests the transcript has no messages for.
-        await self._refresh_events(environment)
-        await self._sync_trial_files(environment)
-        logger.info("Finished {} entr(ies) in {} exchange(s)", len(sources), self._waits_done)
+        The files land untracked -- the workspace template ignores the uploads tree -- exactly as a
+        real client upload does, so they never enter the eval-case commit or the captured
+        deliverable, and whether the agent used them is the outcome judge's question.
+        """
+        assert self._box_env is not None
+        step = case.step
+        if step is None or not step.files:
+            return True
+        # `mngr rsync` mkdir -p's its destination on the remote side, so this is not what makes the
+        # push work. It is here to tell the two failures apart: a workspace whose filesystem will
+        # not take the directory at all is a different diagnosis from a transfer that broke, and
+        # only this call can report it as one. The workspace template ignores the uploads tree,
+        # which is a statement about git rather than a promise that the directory is there.
+        is_dir_ready, mkdir_output = await minds_bridge.run_in_workspace(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            "mkdir -p {}".format(shlex.quote(WORKSPACE_UPLOADS_DIR)),
+            _WORKSPACE_MKDIR_TIMEOUT_SECONDS,
+        )
+        if not is_dir_ready:
+            await self._mark_timed_out(
+                environment,
+                "could not create the workspace's uploads directory {}: {}".format(
+                    WORKSPACE_UPLOADS_DIR, mkdir_output
+                ),
+            )
+            return False
+        for step_file in step.files:
+            workspace_dir = "{}/{}".format(WORKSPACE_UPLOADS_DIR, step_file.upload_id)
+            logger.info("Placing the step's upload {} at {}", step_file.upload_id, workspace_dir)
+            is_placed, failure = await minds_bridge.push_to_workspace(
+                environment, self._box_env, self._workspace_agent_id, step_file.box_path, workspace_dir
+            )
+            if not is_placed:
+                await self._mark_timed_out(
+                    environment,
+                    "could not place the step's upload {} into the workspace: {}".format(step_file.upload_id, failure),
+                )
+                return False
+        return True
+
+    def _readiness_reason(self, failure: str) -> str:
+        """A preparation wait that ran out, said with the ceiling it ran under, so a reader can tell
+        a workspace that is dead from one that was merely slower than the budget allows.
+
+        Only for failures that actually waited: naming a budget for one the driver could tell
+        immediately points the reader at infrastructure timing rather than at the answer.
+        """
+        return "{} (workspace preparation is capped at {:.0f}s, or the step's deadline if sooner)".format(
+            failure, WORKSPACE_READINESS_TIMEOUT_SECONDS
+        )
 
     def build_turn_sources(self, case: CaseConfig) -> list[TurnSource]:
         """The turn source for each of the case's prompts entries.
@@ -1102,6 +1456,8 @@ class MindsPersonaDriver(BaseAgent):
         case: CaseConfig,
         entry: PromptEntry,
         entry_index: int,
+        *,
+        is_final_entry: bool,
         source: TurnSource,
         environment: BaseEnvironment,
         deadline: float,
@@ -1142,7 +1498,8 @@ class MindsPersonaDriver(BaseAgent):
             )
         )
         await self._sync_trial_files(environment)
-        is_final_entry = entry_index == len(case.prompts) - 1
+        # "Final" is the final entry of THIS instruction, so a stepped case takes the `final`
+        # cadence's one snapshot per step -- which is the state each step's gate was judged against.
         # Gated on the whole run's message count, not this entry's: a final goal entry can be
         # satisfied at exchange 0, and the workspace the earlier entries built is still worth
         # capturing. Only a conversation that never said anything has nothing to snapshot.
@@ -1261,7 +1618,9 @@ class MindsPersonaDriver(BaseAgent):
         self._waits_done = message_index
         await self._sync_trial_files(environment)
 
-        is_replied = await self._wait_for_reply(environment, deadline, baseline_event_count)
+        is_replied = await self._wait_for_reply(
+            environment, deadline, baseline_event_count, wait_label="the agent's reply"
+        )
         if not is_replied:
             return "no reply to message {}".format(message_index)
         reply_texts = _new_agent_reply_texts(self._latest_events, baseline_event_count)
@@ -1269,6 +1628,8 @@ class MindsPersonaDriver(BaseAgent):
         # metric sees the agent's real (short) messages, not the merged wall.
         self._agent_message_word_counts.extend(len(reply_text.split()) for reply_text in reply_texts)
         self._conversation.append({"role": "agent", "text": "\n\n".join(reply_texts)})
+        # The turn is in the conversation now, so the in-flight copy of it would be a duplicate.
+        self._partial_reply_texts = ()
         await self._sync_trial_files(environment)
 
         if is_snapshot_wanted(self._snapshot_mode, SnapshotPoint.AFTER_EXCHANGE):
@@ -1306,6 +1667,74 @@ class MindsPersonaDriver(BaseAgent):
                 )
             )
 
+    def _record_step_boundary(self, case: CaseConfig) -> None:
+        """Mark where this step's turns begin, for a task that declares steps.
+
+        A stepped task drives one workspace across several instructions against this same driver, and
+        both trajectory shapes are cumulative -- so the boundary is the only thing separating the
+        step being graded from the ones before it. A task without steps has one run and nothing to
+        divide, and records no boundary.
+        """
+        if case.step is None:
+            return
+        self._step_boundaries.append(
+            StepBoundary(
+                name=case.step.name,
+                started_at=_utc_now_iso(),
+                # Counted over the entries the trajectory keeps, which is what the hand-built shape
+                # turns into steps.
+                conversation_index=sum(1 for entry in self._conversation if entry["text"].strip()),
+                opening_message="",
+            )
+        )
+
+    def _resolved_step_boundaries(self) -> tuple[StepBoundary, ...]:
+        """The recorded boundaries with each step's opening client message filled in -- which only the
+        conversation that followed the boundary can supply. A step whose client never spoke keeps an
+        empty one, and is placed by its timestamp instead."""
+        kept = [entry for entry in self._conversation if entry["text"].strip()]
+        resolved: list[StepBoundary] = []
+        for position, boundary in enumerate(self._step_boundaries):
+            next_index = (
+                self._step_boundaries[position + 1].conversation_index
+                if position + 1 < len(self._step_boundaries)
+                else len(kept)
+            )
+            opening = next(
+                (entry["text"] for entry in kept[boundary.conversation_index : next_index] if entry["role"] == "user"),
+                "",
+            )
+            resolved.append(boundary.model_copy_update(to_update(boundary.field_ref().opening_message, opening)))
+        return tuple(resolved)
+
+    def _write_instruction(self, instruction: str) -> None:
+        """Keep the instruction this run was handed beside the results it produced.
+
+        `harbor view` browses a trial's files under `agent/`, `artifacts/` and `verifier/` only, so
+        the agent directory is the one place a reader meets the instruction next to the trajectory it
+        drove -- for a task with steps that is the step's own instruction, since harbor gives each
+        step its own agent directory. Written host-side and never mirrored into the box: the
+        expectations it carries have no business on the machine the agent under test runs on.
+        """
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        (self.logs_dir / INSTRUCTION_FILENAME).write_text(instruction)
+
+    def _decider_call_events(self) -> list[dict[str, Any]]:
+        """Every decider-model call as one audit record: the turn the trajectory's provenance already
+        carries, plus the message text it produced, which that provenance deliberately leaves out."""
+        return [
+            {"type": "decider_message", "text": result.message, **turn.model_dump(mode="json")}
+            for result, turn in zip(self._decider_results, self._decider_turns, strict=True)
+        ]
+
+    def _write_driver_events(self) -> None:
+        """Write the driver's own view of the trial: the workspace feed it polled, then the decider
+        calls it made. Host-side only, and read by nothing in the grading path."""
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        records = [*self._latest_events, *self._decider_call_events()]
+        contents = "".join("{}\n".format(json.dumps(record)) for record in records)
+        (self.logs_dir / DRIVER_EVENTS_FILENAME).write_text(contents)
+
     async def _probe_reverse_tunnel(self, environment: BaseEnvironment) -> None:
         """Check that a box-local port is reachable from inside the workspace.
 
@@ -1328,7 +1757,7 @@ class MindsPersonaDriver(BaseAgent):
             PROXY_PROBE_HOLD_SECONDS,
             is_probe_token_served=True,
         )
-        tunnel_log = "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.TUNNEL_LOG_FILENAME)
+        tunnel_log = minds_bridge.service_log_path(minds_bridge.TUNNEL_LOG_FILENAME)
         deadline = time.time() + PROXY_PROBE_READY_TIMEOUT_SECONDS
         while time.time() < deadline:
             if "TUNNEL_READY" in await minds_bridge.read_box_file(environment, self._box_env, tunnel_log):
@@ -1389,7 +1818,7 @@ class MindsPersonaDriver(BaseAgent):
                 await minds_bridge.read_box_file(
                     environment,
                     self._box_env,
-                    "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.PROXY_LOG_FILENAME),
+                    minds_bridge.service_log_path(minds_bridge.PROXY_LOG_FILENAME),
                 ),
             )
             return False
@@ -1404,12 +1833,15 @@ class MindsPersonaDriver(BaseAgent):
             ssh_info,
             PROXY_PORT,
             # Outlive the case, so the tunnel never closes under a running conversation, but stay
-            # bounded so a driver that dies without tearing it down cannot leave it up.
-            case.timeout_seconds + PROXY_TUNNEL_GRACE_SECONDS,
+            # bounded so a driver that dies without tearing it down cannot leave it up. The tunnel
+            # is started once, on the first step, and every later step's conversation runs over it,
+            # so it is sized against the trial's whole lifetime -- which includes the evidence phase
+            # and verifier container each step spends between two conversations.
+            cross_step_lifetime_seconds(case) + PROXY_TUNNEL_GRACE_SECONDS,
             is_probe_token_served=False,
         )
         tunnel_deadline = time.time() + PROXY_TUNNEL_READY_TIMEOUT_SECONDS
-        tunnel_log = "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.TUNNEL_LOG_FILENAME)
+        tunnel_log = minds_bridge.service_log_path(minds_bridge.TUNNEL_LOG_FILENAME)
         while time.time() < tunnel_deadline:
             if "TUNNEL_READY" in await minds_bridge.read_box_file(environment, self._box_env, tunnel_log):
                 logger.info("The proxy is up and reachable inside the workspace on port {}", PROXY_PORT)
@@ -1436,49 +1868,73 @@ class MindsPersonaDriver(BaseAgent):
         (self.logs_dir / PROXY_USAGE_FILENAME).write_text(contents + "\n")
         self._proxy_usage_records = usage_accounting.parse_proxy_usage_log(contents)
 
-    async def _authenticate_workspace(
-        self, environment: BaseEnvironment, deadline: float
-    ) -> minds_bridge.WorkspaceSignIn:
-        """Sign the workspace in after create, the way a user does; reports the account it minted.
+    async def _authenticate_workspace(self, environment: BaseEnvironment, deadline: float) -> WorkspaceAuthentication:
+        """Sign the workspace in after create, the way a user does, and report the account it minted.
 
         A workspace boots unauthenticated -- the product's create path supplies no AI credentials --
         so without this there is no account for a chat to bind to, and the workspace refuses to
         create one. Doing it through the sign-in endpoint rather than the create-time host env is
         what keeps the graded agent in production's shared config-dir regime.
+
+        A failure answers with which of the three ways it failed, because the trial record keeps that
+        string and the three have entirely different causes.
         """
         assert self._box_env is not None
         # Behind the proxy the workspace gets the trial's own key, never the upstream one: it is
         # scoped to this trial, and the credential the agent can see buys nothing anywhere else.
         api_key = self._proxy_key or self._get_env("ANTHROPIC_API_KEY") or ""
         if not api_key:
-            logger.error("No ANTHROPIC_API_KEY to sign the workspace in with")
-            return minds_bridge.NOT_SIGNED_IN
+            return WorkspaceAuthentication(
+                failure="no ANTHROPIC_API_KEY to sign the workspace in with", is_failure_from_waiting=False
+            )
         is_endpoint_ready = await minds_bridge.wait_for_auth_endpoint(
             environment, self._box_env, self._workspace_agent_id, deadline, self._poll_seconds
         )
         if not is_endpoint_ready:
-            logger.error("The workspace's claude-auth endpoint never came up")
-            return minds_bridge.NOT_SIGNED_IN
+            return WorkspaceAuthentication(failure="the workspace's claude-auth endpoint never came up")
         logger.info("Signing the workspace in through the claude-auth endpoint")
-        return await minds_bridge.authenticate_workspace(
+        sign_in = await minds_bridge.authenticate_workspace(
             environment,
             self._box_env,
             self._workspace_agent_id,
             api_key,
             self._proxy_base_url or self._get_env("ANTHROPIC_BASE_URL") or "",
         )
+        if not sign_in.is_signed_in:
+            return WorkspaceAuthentication(
+                failure="the workspace rejected the submitted credentials or came back not signed in"
+            )
+        return WorkspaceAuthentication(account_id=sign_in.account_id)
 
-    async def _wait_for_reply(self, environment: BaseEnvironment, deadline: float, baseline_event_count: int) -> bool:
+    async def _wait_for_reply(
+        self,
+        environment: BaseEnvironment,
+        deadline: float,
+        baseline_event_count: int,
+        wait_label: str,
+    ) -> bool:
         """Wait until the agent has produced a reply to the just-sent message AND is WAITING again.
         Polling on the reply itself (rather than a leave-WAITING edge) cannot miss a fast
         WAITING->BUSY->WAITING transition between polls. Anchors on the event count captured before
         the send, so framework-injected user messages cannot be mistaken for the agent's reply.
         Gives up early (returning False) once the bridge fails too many polls in a row, rather than
-        silently burning the whole case budget on a wedged bridge."""
+        silently burning the whole case budget on a wedged bridge.
+
+        ``wait_label`` is what the heartbeat calls the wait: an agent that thinks for twenty minutes
+        and a poll that is not running at all are otherwise indistinguishable in a trial log."""
         assert self._box_env is not None
+        heartbeat = minds_bridge.WaitHeartbeat(label=wait_label)
         consecutive_failures = 0
+        # The trial files are normally written once the reply is in, so everything the agent says
+        # during a turn that never completes -- because the box or the workspace dies under it --
+        # would otherwise exist nowhere on the host. Keep the host copy current as events arrive.
+        persisted_event_count = len(self._latest_events)
         while time.time() < deadline:
             is_refreshed = await self._refresh_events(environment)
+            if is_refreshed and len(self._latest_events) > persisted_event_count:
+                self._partial_reply_texts = tuple(_new_agent_reply_texts(self._latest_events, baseline_event_count))
+                self._write_trial_files()
+                persisted_event_count = len(self._latest_events)
             if not is_refreshed:
                 consecutive_failures += 1
                 if consecutive_failures % _FETCH_FAILURE_LOG_INTERVAL == 0:
@@ -1486,10 +1942,14 @@ class MindsPersonaDriver(BaseAgent):
                 if consecutive_failures >= _MAX_CONSECUTIVE_FETCH_FAILURES:
                     logger.error("Giving up on the reply after {} consecutive bridge failures", consecutive_failures)
                     return False
+                # A bridge answering nothing at all is the case the heartbeat exists for, so it ticks
+                # here too rather than only where the bridge answered something unhelpful.
+                heartbeat.tick("nothing at all -- {} consecutive bridge failure(s)".format(consecutive_failures))
                 await asyncio.sleep(self._poll_seconds)
                 continue
             consecutive_failures = 0
-            if _new_agent_reply_texts(self._latest_events, baseline_event_count):
+            new_reply_texts = _new_agent_reply_texts(self._latest_events, baseline_event_count)
+            if new_reply_texts:
                 state = await minds_bridge.fetch_chat_agent_state(
                     environment, self._box_env, self._workspace_agent_id, self._chat_agent_id
                 )
@@ -1500,6 +1960,9 @@ class MindsPersonaDriver(BaseAgent):
                     # event total has not moved.
                     await self._refresh_events(environment)
                     return True
+                heartbeat.tick("{} message(s), still not back to WAITING".format(len(new_reply_texts)))
+            else:
+                heartbeat.tick("{} event(s), none of them a new agent message".format(len(self._latest_events)))
             await asyncio.sleep(self._poll_seconds)
         return False
 
@@ -1631,15 +2094,118 @@ class MindsPersonaDriver(BaseAgent):
             )
 
     async def _mark_timed_out(self, environment: BaseEnvironment, reason: str) -> None:
+        """Record that the trial gave up, why, and what the workspace looked like when it did."""
         logger.warning("Marking the trial timed_out: {}", reason)
         self._test_state = "timed_out"
+        self._timed_out_reason = reason
         await self._sync_trial_files(environment)
+        await self._capture_timeout_diagnostics(environment, reason)
+
+    async def _capture_timeout_diagnostics(self, environment: BaseEnvironment, reason: str) -> None:
+        """Write what the workspace looked like at the moment the trial gave up.
+
+        Best-effort throughout: a trial that has already given up must never be turned into a crash
+        by the attempt to explain itself, and it must not stall its own teardown either -- so the
+        whole capture runs under one wall-clock ceiling and every individual capture is guarded.
+        A capture that fails records its failure text, which is itself a diagnosis.
+        """
+        captures: dict[str, Any] = {}
+        capture_error = ""
+        try:
+            await asyncio.wait_for(
+                self._fill_timeout_diagnostics(environment, captures), timeout=TIMEOUT_DIAGNOSTICS_BUDGET_SECONDS
+            )
+        except Exception as exc:
+            capture_error = "{}: {}".format(type(exc).__name__, exc)
+            logger.warning("Timeout diagnostics were cut short: {}", capture_error)
+        payload = {
+            "reason": reason,
+            "captured_at": _utc_now_iso(),
+            "elapsed_seconds": round(time.time() - self._started_at, 1),
+            "waits_done": self._waits_done,
+            "workspace_agent_id": self._workspace_agent_id,
+            "chat_agent_id": self._chat_agent_id,
+            "is_workspace_prepared": self._is_workspace_prepared,
+            # Empty unless the capture as a whole ran out of budget or raised; the per-capture
+            # failures live in `captures` beside whatever did succeed.
+            "capture_error": capture_error,
+            "captures": captures,
+        }
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        (self.logs_dir / TIMEOUT_DIAGNOSTICS_FILENAME).write_text(json.dumps(payload, indent=2))
+
+    async def _fill_timeout_diagnostics(self, environment: BaseEnvironment, captures: dict[str, Any]) -> None:
+        """Populate the diagnostics one capture at a time, cheapest and most decisive first.
+
+        Filled in place rather than returned, so whatever completed before the ceiling still reaches
+        the file when the remaining captures are cancelled.
+        """
+        assert self._box_env is not None
+        # A torn-down workspace answers nothing, and every probe against it runs to its own
+        # transport timeout before saying so -- which would spend the whole budget below on
+        # failures that diagnose nothing. Recorded rather than omitted: an absent key cannot be told
+        # apart from a capture that was never attempted. The box outlives the workspace, so its
+        # service logs (where the original failure is recorded) are still worth reading.
+        if self._is_workspace_destroyed:
+            captures["workspace_agents"] = _WORKSPACE_GONE_CAPTURE
+            captures["chat_agent_state"] = _WORKSPACE_GONE_CAPTURE
+        elif not self._workspace_agent_id:
+            captures["workspace_agents"] = _NO_WORKSPACE_CAPTURE
+            captures["chat_agent_state"] = _NO_WORKSPACE_CAPTURE
+        else:
+            await self._record_capture(
+                captures,
+                "workspace_agents",
+                minds_bridge.workspace_curl_json(
+                    environment, self._box_env, self._workspace_agent_id, minds_bridge.AGENTS_PATH, None
+                ),
+            )
+            if self._chat_agent_id:
+                await self._record_capture(
+                    captures,
+                    "chat_agent_state",
+                    minds_bridge.fetch_chat_agent_state(
+                        environment, self._box_env, self._workspace_agent_id, self._chat_agent_id
+                    ),
+                )
+            else:
+                captures["chat_agent_state"] = _NO_CHAT_CAPTURE
+        for capture_name, log_filename in (
+            ("box_log_tail", minds_bridge.BOX_LOG_FILENAME),
+            ("reverse_tunnel_log_tail", minds_bridge.TUNNEL_LOG_FILENAME),
+            ("proxy_log_tail", minds_bridge.PROXY_LOG_FILENAME),
+        ):
+            await self._record_capture(
+                captures,
+                capture_name,
+                minds_bridge.read_box_file_tail(
+                    environment,
+                    self._box_env,
+                    minds_bridge.service_log_path(log_filename),
+                    minds_bridge.SERVICE_LOG_TAIL_BYTES,
+                ),
+            )
+
+    @staticmethod
+    async def _record_capture(captures: dict[str, Any], name: str, capture: Coroutine[Any, Any, Any]) -> None:
+        """Await one diagnostic capture, recording its failure text in place of its result.
+
+        One capture's failure says nothing about the next one's -- a dead workspace still has box
+        logs -- so no capture may abort the rest.
+        """
+        try:
+            captures[name] = await capture
+        except Exception as exc:
+            captures[name] = "capture failed -- {}: {}".format(type(exc).__name__, exc)
 
     def _state_payload(self) -> dict[str, Any]:
-        entry_count = len(self._case.prompts) if self._case is not None else 0
+        step = self._case.step if self._case is not None else None
         return {
             "eval_name": self.logs_dir.parent.name,
             "case_name": self._case.case_id if self._case is not None else "",
+            # Which step wrote this file, so a per-step artifact says what it is. Empty for a
+            # single-step case, whose one state.json describes the whole trial.
+            "step_name": step.name if step is not None else "",
             "mngr_sha": self._mngr_sha,
             "dwt_sha": self._case.dwt_sha if self._case is not None else "",
             "waits_done": self._waits_done,
@@ -1648,32 +2214,53 @@ class MindsPersonaDriver(BaseAgent):
             # the messages actually sent, and the per-entry records below account for those
             # messages entry by entry. An entry earns its record only once it has stopped, so a
             # timed-out trial's records end at the entry it died in and account for fewer messages
-            # than "waits_done"; only a finished trial's two views are expected to agree.
-            "num_turns": entry_count,
+            # than "waits_done"; only a finished trial's two views are expected to agree. Across a
+            # stepped case the count accumulates, so the final step's file describes the whole case.
+            "num_turns": self._configured_entry_count,
             "entries": [record.model_dump(mode="json") for record in self._entry_records],
             "test_state": self._test_state,
             "timed_out": self._test_state == "timed_out",
+            # Which wait ran out, in prose. Empty while the trial has not given up: "timed_out" on
+            # its own cannot distinguish a workspace that never came up from an agent that stopped
+            # replying halfway through.
+            "timed_out_reason": self._timed_out_reason,
             "started_at": datetime.fromtimestamp(self._started_at, tz=timezone.utc).isoformat(),
+            # The whole trial's, which across a stepped case spans every step so far.
             "elapsed_seconds": round(time.time() - self._started_at, 1),
+            # This step's own, which is the span "timeout_seconds" below bounds -- for a stepped
+            # case that key is only this step's share of the conversation budget, so the trial-wide
+            # figure above would read as an overrun on a perfectly healthy later step.
+            "step_elapsed_seconds": round(time.time() - self._step_started_at, 1),
             "timeout_seconds": self._case.timeout_seconds if self._case is not None else 0.0,
         }
 
-    async def _sync_trial_files(self, environment: BaseEnvironment) -> None:
-        """Write the hand-built trajectory and the state to the host logs dir and mirror them into the
-        box's /logs/agent/, where the task's declared artifacts pick them up for the verifier."""
+    def _write_trial_files(self) -> dict[str, str]:
+        """Write the hand-built trajectory and the state to the host logs dir; returns what was
+        written, keyed by filename.
+
+        Host-side only, so it is safe to call from inside a wait: it touches no box I/O and cannot
+        fail because the box is failing. The host copy is what survives a box that dies mid-turn.
+        """
         assert self._case is not None, "the case is parsed before the conversation starts"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         file_contents = {STATE_FILENAME: json.dumps(self._state_payload(), indent=2)}
         hand_built = self._hand_built_trajectory(self._case)
         if hand_built is not None:
             file_contents[TRAJECTORY_FILENAME] = _trajectory_json(hand_built)
-        await environment.exec("mkdir -p {}".format(minds_bridge.BOX_LOGS_DIR), timeout_sec=60)
         for filename, content in file_contents.items():
-            local_path = self.logs_dir / filename
-            local_path.write_text(content)
-            await environment.upload_file(local_path, _box_trial_file_path(filename))
+            (self.logs_dir / filename).write_text(content)
+        return file_contents
+
+    async def _sync_trial_files(self, environment: BaseEnvironment) -> None:
+        """Write the hand-built trajectory and the state to the host logs dir and mirror them into the
+        box's /logs/agent/, where the task's declared artifacts pick them up for the verifier."""
+        file_contents = self._write_trial_files()
+        await environment.exec("mkdir -p {}".format(minds_bridge.BOX_LOGS_DIR), timeout_sec=60)
+        for filename in file_contents:
+            await environment.upload_file(self.logs_dir / filename, _box_trial_file_path(filename))
         if TRAJECTORY_FILENAME in file_contents:
             self._box_trajectory_json = file_contents[TRAJECTORY_FILENAME]
+        self._write_driver_events()
 
     def _resolve_workspace_usage(self) -> usage_accounting.ResolvedWorkspaceUsage:
         """The one resolution of the workspace agent's spend that every usage writer in this driver
@@ -1693,6 +2280,31 @@ class MindsPersonaDriver(BaseAgent):
             _settled_worker_count(self._worker_captures, self._worker_stream_records_by_name),
         )
 
+    def _publish_step_spend(self, context: AgentContext, workspace_usage: usage_accounting.TrialUsage) -> None:
+        """Report on this context the workspace spend this run() call added, not the running total.
+
+        Harbor sums one AgentContext per step into a multi-step trial's totals, while the account
+        this reads from is the whole conversation's, so publishing the total on every step would
+        multiply an N-step trial's published tokens and cost. A single-step trial starts from
+        nothing and therefore still publishes the whole account.
+        """
+        published = self._published_spend
+        # Output tokens and cost are each unknown for a stream that did not report them. An unknown
+        # figure publishes nothing rather than a partial one, and leaves what earlier steps
+        # published standing so a later step that does know still reports its own share.
+        output_tokens = workspace_usage.tokens.output
+        cost_usd = workspace_usage.cost_usd
+        context.n_input_tokens = workspace_usage.n_input_tokens - published.input_tokens
+        context.n_cache_tokens = workspace_usage.n_cache_tokens - published.cache_tokens
+        context.n_output_tokens = None if output_tokens is None else output_tokens - published.output_tokens
+        context.cost_usd = None if cost_usd is None else cost_usd - published.cost_usd
+        self._published_spend = PublishedSpend(
+            input_tokens=workspace_usage.n_input_tokens,
+            cache_tokens=workspace_usage.n_cache_tokens,
+            output_tokens=published.output_tokens if output_tokens is None else output_tokens,
+            cost_usd=published.cost_usd if cost_usd is None else cost_usd,
+        )
+
     def _populate_context_metadata(self, context: AgentContext, trajectory_source: TrajectorySource) -> None:
         turn_word_counts = _words_per_agent_turn(self._conversation)
         message_word_counts = self._agent_message_word_counts
@@ -1704,10 +2316,7 @@ class MindsPersonaDriver(BaseAgent):
         workspace_usage = resolved_usage.reported
         decider_usage = usage_accounting.summarize_decider_usage(decider_results, self._decider_model)
         if workspace_usage.message_count:
-            context.n_input_tokens = workspace_usage.n_input_tokens
-            context.n_cache_tokens = workspace_usage.n_cache_tokens
-            context.n_output_tokens = workspace_usage.tokens.output
-            context.cost_usd = workspace_usage.cost_usd
+            self._publish_step_spend(context, workspace_usage)
         if workspace_usage.unpriced_models:
             logger.warning(
                 "No pricing for {}; the trial's cost is reported as unknown rather than partial",
@@ -1742,10 +2351,13 @@ class MindsPersonaDriver(BaseAgent):
             # Messages sent versus entries configured: a goal entry can send several, so these
             # are two separate counts.
             "turns_completed": self._waits_done,
-            "turn_count": len(self._case.prompts) if self._case is not None else 0,
+            "turn_count": self._configured_entry_count,
+            "step_name": self._case.step.name if self._case is not None and self._case.step is not None else "",
             "entries": [record.model_dump(mode="json") for record in self._entry_records],
             "test_state": self._test_state,
             "timed_out": self._test_state == "timed_out",
+            # Which wait ran out, in prose; empty while the trial has not given up.
+            "timed_out_reason": self._timed_out_reason,
             # Per merged agent turn vs. per individual agent message, both observability only: the
             # verifier re-derives its own counts from trajectory.json.
             "average_words_per_turn": round(sum(turn_word_counts) / len(turn_word_counts), 1)
@@ -1825,20 +2437,35 @@ class MindsPersonaDriver(BaseAgent):
             return None
         try:
             return trajectory_building.build_workspace_trajectory(
-                document_json, provenance, workspace_usage, _embedded_workers(self._worker_captures, self.logs_dir)
+                document_json,
+                provenance,
+                workspace_usage,
+                _embedded_workers(self._worker_captures, self.logs_dir),
+                self._resolved_step_boundaries(),
             )
         except TrajectoryDocumentError as exc:
             logger.warning("The captured trajectory document is unusable; writing the hand-built one: {}", exc)
             return None
 
     def _hand_built_trajectory(self, case: CaseConfig) -> Trajectory | None:
-        """The driver's own per-turn summary of the conversation so far, or None before any exchange."""
+        """The driver's own per-turn summary of the conversation so far, or None before any exchange.
+
+        Across a stepped case the conversation accumulates, so every step's document describes the
+        whole case up to that step, which is the scale the gates read it on.
+
+        A turn still in flight contributes its messages so far as one more agent step, which the
+        turn's own completed step replaces once the reply is in.
+        """
         resolved_usage = self._resolve_workspace_usage()
+        conversation = list(self._conversation)
+        if self._partial_reply_texts:
+            conversation.append({"role": "agent", "text": "\n\n".join(self._partial_reply_texts)})
         return trajectory_building.build_hand_built_trajectory(
-            conversation=self._conversation,
+            conversation=conversation,
             provenance=self._trajectory_provenance(case, _usage_source(resolved_usage)),
             workspace_usage=resolved_usage.reported,
             timestamp=_utc_now_iso(),
+            boundaries=self._resolved_step_boundaries(),
         )
 
     async def _publish_trajectory(self, case: CaseConfig, environment: BaseEnvironment) -> TrajectorySource:
