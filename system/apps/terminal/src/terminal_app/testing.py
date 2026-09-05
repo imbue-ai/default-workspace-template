@@ -17,6 +17,9 @@ ENV_FAKE_TMUX_DIR: Final[str] = "FAKE_TMUX_DIR"
 # Where the fake ttyd records the argv it was started with.
 ENV_FAKE_TTYD_DIR: Final[str] = "FAKE_TTYD_DIR"
 
+# Where a test source starts a terminal created without a workdir.
+DEFAULT_TEST_WORKDIR: Final[Workdir] = Workdir("/home/user/workspace")
+
 _EXECUTABLE_MODE: Final[int] = 0o755
 
 # The fake tmux answers list-sessions and list-clients from two tab-separated files (in the

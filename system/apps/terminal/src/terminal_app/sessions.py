@@ -1,4 +1,3 @@
-import os
 import threading
 from collections.abc import Mapping, Sequence
 from typing import Final
@@ -104,7 +103,7 @@ def build_instance_records(
 
 
 @pure
-def _parse_workdir(params: Mapping[str, str]) -> Workdir | None:
+def _parse_workdir(params: Mapping[str, str], default_workdir: Workdir) -> Workdir:
     unknown_params = sorted(set(params) - {WORKDIR_PARAM})
     if unknown_params:
         raise InvalidParamsError(
@@ -112,9 +111,7 @@ def _parse_workdir(params: Mapping[str, str]) -> Workdir | None:
         )
     raw_workdir = params.get(WORKDIR_PARAM)
     if raw_workdir is None or raw_workdir == "":
-        # A create that names no directory starts the shell where this app runs: the workspace
-        # root under supervisord, rather than wherever the dispatch script would fall back to.
-        return Workdir(os.getcwd())
+        return default_workdir
     try:
         return Workdir(raw_workdir)
     except InvalidTerminalValueError as e:
@@ -159,6 +156,11 @@ class TmuxSessionSource(InstanceSourceInterface):
         frozen=True,
         description="The prefix of mngr agents' sessions, which are never terminals",
     )
+    # A create that names no directory starts its shell here: the workspace root under
+    # supervisord, rather than wherever the dispatch script would fall back to.
+    default_workdir: Workdir = Field(
+        frozen=True, description="Where a terminal created without a workdir starts"
+    )
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def list_instances(self) -> list[InstanceRecord]:
@@ -174,7 +176,7 @@ class TmuxSessionSource(InstanceSourceInterface):
             raise UnknownActionError(
                 f"unknown action {action!r}: the terminal only declares {NEW_ACTION_ID!r}"
             )
-        workdir = _parse_workdir(params)
+        workdir = _parse_workdir(params, self.default_workdir)
         with self._lock:
             taken_names = self._taken_names()
             record = TerminalSessionRecord(
