@@ -164,7 +164,7 @@ def main() -> None:
         state = get_state()
 
     # The chat app tells the shell when its instance list changes (contracts.md section
-    # 5.1). Installed here, at the process entry point, so a manager a test builds nudges
+    # 5). Installed here, at the process entry point, so a manager a test builds nudges
     # nobody; on a thread of its own, so an agent event never waits on the shell.
     state.agent_manager.set_nudger(
         ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=shell_base_url()))
