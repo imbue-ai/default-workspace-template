@@ -24,30 +24,22 @@ from imbue.system_interface.shell.inventory import parse_instances_body
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
 from imbue.system_interface.shell.testing import FakeLivenessProber
+from imbue.system_interface.shell.testing import TEST_FILES_URL
+from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-
-_TERMINAL_URL = "http://localhost:7681"
-_FILES_URL = "http://localhost:7000"
-
-
-def _registry(tmp_path: Path) -> Path:
-    return write_registry(
-        tmp_path / "apps.toml",
-        registry_row_toml("terminal", _TERMINAL_URL, True, program="terminal", actions=[("new", "New terminal")]),
-        registry_row_toml("files", _FILES_URL, program="files"),
-    )
 
 
 def test_the_registry_read_synthesizes_single_instance_records(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     client_queue = broadcaster.register()
-    inventory = build_inventory(_registry(tmp_path), broadcaster)
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster)
 
     entries = inventory.entries()
     assert [str(entry.row.name) for entry in entries] == ["terminal", "files"]
@@ -71,9 +63,9 @@ def test_a_fetched_list_replaces_the_apps_instances_and_reports_what_left(
 ) -> None:
     fetcher = FakeInstanceFetcher()
     fetcher.list(
-        _TERMINAL_URL, instance_record("terminal-1", "Terminal 1"), instance_record("terminal-2", "Terminal 2")
+        TEST_TERMINAL_URL, instance_record("terminal-1", "Terminal 1"), instance_record("terminal-2", "Terminal 2")
     )
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
     removed: list[list[Address]] = []
     inventory.add_removed_listener(removed.append)
 
@@ -85,25 +77,25 @@ def test_a_fetched_list_replaces_the_apps_instances_and_reports_what_left(
     }
     assert removed == []
 
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-2", "Terminal 2"))
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-2", "Terminal 2"))
     inventory.refetch_now("terminal")
     assert removed == [[Address("app:terminal?instance=terminal-1")]]
     # A single-instance app is never fetched.
     inventory.refetch_now("files")
-    assert fetcher.fetched_urls == [_TERMINAL_URL, _TERMINAL_URL]
+    assert fetcher.fetched_urls == [TEST_TERMINAL_URL, TEST_TERMINAL_URL]
 
 
 def test_an_app_counts_as_listed_once_its_list_has_arrived(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     fetcher = FakeInstanceFetcher()
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
     terminal, files = inventory.entries()
     # The synthesized record of a single-instance app is its list; an instances app's seed is not.
     assert files.is_listed and not terminal.is_listed
     assert inventory.serialized()[0]["is_listed"] is False
-    fetcher.fail(_TERMINAL_URL)
+    fetcher.fail(TEST_TERMINAL_URL)
     inventory.refetch_now("terminal")
     assert not inventory.entries()[0].is_listed
-    fetcher.list(_TERMINAL_URL)
+    fetcher.list(TEST_TERMINAL_URL)
     inventory.refetch_now("terminal")
     assert inventory.entries()[0].is_listed
     # A registry re-read keeps the flag with the list it describes.
@@ -115,16 +107,16 @@ def test_not_ready_keeps_the_list_and_a_failure_marks_it_error(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"))
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
     inventory.refetch_now("terminal")
 
-    fetcher.not_ready(_TERMINAL_URL)
+    fetcher.not_ready(TEST_TERMINAL_URL)
     inventory.refetch_now("terminal")
     found = inventory.find_instance(Address("app:terminal?instance=terminal-1"))
     assert found is not None and found[1].status is InstanceStatus.IDLE
 
-    fetcher.fail(_TERMINAL_URL)
+    fetcher.fail(TEST_TERMINAL_URL)
     inventory.refetch_now("terminal")
     found = inventory.find_instance(Address("app:terminal?instance=terminal-1"))
     assert found is not None and found[1].status is InstanceStatus.ERROR
@@ -134,9 +126,9 @@ def test_liveness_rewrites_statuses_and_refetches_an_app_that_came_back(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"))
     prober = FakeLivenessProber()
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher, prober=prober)
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher, prober=prober)
     inventory.refetch_now("terminal")
     client_queue = broadcaster.register()
 
@@ -148,13 +140,13 @@ def test_liveness_rewrites_statuses_and_refetches_an_app_that_came_back(
     assert [message["type"] for message in drain_messages(client_queue)] == ["apps_updated"]
     # A stopped app is not fetched.
     inventory.refetch_now("terminal")
-    assert fetcher.fetched_urls == [_TERMINAL_URL]
+    assert fetcher.fetched_urls == [TEST_TERMINAL_URL]
 
     prober.is_running_by_name = {}
     inventory.refresh_liveness()
     terminal, files = inventory.entries()
     assert terminal.is_running and files.instances[0].status is InstanceStatus.IDLE
-    assert fetcher.fetched_urls == [_TERMINAL_URL, _TERMINAL_URL]
+    assert fetcher.fetched_urls == [TEST_TERMINAL_URL, TEST_TERMINAL_URL]
     # Nothing changed since, so nothing is broadcast again.
     drain_messages(client_queue)
     inventory.refresh_liveness()
@@ -163,18 +155,18 @@ def test_liveness_rewrites_statuses_and_refetches_an_app_that_came_back(
 
 def test_nudges_coalesce_into_one_fetch(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"))
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
     try:
         assert inventory.nudge("terminal") is True
         assert inventory.nudge("terminal") is True
         assert inventory.nudge("unknown") is False
-        assert wait_until(lambda: fetcher.fetched_urls == [_TERMINAL_URL], timeout_seconds=2.0)
+        assert wait_until(lambda: fetcher.fetched_urls == [TEST_TERMINAL_URL], timeout_seconds=2.0)
         assert wait_until(
             lambda: inventory.find_instance(Address("app:terminal?instance=terminal-1")) is not None,
             timeout_seconds=2.0,
         )
-        assert fetcher.fetched_urls == [_TERMINAL_URL]
+        assert fetcher.fetched_urls == [TEST_TERMINAL_URL]
     finally:
         inventory.stop()
 
@@ -183,14 +175,14 @@ def test_a_registry_change_keeps_known_lists_and_drops_removed_rows(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
-    registry_path = _registry(tmp_path)
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"))
+    registry_path = write_two_app_registry(tmp_path)
     inventory = build_inventory(registry_path, broadcaster, fetcher=fetcher)
     inventory.refetch_now("terminal")
 
     write_registry(
         registry_path,
-        registry_row_toml("terminal", _TERMINAL_URL, True, program="terminal", display_name="Shells"),
+        registry_row_toml("terminal", TEST_TERMINAL_URL, True, program="terminal", display_name="Shells"),
     )
     inventory.reload_registry()
     entries = inventory.entries()
@@ -203,15 +195,15 @@ def test_a_row_whose_instances_flag_flips_starts_its_list_over(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_FILES_URL, instance_record("files-1"))
-    registry_path = _registry(tmp_path)
+    fetcher.list(TEST_FILES_URL, instance_record("files-1"))
+    registry_path = write_two_app_registry(tmp_path)
     inventory = build_inventory(registry_path, broadcaster, fetcher=fetcher)
     assert inventory.entries()[1].is_listed
 
     write_registry(
         registry_path,
-        registry_row_toml("terminal", _TERMINAL_URL, True, program="terminal"),
-        registry_row_toml("files", _FILES_URL, True, program="files"),
+        registry_row_toml("terminal", TEST_TERMINAL_URL, True, program="terminal"),
+        registry_row_toml("files", TEST_FILES_URL, True, program="files"),
     )
     inventory.reload_registry()
     files = inventory.entries()[1]
@@ -219,7 +211,7 @@ def test_a_row_whose_instances_flag_flips_starts_its_list_over(
     inventory.refetch_now("files")
     assert inventory.entries()[1].addresses() == [Address("app:files?instance=files-1")]
 
-    write_registry(registry_path, registry_row_toml("files", _FILES_URL, program="files"))
+    write_registry(registry_path, registry_row_toml("files", TEST_FILES_URL, program="files"))
     inventory.reload_registry()
     (files_again,) = inventory.entries()
     assert files_again.is_listed and files_again.addresses() == [Address("app:files")]
@@ -227,8 +219,8 @@ def test_a_row_whose_instances_flag_flips_starts_its_list_over(
 
 def test_an_unreadable_registry_keeps_the_last_good_read(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
-    registry_path = _registry(tmp_path)
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"))
+    registry_path = write_two_app_registry(tmp_path)
     inventory = build_inventory(registry_path, broadcaster, fetcher=fetcher)
     inventory.refetch_now("terminal")
     client_queue = broadcaster.register()
@@ -245,8 +237,8 @@ def test_an_unreadable_registry_keeps_the_last_good_read(tmp_path: Path, broadca
 def test_the_grace_period_follows_the_first_listing(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     now = [1000.0]
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1", lifetime=InstanceLifetime.REFERENCED))
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher, clock=lambda: now[0])
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1", lifetime=InstanceLifetime.REFERENCED))
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher, clock=lambda: now[0])
     inventory.refetch_now("terminal")
     found = inventory.find_instance(Address("app:terminal?instance=terminal-1"))
     assert found is not None and inventory.is_within_grace(*found)
@@ -294,8 +286,8 @@ def test_start_watches_the_registry_and_lists_a_row_that_appears(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
-    files_row = registry_row_toml("files", _FILES_URL, program="files")
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"))
+    files_row = registry_row_toml("files", TEST_FILES_URL, program="files")
     registry_path = write_registry(tmp_path / "apps.toml", files_row)
     inventory = AppInventory(
         registry_path=registry_path,
@@ -311,7 +303,9 @@ def test_start_watches_the_registry_and_lists_a_row_that_appears(
         write_registry(
             registry_path,
             files_row,
-            registry_row_toml("terminal", _TERMINAL_URL, True, program="terminal", actions=[("new", "New terminal")]),
+            registry_row_toml(
+                "terminal", TEST_TERMINAL_URL, True, program="terminal", actions=[("new", "New terminal")]
+            ),
         )
         assert wait_until(
             lambda: inventory.find_instance(Address("app:terminal?instance=terminal-1")) is not None,
@@ -325,17 +319,17 @@ def test_refetch_all_fetches_every_running_app_with_instances(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"))
     prober = FakeLivenessProber()
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher, prober=prober)
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher, prober=prober)
     inventory.refetch_all()
     # The single-instance files app is never fetched.
-    assert fetcher.fetched_urls == [_TERMINAL_URL]
+    assert fetcher.fetched_urls == [TEST_TERMINAL_URL]
     prober.is_running_by_name = {"terminal": False}
     inventory.refresh_liveness()
     inventory.refetch_all()
     # A stopped app is skipped too.
-    assert fetcher.fetched_urls == [_TERMINAL_URL]
+    assert fetcher.fetched_urls == [TEST_TERMINAL_URL]
 
 
 def _raise_state_error(addresses: list[Address]) -> None:
@@ -344,16 +338,16 @@ def _raise_state_error(addresses: list[Address]) -> None:
 
 def test_a_failing_pass_does_not_end_the_sweep(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"), instance_record("terminal-2"))
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"), instance_record("terminal-2"))
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
     inventory.refetch_now("terminal")
     inventory.add_removed_listener(_raise_state_error)
 
     # The app dropped an instance, so folding the next list fires the listener, which raises.
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-2"))
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-2"))
     inventory.sweep_once(is_reconciling=True)
     inventory.sweep_once(is_reconciling=True)
-    assert fetcher.fetched_urls == [_TERMINAL_URL] * 3
+    assert fetcher.fetched_urls == [TEST_TERMINAL_URL] * 3
     assert inventory.listed_addresses() == {Address("app:terminal?instance=terminal-2"), Address("app:files")}
 
 
@@ -389,7 +383,7 @@ def test_the_folds_of_one_app_land_in_fetch_order(tmp_path: Path, broadcaster: W
         kind=FetchOutcomeKind.LISTED, records=(instance_record("terminal-1"), instance_record("terminal-2"))
     )
     fetcher = _GatedFetcher(outcomes=[stale, fresh])
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
     removed: list[list[Address]] = []
     inventory.add_removed_listener(removed.append)
 
