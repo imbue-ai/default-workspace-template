@@ -1383,8 +1383,11 @@ class AgentManager:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
             self._broadcast_agents_updated()
+        else:
+            # The provisional record left the instance list with no agent-list broadcast to
+            # carry the change (a success nudges through the broadcast above).
+            self._nudger.nudge()
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
-        self._nudger.nudge()
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""
