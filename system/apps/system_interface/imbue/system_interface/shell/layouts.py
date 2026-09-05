@@ -322,10 +322,11 @@ class LayoutStore(MutableModel):
                 )
                 write_json_atomic(path, layout_wire_json(stamped))
 
-    def _rewrite_client_layouts(
+    def _rewrite_layouts_everywhere(
         self, transform: Callable[[LayoutRecord], LayoutRecord], now: datetime
     ) -> list[StoredLayout]:
-        """Apply ``transform`` to every client layout it changes; returns the layouts rewritten."""
+        """Apply ``transform`` to every client layout and every seed it changes, under one hold of the state lock;
+        returns the client layouts rewritten (the seeds are edited in place and not reported)."""
         rewritten: list[StoredLayout] = []
         with STATE_FILES_LOCK:
             for stored in self.all_client_layouts():
@@ -339,11 +340,11 @@ class LayoutStore(MutableModel):
 
     def rebind_tab(self, tab_id: TabId, address: Address, now: datetime) -> list[StoredLayout]:
         """Point every tab record carrying ``tab_id`` at ``address``, in the seeds too; returns the client layouts rewritten."""
-        return self._rewrite_client_layouts(lambda layout: rebind_tab_in_layout(layout, tab_id, address), now)
+        return self._rewrite_layouts_everywhere(lambda layout: rebind_tab_in_layout(layout, tab_id, address), now)
 
     def remove_addresses_everywhere(self, addresses: Sequence[Address], now: datetime) -> list[StoredLayout]:
         """Strip the panels showing addresses no app lists any more from every client layout and every seed."""
-        return self._rewrite_client_layouts(lambda layout: strip_addresses_from_layout(layout, addresses), now)
+        return self._rewrite_layouts_everywhere(lambda layout: strip_addresses_from_layout(layout, addresses), now)
 
     def delete_client_layouts(self, client_id: ClientId) -> int:
         """Remove every layout file a client owns; returns how many went."""
