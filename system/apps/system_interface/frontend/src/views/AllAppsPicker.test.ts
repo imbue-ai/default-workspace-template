@@ -1,44 +1,21 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../testing/dom";
 
-vi.hoisted(() => {
-  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-});
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
-import type { AppRecord } from "../models/Inventory";
+import { appRecord } from "../testing/records";
 import { applyApps, resetInventoryForTesting } from "../models/Inventory";
 import { AllAppsPicker, filterActions, pickableActions, pinKey, unpinnedActions } from "./AllAppsPicker";
 import type { AllAppsPickerAttrs } from "./AllAppsPicker";
 
-function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
-  return {
-    name,
-    display_name: name[0].toUpperCase() + name.slice(1),
-    icon: "",
-    label: "",
-    url: `http://127.0.0.1:1/${name}`,
-    internal: false,
-    program: name,
-    critical: false,
-    instances_url: "",
-    has_instances: true,
-    actions: [{ id: "new", label: `New ${name}` }],
-    default_shortcut: null,
-    is_running: true,
-    instances: [],
-    ...overrides,
-  };
-}
-
 describe("pickableActions", () => {
   it("pairs every app with its primary action, ordered by display name, dropping apps with no actions", () => {
     const rows = pickableActions([
-      app("terminal"),
-      app("browser", { actions: [] }),
-      app("chat", {
+      appRecord("terminal"),
+      appRecord("browser", { actions: [] }),
+      appRecord("chat", {
         actions: [
           { id: "subagent", label: "Subagent" },
           { id: "new", label: "New Chat" },
@@ -51,7 +28,7 @@ describe("pickableActions", () => {
 });
 
 describe("filterActions and unpinnedActions", () => {
-  const rows = pickableActions([app("terminal"), app("files", { display_name: "File browser" })]);
+  const rows = pickableActions([appRecord("terminal"), appRecord("files", { display_name: "File browser" })]);
 
   it("matches either name an app answers to, case-insensitively", () => {
     expect(filterActions(rows, "BROWSER").map((row) => row.app.name)).toEqual(["files"]);
@@ -91,7 +68,7 @@ describe("AllAppsPicker", () => {
   }
 
   it("lists unpinned apps with a pin under a project, runs the action on click, and pins on the toggle", () => {
-    applyApps([app("terminal"), app("files"), app("hidden", { internal: true })]);
+    applyApps([appRecord("terminal"), appRecord("files"), appRecord("hidden", { internal: true })]);
     const attrs = mount({ pinnedKeys: ["files:new"] });
     const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-app]"));
     expect(rows.map((row) => row.dataset.app)).toEqual(["terminal"]);
@@ -108,7 +85,7 @@ describe("AllAppsPicker", () => {
   });
 
   it("offers every app with no pins under Everything", () => {
-    applyApps([app("terminal"), app("files")]);
+    applyApps([appRecord("terminal"), appRecord("files")]);
     mount({ projectName: null, pinnedKeys: [] });
     expect(root.querySelectorAll("[data-app]").length).toBe(2);
     expect(root.querySelector(".project-rail-pin")).toBeNull();
@@ -117,7 +94,7 @@ describe("AllAppsPicker", () => {
   it("says so when nothing is registered, and dims a stopped app", () => {
     mount({});
     expect(root.textContent).toContain("No apps are running on this machine.");
-    applyApps([app("terminal", { is_running: false })]);
+    applyApps([appRecord("terminal", { is_running: false })]);
     m.redraw.sync();
     expect(root.querySelector(".project-rail-app-stopped")).not.toBeNull();
   });

@@ -1,41 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AppRecord, InstanceRecord } from "../models/Inventory";
+import type { AppRecord } from "../models/Inventory";
 import { TAB_MENU_DIVIDER, tabMenuEntries } from "./tabMenu";
 import type { TabMenuActions } from "./tabMenu";
+import { appRecord, instanceRecord } from "../testing/records";
 
 function app(overrides: Partial<AppRecord> = {}): AppRecord {
-  return {
-    name: "terminal",
-    display_name: "Terminal",
-    icon: "",
-    label: "terminal-1a2b",
-    url: "http://127.0.0.1:7681",
-    internal: false,
-    program: "terminal",
-    critical: false,
-    instances_url: "",
-    has_instances: true,
-    actions: [{ id: "new", label: "New terminal" }],
-    default_shortcut: null,
-    is_running: true,
-    instances: [],
-    ...overrides,
-  };
+  return appRecord("terminal", { label: "terminal-1a2b", url: "http://127.0.0.1:7681", ...overrides });
 }
 
-function instance(overrides: Partial<InstanceRecord> = {}): InstanceRecord {
-  return {
-    key: "terminal-1",
-    url: "/",
-    title: "Terminal 1",
-    status: "idle",
-    lifetime: "referenced",
-    last_active: null,
-    renameable: true,
-    ...overrides,
-  };
-}
+const instance = instanceRecord;
 
 function actions(overrides: Partial<TabMenuActions> = {}): TabMenuActions {
   return {

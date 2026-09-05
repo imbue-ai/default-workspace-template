@@ -1,9 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import "../testing/dom";
 
-vi.hoisted(() => {
-  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-});
+import { describe, expect, it } from "vitest";
 
 import {
   actionKey,
@@ -13,6 +10,7 @@ import {
   primaryActionForApp,
 } from "./DockviewWorkspace";
 import type { AppRecord } from "../models/Inventory";
+import { appRecord } from "../testing/records";
 
 describe("equalTabWidth", () => {
   it("shares what is left of a strip once the '+' is accounted for", () => {
@@ -86,26 +84,16 @@ describe("mostRecentAddressOfApp", () => {
 
 describe("primaryActionForApp", () => {
   function app(overrides: Partial<AppRecord>): AppRecord {
-    return {
-      name: "chat",
-      display_name: "Chat",
-      icon: "",
-      label: "",
+    return appRecord("chat", {
       url: "http://127.0.0.1:8000",
-      internal: false,
       program: "",
       critical: true,
-      instances_url: "",
-      has_instances: true,
       actions: [
         { id: "new", label: "New Chat" },
         { id: "subagent", label: "Open subagent" },
       ],
-      default_shortcut: null,
-      is_running: true,
-      instances: [],
       ...overrides,
-    };
+    });
   }
 
   it("takes the declared default shortcut's action, else the first action, else nothing", () => {
