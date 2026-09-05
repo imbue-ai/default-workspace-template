@@ -19,6 +19,8 @@ from typing import Final
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.shell.errors import SupervisorProgramActionError
+
 # The socket supervisord's ``[unix_http_server]`` section binds (see
 # ``system/supervisord.conf``); override for tests via the env var.
 DEFAULT_SUPERVISOR_SOCKET_PATH: Final[str] = "/var/run/supervisor.sock"
@@ -60,12 +62,6 @@ class _UnixSocketTransport(xmlrpc.client.Transport):
 
     def make_connection(self, host: str | tuple[str, dict[str, str]]) -> HTTPConnection:
         return _UnixSocketHttpConnection(self._socket_path)
-
-
-class SupervisorProgramActionError(RuntimeError):
-    """Raised when supervisord refuses, or cannot be reached for, a stop/start."""
-
-    ...
 
 
 # Fault codes from supervisord's ``supervisor.xmlrpc.Faults`` -- pinned here

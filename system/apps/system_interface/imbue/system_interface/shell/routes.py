@@ -41,6 +41,7 @@ from imbue.system_interface.shell.errors import ProjectConflictError
 from imbue.system_interface.shell.errors import ProjectNotFoundError
 from imbue.system_interface.shell.errors import ProjectValueError
 from imbue.system_interface.shell.errors import ShellError
+from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.errors import UnknownAppError
 from imbue.system_interface.shell.instance_relay import RelayOutcome
 from imbue.system_interface.shell.instance_relay import relay_create
@@ -57,7 +58,6 @@ from imbue.system_interface.shell.layout_ops import layout_list
 from imbue.system_interface.shell.layout_ops import layout_views
 from imbue.system_interface.shell.layout_ops import view_display_name
 from imbue.system_interface.shell.layouts import layout_wire_json
-from imbue.system_interface.shell.liveness import SupervisorProgramActionError
 from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
 from imbue.system_interface.shell.liveness import supervisor_socket_path
