@@ -415,7 +415,7 @@ def layout_broadcast() -> ResponseReturnValue:
         return refusal
     try:
         body = json.loads(request.get_data())
-    except (json.JSONDecodeError, ValueError) as e:
+    except ValueError as e:
         logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
         return _detail("Invalid JSON in request body", HTTP_BAD_REQUEST)
     if not isinstance(body, dict):
@@ -559,139 +559,177 @@ def _resolve_client(shell: ShellState, args_raw: dict[str, Any], agent_id: str, 
 
 
 def _dispatch_layout_op(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
-    if op == "list":
-        view_id, error = _resolve_view(shell, args_raw)
-        if error is not None:
-            return error
-        layouts = [
-            stored for stored in shell.layouts.all_client_layouts() if view_id is None or stored.view_id == view_id
-        ]
-        listing = layout_list(shell.inventory.entries(), layouts)
-        logger.info("layout op={} agent_id={} view={} apps={}", op, agent_id, view_id, len(listing))
-        return jsonify({"ok": True, "view_id": view_id, "apps": listing})
+    match op:
+        case "list":
+            return _op_list(shell, args_raw, agent_id)
+        case "inspect":
+            return _op_inspect(shell, args_raw, agent_id)
+        case "views":
+            return _op_views(shell, agent_id)
+        case "context":
+            return _op_context(shell, agent_id)
+        case "load":
+            return _op_load(shell, args_raw, agent_id)
+        case _:
+            return _op_broadcast(shell, op, args_raw, agent_id)
 
-    if op == "inspect":
-        view_id, error = _resolve_view(shell, args_raw)
-        if error is not None:
-            return error
-        client_id = _resolve_client(shell, args_raw, agent_id, view_id)
-        layout = None
-        if view_id is not None and client_id is not None:
-            client = shell.clients.get_client(client_id)
-            device_kind = client.device_kind if client is not None else DeviceKind.DESKTOP
-            layout = shell.layouts.read_layout(view_id, client_id, device_kind)
-        title_by_address = {
-            str(entry.address_of(instance)): instance.title
-            for entry in shell.inventory.entries()
-            for instance in entry.instances
-        }
-        summary = layout_inspect(layout, title_by_address)
-        logger.info(
-            "layout op={} agent_id={} view={} client={} panels={}",
-            op,
-            agent_id,
-            view_id,
-            client_id,
-            len(summary["panels"]),
+
+def _op_list(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
+    view_id, error = _resolve_view(shell, args_raw)
+    if error is not None:
+        return error
+    layouts = [stored for stored in shell.layouts.all_client_layouts() if view_id is None or stored.view_id == view_id]
+    listing = layout_list(shell.inventory.entries(), layouts)
+    logger.info("layout op=list agent_id={} view={} apps={}", agent_id, view_id, len(listing))
+    return jsonify({"ok": True, "view_id": view_id, "apps": listing})
+
+
+def _op_inspect(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
+    view_id, error = _resolve_view(shell, args_raw)
+    if error is not None:
+        return error
+    client_id = _resolve_client(shell, args_raw, agent_id, view_id)
+    layout = None
+    if view_id is not None and client_id is not None:
+        client = shell.clients.get_client(client_id)
+        device_kind = client.device_kind if client is not None else DeviceKind.DESKTOP
+        layout = shell.layouts.read_layout(view_id, client_id, device_kind)
+    title_by_address = {
+        str(entry.address_of(instance)): instance.title
+        for entry in shell.inventory.entries()
+        for instance in entry.instances
+    }
+    summary = layout_inspect(layout, title_by_address)
+    logger.info(
+        "layout op=inspect agent_id={} view={} client={} panels={}",
+        agent_id,
+        view_id,
+        client_id,
+        len(summary["panels"]),
+    )
+    return jsonify({"ok": True, "view_id": view_id, "client_id": client_id, "layout": summary})
+
+
+def _op_views(shell: ShellState, agent_id: str) -> ResponseReturnValue:
+    projects = shell.projects.list_projects()
+    everything_tabs = [
+        address for entry in shell.inventory.entries() if not entry.row.internal for address in entry.addresses()
+    ]
+    views = layout_views(projects, everything_tabs, _clients_by_view(shell))
+    logger.info("layout op=views agent_id={} views={}", agent_id, len(views))
+    return jsonify({"ok": True, "views": views})
+
+
+def _op_context(shell: ShellState, agent_id: str) -> ResponseReturnValue:
+    events = shell.activity.read_events()
+    connected_infos = shell.broadcaster.get_connected_client_infos()
+    live_view_by_client_id = {info["client_id"]: info["active_view"] for info in connected_infos}
+    clients = summarize_client_activity(events, set(live_view_by_client_id))
+    for client_summary in clients:
+        live_view = live_view_by_client_id.get(client_summary["client_id"])
+        if live_view:
+            client_summary["active_view"] = live_view
+    logger.info("layout op=context agent_id={} clients={}", agent_id, len(clients))
+    return jsonify({"ok": True, "clients": clients})
+
+
+def _op_load(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
+    requested = args_raw.get("view")
+    if not isinstance(requested, str) or not requested:
+        return _detail("'load' requires a view name in args.view", HTTP_BAD_REQUEST)
+    view_id, error = _resolve_view(shell, args_raw)
+    if error is not None:
+        return error
+    if view_id is None:
+        return _detail("Failed to resolve the requested view", HTTP_INTERNAL_ERROR)
+    target_client_id = _resolve_client(shell, args_raw, agent_id, None)
+    display_name = view_display_name(view_id, shell.projects.list_projects())
+    shell.broadcaster.broadcast_load_layout(view_id, display_name, target_client_id)
+    logger.info("layout op=load agent_id={} view={} target_client={}", agent_id, view_id, target_client_id)
+    return jsonify({"ok": True, "view_id": view_id, "target_client_id": target_client_id})
+
+
+def _refuse_unregistered_address(shell: ShellState, args_raw: dict[str, Any]) -> ResponseReturnValue | None:
+    """An addressed op names an instance or an app; the address must parse, and an app it names must be registered, before anything is broadcast."""
+    raw_address = args_raw.get("address")
+    if raw_address is None:
+        return None
+    try:
+        address = Address(str(raw_address))
+    except InvalidAddressError as e:
+        return _detail(str(e), HTTP_BAD_REQUEST)
+    if shell.inventory.entry(str(address.app)) is None:
+        return _detail(f"No registered app named {address.app!r}", HTTP_NOT_FOUND)
+    return None
+
+
+def _no_client_on_view_response(
+    shell: ShellState, op: str, args_raw: dict[str, Any], target_view: str | None
+) -> ResponseReturnValue:
+    """The 412 a mutating op gets when no connected client has the target view active."""
+    connected_clients = shell.broadcaster.get_connected_client_infos()
+    requested_view = args_raw.get("view") or target_view or "<no view>"
+    logger.warning(
+        "Layout op {!r} rejected (412): no connected client on view {!r}; connected clients: {}",
+        op,
+        requested_view,
+        connected_clients,
+    )
+    client_summary = (
+        ", ".join(
+            f"{info['client_id']} (view={info['active_view']}, device={info['device_kind']})"
+            for info in connected_clients
         )
-        return jsonify({"ok": True, "view_id": view_id, "client_id": client_id, "layout": summary})
+        or "none"
+    )
+    return _detail(
+        f"No connected client has view '{requested_view}' active. Ask the user to switch to it, "
+        f"or run `layout.py load {requested_view!r}` first. Connected clients: {client_summary}.",
+        HTTP_PRECONDITION_FAILED,
+    )
 
-    if op == "views":
-        projects = shell.projects.list_projects()
-        everything_tabs = [
-            address for entry in shell.inventory.entries() if not entry.row.internal for address in entry.addresses()
-        ]
-        views = layout_views(projects, everything_tabs, _clients_by_view(shell))
-        logger.info("layout op={} agent_id={} views={}", op, agent_id, len(views))
-        return jsonify({"ok": True, "views": views})
 
-    if op == "context":
-        events = shell.activity.read_events()
-        connected_infos = shell.broadcaster.get_connected_client_infos()
-        live_view_by_client_id = {info["client_id"]: info["active_view"] for info in connected_infos}
-        clients = summarize_client_activity(events, set(live_view_by_client_id))
-        for client_summary in clients:
-            live_view = live_view_by_client_id.get(client_summary["client_id"])
-            if live_view:
-                client_summary["active_view"] = live_view
-        logger.info("layout op={} agent_id={} clients={}", op, agent_id, len(clients))
-        return jsonify({"ok": True, "clients": clients})
+def _broadcast_mutating_op(
+    shell: ShellState, op: str, args_raw: dict[str, Any], agent_id: str
+) -> ResponseReturnValue | None:
+    """Broadcast a view-targeted op under the layout mutex; a 412 or 409 when it cannot land, None when it did."""
+    target_view, error = _resolve_view(shell, args_raw)
+    if error is not None:
+        return error
+    if target_view is None or not shell.broadcaster.has_client_on_view(target_view):
+        return _no_client_on_view_response(shell, op, args_raw, target_view)
+    broadcast_args = {key: value for key, value in args_raw.items() if key != "view"}
+    holder = shell.layout_mutex.try_acquire(agent_id, op, args_raw)
+    if holder is not None:
+        return jsonify(
+            {
+                "detail": (
+                    f"Another layout op is in flight: agent_id={holder['agent_id']} op={holder['operation']}. "
+                    "Retry after the mutex TTL elapses."
+                ),
+                "retry_after_ms": shell.layout_mutex.retry_after_ms(),
+                "in_flight": holder,
+            }
+        ), HTTP_CONFLICT
+    try:
+        shell.broadcaster.broadcast_layout_op(op, broadcast_args, requester_agent_id=agent_id, target_view=target_view)
+    finally:
+        shell.layout_mutex.release(agent_id, op)
+    return None
 
-    if op == "load":
-        requested = args_raw.get("view")
-        if not isinstance(requested, str) or not requested:
-            return _detail("'load' requires a view name in args.view", HTTP_BAD_REQUEST)
-        view_id, error = _resolve_view(shell, args_raw)
-        if error is not None:
-            return error
-        if view_id is None:
-            return _detail("Failed to resolve the requested view", HTTP_INTERNAL_ERROR)
-        target_client_id = _resolve_client(shell, args_raw, agent_id, None)
-        display_name = view_display_name(view_id, shell.projects.list_projects())
-        shell.broadcaster.broadcast_load_layout(view_id, display_name, target_client_id)
-        logger.info("layout op={} agent_id={} view={} target_client={}", op, agent_id, view_id, target_client_id)
-        return jsonify({"ok": True, "view_id": view_id, "target_client_id": target_client_id})
 
+def _op_broadcast(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
+    """Every op the connected clients carry out: checked here, then sent as a ``layout_op`` message."""
     if not is_broadcasting_op(op):
         return _detail(f"Op {op!r} has no broadcast handler", HTTP_INTERNAL_ERROR)
-
-    # An addressed op names an instance or an app; the address must parse, and an app it names
-    # must be registered, before anything is broadcast.
-    raw_address = args_raw.get("address")
-    if raw_address is not None:
-        try:
-            address = Address(str(raw_address))
-        except InvalidAddressError as e:
-            return _detail(str(e), HTTP_BAD_REQUEST)
-        if shell.inventory.entry(str(address.app)) is None:
-            return _detail(f"No registered app named {address.app!r}", HTTP_NOT_FOUND)
-
+    refusal = _refuse_unregistered_address(shell, args_raw)
+    if refusal is not None:
+        return refusal
     if is_mutating_op(op):
-        target_view, error = _resolve_view(shell, args_raw)
-        if error is not None:
-            return error
-        if target_view is None or not shell.broadcaster.has_client_on_view(target_view):
-            connected_clients = shell.broadcaster.get_connected_client_infos()
-            requested_view = args_raw.get("view") or target_view or "<no view>"
-            logger.warning(
-                "Layout op {!r} rejected (412): no connected client on view {!r}; connected clients: {}",
-                op,
-                requested_view,
-                connected_clients,
-            )
-            client_summary = (
-                ", ".join(
-                    f"{info['client_id']} (view={info['active_view']}, device={info['device_kind']})"
-                    for info in connected_clients
-                )
-                or "none"
-            )
-            return _detail(
-                f"No connected client has view '{requested_view}' active. Ask the user to switch to it, "
-                f"or run `layout.py load {requested_view!r}` first. Connected clients: {client_summary}.",
-                HTTP_PRECONDITION_FAILED,
-            )
-        broadcast_args = {key: value for key, value in args_raw.items() if key != "view"}
-        holder = shell.layout_mutex.try_acquire(agent_id, op, args_raw)
-        if holder is not None:
-            return jsonify(
-                {
-                    "detail": (
-                        f"Another layout op is in flight: agent_id={holder['agent_id']} op={holder['operation']}. "
-                        "Retry after the mutex TTL elapses."
-                    ),
-                    "retry_after_ms": shell.layout_mutex.retry_after_ms(),
-                    "in_flight": holder,
-                }
-            ), HTTP_CONFLICT
-        try:
-            shell.broadcaster.broadcast_layout_op(
-                op, broadcast_args, requester_agent_id=agent_id, target_view=target_view
-            )
-        finally:
-            shell.layout_mutex.release(agent_id, op)
+        failure = _broadcast_mutating_op(shell, op, args_raw, agent_id)
+        if failure is not None:
+            return failure
     else:
         shell.broadcaster.broadcast_layout_op(op, args_raw, requester_agent_id=agent_id)
-
     logger.info("layout op={} agent_id={} args={}", op, agent_id, args_raw)
     return jsonify({"ok": True})
