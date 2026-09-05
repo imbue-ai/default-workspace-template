@@ -30,4 +30,6 @@ Phase 7 of the workspace app model (the shell core):
 
 - Every skill that drives the workspace layout speaks addresses: `manage-layout` and `manage-projects` are rewritten around `app:<name>` and `app:<name>?instance=<key>`, `--view`, the relay verbs, and the shortcut subcommands; the caretaker, migrate-workspace, manage-scheduled-tasks, and update-self docs and `update_self.py` (`open app:chat?instance=$MNGR_AGENT_ID` in place of `surface-chat-tab`) follow.
 
+- update-self's teardown closes a stale preview tab before deregistering its app (an op addressed to an unregistered app is refused); build-app describes `layout.py open` as a no-op for an already-open tab and `list` as the per-app instance listing.
+
 - The build-app scaffold's index page posts `{type: "shell:location", path}` (the contract's message) rather than the retired `minds-location`, which the shell no longer accepts; the skill doc describes the beacon as relayed to the app's own instances API.
