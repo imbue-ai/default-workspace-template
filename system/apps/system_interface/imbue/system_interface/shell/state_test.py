@@ -1,18 +1,25 @@
 """Tests for ``ShellState``: the referenced-lifetime deletion and the pruning that follows an app's list shrinking."""
 
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
 from app_instances.data_types import InstanceLifetime
 from app_instances.testing import StubInstanceSource
+from app_instances.testing import wait_until
 
+from imbue.imbue_common.model_update import to_update
+from imbue.system_interface.shell.clients import CLIENT_RETENTION
+from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import TabRecord
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
+from imbue.system_interface.shell.primitives import ViewId
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import build_inventory
@@ -99,5 +106,35 @@ def test_instances_an_app_stopped_listing_leave_the_tab_sets_and_layouts(
         assert set(shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP).tabs) == {"p1"}
         types = [message["type"] for message in drain_messages(client_queue)]
         assert "projects_updated" in types and "apps_updated" in types
+    finally:
+        shell.stop()
+
+
+def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_app_url: str
+) -> None:
+    registry_path = write_registry(tmp_path / "apps.toml", registry_row_toml("stub", stub_app_url, True))
+    inventory = build_inventory(registry_path, broadcaster)
+    built = build_shell_state(tmp_path / "state", registry_path, broadcaster, inventory=inventory)
+    shell = built.model_copy_update(to_update(built.field_ref().client_prune_interval_seconds, 0.05))
+    stale_at = _NOW - CLIENT_RETENTION - timedelta(days=1)
+    shell.clients.record_report(
+        ClientStateReport(client_id=ClientId("old"), device_kind=DeviceKind.DESKTOP, active_view=ViewId("everything")),
+        stale_at,
+    )
+    shell.layouts.save_layout("everything", "old", _layout_showing(_STUB_1), stale_at)
+    shell.start()
+    try:
+        # The prune at start took the stale client and its layout file.
+        assert shell.clients.get_client("old") is None
+        assert shell.layouts.all_client_layouts() == []
+        # A client that goes stale while the shell runs is taken by the periodic prune.
+        shell.clients.record_report(
+            ClientStateReport(
+                client_id=ClientId("later"), device_kind=DeviceKind.DESKTOP, active_view=ViewId("everything")
+            ),
+            stale_at,
+        )
+        assert wait_until(lambda: shell.clients.get_client("later") is None, timeout_seconds=5.0)
     finally:
         shell.stop()

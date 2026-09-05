@@ -28,6 +28,8 @@ from imbue.system_interface.shell.projects import project_wire_json
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 CLIENT_ACTIVITY_EVENTS_PATH: Final[str] = "events/client_activity/events.jsonl"
+# How often the client prune of contracts.md section 7 re-runs after the one at start.
+CLIENT_PRUNE_INTERVAL_SECONDS: Final[float] = 24 * 60 * 60.0
 
 
 class ShellState(MutableModel):
@@ -46,24 +48,44 @@ class ShellState(MutableModel):
     )
     layout_mutex: LayoutMutex = Field(frozen=True, description="Serializes layout-mutating ops")
     http_client: httpx.Client = Field(frozen=True, description="The client the relay uses to reach the apps")
+    client_prune_interval_seconds: float = Field(
+        default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
+    )
 
     _sweep_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _prune_thread: threading.Thread | None = PrivateAttr(default=None)
 
     def start(self) -> None:
-        """Prune stale clients, then start the inventory (registry watch, liveness, instance lists)."""
-        now = datetime.now(timezone.utc)
-        for client_id in self.clients.prune_unseen(now):
-            removed = self.layouts.delete_client_layouts(client_id)
-            logger.info("Pruned client {} unseen for 90 days ({} layout file(s))", client_id, removed)
+        """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness, instance lists)."""
+        self.prune_unseen_clients()
+        thread = threading.Thread(target=self._run_client_prune, daemon=True, name="shell-client-prune")
+        self._prune_thread = thread
+        thread.start()
         self.inventory.add_removed_listener(self.on_instances_removed)
         self.inventory.start()
 
     def stop(self) -> None:
+        self._prune_stop.set()
+        if self._prune_thread is not None:
+            self._prune_thread.join(timeout=5)
+            self._prune_thread = None
         self.inventory.stop()
         try:
             self.http_client.close()
         except (httpx.HTTPError, RuntimeError) as e:
             logger.debug("Skipped closing the relay http client during shutdown: {}", e)
+
+    def prune_unseen_clients(self) -> None:
+        """Drop every client unseen for the retention period, together with the layouts it owns (contracts.md section 7)."""
+        now = datetime.now(timezone.utc)
+        for client_id in self.clients.prune_unseen(now):
+            removed = self.layouts.delete_client_layouts(client_id)
+            logger.info("Pruned client {} unseen for 90 days ({} layout file(s))", client_id, removed)
+
+    def _run_client_prune(self) -> None:
+        while not self._prune_stop.wait(timeout=self.client_prune_interval_seconds):
+            self.prune_unseen_clients()
 
     def broadcast_projects_updated(self) -> None:
         self.broadcaster.broadcast_projects_updated(
