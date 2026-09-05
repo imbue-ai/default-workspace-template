@@ -258,63 +258,6 @@ class AgentStateItem(FrozenModel):
     )
 
 
-class AppEntry(FrozenModel):
-    """An app registered in data/.state/apps.toml."""
-
-    name: str = Field(description="App name (e.g., 'web', 'terminal')")
-    url: str = Field(description="Local URL where the app is accessible")
-    label: str = Field(
-        default="",
-        description=(
-            "Unguessable ``<name>-<rand>`` hostname label the service's public "
-            "origin uses. Empty for legacy rows written before labels existed."
-        ),
-    )
-    icon: str = Field(
-        default="",
-        description=(
-            "The app's icon as SVG markup (a single ``<svg>`` element), stored "
-            "verbatim in the registry by ``system/scripts/forward_port.py``. "
-            "Empty when the app registered no icon, which is the normal case; "
-            "consumers fall back to their generic app glyph."
-        ),
-    )
-    internal: bool = Field(
-        default=False,
-        description=(
-            "Registered with ``forward_port.py --internal``: has a port to "
-            "forward but no page of its own, so the frontend must not offer it "
-            "as something to open (the New Tab launcher's machine table, the "
-            "rail's All apps popover, its shortcuts)."
-        ),
-    )
-    program: str = Field(
-        default="",
-        description=(
-            "The supervisord program running this app, registered via "
-            "``forward_port.py --program``. Its presence is the capability "
-            "grant 'this app can be stopped and started through supervisord'; "
-            "empty means unsupervised (or registered before the field existed)."
-        ),
-    )
-    is_running: bool = Field(
-        default=True,
-        description=(
-            "Derived liveness, never stored in the registry: supervisord's "
-            "process state for ``program`` rows, a TCP probe of ``url`` "
-            "otherwise. Rows default to running until the first probe lands."
-        ),
-    )
-
-
-class TerminalSessionInfo(FrozenModel):
-    """A live user-terminal tmux session (one per ad-hoc dockview terminal tab)."""
-
-    session_name: str = Field(description="The tmux session name (e.g. 'terminal-1')")
-    session_id: str = Field(description="The immutable tmux session id (e.g. '$3'), stable across rename")
-    cwd: str = Field(description="The session's current working directory (tmux session_path)")
-
-
 class CreateChatRequest(FrozenModel):
     """Request body for creating a chat agent. The account decides which harness it runs on."""
 
