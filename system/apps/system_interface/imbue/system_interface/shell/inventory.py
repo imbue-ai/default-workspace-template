@@ -426,8 +426,9 @@ class AppInventory(MutableModel):
 
     def _run_sweep(self) -> None:
         sweep_count = 0
-        # The first pass waits one interval: the process is still bringing its server up when
-        # ``start`` returns, and the chat row's list is served by that very server.
+        # The first pass runs as soon as the registry read in ``start`` woke it. An app whose
+        # server is still coming up then (the chat row's list is served by this very process)
+        # fails that fetch and is caught up by its first nudge or the next reconciliation.
         while not self._sweep_stop.is_set():
             self._sweep_wake.wait(timeout=self.sweep_interval_seconds)
             self._sweep_wake.clear()
