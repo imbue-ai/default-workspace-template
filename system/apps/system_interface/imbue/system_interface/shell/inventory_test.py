@@ -1,11 +1,14 @@
 """Tests for the inventory: the registry read, liveness, the fetched lists, nudging, and the diffed broadcast."""
 
+import threading
 from pathlib import Path
 
 from app_instances.data_types import InstanceLifetime
 from app_instances.data_types import InstanceStatus
 from app_instances.testing import StubInstanceSource
 from app_instances.testing import wait_until
+from pydantic import Field
+from pydantic import PrivateAttr
 from watchdog.events import DirModifiedEvent
 from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
@@ -14,6 +17,8 @@ from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
+from imbue.system_interface.shell.inventory import InstanceFetchOutcome
+from imbue.system_interface.shell.inventory import InstanceFetcherInterface
 from imbue.system_interface.shell.inventory import _make_registry_file_handler
 from imbue.system_interface.shell.inventory import parse_instances_body
 from imbue.system_interface.shell.primitives import Address
@@ -350,3 +355,59 @@ def test_a_failing_pass_does_not_end_the_sweep(tmp_path: Path, broadcaster: WebS
     inventory.sweep_once(is_reconciling=True)
     assert fetcher.fetched_urls == [_TERMINAL_URL] * 3
     assert inventory.listed_addresses() == {Address("app:terminal?instance=terminal-2"), Address("app:files")}
+
+
+class _GatedFetcher(InstanceFetcherInterface):
+    """Answers the queued outcomes in call order; the first call waits for the gate before answering."""
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    outcomes: list[InstanceFetchOutcome] = Field(description="What each call answers, in order")
+    gate: threading.Event = Field(default_factory=threading.Event, description="Released to let the first call answer")
+    first_call_started: threading.Event = Field(
+        default_factory=threading.Event, description="Set when the first call begins"
+    )
+    second_call_started: threading.Event = Field(
+        default_factory=threading.Event, description="Set when the second call begins"
+    )
+    _call_count: int = PrivateAttr(default=0)
+
+    def fetch(self, instances_url: str) -> InstanceFetchOutcome:
+        self._call_count += 1
+        call_number = self._call_count
+        if call_number == 1:
+            self.first_call_started.set()
+            self.gate.wait(timeout=5)
+        elif call_number == 2:
+            self.second_call_started.set()
+        return self.outcomes[call_number - 1]
+
+
+def test_the_folds_of_one_app_land_in_fetch_order(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    stale = InstanceFetchOutcome(kind=FetchOutcomeKind.LISTED, records=(instance_record("terminal-1"),))
+    fresh = InstanceFetchOutcome(
+        kind=FetchOutcomeKind.LISTED, records=(instance_record("terminal-1"), instance_record("terminal-2"))
+    )
+    fetcher = _GatedFetcher(outcomes=[stale, fresh])
+    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
+    removed: list[list[Address]] = []
+    inventory.add_removed_listener(removed.append)
+
+    # The sweep's fetch is in flight (blocked on the gate) when a create's refetch arrives.
+    sweep = threading.Thread(target=inventory.refetch_now, args=("terminal",))
+    sweep.start()
+    assert fetcher.first_call_started.wait(timeout=5)
+    after_create = threading.Thread(target=inventory.refetch_now, args=("terminal",))
+    after_create.start()
+    # The second fetch must wait for the first: it has not started by the time the gate opens.
+    assert not fetcher.second_call_started.wait(timeout=0.2)
+    fetcher.gate.set()
+    sweep.join(timeout=5)
+    after_create.join(timeout=5)
+
+    assert inventory.listed_addresses() == {
+        Address("app:terminal?instance=terminal-1"),
+        Address("app:terminal?instance=terminal-2"),
+        Address("app:files"),
+    }
+    assert removed == []

@@ -203,6 +203,9 @@ class AppInventory(MutableModel):
     _entry_by_name: dict[str, AppInventoryEntry] = PrivateAttr(default_factory=dict)
     _registry_order: list[str] = PrivateAttr(default_factory=list)
     _pending_nudge_by_name: dict[str, threading.Timer] = PrivateAttr(default_factory=dict)
+    # One per app, held across a fetch and its fold, so the folds of one app land in fetch order:
+    # a sweep fetch that started before a create must not overwrite the refetch that followed it.
+    _fetch_lock_by_name: dict[str, threading.Lock] = PrivateAttr(default_factory=dict)
     _last_broadcast_json: str | None = PrivateAttr(default=None)
     _observer: Any | None = PrivateAttr(default=None)
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -402,16 +405,24 @@ class AppInventory(MutableModel):
             return
         if not entry.is_running:
             return
-        outcome = self.fetcher.fetch(instances_url_of(entry.row))
-        self._fold_fetch(app_name, outcome)
+        self._fetch_and_fold(entry)
         self._broadcast_if_changed()
 
     def refetch_all(self) -> None:
         for entry in self.entries():
             if entry.row.instances and entry.is_running:
-                outcome = self.fetcher.fetch(instances_url_of(entry.row))
-                self._fold_fetch(str(entry.row.name), outcome)
+                self._fetch_and_fold(entry)
         self._broadcast_if_changed()
+
+    def _fetch_lock(self, app_name: str) -> threading.Lock:
+        with self._lock:
+            return self._fetch_lock_by_name.setdefault(app_name, threading.Lock())
+
+    def _fetch_and_fold(self, entry: AppInventoryEntry) -> None:
+        app_name = str(entry.row.name)
+        with self._fetch_lock(app_name):
+            outcome = self.fetcher.fetch(instances_url_of(entry.row))
+            self._fold_fetch(app_name, outcome)
 
     def _fold_fetch(self, app_name: str, outcome: InstanceFetchOutcome) -> None:
         removed: list[Address] = []
