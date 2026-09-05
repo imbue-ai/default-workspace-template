@@ -95,10 +95,7 @@ def test_prevent_silent_decode_error_catches() -> None:
 
 
 def test_prevent_inline_imports() -> None:
-    # All four are the module-level ``try: from playwright.sync_api import ...`` block in
-    # test_e2e.py, which the regex reads as inline because it is indented under the guard;
-    # they are at the top of the file, not inside a function.
-    rc.check_inline_imports(_DIR, snapshot(4))
+    rc.check_inline_imports(_DIR, snapshot(0))
 
 
 def test_prevent_relative_imports() -> None:
