@@ -83,11 +83,12 @@ class SystemInterfaceState(MutableModel):
 
     @property
     def broadcaster(self) -> WebSocketBroadcaster:
-        """The agent manager's broadcaster, kept paired with the manager itself.
+        """The one WebSocket broadcaster of the process, as the agent manager holds it.
 
-        Derived from ``agent_manager`` (rather than stored separately) so that
-        seeding a test manager via ``state.agent_manager = ...`` transparently
-        repoints the broadcaster too -- the two must never diverge.
+        The shell (``ShellState`` and its inventory) is built over the same object and keeps
+        its own reference, so the manager and the shell are always constructed together
+        (``main.build_production_state``, ``testing.build_test_state``) and never swapped
+        apart afterwards.
         """
         return self.agent_manager.broadcaster
 
