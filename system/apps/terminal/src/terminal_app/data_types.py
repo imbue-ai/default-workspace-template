@@ -18,7 +18,7 @@ class TmuxHookKind(StrEnum):
 
 
 class TmuxHookEvent(FrozenModel):
-    """What the tmux hook script posts to ``/tmux-hook``: today's notify shape, unchanged.
+    """What the tmux hook script posts to the app's own ``/tmux-hook``.
 
     Names and ids are plain strings here because a hand-made tmux session may carry any name;
     each handler validates what it needs.
