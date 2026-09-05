@@ -1,7 +1,7 @@
-import time
 from pathlib import Path
 from typing import Any
 
+from app_instances.testing import wait_until
 from app_manifest.registry import read_registry
 
 from imbue.system_interface.shell.data_types import AppInventoryEntry
@@ -117,6 +117,6 @@ def test_the_mutex_is_exclusive_until_released_or_expired() -> None:
     assert mutex.try_acquire("b", "close", {}) is not None
     mutex.release("a", "open")
     assert mutex.try_acquire("b", "close", {}) is None
-    time.sleep(0.06)
-    assert mutex.try_acquire("c", "focus", {}) is None
+    # The unreleased hold expires on its own once the TTL passes.
+    assert wait_until(lambda: mutex.try_acquire("c", "focus", {}) is None, timeout_seconds=2.0)
     assert mutex.retry_after_ms() == 50

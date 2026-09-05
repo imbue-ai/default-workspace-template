@@ -27,6 +27,7 @@ from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 from loguru import logger
 from pydantic import Field
+from pydantic import PrivateAttr
 from pydantic import ValidationError
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileSystemEvent
@@ -133,12 +134,15 @@ def parse_instances_body(url: str, body: bytes) -> InstanceFetchOutcome:
 
 
 class _RegistryFileHandler(FileSystemEventHandler):
-    """Fires ``on_change`` on mutating events whose path is the registry file (the old agent manager's watcher)."""
+    """Fires ``on_change`` on mutating events whose path is the registry file.
 
-    def __init__(self, basename: str, on_change: Callable[[], None]) -> None:
-        super().__init__()
-        self._basename = basename
-        self._on_change = on_change
+    Subscribes to the mutation events rather than ``on_any_event``: watchdog's default inotify
+    mask includes the open and close-no-write events a read of the file raises, which would loop.
+    ``forward_port.py`` replaces the file atomically, so moves count too.
+    """
+
+    basename: str
+    on_change: Callable[[], None]
 
     def _maybe_fire(self, event: FileSystemEvent) -> None:
         if event.is_directory:
@@ -146,8 +150,8 @@ class _RegistryFileHandler(FileSystemEventHandler):
         paths = [event.src_path]
         if isinstance(event, FileMovedEvent):
             paths.append(event.dest_path)
-        if any(os.path.basename(str(path)) == self._basename for path in paths):
-            self._on_change()
+        if any(os.path.basename(str(path)) == self.basename for path in paths):
+            self.on_change()
 
     on_modified = _maybe_fire
     on_created = _maybe_fire
@@ -171,36 +175,42 @@ def serialize_apps(entries: Sequence[AppInventoryEntry]) -> list[dict[str, Any]]
     return [app_wire_json(entry) for entry in entries]
 
 
-class AppInventory:
+def _make_registry_file_handler(basename: str, on_change: Callable[[], None]) -> _RegistryFileHandler:
+    handler = _RegistryFileHandler()
+    handler.basename = basename
+    handler.on_change = on_change
+    return handler
+
+
+class AppInventory(MutableModel):
     """Holds the merged inventory and keeps it current; see the module docstring."""
 
-    def __init__(
-        self,
-        registry_path: Path,
-        broadcaster: WebSocketBroadcaster,
-        liveness_prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] = probe_all_app_liveness,
-        fetcher: InstanceFetcherInterface | None = None,
-        coalesce_seconds: float = NUDGE_COALESCE_SECONDS,
-        sweep_interval_seconds: float = LIVENESS_SWEEP_INTERVAL_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._registry_path = registry_path
-        self._broadcaster = broadcaster
-        self._liveness_prober = liveness_prober
-        self._fetcher = fetcher if fetcher is not None else HttpInstanceFetcher()
-        self._coalesce_seconds = coalesce_seconds
-        self._sweep_interval_seconds = sweep_interval_seconds
-        self._clock = clock
-        self._lock = threading.Lock()
-        self._entry_by_name: dict[str, AppInventoryEntry] = {}
-        self._registry_order: list[str] = []
-        self._pending_nudge_by_name: dict[str, threading.Timer] = {}
-        self._last_broadcast_json: str | None = None
-        self._observer: Any | None = None
-        self._sweep_stop = threading.Event()
-        self._sweep_wake = threading.Event()
-        self._sweep_thread: threading.Thread | None = None
-        self._removed_listeners: list[Callable[[list[Address]], None]] = []
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    registry_path: Path = Field(frozen=True, description="The apps.toml to read and watch")
+    broadcaster: WebSocketBroadcaster = Field(frozen=True, description="Where ``apps_updated`` goes")
+    liveness_prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] = Field(
+        default=probe_all_app_liveness, frozen=True, description="Derives is_running for every (name, program, url)"
+    )
+    fetcher: InstanceFetcherInterface = Field(
+        default_factory=HttpInstanceFetcher, frozen=True, description="Fetches one app's instance list"
+    )
+    coalesce_seconds: float = Field(default=NUDGE_COALESCE_SECONDS, frozen=True, description="The nudge window")
+    sweep_interval_seconds: float = Field(
+        default=LIVENESS_SWEEP_INTERVAL_SECONDS, frozen=True, description="How often the sweep runs"
+    )
+    clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="Monotonic seconds")
+
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _entry_by_name: dict[str, AppInventoryEntry] = PrivateAttr(default_factory=dict)
+    _registry_order: list[str] = PrivateAttr(default_factory=list)
+    _pending_nudge_by_name: dict[str, threading.Timer] = PrivateAttr(default_factory=dict)
+    _last_broadcast_json: str | None = PrivateAttr(default=None)
+    _observer: Any | None = PrivateAttr(default=None)
+    _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _sweep_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _sweep_thread: threading.Thread | None = PrivateAttr(default=None)
+    _removed_listeners: list[Callable[[list[Address]], None]] = PrivateAttr(default_factory=list)
 
     # ---------- lifecycle ----------
 
@@ -260,13 +270,13 @@ class AppInventory:
 
     def is_within_grace(self, entry: AppInventoryEntry, instance: InventoryInstance) -> bool:
         first_seen = entry.first_seen_at_by_key.get(instance.key)
-        return first_seen is not None and self._clock() - first_seen < NEW_INSTANCE_GRACE_SECONDS
+        return first_seen is not None and self.clock() - first_seen < NEW_INSTANCE_GRACE_SECONDS
 
     # ---------- the registry ----------
 
     def reload_registry(self) -> None:
         """Re-read the registry, keeping each known app's liveness and list across the read."""
-        rows = read_registry(self._registry_path)
+        rows = read_registry(self.registry_path)
         is_changed = False
         with self._lock:
             previous = dict(self._entry_by_name)
@@ -293,15 +303,17 @@ class AppInventory:
             self._broadcast_if_changed()
 
     def _start_registry_watch(self) -> None:
-        watch_dir = self._registry_path.parent
+        watch_dir = self.registry_path.parent
         watch_dir.mkdir(parents=True, exist_ok=True)
         observer = _Observer()
-        observer.schedule(_RegistryFileHandler(self._registry_path.name, self._on_registry_changed), str(watch_dir))
+        observer.schedule(
+            _make_registry_file_handler(self.registry_path.name, self._on_registry_changed), str(watch_dir)
+        )
         observer.daemon = True
         try:
             observer.start()
         except OSError as e:
-            logger.opt(exception=e).error("Failed to watch the app registry at {}", self._registry_path)
+            logger.opt(exception=e).error("Failed to watch the app registry at {}", self.registry_path)
             return
         self._observer = observer
 
@@ -321,7 +333,7 @@ class AppInventory:
                 (name, self._entry_by_name[name].row.program or "", str(self._entry_by_name[name].row.url))
                 for name in self._registry_order
             ]
-        is_running_by_name = self._liveness_prober(targets)
+        is_running_by_name = self.liveness_prober(targets)
         newly_running: list[str] = []
         with self._lock:
             for name, entry in self._entry_by_name.items():
@@ -358,7 +370,7 @@ class AppInventory:
                 return False
             if app_name in self._pending_nudge_by_name:
                 return True
-            timer = threading.Timer(self._coalesce_seconds, self._on_nudge_window_closed, args=(app_name,))
+            timer = threading.Timer(self.coalesce_seconds, self._on_nudge_window_closed, args=(app_name,))
             timer.daemon = True
             self._pending_nudge_by_name[app_name] = timer
         timer.start()
@@ -376,14 +388,14 @@ class AppInventory:
             return
         if not entry.is_running:
             return
-        outcome = self._fetcher.fetch(_instances_url(entry.row))
+        outcome = self.fetcher.fetch(_instances_url(entry.row))
         self._fold_fetch(app_name, outcome)
         self._broadcast_if_changed()
 
     def refetch_all(self) -> None:
         for entry in self.entries():
             if entry.row.instances and entry.is_running:
-                outcome = self._fetcher.fetch(_instances_url(entry.row))
+                outcome = self.fetcher.fetch(_instances_url(entry.row))
                 self._fold_fetch(str(entry.row.name), outcome)
         self._broadcast_if_changed()
 
@@ -396,7 +408,7 @@ class AppInventory:
             match outcome.kind:
                 case FetchOutcomeKind.LISTED:
                     listed = tuple(inventory_instance_from_record(record) for record in outcome.records)
-                    now = self._clock()
+                    now = self.clock()
                     listed_keys = {instance.key for instance in listed}
                     first_seen = {key: entry.first_seen_at_by_key.get(key, now) for key in listed_keys}
                     removed = [
@@ -424,7 +436,7 @@ class AppInventory:
         # The first pass waits one interval: the process is still bringing its server up when
         # ``start`` returns, and the chat row's list is served by that very server.
         while not self._sweep_stop.is_set():
-            self._sweep_wake.wait(timeout=self._sweep_interval_seconds)
+            self._sweep_wake.wait(timeout=self.sweep_interval_seconds)
             self._sweep_wake.clear()
             if self._sweep_stop.is_set():
                 return
@@ -446,4 +458,4 @@ class AppInventory:
             if encoded == self._last_broadcast_json:
                 return
             self._last_broadcast_json = encoded
-        self._broadcaster.broadcast_apps_updated(serialized)
+        self.broadcaster.broadcast_apps_updated(serialized)
