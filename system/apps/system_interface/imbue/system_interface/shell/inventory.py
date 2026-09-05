@@ -458,10 +458,22 @@ class AppInventory(MutableModel):
             self._sweep_wake.clear()
             if self._sweep_stop.is_set():
                 return
-            self.refresh_liveness()
-            if sweep_count % RECONCILE_EVERY_SWEEPS == 0:
-                self.refetch_all()
+            self.sweep_once(is_reconciling=sweep_count % RECONCILE_EVERY_SWEEPS == 0)
             sweep_count += 1
+
+    def sweep_once(self, is_reconciling: bool) -> None:
+        """One pass of the sweep: re-derive liveness and, when reconciling, refetch every running app's list.
+
+        A pass that raises (a state file the removed-instances listener cannot write, a registry
+        url the probe cannot parse) is logged and the next pass runs: the sweep is what keeps
+        every status current, so it must outlive one bad pass.
+        """
+        try:
+            self.refresh_liveness()
+            if is_reconciling:
+                self.refetch_all()
+        except (OSError, ValueError) as e:
+            logger.opt(exception=e).error("The app inventory sweep failed; the next pass will retry")
 
     # ---------- the broadcast ----------
 
