@@ -29,13 +29,8 @@ LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset(
     {"127.0.0.1", "::1", "localhost"}
 )
 
-# The shell routes this app posts to: the generic tab route of contracts.md section 5 (the shell
-# answers 404 until phase 7 of the model), and the terminal notify route it serves today.
+# The shell route this app posts to: the generic tab route of contracts.md section 5.
 TAB_INSTANCE_ROUTE_TEMPLATE: Final[str] = "/api/tabs/{tab_id}/instance"
-# CLEANUP: drop the forward to /api/terminals/notify (and this constant) in phase 7 of the
-# workspace app model, when the shell re-addresses tabs through /api/tabs/<tab_id>/instance
-# and its terminal_session broadcast is gone.
-TERMINAL_NOTIFY_ROUTE: Final[str] = "/api/terminals/notify"
 
 # The one status the library's routes never answer; the others come from the blueprint.
 HTTP_FORBIDDEN: Final[int] = 403
@@ -106,22 +101,6 @@ def build_tmux_hook_blueprint(
             {"app": app_name, "key": key},
         )
 
-    def forward_to_shell(
-        event: TmuxHookEvent, terminal_id: TerminalTabId | None
-    ) -> None:
-        # CLEANUP: delete this forward in phase 7 of the workspace app model; until then it
-        # keeps today's terminal_session broadcast, and with it live tab titles, working.
-        shell.post_json(
-            TERMINAL_NOTIFY_ROUTE,
-            {
-                "kind": event.kind.value,
-                "client_tty": event.client_tty,
-                "session_name": event.session_name,
-                "session_id": event.session_id,
-                "terminal_id": terminal_id,
-            },
-        )
-
     def handle_session_changed(event: TmuxHookEvent) -> None:
         try:
             client_tty = ClientTty(event.client_tty)
@@ -140,7 +119,6 @@ def build_tmux_hook_blueprint(
             )
             return
         rebind_tab(tab_id, event.session_name)
-        forward_to_shell(event, tab_id)
 
     def handle_session_renamed(event: TmuxHookEvent) -> None:
         for client in tmux.list_clients():
@@ -149,7 +127,6 @@ def build_tmux_hook_blueprint(
             tab_id = resolve_tab_id_for_tty(paths.clients_dir, client.client_tty)
             if tab_id is not None:
                 rebind_tab(tab_id, event.session_name)
-        forward_to_shell(event, None)
 
     @blueprint.post(TMUX_HOOK_PATH)
     def receive_tmux_hook() -> ResponseReturnValue:

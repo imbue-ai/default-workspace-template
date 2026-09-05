@@ -363,9 +363,9 @@ def wait_and_open_chat_tab(
         sleep(retry_seconds)
 
 
-def _try_open_chat_tab(repo_root: Path, chat_name: str) -> bool:
+def _try_open_chat_tab(repo_root: Path, agent_id: str) -> bool:
     result = subprocess.run(
-        [sys.executable, "system/scripts/layout.py", "open", f"chat:{chat_name}"],
+        [sys.executable, "system/scripts/layout.py", "open", f"app:chat?instance={agent_id}"],
         cwd=repo_root,
         capture_output=True,
     )
@@ -378,7 +378,7 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
         return (
             0
             if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.name),
+                lambda: _try_open_chat_tab(repo_root, args.agent_id),
                 deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
                 retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
             )
@@ -392,8 +392,8 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
             sys.executable,
             str(Path(__file__).resolve()),
             "surface-chat-tab",
-            "--name",
-            args.name,
+            "--agent-id",
+            args.agent_id,
             "--repo-root",
             str(repo_root),
             "--wait",
@@ -688,7 +688,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parents=[common],
     )
     surface_parser.add_argument(
-        "--name", required=True, help="This run's chat agent name ($MNGR_AGENT_NAME)."
+        "--agent-id", required=True, help="This run's chat agent id ($MNGR_AGENT_ID); a chat is addressed by it."
     )
     surface_parser.add_argument(
         "--wait",

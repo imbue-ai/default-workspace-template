@@ -428,7 +428,7 @@ def up(
         sys.stdout.write(f"{preview_service_name}\n")
         sys.stderr.write(
             f"preview up: open the '{preview_service_name}' service tab, e.g. "
-            f"`python3 system/scripts/layout.py open --layout desktop "
+            f"`python3 system/scripts/layout.py open "
             f"{preview_service_name}` (serving {cwd} "
             f"on port {inner_port}, wrapped on port {wrapper_port}). Run "
             f"'down --name {name}' to tear it down.\n"

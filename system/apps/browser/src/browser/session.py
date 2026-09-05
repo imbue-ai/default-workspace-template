@@ -2029,15 +2029,18 @@ class BrowserSessionManager(MutableModel):
         return first_free_numbered_browser_name(set(self._browsers) | persisted_names)
 
     def get(self, browser_id: str) -> LiveBrowser:
-        # Dict access raises KeyError for a missing/closed name; callers turn it into a 404.
-        return self._browsers[browser_id]
+        """The live browser of that name; an unknown or closed name raises UnknownBrowserError (a 404)."""
+        browser = self._browsers.get(browser_id)
+        if browser is None:
+            raise UnknownBrowserError(f"No browser {browser_id}")
+        return browser
 
     async def resolve(self, browser_id: str) -> LiveBrowser:
         """:meth:`get` as a coroutine, so the sync web layer can resolve a browser ON the
         loop via ``bridge.run`` -- race-free against a concurrent close popping the name --
         without defining its own ``async def``. There is no default browser: every browser
-        is created on demand and addressed by name; a closed/unknown name raises KeyError
-        (-> 404) until a later create mints it afresh."""
+        is created on demand and addressed by name; a closed/unknown name raises
+        UnknownBrowserError (-> 404) until a later create mints it afresh."""
         return self.get(browser_id)
 
     def has_browser(self, browser_id: str) -> bool:

@@ -417,7 +417,7 @@ an assumption:
   quiescence): re-run the baseline diff with `--refresh` and re-sync anything new.
 
 Open the migrated **apps** as tabs in default positions
-(`python3 system/scripts/layout.py open service:<name>`).
+(`python3 system/scripts/layout.py open app:<name>`).
 Do **not** open the recreated chats -- there can be many, and a wall of tabs is
 worse than none. Reproducing the old workspace's arrangement is out of scope;
 offer to lay things out if the user asks.

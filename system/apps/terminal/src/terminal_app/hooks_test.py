@@ -39,7 +39,7 @@ def test_resolve_tab_id_finds_the_file_holding_the_pty(
     )
 
 
-def test_session_changed_repoints_the_tab_forwards_with_the_resolved_id_and_nudges(
+def test_session_changed_repoints_the_tab_and_nudges(
     hook_client: FlaskClient,
     terminal_paths: TerminalPaths,
     recording_shell: RecordedShellRequests,
@@ -63,17 +63,6 @@ def test_session_changed_repoints_the_tab_forwards_with_the_resolved_id_and_nudg
         for received in recording_shell.requests
     ] == [
         ("POST", "/api/tabs/term-a/instance", {"app": "terminal", "key": "build"}),
-        (
-            "POST",
-            "/api/terminals/notify",
-            {
-                "kind": "session-changed",
-                "client_tty": "/dev/pts/3",
-                "session_name": "build",
-                "session_id": "$4",
-                "terminal_id": "term-a",
-            },
-        ),
     ]
     assert recording_nudger.nudge_count == 1
 
@@ -101,7 +90,7 @@ def test_session_changed_from_a_pty_no_tab_recorded_or_from_no_pty_only_nudges(
     assert recording_nudger.nudge_count == 1
 
 
-def test_session_changed_to_a_session_that_cannot_be_a_key_only_forwards(
+def test_session_changed_to_a_session_that_cannot_be_a_key_only_nudges(
     hook_client: FlaskClient,
     terminal_paths: TerminalPaths,
     recording_shell: RecordedShellRequests,
@@ -118,10 +107,10 @@ def test_session_changed_to_a_session_that_cannot_be_a_key_only_forwards(
         },
     )
 
-    assert recording_shell.paths() == [("POST", "/api/terminals/notify")]
+    assert recording_shell.paths() == []
 
 
-def test_session_renamed_repoints_every_attached_tab_forwards_once_and_nudges(
+def test_session_renamed_repoints_every_attached_tab_and_nudges(
     hook_client: FlaskClient,
     fake_tmux: FakeTmux,
     terminal_paths: TerminalPaths,
@@ -156,16 +145,9 @@ def test_session_renamed_repoints_every_attached_tab_forwards_once_and_nudges(
     assert recording_shell.paths() == [
         ("POST", "/api/tabs/term-a/instance"),
         ("POST", "/api/tabs/term-b/instance"),
-        ("POST", "/api/terminals/notify"),
     ]
     assert recording_shell.requests[0].body == {"app": "terminal", "key": "deploy"}
-    assert recording_shell.requests[2].body == {
-        "kind": "session-renamed",
-        "client_tty": "",
-        "session_name": "deploy",
-        "session_id": "$4",
-        "terminal_id": None,
-    }
+    assert recording_shell.requests[1].body == {"app": "terminal", "key": "deploy"}
     assert recording_nudger.nudge_count == 1
 
 
