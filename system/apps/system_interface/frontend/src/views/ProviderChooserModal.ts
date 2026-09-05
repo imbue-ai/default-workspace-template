@@ -809,16 +809,16 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         body = method === null ? null : stepsBody(current, method);
       }
 
-      // Which of the four sizes this screen is. A verdict is a sentence and gets the small
-      // panel; the lane list is the widest thing the flow shows. The body then sizes to its
-      // content within that, so a two-line confirmation is a two-line panel rather than the
-      // tallest screen's height filled out with white space.
-      // What the panel is showing, which decides its size.
+      // Which of the four heights this screen gets -- the width is one value for all of them.
+      // A verdict is a sentence and gets the shallow ceiling; the lane list is the tallest
+      // thing the flow shows. The body then sizes to its content within that, so a two-line
+      // confirmation is a two-line panel rather than the tallest screen's height filled out
+      // with white space.
       //
-      // A PENDING verdict deliberately keeps the size of the screen it interrupts. Checking a
-      // credential can take well under a second, and resizing down to the small status panel and
+      // A PENDING verdict deliberately keeps the height of the screen it interrupts. Checking a
+      // credential can take well under a second, and collapsing to the short status panel and
       // straight back up reads as a flinch. A settled verdict -- signed in, or failed -- is a
-      // screen the user will sit on, so that one takes the size it deserves.
+      // screen the user will sit on, so that one takes the height it deserves.
       const settledScreen: "status" | "menu" | "form" | "chooser" =
         current === null ? "chooser" : mode === "menu" ? "menu" : "form";
       const screen: "status" | "menu" | "form" | "chooser" = isPending
@@ -828,7 +828,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           : settledScreen;
       // The entry screen keeps a floor: the flow always returns there, and a panel that shrinks
       // under the pointer on the way back reads as something having gone wrong.
-      const size = css.panelSize(screen);
+      const bodyClass = css.panelBody(screen);
 
       return m(
         "div",
@@ -849,7 +849,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               "aria-label": "Pick your AI provider",
               "data-e2e": "provider-chooser",
             },
-            m("div", { class: `${css.PANEL} ${size.width}` }, [
+            m("div", { class: css.PANEL }, [
               m("div", { class: css.HEADER }, [
                 current !== null
                   ? m(
@@ -886,7 +886,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               m(
                 "div",
                 {
-                  class: size.body,
+                  class: bodyClass,
                   oncreate: (node: m.VnodeDOM) => {
                     if (current === null) (node.dom as HTMLElement).scrollTop = savedScroll;
                   },

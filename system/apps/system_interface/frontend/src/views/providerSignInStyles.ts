@@ -20,40 +20,42 @@
 import { menuCardClass } from "./components/menu";
 
 /** The workspace's modal-card chrome (see MODAL_CARD_CLASS in components/Modal.ts) minus its
- *  fixed width and padding -- the panel sizes per screen and pads its own regions. */
+ *  fixed width and padding -- the panel carries the width and pads its own regions. */
 export const MODAL =
   "overflow-hidden rounded-lg border border-default bg-surface shadow-overlay " +
   "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
-/** The panel's frame. Both dimensions come from `panelSize` below, per screen.
+/** The panel's frame.
+ *
+ *  ONE width for every screen, so drilling in and backing out never resizes the dialog
+ *  sideways -- 460px, near the shared modal card's 420 (MODAL_CARD_CLASS), and wearing its
+ *  `max-w-[90vw]` so a narrow viewport shrinks the panel rather than hanging it off the edge.
+ *  Only HEIGHT is per-screen now; see `panelBody`.
  *
  *  Height is CONTENT-driven, not set: the overlay centers rather than stretches, the body has
  *  no height of its own, and the footer sits outside the scroll region -- so the panel is
  *  exactly header + content + footer until the content passes its screen's cap, at which point
  *  the body scrolls and the panel stops growing. */
-export const PANEL = "flex flex-col transition-[width] duration-(--dur-base) ease-out";
+export const PANEL = "flex w-[460px] max-w-[90vw] flex-col";
 
-/** The body's shared part. Its ceiling comes from `panelSize`, because how much room a screen
+/** The body's shared part. Its ceiling comes from `panelBody`, because how much room a screen
  *  deserves is a fact about that screen. */
 const BODY = "overflow-y-auto overscroll-contain px-6 pb-5 pt-1";
 
-/** Each screen's width and its body's ceiling.
- *
- *  Four steps on one scale, so drilling in never feels like a new dialog: a confirmation is a
- *  sentence, a method list is a column of rows, a form is a column of fields, and the lane list
- *  is the widest and tallest thing the flow ever shows. The ceilings are per-screen for the
- *  same reason the widths are -- a method list has no business being as tall as the catalog.
+/** Each screen's body ceiling. Height is the axis that still varies: a confirmation is a
+ *  sentence, a method list is a column of rows, and the lane list is the tallest thing the
+ *  flow ever shows -- a method list has no business being as tall as the catalog.
  *
  *  Each is `min(px, vh)` so the tallest screen still fits a laptop; the entry screen's FLOOR is
  *  clamped the same way, or on a short viewport a floor above the ceiling would push the panel
  *  off the bottom of the screen. */
-export function panelSize(screen: "status" | "menu" | "form" | "chooser"): { width: string; body: string } {
+export function panelBody(screen: "status" | "menu" | "form" | "chooser"): string {
   return {
-    status: { width: "w-[440px]", body: `${BODY} max-h-[min(320px,60vh)]` },
-    menu: { width: "w-[600px]", body: `${BODY} max-h-[min(420px,62vh)]` },
-    form: { width: "w-[640px]", body: `${BODY} max-h-[min(480px,62vh)]` },
+    status: `${BODY} max-h-[min(320px,60vh)]`,
+    menu: `${BODY} max-h-[min(420px,62vh)]`,
+    form: `${BODY} max-h-[min(480px,62vh)]`,
     // The one screen the flow always returns to, so it also keeps a floor: a panel that shrinks
     // under the pointer on the way back reads as something having gone wrong.
-    chooser: { width: "w-[690px]", body: `${BODY} max-h-[min(560px,62vh)] min-h-[min(380px,45vh)]` },
+    chooser: `${BODY} max-h-[min(560px,62vh)] min-h-[min(380px,45vh)]`,
   }[screen];
 }
 
