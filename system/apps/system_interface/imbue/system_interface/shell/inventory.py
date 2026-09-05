@@ -320,7 +320,7 @@ class AppInventory(MutableModel):
         self.reload_registry()
         # A row that just appeared has no list yet; fetch it rather than wait for the sweep.
         for entry in self.entries():
-            if entry.row.instances and not entry.first_seen_at_by_key and not entry.instances:
+            if entry.row.instances and not entry.is_listed:
                 self.refetch_now(str(entry.row.name))
 
     # ---------- liveness ----------
