@@ -143,7 +143,7 @@ All routes below are on the shell (`MINDS_WORKSPACE_SERVER_URL`, default `http:/
 |---|---|---|---|
 | `POST /api/apps/<name>/changed` | any app, loopback only | empty | `204`; unknown name `404` |
 | `POST /api/tabs/<tab_id>/instance` | an app, loopback only | `{"app": "<name>", "key": "<key>"}` | `204`; unknown tab `404`; app mismatch with the tab's address `400` |
-| `POST /api/client-activity` | the chat app on a send; the shell itself on a view switch | `{"client_id", "device_kind", "view_id", "kind": "message" \| "view_switch", "app"?, "key"?, "text"?}` | `204` |
+| `POST /api/client-activity` | the chat app on a send; the shell itself on a view switch | `{"client_id", "device_kind", "view_id", "kind": "message" \| "view_switch", "app"?, "key"?, "text"?, "from_view_id"?}` | `204` |
 | `GET /api/health` | probes | | `200 {"status": "ok", "is_frontend_built": bool}` |
 
 Loopback-only routes reject non-loopback peers with `403`, as `/api/layout/broadcast` does today.
@@ -281,7 +281,7 @@ The shell inspects no payloads.
 
 Subcommands: `list`, `inspect`, `where`, `context`, `views`, `load`, `open`, `focus`, `split`, `close`, `move`, `rename`, `delete`, `maximize`, `restore`, `replace-url`, `refresh`, `shortcuts`, `shortcut set`, `shortcut remove`.
 
-- Every op takes `--client <id>` (default: the client that most recently messaged the requesting agent, per `context`; else every connected client) and `--view <name>` (switch that client first).
+- Every op takes `--client <id>` (default: the client that most recently messaged the requesting agent, per `context`; else every connected client) and `--view <name>` (switch that client first; the switch lands in phase 8 with `--client`, and until then `--view` names a view a connected client must already have active, an op with none being refused with 412).
 - `open <address> [--action <id>] [--param name=value]...`: `app:<name>` runs `--action` or the app's `default_shortcut.action` or its first declared action, in focus mode; `app:<name>?instance=<key>` docks an existing instance; a bare `https://` URL means `open app:browser --action new --param url=<url>`; a bare word that is an app name means `app:<word>`. (Phase 7 landed the address grammar, the relay verbs, and the shortcut subcommands; `--client`, `--action`, `--param`, and the bare-URL form land in phase 8, and until then `open app:<name>` of an app with instances runs its primary action through the connected client and a URL is refused with an error naming phase 8.)
 - `rename <address> <title>` and `delete <address>` call the shell's relay routes.
 - `replace-url <address> <path-or-url>` calls the relay's location route.
