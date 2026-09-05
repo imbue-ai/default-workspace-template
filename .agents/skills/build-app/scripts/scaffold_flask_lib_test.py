@@ -40,3 +40,9 @@ def test_the_display_name_limit_matches_the_library() -> None:
     # The scaffold runs in its own PEP 723 environment and cannot import the
     # library, so it carries its own copy of the limit.
     assert scaffold_flask_lib.MAX_DISPLAY_NAME_LENGTH == MAX_DISPLAY_NAME_LENGTH
+
+
+def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
+    source = scaffold_flask_lib._lib_runner("inbox-status", "inbox_status", "inbox status dashboard", 8081)
+    assert '"shell:location"' in source
+    assert "minds-location" not in source
