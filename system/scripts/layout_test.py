@@ -42,13 +42,22 @@ def _make_fake_post(
         ("files", "app:files"),
         ("app:files", "app:files"),
         ("app:terminal?instance=terminal-2", "app:terminal?instance=terminal-2"),
-        ("self", "self"),
     ],
 )
 def test_bare_names_expand_and_addresses_pass_through(
     spelling: str, address: str
 ) -> None:
     assert layout._resolve_address(spelling) == address
+
+
+def test_self_is_the_callers_chat_when_the_agent_id_is_known(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(layout.ENV_MNGR_AGENT_ID, "agent-42")
+    assert layout._resolve_address("self") == "app:chat?instance=agent-42"
+    # Without an agent id the frontend is the only side that can still make sense of it.
+    monkeypatch.delenv(layout.ENV_MNGR_AGENT_ID)
+    assert layout._resolve_address("self") == "self"
 
 
 @pytest.mark.parametrize(
@@ -245,6 +254,7 @@ def test_split_and_move_pass_the_anchor_and_direction_through(
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+    monkeypatch.setenv(layout.ENV_MNGR_AGENT_ID, "agent-42")
     assert (
         layout.main(
             [
@@ -288,7 +298,7 @@ def test_split_and_move_pass_the_anchor_and_direction_through(
             "move",
             {
                 "address": "app:files",
-                "relative_to": "self",
+                "relative_to": "app:chat?instance=agent-42",
                 "direction": "below",
                 "new_group": True,
                 "view": None,
