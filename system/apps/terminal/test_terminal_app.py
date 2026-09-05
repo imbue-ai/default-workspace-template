@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import urllib.parse
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -222,9 +223,12 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
         )
         assert created.status_code == 201, created.text
         assert created.json()["instance"]["key"] == "terminal-1"
+        # A create naming no workdir starts the shell where the app runs: the cwd it was
+        # spawned with, which is this test's.
+        default_directory = urllib.parse.quote(os.getcwd(), safe="")
         assert (
             created.json()["instance"]["url"]
-            == "/?arg=_&arg=session&arg=terminal-1&arg={tab}"
+            == f"/?arg=_&arg=session&arg=terminal-1&arg={{tab}}&arg={default_directory}"
         )
         assert [
             session["name"]
