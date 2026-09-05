@@ -2143,7 +2143,7 @@ function renderLiveContent(surface: LiveSurface): m.Children {
   return m(IframePanel, {
     url,
     isPageAtUrl: isPageAtListedUrl(url, surface.lastReportedPath),
-    onLoad: () => clearReportedPath(surface.key),
+    onNavigate: () => clearReportedPath(surface.key),
     title: instance.title,
     appName: app.name,
     address: params.address,

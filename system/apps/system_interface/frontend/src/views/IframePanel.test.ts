@@ -195,4 +195,44 @@ describe("IframePanel's frame url", () => {
     m.redraw.sync();
     expect(frame().getAttribute("src")).toBe("http://files.example/elsewhere/");
   });
+
+  it("forgets the page's reported path only when the shell itself navigates the frame", () => {
+    const onNavigate = vi.fn();
+    const attrs = { url: "http://files.example/", isPageAtUrl: false };
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    m.mount(root, {
+      view: () =>
+        m(IframePanel, {
+          url: attrs.url,
+          isPageAtUrl: attrs.isPageAtUrl,
+          onNavigate,
+          title: "Files 1",
+          appName: "files",
+          address: "app:files?instance=files-1",
+          contract,
+        }),
+    });
+    const frame = root.querySelector("iframe");
+    if (frame === null) throw new Error("the panel mounted no iframe");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+
+    // The page navigated itself and reported the path before its load: the load forgets nothing.
+    frame.dispatchEvent(new Event("load"));
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+
+    // The record caught up with the reported path: adopted without a reload.
+    attrs.url = "http://files.example/notes/";
+    attrs.isPageAtUrl = true;
+    m.redraw.sync();
+    expect(frame.getAttribute("src")).toBe("http://files.example/");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+
+    // An agent's replace-url names another path: the shell navigates and forgets the report.
+    attrs.url = "http://files.example/elsewhere/";
+    attrs.isPageAtUrl = false;
+    m.redraw.sync();
+    expect(frame.getAttribute("src")).toBe("http://files.example/elsewhere/");
+    expect(onNavigate).toHaveBeenCalledTimes(2);
+  });
 });

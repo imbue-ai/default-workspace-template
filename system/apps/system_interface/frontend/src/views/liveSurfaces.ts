@@ -167,7 +167,9 @@ export function recordReportedPath(key: LiveKey, path: string): void {
   if (surface !== undefined) surface.lastReportedPath = path;
 }
 
-/** A fresh page has reported nothing: the frame's load forgets the last report. */
+/** The shell pointed the frame elsewhere: whatever the page last reported was about the document
+ *  being left. A page's own navigation keeps its report, since the page posts it while loading,
+ *  before the frame's load event, and the record catching up with it must not reload the page. */
 export function clearReportedPath(key: LiveKey): void {
   const surface = surfacesByKey.get(key);
   if (surface !== undefined) surface.lastReportedPath = null;
