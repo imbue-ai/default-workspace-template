@@ -100,10 +100,10 @@ chat, joining whatever group already lives there if one is open. Pass
 What `open` does with each target:
 
 - `open app:docs` (a single-instance app, one you built without
-  `instances = true`): docks its one tab, or reports a no-op if it is already
-  open (use `focus` to bring it to the front).
+  `instances = true`): docks its one tab, or brings it to the front if it is
+  already open.
 - `open app:terminal?instance=terminal-2` (an instance address): docks that
-  instance, or reports a no-op if it is already open.
+  instance, or brings it to the front if it is already open.
 - `open terminal` (a bare app that has instances): runs the app's action
   through the app and creates a **fresh** instance every time, exactly like
   the rail's "New Terminal". The new instance's address is printed to

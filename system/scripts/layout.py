@@ -8,7 +8,7 @@ Subcommands:
     context                             Show each browser client's recent messages, device kind, and active view.
     views                               List the views (projects + Everything): tab sets and the clients on each.
     load <view>                         Switch the target client onto a view.
-    open <address|url>                  Dock an instance next to the caller's chat (a no-op when it is already open),
+    open <address|url>                  Dock an instance next to the caller's chat (focus it when it is already open),
                                         create one (--action / --param), or open a URL in a new browser.
     focus <address>                     Activate the named panel within its group.
     split <address> [...]               Add a panel relative to another panel; tabs into an adjacent group by default.
