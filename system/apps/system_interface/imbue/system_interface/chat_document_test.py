@@ -177,6 +177,10 @@ def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view(tmp_path:
     assert is_client_activity_reportable(framed)
     assert not is_client_activity_reportable(SendMessageRequest(message="hello", client_id="c1"))
     assert not is_client_activity_reportable(SendMessageRequest(message="hello", active_layout="alpha"))
+    # The shell's report needs the device kind too; without it the post would only be refused.
+    assert not is_client_activity_reportable(
+        SendMessageRequest(message="hello", client_id="c1", active_layout="alpha")
+    )
     assert client_activity_report(agent_info, framed) == {
         "client_id": "c1",
         "device_kind": "desktop",
