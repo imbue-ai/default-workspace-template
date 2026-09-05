@@ -210,6 +210,10 @@ def _empty_document(group_id: str, panel_id: str) -> dict[str, Any]:
     }
 
 
+def _holds_only_launchers(leaf: dict[str, Any]) -> bool:
+    return all(is_launcher_panel_id(view) for view in leaf["data"].get("views") or [])
+
+
 def _drop_launchers_from_leaf(document: dict[str, Any], leaf: dict[str, Any]) -> None:
     """A New Tab launcher is a question about an empty pane; docking into the pane answers it."""
     data = leaf["data"]
@@ -315,7 +319,8 @@ def _dock(document: dict[str, Any], panel_id: str, placement: Placement) -> dict
     else:
         anchor_path = _active_leaf_path(document)
     direction = placement.direction
-    if direction is None or direction is Direction.WITHIN:
+    # An anchor group holding nothing but launchers is an empty pane: it is filled, never split beside.
+    if direction is None or direction is Direction.WITHIN or _holds_only_launchers(_node_at(root, anchor_path)):
         target_path = anchor_path
     elif (
         not placement.is_new_group

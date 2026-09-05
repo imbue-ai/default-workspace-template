@@ -253,3 +253,29 @@ def test_move_relocates_a_panel_keeping_its_record_and_is_a_noop_within_its_own_
         move_panel(layout, "pa", _placement("pa", Direction.WITHIN))
     with pytest.raises(PanelNotFoundError):
         move_panel(layout, "nope", _placement("pb", Direction.WITHIN))
+
+
+def test_an_open_into_a_launcher_only_view_fills_the_pane_rather_than_splitting_beside_it() -> None:
+    """What the browser saves after the last tab is closed: one group holding a New Tab launcher."""
+    launcher_id = "new-tab-000000000000000f"
+    launcher_only = LayoutRecord(
+        dockview={
+            "grid": {
+                "root": {"type": "branch", "data": [_leaf("g1", launcher_id, size=1200)], "size": 800},
+                "width": 1200,
+                "height": 800,
+                "orientation": HORIZONTAL,
+            },
+            "panels": {launcher_id: {"id": launcher_id}},
+            "activeGroup": "g1",
+        },
+        tabs={},
+        device_kind=DeviceKind.DESKTOP,
+        updated_at=None,
+    )
+    # An agent's ``open`` with no chat docked: no anchor, to the right of the active group.
+    opened = add_panel(launcher_only, _TERMINAL_1, _TAB_A, "Terminal 1", _placement(None, Direction.RIGHT))
+    assert opened.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(opened.dockview)] == [[str(_TAB_A)]]
+    assert set(opened.dockview["panels"]) == {str(_TAB_A)}
+    assert opened.dockview["activeGroup"] == "g1"
