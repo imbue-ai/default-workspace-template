@@ -109,8 +109,11 @@ _RETIRED_PREFIXES = (
     "subagent:",
 )
 _EXTERNAL_URL_PREFIXES = ("https://", "http://")
-# A bare word that may stand in for ``app:<word>``: the registry's name alphabet.
-_APP_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+# A bare word that may stand in for ``app:<word>``: the registry's name rule
+# (``forward_port.py``'s ``NAME_PATTERN`` and ``MAX_SERVICE_NAME_LENGTH``), so a name the
+# registry could never hold is refused here rather than waited for.
+_APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
+_MAX_APP_NAME_LENGTH = 32
 _INSTANCE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # How long ``open`` / ``split`` wait for a freshly-registered app to appear before giving
@@ -204,12 +207,19 @@ def _normalize_address(value: str) -> str:
             f"{value!r} is an external URL; opening one lands in phase 8 of the workspace app model. "
             "Until then open it in a browser instance (app:browser?instance=<name>)"
         )
-    if _APP_NAME_PATTERN.fullmatch(value):
+    if _is_app_name(value):
         return f"{ADDRESS_SCHEME}{value}"
     _fail(
         f"{value!r} is not an address: expected app:<name>, app:<name>?instance=<key>, or a bare app name"
     )
     return value
+
+
+def _is_app_name(value: str) -> bool:
+    return (
+        len(value) <= _MAX_APP_NAME_LENGTH
+        and _APP_NAME_PATTERN.fullmatch(value) is not None
+    )
 
 
 def _address_parts(address: str) -> tuple[str, str | None]:
@@ -231,7 +241,7 @@ def _validate_address(address: str) -> None:
         )
     body = address[len(ADDRESS_SCHEME) :]
     name, separator, remainder = body.partition("?")
-    if not _APP_NAME_PATTERN.fullmatch(name):
+    if not _is_app_name(name):
         _fail(f"{address!r} names no app: an address starts with app:<name>")
     if separator:
         if not remainder.startswith(ADDRESS_INSTANCE_PARAMETER):
