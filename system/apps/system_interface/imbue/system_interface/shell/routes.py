@@ -771,10 +771,17 @@ def _op_load(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> Resp
     return jsonify({"ok": True, "view_id": view_id, "target_client_id": str(client_id)})
 
 
+# The keys that pick an op's target rather than describe the op; stripped before the op's own arguments are read.
+_TARGET_ARG_KEYS: Final[frozenset[str]] = frozenset({"view", "client"})
+
+
+def _op_only_args(args_raw: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in args_raw.items() if key not in _TARGET_ARG_KEYS}
+
+
 def _parse_document_arguments(args_raw: dict[str, Any]) -> DocumentOpArguments:
-    op_args = {key: value for key, value in args_raw.items() if key not in ("view", "client")}
     try:
-        return DocumentOpArguments.model_validate(op_args)
+        return DocumentOpArguments.model_validate(_op_only_args(args_raw))
     except ValidationError as e:
         raise LayoutOpError(f"bad op arguments: {e.errors()[0]['msg']}") from e
 
@@ -1048,7 +1055,7 @@ def _op_transient(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id
         refusal = _refuse_unregistered_address(shell, args_raw)
         if refusal is not None:
             return refusal
-    op_args = {key: value for key, value in args_raw.items() if key not in ("view", "client")}
+    op_args = _op_only_args(args_raw)
     target_client_id = None if _is_machine_wide(op, args_raw) else str(_require_client(shell, args_raw, agent_id))
     shell.broadcaster.broadcast_layout_op(op, op_args, requester_agent_id=agent_id, target_client_id=target_client_id)
     logger.info("layout op={} agent_id={} target_client={} args={}", op, agent_id, target_client_id, op_args)
