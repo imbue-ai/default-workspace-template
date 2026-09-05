@@ -101,14 +101,30 @@ def test_create_delegates_to_the_fleet_and_returns_the_new_browser() -> None:
     assert [snapshot.name for snapshot in fleet.browsers] == ["browser-1", "browser-2"]
 
 
-def test_create_refuses_other_actions_and_any_param() -> None:
+def test_create_refuses_other_actions_and_unknown_or_malformed_params() -> None:
     source, fleet = _source()
 
     with pytest.raises(UnknownActionError, match="unknown action 'open'"):
         source.create_instance(ActionId("open"), {})
-    with pytest.raises(InvalidParamsError, match="takes none"):
-        source.create_instance(NEW_ACTION_ID, {"url": "https://example.com"})
+    with pytest.raises(InvalidParamsError, match="takes only 'url'"):
+        source.create_instance(NEW_ACTION_ID, {"path": "/x"})
+    with pytest.raises(InvalidParamsError, match="absolute http or https URL"):
+        source.create_instance(NEW_ACTION_ID, {"url": "/relative"})
+    with pytest.raises(InvalidParamsError, match="absolute http or https URL"):
+        source.create_instance(NEW_ACTION_ID, {"url": "ftp://example.com/x"})
     assert fleet.browsers == []
+
+
+def test_create_starts_the_browser_on_the_requested_page() -> None:
+    source, fleet = _source()
+
+    record = source.create_instance(NEW_ACTION_ID, {"url": "https://example.com/docs"})
+
+    assert record.key == "browser-1"
+    assert fleet.start_urls == ["https://example.com/docs"]
+    # Without the param the browser opens on its home page.
+    source.create_instance(NEW_ACTION_ID, {})
+    assert fleet.start_urls == ["https://example.com/docs", None]
 
 
 def test_create_turns_a_fleet_refusal_into_a_conflict_with_its_detail() -> None:

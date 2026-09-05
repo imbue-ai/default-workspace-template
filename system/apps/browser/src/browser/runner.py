@@ -50,7 +50,9 @@ from types import FrameType
 from typing import Any
 
 from app_instances.blueprint import build_instances_blueprint
+from app_instances.errors import InvalidInstanceValueError
 from app_instances.nudge import ShellNudger, ThreadedNudger, shell_base_url
+from app_instances.primitives import AbsoluteHttpUrl
 from flask import Flask, Response, jsonify, request
 from flask_sock import Sock
 from loguru import logger
@@ -289,18 +291,27 @@ def create_browser() -> Response:
     background launch persists the manifest itself once the browser is ``running``. The
     only hard pre-check is that Chromium is installed (else nothing to launch -> 503).
 
-    Body ``{"name": "<name>"}`` is optional; omitted -> the first free ``browser-<N>``
-    is minted (the canonical form of the "Browser N" display name the UI derives).
-    Response ``{"name": <chosen-name>}``. Errors: 400 invalid name, 409 duplicate name or
+    Body ``{"name": "<name>", "url": "<start page>"}``, both optional; a missing name mints the
+    first free ``browser-<N>`` (the canonical form of the "Browser N" display name the UI
+    derives), a missing url opens the home page.
+    Response ``{"name": <chosen-name>}``. Errors: 400 invalid name or url, 409 duplicate name or
     fleet full, 503 Chromium installing. The attach URL is NOT returned here: the launch is
     still in flight, so the CLI polls for it (see ``fleet.cmd_new``)."""
     ready, reason = deferred_install_ready()
     if not ready:
         return _error({"error": reason}, 503)
-    name = _body().get("name")
+    body = _body()
+    name = body.get("name")
+    raw_url = body.get("url")
+    start_url: str | None = None
+    if raw_url is not None:
+        try:
+            start_url = str(AbsoluteHttpUrl(str(raw_url)))
+        except InvalidInstanceValueError as e:
+            return _error({"error": f"url: {e}"}, 400)
     try:
         # Returns fast: registers init + spawns the serialized launch on the loop.
-        session = bridge.run(manager.create(name), timeout=_ROUTE_TIMEOUT)
+        session = bridge.run(manager.create(name, start_url), timeout=_ROUTE_TIMEOUT)
     except InvalidBrowserNameError as e:
         return _error({"error": str(e)}, 400)
     except (DuplicateBrowserNameError, FleetFullError) as e:

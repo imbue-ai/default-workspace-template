@@ -12,3 +12,4 @@ mode = "focus"
 [[actions]]
 id = "new"
 label = "New Browser"
+params = [{name = "url", label = "Start page", required = false}]

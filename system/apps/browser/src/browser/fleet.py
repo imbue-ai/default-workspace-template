@@ -345,6 +345,8 @@ def cmd_new(args: argparse.Namespace) -> int:
     # `new` mints the first free `browser-<N>`; pass `new <name>` to choose one. A duplicate or invalid
     # name is rejected by the daemon (409 / 400) with a clear message.
     body: dict[str, Any] = {"name": args.name} if args.name else {}
+    if args.url:
+        body["url"] = args.url
     status, payload = _request("POST", "/browsers", body)
     if status == 200:
         # Surface the new browser's pane right away, so "open a new browser" visibly
@@ -575,6 +577,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ls.set_defaults(func=cmd_ls)
     p_new = sub.add_parser("new", help="Start a new browser and print its name. Pass an optional name to choose one.")
     p_new.add_argument("name", nargs="?", default=None, help="Optional name (lowercase letters/digits/dashes, e.g. 'research-1'); a duplicate is rejected.")
+    p_new.add_argument("--url", default=None, help="The page the new browser opens on (an absolute http(s) URL); the home page when omitted.")
     p_new.set_defaults(func=cmd_new)
 
     p_close = sub.add_parser("close", help="Close an entire browser (all tabs) and retire its name. For one tab, use `tab <name> close`.")

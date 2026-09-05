@@ -570,6 +570,9 @@ class LiveBrowser(MutableModel):
     # finishes/aborts first and observes _closed. None once create's launch isn't pending.
     _launch_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     _closed: bool = PrivateAttr(default=False)
+    # The tabs a create asked this browser to open on, reported as its tabs until Chromium is up
+    # and can be asked, so a daemon crash mid-launch restores the browser to that page.
+    _start_tabs: list[str] = PrivateAttr(default_factory=list)
     # Serializes direct browser actions + active-tab foregrounding (slow CDP work).
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
     # Serializes ALL ownership changes -- the single mutual-exclusion primitive.
@@ -911,7 +914,7 @@ class LiveBrowser(MutableModel):
         """The restorable tab URLs + the active tab's index, for the manifest. The
         checkpoint runs it every ~10s on the loop, which is fine (a light targets query)."""
         if self._cdp is None:
-            return [], 0
+            return list(self._start_tabs), 0
         try:
             targets = await self._cdp.page_targets()
         except Exception as e:  # noqa: BLE001
@@ -1951,8 +1954,8 @@ class BrowserSessionManager(MutableModel):
         task.add_done_callback(lambda _t: setattr(session, "_launch_task", None))
         return task
 
-    async def create(self, name: str | None = None) -> LiveBrowser:
-        """Start a new browser ('New browser' / fleet ``new``), optionally with a chosen name.
+    async def create(self, name: str | None = None, start_url: str | None = None) -> LiveBrowser:
+        """Start a new browser ('New browser' / fleet ``new``), optionally with a chosen name and a start page.
 
         Registers the browser in ``init`` under ``self._lock`` (cap check FIRST, then name
         resolution + insert -- all atomic) and RETURNS IMMEDIATELY, kicking the serialized
@@ -1998,13 +2001,16 @@ class BrowserSessionManager(MutableModel):
                         "pick another (a browser that has not been restored yet keeps its name)."
                     )
             session = self._register_init_locked(name)
+            if start_url is not None:
+                session._start_tabs = [start_url]
         # Persist the manifest NOW, while the browser is still ``init`` (finding [5]):
         # the Chromium launch is multi-second, and a daemon crash in that window would
-        # otherwise lose a browser the user just asked for. The init entry has no tabs
-        # (it restores to home); the launch's own post-running save then captures its
-        # real tabs. Fire-and-forget so create still returns immediately.
+        # otherwise lose a browser the user just asked for. The init entry carries the
+        # start page it was asked for (no tabs means it restores to home); the launch's
+        # own post-running save then captures its real tabs. Fire-and-forget so create
+        # still returns immediately.
         self._spawn_save()
-        self._spawn_launch(session)
+        self._spawn_launch(session, restore_tabs=[start_url] if start_url is not None else None)
         return session
 
     def _persisted_names(self) -> set[str]:
@@ -2096,9 +2102,9 @@ class BrowserSessionManager(MutableModel):
         """Every browser's name, lifecycle, and controller, by name; ON the loop so the read is race-free."""
         return [_snapshot_of(browser) for _, browser in sorted(self._browsers.items())]
 
-    async def create_snapshot(self) -> BrowserSnapshot:
+    async def create_snapshot(self, start_url: str | None = None) -> BrowserSnapshot:
         """:meth:`create` with a daemon-minted name, snapshotted ON the loop before the launch can flip anything."""
-        return _snapshot_of(await self.create(None))
+        return _snapshot_of(await self.create(None, start_url))
 
     async def navigate_browser(self, browser_id: str, url: str) -> None:
         """Navigate a browser's active tab (see :meth:`LiveBrowser.navigate_active_tab`), then
