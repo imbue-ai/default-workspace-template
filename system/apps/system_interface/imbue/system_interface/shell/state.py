@@ -14,6 +14,7 @@ from pydantic import PrivateAttr
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.shell.client_activity import ClientActivityLog
+from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import InventoryInstance
@@ -81,7 +82,9 @@ class ShellState(MutableModel):
         now = datetime.now(timezone.utc)
         for client_id in self.clients.prune_unseen(now):
             removed = self.layouts.delete_client_layouts(client_id)
-            logger.info("Pruned client {} unseen for 90 days ({} layout file(s))", client_id, removed)
+            logger.info(
+                "Pruned client {} unseen for {} days ({} layout file(s))", client_id, CLIENT_RETENTION.days, removed
+            )
 
     def _run_client_prune(self) -> None:
         while not self._prune_stop.wait(timeout=self.client_prune_interval_seconds):
