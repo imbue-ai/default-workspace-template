@@ -1262,7 +1262,7 @@ export function runAppAction(app: AppRecord, actionId: string, params: Record<st
  * A single-instance app's ``open`` docks its one tab (or focuses it). Anything else goes
  * through the shell's relay, which asks the app to create an instance and refetches its list
  * before answering, so the record can be docked at once. One run per (app, action) at a time:
- * a create takes seconds, and a second click used to start a second instance.
+ * a create takes seconds, and a second click while it runs must not start a second instance.
  *
  * CLEANUP (phase 10 of the workspace app model): the chat app's ``new`` is special-cased --
  * the account the launcher's provider picker chose rides as ``account_id``, and with nothing
