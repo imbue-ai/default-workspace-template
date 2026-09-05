@@ -77,8 +77,8 @@ creation is right but the scenario was wrong.
 
 ## Stage 5: Review gates
 
-Run the review gates per `harden-creation.md`, before the final gate report, so
-the user sees a single report that already reflects the verdicts.
+Ensure all review gates have been run per `harden-creation.md`, before the final gate
+report, so the user sees a single report that already reflects the verdicts.
 
 ## Stage 6: Final gate, then commit and hand off
 
