@@ -144,8 +144,10 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_CONFLICT = 3
 
-# Sentinel the frontend resolves to the caller's own chat panel. Valid as a
-# ``--relative-to`` value for ``split`` / ``move`` and as a target for any dock op.
+# The caller's own chat. Valid as a ``--relative-to`` value for ``split`` / ``move`` and as
+# a target for any dock op; ``_resolve_address`` turns it into the chat's address from
+# ``MNGR_AGENT_ID`` (the key the frontend resolves it to as well), and passes it through
+# unresolved when that is unset, which the frontend reads as the active panel for an anchor.
 _SELF_REF = "self"
 
 
@@ -260,6 +262,8 @@ def _validate_address(address: str) -> None:
 
 
 def _resolve_address(value: str) -> str:
+    if value == _SELF_REF and _mngr_agent_id():
+        value = f"{ADDRESS_SCHEME}chat?{ADDRESS_INSTANCE_PARAMETER}{_mngr_agent_id()}"
     address = _normalize_address(value)
     _validate_address(address)
     return address
@@ -872,8 +876,9 @@ def _cmd_where(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
     if address == _SELF_REF:
         sys.stderr.write(
-            "error: 'self' is not resolvable from the CLI; pass your chat's address "
-            "(app:chat?instance=$MNGR_AGENT_ID) or use ``inspect`` to see every address\n"
+            "error: 'self' is your own chat, which needs MNGR_AGENT_ID in the environment; "
+            "pass the chat's address (app:chat?instance=<agent id>) or use ``inspect`` to "
+            "see every address\n"
         )
         return EXIT_ERROR
     layout = _fetch_layout(args.view)
