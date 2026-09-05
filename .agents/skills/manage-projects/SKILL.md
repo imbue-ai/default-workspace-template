@@ -121,9 +121,10 @@ its manifest (the chat's "New Chat" in new mode; the terminal's "New
 Terminal", the files app's "New File Viewer", and the browser's "New Browser"
 in focus mode). Each row has a **mode**: `focus` goes to the app's most recent
 tab in the view (running the action only when it has none); `new` always runs
-the action. Everything's rail is fixed: every app's primary action (its
-`default_shortcut` action, else its first declared action, else `open`), in
-registry order.
+the action. Everything's rail is fixed: every app's primary action, in registry order
+(its `default_shortcut` action, else its first declared action; a
+single-instance app's synthesized `open`; an app with instances that declares
+no action has no row).
 
 ```bash
 # A view's rail: app, action, mode.
