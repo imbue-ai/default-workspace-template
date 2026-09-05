@@ -1180,20 +1180,36 @@ def _resolve_project_view(
     return None
 
 
+def _primary_action_id(app: dict[str, Any]) -> str | None:
+    """The action an app's rail row runs, as the shell picks it: its ``default_shortcut`` action
+    when declared, else its first declared action, else the synthesized ``open`` of a
+    single-instance app; None for an app with instances that declares no action."""
+    if not bool(app.get("instances", False)):
+        return "open"
+    actions = app.get("actions")
+    action_ids = (
+        [str(action.get("id")) for action in actions if hasattr(action, "get")]
+        if isinstance(actions, list)
+        else []
+    )
+    default_shortcut = app.get("default_shortcut")
+    if hasattr(default_shortcut, "get"):
+        default_action = str(default_shortcut.get("action", ""))
+        if default_action in action_ids:
+            return default_action
+    return action_ids[0] if action_ids else None
+
+
 def _everything_shortcut_rows() -> list[dict[str, Any]]:
-    """Everything's rail: every registered app's actions, in registry order (the shell synthesizes ``open`` for single-instance apps)."""
+    """Everything's rail: every registered app's primary action, in registry order, in focus mode."""
     rows: list[dict[str, Any]] = []
     for app in _read_registry_rows(_apps_file()):
         if bool(app.get("internal", False)):
             continue
-        actions = app.get("actions") if bool(app.get("instances", False)) else None
-        action_ids = (
-            [str(action.get("id")) for action in actions]
-            if isinstance(actions, list)
-            else ["open"]
-        )
-        for action_id in action_ids:
-            rows.append({"app": str(app["name"]), "action": action_id, "mode": "focus"})
+        action_id = _primary_action_id(app)
+        if action_id is None:
+            continue
+        rows.append({"app": str(app["name"]), "action": action_id, "mode": "focus"})
     return rows
 
 
@@ -1218,7 +1234,7 @@ def _project_for_shortcut_write(view_name: str | None) -> str | None:
     project_id, project = resolved
     if project is None:
         sys.stderr.write(
-            "error: Everything's rail is fixed (every app's actions); pass --view <project name>\n"
+            "error: Everything's rail is fixed (every app's primary action); pass --view <project name>\n"
         )
         return None
     return project_id

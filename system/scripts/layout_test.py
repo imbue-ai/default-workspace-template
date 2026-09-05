@@ -597,6 +597,9 @@ def test_shortcuts_list_a_projects_rail_and_everythings_fixed_rows(
         "view": "research",
         "shortcuts": [{"app": "terminal", "action": "new", "mode": "new"}],
     }
+    # One row per app, running its primary action: the synthesized ``open`` of a
+    # single-instance app, the one action of a one-action app, and the ``default_shortcut``
+    # action of an app declaring several (the chat's ``new``, not its first-declared ``subagent``).
     assert layout.main(["shortcuts", "--view", "everything", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["shortcuts"] == [
         {"app": "files", "action": "open", "mode": "focus"},

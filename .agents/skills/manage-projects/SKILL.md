@@ -119,8 +119,9 @@ rail order. A new project is seeded with every app's `default_shortcut` from
 its manifest (the chat's "New Chat", the terminal's "New terminal", the files
 app's "Open"). Each row has a **mode**: `focus` goes to the app's most recent
 tab in the view (running the action only when it has none); `new` always runs
-the action. Everything's rail is fixed: every app's actions, in registry
-order.
+the action. Everything's rail is fixed: every app's primary action (its
+`default_shortcut` action, else its first declared action, else `open`), in
+registry order.
 
 ```bash
 # A view's rail: app, action, mode.
