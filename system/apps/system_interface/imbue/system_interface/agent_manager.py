@@ -408,11 +408,11 @@ def _assert_special_kinds_declared(harness: HarnessType, events: list[dict[str, 
 
 
 class AgentManager:
-    """Manages agent lifecycle detection, app-registry watching, and agent creation.
+    """Manages agent lifecycle detection, per-agent activity and model tracking, and agent creation.
 
     Runs mngr observe as a subprocess for event-driven agent lifecycle detection.
-    Watches data/.state/apps.toml for each agent.
-    Handles agent creation via local mngr create calls.
+    Handles agent creation via local mngr create calls, and nudges the shell whenever
+    the agent list (the chat app's instance list) changes.
     """
 
     _broadcaster: WebSocketBroadcaster
@@ -422,7 +422,7 @@ class AgentManager:
     # stream: an AGENTS_FULL_STATE snapshot rebuilds it wholesale, an AGENT_STATE
     # upserts one agent, and an AGENT_REMOVED drops one. ``_agents`` /
     # ``_match_by_agent_id`` are rebuilt from it after each event, and its
-    # before/after key diff drives the per-agent membership side-effects.
+    # before/after key diff starts and stops the per-agent tracking.
     _agent_details_by_id: dict[str, AgentDetails]
     _agents: dict[str, AgentStateItem]
     # The session sweep's lifecycle: ``_session_sweep_stop`` ends the loop.
@@ -886,9 +886,8 @@ class AgentManager:
     def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
         """Give a chat agent the name the user just typed, keeping its name pair matched.
 
-        ``agent_ref`` is what a ``chat:`` member ref carries -- an agent id from
-        every UI surface, or an agent name from the agent-facing layout listing --
-        so both are resolved here. The display name's canonical form becomes the
+        ``agent_ref`` is an agent id (what the chat app's rename route and the
+        instance key carry) or an agent name, so both are resolved here. The display name's canonical form becomes the
         agent's true name and the typed form its ``display_name`` label, the same
         pairing ``mngr create`` establishes. When the canonical form is already
         the agent's name (a display-only change, e.g. "chat 2" -> "Chat 2"),
@@ -1109,7 +1108,6 @@ class AgentManager:
         requested_name: str,
         extra_role_templates: tuple[str, ...] = (),
         project_id: str = "",
-        extra_taken_names: tuple[str, ...] = (),
         account_id: str = "",
     ) -> CreatedChatAgent:
         """Create a chat agent in the primary agent's work dir on the given harness.
@@ -1120,9 +1118,6 @@ class AgentManager:
         first free "<word> N" for the harness ("Chat 1", "Codex 2", ...) here,
         server-side, under the same lock that registers the in-flight create --
         so two simultaneous creates cannot both mint "Chat 1".
-        ``extra_taken_names`` widens the taken set beyond the machine's agents
-        (the caller passes the member-title store's chosen names, so a terminal
-        someone renamed to "Chat 2" blocks that slot too).
 
         The harness comes from the account, not from the caller: it is the name of the
         create template stacked on top, and the `chat` role template supplies everything
@@ -1169,7 +1164,7 @@ class AgentManager:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
 
-            taken_names = self._taken_names_locked() + list(extra_taken_names)
+            taken_names = self._taken_names_locked()
             if explicit_name:
                 if is_name_conflict(explicit_name, taken_names):
                     raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
@@ -1568,9 +1563,9 @@ class AgentManager:
         agent, and ``AGENT_REMOVED`` drops one. ``self._agents`` and
         ``self._match_by_agent_id`` are then rebuilt from the folded view -- now
         carrying each agent's real lifecycle ``state`` (``AgentDetails.state``)
-        rather than a hardcoded literal -- while the before/after key diff drives
-        per-agent resource start/stop (app watcher, activity tracking) and assist
-        auto-open, exactly as the discovery membership delta used to.
+        rather than a hardcoded literal -- while the before/after key diff starts
+        and stops the per-agent tracking (activity, model choice, the resident
+        watcher), exactly as the discovery membership delta used to.
         """
         with self._lock:
             before_details = dict(self._agent_details_by_id)

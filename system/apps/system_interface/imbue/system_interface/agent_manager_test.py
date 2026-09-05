@@ -1011,12 +1011,12 @@ def test_create_chat_agent_mints_the_first_free_numbered_name(
 ) -> None:
     """An empty requested name allocates "Chat N" server-side, filling gaps.
 
-    "Chat 1" is held by a live agent's display label and "Chat 3" by a chosen
-    member title the endpoint passes through, so the mint lands on "Chat 2" --
-    and its canonical form is the agent's name.
+    "Chat 1" and "Chat 3" are held by live agents' display labels, so the mint
+    lands on "Chat 2" -- and its canonical form is the agent's name.
     """
     _tracked_chat(agent_manager, "agent-1", "Chat-1", display_name="Chat 1")
-    created = agent_manager.create_chat_agent("", extra_taken_names=("Chat 3",))
+    _tracked_chat(agent_manager, "agent-3", "Chat-3", display_name="Chat 3")
+    created = agent_manager.create_chat_agent("")
     agent_manager.stop()
 
     assert created.display_name == "Chat 2"
