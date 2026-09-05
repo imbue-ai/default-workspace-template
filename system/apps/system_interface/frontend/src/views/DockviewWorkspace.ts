@@ -1557,7 +1557,8 @@ async function applyLayout(
     panelsPrunedByRestore = unlisted;
     try {
       dv.fromJSON(layout.dockview);
-    } catch {
+    } catch (e) {
+      console.warn(`[si] could not restore the saved arrangement of ${mountedViewId ?? "?"}; starting it over`, e);
       panelParams.clear();
       dv.clear();
     }
