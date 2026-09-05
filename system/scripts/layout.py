@@ -661,18 +661,28 @@ def _fetch_inventory() -> dict[str, Any] | None:
     return body
 
 
+def _view_id_for_name(view_name: str, projects: list[dict[str, Any]]) -> str | None:
+    """The view a ``--view`` value names, as the shell matches it: ``Everything`` (any case), else the
+    project whose name matches case-insensitively or whose id matches exactly; None for none."""
+    if view_name.strip().lower() == EVERYTHING_VIEW_ID:
+        return EVERYTHING_VIEW_ID
+    wanted = view_name.strip().lower()
+    for project in projects:
+        if (
+            project.get("id") == view_name
+            or str(project.get("name", "")).strip().lower() == wanted
+        ):
+            return str(project.get("id"))
+    return None
+
+
 def _resolve_view_id(view: str | None, inventory: dict[str, Any]) -> str | None:
     """A ``--view`` name or id as a view id; None with an error printed when it names nothing."""
     if view is None:
         return None
-    if view.strip().lower() == EVERYTHING_VIEW_ID:
-        return EVERYTHING_VIEW_ID
-    for project in inventory.get("projects", []) or []:
-        if (
-            project.get("id") == view
-            or str(project.get("name", "")).strip().lower() == view.strip().lower()
-        ):
-            return str(project.get("id"))
+    view_id = _view_id_for_name(view, inventory.get("projects", []) or [])
+    if view_id is not None:
+        return view_id
     known = ", ".join(
         str(project.get("name")) for project in inventory.get("projects", []) or []
     )
@@ -1136,15 +1146,13 @@ def _resolve_project_view(
                 "error: no connected client to take the view from; pass --view <project name>\n"
             )
             return None
-    if view_name.strip().lower() == EVERYTHING_VIEW_ID:
+    view_id = _view_id_for_name(view_name, projects)
+    if view_id == EVERYTHING_VIEW_ID:
         return EVERYTHING_VIEW_ID, None
-    wanted = view_name.strip().lower()
-    for project in projects:
-        if (
-            str(project.get("name", "")).strip().lower() == wanted
-            or project.get("id") == view_name
-        ):
-            return str(project.get("id")), project
+    if view_id is not None:
+        for project in projects:
+            if project.get("id") == view_id:
+                return view_id, project
     known = ", ".join(repr(str(p.get("name", p.get("id", "?")))) for p in projects)
     sys.stderr.write(
         f"error: no project named {view_name!r} (projects: {known or '<none>'}, or 'Everything')\n"
