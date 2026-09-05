@@ -224,6 +224,10 @@ let baseUpdatedAt: string | null = null;
 // A pushed update that arrived while the user was dragging a tab or editing a title waits here
 // until the gesture ends.
 let isLayoutRefreshPending = false;
+// Bumped by every refresh of the mounted view's arrangement from the shell. A refresh whose fetch
+// resolves after a later one started is dropped: the later one read the newer stored arrangement,
+// and applying the earlier answer over it would show a stale arrangement under a stale stamp.
+let layoutRefreshSequence = 0;
 // How many tab titles are being edited right now (a pushed layout waits for the edit to end).
 let activeTitleEdits = 0;
 // Bumped by every mount of a view, the initial one included. A mount whose generation has moved
@@ -1546,6 +1550,7 @@ async function refreshMountedLayoutFromServer(): Promise<void> {
   }
   isLayoutRefreshPending = false;
   const generation = viewMountGeneration;
+  const sequence = ++layoutRefreshSequence;
   let layout: LayoutRecord;
   try {
     layout = await fetchLayout(viewId, getClientId());
@@ -1553,7 +1558,7 @@ async function refreshMountedLayoutFromServer(): Promise<void> {
     console.warn(`[si] could not fetch the pushed layout of ${viewId}`, e);
     return;
   }
-  if (generation !== viewMountGeneration || viewId !== mountedViewId) return;
+  if (generation !== viewMountGeneration || viewId !== mountedViewId || sequence !== layoutRefreshSequence) return;
   // Already applied (this window's own save, or an update that carried nothing new).
   if (layout.updated_at === baseUpdatedAt) return;
   baseUpdatedAt = layout.updated_at;
