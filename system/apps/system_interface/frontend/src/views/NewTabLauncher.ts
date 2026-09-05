@@ -14,6 +14,7 @@
  */
 
 import m from "mithril";
+import { CHAT_APP_NAME, CHAT_NEW_ACTION } from "../models/chatApp";
 import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
 import { serviceIconMarkup } from "./appIcon";
 import { getAccounts, getSelectedAccount, openProviderChooser, selectAccount } from "../models/Providers";
@@ -56,8 +57,6 @@ const SECTION_HEADING_CLASS = "text-text-faint text-[11px] font-semibold trackin
 
 // The chat app's ``new`` action takes the provider account the picker beside its tile chose.
 // CLEANUP: phase 10 of the workspace app model moves the picker into the chat app's own page.
-const CHAT_APP_NAME = "chat";
-const CHAT_NEW_ACTION = "new";
 
 /**
  * Assemble the launcher's tables. A project's "In this project" table IS its tab set, in tab

@@ -16,7 +16,7 @@
 
 import m from "mithril";
 import type { AppAction, AppRecord } from "../models/Inventory";
-import { appStoppedDetail, getOpenableApps } from "../models/Inventory";
+import { appStoppedDetail, getOpenableApps, primaryActionForApp } from "../models/Inventory";
 import { appIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
@@ -41,20 +41,11 @@ export interface PickableAction {
   action: AppAction;
 }
 
-/** The action an app's row runs: its declared default shortcut's action, else its first action. */
-export function primaryAction(app: AppRecord): AppAction | null {
-  if (app.default_shortcut !== null) {
-    const declared = app.actions.find((action) => action.id === app.default_shortcut?.action);
-    if (declared !== undefined) return declared;
-  }
-  return app.actions[0] ?? null;
-}
-
 /** Every app the popover can offer with its primary action, ordered by display name. */
 export function pickableActions(apps: readonly AppRecord[]): PickableAction[] {
   return apps
     .flatMap((app) => {
-      const action = primaryAction(app);
+      const action = primaryActionForApp(app);
       return action === null ? [] : [{ app, action }];
     })
     .sort((a, b) => a.app.display_name.localeCompare(b.app.display_name));

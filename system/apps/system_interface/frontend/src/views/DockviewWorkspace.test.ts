@@ -2,15 +2,7 @@ import "../testing/dom";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  actionKey,
-  equalTabWidth,
-  isTitleTruncated,
-  mostRecentAddressOfApp,
-  primaryActionForApp,
-} from "./DockviewWorkspace";
-import type { AppRecord } from "../models/Inventory";
-import { appRecord } from "../testing/records";
+import { actionKey, equalTabWidth, isTitleTruncated, mostRecentAddressOfApp } from "./DockviewWorkspace";
 
 describe("equalTabWidth", () => {
   it("shares what is left of a strip once the '+' is accounted for", () => {
@@ -82,27 +74,7 @@ describe("mostRecentAddressOfApp", () => {
   });
 });
 
-describe("primaryActionForApp", () => {
-  function app(overrides: Partial<AppRecord>): AppRecord {
-    return appRecord("chat", {
-      url: "http://127.0.0.1:8000",
-      program: "",
-      critical: true,
-      actions: [
-        { id: "new", label: "New Chat" },
-        { id: "subagent", label: "Open subagent" },
-      ],
-      ...overrides,
-    });
-  }
-
-  it("takes the declared default shortcut's action, else the first action, else nothing", () => {
-    expect(primaryActionForApp(app({ default_shortcut: { action: "subagent", mode: "new" } }))?.id).toBe("subagent");
-    expect(primaryActionForApp(app({}))?.id).toBe("new");
-    expect(primaryActionForApp(app({ default_shortcut: { action: "gone", mode: "new" } }))?.id).toBe("new");
-    expect(primaryActionForApp(app({ actions: [] }))).toBeNull();
-  });
-
+describe("actionKey", () => {
   it("keys an in-flight action by app and action", () => {
     expect(actionKey("chat", "new")).toBe("chat:new");
   });

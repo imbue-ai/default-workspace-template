@@ -95,8 +95,8 @@ import {
   parseAddress,
   removeAppsUpdatedListener,
   reportClientState,
+  primaryActionForApp,
   whenAppsLoaded,
-  type AppAction,
   type AppRecord,
   type LayoutOpEvent,
   type ProjectInfo,
@@ -105,6 +105,7 @@ import {
   type ShortcutMode,
   type TabReboundEvent,
 } from "../models/Inventory";
+import { CHAT_APP_NAME, CHAT_NEW_ACTION } from "../models/chatApp";
 import { getActiveProjectId, getClientId, getStoredProjectId, setActiveProjectId } from "../models/ClientIdentity";
 import { areAccountsLoaded, getAccounts, loadAccounts, openProviderChooser } from "../models/Providers";
 import {
@@ -142,8 +143,6 @@ const LAUNCHER_COMPONENT = "launcher";
 // its ``new`` action takes the provider account the launcher's picker chose, and is diverted to
 // the provider chooser when nothing is signed in; and ``self`` in an agent's layout op is the
 // requester's own chat instance.
-const CHAT_APP_NAME = "chat";
-const CHAT_NEW_ACTION = "new";
 
 // Second paragraph of the delete confirmation: deleting is not a louder Close.
 const DELETE_INSTANCE_DETAILS =
@@ -1157,17 +1156,6 @@ function refreshPanelContent(panelId: string): void {
 }
 
 // ---------- Shortcuts ----------
-
-/** The action an app's rail row and launcher tile run: its declared default shortcut's action
- *  when the app declares one, else its first action, else the synthesized ``open``. Null for an
- *  app with instances that declares no action at all. */
-export function primaryActionForApp(app: AppRecord): AppAction | null {
-  if (app.default_shortcut !== null) {
-    const declared = app.actions.find((action) => action.id === app.default_shortcut?.action);
-    if (declared !== undefined) return declared;
-  }
-  return app.actions[0] ?? null;
-}
 
 /** Epoch milliseconds each open panel's address was last the active one, for the MRU rule. */
 function lastFocusedMsByAddress(): Record<string, number> {

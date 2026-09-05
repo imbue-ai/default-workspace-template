@@ -9,7 +9,9 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
 import { postJson } from "../models/http";
+import { CHAT_APP_NAME } from "../models/chatApp";
 import { adoptClientIdentity } from "../models/ClientIdentity";
+import { addressFor } from "../models/Inventory";
 import { createChatAgent } from "./models/AgentManager";
 import type { CreatedChatAgent } from "./models/AgentManager";
 import { isEverythingView } from "../models/Projects";
@@ -17,11 +19,8 @@ import { connectToShell } from "../app_contract";
 import type { ShellConnection, ShellHandshake } from "../app_contract";
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
 
-// The registered name of the chat app, which every chat address names.
-export const CHAT_APP_NAME = "chat";
-
 export function chatAddress(instanceKey: string): string {
-  return `app:${CHAT_APP_NAME}?instance=${instanceKey}`;
+  return addressFor(CHAT_APP_NAME, instanceKey);
 }
 
 let connection: ShellConnection | null = null;
