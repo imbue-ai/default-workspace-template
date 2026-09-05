@@ -9,11 +9,8 @@ from app_instances.testing import StubInstanceSource
 from flask import Flask
 from flask.testing import FlaskClient
 
-from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import state_of
-from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import Address
@@ -24,46 +21,23 @@ from imbue.system_interface.shell.primitives import ViewId
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
 from imbue.system_interface.shell.testing import TEST_NOW
+from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import layout_showing
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.testing import FakeSupervisorServer
-from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-_TERMINAL_URL = "http://localhost:7681"
 _TERMINAL_1 = Address("app:terminal?instance=terminal-1")
 _TERMINAL_2 = Address("app:terminal?instance=terminal-2")
 _FILES = Address("app:files")
 _TAB = TabId("tab-000000000000000a")
 _NOT_LOOPBACK = {"REMOTE_ADDR": "10.0.0.7"}
-
-
-def _registry(tmp_path: Path, *extra_rows: str) -> Path:
-    return write_registry(
-        tmp_path / "apps.toml",
-        registry_row_toml(
-            "terminal",
-            _TERMINAL_URL,
-            True,
-            program="terminal",
-            actions=[("new", "New terminal")],
-            default_shortcut=("new", "new"),
-        ),
-        registry_row_toml("files", "http://localhost:7000", program="files", default_shortcut=("open", "focus")),
-        *extra_rows,
-    )
-
-
-def _app(tmp_path: Path, inventory: AppInventory, broadcaster: WebSocketBroadcaster) -> Flask:
-    """The shell app over ``inventory``; the agent manager shares the inventory's broadcaster, as in production."""
-    state = build_test_state(
-        agent_manager=AgentManager.build(broadcaster), shell_state_directory=tmp_path / "state", inventory=inventory
-    )
-    return create_application(state)
 
 
 def _shell(app: Flask) -> ShellState:
@@ -74,25 +48,6 @@ def _register_client(app: Flask, client_id: str, view_id: str) -> "queue.Queue[s
     client_queue = _shell(app).broadcaster.register()
     _shell(app).broadcaster.set_client_info(client_queue, client_id, view_id, "desktop")
     return client_queue
-
-
-@pytest.fixture
-def fetcher() -> FakeInstanceFetcher:
-    fetcher = FakeInstanceFetcher()
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1", "Terminal 1"))
-    return fetcher
-
-
-@pytest.fixture
-def app(tmp_path: Path, broadcaster: WebSocketBroadcaster, fetcher: FakeInstanceFetcher) -> Flask:
-    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher)
-    inventory.refetch_now("terminal")
-    return _app(tmp_path, inventory, broadcaster)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    return app.test_client()
 
 
 # ---------- section 5 ----------
@@ -114,7 +69,7 @@ def test_a_tab_report_rebinds_the_tab_everywhere_and_files_it_in_the_project(
     shell.projects.create_project("Alpha", "#111111", 0, ())
     shell.layouts.save_layout("alpha", "c1", layout_showing(_TERMINAL_1), TEST_NOW)
     shell.layouts.save_layout("everything", "c2", layout_showing(_TERMINAL_1), TEST_NOW)
-    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"), instance_record("terminal-2"))
+    fetcher.list(TEST_TERMINAL_URL, instance_record("terminal-1"), instance_record("terminal-2"))
     client_queue = _register_client(app, "c1", "alpha")
 
     response = client.post("/api/tabs/tab-0000000000000000/instance", json={"app": "terminal", "key": "terminal-2"})
@@ -189,7 +144,7 @@ def test_instance_verbs_are_relayed_and_the_list_refetched(
         fetcher=HttpInstanceFetcher(),
     )
     inventory.refetch_now("stub")
-    client = _app(tmp_path, inventory, broadcaster).test_client()
+    client = shell_application(tmp_path, inventory, broadcaster).test_client()
 
     created = client.post("/api/apps/stub/instances", json={"action": "new", "params": {}})
     assert created.status_code == 201 and created.get_json()["instance"]["key"] == "stub-2"
@@ -215,7 +170,7 @@ def test_stop_and_start_drive_the_supervised_program(
 ) -> None:
     fake_supervisor.statename_by_program["files"] = "RUNNING"
     fake_supervisor.statename_by_program["system_interface"] = "RUNNING"
-    registry_path = _registry(
+    registry_path = write_two_app_registry(
         tmp_path,
         registry_row_toml("system_interface", "http://localhost:8000", program="system_interface", is_critical=True),
         registry_row_toml("chat", "http://localhost:8000", True, program="system_interface"),
@@ -225,7 +180,7 @@ def test_stop_and_start_drive_the_supervised_program(
         ),
     )
     inventory = build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness)
-    client = _app(tmp_path, inventory, broadcaster).test_client()
+    client = shell_application(tmp_path, inventory, broadcaster).test_client()
 
     stopped = client.post("/api/apps/files/stop")
     assert stopped.status_code == 200 and stopped.get_json() == {"name": "files", "is_running": False}
@@ -243,7 +198,9 @@ def test_an_unreachable_supervisord_is_a_502(
     tmp_path: Path, broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(tmp_path / "missing.sock"))
-    client = _app(tmp_path, build_inventory(_registry(tmp_path), broadcaster), broadcaster).test_client()
+    client = shell_application(
+        tmp_path, build_inventory(write_two_app_registry(tmp_path), broadcaster), broadcaster
+    ).test_client()
     assert client.post("/api/apps/files/stop").status_code == 502
 
 
