@@ -559,7 +559,10 @@ def test_rename_delete_and_replace_url_ride_the_relay(
         layout.main(["rename", "app:terminal?instance=terminal-9", "x"])
         == layout.EXIT_ERROR
     )
-    assert "refused (HTTP 404): no such instance" in capsys.readouterr().err
+    assert (
+        "rename app:terminal?instance=terminal-9 refused (HTTP 404): no such instance"
+        in capsys.readouterr().err
+    )
 
 
 def test_the_relay_verbs_need_an_instance_address(
@@ -575,6 +578,7 @@ def test_the_relay_verbs_need_an_instance_address(
     assert "phase 8" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         layout.main(["replace-url", "app:files?instance=files-1", "notes"])
+    assert "starting with '/'" in capsys.readouterr().err
 
 
 def test_shortcuts_list_a_projects_rail_and_everythings_fixed_rows(
