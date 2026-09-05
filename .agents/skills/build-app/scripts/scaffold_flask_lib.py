@@ -250,7 +250,7 @@ def index() -> Response:
         "<h1>{name}</h1>"
         "<p>{description}</p>"
         "<script>if (window.parent !== window) window.parent.postMessage("
-        '{{type: "minds-location", path: location.pathname + location.search}}, "*");</script>'
+        '{{type: "shell:location", path: location.pathname + location.search}}, "*");</script>'
         "</body></html>",
         mimetype="text/html",
     )

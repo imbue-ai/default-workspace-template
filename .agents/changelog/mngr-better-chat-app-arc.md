@@ -25,3 +25,9 @@ Phase 4 of the workspace app model (the files app):
 Phase 6 of the workspace app model (chat as a document):
 
 - The migrate-workspace port scan (`migrate_workspace.py list-ports`) reports one row for a program that registers two manifests at one port: the shell's line now registers the chat app's manifest beside its own at port 8000, and the registry scan is what names the `chat` row.
+
+Phase 7 of the workspace app model (the shell core):
+
+- Every skill that drives the workspace layout speaks addresses: `manage-layout` and `manage-projects` are rewritten around `app:<name>` and `app:<name>?instance=<key>`, `--view`, the relay verbs, and the shortcut subcommands; the caretaker, migrate-workspace, manage-scheduled-tasks, and update-self docs and `update_self.py` (`open app:chat?instance=$MNGR_AGENT_ID` in place of `surface-chat-tab`) follow.
+
+- The build-app scaffold's index page posts `{type: "shell:location", path}` (the contract's message) rather than the retired `minds-location`, which the shell no longer accepts; the skill doc describes the beacon as relayed to the app's own instances API.

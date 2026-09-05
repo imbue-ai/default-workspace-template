@@ -9,3 +9,5 @@ The terminal is a Python package now (phase 3 of the workspace app model, `docs/
 - The store of remembered terminals lives at `data/.apps/terminal/instances.json` (app data, where every app keeps its instance records; `terminal-app --store` overrides it) rather than beside the dispatch scripts under `data/.state/terminal/`, which now holds only machine state (contracts.md section 17, added in phase 4).
 
 - ttyd's port is read from the app URL through the library's `app_url_port` (shared with the files app) rather than a helper of the terminal's own.
+
+Phase 7 of the workspace app model (the shell core): the tmux hooks no longer forward to the shell's retired `/api/terminals/notify`; the generic tab route and the nudge are the whole path now. `new` defaults a terminal's `workdir` to the app's own working directory (the workspace root under supervisord), so a terminal opened from the launcher lands there rather than wherever ttyd happens to run.
