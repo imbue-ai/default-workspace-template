@@ -154,7 +154,8 @@ An app whose fetch fails keeps its last known list with every instance's status 
 
 ## 6. Shell routes the browser calls
 
-Unchanged routes: `GET /` and the SPA catch-all, `/assets/<path>`, `/plugins/<basename>`, `POST /api/layout/broadcast`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, `/api/ws`.
+Unchanged routes: `GET /` and the SPA catch-all, `/assets/<path>`, `/plugins/<basename>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, `/api/ws`.
+`POST /api/layout/broadcast` keeps its path and is the agent-facing op route of section 12 (loopback only).
 
 Instance verbs are relayed by the shell, so browsers never reach an `instances_url`:
 
@@ -180,13 +181,14 @@ Projects and views:
 | `POST /api/projects/<id>/shortcuts` | `{"app", "action", "mode"}` | `200 project`; replaces the entry for `(app, action)` |
 | `POST /api/projects/<id>/shortcuts/remove` | `{"app", "action"}` | `200 project` |
 | `GET /api/layouts/<view_id>?client=<client_id>&device=<device_kind>` | | `200 layout` (the client's own, else the seed for its device kind, else `{"dockview": null, "tabs": {}}`); `device` names the seed for a client the shell has no record of yet |
-| `POST /api/layouts/<view_id>` | `layout` plus `client_id`, `save_id` | `204` |
-| `GET /api/clients` | | `{"clients": [client, ...]}` |
+| `POST /api/layouts/<view_id>` | `layout` plus `client_id`, `save_id`, `base_updated_at` | `204`; `409 {"detail"}` when the stored layout's `updated_at` is newer than `base_updated_at` (the window refetches and applies the stored one); a body equal to the stored arrangement is a no-op that writes and broadcasts nothing |
+| `GET /api/clients` | | `{"clients": [client, ...]}`; a window reads its own record here on boot to learn its active view |
 | `GET /api/inventory` | | the inventory document (section 9) |
 
 `project` is `{"id", "name", "color", "glyph", "tabs": [address], "shortcuts": [{"app", "action", "mode"}]}`.
 `layout` is `{"dockview": <dockview JSON>, "tabs": {"<panel_id>": {"address", "tab_id", "last_focused_ms"}}, "device_kind", "updated_at"}`.
-`client` is `{"id", "device_kind", "active_view", "last_seen"}`.
+`client` is `{"id", "device_kind", "active_view", "last_seen", "is_connected"}`; `is_connected` says whether any window of the client holds the WebSocket right now.
+`base_updated_at` is the `updated_at` of the layout the window last fetched or last saved successfully, `null` for a view it has only ever seen empty.
 
 Everything (`view_id = everything`) accepts layout reads and writes and rejects every project route with `404`.
 
@@ -196,7 +198,10 @@ All under `data/.state/system_interface/`, written atomically (temp file plus re
 
 - `projects.json`: `{"version": 1, "projects": [project, ...]}` in creation order.
 - `layouts/<view_id>/<client_id>.json`: a `layout` (section 6).
-- `layouts/<view_id>/seed.<device_kind>.json`: a `layout`; rewritten on every save by a client of that device kind.
+- `layouts/<view_id>/seed.<device_kind>.json`: a `layout`; rewritten on every save a browser of that device kind makes.
+  The shell's own writes (an agent op, a tab rebind, a pruned address) never copy a client's layout over a seed: a prune or a rebind edits the seed files directly, and an agent op edits only the target client's file.
+  An op on a view the client has no file for first materializes the client's copy from the seed of its device kind.
+- The client layout file is the truth of the arrangement: the browser writes it through the save route for the user's own gestures, and the shell writes it for agent ops and its own bookkeeping, and every write is followed by a `layout_updated` broadcast (section 8).
 - `clients.json`: `{"version": 1, "clients": {"<client_id>": {"device_kind", "active_view", "last_seen"}}}`.
 - `migrated.json`: written by the migration (phase 9): `{"version": 1, "migrated_at", "source": "<old layout dir>"}`.
 
@@ -218,10 +223,10 @@ Outbound (shell to browser):
 |---|---|---|
 | `apps_updated` | `{"apps": [app, ...]}` | on connect, and whenever any app's row, liveness, or instance list changed (the whole inventory, diffed before sending) |
 | `projects_updated` | `{"projects": [project, ...]}` | on connect and after any project write |
-| `layout_updated` | `{"view_id", "client_id", "save_id"}` | after any layout save; a window applies it only when `client_id` is its own and `save_id` is not one it minted |
-| `active_view_changed` | `{"client_id", "view_id"}` | after a `client_state` or a `load` op changed a client's active view; the other windows of that client switch |
+| `layout_updated` | `{"view_id", "client_id", "save_id"}` | after any write of a client layout (a browser's save, an agent op, a tab rebind, a prune); the shell mints the save id of its own writes; a window applies it only when `client_id` is its own, the view is the one it shows, and `save_id` is not one it minted, and then only when the fetched `updated_at` differs from the one it holds |
+| `active_view_changed` | `{"client_id", "view_id"}` | after a `client_state` report or a `load` op (or an op's `--view`) changed the client's stored active view; never when the report names the view already stored; the other windows of that client switch and report back without a previous view |
 | `tab_rebound` | `{"client_id", "view_id", "tab_id", "address"}` | after `POST /api/tabs/<tab_id>/instance`; the owning client re-addresses that tab, adds the address to the view's tab set through the projects route, and saves |
-| `layout_op` | as today: `{"op", "args", "requester_agent_id", "target_client_id"}` | from `/api/layout/broadcast` |
+| `layout_op` | `{"op", "args", "requester_agent_id", "target_client_id"}` | only the four transient verbs of section 12 (`maximize`, `restore`, `refresh`, `reload_system_interface`); `target_client_id` names the client whose windows apply it, `null` for the two machine-wide forms |
 
 `app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "instances_url", "has_instances", "actions": [{"id", "label"}], "default_shortcut", "is_running", "is_listed", "instances": [record, ...]}`.
 `is_listed` is false until the app's instances API has answered a list once (a single-instance app's synthesized record counts): a client prunes a tab whose address is missing only from a list that has arrived, never from the empty seed.
@@ -229,7 +234,7 @@ A single-instance app carries one synthesized record: key `""`, url `/`, title `
 
 Retired messages: `agents_updated`, `proto_agent_*`, `terminal_session`, `load_layout` (folded into `active_view_changed`), `project_saved`, `project_deleted`, `project_updated`, `project_members_changed`, `project_panel_removed`, `member_title_changed`, `member_last_used_changed`, `member_location_changed`.
 
-Two of those outlive phase 7 as marked carve-outs: `agents_updated` and `proto_agent_*` stay on the shell's socket for the chat pages until phase 10 gives the chat app a socket of its own (a `# CLEANUP:` in `server.py` and `chat/models/AgentManager.ts`), and `load_layout` (`{"view_id", "display_name", "target_client_id"}`) carries the `load` op until phase 8 lands `active_view_changed` and `layout_updated`.
+One of those outlives phase 7 as a marked carve-out: `agents_updated` and `proto_agent_*` stay on the shell's socket for the chat pages until phase 10 gives the chat app a socket of its own (a `# CLEANUP:` in `server.py` and `chat/models/AgentManager.ts`). Phase 8 replaced `load_layout` with `active_view_changed`, and moved `open`, `focus`, `split`, `close`, and `move` off the socket altogether: the shell applies them to the layout file and the file's `layout_updated` is what the windows see.
 
 ## 9. The inventory document
 
@@ -245,7 +250,7 @@ Two of those outlive phase 7 as marked carve-outs: `agents_updated` and `proto_a
 ```
 
 `everything.tabs` is every address of every listed instance, apps in registry order, instances in list order.
-Each `client` entry here additionally carries `docked`, the addresses in that client's layout of its active view, so `layout.py list` can say where an instance is docked without reading layouts.
+`clients` is every stored client record (section 7's retention), each carrying `is_connected` and additionally `docked`, the addresses in that client's layout of its active view, so `layout.py list` can say where an instance is docked without reading layouts.
 
 ## 10. The browser-side contract (`app_contract.js`)
 
@@ -277,16 +282,21 @@ In the shell's embed module: a `message` listener that forwards any message whos
 The shell keeps its own handling of `minds:close-active-tab` and forwards it as well.
 The shell inspects no payloads.
 
-## 12. `layout.py`
+## 12. `layout.py` and the op route
 
 Subcommands: `list`, `inspect`, `where`, `context`, `views`, `load`, `open`, `focus`, `split`, `close`, `move`, `rename`, `delete`, `maximize`, `restore`, `replace-url`, `refresh`, `shortcuts`, `shortcut set`, `shortcut remove`.
 
-- Every op that targets a client's arrangement takes `--client <id>` (default: the client that most recently messaged the requesting agent, per `context`; else every connected client) and `--view <name>` (switch that client first; the switch lands in phase 8 with `--client`, and until then `--view` names a view a connected client must already have active, an op with none being refused with 412). `context`, `views`, and `refresh` reach the whole machine and the relay verbs `rename`, `delete`, and `replace-url` go straight to the app, so they take neither; the `shortcuts` commands' `--view` names the project to read or configure.
-- `open <address> [--action <id>] [--param name=value]...`: `app:<name>` runs `--action` or the app's `default_shortcut.action` or its first declared action, in focus mode; `app:<name>?instance=<key>` docks an existing instance; a bare `https://` URL means `open app:browser --action new --param url=<url>`; a bare word that is an app name means `app:<word>`. (Phase 7 landed the address grammar, the relay verbs, and the shortcut subcommands; `--client`, `--action`, `--param`, and the bare-URL form land in phase 8, and until then `open app:<name>` of an app with instances runs its primary action through the connected client and a URL is refused with an error naming phase 8.)
-- `rename <address> <title>` and `delete <address>` call the shell's relay routes.
-- `replace-url <address> <path-or-url>` calls the relay's location route.
-- `list` prints, per app: `name`, `display_name`, `is_running`, `actions`, and `instances` with `key`, `address`, `title`, `status`, `docked_in` (client ids).
-- `views` prints every view with `tabs` (addresses) and `clients` (ids with device kind); `context` prints every client with `active_view`, `device_kind`, `is_connected`, and recent activity.
+The script posts `{op, args, agent_id}` to `POST /api/layout/broadcast` on the shell (loopback only; the path is historical).
+The client's layout file is the truth of the arrangement, so the shell applies every arrangement op to that file itself and no browser needs to be connected for an op to land.
+
+- **The target client.** Every op that reads or changes one client's arrangement resolves to exactly one client: `--client <id>`, else the client that most recently messaged the requesting agent (the client-activity log), else the one connected client. When none of those settles it, the op fails with `412` and a detail that lists the connected clients and their views and asks for `--client`; the shell never guesses across clients and never applies an op to every client. A `--client` with no record is `404`. `context`, `views`, `list`, and the relay verbs `rename`, `delete`, and `replace-url` reach the whole machine and take no `--client`; `refresh <app>` and the interface reload are machine-wide too.
+- **The target view.** `--view <name>` (a project's name or id, or Everything; `--layout` stays as an alias) names the view whose arrangement the op edits; without it the op edits the client's active view. A `--view` that differs from the client's active view also switches the client to it (the record is written and `active_view_changed` is broadcast), so the user sees what the agent arranged.
+- **Document ops.** `open`, `focus`, `split`, `close`, and `move` are applied by the shell to the client's layout of the view: the file is read (materialized from the seed of the client's device kind when the client has none), edited by the pure editor (`shell/dockview_document.py`), written, and `layout_updated` is broadcast; a project view files an opened address into its tab set and a close runs the referenced-instance cleanup, exactly as a browser's save does. Placement follows the document's tree, never the screen: the anchor is the requester's own chat panel when the document holds it, else the document's active group, else its first group; a direction finds the nearest enclosing branch of the matching orientation and the sibling on that side, and tabs into that group unless `--new-group`; a split takes `--ratio` of the anchor group's own extent. A launcher (New Tab) panel in the document counts as empty and is dropped from the group an op docks into.
+- **Creates.** `open <address> [--action <id>] [--param name=value]...` (and `split` of the same forms): `app:<name>` of an app with instances runs the create through the shell's relay inside the op, `--action` or the app's `default_shortcut.action` or its first declared action with every `--param`, then docks the record it made; the app's refusal (a `400`, `409`, or `503`) is the op's error, verbatim. `app:<name>?instance=<key>` docks a listed instance (`404` when nothing lists it). A bare `https://` or `http://` URL means `open app:browser --action new --param url=<url>`. A bare word that is an app name means `app:<word>`. An `open` of an address the document already shows focuses it. An op names the address it made in its answer, which `open` prints to stdout.
+- **Transient verbs.** `maximize`, `restore`, `refresh`, and `reload_system_interface` change what is on screen without changing the saved document, so they alone still travel as a `layout_op` message (section 8) to the resolved client's windows; `refresh app:<name>` and the interface reload go to every window.
+- **Answers.** A document op answers `{"ok", "view_id", "client_id", "layout", "created_address"?}` with `layout` in the shape `inspect` prints, so the script prints its diff from the answer and exits; nothing polls.
+- `rename <address> <title>` and `delete <address>` call the shell's relay routes; `replace-url <address> <path-or-url>` calls the relay's location route.
+- `list` reads `GET /api/inventory` and prints, per app: `name`, `display_name`, `is_running`, `actions`, and `instances` with `key`, `address`, `title`, `status`, `docked_in` (client ids; `--view` narrows it to clients whose active view is that view). `views` reads the same document and prints every view with `tabs` (addresses) and `clients` (ids with device kind); `context` prints every client with `active_view`, `device_kind`, `is_connected`, and recent activity. `shortcuts` for Everything derives the fixed rail from the inventory's apps.
 - Exit codes stay `0`, `1`, `3`.
 - The old spellings (`chat:`, `terminal:`, `service:`, `url:`, `subagent:`, `chat-terminal:`) are errors that name the new form.
 
@@ -300,6 +310,8 @@ Honoured by the shell on page load for the requesting client, then stripped from
 - `&follow=<client_id>`: reserved; ignored in this arc.
 
 Unknown or stale targets are ignored silently.
+The browser applies these itself through the paths a click takes, before it reports its first `client_state`; the `view` wins over the stored active view.
+The minds chrome does not yet forward a deep link's query to the shell frame; that lands with the switcher (deferred, see the meta spec).
 
 ## 14. Tool environments
 

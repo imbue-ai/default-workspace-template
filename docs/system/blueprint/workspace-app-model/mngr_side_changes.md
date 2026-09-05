@@ -22,6 +22,10 @@ The one mngr-side reader of the workspace's supervisord program lines (the evals
 - `~/handoff/app-cleanup.md`: replaced by a handoff naming the spec folder and the state of both branches.
 - Changelog entries: `apps/minds_evals/changelog/mngr-better-chat-app-arc.md`, `apps/minds/changelog/mngr-better-chat-app-arc.md`, `libs/mngr_forward/changelog/mngr-better-chat-app-arc.md`, and the existing `dev/changelog/mngr-better-chat-app-arc.md`.
 
+## Deferred
+
+- The minds chrome forwarding a deep link's query string (`?view=`, `&open=`, `&action=`) to the shell frame it embeds: the shell honours those on load from phase 8, but nothing in the chrome passes them through yet. It lands with the switcher, which the meta spec defers.
+
 ## Tests
 
 - `minds_bridge_test.py` for the registry read and the fallback.
