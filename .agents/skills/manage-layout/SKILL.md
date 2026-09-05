@@ -30,7 +30,7 @@ Every tab is named by one **address**:
 | Form | Meaning | Example |
 |---|---|---|
 | `app:<name>?instance=<key>` | One instance of an app. | `app:chat?instance=agent-3f2a...` (a chat, keyed by its agent id), `app:terminal?instance=terminal-2` (a terminal, keyed by its tmux session name), `app:browser?instance=riley` (a browser, keyed by its name) |
-| `app:<name>` | A single-instance app's one tab; or, as an `open` / `split` target, "a fresh instance of this app". | `app:files`, `open app:terminal` |
+| `app:<name>` | A single-instance app's one tab (an app built without `instances = true`); or, as an `open` / `split` target for an app with instances, "a fresh instance of this app". | `app:docs` (a single-instance app you built), `open app:terminal` |
 
 A bare word is shorthand for `app:<word>` (`open files`). The literal `self`
 resolves to your own chat panel; most useful as `--relative-to=self` on
@@ -91,15 +91,17 @@ chat, joining whatever group already lives there if one is open. Pass
 
 What `open` does with each target:
 
-- `open app:files` (a single-instance app): docks its one tab, or reports a
-  no-op if it is already open (use `focus` to bring it to the front).
+- `open app:docs` (a single-instance app, one you built without
+  `instances = true`): docks its one tab, or reports a no-op if it is already
+  open (use `focus` to bring it to the front).
 - `open app:terminal?instance=terminal-2` (an instance address): docks that
   instance, or reports a no-op if it is already open.
 - `open terminal` (a bare app that has instances): runs the app's action and
   creates a **fresh** instance every time, exactly like the rail's "New
-  terminal". The new instance's address is printed to **stdout** so you can
-  capture it for later ops. The same holds for `open chat` (a new chat) and
-  `open browser` (a new browser).
+  Terminal". The new instance's address is printed to **stdout** so you can
+  capture it for later ops. The same holds for `open chat` (a new chat),
+  `open browser` (a new browser), and `open files` (a new file viewer: the
+  files app has instances too, so `app:files` never names an open viewer).
 
 A terminal created this way starts in the workspace root. Pass a different
 directory by creating it through the terminal app's own action (the rail's
@@ -127,9 +129,9 @@ the dock (they take an instance address, never a bare app):
 | Delete an instance (it leaves every view) | `python3 system/scripts/layout.py delete <address>` |
 | Point an instance at a path under its app | `python3 system/scripts/layout.py replace-url <address> /<path>` |
 
-Not every app accepts every verb: a terminal's title is its own, and an app
-that does not track locations refuses `replace-url`. The app's refusal is
-printed as the error.
+Not every app accepts every verb: a browser is not renameable (its title is
+its name), and an app that does not track locations (the terminal, the chat)
+refuses `replace-url`. The app's refusal is printed as the error.
 
 ### Directions on `split` and `move`
 
@@ -157,7 +159,7 @@ python3 system/scripts/layout.py split terminal --relative-to=self --direction=w
 active_panel: g1
 row size=1.0
   [app:chat?instance=agent-3f2a* app:terminal?instance=terminal-1] size=0.4
-  [app:files*] size=0.6
+  [app:files?instance=files-1*] size=0.6
 ```
 
 The `*` marks the active tab in each group. `row` means the children sit
@@ -179,7 +181,7 @@ the full surface.
 Every dock op (`open`, `split`, `move`, `focus`, `close`, `maximize`,
 `restore`, `refresh`) waits for the resulting state to be observable via
 `inspect` before returning. On success it prints a one-line diff on
-**stderr** (`opened app:files in tabs=[...]`, `created
+**stderr** (`opened app:terminal?instance=terminal-2 in tabs=[...]`, `created
 app:terminal?instance=terminal-3 in tabs=[...]`, `moved ... into ...`). On a
 **no-op** it prints `no change: <address> is already ...` and exits 0.
 `maximize`, `restore`, and `refresh` change nothing `inspect` can see, so they
