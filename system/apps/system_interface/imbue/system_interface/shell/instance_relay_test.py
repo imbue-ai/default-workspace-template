@@ -9,6 +9,7 @@ from imbue.system_interface.agent_manager import DESTROY_TIMEOUT_SECONDS
 from imbue.system_interface.shell.instance_relay import RELAY_TIMEOUT_SECONDS
 from imbue.system_interface.shell.instance_relay import relay_create
 from imbue.system_interface.shell.instance_relay import relay_delete
+from imbue.system_interface.shell.instance_relay import relay_location
 from imbue.system_interface.shell.instance_relay import relay_rename
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import instance_record
@@ -37,6 +38,9 @@ def test_the_relay_passes_the_apps_answers_through(
         assert refused.status_code == 400
         renamed = relay_rename(client, entry, "stub-1", json.dumps({"title": "Renamed"}).encode())
         assert renamed.status_code == 200 and json.loads(renamed.body)["instance"]["title"] == "Renamed"
+        located = relay_location(client, entry, "stub-1", json.dumps({"path": "/deeper"}).encode())
+        assert located.status_code == 200 and json.loads(located.body)["instance"]["url"] == "/deeper"
+        assert relay_location(client, entry, "stub-1", json.dumps({"path": "no-slash"}).encode()).status_code == 400
         assert relay_delete(client, entry, "stub-2").status_code == 204
         # A delete of an unknown key is idempotent under the contract.
         assert relay_delete(client, entry, "stub-9").status_code == 204
