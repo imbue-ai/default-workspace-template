@@ -508,10 +508,13 @@ def test_document_ops_edit_the_target_clients_file_and_announce_the_write(client
     assert len(updates) == 1 and updates[0]["client_id"] == "c1" and updates[0]["view_id"] == "alpha"
     assert updates[0]["save_id"].startswith("save-")
     assert "projects_updated" in [message["type"] for message in messages]
-    # Opening an address the arrangement already shows focuses it rather than docking it twice.
+    # Opening an address the arrangement already shows focuses it rather than docking it twice; since that panel
+    # is the active one already, nothing is written or announced.
     assert _panel_addresses(_broadcast(client, "open", {"address": str(_TERMINAL_1)}).get_json()["layout"]) == [
         str(_TERMINAL_1)
     ]
+    assert shell.layouts.read_client_layout("alpha", "c1") == stored
+    assert [message["type"] for message in drain_messages(client_queue) if message["type"] == "layout_updated"] == []
 
     split = _broadcast(
         client, "split", {"address": str(_FILES), "relative_to": str(_TERMINAL_1), "direction": "below", "ratio": 0.5}
