@@ -34,6 +34,7 @@ from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.projects import project_wire_json
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
@@ -496,7 +497,12 @@ def _handle_client_state_message(
     shell.broadcaster.set_client_info(
         client_queue, str(report.client_id), str(report.active_view), report.device_kind.value
     )
-    shell.clients.record_report(report, datetime.now(timezone.utc))
+    # A state file the shell cannot write is a warning, not a dropped socket: the live
+    # registration above is what the layout ops need, and the next report retries the write.
+    try:
+        shell.clients.record_report(report, datetime.now(timezone.utc))
+    except ShellStateError as e:
+        _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
     if is_first_report:
         _loguru_logger.info(
             "WS client registered: client_id={} view={} device={} (conn {})",
@@ -513,9 +519,12 @@ def _handle_client_state_message(
             report.active_view,
             id(client_queue),
         )
-        shell.activity.append_view_switch(
-            str(report.client_id), report.device_kind.value, report.previous_view, str(report.active_view)
-        )
+        try:
+            shell.activity.append_view_switch(
+                str(report.client_id), report.device_kind.value, report.previous_view, str(report.active_view)
+            )
+        except OSError as e:
+            _loguru_logger.opt(exception=e).warning("Could not log the view switch for {}", report.client_id)
     else:
         # A re-report on an already-registered connection with an unchanged view.
         pass
