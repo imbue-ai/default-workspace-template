@@ -842,19 +842,23 @@ def _require_panel(layout: LayoutRecord, address: Address) -> str:
     return panel_id
 
 
+def _create_action_id(entry: AppInventoryEntry, arguments: DocumentOpArguments) -> str:
+    """The action a create runs: the one the op names, else the app's ``default_shortcut`` action when it declares
+    that action, else its first declared action."""
+    if arguments.action:
+        return arguments.action
+    declared = effective_actions(entry.row)
+    default_shortcut = entry.row.default_shortcut
+    if default_shortcut is not None and any(action.id == default_shortcut.action for action in declared):
+        return str(default_shortcut.action)
+    if declared:
+        return str(declared[0].id)
+    raise LayoutOpError(f"App {entry.row.name!r} declares no action to create an instance with")
+
+
 def _create_through_relay(shell: ShellState, entry: AppInventoryEntry, arguments: DocumentOpArguments) -> Address:
     """Run the app's action through the relay (the same route the browser uses) and answer the address it made."""
-    declared = effective_actions(entry.row)
-    action_id = arguments.action
-    if not action_id:
-        default_shortcut = entry.row.default_shortcut
-        if default_shortcut is not None and any(action.id == default_shortcut.action for action in declared):
-            action_id = str(default_shortcut.action)
-        elif declared:
-            action_id = str(declared[0].id)
-        else:
-            raise LayoutOpError(f"App {entry.row.name!r} declares no action to create an instance with")
-    body = json.dumps({"action": action_id, "params": dict(arguments.params)}).encode()
+    body = json.dumps({"action": _create_action_id(entry, arguments), "params": dict(arguments.params)}).encode()
     outcome = relay_create(shell.http_client, entry, body)
     if outcome.status_code >= HTTP_BAD_REQUEST:
         raise InstanceCreateRefusedError(outcome.status_code, _relay_detail(outcome))
