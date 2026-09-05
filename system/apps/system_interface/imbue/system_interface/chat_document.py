@@ -377,6 +377,12 @@ def _send_message_endpoint(agent_id: str) -> Response:
 
 
 @pure
+def is_client_activity_reportable(send_message_request: SendMessageRequest) -> bool:
+    """Whether a send names the client and the view the shell's activity log keys on (a legacy or unframed caller names neither)."""
+    return send_message_request.client_id != "" and send_message_request.active_layout != ""
+
+
+@pure
 def client_activity_report(agent_info: AgentInfo, send_message_request: SendMessageRequest) -> dict[str, str]:
     """The body of the shell's ``POST /api/client-activity`` for one send (contracts.md section 5)."""
     return {
@@ -392,9 +398,9 @@ def client_activity_report(agent_info: AgentInfo, send_message_request: SendMess
 
 def _record_client_message_activity(agent_info: AgentInfo, send_message_request: SendMessageRequest) -> None:
     """Tell the shell which client (and view) a message came from, so agents can attribute requests through
-    ``layout.py context``. Legacy callers without client metadata are not recorded. Posted on its own thread:
+    ``layout.py context``. Callers naming no client or no view are not recorded. Posted on its own thread:
     the shell is a separate app, and a send must not wait on it."""
-    if not send_message_request.client_id:
+    if not is_client_activity_reportable(send_message_request):
         return
     body = client_activity_report(agent_info, send_message_request)
     threading.Thread(

@@ -6,11 +6,15 @@ from uuid import uuid4
 from app_instances.testing import RecordingNudger
 from flask.testing import FlaskClient
 
+from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
+from imbue.system_interface.chat_document import client_activity_report
+from imbue.system_interface.chat_document import is_client_activity_reportable
 from imbue.system_interface.documents import CHAT_AGENT_ID_META_NAME
 from imbue.system_interface.documents import CHAT_SESSION_ID_META_NAME
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import seed_agent_state
@@ -156,3 +160,22 @@ def test_a_location_report_is_refused_for_the_chat(tmp_path: Path) -> None:
     client, _ = _client(tmp_path, chat_id)
     response = client.post(f"/_instances/{chat_id}/location", json={"path": "/elsewhere"})
     assert response.status_code == 400
+
+
+def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view(tmp_path: Path) -> None:
+    agent_info = AgentInfo(
+        id="agent-1", name="alice", state="RUNNING", agent_state_dir=tmp_path, claude_config_dir=tmp_path
+    )
+    framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
+    assert is_client_activity_reportable(framed)
+    assert not is_client_activity_reportable(SendMessageRequest(message="hello", client_id="c1"))
+    assert not is_client_activity_reportable(SendMessageRequest(message="hello", active_layout="alpha"))
+    assert client_activity_report(agent_info, framed) == {
+        "client_id": "c1",
+        "device_kind": "desktop",
+        "view_id": "alpha",
+        "kind": "message",
+        "app": "chat",
+        "key": "agent-1",
+        "text": "hello",
+    }
