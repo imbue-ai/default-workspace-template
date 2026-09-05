@@ -56,11 +56,6 @@ def is_known_op(op: str) -> bool:
 
 
 @pure
-def is_read_op(op: str) -> bool:
-    return op in READ_OPS
-
-
-@pure
 def is_document_op(op: str) -> bool:
     return op in DOCUMENT_OPS
 
@@ -223,13 +218,3 @@ def layout_views(
         }
     )
     return views
-
-
-@pure
-def view_display_name(view_id: str, projects: Sequence[Project]) -> str:
-    if view_id == EVERYTHING_VIEW_ID:
-        return EVERYTHING_VIEW_NAME
-    for project in projects:
-        if project.id == view_id:
-            return project.name
-    return view_id

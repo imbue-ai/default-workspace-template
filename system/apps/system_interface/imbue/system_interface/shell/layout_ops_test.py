@@ -11,7 +11,6 @@ from imbue.system_interface.shell.data_types import synthesized_single_instance
 from imbue.system_interface.shell.layout_ops import layout_inspect
 from imbue.system_interface.shell.layout_ops import layout_list
 from imbue.system_interface.shell.layout_ops import layout_views
-from imbue.system_interface.shell.layout_ops import view_display_name
 from imbue.system_interface.shell.layouts import StoredLayout
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
@@ -92,7 +91,7 @@ def test_list_names_every_app_with_where_its_instances_are_docked(tmp_path: Path
     ]
 
 
-def test_views_and_display_names() -> None:
+def test_views_lists_every_project_then_everything() -> None:
     project = Project(id=ProjectId("alpha"), name="Alpha", color="#111111", glyph=0, tabs=(_FILES,), shortcuts=())
     views = layout_views([project], [_FILES], {"alpha": [{"id": "c1", "device_kind": "desktop"}]})
     assert views == [
@@ -105,6 +104,3 @@ def test_views_and_display_names() -> None:
         },
         {"id": "everything", "name": "Everything", "is_everything": True, "tabs": ["app:files"], "clients": []},
     ]
-    assert view_display_name("alpha", [project]) == "Alpha"
-    assert view_display_name("everything", [project]) == "Everything"
-    assert view_display_name("gone", [project]) == "gone"
