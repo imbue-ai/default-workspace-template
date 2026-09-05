@@ -42,6 +42,13 @@ def test_the_summary_folds_the_log_per_client(tmp_path: Path) -> None:
     assert second["is_connected"] is True and second["device_kind"] == "mobile"
 
 
+def test_a_message_to_a_single_instance_app_is_summarized_with_the_bare_address(tmp_path: Path) -> None:
+    log = _log(tmp_path)
+    log.append_message("c1", "desktop", "alpha", "files", "", "open the notes")
+    (summary,) = summarize_client_activity(log.read_events(), set())
+    assert summary["recent_messages"][0]["address"] == "app:files"
+
+
 def test_the_last_client_to_message_an_instance_is_found(tmp_path: Path) -> None:
     log = _log(tmp_path)
     log.append_message("c1", "desktop", "alpha", "chat", "agent-1", "one")
