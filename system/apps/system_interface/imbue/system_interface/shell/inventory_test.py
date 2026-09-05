@@ -193,6 +193,32 @@ def test_a_registry_change_keeps_known_lists_and_drops_removed_rows(
     assert entries[0].addresses() == [Address("app:terminal?instance=terminal-1")]
 
 
+def test_a_row_whose_instances_flag_flips_starts_its_list_over(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    fetcher = FakeInstanceFetcher()
+    fetcher.list(_FILES_URL, instance_record("files-1"))
+    registry_path = _registry(tmp_path)
+    inventory = build_inventory(registry_path, broadcaster, fetcher=fetcher)
+    assert inventory.entries()[1].is_listed
+
+    write_registry(
+        registry_path,
+        registry_row_toml("terminal", _TERMINAL_URL, True, program="terminal"),
+        registry_row_toml("files", _FILES_URL, True, program="files"),
+    )
+    inventory.reload_registry()
+    files = inventory.entries()[1]
+    assert files.instances == () and not files.is_listed
+    inventory.refetch_now("files")
+    assert inventory.entries()[1].addresses() == [Address("app:files?instance=files-1")]
+
+    write_registry(registry_path, registry_row_toml("files", _FILES_URL, program="files"))
+    inventory.reload_registry()
+    (files_again,) = inventory.entries()
+    assert files_again.is_listed and files_again.addresses() == [Address("app:files")]
+
+
 def test_an_unreadable_registry_keeps_the_last_good_read(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     fetcher = FakeInstanceFetcher()
     fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
