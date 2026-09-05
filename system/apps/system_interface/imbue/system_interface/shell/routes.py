@@ -821,20 +821,33 @@ def _create_action_id(entry: AppInventoryEntry, arguments: DocumentOpArguments) 
     raise LayoutOpError(f"App {entry.row.name!r} declares no action to create an instance with")
 
 
-def _create_through_relay(shell: ShellState, entry: AppInventoryEntry, arguments: DocumentOpArguments) -> Address:
-    """Run the app's action through the relay (the same route the browser uses) and answer the address it made."""
+class _CreatedInstance(FrozenModel):
+    """The instance a create made, as the app's answer described it."""
+
+    address: Address = Field(description="The new instance's address")
+    title: str = Field(description="The title the app gave it, which the new panel takes")
+
+
+def _create_through_relay(
+    shell: ShellState, entry: AppInventoryEntry, arguments: DocumentOpArguments
+) -> _CreatedInstance:
+    """Run the app's action through the relay (the same route the browser uses) and answer the instance it made. The
+    title comes from the app's answer rather than the inventory, which may not have listed the instance yet."""
     body = json.dumps({"action": _create_action_id(entry, arguments), "params": dict(arguments.params)}).encode()
     outcome = relay_create(shell.http_client, entry, body)
     if outcome.status_code >= HTTP_BAD_REQUEST:
         raise InstanceCreateRefusedError(outcome.status_code, _relay_detail(outcome))
     try:
-        key = json.loads(outcome.body)["instance"]["key"]
+        record = json.loads(outcome.body)["instance"]
+        created = _CreatedInstance(
+            address=address_for(entry.row.name, InstanceKey(str(record["key"]))), title=str(record["title"])
+        )
     except (ValueError, KeyError, TypeError) as e:
         raise InstanceCreateRefusedError(
             HTTP_BAD_GATEWAY, f"App {entry.row.name!r} answered the create with an unreadable body"
         ) from e
     shell.inventory.refetch_now(str(entry.row.name))
-    return address_for(entry.row.name, InstanceKey(str(key)))
+    return created
 
 
 def _relay_detail(outcome: RelayOutcome) -> str:
@@ -905,16 +918,13 @@ def _prepare_docking_target(
     entry = shell.inventory.entry(str(address.app))
     if entry is None:
         raise UnknownAppError(f"No registered app named {address.app!r}")
-    is_creating = address.key is None and entry.row.instances
-    if is_creating and op == "split":
-        _anchor_panel_id(snapshot, arguments.relative_to, requester_chat)
-    docked = _create_through_relay(shell, entry, arguments) if is_creating else address
-    found = shell.inventory.find_instance(docked)
-    return _DocumentOpTarget(
-        address=docked,
-        title=found[1].title if found is not None else None,
-        created=docked if is_creating else None,
-    )
+    if address.key is None and entry.row.instances:
+        if op == "split":
+            _anchor_panel_id(snapshot, arguments.relative_to, requester_chat)
+        created = _create_through_relay(shell, entry, arguments)
+        return _DocumentOpTarget(address=created.address, title=created.title, created=created.address)
+    found = shell.inventory.find_instance(address)
+    return _DocumentOpTarget(address=address, title=found[1].title if found is not None else None, created=None)
 
 
 def _prepare_op_target(
