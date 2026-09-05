@@ -625,11 +625,17 @@ def _find_view(shell: ShellState, requested: str) -> tuple[str | None, ResponseR
     return None, _detail(f"View {requested!r} not found (known views: {known})", HTTP_NOT_FOUND)
 
 
+def _requested_view(args_raw: dict[str, Any]) -> str | None:
+    """The view an op names in ``args.view`` (a project's name or id, or Everything), None when it names none."""
+    requested = args_raw.get("view")
+    return requested if isinstance(requested, str) and requested else None
+
+
 def _resolve_view(shell: ShellState, args_raw: dict[str, Any]) -> tuple[str | None, ResponseReturnValue | None]:
     """The view a read op targets: ``args.view``, else the one connected view, else the newest client's; None when
     nothing settles it (a read then spans every view)."""
-    requested = args_raw.get("view")
-    if isinstance(requested, str) and requested:
+    requested = _requested_view(args_raw)
+    if requested is not None:
         return _find_view(shell, requested)
     connected_views = {info["active_view"] for info in shell.broadcaster.get_connected_client_infos()}
     if len(connected_views) == 1:
@@ -698,8 +704,8 @@ def _resolve_op_view(
     shell: ShellState, args_raw: dict[str, Any], client_id: ClientId
 ) -> tuple[str | None, ResponseReturnValue | None]:
     """The view a document op edits: ``args.view``, else the client's active view."""
-    requested = args_raw.get("view")
-    if isinstance(requested, str) and requested:
+    requested = _requested_view(args_raw)
+    if requested is not None:
         return _find_view(shell, requested)
     active = _active_view_of_client(shell, client_id)
     if active is None:
@@ -751,7 +757,7 @@ def _op_list(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> Resp
 def _op_inspect(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
     client_id = _resolve_client(shell, args_raw, agent_id)
     view_id: str | None
-    if client_id is not None and not (isinstance(args_raw.get("view"), str) and args_raw.get("view")):
+    if client_id is not None and _requested_view(args_raw) is None:
         view_id, error = _active_view_of_client(shell, client_id), None
     else:
         view_id, error = _resolve_view(shell, args_raw)
@@ -1020,11 +1026,7 @@ def _op_document(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id:
         shell.broadcast_projects_updated()
     if op == "close":
         shell.delete_unreferenced_instances()
-    if (
-        isinstance(args_raw.get("view"), str)
-        and args_raw.get("view")
-        and _active_view_of_client(shell, client_id) != str(view_id)
-    ):
+    if _requested_view(args_raw) is not None and _active_view_of_client(shell, client_id) != str(view_id):
         shell.set_client_active_view(client_id, view_id)
     logger.info("layout op={} agent_id={} view={} client={} args={}", op, agent_id, view_id, client_id, args_raw)
     return jsonify(
