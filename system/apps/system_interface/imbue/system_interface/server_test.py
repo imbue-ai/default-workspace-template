@@ -2574,7 +2574,11 @@ def test_client_state_reports_register_the_client_and_log_only_real_view_switche
 
         for malformed in ("{", json.dumps({"type": "other"}), json.dumps({"type": "client_state", "client_id": "c1"})):
             assert _handle_client_state_message(malformed, client_queue, shell, is_first_report=False) is False
-        assert shell.broadcaster.get_client_info(client_queue)["active_view"] == "alpha"
+        assert shell.broadcaster.get_client_info(client_queue) == {
+            "client_id": "c1",
+            "active_view": "alpha",
+            "device_kind": "mobile",
+        }
     finally:
         shell.broadcaster.unregister(client_queue)
 
