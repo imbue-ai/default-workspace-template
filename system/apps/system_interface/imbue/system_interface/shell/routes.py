@@ -884,19 +884,26 @@ def _anchor_panel_id(layout: LayoutRecord, raw_anchor: str, requester_chat: Addr
     return _require_panel(layout, address)
 
 
+def _anchored_placement(
+    layout: LayoutRecord, arguments: DocumentOpArguments, requester_chat: Address | None
+) -> Placement:
+    """The placement a split or a move posts: relative to its anchor, in its direction."""
+    return Placement(
+        anchor_panel_id=_anchor_panel_id(layout, arguments.relative_to, requester_chat),
+        direction=arguments.direction,
+        ratio=arguments.ratio,
+        is_new_group=arguments.new_group,
+        group_id=mint_group_id(),
+    )
+
+
 def _docking_placement(
     layout: LayoutRecord, op: str, arguments: DocumentOpArguments, requester_chat: Address | None
 ) -> Placement:
     """Where ``open`` and ``split`` dock: open lands beside the requester's own chat when it is docked (else beside
     the active group), tabbing into a group already there unless ``new_group``; split follows its anchor and direction."""
     if op == "split":
-        return Placement(
-            anchor_panel_id=_anchor_panel_id(layout, arguments.relative_to, requester_chat),
-            direction=arguments.direction,
-            ratio=arguments.ratio,
-            is_new_group=arguments.new_group,
-            group_id=mint_group_id(),
-        )
+        return _anchored_placement(layout, arguments, requester_chat)
     chat_panel = panel_id_for_address(layout, requester_chat) if requester_chat is not None else None
     return Placement(
         anchor_panel_id=chat_panel,
@@ -927,6 +934,24 @@ def _apply_docking_op(
     return add_panel(layout, docked, mint_tab_id(), title, placement), docked, docked if is_creating else None
 
 
+def _edit_layout_for_op(
+    shell: ShellState, op: str, layout: LayoutRecord, arguments: DocumentOpArguments, requester_chat: Address | None
+) -> tuple[LayoutRecord, Address | None, Address | None]:
+    """The layout with ``op`` applied, the address it docked (filed into a project view), and the address it created."""
+    if is_creating_op(op):
+        return _apply_docking_op(shell, op, layout, arguments, requester_chat)
+    panel_id = _require_panel(layout, _resolve_op_address(arguments.address, requester_chat))
+    match op:
+        case "focus":
+            return focus_panel(layout, panel_id), None, None
+        case "close":
+            return remove_panel(layout, panel_id), None, None
+        case "move":
+            return move_panel(layout, panel_id, _anchored_placement(layout, arguments, requester_chat)), None, None
+        case _:
+            raise ShellError(f"Op {op!r} has no document handler")
+
+
 def _op_document(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
     """Apply one arrangement op to the target client's layout file and announce the write (contracts.md section 12)."""
     arguments = _parse_document_arguments(args_raw)
@@ -938,32 +963,7 @@ def _op_document(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id:
     if not shell.projects.is_view_known(view_id):
         raise ProjectNotFoundError(view_raw)
     layout = shell.materialize_client_layout(view_id, client_id)
-    requester_chat = _requester_chat_address(agent_id)
-    created: Address | None = None
-    filed: Address | None = None
-    if is_creating_op(op):
-        edited, filed, created = _apply_docking_op(shell, op, layout, arguments, requester_chat)
-    else:
-        panel_id = _require_panel(layout, _resolve_op_address(arguments.address, requester_chat))
-        match op:
-            case "focus":
-                edited = focus_panel(layout, panel_id)
-            case "close":
-                edited = remove_panel(layout, panel_id)
-            case "move":
-                edited = move_panel(
-                    layout,
-                    panel_id,
-                    Placement(
-                        anchor_panel_id=_anchor_panel_id(layout, arguments.relative_to, requester_chat),
-                        direction=arguments.direction,
-                        ratio=arguments.ratio,
-                        is_new_group=arguments.new_group,
-                        group_id=mint_group_id(),
-                    ),
-                )
-            case _:
-                return _detail(f"Op {op!r} has no document handler", HTTP_INTERNAL_ERROR)
+    edited, filed, created = _edit_layout_for_op(shell, op, layout, arguments, _requester_chat_address(agent_id))
     saved = shell.write_client_layout(view_id, client_id, edited)
     if filed is not None and not is_everything_view(view_id):
         shell.projects.add_tab(view_id, filed)
