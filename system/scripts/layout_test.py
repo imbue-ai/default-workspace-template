@@ -542,10 +542,16 @@ def test_rename_delete_and_replace_url_ride_the_relay(
 ) -> None:
     assert layout.main(["rename", "app:terminal?instance=terminal-1", "Build"]) == 0
     assert layout.main(["replace-url", "app:files?instance=files-1", "/notes"]) == 0
+    # The browser's location is a URL; which form an app takes is the app's own rule.
+    assert (
+        layout.main(["replace-url", "app:browser?instance=b1", "https://example.com"])
+        == 0
+    )
     assert layout.main(["delete", "app:terminal?instance=terminal-1"]) == 0
     assert fake_shell.posted == [
         ("/api/apps/terminal/instances/terminal-1/rename", {"title": "Build"}),
         ("/api/apps/files/instances/files-1/location", {"path": "/notes"}),
+        ("/api/apps/browser/instances/b1/location", {"path": "https://example.com"}),
         ("/api/apps/terminal/instances/terminal-1/delete", {}),
     ]
     err = capsys.readouterr().err
@@ -572,13 +578,8 @@ def test_the_relay_verbs_need_an_instance_address(
         layout.main(["rename", "files", "Docs"])
     assert "needs an instance address" in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        layout.main(
-            ["replace-url", "app:files?instance=files-1", "https://example.com"]
-        )
-    assert "phase 8" in capsys.readouterr().err
-    with pytest.raises(SystemExit):
-        layout.main(["replace-url", "app:files?instance=files-1", "notes"])
-    assert "starting with '/'" in capsys.readouterr().err
+        layout.main(["replace-url", "app:files?instance=files-1", ""])
+    assert "needs a path" in capsys.readouterr().err
 
 
 def test_shortcuts_list_a_projects_rail_and_everythings_fixed_rows(

@@ -15,7 +15,7 @@ Subcommands:
     move <address> --relative-to <address> [...]  Relocate a panel; iframe DOM is preserved.
     rename <address> <title>            Retitle an instance through its app (the title shows in every view).
     delete <address>                    Delete an instance through its app (it leaves every view).
-    replace-url <address> <path>        Point an instance at a path under its app (its location).
+    replace-url <address> <path-or-url> Point an instance at a path under its app, or at a URL for an app that browses.
     maximize <address>                  Maximize the panel's group within the dock.
     restore                             Exit a maximized group.
     refresh <address>                   Reload one iframe; a bare app address reloads every iframe of that app.
@@ -1106,15 +1106,12 @@ def _cmd_delete(args: argparse.Namespace) -> int:
 
 def _cmd_replace_url(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
-    if any(args.path.startswith(prefix) for prefix in _EXTERNAL_URL_PREFIXES):
+    if not args.path:
         _fail(
-            f"{args.path!r} is an external URL; pointing a tab at one lands in phase 8 of the "
-            "workspace app model. replace-url takes a path under the instance's app, starting with '/'"
+            "replace-url needs a path under the instance's app, or an absolute http(s) URL"
         )
-    if not args.path.startswith("/"):
-        _fail(
-            f"replace-url takes a path under the instance's app, starting with '/' (got {args.path!r})"
-        )
+    # Which form the app takes (a rooted path for a file viewer, an absolute URL for the
+    # browser) is the app's rule, and it answers 400 for the other; nothing is checked here.
     exit_code = _relay("replace-url", address, "/location", {"path": args.path})
     if exit_code == EXIT_OK:
         sys.stderr.write(f"pointed {address} at {args.path}\n")
@@ -1480,12 +1477,16 @@ def main(argv: list[str] | None = None) -> int:
     p_restore.set_defaults(func=_cmd_restore)
 
     p_replace = subparsers.add_parser(
-        "replace-url", help="Point an instance at a path under its app"
+        "replace-url",
+        help="Point an instance at a path under its app, or at an absolute http(s) URL for an app that browses to one",
     )
     p_replace.add_argument(
         "address", help="Instance address (app:<name>?instance=<key>)"
     )
-    p_replace.add_argument("path", help="A path under the app, starting with '/'")
+    p_replace.add_argument(
+        "path",
+        help="A path under the app starting with '/', or an absolute http(s) URL (the app refuses the form it does not take)",
+    )
     p_replace.set_defaults(func=_cmd_replace_url)
 
     p_refresh = subparsers.add_parser(
