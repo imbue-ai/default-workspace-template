@@ -1054,6 +1054,13 @@ def write_verifier_dir(tests_dir: Path, case_config: CaseConfig) -> None:
     # The outcome directory is a scoring dimension, so it must exist ONLY when there are
     # expectations -- rewardkit would otherwise emit a partial score for a case with nothing to
     # score. It lives outside templates/tests/ precisely so it is opted into rather than deleted.
+    #
+    # The criteria tree is a flat set of dimension directories on purpose. Only the criteria root's
+    # immediate subdirectories are dimensions, but rewardkit recurses below them, and a directory
+    # nested inside one silently joins that dimension's weighted mean at weight 1.0 -- diluting the
+    # judge/checks split the judge toml's weight is there to buy. A judge toml (one carrying both
+    # [judge] and [[criterion]]) dropped at the root instead becomes a dimension of its own, named
+    # after its filename stem.
     if case_config.expectations is not None:
         outcome_dir = tests_dir / VERIFIER_CRITERIA_DIRNAME / "outcome"
         _copy_template_tree("outcome", outcome_dir)

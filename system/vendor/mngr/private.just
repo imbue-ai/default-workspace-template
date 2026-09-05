@@ -36,8 +36,10 @@ _generate-release-dockerfile:
 test-offload args="":
     #!/bin/bash
     set -ueo pipefail
-    : "${MODAL_TOKEN_ID:?must be set}"
-    : "${MODAL_TOKEN_SECRET:?must be set}"
+    # No MODAL_TOKEN_ID / MODAL_TOKEN_SECRET check here: this recipe passes them
+    # nowhere. offload's Modal client resolves credentials itself, the same way
+    # the `modal` CLI does -- the environment first (CI injects the pair), else
+    # ~/.modal.toml -- so demanding them here only blocks local runs.
     just _generate-dockerignore
     trap "rm -f .dockerignore" EXIT
     offload -c offload-modal.toml run --trace \

@@ -11,6 +11,9 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P14D"
 
+[options.exclude-newer-package]
+harbor-rewardkit = "2026-08-23T00:00:00Z"
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -1242,8 +1245,8 @@ wheels = [
 
 [[package]]
 name = "harbor"
-version = "0.21.0"
-source = { git = "https://github.com/harbor-framework/harbor?tag=v0.21.0#64afbbcb62165950301e1a6407c729aa26d844ff" }
+version = "0.22.0"
+source = { git = "https://github.com/harbor-framework/harbor?tag=v0.22.0#4407eb5227a2ff4f0d3f16b2eb48849382fdf276" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -1276,14 +1279,14 @@ modal = [
 
 [[package]]
 name = "harbor-rewardkit"
-version = "0.1.7"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "litellm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/c2/250143b4373cf4f654e8efffa51e5058b16485769315b5ce1704c9366723/harbor_rewardkit-0.1.7.tar.gz", hash = "sha256:1afd6bf4aac87a6d95a563d6e2062df175e104ef8c3b94361b5054670ba0d278", size = 29966, upload-time = "2026-06-27T05:59:28.786Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f9/70/1e70173e730c08e13fb1e887fbd1c2706b3fdb55b84476c08dd9ab79cd49/harbor_rewardkit-0.2.0.tar.gz", hash = "sha256:3e79b5cd00fc1b852963d6858ceedafd817081a907da69b8892a8d770f8a3a35", size = 40913, upload-time = "2026-08-22T03:39:02.4Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/be/b5e8a882023f420ad6636344f0cf890892f9e586fc7c370b4395f5333609/harbor_rewardkit-0.1.7-py3-none-any.whl", hash = "sha256:cb9938e551a0ac2cd21f68e819c3f6f6b3a7cebb2e8ae4a19fb3148d5514539c", size = 46396, upload-time = "2026-06-27T05:59:27.88Z" },
+    { url = "https://files.pythonhosted.org/packages/30/39/7bbe09abe9b7f2feffaa13b41c7e11bd7da7d80c269864829e4820278362/harbor_rewardkit-0.2.0-py3-none-any.whl", hash = "sha256:be4f2c966943e9b443a203b49ce979f88dfef9ca3d9530f6ee0eee2e051ac5ca", size = 57665, upload-time = "2026-08-22T03:39:01.34Z" },
 ]
 
 [[package]]
@@ -1858,7 +1861,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40" },
     { name = "click", specifier = ">=8.0.0" },
-    { name = "harbor", extras = ["modal"], git = "https://github.com/harbor-framework/harbor?tag=v0.21.0" },
+    { name = "harbor", extras = ["modal"], git = "https://github.com/harbor-framework/harbor?tag=v0.22.0" },
     { name = "imbue-common", editable = "../../libs/imbue_common" },
     { name = "imbue-mngr-usage", editable = "../../libs/mngr_usage" },
     { name = "loguru", specifier = ">=0.7" },
@@ -1867,7 +1870,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "harbor-rewardkit", specifier = "==0.1.*" },
+    { name = "harbor-rewardkit", specifier = "==0.2.0" },
     { name = "imbue-common", extras = ["dev"], editable = "../../libs/imbue_common" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=9.0" },

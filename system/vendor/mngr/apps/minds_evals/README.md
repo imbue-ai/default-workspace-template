@@ -113,9 +113,28 @@ just minds-evals-run /tmp/minds-evals/datasets/small my-eval-run 3
 # 4. Browse results
 uv run --project apps/minds_evals harbor view apps/minds_evals/jobs
 
-# Re-grade finished rollouts without re-running them (needs the task path)
-uv run --project apps/minds_evals harbor trial regrade -p /tmp/minds-evals/datasets/small apps/minds_evals/jobs/<job>/<trial>
+# Re-grade one finished rollout without re-running it (needs the task path)
+uv run --project apps/minds_evals harbor trial regrade -p /tmp/minds-evals/datasets/small -e modal \
+  -o apps/minds_evals/regrades apps/minds_evals/jobs/<job>/<trial>
+
+# Or re-grade every trial of a finished job, into a new job beside the original
+uv run --project apps/minds_evals harbor job regrade -p /tmp/minds-evals/datasets/small -e modal \
+  -o apps/minds_evals/jobs apps/minds_evals/jobs/<job>
 ```
+
+Both default to a local docker daemon, so `-e modal` is what makes them use the same environment the
+run did. `-p` takes either one task directory or a dataset of them, in which case the task is matched
+to the trial by `[task].name` and a name that matches none, or more than one, is an error. `-o` is a
+*parent* directory in both, not the directory that gets written: `trial regrade` creates one
+`<task>__<id>` trial directory under it and no job files at all, so only `job regrade` produces
+something `harbor view apps/minds_evals/jobs` lists, and only it prints the mean-reward delta.
+
+Neither touches the source: each seeds a new trial directory with the recorded agent logs and
+artifacts and rebuilds the verifier from the task path given, which means it grades with **today's**
+verifier and today's pinned rewardkit rather than the ones that recorded the trial. Gate criteria are
+programmatic and reproduce exactly; judge criteria are sampled, so a regrade of an unchanged trial
+still moves by whole likert points. Compare a regrade against another regrade, never against the
+original run.
 
 Generate datasets outside the repo tree: each generated task embeds a full mngr-internal clone, and
 one under `apps/` trips the repo's marked-test discovery.
@@ -802,8 +821,10 @@ declare `ui_flows` -- which register `ui_flows_completed` either way -- their ou
 the judge alone rather than an even split with the checks. Those scores are on the same 0-1 scale
 but are not the same measurement; see [Outcome verification](#outcome-verification).
 
-The gate composition lives in the verifier's `test.sh` (`finalize.py`) because rewardkit's
-`reward.toml` aggregations cannot express "binary gate zeroes a weighted mean".
+The gate composition lives in the verifier's `test.sh` (`finalize.py`) because no rewardkit
+aggregation expresses "binary gate zeroes a weighted mean"; a `reward.toml` could express the even
+split on its own, but splitting the composition across two files buys nothing over the handful of
+lines in `finalize.py` that state it next to its rationale.
 
 Note how rewardkit weights a dimension, because it is easy to get backwards: every `.py` criterion
 in a dimension directory is averaged into **one** programmatic reward of weight 1.0, and each

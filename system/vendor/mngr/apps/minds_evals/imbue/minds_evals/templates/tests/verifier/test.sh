@@ -26,9 +26,16 @@ if [ -d /tests/outcome ]; then
   python3 /tests/render_flow_evidence.py
 fi
 
+# The rewardkit version is exact, not a range: `uvx` resolves in an isolated tool
+# environment that honours no cooldown, so a range would let two trials in the
+# same run -- or a trial and a later regrade of it -- be graded by different
+# builds with nothing in the output to say so. It must equal the dev-group pin in
+# pyproject.toml, which is what type-checks these criteria; rewardkit_pin_test
+# enforces that.
+#
 # rewardkit exits nonzero on a hard judge failure and may not write reward.json;
 # tolerate its exit code here and let finalize.py inspect the outputs.
-uvx --from 'harbor-rewardkit==0.1.*' rewardkit /tests --workspace /app || true
+uvx --from 'harbor-rewardkit==0.2.0' rewardkit /tests --workspace /app || true
 
 # finalize.py exits nonzero (aborting under set -e) on a grading failure, after
 # removing any reward file so the trial errors rather than grading a fake 0.0.

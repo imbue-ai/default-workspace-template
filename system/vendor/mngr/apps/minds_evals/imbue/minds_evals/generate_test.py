@@ -403,8 +403,9 @@ def test_generate_dataset_emits_the_outcome_dimension_only_for_expectation_cases
 
     generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
 
-    # rewardkit turns every tests/ subdirectory into a scoring dimension, so a case with nothing to
-    # score must not get the directory at all -- otherwise it would emit a partial outcome score.
+    # rewardkit turns every immediate tests/ subdirectory into a scoring dimension, so a case with
+    # nothing to score must not get the directory at all -- otherwise it would emit a partial
+    # outcome score.
     assert not (output_dir / "greeting" / "tests" / VERIFIER_CRITERIA_DIRNAME / "outcome").exists()
     outcome_dir = output_dir / "todo-app" / "tests" / VERIFIER_CRITERIA_DIRNAME / "outcome"
     assert {path.name for path in outcome_dir.iterdir()} == {"checks.py", "judge.toml", "prompt.md"}

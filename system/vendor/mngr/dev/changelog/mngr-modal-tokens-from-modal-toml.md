@@ -1,0 +1,3 @@
+`just test-offload` no longer requires `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the environment. offload's Modal client resolves credentials the same way the `modal` CLI does -- the environment first, else `~/.modal.toml` -- so anyone who has run `modal token new` can now run the suite with nothing extra in their shell.
+
+An exported pair still takes precedence, so CI (which injects the tokens from Vault) is unaffected. The other offload recipes are unchanged: `just test-offload-acceptance` and `just test-offload-release` forward the values into sandboxes that have no `~/.modal.toml` of their own, and `just test-offload-minds-snapshot` runs in CI alongside jobs that write a `~/.modal.toml` for a different Modal workspace, so all three still require the pair.
