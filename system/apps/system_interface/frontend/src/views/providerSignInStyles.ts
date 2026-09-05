@@ -104,8 +104,9 @@ export const LEAD_LINK = "text-accent underline underline-offset-2 hover:text-ac
  *  stranded in the gap between them. */
 export const HEADER_END = "ml-auto flex shrink-0 items-center gap-4";
 /** Which harness this sign-in will run on. Provider -> harness is fixed, so it is a fact the
- *  screen states rather than a control. */
-export const RUNS_ON = "inline-flex shrink-0 items-baseline gap-1.5 type-body";
+ *  screen states rather than a control -- and helper size, not body, because it sits beside
+ *  the heading as an aside rather than reading as a second title. */
+export const RUNS_ON = "inline-flex shrink-0 items-baseline gap-1.5 type-helper";
 export const RUNS_ON_PREFIX = "text-faint";
 /** The harness is the fact worth reading here, so it carries the weight and the full contrast;
  *  "Runs on" is just the label in front of it. */
