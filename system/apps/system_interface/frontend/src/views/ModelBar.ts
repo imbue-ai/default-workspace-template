@@ -142,6 +142,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   function closeCard(): void {
     cardAnchor = null;
+    // A drag that never released (the card can be torn down mid-gesture) would otherwise
+    // still be driving the label and the thumb the next time the card opens.
+    draggingEffortIndex = null;
     setFlyout(null);
   }
 
@@ -240,8 +243,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
    *    debounces, so a low-to-max drag would queue four sequential switches. This commits
    *    once, on release.
    * 2. Indexed over the SHOWN list, accepting that an agent on a hidden level (claude's
-   *    `ultra`) pins its thumb at the far left. The LABEL still reads correctly, because it
-   *    comes from the value rather than the position.
+   *    `ultra`) pins its thumb at the far left. AT REST the label still reads correctly,
+   *    because it comes from the value rather than the position. Mid-drag it follows the
+   *    position instead, which is the point of dragging.
    */
   function effortRow(opts: {
     efforts: readonly { level: string; in_picker: boolean }[];
@@ -255,15 +259,23 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // one-stop slider renders as an immovable full-green track labelled "Off" -- which looks
     // broken and says the opposite of the truth.
     if (shown.length < 2) return null;
-    const index = Math.max(
+    const committed = Math.max(
       0,
       shown.findIndex((effort) => effort.level === opts.current),
     );
-    const pct = (index / (shown.length - 1)) * 100;
-    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
+    // Mid-drag the row reads off the thumb rather than off the committed choice, so the label
+    // and the track fill travel with the finger instead of both sitting on the old level
+    // until release. Only what is DRAWN moves; the commit is still once, on release.
+    const position = draggingEffortIndex ?? committed;
+    const pct = (position / (shown.length - 1)) * 100;
+    // At rest the label comes from the value (which can name a level `shown` does not carry
+    // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
+    // because the input's own min/max are its bounds.
+    const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
+    return m("div", { class: css.ROW_STATIC, "data-card-row": "effort", ...tooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
-        m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(opts.current ?? shown[index].level)),
+        m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
         m("span", { class: css.SLIDER_WRAP }, [
           // Tick marks behind the track: without them the slider is a bare line and the levels
           // it can land on are guesswork.
@@ -284,7 +296,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             // under the pointer mid-drag on any harness that does not move the chip
             // optimistically -- codex is exactly that. Holding the dragged index locally and
             // clearing it on release keeps the thumb where the finger is.
-            value: draggingEffortIndex ?? index,
+            value: position,
             style:
               `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
               `var(--color-fill-active) ${pct}%)`,
