@@ -1349,6 +1349,15 @@ function panelIdForAddress(address: string): string | null {
   return null;
 }
 
+/** The panel whose tab record carries ``tabId``. The two ids coincide for panels this dock
+ *  minted, but a layout the shell wrote (a migration) may name either, so the record decides. */
+function panelIdForTabId(tabId: string): string | null {
+  for (const [panelId, params] of panelParams) {
+    if (params.kind === "instance" && params.tabId === tabId) return panelId;
+  }
+  return null;
+}
+
 /** Any open panel of ``appName``, or null: what a bare app address resolves to for an agent. */
 function anyPanelIdOfApp(appName: string): string | null {
   for (const [panelId, params] of panelParams) {
@@ -2332,7 +2341,8 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   addTabReboundListener((event: TabReboundEvent) => {
     if (event.clientId !== getClientId() || event.viewId !== mountedViewId) return;
-    rebindPanel(event.tabId, event.address);
+    const panelId = panelIdForTabId(event.tabId);
+    if (panelId !== null) rebindPanel(panelId, event.address);
   });
 
   void initializeActiveView();
