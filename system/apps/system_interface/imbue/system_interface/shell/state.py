@@ -1,6 +1,7 @@
 """``ShellState``: everything the shell's routes and WebSocket loop share, built in ``main.py`` (or by a test)."""
 
 import threading
+from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
@@ -25,7 +26,6 @@ from imbue.system_interface.shell.instance_relay import relay_delete
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.layouts import LayoutStore
 from imbue.system_interface.shell.layouts import StoredLayout
-from imbue.system_interface.shell.layouts import is_same_arrangement
 from imbue.system_interface.shell.layouts import unreferenced_addresses
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
@@ -114,15 +114,19 @@ class ShellState(MutableModel):
         for stored in rewritten:
             self.broadcaster.broadcast_layout_updated(str(stored.view_id), str(stored.client_id), mint_save_id())
 
-    def write_client_layout(self, view_id: ViewId, client_id: ClientId, layout: LayoutRecord) -> LayoutRecord:
-        """Write one client's arrangement (an agent op) and announce it. An edit that leaves the stored arrangement
-        as it was is neither written nor announced, so the client's windows are not asked to refetch for nothing."""
-        stored = self.layouts.read_client_layout(view_id, client_id)
-        if stored is not None and is_same_arrangement(stored, layout):
-            return stored
-        saved = self.layouts.write_client_layout(view_id, client_id, layout, datetime.now(timezone.utc))
-        self._broadcast_layout_updated([StoredLayout(view_id=view_id, client_id=client_id, layout=saved)])
-        return saved
+    def edit_client_layout(
+        self, view_id: ViewId, client_id: ClientId, transform: Callable[[LayoutRecord], LayoutRecord]
+    ) -> LayoutRecord:
+        """Apply an agent op's edit to one client's arrangement and announce the write. The arrangement is read,
+        edited, and written under the state lock, so a browser's save cannot slip in between and be overwritten; an
+        edit that leaves the arrangement as it was is neither written nor announced, so the client's windows are not
+        asked to refetch for nothing."""
+        outcome = self.layouts.edit_client_layout(
+            view_id, client_id, self._device_kind_of(client_id), transform, datetime.now(timezone.utc)
+        )
+        if outcome.is_written:
+            self._broadcast_layout_updated([StoredLayout(view_id=view_id, client_id=client_id, layout=outcome.layout)])
+        return outcome.layout
 
     def save_browser_layout(self, view_id: ViewId, request: LayoutSaveRequest) -> LayoutRecord | None:
         """A browser's save (contracts.md section 6): written and announced with the window's own save id, then the
@@ -140,10 +144,13 @@ class ShellState(MutableModel):
         return saved
 
     def materialize_client_layout(self, view_id: ViewId, client_id: ClientId) -> LayoutRecord:
-        """The client's arrangement of the view to edit: its own, else the seed of its device kind (contracts.md section 7)."""
+        """The client's arrangement of the view as an op sees it: its own, else the seed of its device kind (contracts.md section 7)."""
+        return self.layouts.read_layout(view_id, client_id, self._device_kind_of(client_id))
+
+    def _device_kind_of(self, client_id: ClientId) -> DeviceKind:
+        """The device kind whose seed a client without an arrangement of a view starts from; desktop for one never recorded."""
         record = self.clients.get_client(client_id)
-        device_kind = record.device_kind if record is not None else DeviceKind.DESKTOP
-        return self.layouts.read_layout(view_id, client_id, device_kind)
+        return record.device_kind if record is not None else DeviceKind.DESKTOP
 
     def rebind_tab(self, tab_id: TabId, address: Address) -> list[StoredLayout]:
         """Point a tab at another instance of its app everywhere it is saved, announcing both the rebind and the write."""

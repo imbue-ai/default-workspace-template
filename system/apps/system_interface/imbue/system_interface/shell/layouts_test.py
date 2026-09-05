@@ -142,6 +142,36 @@ def test_a_browser_save_that_changes_nothing_is_skipped(tmp_path: Path) -> None:
     assert store.read_layout("everything", "c1", DeviceKind.DESKTOP).updated_at == TEST_NOW
 
 
+def test_an_edit_reads_the_stored_arrangement_at_the_write_and_skips_a_change_of_nothing(tmp_path: Path) -> None:
+    store = LayoutStore(state_directory=tmp_path)
+    seen: list[LayoutRecord] = []
+
+    def drop_files(layout: LayoutRecord) -> LayoutRecord:
+        seen.append(layout)
+        return strip_address_from_layout(layout, _FILES)
+
+    # A client with no arrangement of the view starts from the seed of its device kind, then from its own file.
+    store.save_browser_layout("everything", "seed-maker", _layout(), None, TEST_NOW)
+    first = store.edit_client_layout(
+        "everything", "c1", DeviceKind.DESKTOP, drop_files, TEST_NOW + timedelta(seconds=1)
+    )
+    assert first.is_written is True and set(first.layout.tabs) == {"p2"}
+    assert seen[0].tabs.keys() == {"p1", "p2"}
+    assert store.read_client_layout("everything", "c1") == first.layout
+    # The edit is handed what is stored when it runs, not an earlier snapshot: a browser save in between is what it sees.
+    store.save_browser_layout("everything", "c1", _layout(), first.layout.updated_at, TEST_NOW + timedelta(seconds=2))
+    second = store.edit_client_layout(
+        "everything", "c1", DeviceKind.DESKTOP, drop_files, TEST_NOW + timedelta(seconds=3)
+    )
+    assert seen[-1].tabs.keys() == {"p1", "p2"} and second.is_written is True
+    # An edit that changes nothing is neither written nor stamped.
+    third = store.edit_client_layout(
+        "everything", "c1", DeviceKind.DESKTOP, drop_files, TEST_NOW + timedelta(seconds=4)
+    )
+    assert third.is_written is False and third.layout == second.layout
+    assert store.read_client_layout("everything", "c1") == second.layout
+
+
 def test_the_shells_own_write_leaves_the_seed_alone(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
     store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)

@@ -835,13 +835,6 @@ def _require_panel(layout: LayoutRecord, address: Address) -> str:
     return panel_id
 
 
-def _title_for(shell: ShellState, address: Address) -> str:
-    found = shell.inventory.find_instance(address)
-    if found is None:
-        raise InstanceNotListedError(f"No app lists an instance at {address}; run `layout.py list` to see every one")
-    return found[1].title
-
-
 def _create_through_relay(shell: ShellState, entry: AppInventoryEntry, arguments: DocumentOpArguments) -> Address:
     """Run the app's action through the relay (the same route the browser uses) and answer the address it made."""
     declared = effective_actions(entry.row)
@@ -914,40 +907,91 @@ def _docking_placement(
     )
 
 
-def _apply_docking_op(
-    shell: ShellState, op: str, layout: LayoutRecord, arguments: DocumentOpArguments, requester_chat: Address | None
-) -> tuple[LayoutRecord, Address, Address | None]:
-    """``open`` or ``split``: the edited layout, the address docked, and the address created (when the op created)."""
+class _DocumentOpTarget(FrozenModel):
+    """What a document op acts on once its address is settled: ``self`` resolved, or the instance the op created."""
+
+    address: Address = Field(description="The instance the op docks, focuses, closes, or moves")
+    title: str | None = Field(description="The title a dock gives the new panel; None when no app lists the address")
+    created: Address | None = Field(description="The address the op created through the relay, when it created one")
+
+
+def _prepare_docking_target(
+    shell: ShellState,
+    op: str,
+    snapshot: LayoutRecord,
+    arguments: DocumentOpArguments,
+    requester_chat: Address | None,
+) -> _DocumentOpTarget:
+    """Settle what ``open`` or ``split`` docks, over a snapshot of the arrangement and outside the state lock: the app
+    must be registered, a split's anchor must be docked before any create runs (so a bad anchor makes no instance),
+    and a bare app with instances is created through the relay here."""
     address = _resolve_op_address(arguments.address, requester_chat)
     entry = shell.inventory.entry(str(address.app))
     if entry is None:
         raise UnknownAppError(f"No registered app named {address.app!r}")
     is_creating = address.key is None and entry.row.instances
-    if not is_creating:
-        already_open = panel_id_for_address(layout, address)
-        if already_open is not None:
-            return focus_panel(layout, already_open), address, None
-    # A split needs its anchor before any create runs, so a bad anchor is refused without making an instance.
-    placement = _docking_placement(layout, op, arguments, requester_chat)
+    if is_creating and op == "split":
+        _anchor_panel_id(snapshot, arguments.relative_to, requester_chat)
     docked = _create_through_relay(shell, entry, arguments) if is_creating else address
-    title = _title_for(shell, docked)
-    return add_panel(layout, docked, mint_tab_id(), title, placement), docked, docked if is_creating else None
+    found = shell.inventory.find_instance(docked)
+    return _DocumentOpTarget(
+        address=docked,
+        title=found[1].title if found is not None else None,
+        created=docked if is_creating else None,
+    )
+
+
+def _prepare_op_target(
+    shell: ShellState,
+    op: str,
+    snapshot: LayoutRecord,
+    arguments: DocumentOpArguments,
+    requester_chat: Address | None,
+) -> _DocumentOpTarget:
+    if is_creating_op(op):
+        return _prepare_docking_target(shell, op, snapshot, arguments, requester_chat)
+    return _DocumentOpTarget(address=_resolve_op_address(arguments.address, requester_chat), title=None, created=None)
+
+
+def _dock_target(
+    layout: LayoutRecord,
+    op: str,
+    target: _DocumentOpTarget,
+    arguments: DocumentOpArguments,
+    requester_chat: Address | None,
+) -> LayoutRecord:
+    """``open`` or ``split`` over the arrangement as it is at the write: an address it already shows is focused, a
+    listed one is docked per the op's placement, and one that is neither is not open anywhere."""
+    already_open = panel_id_for_address(layout, target.address)
+    if already_open is not None:
+        return focus_panel(layout, already_open)
+    placement = _docking_placement(layout, op, arguments, requester_chat)
+    if target.title is None:
+        raise InstanceNotListedError(
+            f"No app lists an instance at {target.address}; run `layout.py list` to see every one"
+        )
+    return add_panel(layout, target.address, mint_tab_id(), target.title, placement)
 
 
 def _edit_layout_for_op(
-    shell: ShellState, op: str, layout: LayoutRecord, arguments: DocumentOpArguments, requester_chat: Address | None
-) -> tuple[LayoutRecord, Address | None, Address | None]:
-    """The layout with ``op`` applied, the address it docked (filed into a project view), and the address it created."""
+    op: str,
+    layout: LayoutRecord,
+    target: _DocumentOpTarget,
+    arguments: DocumentOpArguments,
+    requester_chat: Address | None,
+) -> LayoutRecord:
+    """The arrangement with ``op`` applied. Pure over the layout it is handed, which is the stored one at the moment of
+    the write (the panel ids are resolved on it, not on the snapshot the op was prepared over)."""
     if is_creating_op(op):
-        return _apply_docking_op(shell, op, layout, arguments, requester_chat)
-    panel_id = _require_panel(layout, _resolve_op_address(arguments.address, requester_chat))
+        return _dock_target(layout, op, target, arguments, requester_chat)
+    panel_id = _require_panel(layout, target.address)
     match op:
         case "focus":
-            return focus_panel(layout, panel_id), None, None
+            return focus_panel(layout, panel_id)
         case "close":
-            return remove_panel(layout, panel_id), None, None
+            return remove_panel(layout, panel_id)
         case "move":
-            return move_panel(layout, panel_id, _anchored_placement(layout, arguments, requester_chat)), None, None
+            return move_panel(layout, panel_id, _anchored_placement(layout, arguments, requester_chat))
         case _:
             raise ShellError(f"Op {op!r} has no document handler")
 
@@ -962,11 +1006,17 @@ def _op_document(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id:
     view_id = ViewId(view_raw)
     if not shell.projects.is_view_known(view_id):
         raise ProjectNotFoundError(view_raw)
-    layout = shell.materialize_client_layout(view_id, client_id)
-    edited, filed, created = _edit_layout_for_op(shell, op, layout, arguments, _requester_chat_address(agent_id))
-    saved = shell.write_client_layout(view_id, client_id, edited)
-    if filed is not None and not is_everything_view(view_id):
-        shell.projects.add_tab(view_id, filed)
+    # What the op acts on is settled over a snapshot, outside the state lock (a create may wait on the app for a
+    # while); the edit itself runs under the lock over the arrangement as it is then.
+    requester_chat = _requester_chat_address(agent_id)
+    target = _prepare_op_target(
+        shell, op, shell.materialize_client_layout(view_id, client_id), arguments, requester_chat
+    )
+    saved = shell.edit_client_layout(
+        view_id, client_id, lambda layout: _edit_layout_for_op(op, layout, target, arguments, requester_chat)
+    )
+    if is_creating_op(op) and not is_everything_view(view_id):
+        shell.projects.add_tab(view_id, target.address)
         shell.broadcast_projects_updated()
     if op == "close":
         shell.delete_unreferenced_instances()
@@ -983,7 +1033,7 @@ def _op_document(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id:
             "view_id": str(view_id),
             "client_id": str(client_id),
             "layout": layout_inspect(saved, _title_by_address(shell)),
-            "created_address": str(created) if created is not None else None,
+            "created_address": str(target.created) if target.created is not None else None,
         }
     )
 

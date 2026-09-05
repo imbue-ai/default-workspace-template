@@ -245,3 +245,12 @@ class ClientReportOutcome(FrozenModel):
 
     record: ClientRecord = Field(description="The client record as written")
     is_active_view_changed: bool = Field(description="Whether the stored active view differs from before the report")
+
+
+class LayoutEditOutcome(FrozenModel):
+    """What editing a client's layout under the state lock came to: the arrangement now in force, and whether it was written."""
+
+    layout: LayoutRecord = Field(description="The arrangement after the edit, stamped when it was written")
+    is_written: bool = Field(
+        description="Whether the edit changed the arrangement and was written to the client's file"
+    )
