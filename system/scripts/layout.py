@@ -143,8 +143,8 @@ _OP_TIMEOUT_SECONDS = 160.0
 _SHORTCUT_MODES = ("focus", "new")
 
 # Exit codes: 0 / 1 / 3. Agents branch on "did it work"; the one distinct code worth its
-# own slot is contention, where retry-with-backoff is the right response. Slot 2 is left
-# to argparse's usage exit.
+# own slot is an app that cannot act right now (a 409 or a 503 from it), where
+# retry-with-backoff is the right response. Slot 2 is left to argparse's usage exit.
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_CONFLICT = 3
@@ -393,7 +393,7 @@ def _maybe_parse_json(text: str) -> dict[str, Any] | str:
 
 
 def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
-    """Translate (status, body) into a stderr message + exit code; only a 409 (the app cannot do it right now) has its own code."""
+    """Translate (status, body) into a stderr message + exit code; only a 409 or a 503 (the app cannot do it right now) has its own code."""
     if status == -1:
         sys.stderr.write(f"error: could not reach the workspace shell: {body}\n")
         return EXIT_ERROR
@@ -405,9 +405,10 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
                 f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n"
             )
             return EXIT_ERROR
-        if status == 409:
-            # The app cannot do it right now (a full browser fleet, no signed-in account): retry later.
-            sys.stderr.write(f"error: {op!r} rejected (HTTP 409 conflict): {detail}\n")
+        if status in (409, 503):
+            # The app cannot do it right now (a full browser fleet, no signed-in account, an app
+            # still starting up): retry later.
+            sys.stderr.write(f"error: {op!r} rejected (HTTP {status}): {detail}\n")
             return EXIT_CONFLICT
         if status == 404:
             sys.stderr.write(f"error: {op!r} target not found (HTTP 404): {detail}\n")

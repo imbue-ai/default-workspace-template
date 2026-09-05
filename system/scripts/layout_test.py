@@ -557,6 +557,11 @@ def test_where_shows_tab_mates_and_neighbors(
         ((-1, "connection refused"), layout.EXIT_ERROR, "could not reach"),
         ((409, {"detail": "2/2 browsers open"}), layout.EXIT_CONFLICT, "409"),
         (
+            (503, {"detail": "the chat app has not read its agent list"}),
+            layout.EXIT_CONFLICT,
+            "503",
+        ),
+        (
             (404, {"detail": "No registered app named 'x'"}),
             layout.EXIT_ERROR,
             "not found",
