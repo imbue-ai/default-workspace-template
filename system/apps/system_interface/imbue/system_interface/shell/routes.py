@@ -562,7 +562,8 @@ def _resolve_client(shell: ShellState, args_raw: dict[str, Any], agent_id: str, 
     """The client an op addresses: ``args.client``, else the client that last messaged the requesting agent, else the one connected client on the view."""
     explicit = args_raw.get("client")
     if isinstance(explicit, str) and explicit:
-        return explicit
+        # Held to the client id rule before it names a layout file.
+        return str(ClientId(explicit))
     # The requester is an agent, and agents are the chat app's instances (keyed by agent id).
     attributed = find_client_id_for_instance(shell.activity.read_events(), CHAT_APP_NAME_FOR_ATTRIBUTION, agent_id)
     if attributed is not None:
