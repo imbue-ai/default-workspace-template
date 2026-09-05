@@ -393,7 +393,7 @@ def _maybe_parse_json(text: str) -> dict[str, Any] | str:
 
 
 def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
-    """Translate (status, body) into a stderr message + exit code; only mutex contention is distinct."""
+    """Translate (status, body) into a stderr message + exit code; only a 409 (the app cannot do it right now) has its own code."""
     if status == -1:
         sys.stderr.write(f"error: could not reach the workspace shell: {body}\n")
         return EXIT_ERROR
