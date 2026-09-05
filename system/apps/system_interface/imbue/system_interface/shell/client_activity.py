@@ -8,8 +8,8 @@ previous view, so an agent can work out which client (and view) a request came f
 
 import json
 import threading
+from collections.abc import Mapping
 from collections.abc import Sequence
-from collections.abc import Set as AbstractSet
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -162,27 +162,35 @@ def _event_view_id(event: dict[str, Any]) -> str | None:
 
 
 @pure
+def _empty_client_summary(client_id: str) -> dict[str, Any]:
+    return {
+        "client_id": client_id,
+        "device_kind": "",
+        "active_view": None,
+        "last_seen": "",
+        "is_connected": False,
+        "recent_messages": [],
+    }
+
+
+@pure
 def summarize_client_activity(
     events: Sequence[dict[str, Any]],
-    connected_client_ids: AbstractSet[str],
+    # The broadcaster's registrations: each carries ``client_id``, ``active_view``, and ``device_kind``.
+    connected_clients: Sequence[Mapping[str, str]],
 ) -> list[dict[str, Any]]:
-    """Fold the log into one summary per client, most recently seen first (the ``context`` op)."""
+    """Fold the log into one summary per client, most recently seen first (the ``context`` op).
+
+    Every connected client is listed with its live view and device kind, whether or not the
+    log holds anything for it: a client that has neither messaged nor switched views yet has
+    no event, and is still the one an agent's op should land on.
+    """
     summary_by_client_id: dict[str, dict[str, Any]] = {}
     for event in events:
         client_id = str(event.get("client_id", ""))
         if not client_id:
             continue
-        summary = summary_by_client_id.setdefault(
-            client_id,
-            {
-                "client_id": client_id,
-                "device_kind": "",
-                "active_view": None,
-                "last_seen": "",
-                "is_connected": False,
-                "recent_messages": [],
-            },
-        )
+        summary = summary_by_client_id.setdefault(client_id, _empty_client_summary(client_id))
         summary["last_seen"] = str(event.get("timestamp", ""))
         device_kind = str(event.get("device_kind", ""))
         if device_kind:
@@ -199,9 +207,14 @@ def summarize_client_activity(
                 }
             )
             del summary["recent_messages"][:-RECENT_MESSAGES_PER_CLIENT]
-    for client_id in connected_client_ids:
-        if client_id in summary_by_client_id:
-            summary_by_client_id[client_id]["is_connected"] = True
+    # The live registrations are fresher than the log (and the only record of a client that
+    # has logged nothing yet), so they settle the view and the device kind.
+    for connected in connected_clients:
+        client_id = connected["client_id"]
+        summary = summary_by_client_id.setdefault(client_id, _empty_client_summary(client_id))
+        summary["is_connected"] = True
+        summary["active_view"] = connected["active_view"]
+        summary["device_kind"] = connected["device_kind"]
     return sorted(summary_by_client_id.values(), key=lambda summary: summary["last_seen"], reverse=True)
 
 

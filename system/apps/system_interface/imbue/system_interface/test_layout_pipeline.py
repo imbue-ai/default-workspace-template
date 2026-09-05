@@ -239,7 +239,8 @@ def _sandbox(tmp_path: Path) -> Path:
 def test_inspect_and_context_round_trip_through_script_and_endpoint(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
-    """``inspect --json`` and ``context --json`` answer with the empty shapes for a machine nobody has opened."""
+    """``inspect --json`` and ``context --json`` answer with the empty shapes for a machine nobody has opened,
+    and ``context`` lists a client as soon as it connects, before it has messaged or switched views."""
     sandbox = _sandbox(tmp_path)
 
     inspect = _run_layout_script(["inspect", "--json"], layout_server, sandbox)
@@ -249,6 +250,17 @@ def test_inspect_and_context_round_trip_through_script_and_endpoint(
     context = _run_layout_script(["context", "--json"], layout_server, sandbox)
     assert context.returncode == 0, f"stderr={context.stderr!r}"
     assert json.loads(context.stdout) == []
+
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, "client-silent", "everything", "desktop")
+    try:
+        connected = _run_layout_script(["context", "--json"], layout_server, sandbox)
+        assert connected.returncode == 0, f"stderr={connected.stderr!r}"
+        (entry,) = json.loads(connected.stdout)
+        assert entry["client_id"] == "client-silent"
+        assert entry["is_connected"] is True and entry["active_view"] == "everything"
+    finally:
+        layout_server.broadcaster.unregister(client_queue)
 
 
 def test_mutating_op_without_client_on_view_fails_with_412(layout_server: PipelineHarness, tmp_path: Path) -> None:

@@ -640,14 +640,7 @@ def _op_views(shell: ShellState, agent_id: str) -> ResponseReturnValue:
 
 
 def _op_context(shell: ShellState, agent_id: str) -> ResponseReturnValue:
-    events = shell.activity.read_events()
-    connected_infos = shell.broadcaster.get_connected_client_infos()
-    live_view_by_client_id = {info["client_id"]: info["active_view"] for info in connected_infos}
-    clients = summarize_client_activity(events, set(live_view_by_client_id))
-    for client_summary in clients:
-        live_view = live_view_by_client_id.get(client_summary["client_id"])
-        if live_view:
-            client_summary["active_view"] = live_view
+    clients = summarize_client_activity(shell.activity.read_events(), shell.broadcaster.get_connected_client_infos())
     logger.info("layout op=context agent_id={} clients={}", agent_id, len(clients))
     return jsonify({"ok": True, "clients": clients})
 
