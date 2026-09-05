@@ -1,10 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../testing/dom";
 
-vi.hoisted(() => {
-  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-});
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The chat tile's provider picker reads the account list; the launcher itself never needs one.
 vi.mock("../models/Providers", () => ({
@@ -16,7 +13,7 @@ vi.mock("../models/Providers", () => ({
 
 import m from "mithril";
 
-import type { AppRecord } from "../models/Inventory";
+import { appRecord } from "../testing/records";
 import {
   NewTabLauncher,
   appsInRows,
@@ -26,26 +23,6 @@ import {
   sortRowsByRecency,
 } from "./NewTabLauncher";
 import type { LauncherRow, NewTabLauncherAttrs } from "./NewTabLauncher";
-
-function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
-  return {
-    name,
-    display_name: name[0].toUpperCase() + name.slice(1),
-    icon: "",
-    label: "",
-    url: `http://127.0.0.1:1/${name}`,
-    internal: false,
-    program: name,
-    critical: false,
-    instances_url: "",
-    has_instances: true,
-    actions: [{ id: "new", label: `New ${name}` }],
-    default_shortcut: null,
-    is_running: true,
-    instances: [],
-    ...overrides,
-  };
-}
 
 function row(
   address: string,
@@ -126,8 +103,8 @@ describe("NewTabLauncher", () => {
   function mount(overrides: Partial<NewTabLauncherAttrs>): NewTabLauncherAttrs {
     const attrs: NewTabLauncherAttrs = {
       tiles: [
-        { app: app("chat", { critical: true }), action: { id: "new", label: "New Chat" } },
-        { app: app("terminal"), action: { id: "new", label: "New terminal" } },
+        { app: appRecord("chat", { critical: true }), action: { id: "new", label: "New Chat" } },
+        { app: appRecord("terminal"), action: { id: "new", label: "New terminal" } },
       ],
       rows: MACHINE,
       memberRows: [MACHINE[1]],

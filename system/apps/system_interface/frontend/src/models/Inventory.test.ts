@@ -1,9 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../testing/dom";
 
-vi.hoisted(() => {
-  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-});
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   addressFor,
@@ -18,29 +15,22 @@ import {
   resetInventoryForTesting,
 } from "./Inventory";
 import type { AppRecord, InstanceRecord } from "./Inventory";
+import { appRecord, instanceRecord } from "../testing/records";
 
 function instance(key: string, title: string, url: string = "/"): InstanceRecord {
-  return { key, url, title, status: "idle", lifetime: "explicit", last_active: null, renameable: false };
+  return instanceRecord({ key, title, url, lifetime: "explicit", renameable: false });
 }
 
 function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
-  return {
-    name,
-    display_name: name.charAt(0).toUpperCase() + name.slice(1),
-    icon: "",
+  return appRecord(name, {
     label: `${name}-1a2b`,
     url: `http://127.0.0.1:9${name.length}00`,
-    internal: false,
     program: "",
-    critical: false,
-    instances_url: "",
     has_instances: false,
     actions: [],
-    default_shortcut: null,
-    is_running: true,
     instances: [instance("", name)],
     ...overrides,
-  };
+  });
 }
 
 describe("addresses", () => {

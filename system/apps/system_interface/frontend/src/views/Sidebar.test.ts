@@ -1,61 +1,26 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../testing/dom";
 
-vi.hoisted(() => {
-  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-});
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
-import type { AppRecord, ProjectInfo } from "../models/Inventory";
+import type { AppRecord } from "../models/Inventory";
 import { applyApps, resetInventoryForTesting } from "../models/Inventory";
 import { EVERYTHING_VIEW_ID } from "../models/Projects";
 import { Sidebar, effectiveShortcuts, nextGlyphIndex, nextProjectName, placeMenu, shortcutLabel } from "./Sidebar";
 import type { SidebarAttrs, SidebarTabRow } from "./Sidebar";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
+import { appRecord, instanceRecord, projectRecord } from "../testing/records";
 
 function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
-  return {
-    name,
-    display_name: name[0].toUpperCase() + name.slice(1),
-    icon: "",
-    label: "",
-    url: `http://127.0.0.1:1/${name}`,
-    internal: false,
-    program: name,
-    critical: false,
-    instances_url: "",
-    has_instances: true,
-    actions: [{ id: "new", label: `New ${name}` }],
-    default_shortcut: null,
-    is_running: true,
-    instances: [
-      {
-        key: "one",
-        url: "/",
-        title: `${name} one`,
-        status: "idle",
-        lifetime: "referenced",
-        last_active: null,
-        renameable: true,
-      },
-    ],
+  return appRecord(name, {
+    instances: [instanceRecord({ key: "one", title: `${name} one` })],
     ...overrides,
-  };
+  });
 }
 
-function project(id: string, overrides: Partial<ProjectInfo> = {}): ProjectInfo {
-  return {
-    id,
-    name: id[0].toUpperCase() + id.slice(1),
-    color: "#123456",
-    glyph: 0,
-    tabs: [],
-    shortcuts: [],
-    ...overrides,
-  };
-}
+const project = projectRecord;
 
 describe("placeMenu", () => {
   const viewport = { width: 1000, height: 800 };
