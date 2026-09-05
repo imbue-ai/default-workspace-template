@@ -119,7 +119,6 @@ _TRIGGER_TIMEOUT_MS = 20000
 
 # Comfortably past the workspace's 1500ms autosave debounce, so a test can wait for the
 # writes an action already triggered to land before provoking the next.
-AUTOSAVE_SETTLE_MS = 3000
 
 
 def _chat(page: Page, agent_id: str = _FIXTURE_AGENT_ID) -> FrameLocator:
