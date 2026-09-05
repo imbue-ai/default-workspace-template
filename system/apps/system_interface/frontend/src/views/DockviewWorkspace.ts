@@ -171,6 +171,9 @@ const DELETE_INSTANCE_DETAILS =
 // the relay ran is in the ``apps_updated`` the shell pushes before it answers, which can still
 // reach this window after the answer does.
 const AWAIT_ADDRESS_TIMEOUT_MS = 4000;
+// A deep link is applied right after the page loads, before the shell may have fetched every app's
+// list, so it waits longer for its address than an open that follows a create does.
+const DEEP_LINK_ADDRESS_TIMEOUT_MS = 15000;
 
 interface DeleteDialogState {
   address: string;
@@ -1726,7 +1729,7 @@ function takeDeepLinkFromLocation(): DeepLink {
  *  a target nothing lists is ignored. */
 async function applyDeepLinkTargets(link: DeepLink): Promise<void> {
   if (link.openAddress !== null) {
-    if (await whenAddressListed(link.openAddress)) {
+    if (await whenAddressListed(link.openAddress, DEEP_LINK_ADDRESS_TIMEOUT_MS)) {
       openAddressInGroup(link.openAddress, null);
     } else {
       console.warn(`[si] deep link ignored: nothing lists ${link.openAddress}`);
@@ -1879,7 +1882,7 @@ function openInstanceForChildFrame(frame: HTMLIFrameElement, payload: Record<str
 
 /** Resolve to whether the inventory lists ``address``: at once, when its next list arrives, or
  *  false once ``AWAIT_ADDRESS_TIMEOUT_MS`` passes without it. */
-function whenAddressListed(address: string): Promise<boolean> {
+function whenAddressListed(address: string, timeoutMs: number = AWAIT_ADDRESS_TIMEOUT_MS): Promise<boolean> {
   if (findInstance(address) !== null) return Promise.resolve(true);
   return new Promise<boolean>((resolve) => {
     const settle = (isListed: boolean): void => {
@@ -1890,7 +1893,7 @@ function whenAddressListed(address: string): Promise<boolean> {
     const listener = (): void => {
       if (findInstance(address) !== null) settle(true);
     };
-    const timer = setTimeout(() => settle(false), AWAIT_ADDRESS_TIMEOUT_MS);
+    const timer = setTimeout(() => settle(false), timeoutMs);
     addAppsUpdatedListener(listener);
   });
 }
@@ -2285,6 +2288,7 @@ export const DockviewWorkspace: m.Component = {
       {
         class: "dockview-workspace",
         style: "width: 100%; height: 100%;",
+        "data-view-id": mountedViewId ?? "",
       },
       [
         deleteDialog !== null

@@ -42,31 +42,37 @@ every address on the machine, with each instance's title and status, so you
 never have to guess: find the row whose title the user said, and use its
 address.
 
-External `https://` URLs cannot be opened as tabs yet (that lands in phase 8
-of the workspace app model); open them in a browser instance instead.
+A bare `https://` URL is also an `open` target: `open https://example.com`
+starts a new browser on that page (the browser app's `new` action with the URL
+as its `url` param) and prints the new browser's address.
 
-## Views
+## Clients and views
 
 The workspace shows one *view* at a time: a **project** (a shared set of tabs
 plus its own arrangement) or **Everything** (every instance on the machine).
-Each connected browser client has exactly one view active, and every change
-that client makes auto-saves into its own arrangement of that view.
+Every browser **client** (one per browser; its windows share it) has one
+active view and its own arrangement of every view, kept in a file on the
+shell. That file is the truth: the browser saves the user's own gestures into
+it, and the shell edits it for your ops, so an op lands whether or not a
+browser is connected and a connected window shows it within a redraw.
 
-- **An op with no target goes to the view the connected client is looking
-  at.** That is what you want nearly always; just run the op.
-- **Pass `--view <name>` to address a different view** (a project's name, or
-  `Everything`). The op applies only on connected clients that have that
-  view active; with none, it fails fast with an error listing what each
-  client is on.
+- **Every op targets exactly one client.** With no `--client`, that is the
+  client that most recently messaged you, else the one connected client.
+  When neither settles it (several clients, an agent nobody messaged), the op
+  is refused with the connected clients listed; pass `--client <id>` (from
+  `context`). Ops are never applied to every client at once.
+- **An op with no `--view` edits the client's active view.** That is what
+  you want nearly always; just run the op.
+- **Pass `--view <name>` to edit a different view** (a project's name, or
+  `Everything`). The op edits that view's arrangement and switches the client
+  to it, so the user sees what you arranged.
 - **`views` lists the views**: every project plus Everything, each with its
   tab set and which connected clients have it in front.
 - **`context` tells you which client asked**: every known client with its
   device kind, active view, connection state, and last few messages. The
   client that most recently messaged you is almost always the requester.
-- **`load <view>` switches a client onto a view** so you can then mutate it
-  (`load "Research"`, then run your ops). By default it targets the client
-  that most recently messaged you; pass `--client <id>` (from `context`) to
-  pick one explicitly.
+- **`load <view>` switches a client onto a view** without changing any
+  arrangement (`load "Research"`).
 
 Every tab you open in a project is filed into that project's tab set, so it
 shows in the project's rail and on every device.
@@ -82,6 +88,8 @@ shows in the project's rail and on every device.
 | Locate one panel, its tab-mates, and its neighbors | `python3 system/scripts/layout.py where <address> [--view <name>]` |
 | Switch a client onto a view | `python3 system/scripts/layout.py load <view> [--client <id>]` |
 | Surface an instance alongside your chat | `python3 system/scripts/layout.py open <address>` |
+| Open a web page in a new browser | `python3 system/scripts/layout.py open https://example.com` |
+| Create an instance with arguments | `python3 system/scripts/layout.py open terminal --param workdir=/data` |
 | Put a new terminal in the same tab group as your chat | `python3 system/scripts/layout.py split terminal --relative-to=self --direction=within` |
 | Close a tab | `python3 system/scripts/layout.py close <address>` |
 
@@ -96,21 +104,25 @@ What `open` does with each target:
   open (use `focus` to bring it to the front).
 - `open app:terminal?instance=terminal-2` (an instance address): docks that
   instance, or reports a no-op if it is already open.
-- `open terminal` (a bare app that has instances): runs the app's action and
-  creates a **fresh** instance every time, exactly like the rail's "New
-  Terminal". The new instance's address is printed to **stdout** so you can
-  capture it for later ops. The same holds for `open chat` (a new chat),
-  `open browser` (a new browser), and `open files` (a new file viewer: the
-  files app has instances too, so `app:files` never names an open viewer).
-
-A terminal created this way starts in the workspace root; `cd` in it to go
-elsewhere (passing a `workdir` to the terminal's action lands with `--param`
-in phase 8 of the workspace app model).
+- `open terminal` (a bare app that has instances): runs the app's action
+  through the app and creates a **fresh** instance every time, exactly like
+  the rail's "New Terminal". The new instance's address is printed to
+  **stdout** so you can capture it for later ops. The same holds for `open
+  chat` (a new chat), `open browser` (a new browser), and `open files` (a new
+  file viewer: the files app has instances too, so `app:files` never names an
+  open viewer). `--action <id>` picks another of the app's actions and
+  `--param name=value` (repeatable) passes the create's params: `open
+  terminal --param workdir=/data`, `open files --param path=/data/notes`. An
+  app's refusal (a full browser fleet, no signed-in account) is the op's
+  error, printed as the app spelled it.
+- `open https://example.com` (a URL): a new browser on that page.
 
 ## Less common operations
 
-All of these take the same optional `--view <name>` as `open` (except
-`refresh`, which reloads iframes on every client):
+All of these take the same `--client` as `open`; `split`, `focus`, `move`
+take `--view` too. `maximize`, `restore`, and `refresh` change what is on the
+target client's screen without changing the saved arrangement (a `refresh` of
+a whole app reloads its iframes on every client):
 
 | Goal | Command |
 |---|---|
@@ -178,30 +190,27 @@ pass `--json` for programmatic consumption.
 Run `python3 system/scripts/layout.py --help` (or `<subcommand> --help`) for
 the full surface.
 
-## Mutating ops are synchronous
+## Ops answer at once
 
-Every dock op (`open`, `split`, `move`, `focus`, `close`, `maximize`,
-`restore`, `refresh`) waits for the resulting state to be observable via
-`inspect` before returning. On success it prints a one-line diff on
-**stderr** (`opened app:terminal?instance=terminal-2 in tabs=[...]`, `created
-app:terminal?instance=terminal-3 in tabs=[...]`, `moved ... into ...`). On a
-**no-op** it prints `no change: <address> is already ...` and exits 0.
-`maximize`, `restore`, and `refresh` change nothing `inspect` can see, so they
-print `(broadcast sent; no observable layout-state change to confirm)`.
+The shell edits the client's arrangement itself and answers with the result,
+so every dock op returns as soon as the file is written. `open`, `split`,
+`move`, `focus`, and `close` print a one-line description on **stderr**
+(`opened app:terminal?instance=terminal-2 in tabs=[...]`, `moved ... in
+...`); opening an address that is already open focuses it. `maximize`,
+`restore`, and `refresh` print `(sent <op> to client <id>)`.
 
 **stdout** is reserved for machine-readable output: the address of an
 instance `open` / `split` created, and the structured output of the read
-commands. Diffs and no-op messages always go to stderr.
+commands. Descriptions always go to stderr.
 
 ## Exit codes
 
 - `0` ok (including no-op successes)
-- `1` error (the specific reason is in stderr, including the wait-stable
-  timeout and the "no connected client has that view active" rejection; for
-  the latter, `load` the view first or ask the user to switch)
-- `3` mutex conflict: another agent's layout op is in flight (retry after a
-  short backoff; the stderr message includes the in-flight holder's
-  `agent_id`, `op`, `args`, `started_at`, and a suggested `retry_after_ms`)
+- `1` error (the specific reason is in stderr, including "could not tell
+  which client this op is for", for which you pass `--client <id>` from
+  `context`, and an address that is not open or that no app lists)
+- `3` the app cannot do it right now (a full browser fleet, no signed-in
+  account for a new chat): retry after a short backoff, or tell the user
 
 ## When NOT to use this skill
 

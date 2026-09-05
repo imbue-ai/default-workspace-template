@@ -33,3 +33,10 @@ Phase 7 of the workspace app model (the shell core):
 - update-self's teardown closes a stale preview tab before deregistering its app (an op addressed to an unregistered app is refused); build-app describes `layout.py open` as a no-op for an already-open tab and `list` as the per-app instance listing.
 
 - The build-app scaffold's index page posts `{type: "shell:location", path}` (the contract's message) rather than the retired `minds-location`, which the shell no longer accepts; the skill doc describes the beacon as relayed to the app's own instances API.
+
+
+Phase 8 of the workspace app model (the layout file is the truth):
+
+- `manage-layout` describes the new model: every op targets exactly one client (`--client`), ops land with no browser connected and answer at once, `--view` edits a view and switches the client to it, `open` takes `--action` and `--param` and a bare URL, and the exit codes (a 3 is now the app refusing for now, not a mutex).
+
+- `update-system-interface`'s `reveal_system_interface.py` probes the shell's `/api/health` rather than the chat's `/api/agents`.
