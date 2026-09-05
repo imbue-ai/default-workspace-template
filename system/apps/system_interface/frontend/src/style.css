@@ -2638,14 +2638,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   gap: var(--si-tab-gap);
 }
 
-/* Per-agent liveness dot on chat tabs, reflecting the agent's mngr lifecycle
-   state. Distinct from the chat's activity indicator, which tracks work within
-   a running process. Grey (the default) is "dormant" -- the process is not
-   running (DONE/STOPPED/etc.) but revives on the next message.
-
-   Color (from data-liveness) is the primary signal; ``currentColor`` carries
-   the hue so the per-state shape variants below can render as a solid disc, a
-   hollow ring, or a ring-with-dot in that same color without repeating it. */
+/* The status dot on every tab: what the instance is doing, as its app reports it
+   (contracts.md section 4.1). Grey (the default) is idle. Color, from data-status, is the
+   primary signal; ``currentColor`` carries the hue so the shape variants below render in
+   that same color without repeating it. */
 .dv-tab-process-dot {
   box-sizing: border-box;
   width: 7px;
@@ -2656,39 +2652,25 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: currentColor;
 }
 
-/* Process up and working (RUNNING) -- green, matching the activity indicator. */
-.dv-tab-process-dot[data-liveness="active"] {
+/* Working -- green, matching the chat's activity indicator. */
+.dv-tab-process-dot[data-status="working"] {
   color: var(--color-accent);
 }
 
-/* Process up but idle, waiting on the user (WAITING) -- yellow. */
-.dv-tab-process-dot[data-liveness="waiting"] {
+/* Waiting on the user -- yellow. */
+.dv-tab-process-dot[data-status="attention"] {
   color: #ca8a04;
 }
 
-/* Within a color, subtly vary the shape so states that share a hue stay
-   distinguishable (color is still the primary signal; the tooltip names the
-   exact state). Solid disc = the "expected" state of each color: RUNNING
-   (green), WAITING (yellow), DONE (grey, a clean exit to the shell).
+/* Failed -- red. */
+.dv-tab-process-dot[data-status="error"] {
+  color: #dc2626;
+}
 
-   Hollow ring -- the process is up but its agent type is unconfirmed
-   (RUNNING_UNKNOWN_AGENT_TYPE, green), or dormant because its tmux window is
-   gone (STOPPED, grey). */
-.dv-tab-process-dot[data-lifecycle-state="RUNNING_UNKNOWN_AGENT_TYPE"],
-.dv-tab-process-dot[data-lifecycle-state="STOPPED"] {
+/* Stopped -- a hollow grey ring: the instance is known but nothing is running it. */
+.dv-tab-process-dot[data-status="stopped"] {
   background: transparent;
   border: 1.5px solid currentColor;
-}
-
-/* Ring with a center dot -- REPLACED (superseded by a newer process). */
-.dv-tab-process-dot[data-lifecycle-state="REPLACED"] {
-  background: radial-gradient(currentColor 0 1px, transparent 1.4px);
-  border: 1.5px solid currentColor;
-}
-
-/* Faded solid -- UNKNOWN (dormant, exact state indeterminate). */
-.dv-tab-process-dot[data-lifecycle-state="UNKNOWN"] {
-  opacity: 0.45;
 }
 
 /* ── Hover tooltip ── */
@@ -3533,10 +3515,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: default;
 }
 
-/* The workspace's two thin notice bars -- the terminal lifecycle banner above
-   each terminal tab, and the update-staleness banner at the top of the shell.
-   They are the same box; each names its own surface colours below. */
-.terminal-banner,
+/* The update-staleness banner at the top of the shell. */
 .update-staleness-banner {
   display: flex;
   align-items: center;
@@ -3548,32 +3527,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   line-height: 1.4;
 }
 
-/* Terminal lifecycle banner: explains that terminal state lives in memory
-   only. */
-.terminal-banner {
-  color: var(--color-text-secondary);
-  background: var(--color-bg-secondary, #f8fafc);
-  border-bottom: 1px solid var(--color-border, #e5e7eb);
-}
-
-.terminal-banner-text,
 .update-staleness-banner-text {
   min-width: 0;
 }
 
-.terminal-banner-link {
-  color: var(--color-accent, #2563eb);
-  text-decoration: underline;
-}
-
-.terminal-banner-actions {
-  display: flex;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
-/* Both banners' dismiss buttons. */
-.terminal-banner-btn,
 .update-staleness-banner-btn {
   padding: 2px 8px;
   font-size: 0.75rem;
@@ -3584,7 +3541,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: pointer;
 }
 
-.terminal-banner-btn:hover,
 .update-staleness-banner-btn:hover {
   background: var(--color-bg-hover, #eef2f7);
 }

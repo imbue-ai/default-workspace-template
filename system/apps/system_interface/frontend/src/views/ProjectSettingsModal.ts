@@ -27,7 +27,7 @@
 import m from "mithril";
 import { backdropDismissAttrs } from "./modalBackdrop";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
-import type { ProjectInfo } from "../models/Projects";
+import type { ProjectInfo } from "../models/Inventory";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 
 export interface ProjectSettingsModalAttrs {
@@ -90,7 +90,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     m.redraw();
 
     try {
-      attrs.onSaved(await updateProjectSettings(attrs.project.project_id, chosen, color, glyphIndex));
+      attrs.onSaved(await updateProjectSettings(attrs.project.id, chosen, color, glyphIndex));
     } catch (e) {
       error = (e as Error).message ?? "The project could not be saved.";
       isSaving = false;
@@ -105,8 +105,8 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     m.redraw();
 
     try {
-      await deleteProjectRequest(attrs.project.project_id);
-      attrs.onDeleted(attrs.project.project_id);
+      await deleteProjectRequest(attrs.project.id);
+      attrs.onDeleted(attrs.project.id);
     } catch (e) {
       // Stay in the confirmation step: the reason lands next to the button that
       // failed, and a retry is one click away rather than two.

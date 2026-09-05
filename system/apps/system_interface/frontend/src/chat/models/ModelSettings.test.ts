@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { mockRequest, mockGetAgentById } = vi.hoisted(() => ({ mockRequest: vi.fn(), mockGetAgentById: vi.fn() }));
 vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }));
 vi.mock("../../base-path", () => ({ apiUrl: (path: string) => path }));
-vi.mock("../../models/AgentManager", () => ({ getAgentById: mockGetAgentById }));
+vi.mock("./AgentManager", () => ({ getAgentById: mockGetAgentById }));
 
 import { changedAxes, effectiveChoice, getAgentFastMode, setFastMode, setModelChoice } from "./ModelSettings";
 import type { ModelChoice } from "./ModelSettings";

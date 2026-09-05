@@ -90,13 +90,13 @@ describe("connectToShell", () => {
 
     connection.focused();
     connection.location("/docs");
-    connection.open("app:chat?instance=agent-2", "Chat 2");
+    connection.open("app:chat?instance=agent-2");
     connection.open("app:chat?instance=agent-3");
 
     expect(parent.postMessage.mock.calls).toEqual([
       [{ type: SHELL_FOCUSED }, "*"],
       [{ type: SHELL_LOCATION, path: "/docs" }, "*"],
-      [{ type: SHELL_OPEN, address: "app:chat?instance=agent-2", title: "Chat 2" }, "*"],
+      [{ type: SHELL_OPEN, address: "app:chat?instance=agent-2" }, "*"],
       [{ type: SHELL_OPEN, address: "app:chat?instance=agent-3" }, "*"],
     ]);
   });

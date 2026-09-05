@@ -1,5 +1,5 @@
 import { getBasePath } from "./base-path";
-import { initAgentManager } from "./models/AgentManager";
+import { initInventory } from "./models/Inventory";
 import { initEmbedderRelay } from "./relay";
 import m from "mithril";
 import "./style.css";
@@ -22,7 +22,7 @@ function getEffectiveRoutePrefix(): string {
 
 function bootstrap(): void {
   m.route.prefix = getEffectiveRoutePrefix();
-  initAgentManager();
+  initInventory();
   // The child-frame boundary: the minds relay for the chat pages' permission cards, and the
   // shell side of the app contract.
   initEmbedderRelay();

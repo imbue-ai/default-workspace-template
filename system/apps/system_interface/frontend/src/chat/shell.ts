@@ -8,9 +8,10 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { postJson } from "../models/http";
 import { adoptClientIdentity } from "../models/ClientIdentity";
-import { createChatAgent } from "../models/AgentManager";
-import type { CreatedChatAgent } from "../models/AgentManager";
+import { createChatAgent } from "./models/AgentManager";
+import type { CreatedChatAgent } from "./models/AgentManager";
 import { isEverythingView } from "../models/Projects";
 import { connectToShell } from "../app_contract";
 import type { ShellConnection, ShellHandshake } from "../app_contract";
@@ -122,31 +123,29 @@ export async function startChatOnAccount(accountId: string): Promise<void> {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
   }
-  connection?.open(chatAddress(created.agentId), created.displayName);
+  connection?.open(chatAddress(created.agentId));
   m.redraw();
 }
 
 /**
  * Open the subagent view for `sessionId` of this page's chat beside it. The instance is
- * created first (the chat app's `subagent` action), so the shell's inventory lists it from
- * phase 7 on, then the shell is asked to dock it.
+ * created first through the shell's relay (the chat app's `subagent` action), so the shell's
+ * inventory lists it before the shell is asked to dock it.
  *
- * CLEANUP: from phase 7 the create goes through the shell's relay route
- * (`POST /api/apps/chat/instances`) rather than the chat app's own instances API.
+ * The relay route is reached on this page's own origin: the chat app shares the shell's
+ * process, so the route is served here too.
+ * CLEANUP: address the shell's own origin in phase 10 of the workspace app model, when the
+ * chat app runs as its own process.
  */
 export async function openSubagentTab(agentId: string, sessionId: string, description: string): Promise<void> {
   const key = `${agentId}.${sessionId}`;
   try {
-    const response = await fetch(apiUrl("/_instances"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "subagent", params: { parent: agentId, session: sessionId, description } }),
+    await postJson(apiUrl(`/api/apps/${CHAT_APP_NAME}/instances`), {
+      action: "subagent",
+      params: { parent: agentId, session: sessionId, description },
     });
-    if (!response.ok) {
-      console.warn(`[chat] could not create the subagent instance ${key}: HTTP ${response.status}`);
-    }
   } catch (error) {
     console.warn(`[chat] could not create the subagent instance ${key}`, error);
   }
-  connection?.open(chatAddress(key), description);
+  connection?.open(chatAddress(key));
 }

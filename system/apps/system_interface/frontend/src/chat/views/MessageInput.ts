@@ -18,7 +18,7 @@ import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from ".
 import { describeRequestError, describeRequestErrorKind } from "../../models/request-error";
 import { openProviderChooser } from "../../models/Providers";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
-import { getAgentById } from "../../models/AgentManager";
+import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { hoverTooltipAttrs } from "../../views/hoverTooltip";
 import { icon, stopIcon } from "../../views/icons";

@@ -16,7 +16,7 @@
 
 import m from "mithril";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
-import { getAgentById } from "../../models/AgentManager";
+import { getAgentById } from "../models/AgentManager";
 
 /**
  * Find the most recent assistant tool call whose tool_call_id has no matching

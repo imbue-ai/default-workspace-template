@@ -13,10 +13,10 @@
  */
 
 import m from "mithril";
-import { apiUrl } from "../base-path";
+import { apiUrl } from "../../base-path";
 import { getAgentById } from "../models/AgentManager";
 import { isAgentProcessDead } from "./agentLiveness";
-import { IframePanel } from "./IframePanel";
+import { TerminalFrame } from "./TerminalFrame";
 
 interface AgentTerminalPanelAttrs {
   agentId: string;
@@ -71,7 +71,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
       // A dead agent has no tmux session, so a mounted ttyd client reconnect-loops
       // against it (spawn `tmux attach`, exit, retry -- several times a second, each
       // attempt claiming the page's focus before the client was patched not to). Same
-      // pattern as IframePanel's stopped-service placeholder: unmount the iframe while
+      // pattern as the shell's stopped-app placeholder: unmount the iframe while
       // the agent is positively dead; the agents push after a start swaps it back in.
       // An untracked id or UNKNOWN state keeps the iframe -- non-evidence is not death.
       const agent = vnode.attrs.agentId === "" ? undefined : getAgentById(vnode.attrs.agentId);
@@ -129,12 +129,12 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
           m(
             "div",
             { style: "flex: 1 1 auto; min-height: 0;" },
-            m(IframePanel, { url: vnode.attrs.url, title: vnode.attrs.title }),
+            m(TerminalFrame, { url: vnode.attrs.url, title: vnode.attrs.title }),
           ),
         ]);
       }
 
-      return m(IframePanel, { url: vnode.attrs.url, title: vnode.attrs.title });
+      return m(TerminalFrame, { url: vnode.attrs.url, title: vnode.attrs.title });
     },
   };
 }

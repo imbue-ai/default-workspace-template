@@ -17,7 +17,7 @@
 
 import m from "mithril";
 import { backdropDismissAttrs } from "./modalBackdrop";
-import type { ProjectInfo } from "../models/Projects";
+import type { ProjectInfo } from "../models/Inventory";
 import { squiggleMarkup } from "./squiggles";
 
 const ROW_GLYPH_SIZE = 16;
@@ -49,8 +49,8 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
     // A project already showing the object is settled: its box stays checked
     // and fixed, saying "already here" rather than offering a removal this
     // dialog does not do.
-    const isFixed = attrs.memberProjectIds.includes(project.project_id);
-    const isChecked = isFixed || selected.has(project.project_id);
+    const isFixed = attrs.memberProjectIds.includes(project.id);
+    const isChecked = isFixed || selected.has(project.id);
     return m(
       "label",
       {
@@ -66,9 +66,9 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
           "aria-label": project.name,
           onchange(e: Event) {
             if ((e.target as HTMLInputElement).checked) {
-              selected.add(project.project_id);
+              selected.add(project.id);
             } else {
-              selected.delete(project.project_id);
+              selected.delete(project.id);
             }
           },
         }),
