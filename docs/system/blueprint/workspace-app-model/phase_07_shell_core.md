@@ -78,7 +78,7 @@ Also: `load_layout` (the `load` op's message) stays until phase 8 lands `active_
 
 ## Behaviour
 
-- On connect a client receives `apps_updated` and `projects_updated`, fetches its layout for the active view, and renders; a tab whose address is not in the inventory renders the stopped placeholder when its app is stopped and is pruned from the layout otherwise.
+- On connect a client receives `apps_updated` and `projects_updated`, fetches its layout for the active view, and renders; a tab whose address is not in the inventory renders the stopped placeholder when its app is stopped, waits while its app's list has not arrived yet (`is_listed` false), and is pruned from the layout otherwise.
 - Opening an action: `POST /api/apps/<name>/instances` through the relay, then dock the returned record's url beside the active tab, add the address to the view's tab set (projects only), and record `last_focused_ms`.
 - Focus mode: the most recently focused tab of that app in this client's layout of this view; otherwise the action runs.
 - Delete: relay, then the `apps_updated` that follows the shell's refetch prunes the tab everywhere.

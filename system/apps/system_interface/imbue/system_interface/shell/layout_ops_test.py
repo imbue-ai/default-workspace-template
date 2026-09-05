@@ -78,7 +78,11 @@ def test_list_names_every_app_with_where_its_instances_are_docked(tmp_path: Path
     )
     entries = [
         AppInventoryEntry(
-            row=row, is_running=True, instances=(synthesized_single_instance(row, True),), first_seen_at_by_key={}
+            row=row,
+            is_running=True,
+            instances=(synthesized_single_instance(row, True),),
+            first_seen_at_by_key={},
+            is_listed=True,
         )
         for row in rows
     ]

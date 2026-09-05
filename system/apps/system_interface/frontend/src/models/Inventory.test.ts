@@ -9,6 +9,7 @@ import {
   applyApps,
   findInstance,
   instancePageUrl,
+  isAddressUnlisted,
   isAppStoppable,
   listInstances,
   parseAddress,
@@ -46,6 +47,24 @@ describe("addresses", () => {
     for (const bad of ["chat:agent-1", "service:files", "app:", "app:files?key=1", "app:files?instance=", "files"]) {
       expect(parseAddress(bad), bad).toBeNull();
     }
+  });
+});
+
+describe("isAddressUnlisted", () => {
+  afterEach(() => resetInventoryForTesting());
+
+  it("is decided by the app's own list, never by the seed", () => {
+    applyApps([
+      app("files"),
+      app("terminal", { has_instances: true, is_listed: false, instances: [] }),
+      app("browser", { has_instances: true, is_listed: true, instances: [instance("riley", "Riley")] }),
+    ]);
+    expect(isAddressUnlisted("app:files")).toBe(false);
+    expect(isAddressUnlisted("app:terminal?instance=terminal-1")).toBe(false);
+    expect(isAddressUnlisted("app:browser?instance=riley")).toBe(false);
+    expect(isAddressUnlisted("app:browser?instance=gone")).toBe(true);
+    expect(isAddressUnlisted("app:nowhere?instance=x")).toBe(true);
+    expect(isAddressUnlisted("not an address")).toBe(true);
   });
 });
 

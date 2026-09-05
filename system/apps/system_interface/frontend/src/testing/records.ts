@@ -25,6 +25,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     actions: [{ id: "new", label: `New ${name}` }],
     default_shortcut: null,
     is_running: true,
+    is_listed: true,
     instances: [],
     ...overrides,
   };
