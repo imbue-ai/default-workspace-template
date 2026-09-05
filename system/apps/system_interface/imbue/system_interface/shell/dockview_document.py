@@ -218,13 +218,14 @@ def _drop_launchers_from_leaf(document: dict[str, Any], leaf: dict[str, Any]) ->
         document.get("panels", {}).pop(launcher, None)
 
 
-def _flatten(node: dict[str, Any], is_root: bool) -> dict[str, Any]:
-    """Collapse single-child branches a removal left behind, keeping the root a branch as dockview requires."""
+def _flatten(node: dict[str, Any]) -> dict[str, Any]:
+    """Collapse single-child branches a removal left behind. Only children are collapsed, never the node itself, so
+    the root stays a branch as dockview requires."""
     if node.get("type") != "branch":
         return node
     children: list[dict[str, Any]] = []
     for child in node.get("data", []) or []:
-        flattened = _flatten(child, is_root=False)
+        flattened = _flatten(child)
         grandchildren = flattened.get("data") if flattened.get("type") == "branch" else None
         if isinstance(grandchildren, list) and len(grandchildren) == 1:
             only = grandchildren[0]
@@ -268,7 +269,7 @@ def _detach_panel_from_grid(document: dict[str, Any], panel_id: str) -> dict[str
         return None
     if entry is not None:
         stripped["panels"] = {**stripped.get("panels", {}), panel_id: entry}
-    stripped["grid"] = {**stripped["grid"], "root": _flatten(stripped["grid"]["root"], is_root=True)}
+    stripped["grid"] = {**stripped["grid"], "root": _flatten(stripped["grid"]["root"])}
     _repair_active_group(stripped)
     return stripped
 
