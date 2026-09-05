@@ -1438,6 +1438,9 @@ function dropPanelsForAddress(address: string, options: { keepPage?: boolean } =
 function rebindPanel(panelId: string, address: string): void {
   const params = panelParams.get(panelId);
   if (params === undefined || params.kind === "launcher" || params.address === address) return;
+  // One page per instance: a tab already showing the target closes (the rebound pane is where
+  // the user acted), and its page goes with it rather than lingering unfiled.
+  dropPanelsForAddress(address);
   rekeyLiveSurface(params.address, address);
   params.address = address;
   syncTabTitlesFromInventory();

@@ -183,11 +183,13 @@ export function isPageAtListedUrl(listedUrl: string, lastReportedPath: string | 
 }
 
 /** Re-file a page under a new address without touching the page: a tab whose app re-pointed
- *  it at another instance (a terminal's client switching tmux session) keeps its iframe. */
+ *  it at another instance (a terminal's client switching tmux session) keeps its iframe. An
+ *  instance has one page, so a page already filed under the new address goes. */
 export function rekeyLiveSurface(fromKey: LiveKey, toKey: LiveKey): void {
   if (fromKey === toKey) return;
   const surface = surfacesByKey.get(fromKey);
   if (surface === undefined) return;
+  destroyLiveSurface(toKey);
   surfacesByKey.delete(fromKey);
   surface.key = toKey;
   surfacesByKey.set(toKey, surface);
