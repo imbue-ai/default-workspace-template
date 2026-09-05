@@ -179,7 +179,7 @@ Projects and views:
 | `POST /api/projects/<id>/tabs/remove` | `{"address"}` | `200 project` |
 | `POST /api/projects/<id>/shortcuts` | `{"app", "action", "mode"}` | `200 project`; replaces the entry for `(app, action)` |
 | `POST /api/projects/<id>/shortcuts/remove` | `{"app", "action"}` | `200 project` |
-| `GET /api/layouts/<view_id>?client=<client_id>` | | `200 layout` (the client's own, else the seed for its device kind, else `{"dockview": null, "tabs": {}}`) |
+| `GET /api/layouts/<view_id>?client=<client_id>&device=<device_kind>` | | `200 layout` (the client's own, else the seed for its device kind, else `{"dockview": null, "tabs": {}}`); `device` names the seed for a client the shell has no record of yet |
 | `POST /api/layouts/<view_id>` | `layout` plus `client_id`, `save_id` | `204` |
 | `GET /api/clients` | | `{"clients": [client, ...]}` |
 | `GET /api/inventory` | | the inventory document (section 9) |
