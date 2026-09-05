@@ -37,6 +37,11 @@ export interface StoppedAppPlaceholderAttrs {
 
 interface IframePanelAttrs {
   url: string;
+  /** Whether the page is already at ``url`` (it reported that path itself), so a changed url is
+   *  adopted without reloading the frame. */
+  isPageAtUrl?: boolean;
+  /** Called after every load of the frame, the reloads included. */
+  onLoad?: () => void;
   title: string;
   /** The app the frame belongs to; every frame of one app reloads together on a Refresh. */
   appName: string;
@@ -67,6 +72,10 @@ export const APP_FRAME_SANDBOX = `${DEFAULT_FRAME_SANDBOX} allow-popups-to-escap
 export function IframePanel(): m.Component<IframePanelAttrs> {
   let frame: HTMLIFrameElement | null = null;
   let latestContract: IframeContractAttrs | null = null;
+  let latestOnLoad: (() => void) | null = null;
+  // The url the frame was last pointed at, or adopted as already showing. Kept here rather than
+  // as a mithril attr so a redraw never reassigns ``src`` (a reload) on its own.
+  let assignedUrl: string | null = null;
   // What the page was last told, so a handshake goes out again only when its identity changed
   // and shown or hidden only when the visibility did; a load resets both, since a fresh page
   // has been told nothing.
@@ -99,8 +108,17 @@ export function IframePanel(): m.Component<IframePanelAttrs> {
   function greetOnLoad(): void {
     lastSentIdentity = null;
     lastSentVisibility = null;
+    latestOnLoad?.();
     greet();
     syncVisibility();
+  }
+
+  /** Point the frame at ``url`` unless it is already there: a url the page is at (it reported
+   *  the path itself) is adopted, anything else is a navigation. */
+  function syncUrl(url: string, isPageAtUrl: boolean): void {
+    if (frame === null || url === assignedUrl) return;
+    assignedUrl = url;
+    if (!isPageAtUrl) frame.src = url;
   }
 
   /** A page that has had its handshake is told again when the tab or view showing it changed.
@@ -114,8 +132,9 @@ export function IframePanel(): m.Component<IframePanelAttrs> {
 
   return {
     view(vnode) {
-      const { url, title, appName, address, contract, stopped, sandbox } = vnode.attrs;
+      const { url, title, appName, address, contract, stopped, sandbox, isPageAtUrl, onLoad } = vnode.attrs;
       latestContract = contract;
+      latestOnLoad = onLoad ?? null;
       // A stopped app's pane shows a lightweight placeholder instead of the dead iframe's raw
       // connection error. Rendered per redraw off the inventory, so a start (from anywhere)
       // swaps the iframe back in on the next ``apps_updated`` push.
@@ -123,7 +142,6 @@ export function IframePanel(): m.Component<IframePanelAttrs> {
         return m(StoppedAppPlaceholder, { ...stopped, appName });
       }
       return m("iframe", {
-        src: url,
         title,
         style: "width: 100%; height: 100%; border: none;",
         sandbox: sandbox ?? APP_FRAME_SANDBOX,
@@ -136,13 +154,16 @@ export function IframePanel(): m.Component<IframePanelAttrs> {
           // Every load, not just the first: a reload (the tab's Refresh, or the page's own) is
           // a fresh page that has to be told who it is again.
           frame.addEventListener("load", greetOnLoad);
+          syncUrl(url, false);
         },
         onupdate: () => {
+          syncUrl(url, isPageAtUrl === true);
           syncIdentity();
           syncVisibility();
         },
         onremove: () => {
           frame = null;
+          assignedUrl = null;
           lastSentIdentity = null;
         },
       });

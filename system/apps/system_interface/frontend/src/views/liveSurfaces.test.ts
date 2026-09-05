@@ -1,11 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import "../testing/dom";
 
-vi.hoisted(() => {
-  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-});
+import { describe, expect, it } from "vitest";
 
-import { duplicateLiveKeyPanelIds, liveKeyForPanel } from "./liveSurfaces";
+import { duplicateLiveKeyPanelIds, isPageAtListedUrl, liveKeyForPanel } from "./liveSurfaces";
 
 describe("liveKeyForPanel", () => {
   it("files an instance panel under its address", () => {
@@ -30,5 +27,14 @@ describe("duplicateLiveKeyPanelIds", () => {
         { panelId: "d", key: null },
       ]),
     ).toEqual(["c"]);
+  });
+});
+
+describe("isPageAtListedUrl", () => {
+  it("is true only for the path the page itself reported, query and fragment included", () => {
+    expect(isPageAtListedUrl("http://files.example/notes/?q=1", "/notes/?q=1")).toBe(true);
+    expect(isPageAtListedUrl("http://files.example/notes/", "/notes/?q=1")).toBe(false);
+    expect(isPageAtListedUrl("http://files.example/elsewhere/", "/notes/")).toBe(false);
+    expect(isPageAtListedUrl("http://files.example/notes/", null)).toBe(false);
   });
 });

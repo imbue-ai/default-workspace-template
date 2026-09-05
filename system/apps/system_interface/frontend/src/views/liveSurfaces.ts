@@ -45,6 +45,9 @@ export interface LiveSurface {
   params: PanelParams;
   /** Whether a pane is showing this page right now. */
   isVisible: boolean;
+  /** The path the page itself last reported (``shell:location``), cleared by the frame's next
+   *  load. A listed url equal to it is where the page already is, so no reload. */
+  lastReportedPath: string | null;
   /** The slot currently standing in for this page, if any. */
   boundPanelId: string | null;
   boundApi: DockviewPanelApi | null;
@@ -149,6 +152,7 @@ export function ensureLiveSurface(
     element,
     params,
     isVisible: false,
+    lastReportedPath: null,
     boundPanelId: null,
     boundApi: null,
     bindingDisposables: [],
@@ -160,6 +164,27 @@ export function ensureLiveSurface(
   layerHost.appendChild(element);
   mountContent(surface);
   return surface;
+}
+
+/** Remember the path a page reported for itself, so the record catching up with it is not a reload. */
+export function recordReportedPath(key: LiveKey, path: string): void {
+  const surface = surfacesByKey.get(key);
+  if (surface !== undefined) surface.lastReportedPath = path;
+}
+
+/** A fresh page has reported nothing: the frame's load forgets the last report. */
+export function clearReportedPath(key: LiveKey): void {
+  const surface = surfacesByKey.get(key);
+  if (surface !== undefined) surface.lastReportedPath = null;
+}
+
+/** Whether the page is already at ``listedUrl``: its path (query and fragment included) is
+ *  exactly what the page last reported, so the record merely caught up with the page. An
+ *  agent's replace-url names another path and still lands (contracts.md section 10). */
+export function isPageAtListedUrl(listedUrl: string, lastReportedPath: string | null): boolean {
+  if (lastReportedPath === null) return false;
+  const parsed = new URL(listedUrl, "http://placeholder.invalid");
+  return `${parsed.pathname}${parsed.search}${parsed.hash}` === lastReportedPath;
 }
 
 /** Re-file a page under a new address without touching the page: a tab whose app re-pointed

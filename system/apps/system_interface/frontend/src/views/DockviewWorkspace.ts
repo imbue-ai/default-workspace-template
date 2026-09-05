@@ -41,15 +41,18 @@ import {
 } from "./IframePanel";
 import {
   bindSlot,
+  clearReportedPath,
   destroyLiveSurface,
   duplicateLiveKeyPanelIds,
   ensureLiveSurface,
   initializeLiveLayer,
+  isPageAtListedUrl,
   liveKeyForPanel,
   liveSurfaceBoundPanelId,
   liveSurfaceElement,
   liveSurfaceKeys,
   reconcileLiveSurfaces,
+  recordReportedPath,
   rekeyLiveSurface,
   scheduleReconcile,
   setDragInProgress,
@@ -1721,6 +1724,8 @@ function relayLocationForChildFrame(frame: HTMLIFrameElement, payload: Record<st
   if (address === null || typeof path !== "string" || path === "") return;
   const parsed = parseAddress(address);
   if (parsed === null || parsed.key === "") return;
+  // Remembered before the relay: the record catching up with the page is not a reload.
+  recordReportedPath(address, path);
   void reportInstanceLocation(parsed.app, parsed.key, path);
 }
 
@@ -2067,8 +2072,11 @@ function renderLiveContent(surface: LiveSurface): m.Children {
     );
   }
   const { app, instance } = resolved;
+  const url = instancePageUrl(app, instance, params.tabId);
   return m(IframePanel, {
-    url: instancePageUrl(app, instance, params.tabId),
+    url,
+    isPageAtUrl: isPageAtListedUrl(url, surface.lastReportedPath),
+    onLoad: () => clearReportedPath(surface.key),
     title: instance.title,
     appName: app.name,
     address: params.address,
