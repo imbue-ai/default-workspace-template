@@ -54,7 +54,7 @@ def test_bare_names_expand_and_addresses_pass_through(
 @pytest.mark.parametrize(
     ("spelling", "expected_hint"),
     [
-        ("chat:agent-1", "app:chat?instance=agent-1"),
+        ("chat:agent-1", "the one titled 'agent-1'"),
         ("chat-terminal:alice", "back face of its chat"),
         ("terminal:terminal-3", "app:terminal?instance=terminal-3"),
         ("service:files", "use app:files"),

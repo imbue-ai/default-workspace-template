@@ -325,7 +325,7 @@ def test_open_close_of_an_instance_address_broadcasts_layout_ops(
 @pytest.mark.parametrize(
     ("spelling", "expected_hint"),
     [
-        (f"chat:{_AGENT_NAME}", f"app:chat?instance={_AGENT_NAME}"),
+        (f"chat:{_AGENT_NAME}", f"the one titled {_AGENT_NAME!r}"),
         ("service:docs?instance=docs-1", "app:docs?instance=docs-1"),
         ("terminal:terminal-1", "app:terminal?instance=terminal-1"),
         ("https://example.com/", "phase 8"),
