@@ -29,6 +29,8 @@ from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.logging import generate_log_event_id
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.primitives import ADDRESS_INSTANCE_PARAMETER
+from imbue.system_interface.shell.primitives import ADDRESS_SCHEME
 
 CLIENT_ACTIVITY_EVENT_SOURCE: Final[EventSource] = EventSource("client_activity")
 MESSAGE_EVENT_TYPE: Final[EventType] = EventType("message")
@@ -142,6 +144,14 @@ class ClientActivityLog(MutableModel):
 
 
 @pure
+def _message_address(app: str, key: str) -> str:
+    """The address a message went to, spelled as the event recorded it (the log is not validated against the registry)."""
+    if key == "":
+        return f"{ADDRESS_SCHEME}{app}"
+    return f"{ADDRESS_SCHEME}{app}?{ADDRESS_INSTANCE_PARAMETER}{key}"
+
+
+@pure
 def _event_view_id(event: dict[str, Any]) -> str | None:
     event_type = event.get("type")
     if event_type == VIEW_SWITCH_EVENT_TYPE:
@@ -184,7 +194,7 @@ def summarize_client_activity(
             summary["recent_messages"].append(
                 {
                     "timestamp": str(event.get("timestamp", "")),
-                    "address": f"app:{event.get('app', '')}?instance={event.get('key', '')}",
+                    "address": _message_address(str(event.get("app", "")), str(event.get("key", ""))),
                     "text": str(event.get("text", "")),
                 }
             )
