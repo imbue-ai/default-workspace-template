@@ -21,9 +21,10 @@ import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import { isPermissionRequestCall } from "./message-classification";
-import { icon } from "../../views/icons";
-import type { IconName } from "../../views/icons";
+import { icon } from "../../views/components/icons";
+import type { IconName } from "../../views/components/icons";
 import { serviceMarkUrl } from "./service-marks";
+import { Button } from "../../views/components/Button";
 
 /** The rich fields a created permission request echoes back on stdout, parsed
  *  from the tool result. `requestId` is always present (it's what the modal
@@ -177,10 +178,32 @@ export function initShellPermissionResolutions(): void {
   setEmbedderMessageHandler(PERMISSION_RESOLUTIONS, notePermissionResolutions);
 }
 
+/* Card styling.
+ * The card is styled with utilities at each call site below; the
+ * permission-request-* class names stay as bare markers (the vitest suites and
+ * the e2e tests query them). Shared fragments live here so the two card badges
+ * and the two raw-toggle placements can't drift. */
+
+/** The card shell every state shares. */
+const CARD_CLASS = "permission-request max-w-[560px] rounded-lg border bg-composer px-3.5 py-3";
+
+/** The rounded subject badge; the pending body uses the 32px form, the
+ *  resolved receipt the 24px one. Size + radius are resolved per call site so
+ *  no two utilities fight over one property. */
+const BADGE_BASE = "flex shrink-0 items-center justify-center bg-fill-hover text-secondary";
+
+/** The verdict's color says the outcome: approved reads in the accent green;
+ *  denied reads neutral (a decision, not an error); couldn't-complete warns. */
+const VERDICT_COLOR: Record<PermissionResolution, string> = {
+  granted: "text-accent",
+  denied: "text-secondary",
+  error: "text-warning",
+};
+
 /** The key that heads every card state's eyebrow. 13px is the size of the
  *  verdict glyphs it sits level with on the receipt row. */
 function renderKeyIcon(): m.Vnode {
-  return m.trust(icon("key", { size: 13, className: "permission-request-icon" }));
+  return m.trust(icon("key", { size: 13, className: "permission-request-icon shrink-0" }));
 }
 
 /**
@@ -196,9 +219,16 @@ function renderKeyIcon(): m.Vnode {
 function renderSubjectMark(details: PermissionRequestDetails | null, size: number): m.Vnode {
   const markUrl = details?.scope ? serviceMarkUrl(details.scope) : null;
   if (markUrl === null) {
-    return m.trust(icon("box", { size, className: "permission-request-icon" }));
+    return m.trust(icon("box", { size, className: "permission-request-icon shrink-0" }));
   }
-  return m("img", { src: markUrl, alt: "", width: size, height: size, class: "permission-request-mark" });
+  // object-contain matters because several of the marks are non-square.
+  return m("img", {
+    src: markUrl,
+    alt: "",
+    width: size,
+    height: size,
+    class: "permission-request-mark block shrink-0 object-contain",
+  });
 }
 
 /** The generic subject, used only where a row would otherwise be blank. It
@@ -224,7 +254,7 @@ function permissionTitle(details: PermissionRequestDetails | null, scopeInfo: Sc
  *  (denied), or an exclamation (error / couldn't complete). */
 function renderVerdictIcon(resolution: PermissionResolution): m.Vnode {
   const name: IconName = resolution === "granted" ? "check" : resolution === "denied" ? "close" : "alert";
-  return m.trust(icon(name, { size: 13, className: "permission-request-verdict-icon" }));
+  return m.trust(icon(name, { size: 13, className: "permission-request-verdict-icon shrink-0" }));
 }
 
 /** The label shown beside the verdict icon. "error" reads as "Couldn't
@@ -238,15 +268,27 @@ function verdictLabel(resolution: PermissionResolution): string {
 /** The resolved verdict shown at the right of the receipt row (approved,
  *  denied, or could-not-complete). */
 function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
-  return m("div", { class: `permission-request-verdict permission-request-verdict--${resolution}` }, [
-    renderVerdictIcon(resolution),
-    m("span", verdictLabel(resolution)),
-  ]);
+  return m(
+    "div",
+    {
+      // The modifier marker is interpolated (markers are invisible to the
+      // Tailwind scanner); the color utility comes from the literal map above.
+      class:
+        `permission-request-verdict permission-request-verdict--${resolution} ` +
+        `inline-flex shrink-0 items-center gap-[5px] text-(length:--font-size-helper) font-semibold ` +
+        VERDICT_COLOR[resolution],
+    },
+    [renderVerdictIcon(resolution), m("span", verdictLabel(resolution))],
+  );
 }
 
 /** The eyebrow row every card state shares: a small key + "Permission request". */
 function renderEyebrow(): m.Vnode {
-  return m("div", { class: "permission-request-eyebrow" }, [renderKeyIcon(), m("span", "Permission request")]);
+  return m(
+    "div",
+    { class: "permission-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-secondary" },
+    [renderKeyIcon(), m("span", "Permission request")],
+  );
 }
 
 /** The plain-text "Show raw request" / "Hide raw request" toggle, or null when
@@ -256,7 +298,9 @@ function renderRawToggle(rawText: string, rawOpen: boolean, onToggleRaw: () => v
   return m(
     "button",
     {
-      class: "permission-request-raw-toggle",
+      class:
+        "permission-request-raw-toggle cursor-pointer border-none bg-transparent p-0 " +
+        "text-(length:--font-size-helper) text-faint transition-[color] duration-(--dur-base) hover:text-secondary",
       type: "button",
       onclick(e: Event) {
         e.preventDefault();
@@ -271,7 +315,18 @@ function renderRawToggle(rawText: string, rawOpen: boolean, onToggleRaw: () => v
 /** The raw request/response block, shown full-width when the toggle is open. */
 function renderRawBlock(rawText: string, rawOpen: boolean): m.Vnode | null {
   if (!rawText || !rawOpen) return null;
-  return m("div", { class: "permission-request-raw" }, m("pre", m("code", rawText)));
+  return m(
+    "div",
+    { class: "permission-request-raw mt-2.5" },
+    m(
+      "pre",
+      {
+        class:
+          "overflow-auto rounded-md bg-sidebar p-2 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-secondary",
+      },
+      m("code", rawText),
+    ),
+  );
 }
 
 /**
@@ -310,27 +365,37 @@ export function renderPermissionCard(
     // One compact line: the verdict reads inline right after the title, and
     // the raw toggle keeps to the right edge of the same row, so the receipt
     // never grows a second row.
-    return m("div", { class: "permission-request" }, [
+    return m("div", { class: CARD_CLASS }, [
       renderEyebrow(),
-      m("div", { class: "permission-request-receipt" }, [
-        m("div", { class: "permission-request-badge permission-request-badge--sm" }, renderSubjectMark(details, 14)),
-        m("div", { class: "permission-request-receipt-title" }, title ?? GENERIC_PERMISSION_TITLE),
+      m("div", { class: "permission-request-receipt mt-2.5 flex items-center gap-2" }, [
+        m(
+          "div",
+          { class: `permission-request-badge permission-request-badge--sm h-6 w-6 rounded-md ${BADGE_BASE}` },
+          renderSubjectMark(details, 14),
+        ),
+        m(
+          "div",
+          {
+            class: "permission-request-receipt-title min-w-0 truncate type-label text-primary",
+          },
+          title ?? GENERIC_PERMISSION_TITLE,
+        ),
         renderPermissionVerdict(resolution),
-        rawToggle ? m("div", { class: "permission-request-receipt-toggle" }, rawToggle) : null,
+        rawToggle ? m("div", { class: "permission-request-receipt-toggle ml-auto shrink-0" }, rawToggle) : null,
       ]),
       rawBlock,
     ]);
   }
 
   if (details === null) {
-    return m("div", { class: "permission-request" }, [
+    return m("div", { class: CARD_CLASS }, [
       renderEyebrow(),
       m(
         "div",
-        { class: "permission-request-status" },
+        { class: "permission-request-status mt-[9px] text-(length:--font-size-body) text-secondary" },
         hasResult ? "Couldn't read this request — see the Permissions tab." : "Waiting for the request to register…",
       ),
-      rawToggle ? m("div", { class: "permission-request-toggle-row" }, rawToggle) : null,
+      rawToggle ? m("div", { class: "permission-request-toggle-row mt-2 flex justify-end" }, rawToggle) : null,
       rawBlock,
     ]);
   }
@@ -339,21 +404,26 @@ export function renderPermissionCard(
   // when no rationale survived either, so a titled-but-redundant row never sits
   // under an identical eyebrow.
   const bodyTitle = title ?? (details.rationale === null ? GENERIC_PERMISSION_TITLE : null);
-  return m("div", { class: "permission-request" }, [
+  return m("div", { class: CARD_CLASS }, [
     renderEyebrow(),
-    m("div", { class: "permission-request-body" }, [
-      m("div", { class: "permission-request-badge" }, renderSubjectMark(details, 16)),
-      m("div", { class: "permission-request-info" }, [
-        bodyTitle !== null ? m("div", { class: "permission-request-title" }, bodyTitle) : null,
-        details.rationale ? m("div", { class: "permission-request-reason" }, details.rationale) : null,
+    m("div", { class: "permission-request-body mt-2.5 flex items-start gap-2.5" }, [
+      m("div", { class: `permission-request-badge h-8 w-8 rounded-lg ${BADGE_BASE}` }, renderSubjectMark(details, 16)),
+      m("div", { class: "permission-request-info min-w-0 flex-1" }, [
+        bodyTitle !== null ? m("div", { class: "permission-request-title type-label text-primary" }, bodyTitle) : null,
+        details.rationale
+          ? m(
+              "div",
+              { class: "permission-request-reason text-(length:--font-size-helper) leading-[1.45] text-secondary" },
+              details.rationale,
+            )
+          : null,
       ]),
     ]),
-    m("div", { class: "permission-request-actions" }, [
+    m("div", { class: "permission-request-actions mt-3 flex items-center justify-between gap-2.5" }, [
       m(
-        "button",
+        Button,
         {
-          class: "permission-request-button",
-          type: "button",
+          variant: "primary",
           onclick(e: Event) {
             e.preventDefault();
             e.stopPropagation();

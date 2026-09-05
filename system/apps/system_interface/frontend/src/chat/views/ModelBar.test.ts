@@ -231,6 +231,90 @@ describe("the combo card", () => {
     expect(picks).toHaveLength(1);
   });
 
+  it("names the stop under the thumb while the drag is in flight, without committing it", () => {
+    // Uncommitted is not the same as unshown: the row is what you are aiming with, so it reads
+    // off the thumb from the first notch. The TRIGGER keeps saying the committed level, since
+    // that is still what the agent is running on until release.
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "medium", in_picker: true },
+      { level: "high", in_picker: true },
+    ];
+    const model = { ...OPUS, efforts };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "low", fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider === null) throw new Error("no slider");
+    const row = (): string => document.querySelector('[data-card-row="effort"]')?.textContent ?? "";
+    expect(row()).toContain("Low");
+
+    slider.value = "1";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    render();
+    expect(row()).toContain("Medium");
+    expect(slider.value).toBe("1");
+    // The green track follows too. A label that moved while the fill stayed put would just be
+    // a differently broken row -- the three read as one control or none of them do.
+    expect(slider.getAttribute("style")).toContain("50%");
+    expect(picks).toHaveLength(0);
+    expect(document.querySelector(".model-selector-trigger")?.textContent).toContain("Low");
+  });
+
+  it("goes back to naming the committed level once the drag is released", () => {
+    // `onchange` clears the dragged index, and nothing has re-entered the card with a new
+    // choice yet -- so the label has to fall back to the value rather than blank or stick.
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "high", in_picker: true },
+    ];
+    const model = { ...OPUS, efforts };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "low", fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider === null) throw new Error("no slider");
+
+    slider.value = "1";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    slider.dispatchEvent(new Event("change", { bubbles: true }));
+    render();
+    expect(picks).toHaveLength(1);
+    expect(document.querySelector('[data-card-row="effort"]')?.textContent).toContain("Low");
+  });
+
+  it("keeps naming a hidden level while the thumb sits at the far left", () => {
+    // claude's `ultra` is not in the picker, so there is no stop for it and the thumb pins to
+    // 0. The label comes from the VALUE, so it still says what the agent is actually on --
+    // this is what the drag-follow must not trample.
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "high", in_picker: true },
+      { level: "ultra", in_picker: false },
+    ];
+    const model = { ...OPUS, efforts };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "ultra", fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-card-row="effort"]')?.textContent).toContain("Ultra");
+    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+  });
+
   it("locks every provider that is not this chat's, and says how to reach it", () => {
     // A chat binds to its account when it is CREATED and nothing rebinds it, so there is no
     // state in which switching would work. The row states that rather than doing something

@@ -2,6 +2,12 @@
 
 Contracts: [contracts.md](contracts.md) sections 5 to 9, 12, and 13.
 
+## Order of work
+
+Land the cross-client layout machinery first: `save_id` on every layout save, the `layout_updated` broadcast, and the frontend's echo suppression. Several of phase 7's review findings pointed at that seam (the frontend sends no `save_id`, two windows of one client only converge on reload, and a stale window can still clobber a newer arrangement), so it is the part of this phase the rest depends on and the first to commit. Then `active_view_changed` and the client-record source of truth, then the inventory endpoint, deep links, and the browser's `url` param.
+
+Already landed in phase 7 (see `phase_07_shell_core.md`): the address grammar of `layout.py` and every skill caller, `POST /api/tabs/<tab_id>/instance` with the `tab_rebound` broadcast, the client pruning sweep, `rename`/`delete`/`replace-url` through the relay, and the `shortcuts` subcommands. What this phase still owes `layout.py` is `--client`, `--action`, `--param`, the bare-URL form of `open`, and reading `list`/`views`/`context` off `/api/inventory`.
+
 ## Goal
 
 Finish the cross-client machinery: client-tagged layout broadcasts with save ids, per-client active view pushed across a client's windows, the tab route the terminal app uses, client pruning, the inventory endpoint, deep links, and the rewrite of `layout.py` and every skill that speaks refs.

@@ -5,16 +5,19 @@
 
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
-import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getAgentById } from "../models/AgentManager";
 import { openProviderChooser } from "../../models/Providers";
 import { openSubagentTab, startChatOnAccount } from "../shell";
-import { hoverTooltipAttrs } from "../../views/hoverTooltip";
+import { hoverTooltipAttrs } from "../../views/components/hoverTooltip";
+import { activityDotClass } from "../../views/components/activityDot";
+import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
+import { renderToolBlock, type PayloadState } from "./ToolCallBlock";
+import { badgeClass } from "../../views/components/Badge";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
  *  `resolutionsByRequestId`, or null while the request awaits a decision (or
@@ -232,7 +235,7 @@ export function renderAssistantMessage(
     "div",
     {
       id: event.event_id,
-      class: "message message-assistant",
+      class: "message message-assistant mb-5",
       key: event.event_id,
     },
     m(StableAssistantMessage, { event, toolResults, agentId }),
@@ -254,13 +257,14 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
   // whole card also drops its green accent for neutral grey, since green reads as "active".
   const statusIndicator = isRunning
     ? m("span", {
-        class: "subagent-card-status-dot subagent-card-status-dot--running",
+        class: `subagent-card-status-dot subagent-card-status-dot--running ${activityDotClass("h-[7px] w-[7px]")}`,
         "aria-label": "Sub-agent is working",
         ...hoverTooltipAttrs("Working"),
       })
     : m(
-        "svg.subagent-card-status-check",
+        "svg",
         {
+          class: "subagent-card-status-check shrink-0 text-secondary",
           width: 16,
           height: 16,
           viewBox: "0 0 16 16",
@@ -275,47 +279,53 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
         ),
       );
 
-  return m("div", { class: `subagent-card${isRunning ? "" : " subagent-card--done"}` }, [
-    m("div", { class: "subagent-card-header" }, [
-      statusIndicator,
-      m("span", { class: "subagent-card-description" }, description),
-      agentType ? m("span", { class: "subagent-card-type-badge" }, agentType) : null,
-    ]),
-    // The click-through needs the subagent session_id, which only arrives once the call is
-    // linked. The label stays "View conversation" throughout so it doesn't flip-flop; before
-    // the session is known it renders as a muted, non-clickable placeholder (there is no
-    // conversation to open yet), becoming an active link the moment linkage lands.
-    sessionId
-      ? m(
-          "a",
-          {
-            class: "subagent-card-link",
-            href: "javascript:void(0)",
-            onclick(e: Event) {
-              e.preventDefault();
-              e.stopPropagation();
-              void openSubagentTab(agentId, sessionId, description);
+  const cardTone = isRunning
+    ? "border-accent bg-accent-light"
+    : "subagent-card--done border-default bg-surface-secondary";
+  const linkBase =
+    "shrink-0 whitespace-nowrap text-(length:--font-size-body) transition-[color] duration-(--dur-base)";
+  return m(
+    "div",
+    {
+      class: `subagent-card my-[0.75em] flex items-center justify-between gap-3 rounded-md border px-4 py-3 ${cardTone}`,
+    },
+    [
+      m("div", { class: "subagent-card-header flex min-w-0 flex-1 items-center gap-2" }, [
+        statusIndicator,
+        m(
+          "span",
+          { class: "subagent-card-description truncate text-(length:--font-size-body) font-medium text-primary" },
+          description,
+        ),
+        agentType ? m("span", { class: badgeClass("accent", { mono: true, extra: "shrink-0" }) }, agentType) : null,
+      ]),
+      // The click-through needs the subagent session_id, which only arrives once the call is
+      // linked. The label stays "View conversation" throughout so it doesn't flip-flop; before
+      // the session is known it renders as a muted, non-clickable placeholder (there is no
+      // conversation to open yet), becoming an active link the moment linkage lands.
+      sessionId
+        ? m(
+            "a",
+            {
+              class: `subagent-card-link ${linkBase} text-accent no-underline hover:text-accent-hover hover:underline`,
+              href: "javascript:void(0)",
+              onclick(e: Event) {
+                e.preventDefault();
+                e.stopPropagation();
+                openSubagentTab(agentId, sessionId, description);
+              },
             },
-          },
-          "View conversation",
-        )
-      : m("span", { class: "subagent-card-link subagent-card-link--pending" }, "View conversation"),
-  ]);
-}
-
-/** One deferred payload's contribution to an expanded block: its text, or a quiet note. */
-function renderPayloadSection(
-  cssClass: string,
-  text: string | null,
-  state: "loaded" | "loading" | "unavailable",
-): m.Vnode | null {
-  if (state === "loading") {
-    return m("div", { class: `${cssClass} tool-call-payload-note` }, "Loading\u2026");
-  }
-  if (state === "unavailable") {
-    return m("div", { class: `${cssClass} tool-call-payload-note` }, "No longer available");
-  }
-  return text ? m("div", { class: cssClass }, [m("pre", m("code", text))]) : null;
+            "View conversation",
+          )
+        : m(
+            "span",
+            {
+              class: `subagent-card-link subagent-card-link--pending ${linkBase} cursor-default text-faint hover:text-secondary`,
+            },
+            "View conversation",
+          ),
+    ],
+  );
 }
 
 export function renderToolCallBlock(
@@ -328,17 +338,13 @@ export function renderToolCallBlock(
   // codex that means unwrapping an `exec` whose real operation is buried in a JS
   // argument, which is not something this view should have to know. Falls back to
   // the tool name for events parsed before the labels existed.
-  const headerText = toolCall.header_label || `Tool: ${toolCall.tool_name}`;
   const isError = toolResult?.is_error === true;
   // Keyed by the tool call's stable id so the expansion survives the row
   // unmounting and remounting (virtualization) or re-rendering (streaming).
   const expansionKey = `tc:${toolCall.tool_call_id}`;
-  const isExpanded = isBlockExpanded(expansionKey);
 
   // Events are payload-free on the wire: the full input/output are fetched on demand
   // (cached frontend-side for the page session) the first time the row is expanded.
-  const hasInput = toolCall.input_chars > 0 || Boolean(toolCall.tk_command);
-  const hasOutput = Boolean(toolResult && (toolResult.output_chars > 0 || toolResult.output));
   const requestPayloads = () => {
     if (toolCall.input_chars > 0) {
       requestEventDetail(agentId, assistantEventId);
@@ -347,90 +353,65 @@ export function renderToolCallBlock(
       requestEventDetail(agentId, toolResult.event_id);
     }
   };
-  if (isExpanded) {
+  if (isBlockExpanded(expansionKey)) {
     // Re-request on every expanded render: a no-op when cached or in flight, and it
     // heals an entry dropped by a transient fetch failure.
     requestPayloads();
   }
 
-  let inputSection: m.Vnode | null = null;
-  if (hasInput) {
+  let inputText = "";
+  let inputState: PayloadState = "loaded";
+  if (toolCall.input_chars > 0 || Boolean(toolCall.tk_command)) {
     const inputDetail = getEventDetailState(agentId, assistantEventId);
     if (inputDetail?.state === "loaded") {
-      const inputText = inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? toolCall.tk_command ?? "";
-      inputSection = renderPayloadSection("tool-call-input", inputText, "loaded");
+      inputText = inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? toolCall.tk_command ?? "";
     } else if (toolCall.input_chars === 0) {
       // Only the stamped tk command exists (nothing to fetch).
-      inputSection = renderPayloadSection("tool-call-input", toolCall.tk_command ?? "", "loaded");
+      inputText = toolCall.tk_command ?? "";
     } else {
-      inputSection = renderPayloadSection("tool-call-input", null, inputDetail?.state ?? "loading");
+      inputState = inputDetail?.state ?? "loading";
     }
   }
 
-  let outputSection: m.Vnode | null = null;
-  const outputClass = isError ? "tool-call-output tool-call-output--error" : "tool-call-output";
+  let outputText = "";
+  let outputState: PayloadState = "loaded";
   if (toolResult) {
     // A frontend-synthesized skill expansion carries its body inline; a real result's
     // output is fetched. When both exist (a Skill call with real output plus its
     // expansion), the fetched output leads and the expansion follows.
-    const fetched =
-      toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")
-        ? getEventDetailState(agentId, toolResult.event_id)
-        : undefined;
+    const isFetchable = toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-");
+    const fetched = isFetchable ? getEventDetailState(agentId, toolResult.event_id) : undefined;
     const inline = toolResult.output ?? "";
     if (fetched?.state === "loaded") {
-      const combined = [fetched.detail.output ?? "", inline].filter((part) => part).join("\n\n");
-      outputSection = renderPayloadSection(outputClass, combined, "loaded");
-    } else if (toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")) {
-      outputSection = renderPayloadSection(outputClass, null, fetched?.state ?? "loading");
-    } else if (inline) {
-      outputSection = renderPayloadSection(outputClass, inline, "loaded");
+      outputText = [fetched.detail.output ?? "", inline].filter((part) => part).join("\n\n");
+    } else if (isFetchable) {
+      outputState = fetched?.state ?? "loading";
     } else {
-      outputSection = null;
+      outputText = inline;
     }
   }
 
-  return m("div", { class: `tool-call-block${isExpanded ? " tool-call-block--expanded" : ""}` }, [
-    m(
-      "div",
-      {
-        class: "tool-call-header",
-        onclick(e: Event) {
-          const block = (e.currentTarget as HTMLElement).parentElement;
-          if (block) {
-            // Toggle the DOM directly (memoized wrappers skip re-patching)
-            // AND record it so a fresh mount renders in the same state.
-            const nowExpanded = block.classList.toggle("tool-call-block--expanded");
-            setBlockExpanded(expansionKey, nowExpanded);
-            if (nowExpanded) {
-              // Kick off the payload fetches; the redraw renders the loading note (or
-              // the cached payload) into the just-revealed details section.
-              requestPayloads();
-              m.redraw();
-            }
-          }
-        },
-      },
-      [m("span", { class: "tool-call-chevron" }, "\u25B8"), m("span", headerText)],
-    ),
-    // A failed call stays glanceable without a fetch: its stamped first line rides the
-    // event and shows under the collapsed header.
-    isError && toolResult?.error_snippet
-      ? m("div", { class: "tool-call-error-snippet" }, toolResult.error_snippet)
-      : null,
-    hasInput || hasOutput || outputSection || inputSection
-      ? m("div", { class: "tool-call-details" }, [inputSection, outputSection])
-      : null,
-  ]);
+  return renderToolBlock({
+    headerText: toolCall.header_label || `Tool: ${toolCall.tool_name}`,
+    inputText,
+    outputText,
+    inputState,
+    outputState,
+    isError,
+    errorSnippet: toolResult?.error_snippet ?? undefined,
+    // The markdown rhythm: the same vertical slot a paragraph-adjacent block
+    // gets in the assistant flow.
+    extra: "my-[0.25em]",
+    expansionKey,
+    // Kick off the payload fetches; the redraw renders the loading note (or
+    // the cached payload) into the just-revealed details section.
+    onExpand: () => {
+      requestPayloads();
+      m.redraw();
+    },
+  });
 }
 
-/**
- * Render the children (text + tool calls) of an assistant message.
- * Used by both the stable (memoized) and simple assistant message renderers.
- */
-/** The grey note shown under a provider-fault API error: the failure is the model
- *  provider's, not ours. Wording nudged by kind; every harness's provider faults
- *  land here since they stamp the same is_provider_fault flag. */
 /** The "sign in again" affordance under an auth failure.
  *
  * Resolves the chat's own account from its `account` label, so the chooser opens ON that
@@ -438,15 +419,17 @@ export function renderToolCallBlock(
  * label (a chat from before accounts, say) it opens the chooser plainly, which is still the
  * right destination.
  */
+const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
+
 function renderReauthAction(agentId: string): m.Children {
   const accountId = getAgentById(agentId)?.labels?.account ?? "";
-  return m("div.message-api-error-note", [
+  return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
     "This provider is no longer working. ",
     m(
       "button",
       {
         type: "button",
-        class: "message-api-error-action",
+        class: REAUTH_ACTION_CLASS,
         onclick: () => openProviderChooser(accountId ? { accountId } : {}),
       },
       "Sign in again",
@@ -461,7 +444,7 @@ function renderReauthAction(agentId: string): m.Children {
       "button",
       {
         type: "button",
-        class: "message-api-error-action",
+        class: REAUTH_ACTION_CLASS,
         onclick: () => openProviderChooser({ onSignedIn: (chosen) => startChatOnAccount(chosen) }),
       },
       "switch to another provider",
@@ -470,6 +453,9 @@ function renderReauthAction(agentId: string): m.Children {
   ]);
 }
 
+/** The grey note shown under a provider-fault API error: the failure is the model
+ *  provider's, not ours. Wording nudged by kind; every harness's provider faults
+ *  land here since they stamp the same is_provider_fault flag. */
 function providerFaultNote(kind: string | null): string {
   const cause =
     kind === "api_error" ? "the model provider's servers hit an error" : "the model provider's servers are overloaded";
@@ -524,6 +510,10 @@ function renderThinkingDisclosure(event: AssistantMessageEvent, agentId: string)
   ]);
 }
 
+/**
+ * Render the children (text + tool calls) of an assistant message.
+ * Used by both the stable (memoized) and simple assistant message renderers.
+ */
 export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
@@ -547,13 +537,19 @@ export function renderAssistantMessageChildren(
       // raw 401 body. Inline rather than a modal, so it waits to be clicked instead of
       // throwing a sign-in screen over whatever the user was doing.
       children.push(
-        m("div.message-api-error", [
+        m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [
           m(MarkdownContent, {
             content: textContent,
             requestedAt: event.timestamp,
             expansionKeyPrefix: event.event_id,
           }),
-          event.is_provider_fault ? m("div.message-api-error-note", providerFaultNote(event.api_error_kind)) : null,
+          event.is_provider_fault
+            ? m(
+                "div",
+                { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" },
+                providerFaultNote(event.api_error_kind),
+              )
+            : null,
           event.is_auth_error ? renderReauthAction(agentId) : null,
         ]),
       );
@@ -615,7 +611,7 @@ export function renderPermissionItem(
   // and shifting content each time it crosses the window edge.
   return m(
     "div",
-    { id: domId, class: "message message-assistant", key: event.event_id },
+    { id: domId, class: "message message-assistant mb-5", key: event.event_id },
     renderAssistantMessageChildren(event, toolResults, agentId, resolutionsByRequestId),
   );
 }

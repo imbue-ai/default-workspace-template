@@ -60,7 +60,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
         return m(
           "div",
           { class: "agent-terminal-starting flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "Starting agent..."),
+          m("p", { class: "text-secondary" }, "Starting agent..."),
         );
       }
 
@@ -76,10 +76,10 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
           "div",
           { class: "agent-terminal-stopped flex h-full w-full flex-col items-center justify-center gap-3 bg-surface" },
           [
-            m("div", { class: "text-[15px] font-medium text-text-primary" }, agent.name),
+            m("div", { class: "text-[15px] font-medium text-primary" }, agent.name),
             m(
               "div",
-              { class: "text-[13px] text-text-faint" },
+              { class: "text-(length:--font-size-row) text-faint" },
               "This agent is stopped, so its terminal has nothing to attach to.",
             ),
             // A failed start leaves the agent dead, which lands back on this face --
@@ -88,7 +88,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               ? null
               : m(
                   "div",
-                  { class: "agent-terminal-start-error text-[13px] text-red-500" },
+                  { class: "agent-terminal-start-error text-(length:--font-size-row) text-danger" },
                   `Could not start agent: ${startError}`,
                 ),
             m(
@@ -97,7 +97,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
                 type: "button",
                 class:
                   "agent-terminal-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
-                  "border-border px-4 text-[13px] font-medium text-text-primary hover:bg-bg-hover",
+                  "border-default px-4 text-(length:--font-size-row) font-medium text-primary hover:bg-fill-hover",
                 onclick: () => {
                   starting = true;
                   startError = null;
@@ -117,7 +117,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
           m(
             "div",
             {
-              class: "agent-terminal-start-error text-red-500",
+              class: "agent-terminal-start-error text-danger",
               style: "font-size: 0.85em; padding: 4px 8px; flex: 0 0 auto;",
             },
             `Could not start agent: ${startError}`,

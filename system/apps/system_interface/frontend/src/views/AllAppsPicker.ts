@@ -17,9 +17,9 @@
 import m from "mithril";
 import type { AppAction, AppRecord } from "../models/Inventory";
 import { appStoppedDetail, getOpenableApps, primaryActionForApp } from "../models/Inventory";
-import { appIconMarkup } from "./appIcon";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
+import { appIconMarkup } from "./components/appIcon";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { icon } from "./components/icons";
 
 const FILTER_ROW_THRESHOLD = 8;
 const ROW_GLYPH_SIZE = 14;
@@ -95,16 +95,16 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
         "data-app": row.app.name,
         class:
           "project-rail-app group flex w-full items-center gap-2 px-3 text-left " +
-          (isStopped ? "project-rail-app-stopped text-text-faint " : "text-text-primary ") +
-          "transition-all duration-150 " +
-          (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-bg-hover"),
+          (isStopped ? "project-rail-app-stopped text-faint " : "text-primary ") +
+          "transition-all duration-(--dur-base) " +
+          (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-fill-hover"),
         ...(isStopped && !isFadingOut ? hoverTooltipAttrs(`${label} — ${appStoppedDetail(row.app)}`) : {}),
         onclick: isFadingOut ? undefined : () => attrs.onRunAction(row.app, row.action),
       },
       [
         m(
           "span",
-          { class: "flex shrink-0 items-center text-text-faint" },
+          { class: "flex shrink-0 items-center text-faint" },
           m.trust(
             appIconMarkup(row.app.icon, ROW_GLYPH_SIZE, icon("external-link", { size: ROW_GLYPH_SIZE }), row.app.name),
           ),
@@ -118,7 +118,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
                 type: "button",
                 class:
                   "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
-                  "text-text-faint opacity-0 hover:text-text-primary focus-visible:opacity-100 " +
+                  "text-faint opacity-0 hover:text-primary focus-visible:opacity-100 " +
                   "group-hover:opacity-100",
                 "aria-label": `Pin ${label}`,
                 ...hoverTooltipAttrs("Pin it to this project's rail. What it opens does not change."),
@@ -169,8 +169,8 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           ? m("input", {
               type: "text",
               class:
-                "mx-3 my-1 h-7 shrink-0 rounded-md bg-bg-sidebar px-2 text-[13px] text-text-primary outline-none " +
-                "placeholder:text-text-faint",
+                "mx-3 my-1 h-7 shrink-0 rounded-md bg-sidebar px-2 text-(length:--font-size-row) text-primary outline-none " +
+                "placeholder:text-faint",
               value: filterText,
               placeholder: "Filter apps",
               autofocus: true,
@@ -184,7 +184,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
             })
           : null,
         rows.length === 0
-          ? m("div", { class: "px-3 py-2 text-[13px] text-text-faint" }, emptyMessage)
+          ? m("div", { class: "px-3 py-2 text-(length:--font-size-row) text-faint" }, emptyMessage)
           : m(
               "div",
               { class: "min-h-0 flex-1 overflow-y-auto" },

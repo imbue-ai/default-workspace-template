@@ -66,13 +66,16 @@ export function App(): m.Component {
     view() {
       return m(
         "div",
-        { class: "app-layout flex flex-col", style: "height: calc(100vh - var(--minds-titlebar-height, 0px))" },
+        // h-screen is the full viewport: inside the minds desktop shell this app renders in a
+        // sandboxed iframe the shell already places below its title bar.
+        { class: "app-layout flex h-screen flex-col" },
         [
-          m("div", { class: "minds-titlebar-spacer" }),
           m(UpdateStalenessBanner),
           // min-h-0: a flex item's automatic minimum size is its content's, so without this the
           // row can grow with the viewport but never shrink back.
-          m("div", { class: "app-main flex min-h-0 flex-1 min-w-80" }, [
+          // pt/pl-1: the canvas runs edge to edge, with the padding as the outermost pane gap (the
+          // left so the rail has a few pixels of canvas to hover into).
+          m("div", { class: "app-main flex min-h-0 flex-1 min-w-80 bg-(--si-canvas) pt-1 pl-1" }, [
             // Every attr is read straight off the workspace on each draw rather than cached: the
             // inventory and the projects arrive over the socket as redraws.
             m(Sidebar, {

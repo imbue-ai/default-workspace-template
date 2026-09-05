@@ -46,6 +46,16 @@ npm install
 npm run dev
 ```
 
+## Design system (optional convention for the default UI)
+
+The frontend styles in the markup: Tailwind utilities over a semantic token
+layer (`frontend/src/style.css`), with shared primitives (Button, Modal, the
+input/badge recipes) for repeated looks. When you extend or maintain the
+*default* look, prefer them over new one-offs so it stays coherent. This is a
+convention, not an enforced rule — if a user wants their interface restyled to
+their own taste, build that and ignore the tokens freely. See
+[`frontend/style_guide.md`](frontend/style_guide.md) for the guide.
+
 ## Updating the running UI (canonical flow)
 
 The deployed system interface is the live web UI the user is looking at, so

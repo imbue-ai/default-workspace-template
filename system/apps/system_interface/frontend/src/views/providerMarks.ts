@@ -24,7 +24,7 @@ const OPENCODE = `<svg width="{S}" height="{S}" viewBox="0 0 24 24" fill="none" 
 const API_KEY = `<svg width="{S}" height="{S}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4"/><path d="m10.5 12.5 8-8"/><path d="m16 7 2.5 2.5"/><path d="m13.5 9.5 2.5 2.5"/></svg>`;
 
 // OpenRouter's "OR" monogram, viewBox tight to the glyph so `meet` centres it in the square
-// the row reserves. Same artwork as the mockup's OpenRouterGlyph.
+// the row reserves.
 const OPENROUTER = `<svg width="{S}" height="{S}" viewBox="0 1 63 45" aria-hidden="true"><path fill="#7624F4" fill-rule="evenodd" d="M21.5 3.2 L50 3.2 C57 3.2 62.4 8.6 62.4 15.5 L62.4 18.5 L48.3 28.1 L62.4 40.5 C62.9 42.9 60.7 44.6 57 44.6 L21.5 44.6 A20.7 20.7 0 0 1 21.5 3.2 Z M12.7 23.7 a11.6 11.6 0 1 0 23.2 0 a11.6 11.6 0 1 0 -23.2 0 Z"/></svg>`;
 
 const MARKS_BY_LANE: Readonly<Record<string, string>> = {
