@@ -283,10 +283,6 @@ def test_prevent_init_methods_in_non_exception_classes() -> None:
     # The watchdog file-change handler's __init__ is counted toward the
     # project's existing total: it lived in session_watcher.py and now lives
     # in watcher_common.py as the shared WakeOnChangeHandler.
-    # +1 for layout_ops.LayoutMutex.__init__. The mutex holds runtime state
-    # (a ``threading.Lock`` and a holder dict mutated under that lock) that
-    # is not a natural fit for a Pydantic model, matching the precedent
-    # already set by session_watcher / event_queues entries here.
     # +1 for oom_prioritizer.ChatOomPrioritizer.__init__. Same category: it
     # holds a ``threading.Lock``, mutable presence sets, a recency-timestamp
     # dict mutated under that lock, and injected callables -- runtime state
@@ -296,7 +292,7 @@ def test_prevent_init_methods_in_non_exception_classes() -> None:
     # (``http.client.HTTPConnection`` / ``xmlrpc.client.Transport``) whose
     # construction contract is fixed by the stdlib, so a Pydantic model cannot
     # stand in and the socket path has to arrive through ``__init__``.
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(8))
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(7))
 
 
 def test_prevent_cast_usage() -> None:
