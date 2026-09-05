@@ -212,6 +212,13 @@ def _listing(harness: PipelineHarness, cwd: Path) -> dict[str, dict[str, Any]]:
     return {entry["name"]: entry for entry in json.loads(result.stdout)}
 
 
+def _nudge(harness: PipelineHarness, app: str) -> None:
+    """Tell the shell an app's list changed, as the app itself would (``POST /api/apps/<name>/changed``)."""
+    request = urllib.request.Request(f"{harness.base_url}/api/apps/{app}/changed", method="POST")
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert response.status == 204
+
+
 def _wait_for_instance_listed(harness: PipelineHarness, cwd: Path, app: str, address: str) -> None:
     """The inventory fetches instance lists off the request thread, so a listing is polled for."""
     wait_for(
@@ -358,7 +365,7 @@ def test_rename_and_delete_reach_the_app_through_the_relay(layout_server: Pipeli
     sandbox = _sandbox(tmp_path)
     layout_server.stub_source.records.append(instance_record("stub-1", title="Stub 1"))
     address = f"app:{_STUB_APP_NAME}?instance=stub-1"
-    _run_layout_script(["refresh", f"app:{_STUB_APP_NAME}"], layout_server, sandbox)
+    _nudge(layout_server, _STUB_APP_NAME)
     _wait_for_instance_listed(layout_server, sandbox, _STUB_APP_NAME, address)
 
     rename = _run_layout_script(["rename", address, "Design notes"], layout_server, sandbox)
