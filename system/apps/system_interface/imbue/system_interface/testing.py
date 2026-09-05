@@ -30,6 +30,7 @@ from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 
@@ -38,6 +39,7 @@ import pexpect
 import simple_websocket
 from app_manifest.registry import registry_path
 from flask import Flask
+from flask import request
 
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
@@ -242,6 +244,21 @@ class RecordingMngrMessenger(MngrMessenger):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
         return self.press_succeeds
+
+
+class RecordingClientActivityShell:
+    """A stand-in shell that records every body posted to ``/api/client-activity``."""
+
+    def __init__(self) -> None:
+        self.received: list[dict[str, Any]] = []
+        self.application = Flask("recording-shell")
+        self.application.add_url_rule(
+            "/api/client-activity", view_func=self._accept, methods=["POST"], endpoint="client_activity"
+        )
+
+    def _accept(self) -> tuple[str, int]:
+        self.received.append(request.get_json())
+        return "", 204
 
 
 def build_test_state(

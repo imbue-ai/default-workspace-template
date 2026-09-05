@@ -3,12 +3,18 @@
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+from app_instances.sidecar import serve_in_background
+from app_instances.testing import LOOPBACK_HOST
 from app_instances.testing import RecordingNudger
+from app_instances.testing import free_port
+from app_instances.testing import wait_until
 from flask.testing import FlaskClient
 
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
+from imbue.system_interface.chat_document import _record_client_message_activity
 from imbue.system_interface.chat_document import client_activity_report
 from imbue.system_interface.chat_document import is_client_activity_reportable
 from imbue.system_interface.documents import CHAT_AGENT_ID_META_NAME
@@ -16,6 +22,7 @@ from imbue.system_interface.documents import CHAT_SESSION_ID_META_NAME
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.server import create_application
+from imbue.system_interface.testing import RecordingClientActivityShell
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import seed_agent_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -179,3 +186,19 @@ def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view(tmp_path:
         "key": "agent-1",
         "text": "hello",
     }
+
+
+def test_a_framed_send_is_posted_to_the_shells_client_activity_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_info = AgentInfo(
+        id="agent-1", name="alice", state="RUNNING", agent_state_dir=tmp_path, claude_config_dir=tmp_path
+    )
+    framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
+    shell = RecordingClientActivityShell()
+    port = free_port()
+    with serve_in_background(LOOPBACK_HOST, port, shell.application):
+        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", f"http://{LOOPBACK_HOST}:{port}")
+        _record_client_message_activity(agent_info, SendMessageRequest(message="unframed"))
+        _record_client_message_activity(agent_info, framed)
+        assert wait_until(lambda: shell.received == [client_activity_report(agent_info, framed)], timeout_seconds=5.0)
