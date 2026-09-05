@@ -8,9 +8,7 @@ import signal
 import threading
 import time
 import tomllib
-from collections.abc import Sequence
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import Any
@@ -19,13 +17,8 @@ import pytest
 from app_instances.testing import RecordingNudger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
-from watchdog.events import FileClosedNoWriteEvent
-from watchdog.events import FileModifiedEvent
-from watchdog.events import FileMovedEvent
-from watchdog.events import FileOpenedEvent
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
-from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
@@ -41,12 +34,9 @@ from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_codex.app_server_client import CodexModel
-from imbue.system_interface import client_activity
-from imbue.system_interface import projects
 from imbue.system_interface.accounts import commit_account
 from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
@@ -54,9 +44,7 @@ from imbue.system_interface.agent_manager import _build_chat_display_label_comma
 from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
-from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.agent_manager import _rename_failure_detail
-from imbue.system_interface.auto_open import AutoOpenLedger
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
@@ -66,11 +54,11 @@ from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import FileHarnessSession
+from imbue.system_interface.message_stamps import MessageStampStore
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
-from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.presence import PresenceState
@@ -168,226 +156,9 @@ def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
     assert agents == []
 
 
-def test_get_apps_initially_empty(agent_manager: AgentManager) -> None:
-    apps = agent_manager.get_apps()
-    assert apps == []
-
-
 def test_get_proto_agents_initially_empty(agent_manager: AgentManager) -> None:
     protos = agent_manager.get_proto_agents()
     assert protos == []
-
-
-def test_read_apps_parses_toml(agent_manager: AgentManager, tmp_path: Path) -> None:
-    toml_content = """
-[[apps]]
-name = "web"
-url = "http://localhost:8000"
-label = "web-x7k9q2w1"
-
-[[apps]]
-name = "terminal"
-url = "http://localhost:7681"
-"""
-    toml_file = tmp_path / "apps.toml"
-    toml_file.write_text(toml_content)
-
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert len(apps) == 2
-    assert apps[0].name == "web"
-    assert apps[0].url == "http://localhost:8000"
-    assert apps[0].label == "web-x7k9q2w1"
-    assert apps[1].name == "terminal"
-    assert apps[1].url == "http://localhost:7681"
-    # A row written before labels existed reads back with an empty label.
-    assert apps[1].label == ""
-
-
-def test_read_apps_reads_the_registered_icon(agent_manager: AgentManager, tmp_path: Path) -> None:
-    icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
-    toml_file = tmp_path / "apps.toml"
-    toml_file.write_text(
-        "[[apps]]\n"
-        'name = "web"\n'
-        'url = "http://localhost:8000"\n'
-        'label = "web-x7k9q2w1"\n'
-        f"icon = {json.dumps(icon)}\n"
-        "\n"
-        "[[apps]]\n"
-        'name = "terminal"\n'
-        'url = "http://localhost:7681"\n'
-    )
-
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert apps[0].icon == icon
-    # An app that registered no icon reads back with an empty one.
-    assert apps[1].icon == ""
-
-
-@pytest.mark.parametrize(
-    "icon",
-    [
-        "<svg><script>alert(1)</script></svg>",
-        '<svg onload="alert(1)"></svg>',
-        "<svg><style>* { display: none }</style></svg>",
-        '<svg><a href="javascript:alert(1)"></a></svg>',
-        "<div>not an svg</div>",
-        "<svg" + " " * 20000 + "></svg>",
-    ],
-)
-def test_read_apps_drops_an_unsafe_icon(agent_manager: AgentManager, tmp_path: Path, icon: str) -> None:
-    """``forward_port.py`` never writes markup like this, but a hand-edited
-    registry must not be able to push it into the client's DOM."""
-    toml_file = tmp_path / "apps.toml"
-    toml_file.write_text(f'[[apps]]\nname = "web"\nurl = "http://localhost:8000"\nicon = {json.dumps(icon)}\n')
-
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    # The app itself still registers; only its icon is refused.
-    assert len(apps) == 1
-    assert apps[0].icon == ""
-
-
-def test_read_apps_reads_the_internal_flag(agent_manager: AgentManager, tmp_path: Path) -> None:
-    toml_file = tmp_path / "apps.toml"
-    toml_file.write_text(
-        "[[apps]]\n"
-        'name = "owner-exec"\n'
-        'url = "http://localhost:8793"\n'
-        "internal = true\n"
-        "\n"
-        "[[apps]]\n"
-        'name = "web"\n'
-        'url = "http://localhost:8000"\n'
-    )
-
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert apps[0].internal is True
-    # A row with no `internal` key -- every ordinary app -- reads back False.
-    assert apps[1].internal is False
-
-
-def test_read_apps_reads_the_program_field(agent_manager: AgentManager, tmp_path: Path) -> None:
-    toml_file = tmp_path / "apps.toml"
-    toml_file.write_text(
-        "[[apps]]\n"
-        'name = "files"\n'
-        'url = "http://localhost:8300"\n'
-        'program = "files"\n'
-        "\n"
-        "[[apps]]\n"
-        'name = "web"\n'
-        'url = "http://localhost:8000"\n'
-    )
-
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert apps[0].program == "files"
-    # A row with no `program` key -- an unsupervised or pre-field app -- reads back "".
-    assert apps[1].program == ""
-
-
-def test_read_apps_carries_probed_liveness_across_a_reread(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """Re-reading the registry (a registration, an icon change) must not flash
-    a stopped app back to running until the next probe lands."""
-    toml_file = tmp_path / "apps.toml"
-    toml_file.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:8000"\n')
-    agent_manager._read_apps(toml_file)
-    with agent_manager._lock:
-        agent_manager._apps = [
-            app.model_copy_update(to_update(app.field_ref().is_running, False)) for app in agent_manager._apps
-        ]
-
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert apps[0].is_running is False
-
-
-def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
-    broadcaster: WebSocketBroadcaster,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    probed_targets: list[tuple[str, str, str]] = []
-
-    def fake_prober(targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:
-        probed_targets.extend(targets)
-        return {name: program == "files" for name, program, _url in targets}
-
-    manager = AgentManager.build(broadcaster, liveness_prober=fake_prober)
-    with manager._lock:
-        manager._apps = [
-            AppEntry(name="files", url="http://localhost:8300", program="files"),
-            AppEntry(name="web", url="http://localhost:8000"),
-        ]
-    events: list[dict[str, Any]] = []
-    client_queue = broadcaster.register()
-
-    manager.refresh_app_liveness()
-
-    while not client_queue.empty():
-        message = client_queue.get_nowait()
-        if message is not None:
-            events.append(json.loads(message))
-    apps_updated_events = [event for event in events if event.get("type") == "apps_updated"]
-    assert len(apps_updated_events) == 1
-    serialized_by_name = {app["name"]: app for app in apps_updated_events[0]["apps"]}
-    assert serialized_by_name["files"]["is_running"] is True
-    assert serialized_by_name["web"]["is_running"] is False
-    assert ("files", "files", "http://localhost:8300") in probed_targets
-    assert ("web", "", "http://localhost:8000") in probed_targets
-
-    # A second pass with the same answers changes nothing, so nothing is broadcast.
-    manager.refresh_app_liveness()
-    second_pass_events = []
-    while not client_queue.empty():
-        second_pass_message = client_queue.get_nowait()
-        if second_pass_message is not None:
-            second_pass_events.append(json.loads(second_pass_message))
-    assert [event for event in second_pass_events if event.get("type") == "apps_updated"] == []
-
-
-def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
-    toml_file = tmp_path / "nonexistent.toml"
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert apps == []
-
-
-def test_read_apps_handles_empty_file(agent_manager: AgentManager, tmp_path: Path) -> None:
-    toml_file = tmp_path / "empty.toml"
-    toml_file.write_text("")
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert apps == []
-
-
-def test_read_apps_ignores_entries_without_name(agent_manager: AgentManager, tmp_path: Path) -> None:
-    toml_content = """
-[[apps]]
-url = "http://localhost:8000"
-"""
-    toml_file = tmp_path / "apps.toml"
-    toml_file.write_text(toml_content)
-
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert apps == []
 
 
 def test_get_agents_serialized(agent_manager: AgentManager) -> None:
@@ -406,71 +177,6 @@ def test_get_agents_serialized(agent_manager: AgentManager) -> None:
     assert serialized[0]["name"] == "agent-one"
     assert serialized[0]["labels"] == {"user_created": "true"}
     assert serialized[0]["activity_state"] is None
-
-
-def test_get_apps_serialized(agent_manager: AgentManager) -> None:
-    with agent_manager._lock:
-        agent_manager._apps = [
-            AppEntry(name="web", url="http://localhost:8000", label="web-x7k9q2w1"),
-        ]
-
-    serialized = agent_manager.get_apps_serialized()
-    assert serialized == [
-        {
-            "name": "web",
-            "url": "http://localhost:8000",
-            "label": "web-x7k9q2w1",
-            "icon": "",
-            "internal": False,
-            "program": "",
-            "is_running": True,
-        }
-    ]
-
-
-def test_get_apps_serialized_carries_the_icon(agent_manager: AgentManager) -> None:
-    """The icon rides alongside name/url/label everywhere the app list is sent,
-    so a client can draw the app's own glyph without a second request."""
-    icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
-    with agent_manager._lock:
-        agent_manager._apps = [
-            AppEntry(name="web", url="http://localhost:8000", label="web-x7k9q2w1", icon=icon),
-        ]
-
-    serialized = agent_manager.get_apps_serialized()
-    assert serialized == [
-        {
-            "name": "web",
-            "url": "http://localhost:8000",
-            "label": "web-x7k9q2w1",
-            "icon": icon,
-            "internal": False,
-            "program": "",
-            "is_running": True,
-        }
-    ]
-
-
-def test_get_apps_serialized_carries_internal(agent_manager: AgentManager) -> None:
-    """The frontend's `pickableApps` excludes an internal app everywhere it
-    offers apps to open, so the flag has to reach it over the wire."""
-    with agent_manager._lock:
-        agent_manager._apps = [
-            AppEntry(name="owner-exec", url="http://localhost:8793", internal=True),
-        ]
-
-    serialized = agent_manager.get_apps_serialized()
-    assert serialized == [
-        {
-            "name": "owner-exec",
-            "url": "http://localhost:8793",
-            "label": "",
-            "icon": "",
-            "internal": True,
-            "program": "",
-            "is_running": True,
-        }
-    ]
 
 
 def test_resolve_agent_work_dir_from_own_env(agent_manager: AgentManager) -> None:
@@ -601,192 +307,6 @@ def test_agent_state_event_adds_agent(agent_manager: AgentManager, broadcaster: 
     assert msg["type"] == "agents_updated"
 
 
-def _layout_ops(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [message for message in messages if message.get("type") == "layout_op"]
-
-
-def _register_client(broadcaster: WebSocketBroadcaster) -> queue.Queue[str | None]:
-    """A connected client that has reported its ``client_state``, so it can take layout ops."""
-    q = broadcaster.register()
-    broadcaster.set_client_info(q, "client-1", "everything", "desktop")
-    return q
-
-
-def test_assist_labeled_agent_auto_opens_its_tab(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
-) -> None:
-    """A chat spawned by the get-help flow (carrying the ``assist`` label) auto-opens its tab."""
-    q = _register_client(broadcaster)
-    agent = _agent_details("assist-abc123", labels={"assist": "true"})
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-
-    messages = _drain(q)
-    opens = _layout_ops(messages)
-    assert len(opens) == 1
-    assert opens[0]["op"] == "open"
-    assert opens[0]["args"] == {"ref": "chat:assist-abc123"}
-    # The agent list must be broadcast before the open, or the frontend drops the open
-    # (it resolves ``chat:<name>`` against its known-agents list).
-    types = [m.get("type") for m in messages]
-    assert types.index("agents_updated") < types.index("layout_op")
-
-
-def test_non_assist_agent_does_not_auto_open(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:
-    """An ordinary discovered agent (no ``assist`` label) does not trigger an auto-open."""
-    q = _register_client(broadcaster)
-    agent = _agent_details("plain-agent", labels={"user_created": "true"})
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-
-    assert _layout_ops(_drain(q)) == []
-
-
-def test_assist_agent_rediscovery_does_not_reopen(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
-) -> None:
-    """A re-emitted AGENT_STATE event for an already-seen assist chat does not reopen its tab."""
-    first_client = _register_client(broadcaster)
-    agent = _agent_details("assist-xyz", labels={"assist": "true"})
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-    assert len(_layout_ops(_drain(first_client))) == 1
-    # A second client captures just the re-delivery.
-    q = _register_client(broadcaster)
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-
-    assert _layout_ops(_drain(q)) == []
-
-
-def _assist_agent_details(name: str) -> AgentDetails:
-    return _agent_details(name, labels={"assist": "true"})
-
-
-def test_snapshot_auto_opens_a_newly_appeared_assist_chat(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
-) -> None:
-    """A freshly-created chat usually surfaces in a full snapshot (not a per-agent delta),
-    so the snapshot path must auto-open assist chats too."""
-    q = _register_client(broadcaster)
-    agent = _assist_agent_details("assist-snap")
-    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
-
-    messages = _drain(q)
-    opens = _layout_ops(messages)
-    assert len(opens) == 1
-    assert opens[0]["op"] == "open"
-    assert opens[0]["args"] == {"ref": "chat:assist-snap"}
-    # The agent list must be broadcast before the open, or the frontend drops the open
-    # (it resolves ``chat:<name>`` against its known-agents list).
-    types = [m.get("type") for m in messages]
-    assert types.index("agents_updated") < types.index("layout_op")
-
-
-def test_snapshot_does_not_reopen_assist_chat_on_later_snapshots(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
-) -> None:
-    first_client = _register_client(broadcaster)
-    agent = _assist_agent_details("assist-snap2")
-    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
-    assert len(_layout_ops(_drain(first_client))) == 1
-    # A second client captures only the second snapshot.
-    q = _register_client(broadcaster)
-    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
-
-    assert _layout_ops(_drain(q)) == []
-
-
-def _startup_agent_info(agent: AgentDetails, tmp_path: Path, created_ago: timedelta) -> AgentInfo:
-    """What ``_initial_discover`` learns about a chat that already exists when the server starts."""
-    return AgentInfo(
-        id=str(agent.id),
-        name=str(agent.name),
-        state=agent.state.value,
-        agent_state_dir=tmp_path / "agents" / str(agent.id),
-        claude_config_dir=tmp_path / "claude",
-        labels=dict(agent.labels),
-        work_dir=str(agent.work_dir),
-        create_time=datetime.now(timezone.utc) - created_ago,
-    )
-
-
-def test_stale_assist_chat_present_at_startup_is_not_auto_opened(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
-) -> None:
-    """A chat that has been around for a while when the server starts is left as the saved
-    layout has it, so a restart never pops old tabs."""
-    agent = _assist_agent_details("assist-existing")
-    agent_manager._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(days=2))])
-    q = _register_client(broadcaster)
-    agent_manager.flush_pending_auto_opens()
-    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
-
-    assert _layout_ops(_drain(q)) == []
-
-
-def test_fresh_undelivered_chat_present_at_startup_is_owed_its_open(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
-) -> None:
-    """A recent labeled chat nobody has been shown yet -- an unattended run whose apply
-    restarted this interface -- gets its tab the first time a client registers."""
-    agent = _assist_agent_details("update-3am")
-    agent_manager._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(hours=6))])
-    q = _register_client(broadcaster)
-    agent_manager.flush_pending_auto_opens()
-
-    opens = _layout_ops(_drain(q))
-    assert [op["args"] for op in opens] == [{"ref": "chat:update-3am"}]
-    # Owed once: the next registration finds nothing pending.
-    agent_manager.flush_pending_auto_opens()
-    assert _layout_ops(_drain(q)) == []
-
-
-def test_auto_open_is_held_until_a_client_registers(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
-) -> None:
-    """A labeled chat appearing while no client has registered is not broadcast into the
-    void: its open waits for the first registration, then goes out exactly once."""
-    unregistered = broadcaster.register()
-    agent = _agent_details("update-a1b2c3", labels={"auto_open": "true", "update": "true"})
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-    assert _layout_ops(_drain(unregistered)) == []
-
-    q = _register_client(broadcaster)
-    agent_manager.flush_pending_auto_opens()
-    opens = _layout_ops(_drain(q))
-    assert [op["args"] for op in opens] == [{"ref": "chat:update-a1b2c3"}]
-
-    # Neither a later snapshot nor a later registration repeats it.
-    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
-    agent_manager.flush_pending_auto_opens()
-    assert _layout_ops(_drain(q)) == []
-
-
-def test_delivered_auto_open_survives_a_restart(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
-    """The delivered set is on disk, so the interface that comes up after an update's
-    restart does not re-pop a tab the previous one already surfaced."""
-    ledger_path = tmp_path / "workspace_layout" / "auto_opened_chats.json"
-    before = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
-    q = _register_client(broadcaster)
-    agent = _assist_agent_details("assist-once")
-    before._handle_observe_event(make_agent_state_event(agent))
-    assert len(_layout_ops(_drain(q))) == 1
-
-    after = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
-    after._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(minutes=5))])
-    after.flush_pending_auto_opens()
-    after._handle_observe_event(make_full_agent_state_event([agent]))
-    assert _layout_ops(_drain(q)) == []
-
-
-def test_a_ledger_of_the_wrong_shape_is_logged_and_starts_empty(tmp_path: Path, loguru_records: list[str]) -> None:
-    # Valid JSON that is not the ledger's shape (a hand edit, a file from some
-    # other tool) must not read as "nothing delivered" in silence: that is the
-    # one path that re-pops every tab, and it should be findable in the log.
-    ledger_path = tmp_path / "auto_opened_chats.json"
-    ledger_path.write_text('["assist-once"]')
-    ledger = AutoOpenLedger(path=ledger_path)
-    assert ledger.is_delivered("assist-once") is False
-    assert any("wrong shape" in record for record in loguru_records)
-
-
 def test_agent_removed_event_removes_agent(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:
     """An AGENT_REMOVED event removes the agent from the tracked list and broadcasts."""
     test_agent_id = MngrAgentId()
@@ -911,46 +431,6 @@ def test_agent_state_event_locates_agent_immediately(agent_manager: AgentManager
     assert str(matches[0].provider_name) == "local"
 
 
-def test_on_apps_changed(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
-    """Application changes are detected and broadcast."""
-    q = broadcaster.register()
-
-    toml_path = tmp_path / "data" / ".state" / "apps.toml"
-    toml_path.parent.mkdir(parents=True, exist_ok=True)
-    toml_path.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:8000"\n')
-
-    with agent_manager._lock:
-        agent_manager._agents["app-agent"] = AgentStateItem(
-            id="app-agent",
-            name="app-agent",
-            state="RUNNING",
-            labels={},
-            work_dir=str(tmp_path),
-        )
-
-    agent_manager._on_apps_changed("app-agent")
-
-    apps = agent_manager.get_apps()
-    assert len(apps) == 1
-    assert apps[0].name == "web"
-
-    raw = q.get_nowait()
-    assert raw is not None
-    msg = json.loads(raw)
-    assert msg["type"] == "apps_updated"
-
-
-def test_read_apps_handles_invalid_toml(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """Invalid TOML files are handled gracefully."""
-    toml_file = tmp_path / "bad.toml"
-    toml_file.write_text("this is [[ not valid toml {{")
-
-    agent_manager._read_apps(toml_file)
-
-    apps = agent_manager.get_apps()
-    assert apps == []
-
-
 def test_unknown_observe_event_type_is_ignored(agent_manager: AgentManager) -> None:
     """An observe line whose ``type`` is not one of the three agents-stream events is ignored.
 
@@ -983,85 +463,6 @@ def test_create_chat_raises_when_the_primary_work_dir_is_unknown(agent_manager: 
         agent_manager._own_work_dir = ""
     with pytest.raises(AgentCreationError, match="Cannot determine work directory"):
         agent_manager.create_chat_agent("test")
-
-
-@pytest.mark.flaky
-def test_start_app_watcher(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """Starting an app watcher for an agent creates the runtime directory."""
-    runtime_dir = tmp_path / "data" / ".state"
-    agent_manager._start_app_watcher("watcher-test", tmp_path)
-    assert runtime_dir.exists()
-    agent_manager._stop_app_watcher("watcher-test")
-
-
-def test_apps_file_handler_fires_on_move(tmp_path: Path) -> None:
-    """The apps-registry watcher must react to move/rename events, not just
-    modify events. system/scripts/forward_port.py writes apps.toml atomically
-    via ``tempfile.mkstemp`` + ``os.replace``, which surfaces as an
-    ``IN_MOVED_TO`` / ``FileMovedEvent`` in watchdog -- if the handler only
-    listened on ``on_modified`` every service registration after startup
-    would be silently dropped.
-    """
-    seen: list[str] = []
-    handler = _make_apps_file_handler("agent-x", lambda aid: seen.append(aid))
-
-    # Simulate what os.replace(tmp, apps.toml) surfaces as.
-    handler.dispatch(
-        FileMovedEvent(
-            src_path=str(tmp_path / "apps.toml.tmp"),
-            dest_path=str(tmp_path / "apps.toml"),
-        )
-    )
-
-    assert seen == ["agent-x"]
-
-
-def test_apps_file_handler_ignores_unrelated_paths(tmp_path: Path) -> None:
-    """The handler must not fire for writes to forward_port.py's scratch
-    ``apps.toml.*.tmp`` files. Every upsert creates and modifies one
-    of those before the atomic rename, and firing on each would produce a
-    broadcast storm with no useful information (the scratch file is never
-    the source of truth we read).
-    """
-    seen: list[str] = []
-    handler = _make_apps_file_handler("agent-x", lambda aid: seen.append(aid))
-
-    handler.dispatch(FileModifiedEvent(src_path=str(tmp_path / "apps.toml.abc123.tmp")))
-
-    assert seen == []
-
-
-def test_apps_file_handler_ignores_open_and_close_no_write(tmp_path: Path) -> None:
-    """The handler must not fire on read-only events (FileOpenedEvent /
-    FileClosedNoWriteEvent). Watchdog 3+ emits these on Linux for any open()
-    / close() of the watched file -- including the read() inside
-    _read_apps itself. If the handler reacts to them it triggers an
-    inotify feedback loop that pins one CPU core per agent watcher.
-    """
-    seen: list[str] = []
-    handler = _make_apps_file_handler("agent-x", lambda aid: seen.append(aid))
-
-    handler.dispatch(FileOpenedEvent(src_path=str(tmp_path / "apps.toml")))
-    handler.dispatch(FileClosedNoWriteEvent(src_path=str(tmp_path / "apps.toml")))
-
-    assert seen == []
-
-
-def test_apps_file_handler_fires_on_modify(tmp_path: Path) -> None:
-    """A direct write (e.g. ``echo ... > apps.toml``) surfaces as a
-    FileModifiedEvent and must still trigger the change callback.
-    """
-    seen: list[str] = []
-    handler = _make_apps_file_handler("agent-x", lambda aid: seen.append(aid))
-
-    handler.dispatch(FileModifiedEvent(src_path=str(tmp_path / "apps.toml")))
-
-    assert seen == ["agent-x"]
-
-
-def test_stop_app_watcher_nonexistent(agent_manager: AgentManager) -> None:
-    """Stopping a watcher for an agent that isn't watched is safe."""
-    agent_manager._stop_app_watcher("nonexistent")
 
 
 def test_initial_discover_populates_agents(
@@ -2882,61 +2283,51 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
     return writes
 
 
-def _write_client_activity_message(host_dir: Path, agent_id: str, seconds_ago: float) -> None:
-    """Append one message event, stamped ``seconds_ago`` before now, to the activity log.
-
-    Relative to now rather than a fixed date because the band the seeded stamp
-    produces depends on how long ago it was: a pinned date drifts out of the
-    freshness ramp as wall-clock advances, and every chat then reads as equally
-    abandoned.
-    """
-    timestamp = format_nanosecond_iso_timestamp(datetime.now(timezone.utc) - timedelta(seconds=seconds_ago))
-    events_path = client_activity.get_events_path(projects.primary_agent_layout_dir(host_dir, "test-agent-id"))
-    events_path.parent.mkdir(parents=True, exist_ok=True)
-    with events_path.open("a") as event_file:
-        event_file.write(
-            json.dumps(
-                {
-                    "timestamp": timestamp,
-                    "type": "message",
-                    "event_id": f"evt-{agent_id}-{timestamp}",
-                    "source": "client_activity",
-                    "client_id": "client-1",
-                    "device_kind": "desktop",
-                    "layout_slug": "desktop",
-                    "agent_id": agent_id,
-                    "agent_name": agent_id,
-                    "message_text": "hi",
-                    "is_message_truncated": False,
-                }
-            )
-            + "\n"
-        )
-
-
-def test_seeding_recovers_chat_message_recency_from_the_activity_log(
-    agent_manager: AgentManager, tmp_path: Path
+def test_seeding_recovers_chat_message_recency_from_the_message_stamps(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """A restarted system interface recovers which chats were recently messaged.
 
     The prioritizer's recency state is in-memory, so on restart it is re-seeded
-    from the durable client-activity log. Without that, every chat would look
+    from the durable message stamps. Without that, every chat would look
     never-messaged and start aging from its process-start time.
     """
+    stamps_path = tmp_path / "last_messaged.json"
     older = _agent_details("older-chat", labels={"user_created": "true"})
     newer = _agent_details("newer-chat", labels={"user_created": "true"})
-    agent_manager._handle_observe_event(make_full_agent_state_event([older, newer]))
-    writes = _capture_prioritizer_writes(agent_manager, {str(older.id): 10, str(newer.id): 20})
+    now = time.time()
+    previous_run = MessageStampStore(path=stamps_path)
+    previous_run.record(str(older.id), at=now - 60 * 60)
+    previous_run.record(str(newer.id), at=now - 30 * 60)
 
-    _write_client_activity_message(tmp_path, str(older.id), seconds_ago=60 * 60)
-    _write_client_activity_message(tmp_path, str(newer.id), seconds_ago=30 * 60)
-    agent_manager._seed_oom_prioritizer()
-    agent_manager._oom_prioritizer.reapply()
+    manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=stamps_path))
+    try:
+        manager._handle_observe_event(make_full_agent_state_event([older, newer]))
+        writes = _capture_prioritizer_writes(manager, {str(older.id): 10, str(newer.id): 20})
+        manager._seed_oom_prioritizer()
+        manager._oom_prioritizer.reapply()
+    finally:
+        manager.stop()
 
     latest = {pid: adj for pid, adj in writes}
     # The more recently messaged chat outranks the other, which only holds if the
-    # log's timestamps were found, parsed, and ordered.
+    # stamps were found and ordered.
     assert latest[20] < latest[10]
+
+
+def test_message_stamps_follow_the_chats_they_stamp(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A send stamps the chat on disk, and a destroyed chat's stamp goes with it."""
+    stamps_path = tmp_path / "last_messaged.json"
+    chat = _agent_details("chat", labels={"user_created": "true"})
+    manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=stamps_path))
+    try:
+        manager._handle_observe_event(make_full_agent_state_event([chat]))
+        manager.record_message_sent(str(chat.id))
+        assert set(MessageStampStore(path=stamps_path).read()) == {str(chat.id)}
+        manager.remove_agent(str(chat.id))
+        assert MessageStampStore(path=stamps_path).read() == {}
+    finally:
+        manager.stop()
 
 
 def _age_process_start_marker(manager: AgentManager, agent_id: str, seconds_ago: float) -> None:

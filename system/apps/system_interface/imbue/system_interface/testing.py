@@ -19,6 +19,7 @@ import os
 import socket
 import socketserver
 import sys
+import tempfile
 import threading
 import time
 import xmlrpc.client
@@ -35,6 +36,7 @@ from xmlrpc.server import SimpleXMLRPCRequestHandler
 import httpx
 import pexpect
 import simple_websocket
+from app_manifest.registry import registry_path
 from flask import Flask
 
 from imbue.mngr.api.find import AgentMatch
@@ -51,8 +53,10 @@ from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.harnesses.signed_in import SignedIn
-from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -248,23 +252,34 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
+    shell_state_directory: Path | None = None,
+    inventory: AppInventory | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
     Every collaborator left unset gets a cheap default production instance;
     pass one to substitute a fake. The agent manager is built but never started,
-    so no `mngr observe` pipeline is spawned. The state's broadcaster is derived
-    from the agent manager, so injecting `agent_manager` (often built with a fake
-    `MngrMessenger`) repoints the broadcaster too.
+    so no `mngr observe` pipeline is spawned, and the shell state is built but
+    never started, so no registry watch or inventory sweep runs. The state's
+    broadcaster is derived from the agent manager, so injecting `agent_manager`
+    (often built with a fake `MngrMessenger`) repoints the broadcaster too.
 
-    Only the collaborators tests actually override are parameters; the agent
-    filters and the local-service http client (which no test substitutes) are
-    fixed to their production defaults inline.
+    ``shell_state_directory`` is where the shell's state files go (a fresh temp
+    directory by default); ``inventory`` substitutes an inventory built over a
+    fake fetcher.
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
     # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
+    shell = build_shell_state(
+        state_directory=shell_state_directory
+        if shell_state_directory is not None
+        else Path(tempfile.mkdtemp(prefix="si-shell-state-")),
+        registry_path=registry_path(),
+        broadcaster=manager.broadcaster,
+        inventory=inventory,
+    )
     state = SystemInterfaceState(
         # Never the production probe: it shells out to whatever claude/codex/agy/pi this
         # machine happens to have, over the network, from any test that reaches a sign-in
@@ -279,7 +294,7 @@ def build_test_state(
         exclude_filters=(),
         agent_manager=manager,
         event_queues=event_queues,
-        layout_mutex=LayoutMutex(),
+        shell=shell,
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
@@ -287,6 +302,10 @@ def build_test_state(
     # Match production: eviction drops a destroyed/stopped agent's watcher.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     return state
+
+
+def shell_of(state: SystemInterfaceState) -> ShellState:
+    return state.shell
 
 
 class FakeFinishedProcess:

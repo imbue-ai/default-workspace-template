@@ -57,6 +57,9 @@ def _isolate_system_interface_tests(
     that gap.
     """
     monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path_factory.mktemp("minds-accounts") / "accounts"))
+    # The shell's inventory reads the app registry from the working directory otherwise, which
+    # in a workspace is the live one.
+    monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
     if "agent_manager_test.py" in request.node.nodeid:
         return None
     isolated = tmp_path_factory.mktemp("mngr-host-isolation")

@@ -5,17 +5,18 @@ splits the chat out of the shell's document: every chat renders inside an iframe
 ``chat`` origin, served by this app from the same process the shell runs in. ``wsgi_dispatch``
 picks this app for the paths only it serves; phase 10 moves it into its own process.
 
-The routes here moved verbatim from ``server.py``; what is new is the document route, the
-presence route, and the instances blueprint.
+The routes here moved verbatim from ``server.py`` (the agent list and the destroy, start,
+and stop verbs among them: loopback callers such as the evals bridge keep reaching them at
+port 8000); what is new is the document route, the presence route, and the instances blueprint.
 """
 
 import json
 import os
 import queue
+import threading
 import time
 from collections.abc import Callable
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 from typing import Final
 from uuid import uuid4
@@ -24,6 +25,8 @@ from app_instances.blueprint import answer_typed_error
 from app_instances.blueprint import build_instances_blueprint
 from app_instances.blueprint import parse_request_body
 from app_instances.errors import AppInstancesError
+from app_instances.nudge import post_to_shell
+from app_instances.nudge import shell_base_url
 from flask import Flask
 from flask import Response
 from flask import request
@@ -32,16 +35,17 @@ from loguru import logger as _loguru_logger
 from simple_websocket import ConnectionClosed
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface import accounts_endpoints
-from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
-from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import SendFailedError
+from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.agent_manager import DESTROY_TIMEOUT_SECONDS
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
@@ -50,9 +54,9 @@ from imbue.system_interface.attachments import get_uploads_directory
 from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.chat_instances import AGENT_ID_PATTERN
+from imbue.system_interface.chat_instances import CHAT_APP_NAME
 from imbue.system_interface.chat_instances import SUBAGENT_KEY_SEPARATOR
 from imbue.system_interface.chat_instances import build_chat_instance_source
-from imbue.system_interface.chat_instances import taken_member_titles
 from imbue.system_interface.config import Config
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
@@ -73,12 +77,16 @@ from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentDestroyError
+from imbue.system_interface.models import AgentListItem
+from imbue.system_interface.models import AgentListResponse
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
+from imbue.system_interface.models import DestroyAgentResponse
 from imbue.system_interface.models import DrainToComposerResponse
 from imbue.system_interface.models import ErrorResponse
 from imbue.system_interface.models import FastModePromptAnsweredResponse
@@ -89,6 +97,8 @@ from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
 from imbue.system_interface.models import SetModelChoiceRequest
 from imbue.system_interface.models import ShoulderTapAtomicResponse
+from imbue.system_interface.models import StartAgentResponse
+from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.presence import PresenceReport
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
@@ -117,18 +127,6 @@ def _find_agent(agent_id: str) -> AgentInfo | None:
 def _agent_not_found_response(agent_id: str) -> Response:
     error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
     return json_response(error.model_dump(), status_code=404)
-
-
-def _primary_agent_layout_dir() -> Path | None:
-    return projects.primary_agent_layout_dir_from_env()
-
-
-def _client_activity_events_path() -> Path | None:
-    """Where the workspace-level client-activity event log lives, or None."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        return None
-    return client_activity.get_events_path(layout_dir)
 
 
 # Default number of events for tail-first loading
@@ -378,20 +376,33 @@ def _send_message_endpoint(agent_id: str) -> Response:
     return json_response(SendMessageResponse(status="ok").model_dump())
 
 
+@pure
+def client_activity_report(agent_info: AgentInfo, send_message_request: SendMessageRequest) -> dict[str, str]:
+    """The body of the shell's ``POST /api/client-activity`` for one send (contracts.md section 5)."""
+    return {
+        "client_id": send_message_request.client_id,
+        "device_kind": send_message_request.device_kind,
+        "view_id": send_message_request.active_layout,
+        "kind": "message",
+        "app": str(CHAT_APP_NAME),
+        "key": agent_info.id,
+        "text": send_message_request.message,
+    }
+
+
 def _record_client_message_activity(agent_info: AgentInfo, send_message_request: SendMessageRequest) -> None:
-    """Record which client (and layout) a message came from, so agents can attribute requests to a
-    client via ``layout.py context``. Legacy callers without client metadata are not recorded."""
-    events_path = _client_activity_events_path()
-    if events_path is not None and send_message_request.client_id:
-        client_activity.append_message_event(
-            events_path,
-            client_id=send_message_request.client_id,
-            device_kind=send_message_request.device_kind,
-            layout_slug=send_message_request.active_layout,
-            agent_id=agent_info.id,
-            agent_name=agent_info.name,
-            message_text=send_message_request.message,
-        )
+    """Tell the shell which client (and view) a message came from, so agents can attribute requests through
+    ``layout.py context``. Legacy callers without client metadata are not recorded. Posted on its own thread:
+    the shell is a separate app, and a send must not wait on it."""
+    if not send_message_request.client_id:
+        return
+    body = client_activity_report(agent_info, send_message_request)
+    threading.Thread(
+        target=post_to_shell,
+        args=(f"{shell_base_url()}/api/client-activity", body),
+        name="client-activity-report",
+        daemon=True,
+    ).start()
 
 
 def _get_harnesses_endpoint() -> Response:
@@ -933,8 +944,8 @@ def _create_chat_agent() -> Response:
 
     The chat's display name is minted here (server-side) when the request names
     none: the first free "<word> N" for the harness, counted against every name
-    on the machine -- agents, in-flight creates, and the member-title store's
-    chosen names -- so simultaneous creates cannot both mint "Chat 1". An
+    on the machine -- agents and in-flight creates -- so simultaneous creates
+    cannot both mint "Chat 1". An
     explicitly requested name that collides answers 409 so the caller can retry
     with another. The response carries the resulting name pair (canonical
     ``name`` + human-readable ``display_name``) beside the agent id.
@@ -962,7 +973,6 @@ def _create_chat_agent() -> Response:
             # anything a client asks for -- bootstrap stacks it on its own `mngr create`.
             extra_role_templates=(),
             project_id=project_id,
-            extra_taken_names=taken_member_titles(),
             account_id=create_request.account_id,
         )
         response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
@@ -972,6 +982,105 @@ def _create_chat_agent() -> Response:
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
         return json_response(error.model_dump(), status_code=400)
+
+
+def _discover_with_filters() -> list[AgentInfo]:
+    """Discover agents using the app-level filter configuration."""
+    state = get_state()
+    return discover_agents(
+        provider_names=state.provider_names,
+        include_filters=state.include_filters,
+        exclude_filters=state.exclude_filters,
+    )
+
+
+def _list_agents_endpoint() -> Response:
+    """List all mngr-managed agents (the loopback callers' listing: the evals bridge, the deployment tests)."""
+    agents = _discover_with_filters()
+    items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
+    return json_response(AgentListResponse(agents=items).model_dump())
+
+
+def _refuse_primary_agent(agent_state_name: str, labels: dict[str, str], verb: str) -> Response | None:
+    """A 400 refusing to destroy or stop the ``is_primary=true`` services agent, or None.
+
+    That agent runs the workspace's supervised services; the frontend never offers it, so this
+    is defense in depth for direct callers.
+    """
+    if labels.get("is_primary") != "true":
+        return None
+    error = ErrorResponse(
+        detail=f"Refusing to {verb} agent '{agent_state_name}': it carries the is_primary=true label (services agent for this workspace)"
+    )
+    return json_response(error.model_dump(), status_code=400)
+
+
+def _destroy_agent(agent_id: str) -> Response:
+    """Destroy an agent by running ``mngr destroy --force`` (the instances API's delete does the same)."""
+    agent_manager: AgentManager = get_state().agent_manager
+    agent_state = agent_manager.get_agent_by_id(agent_id)
+    if agent_state is None:
+        return _agent_not_found_response(agent_id)
+    refusal = _refuse_primary_agent(agent_state.name, agent_state.labels, "destroy")
+    if refusal is not None:
+        return refusal
+    try:
+        agent_manager.destroy_chat_agent(agent_id)
+    except AgentDestroyError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+    return json_response(DestroyAgentResponse(status="ok").model_dump())
+
+
+def _build_stop_command(agent_name: str) -> list[str]:
+    """Build the ``mngr stop`` argv for one agent. Pure, so the CLI contract is testable without a subprocess."""
+    return ["mngr", "stop", agent_name]
+
+
+def _stop_agent(agent_id: str) -> Response:
+    """Stop an agent's process with ``mngr stop``, the reversible counterpart to a destroy.
+
+    The agent keeps its transcript and name; messaging it (or the start route) brings it back.
+    The agent stays tracked: the observe stream reports the STOPPED state on its own.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    agent_state = agent_manager.get_agent_by_id(agent_id)
+    if agent_state is None:
+        return _agent_not_found_response(agent_id)
+    refusal = _refuse_primary_agent(agent_state.name, agent_state.labels, "stop")
+    if refusal is not None:
+        return refusal
+    # Stopping rides the same mngr CLI startup and host-lock path as a destroy, so it shares
+    # the destroy's generous bound.
+    result = run_local_command_modern_version(
+        command=_build_stop_command(agent_state.name),
+        cwd=None,
+        is_checked=False,
+        timeout=DESTROY_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        error = ErrorResponse(detail=f"Failed to stop agent '{agent_state.name}': {result.stderr.strip()}")
+        return json_response(error.model_dump(), status_code=500)
+    return json_response(StopAgentResponse(status="ok").model_dump())
+
+
+def _start_agent(agent_id: str) -> Response:
+    """Ensure an agent is running so its terminal session is attachable (the chat's terminal back face calls this).
+
+    The same in-process mngr start path a send uses, so opening the terminal and messaging the
+    agent succeed or fail together; a no-op for an already-running agent.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    try:
+        start_agent(agent_info.name)
+    except MngrError as e:
+        error = ErrorResponse(detail=f"Failed to start agent '{agent_info.name}': {e}")
+        return json_response(error.model_dump(), status_code=500)
+    # The observe stream will not see the revival for minutes (no pid to watch while the
+    # agent was stopped); reflect it now so the UI's liveness unblocks with the start.
+    get_state().agent_manager.note_agent_alive(agent_info.id)
+    return json_response(StartAgentResponse(status="ok").model_dump())
 
 
 def _proto_agent_logs_endpoint(websocket: Any, agent_id: str) -> None:
@@ -1068,7 +1177,11 @@ def create_chat_application(state: SystemInterfaceState) -> Flask:
     source, nudger = build_chat_instance_source(state.agent_manager)
     application.register_blueprint(build_instances_blueprint(source, nudger))
 
+    application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/<agent_id>/stop", view_func=_stop_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
     application.add_url_rule(
         "/api/agents/<agent_id>/events/<event_id>/detail", view_func=_get_event_detail, methods=["GET"]
