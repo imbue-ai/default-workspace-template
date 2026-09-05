@@ -1,9 +1,10 @@
 """Server-side support for the agent-driven layout surface, over addresses.
 
-``system/scripts/layout.py`` posts ``{op, args, agent_id}`` to ``POST /api/layout/broadcast``;
-the read ops (``list``, ``inspect``, ``views``, ``context``) are answered here from the
-inventory and the state files, ``load`` switches a client's view, and every other op is
-broadcast to the connected clients of the target view, which apply it to their dock.
+``system/scripts/layout.py`` posts ``{op, args, agent_id}`` to ``POST /api/layout/broadcast``
+(``routes.py``): the read ops (``list``, ``inspect``, ``views``, ``context``) are answered from
+the inventory and the state files, ``load`` switches a client's view, and every other op is
+broadcast to the connected clients of the target view, which apply it to their dock. This
+module holds the op tables, the advisory mutex, and the pure summaries the read ops answer with.
 """
 
 import threading
