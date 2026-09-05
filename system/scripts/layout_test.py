@@ -568,6 +568,17 @@ def test_post_layout_sends_the_agent_id_in_body_and_header(
     }
 
 
+def test_a_read_timeout_is_an_unreachable_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timing_out_urlopen(request: urllib.request.Request, timeout: float) -> None:
+        raise TimeoutError("timed out")
+
+    monkeypatch.setenv(layout.ENV_WORKSPACE_URL, "http://127.0.0.1:1/")
+    monkeypatch.setattr(layout.urllib.request, "urlopen", timing_out_urlopen)
+    assert layout._post_layout("focus", {"address": "app:files"}) == (-1, "timed out")
+
+
 # ---------- the REST-riding commands: the relay verbs and the shortcuts ----------
 
 
