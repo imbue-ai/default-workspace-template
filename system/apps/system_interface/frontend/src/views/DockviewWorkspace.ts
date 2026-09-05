@@ -121,6 +121,7 @@ import {
   setProjectShortcut,
 } from "../models/Projects";
 import { fetchLayout, mintTabId, panelsWithUnlistedAddresses, saveLayout } from "../models/Layouts";
+import type { LayoutRecord } from "../models/Layouts";
 import type { TabRecord } from "../models/Layouts";
 import {
   createInstance,
@@ -188,6 +189,9 @@ let mountedViewId: string | null = null;
 // Serialized form of the layout last persisted for the active view; autosave skips the POST
 // when the current serialization matches.
 let lastPersistedLayoutJson: string | null = null;
+// Set when the mounted view's layout could not be fetched: what the dock shows then is not the
+// client's arrangement, and saving it would overwrite the real one. Cleared by the next fetch.
+let isLayoutSaveSuspended = false;
 
 // Target fraction of horizontal space a newly-opened pane takes when it splits alongside the
 // requesting agent's chat.
@@ -1439,7 +1443,7 @@ function buildLayoutPayload(): { dockview: SerializedDockview; tabs: Record<stri
 }
 
 async function persistLayout(): Promise<void> {
-  if (!dockview) return;
+  if (!dockview || isLayoutSaveSuspended) return;
   const targetViewId = mountedViewId;
   if (targetViewId === null) return;
   const payload = buildLayoutPayload();
@@ -1564,10 +1568,24 @@ async function initializeActiveView(): Promise<void> {
   const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
   setActiveView(chosenId);
   reportClientState();
-  const layout = await fetchLayout(chosenId, getClientId());
+  const layout = await fetchLayoutOrSuspendSaves(chosenId);
   lastPersistedLayoutJson = null;
   await applyLayout(layout);
   m.redraw();
+}
+
+/** This client's layout of ``viewId``; when the shell cannot answer, the launcher shows and
+ *  autosave stays off until a fetch succeeds, so nothing is saved over the real arrangement. */
+async function fetchLayoutOrSuspendSaves(viewId: string): Promise<LayoutRecord | null> {
+  try {
+    const layout = await fetchLayout(viewId, getClientId());
+    isLayoutSaveSuspended = false;
+    return layout;
+  } catch (e) {
+    console.warn(`[si] could not fetch the layout of ${viewId}; autosave is off until it loads`, e);
+    isLayoutSaveSuspended = true;
+    return null;
+  }
 }
 
 /**
@@ -1581,7 +1599,7 @@ export async function switchToView(viewId: string): Promise<void> {
   await flushPendingSave();
   setActiveView(viewId);
   reportClientState(previousViewId);
-  const layout = await fetchLayout(viewId, getClientId());
+  const layout = await fetchLayoutOrSuspendSaves(viewId);
   lastPersistedLayoutJson = null;
   await applyLayout(layout);
   m.redraw();
