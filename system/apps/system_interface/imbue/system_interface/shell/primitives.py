@@ -78,9 +78,6 @@ class Address(str):
             return None
         return InstanceKey(remainder[len(ADDRESS_INSTANCE_PARAMETER) :])
 
-    def render(self) -> str:
-        return str(self)
-
 
 @pure
 def address_for(app: AppName, key: InstanceKey | None) -> Address:
