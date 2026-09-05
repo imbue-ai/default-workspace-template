@@ -21,7 +21,6 @@ const FOREIGN_ORIGIN = "https://evil.example";
 
 function mountFrame(): HTMLIFrameElement {
   const iframe = document.createElement("iframe");
-  iframe.setAttribute("data-live-key", "chat:agent-1");
   document.body.appendChild(iframe);
   return iframe;
 }
