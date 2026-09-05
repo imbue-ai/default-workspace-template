@@ -1,16 +1,15 @@
 /**
  * Per-browser client identity.
  *
- * Each browser gets a stable uuid (minted once, kept in localStorage), a
- * device kind derived from the user agent (mobile vs desktop), and an active
- * view id (also persisted per browser so reconnects restore the same view).
- * The identity travels with every chat message and with the WebSocket
- * `client_state` registration, so the server (and agents, via
- * `layout.py context`) can attribute requests to a client and its view.
+ * Each browser gets a stable uuid (minted once, kept in localStorage) and a device kind
+ * derived from the user agent (mobile vs desktop). The active view is module state only: the
+ * shell's client record is its source (contracts.md section 6), read on boot, so two windows
+ * of one browser land on the same view. The identity travels with every chat message and with
+ * the WebSocket `client_state` registration, so the server (and agents, via `layout.py context`)
+ * can attribute requests to a client and its view.
  */
 
 const CLIENT_ID_STORAGE_KEY = "si-client-id";
-const ACTIVE_PROJECT_STORAGE_KEY = "si-active-project-id";
 
 export type DeviceKind = "mobile" | "desktop";
 
@@ -49,15 +48,9 @@ export function getClientId(): string {
   return minted;
 }
 
-// The active view id (a project id, or Everything). Held in module state
-// (source of truth while the page lives) and mirrored to localStorage so the
-// same browser restores the same view on its next connect. Empty string means
-// "not chosen yet" (during startup, before the projects list has been fetched).
+// The active view id (a project id, or Everything), while the page lives. Empty string means
+// "not chosen yet" (during startup, before the client record and the projects have been fetched).
 let activeProjectId = "";
-
-export function getStoredProjectId(): string {
-  return localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY) ?? "";
-}
 
 export function getActiveProjectId(): string {
   return activeProjectId;
@@ -65,7 +58,6 @@ export function getActiveProjectId(): string {
 
 export function setActiveProjectId(projectId: string): void {
   activeProjectId = projectId;
-  localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectId);
 }
 
 export interface AdoptedClientIdentity {

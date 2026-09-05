@@ -48,6 +48,7 @@ import {
   duplicateLiveKeyPanelIds,
   ensureLiveSurface,
   initializeLiveLayer,
+  isDragInProgress,
   isPageAtListedUrl,
   liveKeyForPanel,
   liveSurfaceBoundPanelId,
@@ -83,9 +84,10 @@ import { icon } from "./components/icons";
 import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
 import type { IconName } from "./components/icons";
 import {
+  addActiveViewChangedListener,
   addAppsUpdatedListener,
   addLayoutOpListener,
-  addLoadViewListener,
+  addLayoutUpdatedListener,
   addProjectsUpdatedListener,
   addTabReboundListener,
   addressFor,
@@ -113,7 +115,10 @@ import {
   type TabReboundEvent,
 } from "../models/Inventory";
 import { CHAT_APP_NAME, CHAT_NEW_ACTION } from "../models/chatApp";
-import { getActiveProjectId, getClientId, getStoredProjectId, setActiveProjectId } from "../models/ClientIdentity";
+import { getActiveProjectId, getClientId, setActiveProjectId } from "../models/ClientIdentity";
+import { fetchOwnActiveView } from "../models/Clients";
+import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "../models/deepLinks";
+import type { DeepLink } from "../models/deepLinks";
 import { areAccountsLoaded, getAccounts, loadAccounts, openProviderChooser } from "../models/Providers";
 import {
   addProjectTab,
@@ -125,7 +130,14 @@ import {
   removeProjectTab,
   setProjectShortcut,
 } from "../models/Projects";
-import { fetchLayout, mintTabId, panelsWithUnlistedAddresses, saveLayout } from "../models/Layouts";
+import {
+  StaleLayoutSaveError,
+  fetchLayout,
+  isOwnSaveId,
+  mintTabId,
+  panelsWithUnlistedAddresses,
+  saveLayout,
+} from "../models/Layouts";
 import type { LayoutRecord } from "../models/Layouts";
 import type { TabRecord } from "../models/Layouts";
 import {
@@ -203,6 +215,14 @@ let lastPersistedLayoutJson: string | null = null;
 // Set when the mounted view's layout could not be fetched: what the dock shows then is not the
 // client's arrangement, and saving it would overwrite the real one. Cleared by the next fetch.
 let isLayoutSaveSuspended = false;
+// The stamp of the mounted view's arrangement as this window last fetched or saved it: what the
+// next save is based on, and how a pushed update is told from one already applied.
+let baseUpdatedAt: string | null = null;
+// A pushed update that arrived while the user was dragging a tab or editing a title waits here
+// until the gesture ends.
+let isLayoutRefreshPending = false;
+// How many tab titles are being edited right now (a pushed layout waits for the edit to end).
+let activeTitleEdits = 0;
 // Bumped by every mount of a view, the initial one included. A mount whose generation has moved
 // on after an await abandons its remaining steps, so two overlapping switches (a double click,
 // a load pushed mid-switch) cannot leave one view's arrangement under the other's autosave.
@@ -211,10 +231,6 @@ let viewMountGeneration = 0;
 // its ``applyLayout`` finishing, the dock still shows the outgoing view, and a save then would
 // file that arrangement under the incoming view's id; autosave waits for the two to agree.
 let settledViewGeneration = 0;
-
-// Target fraction of horizontal space a newly-opened pane takes when it splits alongside the
-// requesting agent's chat.
-const OPEN_TAB_SPLIT_FRACTION = 0.6;
 
 // ---------- Tabs ----------
 
@@ -588,6 +604,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const beginTitleEdit = (): void => {
     if (isEditingTitle || !isRenameable()) return;
     isEditingTitle = true;
+    activeTitleEdits += 1;
     editor.value = content.textContent ?? "";
     content.style.display = "none";
     editor.style.display = "block";
@@ -606,6 +623,8 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const endTitleEdit = (isCommitting: boolean): void => {
     if (!isEditingTitle) return;
     isEditingTitle = false;
+    activeTitleEdits = Math.max(0, activeTitleEdits - 1);
+    runPendingLayoutRefresh();
     const typed = editor.value;
     editor.style.display = "none";
     content.style.display = "";
@@ -1491,12 +1510,57 @@ async function persistLayout(): Promise<void> {
   const serialized = JSON.stringify(payload);
   if (serialized === lastPersistedLayoutJson) return;
   try {
-    await saveLayout(targetViewId, getClientId(), payload.dockview, payload.tabs);
+    const outcome = await saveLayout(targetViewId, getClientId(), payload.dockview, payload.tabs, baseUpdatedAt);
     lastPersistedLayoutJson = serialized;
+    if (outcome.updatedAt !== null && targetViewId === mountedViewId) baseUpdatedAt = outcome.updatedAt;
   } catch (e) {
+    if (e instanceof StaleLayoutSaveError) {
+      // The shell holds a newer arrangement (an agent op, or another window's save): it wins, and
+      // the edits this window had not saved yet are dropped with it.
+      console.warn(`[si] the layout of ${targetViewId} moved under this window; taking the shell's`, e);
+      if (targetViewId === mountedViewId) void refreshMountedLayoutFromServer();
+      return;
+    }
     // Best-effort (the project was deleted mid-flight, say; the push switches us to the fallback).
     console.warn(`[si] could not save the layout of ${targetViewId}`, e);
   }
+}
+
+/**
+ * Take the shell's arrangement of the mounted view when it differs from the one this window holds.
+ * A pushed ``layout_updated`` and a refused save both land here. Deferred while a tab drag or a
+ * title edit is under way, so a gesture is never interrupted by a remount.
+ */
+async function refreshMountedLayoutFromServer(): Promise<void> {
+  const viewId = mountedViewId;
+  if (!dockview || viewId === null) return;
+  if (isDragInProgress() || activeTitleEdits > 0) {
+    isLayoutRefreshPending = true;
+    return;
+  }
+  isLayoutRefreshPending = false;
+  const generation = viewMountGeneration;
+  let layout: LayoutRecord;
+  try {
+    layout = await fetchLayout(viewId, getClientId());
+  } catch (e) {
+    console.warn(`[si] could not fetch the pushed layout of ${viewId}`, e);
+    return;
+  }
+  if (generation !== viewMountGeneration || viewId !== mountedViewId) return;
+  // Already applied (this window's own save, or an update that carried nothing new).
+  if (layout.updated_at === baseUpdatedAt) return;
+  baseUpdatedAt = layout.updated_at;
+  isLayoutSaveSuspended = false;
+  await applyLayout(layout, generation);
+  m.redraw();
+}
+
+/** Apply a pushed layout that a gesture held back, once the gesture is over. */
+function runPendingLayoutRefresh(): void {
+  if (!isLayoutRefreshPending) return;
+  if (isDragInProgress() || activeTitleEdits > 0) return;
+  void refreshMountedLayoutFromServer();
 }
 
 function scheduleSave(): void {
@@ -1604,6 +1668,18 @@ async function applyLayout(
   syncTabTitlesFromInventory();
   reconcileLiveSurfaces();
   scheduleTabWidthRecompute();
+  // The dock rescales a document to this window's own size, which changes the numbers dockview
+  // serializes. Laying it out now and recording the result as already saved is what keeps a window
+  // that applied another window's arrangement from saving its rescaled copy straight back, which the
+  // other window would apply and rescale in turn, forever.
+  layoutDockToContainer();
+  lastPersistedLayoutJson = JSON.stringify(buildLayoutPayload());
+}
+
+function layoutDockToContainer(): void {
+  if (!dockview || !dockviewContainer) return;
+  const rect = dockviewContainer.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) dockview.layout(rect.width, rect.height);
 }
 
 function setActiveView(viewId: string): void {
@@ -1611,22 +1687,60 @@ function setActiveView(viewId: string): void {
   mountedViewId = viewId;
 }
 
-/** Pick this client's initial view, register it with the shell, and mount its arrangement. */
+/**
+ * Pick this client's initial view, register it with the shell, and mount its arrangement.
+ *
+ * The view comes from this client's record on the shell (the same for every window of the
+ * browser), unless the page was opened through a deep link naming one. The deep link's open or
+ * action runs once the arrangement is mounted, and the link is then stripped from the URL.
+ */
 async function initializeActiveView(): Promise<void> {
   const generation = ++viewMountGeneration;
-  const listed = await fetchProjectsList();
+  const deepLink = takeDeepLinkFromLocation();
+  const [listed, recordedViewId] = await Promise.all([fetchProjectsList(), fetchOwnActiveView(getClientId())]);
   if (generation !== viewMountGeneration) return;
   // A listing the shell could not answer changes nothing: the push on connect, which may
   // already have landed, is the list.
   if (listed !== null) availableProjects = listed;
   applyProjects(availableProjects);
-  const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
+  const chosenId = chooseInitialViewId(availableProjects, deepLink.viewId ?? recordedViewId);
   setActiveView(chosenId);
   reportClientState();
   const layout = await fetchLayoutOrSuspendSaves(chosenId);
   if (generation !== viewMountGeneration) return;
-  lastPersistedLayoutJson = null;
   await applyLayout(layout, generation);
+  m.redraw();
+  if (generation === viewMountGeneration) void applyDeepLinkTargets(deepLink);
+}
+
+/** The deep link the page was opened with (contracts.md section 13), removed from the URL as it is read. */
+function takeDeepLinkFromLocation(): DeepLink {
+  const link = parseDeepLink(window.location.search);
+  if (isDeepLinkEmpty(link)) return link;
+  const stripped = `${window.location.pathname}${stripDeepLinkParams(window.location.search)}${window.location.hash}`;
+  window.history.replaceState(window.history.state, "", stripped);
+  return link;
+}
+
+/** Dock the instance and run the action a deep link named, through the paths a click takes;
+ *  a target nothing lists is ignored. */
+async function applyDeepLinkTargets(link: DeepLink): Promise<void> {
+  if (link.openAddress !== null) {
+    if (await whenAddressListed(link.openAddress)) {
+      openAddressInGroup(link.openAddress, null);
+    } else {
+      console.warn(`[si] deep link ignored: nothing lists ${link.openAddress}`);
+    }
+  }
+  if (link.action !== null) {
+    await whenAppsLoaded();
+    const app = getApp(link.action.app);
+    if (app !== undefined && app.actions.some((action) => action.id === link.action?.actionId)) {
+      runAppAction(app, link.action.actionId);
+    } else {
+      console.warn(`[si] deep link ignored: no action ${link.action.app}:${link.action.actionId}`);
+    }
+  }
   m.redraw();
 }
 
@@ -1636,10 +1750,12 @@ async function fetchLayoutOrSuspendSaves(viewId: string): Promise<LayoutRecord |
   try {
     const layout = await fetchLayout(viewId, getClientId());
     isLayoutSaveSuspended = false;
+    baseUpdatedAt = layout.updated_at;
     return layout;
   } catch (e) {
     console.warn(`[si] could not fetch the layout of ${viewId}; autosave is off until it loads`, e);
     isLayoutSaveSuspended = true;
+    baseUpdatedAt = null;
     return null;
   }
 }
@@ -1647,8 +1763,11 @@ async function fetchLayoutOrSuspendSaves(viewId: string): Promise<LayoutRecord |
 /**
  * Switch this client onto another view: flush pending edits into the old one, repoint the
  * autosave target, tell the shell (which records the switch), and mount the new arrangement.
+ *
+ * A window that switches because the shell pushed ``active_view_changed`` reports without a
+ * previous view: the switch was already recorded once, and its report only confirms the view.
  */
-export async function switchToView(viewId: string): Promise<void> {
+export async function switchToView(viewId: string, options: { isFollowingPush?: boolean } = {}): Promise<void> {
   if (!dockview) return;
   const previousViewId = mountedViewId ?? getActiveProjectId();
   if (previousViewId === viewId) return;
@@ -1656,11 +1775,15 @@ export async function switchToView(viewId: string): Promise<void> {
   // would make persistLayout refuse the save as one made mid-mount.
   await flushPendingSave();
   const generation = ++viewMountGeneration;
+  isLayoutRefreshPending = false;
   setActiveView(viewId);
-  reportClientState(previousViewId);
+  if (options.isFollowingPush === true) {
+    reportClientState();
+  } else {
+    reportClientState(previousViewId);
+  }
   const layout = await fetchLayoutOrSuspendSaves(viewId);
   if (generation !== viewMountGeneration) return;
-  lastPersistedLayoutJson = null;
   await applyLayout(layout, generation);
   m.redraw();
 }
@@ -1794,20 +1917,11 @@ function relayLocationForChildFrame(frame: HTMLIFrameElement, payload: Record<st
   void reportInstanceLocation(parsed.app, parsed.key, path);
 }
 
-// ---------- Agent-driven layout op handlers ----------
-
-function directionToPosition(direction: string): "top" | "bottom" | "left" | "right" {
-  switch (direction) {
-    case "above":
-      return "top";
-    case "below":
-      return "bottom";
-    case "left":
-      return "left";
-    default:
-      return "right";
-  }
-}
+// ---------- Agent-driven layout ops ----------
+//
+// Only the four verbs with nothing to store reach this window as messages (contracts.md section
+// 12): maximize, restore, refresh, and the interface reload. Open, focus, split, close, and move are
+// applied by the shell to this client's layout file and arrive as a ``layout_updated``.
 
 /** Resolve a layout-op address (or the literal "self") to a live dockview panel id, or null. */
 function resolveAddressToPanelId(address: string, requesterAgentId: string): string | null {
@@ -1828,29 +1942,10 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-async function handleLayoutOp(event: LayoutOpEvent): Promise<void> {
+function handleLayoutOp(event: LayoutOpEvent): void {
   if (!dockview) return;
   const requesterAgentId = event.requesterAgentId;
   switch (event.op) {
-    case "open":
-      await handleOpen(event.args, requesterAgentId);
-      return;
-    case "focus":
-      handleFocus(event.args, requesterAgentId);
-      return;
-    case "split":
-      await handleSplit(event.args, requesterAgentId);
-      return;
-    case "close":
-      handleClose(event.args, requesterAgentId);
-      return;
-    case "move":
-      handleMove(event.args, requesterAgentId);
-      return;
     case "maximize":
       handleMaximize(event.args, requesterAgentId);
       return;
@@ -1864,242 +1959,6 @@ async function handleLayoutOp(event: LayoutOpEvent): Promise<void> {
       reloadInterface();
       return;
   }
-}
-
-/** Find a group adjacent to ``anchorGroupId`` in the requested direction, measured
- *  geometrically; among candidates the one with the largest perpendicular overlap wins. */
-function findSiblingGroupInDirection(
-  anchorGroupId: string,
-  direction: "left" | "right" | "above" | "below",
-): { id: string } | null {
-  if (!dockview) return null;
-  const anchor = dockview.groups.find((g) => g.id === anchorGroupId);
-  if (!anchor) return null;
-  const anchorRect = anchor.element.getBoundingClientRect();
-  const tolerance = 2;
-  let best: { id: string; overlap: number; distance: number } | null = null;
-  for (const group of dockview.groups) {
-    if (group.id === anchorGroupId) continue;
-    const rect = group.element.getBoundingClientRect();
-    let inDirection: boolean;
-    let overlap: number;
-    let distance: number;
-    if (direction === "right") {
-      inDirection = rect.left >= anchorRect.right - tolerance;
-      overlap = Math.max(0, Math.min(rect.bottom, anchorRect.bottom) - Math.max(rect.top, anchorRect.top));
-      distance = rect.left - anchorRect.right;
-    } else if (direction === "left") {
-      inDirection = rect.right <= anchorRect.left + tolerance;
-      overlap = Math.max(0, Math.min(rect.bottom, anchorRect.bottom) - Math.max(rect.top, anchorRect.top));
-      distance = anchorRect.left - rect.right;
-    } else if (direction === "below") {
-      inDirection = rect.top >= anchorRect.bottom - tolerance;
-      overlap = Math.max(0, Math.min(rect.right, anchorRect.right) - Math.max(rect.left, anchorRect.left));
-      distance = rect.top - anchorRect.bottom;
-    } else {
-      inDirection = rect.bottom <= anchorRect.top + tolerance;
-      overlap = Math.max(0, Math.min(rect.right, anchorRect.right) - Math.max(rect.left, anchorRect.left));
-      distance = anchorRect.top - rect.bottom;
-    }
-    if (!inDirection || overlap <= 0) continue;
-    if (best === null || overlap > best.overlap || (overlap === best.overlap && distance < best.distance)) {
-      best = { id: group.id, overlap, distance };
-    }
-  }
-  return best === null ? null : { id: best.id };
-}
-
-/** The placement an agent's ``open`` docks into: to the right of the requester's own chat when
- *  it is docked, else of whatever the user is looking at, tabbing into a group already there
- *  unless ``forceNewGroup``. */
-function placementForAgentOpen(requesterAgentId: string, forceNewGroup: boolean): AddPanelPlacementOptions {
-  if (!dockview) return {};
-  const anchorPanelId = resolveAddressToPanelId("self", requesterAgentId) ?? dockview.activePanel?.id ?? null;
-  if (anchorPanelId === null) return {};
-  const anchorGroupId = dockview.panels.find((p) => p.id === anchorPanelId)?.api.group.id ?? null;
-  const sibling =
-    !forceNewGroup && anchorGroupId !== null ? findSiblingGroupInDirection(anchorGroupId, "right") : null;
-  if (sibling !== null) return { position: { referenceGroup: sibling.id } };
-  const containerWidth = dockviewContainer?.getBoundingClientRect().width ?? 0;
-  const initialWidth = containerWidth > 0 ? Math.round(containerWidth * OPEN_TAB_SPLIT_FRACTION) : undefined;
-  return { position: { referencePanel: anchorPanelId, direction: "right" }, initialWidth };
-}
-
-/** Dock an address with ``placement``: an open tab is focused; a listed instance is docked; a
- *  bare address of an app with instances runs the app's primary action. */
-async function openForAgent(address: string, placement: AddPanelPlacementOptions): Promise<void> {
-  if (!dockview) return;
-  const parsed = parseAddress(address);
-  if (parsed === null) return;
-  const app = getApp(parsed.app);
-  if (app === undefined) return;
-  if (parsed.key === "" && app.has_instances) {
-    const action = primaryActionForApp(app);
-    if (action === null) return;
-    const key = actionKey(app.name, action.id);
-    if (actionsAwaitingCreate.has(key)) return;
-    actionsAwaitingCreate.add(key);
-    const originViewId = mountedViewId;
-    m.redraw();
-    try {
-      const record = await createInstance(app.name, action.id, {});
-      const address = addressFor(app.name, record.key);
-      if (!(await whenAddressListed(address))) {
-        console.warn(`[si] ${app.name} created ${record.key} for an agent but has not listed it`);
-        return;
-      }
-      if (mountedViewId !== originViewId) {
-        fileIntoProject(originViewId, address);
-        return;
-      }
-      addPanelForAddress(address, placement);
-    } catch (e) {
-      console.warn(`[si] could not run ${action.id} on ${app.name} for an agent: ${(e as Error).message}`);
-    } finally {
-      actionsAwaitingCreate.delete(key);
-      m.redraw();
-    }
-    return;
-  }
-  if (findInstance(address) === null) return;
-  addPanelForAddress(address, placement);
-  m.redraw();
-}
-
-/**
- * Focus the panel already showing ``address`` (any instance of the app, for a bare address),
- * or report that none does. A bare app address for an app with instances always creates (a
- * fresh terminal each ``open terminal``), so it never counts as docked.
- */
-function focusDockedPanel(address: string, requesterAgentId: string): boolean {
-  if (!dockview) return false;
-  const parsed = parseAddress(address);
-  const isCreating = parsed !== null && parsed.key === "" && getApp(parsed.app)?.has_instances === true;
-  if (isCreating) return false;
-  const existing = resolveAddressToPanelId(address, requesterAgentId);
-  if (existing === null) return false;
-  const panel = dockview.panels.find((p) => p.id === existing);
-  if (panel) dockview.setActivePanel(panel);
-  return true;
-}
-
-async function handleOpen(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
-  const address = asString(args.address);
-  if (!address || !dockview) return;
-  if (focusDockedPanel(address, requesterAgentId)) return;
-  await openForAgent(address, placementForAgentOpen(requesterAgentId, args.new_group === true));
-}
-
-function handleFocus(args: Record<string, unknown>, requesterAgentId: string): void {
-  if (!dockview) return;
-  const address = asString(args.address);
-  if (!address) return;
-  const panelId = resolveAddressToPanelId(address, requesterAgentId);
-  if (panelId === null) return;
-  const panel = dockview.panels.find((p) => p.id === panelId);
-  if (panel) dockview.setActivePanel(panel);
-}
-
-function directionFromArg(direction: string): "left" | "right" | "above" | "below" {
-  if (direction === "left" || direction === "right" || direction === "above" || direction === "below") {
-    return direction;
-  }
-  return "right";
-}
-
-function isWithinDirection(direction: string): boolean {
-  return direction === "within";
-}
-
-function computeInitialSize(
-  direction: string,
-  ratio: number | null,
-  containerRect: DOMRect | undefined,
-): { initialWidth?: number; initialHeight?: number } {
-  if (ratio === null || !containerRect) return {};
-  if (direction === "above" || direction === "below") {
-    const h = containerRect.height > 0 ? Math.round(containerRect.height * ratio) : undefined;
-    return h ? { initialHeight: h } : {};
-  }
-  const w = containerRect.width > 0 ? Math.round(containerRect.width * ratio) : undefined;
-  return w ? { initialWidth: w } : {};
-}
-
-async function handleSplit(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
-  if (!dockview) return;
-  const address = asString(args.address);
-  const relativeTo = asString(args.relative_to);
-  const direction = asString(args.direction) ?? "right";
-  const ratio = asNumber(args.ratio);
-  const forceNewGroup = args.new_group === true;
-  if (!address || !relativeTo) return;
-  // An instance is one page: a second panel for it would take the page from the first.
-  if (focusDockedPanel(address, requesterAgentId)) return;
-  // ``relative_to=self`` strictly anchors against the requester's own chat panel.
-  const referencePanelId = resolveAddressToPanelId(relativeTo, requesterAgentId);
-  if (referencePanelId === null) return;
-  const referencePanel = dockview.panels.find((p) => p.id === referencePanelId);
-  const anchorGroupId = referencePanel?.api.group.id ?? null;
-  if (isWithinDirection(direction)) {
-    if (anchorGroupId === null) return;
-    await openForAgent(address, { position: { referenceGroup: anchorGroupId } });
-    return;
-  }
-  const directionArg = directionFromArg(direction);
-  const sibling =
-    !forceNewGroup && anchorGroupId !== null ? findSiblingGroupInDirection(anchorGroupId, directionArg) : null;
-  const sizes = computeInitialSize(direction, ratio, dockviewContainer?.getBoundingClientRect());
-  const placement: AddPanelPlacementOptions =
-    sibling !== null
-      ? { position: { referenceGroup: sibling.id } }
-      : { position: { referencePanel: referencePanelId, direction: directionArg }, ...sizes };
-  await openForAgent(address, placement);
-}
-
-function handleClose(args: Record<string, unknown>, requesterAgentId: string): void {
-  if (!dockview) return;
-  const address = asString(args.address);
-  if (!address) return;
-  const panelId = resolveAddressToPanelId(address, requesterAgentId);
-  if (panelId === null) return;
-  const panel = dockview.panels.find((p) => p.id === panelId);
-  if (panel) dockview.removePanel(panel);
-}
-
-function handleMove(args: Record<string, unknown>, requesterAgentId: string): void {
-  if (!dockview) return;
-  const address = asString(args.address);
-  const relativeTo = asString(args.relative_to);
-  const direction = asString(args.direction);
-  const forceNewGroup = args.new_group === true;
-  if (!address || !relativeTo || !direction) return;
-  const targetPanelId = resolveAddressToPanelId(address, requesterAgentId);
-  const referencePanelId = resolveAddressToPanelId(relativeTo, requesterAgentId);
-  if (targetPanelId === null || referencePanelId === null) return;
-  const targetPanel = dockview.panels.find((p) => p.id === targetPanelId);
-  const referencePanel = dockview.panels.find((p) => p.id === referencePanelId);
-  if (!targetPanel || !referencePanel) return;
-  const anchorGroupId = referencePanel.api.group.id;
-  if (isWithinDirection(direction)) {
-    // A sole-occupant panel moved into its own group would be disposed with it; no-op instead.
-    if (targetPanel.api.group.id === referencePanel.api.group.id) return;
-    targetPanel.api.moveTo({ group: referencePanel.api.group });
-    return;
-  }
-  const directionArg = directionFromArg(direction);
-  const sibling = !forceNewGroup ? findSiblingGroupInDirection(anchorGroupId, directionArg) : null;
-  if (sibling !== null) {
-    const siblingGroup = dockview.groups.find((g) => g.id === sibling.id);
-    if (siblingGroup) {
-      if (siblingGroup.id === targetPanel.api.group.id) return;
-      targetPanel.api.moveTo({ group: siblingGroup });
-      return;
-    }
-  }
-  targetPanel.api.moveTo({
-    group: referencePanel.api.group,
-    position: directionToPosition(direction),
-  });
 }
 
 function handleMaximize(args: Record<string, unknown>, requesterAgentId: string): void {
@@ -2316,6 +2175,7 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   const endDrag = (): void => {
     setDragInProgress(false);
+    runPendingLayoutRefresh();
   };
   dv.api.onWillDragPanel(() => {
     setDragInProgress(true);
@@ -2377,14 +2237,20 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   addProjectsUpdatedListener(takeProjects);
 
-  addLayoutOpListener((event: LayoutOpEvent) => {
-    void handleLayoutOp(event);
+  addLayoutOpListener(handleLayoutOp);
+
+  // This client's arrangement of the mounted view was written elsewhere: another window of this
+  // browser, or the shell applying an agent's op. A save this window made is already what it shows.
+  addLayoutUpdatedListener((event) => {
+    if (event.clientId !== getClientId() || event.viewId !== mountedViewId) return;
+    if (isOwnSaveId(event.saveId)) return;
+    void refreshMountedLayoutFromServer();
   });
 
-  addLoadViewListener((event) => {
-    if (event.targetClientId !== null && event.targetClientId !== getClientId()) return;
-    if (event.viewId === mountedViewId) return;
-    void switchToView(event.viewId);
+  // This client's stored view moved (a switch in another window, or an agent's ``load``).
+  addActiveViewChangedListener((event) => {
+    if (event.clientId !== getClientId() || event.viewId === mountedViewId) return;
+    void switchToView(event.viewId, { isFollowingPush: true });
   });
 
   addTabReboundListener((event: TabReboundEvent) => {

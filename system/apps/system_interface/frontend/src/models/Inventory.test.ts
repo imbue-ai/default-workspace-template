@@ -3,10 +3,14 @@ import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  addActiveViewChangedListener,
+  addLayoutOpListener,
+  addLayoutUpdatedListener,
   addressFor,
   appNameFromAddress,
   appStoppedDetail,
   applyApps,
+  dispatchSocketEventForTesting,
   findInstance,
   instancePageUrl,
   isAddressUnlisted,
@@ -18,6 +22,7 @@ import {
   whenAppsLoaded,
 } from "./Inventory";
 import type { AppRecord, InstanceRecord } from "./Inventory";
+import { getClientId } from "./ClientIdentity";
 import { appRecord, instanceRecord } from "../testing/records";
 
 function instance(key: string, title: string, url: string = "/"): InstanceRecord {
@@ -177,5 +182,44 @@ describe("whenAppsLoaded", () => {
     const timedOut = whenAppsLoaded(50);
     vi.advanceTimersByTime(50);
     await expect(timedOut).resolves.toBe(false);
+  });
+});
+
+describe("the socket's cross-window events", () => {
+  afterEach(() => resetInventoryForTesting());
+
+  it("hands layout_updated and active_view_changed to their listeners as they arrive", () => {
+    const updates: unknown[] = [];
+    const switches: unknown[] = [];
+    addLayoutUpdatedListener((event) => updates.push(event));
+    addActiveViewChangedListener((event) => switches.push(event));
+    dispatchSocketEventForTesting({
+      type: "layout_updated",
+      view_id: "alpha",
+      client_id: "c1",
+      save_id: "save-0123456789abcdef",
+    });
+    dispatchSocketEventForTesting({ type: "active_view_changed", client_id: "c1", view_id: "alpha" });
+    expect(updates).toEqual([{ viewId: "alpha", clientId: "c1", saveId: "save-0123456789abcdef" }]);
+    expect(switches).toEqual([{ clientId: "c1", viewId: "alpha" }]);
+  });
+
+  it("delivers a layout_op to this window only when it is untargeted or targets this client", () => {
+    // The client id lives in local storage, which the test environment does not provide.
+    const stored = new Map<string, string>([["si-client-id", "this-client"]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => void stored.set(key, value),
+    });
+    try {
+      const ops: unknown[] = [];
+      addLayoutOpListener((event) => ops.push(event.op));
+      dispatchSocketEventForTesting({ type: "layout_op", op: "refresh", args: {}, target_client_id: null });
+      dispatchSocketEventForTesting({ type: "layout_op", op: "maximize", args: {}, target_client_id: "someone-else" });
+      dispatchSocketEventForTesting({ type: "layout_op", op: "restore", args: {}, target_client_id: getClientId() });
+      expect(ops).toEqual(["refresh", "restore"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

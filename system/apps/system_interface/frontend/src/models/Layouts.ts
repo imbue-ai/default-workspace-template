@@ -4,8 +4,11 @@
  *
  * A layout is the serialized dockview grid plus one tab record per panel: which address the
  * panel shows, the tab id the shell minted for it, and when it was last the active one. The
- * shell falls back to a per-device seed (the last arrangement any client saved on that device
- * kind) and then to the empty layout, so a new client on a view starts where the last one was.
+ * client's layout file on the shell is the truth of the arrangement: this window writes it for
+ * the user's own gestures, the shell writes it for agent ops, and every write is announced as
+ * ``layout_updated`` so the client's other windows refetch. Each save carries a save id this
+ * window minted (so it can skip the echo of its own writes) and the stamp of the arrangement it
+ * was based on (so a save over a newer arrangement is refused rather than clobbering it).
  */
 
 import type { SerializedDockview } from "dockview-core";
@@ -29,17 +32,45 @@ export interface LayoutRecord {
 }
 
 const TAB_ID_PREFIX = "tab-";
-const TAB_ID_HEX_LENGTH = 16;
+const SAVE_ID_PREFIX = "save-";
+const MINTED_ID_HEX_LENGTH = 16;
+// How many of this window's own save ids are remembered for echo suppression; the broadcast of
+// a save arrives within a round trip, so a short memory is plenty.
+const REMEMBERED_SAVE_IDS = 64;
 
-/** A fresh tab id: ``tab-<16 hex>``, never reused. */
-export function mintTabId(): string {
-  const bytes = new Uint8Array(TAB_ID_HEX_LENGTH / 2);
+const HTTP_CONFLICT = 409;
+
+/** The shell refused a save because the stored arrangement is newer than the one it was based on. */
+export class StaleLayoutSaveError extends Error {}
+
+function mintHex(): string {
+  const bytes = new Uint8Array(MINTED_ID_HEX_LENGTH / 2);
   if (typeof crypto !== "undefined" && "getRandomValues" in crypto) {
     crypto.getRandomValues(bytes);
   } else {
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
   }
-  return `${TAB_ID_PREFIX}${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** A fresh tab id: ``tab-<16 hex>``, never reused. */
+export function mintTabId(): string {
+  return `${TAB_ID_PREFIX}${mintHex()}`;
+}
+
+const ownSaveIds: string[] = [];
+
+/** A fresh save id for one save this window makes, remembered so the save's own broadcast is skipped. */
+export function mintSaveId(): string {
+  const saveId = `${SAVE_ID_PREFIX}${mintHex()}`;
+  ownSaveIds.push(saveId);
+  if (ownSaveIds.length > REMEMBERED_SAVE_IDS) ownSaveIds.splice(0, ownSaveIds.length - REMEMBERED_SAVE_IDS);
+  return saveId;
+}
+
+/** Whether this window minted ``saveId`` (the echo of its own save). */
+export function isOwnSaveId(saveId: string): boolean {
+  return ownSaveIds.includes(saveId);
 }
 
 /** Fetch this client's arrangement of ``viewId`` (the seed, or the empty layout, when it has
@@ -54,22 +85,41 @@ export async function fetchLayout(viewId: string, clientId: string): Promise<Lay
   return (await response.json()) as LayoutRecord;
 }
 
-/** Save this client's arrangement of ``viewId``. Throws on failure (callers treat autosave as
- *  best-effort and catch). */
+/** What a save answered: the stamp the shell wrote, or null when the save changed nothing. */
+export interface LayoutSaveOutcome {
+  updatedAt: string | null;
+}
+
+/** Save this client's arrangement of ``viewId``, based on the arrangement stamped ``baseUpdatedAt``
+ *  (null for one only ever seen empty). Throws ``StaleLayoutSaveError`` when the shell holds a newer
+ *  arrangement, and a plain error for any other refusal (callers treat autosave as best-effort). */
 export async function saveLayout(
   viewId: string,
   clientId: string,
   dockview: SerializedDockview | null,
   tabs: Record<string, TabRecord>,
-): Promise<void> {
+  baseUpdatedAt: string | null,
+): Promise<LayoutSaveOutcome> {
   const response = await fetch(apiUrl(`/api/layouts/${encodeURIComponent(viewId)}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_id: clientId, device_kind: getDeviceKind(), dockview, tabs }),
+    body: JSON.stringify({
+      client_id: clientId,
+      save_id: mintSaveId(),
+      base_updated_at: baseUpdatedAt,
+      device_kind: getDeviceKind(),
+      dockview,
+      tabs,
+    }),
   });
+  if (response.status === HTTP_CONFLICT) {
+    throw new StaleLayoutSaveError(await errorDetailFromResponse(response));
+  }
   if (!response.ok) {
     throw new Error(await errorDetailFromResponse(response));
   }
+  const answer = (await response.json()) as { updated_at: string | null };
+  return { updatedAt: answer.updated_at };
 }
 
 /** The panels of a layout whose tab record names an address no longer listed, so a restore

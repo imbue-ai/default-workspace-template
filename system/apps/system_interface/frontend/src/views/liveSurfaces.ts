@@ -63,7 +63,7 @@ const surfacesByKey = new Map<LiveKey, LiveSurface>();
 let layerHost: HTMLElement | null = null;
 let onVisibilityChanged: (() => void) | null = null;
 let reconcileFrame: number | null = null;
-let isDragInProgress = false;
+let isDragUnderWay = false;
 
 /** The live page a panel stands for: the instance's address, or null for a launcher. */
 export function liveKeyForPanel(params: PanelParams | undefined): LiveKey | null {
@@ -140,7 +140,7 @@ export function ensureLiveSurface(
   const element = document.createElement("div");
   // Same class as the overlays dockview positions for its own panels, so the shipped
   // ``.dv-render-overlay`` pane clip applies without restating it.
-  element.className = `dv-render-overlay si-live-surface${isDragInProgress ? ` ${SURFACE_DRAG_CLASS}` : ""}`;
+  element.className = `dv-render-overlay si-live-surface${isDragUnderWay ? ` ${SURFACE_DRAG_CLASS}` : ""}`;
   element.style.display = "none";
   const surface: LiveSurface = {
     key,
@@ -238,9 +238,14 @@ export function destroyLiveSurface(key: LiveKey): void {
 
 /** Step every surface out of the way of an in-flight tab drag, or back into it. Without this
  *  the drop would land inside a framed page rather than on the pane's drop target. */
+/** Whether a tab or group drag is under way (a pushed layout waits for it to end). */
+export function isDragInProgress(): boolean {
+  return isDragUnderWay;
+}
+
 export function setDragInProgress(active: boolean): void {
-  if (isDragInProgress === active) return;
-  isDragInProgress = active;
+  if (isDragUnderWay === active) return;
+  isDragUnderWay = active;
   for (const surface of surfacesByKey.values()) {
     surface.element.classList.toggle(SURFACE_DRAG_CLASS, active);
   }
