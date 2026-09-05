@@ -195,6 +195,9 @@ class AppInventory(MutableModel):
     clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="Monotonic seconds")
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    # Held across serialize, compare, and broadcast, so two threads that snapshot the inventory
+    # in one order cannot broadcast in the other and leave the clients on the older one.
+    _broadcast_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _entry_by_name: dict[str, AppInventoryEntry] = PrivateAttr(default_factory=dict)
     _registry_order: list[str] = PrivateAttr(default_factory=list)
     _pending_nudge_by_name: dict[str, threading.Timer] = PrivateAttr(default_factory=dict)
@@ -449,10 +452,10 @@ class AppInventory(MutableModel):
     # ---------- the broadcast ----------
 
     def _broadcast_if_changed(self) -> None:
-        serialized = self.serialized()
-        encoded = json.dumps(serialized, sort_keys=True)
-        with self._lock:
+        with self._broadcast_lock:
+            serialized = self.serialized()
+            encoded = json.dumps(serialized, sort_keys=True)
             if encoded == self._last_broadcast_json:
                 return
             self._last_broadcast_json = encoded
-        self.broadcaster.broadcast_apps_updated(serialized)
+            self.broadcaster.broadcast_apps_updated(serialized)
