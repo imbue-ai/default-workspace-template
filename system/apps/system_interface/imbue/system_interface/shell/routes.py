@@ -458,7 +458,8 @@ def save_layout(view_id: str) -> ResponseReturnValue:
     if not shell.projects.is_view_known(view):
         raise ProjectNotFoundError(view_id)
     saved = shell.save_browser_layout(view, body)
-    return jsonify({"updated_at": saved.updated_at.isoformat() if saved is not None and saved.updated_at else None})
+    # The stamp is spelled as the layout route spells it, so the window compares like with like.
+    return jsonify({"updated_at": layout_wire_json(saved)["updated_at"] if saved is not None else None})
 
 
 # ---------- sections 6 and 9: clients and the inventory ----------

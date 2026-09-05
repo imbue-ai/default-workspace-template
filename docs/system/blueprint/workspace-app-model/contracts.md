@@ -181,7 +181,7 @@ Projects and views:
 | `POST /api/projects/<id>/shortcuts` | `{"app", "action", "mode"}` | `200 project`; replaces the entry for `(app, action)` |
 | `POST /api/projects/<id>/shortcuts/remove` | `{"app", "action"}` | `200 project` |
 | `GET /api/layouts/<view_id>?client=<client_id>&device=<device_kind>` | | `200 layout` (the client's own, else the seed for its device kind, else `{"dockview": null, "tabs": {}}`); `device` names the seed for a client the shell has no record of yet |
-| `POST /api/layouts/<view_id>` | `layout` plus `client_id`, `save_id`, `base_updated_at` | `204`; `409 {"detail"}` when the stored layout's `updated_at` is newer than `base_updated_at` (the window refetches and applies the stored one); a body equal to the stored arrangement is a no-op that writes and broadcasts nothing |
+| `POST /api/layouts/<view_id>` | `layout` plus `client_id`, `save_id`, `base_updated_at` | `200 {"updated_at"}`, the stamp written (the window's next `base_updated_at`), `null` when the body equalled the stored arrangement and nothing was written or broadcast; `409 {"detail"}` when the stored layout's `updated_at` is newer than `base_updated_at` (the window refetches and applies the stored one) |
 | `GET /api/clients` | | `{"clients": [client, ...]}`; a window reads its own record here on boot to learn its active view |
 | `GET /api/inventory` | | the inventory document (section 9) |
 
