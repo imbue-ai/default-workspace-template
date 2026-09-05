@@ -36,6 +36,10 @@ class FakeFleet(FleetInterface):
     navigations: list[tuple[BrowserName, AbsoluteHttpUrl]] = Field(
         default_factory=list, description="Every (name, url) navigated"
     )
+    start_urls: list[AbsoluteHttpUrl | None] = Field(
+        default_factory=list,
+        description="The start page each create asked for, in order",
+    )
 
     def is_ready(self) -> bool:
         return self.is_fleet_ready
@@ -43,9 +47,10 @@ class FakeFleet(FleetInterface):
     def list_browsers(self) -> list[BrowserSnapshot]:
         return list(self.browsers)
 
-    def create_browser(self) -> BrowserSnapshot:
+    def create_browser(self, start_url: AbsoluteHttpUrl | None) -> BrowserSnapshot:
         if self.create_refusal is not None:
             raise FleetCreateRefusedError(self.create_refusal)
+        self.start_urls.append(start_url)
         name = first_free_numbered_browser_name(
             {snapshot.name for snapshot in self.browsers}
         )

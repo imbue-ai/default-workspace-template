@@ -10,19 +10,16 @@ from typing import Any
 
 import pytest
 from app_instances.testing import RecordingNudger
-from browser import chrome_args
-from browser import chrome_launcher
-from browser import manifest
-from browser import runner
+from browser import chrome_args, chrome_launcher, manifest, runner
 from browser import session as bsession
 from browser.bridged_fleet import BridgedFleet
-from browser.data_types import BrowserController
-from browser.data_types import BrowserLifecycle
-from browser.data_types import BrowserSnapshot
-from browser.errors import FleetCreateRefusedError
-from browser.errors import FleetUnavailableError
-from browser.errors import NavigationFailedError
-from browser.errors import UnknownBrowserError
+from browser.data_types import BrowserController, BrowserLifecycle, BrowserSnapshot
+from browser.errors import (
+    FleetCreateRefusedError,
+    FleetUnavailableError,
+    NavigationFailedError,
+    UnknownBrowserError,
+)
 from browser.primitives import BrowserName
 from mock_cdp_client_test import NavigatingCdpClient
 
@@ -713,6 +710,15 @@ def test_create_persists_the_init_browser_before_it_is_running(monkeypatch: pyte
         assert saved is not None
         assert [e.id for e in saved.browsers] == ["alex-smith"]  # the init browser is persisted
         assert saved.browsers[0].tabs == []  # no tabs yet -> restores to home
+        # A browser created on a page carries that page while it launches, so a crash restores it there.
+        await mgr.create("with-page", "https://example.com/docs")
+        await asyncio.gather(*list(mgr._bg_save_tasks))
+        saved_again = manifest.read_manifest()
+        assert saved_again is not None
+        assert {e.id: e.tabs for e in saved_again.browsers} == {
+            "alex-smith": [],
+            "with-page": ["https://example.com/docs"],
+        }
 
     asyncio.run(go())
 
@@ -1627,7 +1633,7 @@ def test_bridged_fleet_create_refuses_a_full_fleet_with_the_daemons_reason(monke
         mgr._browsers[f"browser-{idx + 1}"] = bsession.LiveBrowser(browser_id=f"browser-{idx + 1}")
 
     with pytest.raises(FleetCreateRefusedError, match="close one first") as caught:
-        _bridged_fleet(mgr, route_timeout_seconds=5).create_browser()
+        _bridged_fleet(mgr, route_timeout_seconds=5).create_browser(None)
 
     assert isinstance(caught.value.__cause__, bsession.FleetFullError)
     assert len(mgr._browsers) == bsession._MAX_SESSIONS

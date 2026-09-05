@@ -55,12 +55,12 @@ class BridgedFleet(FleetInterface):
     def list_browsers(self) -> list[BrowserSnapshot]:
         return self._run_on_loop(self.manager.snapshot_browsers())
 
-    def create_browser(self) -> BrowserSnapshot:
+    def create_browser(self, start_url: AbsoluteHttpUrl | None) -> BrowserSnapshot:
         is_installed, reason = deferred_install_ready()
         if not is_installed:
             raise FleetCreateRefusedError(reason)
         try:
-            return self._run_on_loop(self.manager.create_snapshot())
+            return self._run_on_loop(self.manager.create_snapshot(start_url))
         except FleetFullError as e:
             raise FleetCreateRefusedError(str(e)) from e
 

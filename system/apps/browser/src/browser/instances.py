@@ -39,8 +39,10 @@ from browser.primitives import (
     instance_url_for_browser,
 )
 
-# The one action the manifest declares (system/apps/browser/app.toml); it takes no params.
+# The one action the manifest declares (system/apps/browser/app.toml), and its one param: the
+# page the new browser opens on (contracts.md section 4.3), so ``layout.py open <url>`` is one create.
 NEW_ACTION_ID: Final[ActionId] = ActionId("new")
+START_URL_PARAM: Final[str] = "url"
 
 
 @pure
@@ -73,6 +75,23 @@ def instance_record_for_browser(snapshot: BrowserSnapshot) -> InstanceRecord:
         last_active=None,
         renameable=False,
     )
+
+
+@pure
+def _start_url_from_params(params: Mapping[str, str]) -> AbsoluteHttpUrl | None:
+    """The start page a create asked for; any other param, or a URL that is not absolute http(s), is a 400."""
+    unknown = sorted(set(params) - {START_URL_PARAM})
+    if unknown:
+        raise InvalidParamsError(
+            f"unknown params {unknown}: {NEW_ACTION_ID!r} takes only {START_URL_PARAM!r}"
+        )
+    raw = params.get(START_URL_PARAM)
+    if raw is None:
+        return None
+    try:
+        return AbsoluteHttpUrl(raw)
+    except InvalidInstanceValueError as e:
+        raise InvalidParamsError(f"{START_URL_PARAM}: {e}") from e
 
 
 @pure
@@ -111,12 +130,8 @@ class FleetInstanceSource(InstanceSourceInterface):
             raise UnknownActionError(
                 f"unknown action {action!r}: the browser only declares {NEW_ACTION_ID!r}"
             )
-        if params:
-            raise InvalidParamsError(
-                f"unknown params {sorted(params)}: {NEW_ACTION_ID!r} takes none"
-            )
         try:
-            snapshot = self.fleet.create_browser()
+            snapshot = self.fleet.create_browser(_start_url_from_params(params))
         except FleetCreateRefusedError as e:
             raise InstanceConflictError(str(e)) from e
         return instance_record_for_browser(snapshot)

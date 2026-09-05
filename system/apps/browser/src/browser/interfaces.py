@@ -19,8 +19,8 @@ class FleetInterface(MutableModel, ABC):
         """Every registered browser, by name."""
 
     @abstractmethod
-    def create_browser(self) -> BrowserSnapshot:
-        """Register a new daemon-named browser and start its launch; raises FleetCreateRefusedError when the fleet cannot take one now."""
+    def create_browser(self, start_url: AbsoluteHttpUrl | None) -> BrowserSnapshot:
+        """Register a new daemon-named browser and start its launch on ``start_url`` (the home page when None); raises FleetCreateRefusedError when the fleet cannot take one now."""
 
     @abstractmethod
     def close_browser(self, name: BrowserName) -> None:
