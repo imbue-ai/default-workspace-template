@@ -159,13 +159,24 @@ def test_open_of_an_app_or_a_url_creates_inside_the_op_and_prints_the_new_addres
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     created = "app:terminal?instance=terminal-2"
+    # An older terminal is docked ahead of the new one: the description names the created one.
+    older = "app:terminal?instance=terminal-1"
     answer = {
         "ok": True,
         "created_address": created,
         "layout": {
             "active_panel": "g1",
-            "panels": [{"address": created, "tab_id": "tab-2", "title": "Terminal 2"}],
-            "tree": {"type": "leaf", "panels": [{"address": created, "active": True}]},
+            "panels": [
+                {"address": older, "tab_id": "tab-1", "title": "Terminal 1"},
+                {"address": created, "tab_id": "tab-2", "title": "Terminal 2"},
+            ],
+            "tree": {
+                "type": "leaf",
+                "panels": [
+                    {"address": older, "active": False},
+                    {"address": created, "active": True},
+                ],
+            },
         },
     }
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted, (200, answer)))
@@ -175,7 +186,7 @@ def test_open_of_an_app_or_a_url_creates_inside_the_op_and_prints_the_new_addres
     )
     captured = capsys.readouterr()
     assert captured.out == f"{created}\n"
-    assert f"opened {created} in tabs=[{created}*]" in captured.err
+    assert f"opened {created} in tabs=[{older}, {created}*]" in captured.err
     assert posted == [
         (
             "open",

@@ -540,21 +540,23 @@ def _describe_group(leaf: dict[str, Any] | None) -> str:
 def _run_document_op(
     op: str,
     args: dict[str, Any],
-    describe: Callable[[dict[str, Any]], str],
+    describe: Callable[[dict[str, Any], str | None], str],
 ) -> int:
     """Post one document op; the shell edits the target client's file and answers with the arrangement.
 
     A create (``open`` / ``split`` of an app, or of a URL) prints the new address to stdout so a
-    later op can name it; ``describe`` renders the one-line stderr summary from the answer's layout.
+    later op can name it; ``describe`` renders the one-line stderr summary from the answer's
+    layout and the created address (None when the op created nothing).
     """
     status, body = _post_layout(op, args, timeout=_OP_TIMEOUT_SECONDS)
     if status != 200 or not isinstance(body, dict):
         return _report_failure(op, status, body)
-    created = body.get("created_address")
-    if isinstance(created, str) and created:
+    raw_created = body.get("created_address")
+    created = raw_created if isinstance(raw_created, str) and raw_created else None
+    if created is not None:
         sys.stdout.write(f"{created}\n")
     layout = body.get("layout")
-    sys.stderr.write(describe(layout if isinstance(layout, dict) else {}))
+    sys.stderr.write(describe(layout if isinstance(layout, dict) else {}, created))
     return EXIT_OK
 
 
@@ -934,14 +936,20 @@ def _open_target(
     return address, create_args
 
 
-def _describe_docked(address: str, verb: str) -> Callable[[dict[str, Any]], str]:
-    def describe(layout: dict[str, Any]) -> str:
-        leaf = _find_leaf_for_address(layout, address)
-        docked = _find_panel_summary(layout, address)
+def _describe_docked(
+    address: str, verb: str
+) -> Callable[[dict[str, Any], str | None], str]:
+    """The stderr line for a docking op: the panel it created when it created one (a bare app address
+    would otherwise match whichever instance of the app was docked first), else the one it named."""
+
+    def describe(layout: dict[str, Any], created: str | None) -> str:
+        docked_address = created if created is not None else address
+        leaf = _find_leaf_for_address(layout, docked_address)
+        docked = _find_panel_summary(layout, docked_address)
         shown = (
             str(docked.get("address"))
             if docked and isinstance(docked.get("address"), str)
-            else address
+            else docked_address
         )
         return f"{verb} {shown} in {_describe_group(leaf)}\n"
 
@@ -967,7 +975,7 @@ def _cmd_focus(args: argparse.Namespace) -> int:
     return _run_document_op(
         "focus",
         {"address": address, **_target_args(args.view, args.client)},
-        lambda layout: f"focused {address}\n",
+        lambda layout, created: f"focused {address}\n",
     )
 
 
@@ -1000,7 +1008,7 @@ def _cmd_close(args: argparse.Namespace) -> int:
     return _run_document_op(
         "close",
         {"address": address, **_target_args(args.view, args.client)},
-        lambda layout: f"closed {address}\n",
+        lambda layout, created: f"closed {address}\n",
     )
 
 
