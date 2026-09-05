@@ -19,7 +19,7 @@
  */
 
 import m from "mithril";
-import { addressFor, getApp, getOpenableApps, primaryActionForApp } from "../models/Inventory";
+import { findInstance, getApp, getOpenableApps, primaryActionForApp } from "../models/Inventory";
 import { normalizeTabTitle } from "./tab-rename";
 import type {
   AppAction,
@@ -1038,10 +1038,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   function rowMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "row" }>): m.Children {
     const row = attrs.rows.find((candidate) => candidate.address === menu.address);
     if (row === undefined) return null;
-    const app = getApp(row.appName);
-    const instance = app?.instances.find((candidate) => addressFor(app.name, candidate.key) === row.address);
-    if (app === undefined || instance === undefined) return null;
-    const entries = tabMenuEntries(app, instance, railMenuActions(row, attrs));
+    const resolved = findInstance(row.address);
+    if (resolved === null) return null;
+    const entries = tabMenuEntries(resolved.app, resolved.instance, railMenuActions(row, attrs));
     return floatingCard({
       anchor: menu.anchor,
       placement: "right",
