@@ -4,7 +4,7 @@
  *
  * An app registers its icon as SVG markup (`forward_port.py --icon`), the
  * registry carries it verbatim on the app's row, and the server hands it to
- * this UI on `AppEntry.icon`. That markup is authored by a skill, so it is
+ * this UI on `AppRecord.icon`. That markup is authored by a skill, so it is
  * untrusted: every surface that draws an app -- the rail's shortcut rows and
  * tab list, the "All apps" popover, the New Tab launcher's tables, the dock
  * tab -- goes through `appIconMarkup`/`serviceIconMarkup` here, and nothing
@@ -42,7 +42,7 @@
  */
 
 import DOMPurify from "dompurify";
-import { getApps } from "../models/AgentManager";
+import { getApp } from "../models/Inventory";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
@@ -339,19 +339,16 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
 }
 
 /**
- * The same, for surfaces that hold a service name rather than the app row: the
+ * The same, for surfaces that hold an app name rather than the app record: the
  * rail's tab list, the launcher's tables and the dock tab all address an app by
- * the name in its `service:<name>` ref.
+ * the name in its address.
  *
- * An unknown name (an app that has since been deregistered, a ref from a
- * hand-edited layout) has no icon to draw and takes the fallback.
+ * An unknown name (an app that has since been deregistered) has no icon to draw
+ * and takes the fallback.
  */
-export function serviceIconMarkup(serviceName: string | null, sizePx: number, fallbackMarkup: string): string {
-  if (serviceName === null) return fallbackMarkup;
-  const app = getApps().find((candidate) => candidate.name === serviceName);
-  // A name the machine no longer registers keeps the caller's generic glyph:
-  // there is no app to monogram, and inventing one would dress up a dead ref as
-  // a real app.
+export function serviceIconMarkup(appName: string | null, sizePx: number, fallbackMarkup: string): string {
+  if (appName === null) return fallbackMarkup;
+  const app = getApp(appName);
   if (app === undefined) return fallbackMarkup;
   return appIconMarkup(app.icon, sizePx, fallbackMarkup, app.name);
 }

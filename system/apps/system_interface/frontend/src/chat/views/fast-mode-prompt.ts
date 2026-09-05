@@ -20,7 +20,7 @@
  */
 
 import type { TranscriptEvent } from "../models/Response";
-import type { AgentState } from "../../models/AgentManager";
+import type { AgentState } from "../models/AgentManager";
 import { getAgentFastMode } from "../models/ModelSettings";
 import { hasFastModePrompt } from "../models/HarnessCatalog";
 import { isFastModePromptAnswered, openFastModePrompt } from "../models/FastModePrompt";

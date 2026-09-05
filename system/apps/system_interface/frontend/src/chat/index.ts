@@ -6,7 +6,7 @@
 import m from "mithril";
 import "../style.css";
 import { getChatAgentId, getChatSessionId } from "../base-path";
-import { initAgentManager } from "../models/AgentManager";
+import { initAgentManager } from "./models/AgentManager";
 import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { llmApi } from "./llm-api";
@@ -51,9 +51,9 @@ function ChatDocument(agentId: string, sessionId: string): m.Component {
 async function bootstrap(): Promise<void> {
   const agentId = getChatAgentId();
   const sessionId = getChatSessionId();
-  // The same agents WebSocket the shell uses (the process is shared until phase 10), read
-  // for this page's own agent; the page is not a client of its own, so it registers none.
-  initAgentManager({ isClientReported: false });
+  // The same WebSocket the shell uses (the process is shared until phase 10), read for this
+  // page's own agent; the page is not a client of its own, so it registers none.
+  initAgentManager();
   trackBackendArrivals();
   initShellPermissionResolutions();
   // Only the chat's own page reports the chat's presence: a subagent view is a second page

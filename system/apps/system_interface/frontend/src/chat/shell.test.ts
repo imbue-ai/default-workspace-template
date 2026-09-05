@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 const createChatAgent = vi.fn();
-vi.mock("../models/AgentManager", () => ({ createChatAgent }));
+vi.mock("./models/AgentManager", () => ({ createChatAgent }));
 vi.mock("../models/Projects", () => ({ isEverythingView: () => false }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
@@ -119,10 +119,7 @@ describe("startChatOnAccount", () => {
     await startChatOnAccount("account-1");
 
     expect(createChatAgent).toHaveBeenCalledWith("everything", "account-1");
-    expect(parent.postMessage).toHaveBeenCalledWith(
-      { type: "shell:open", address: "app:chat?instance=agent-2", title: "Chat 2" },
-      "*",
-    );
+    expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:open", address: "app:chat?instance=agent-2" }, "*");
   });
 
   it("tells the user when the create fails rather than opening nothing silently", async () => {

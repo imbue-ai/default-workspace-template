@@ -36,14 +36,14 @@ import {
   getProtoAgents,
   getTerminalUrl,
   removeAgentsUpdatedListener,
-} from "../../models/AgentManager";
+} from "../models/AgentManager";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
 import { ModelBar } from "./ModelBar";
-import { AgentTerminalPanel } from "../../views/AgentTerminalPanel";
+import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
 import {
@@ -53,7 +53,7 @@ import {
   type RowDescriptor,
 } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
-import { requestTerminalFocus } from "../../views/terminalFocus";
+import { requestFrameFocus } from "../../views/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
 
@@ -765,7 +765,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                         if (isFlipped) {
                           const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
                           m.redraw.sync();
-                          requestTerminalFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
+                          requestFrameFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
                         }
                       },
                     }),

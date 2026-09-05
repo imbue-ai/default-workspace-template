@@ -15,7 +15,7 @@ vi.hoisted(() => {
 // /api paths (mirrors Projects.test.ts).
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 
-import type { ProjectInfo } from "../models/Projects";
+import type { ProjectInfo } from "../models/Inventory";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import type { ProjectSettingsModalAttrs } from "./ProjectSettingsModal";
 
@@ -23,12 +23,12 @@ import type { ProjectSettingsModalAttrs } from "./ProjectSettingsModal";
 // color, glyph) plus the delete, and taking an object out of a project is a
 // verb on the object's own rail row rather than anything reachable from here.
 const PROJECT: ProjectInfo = {
-  project_id: "research",
+  id: "research",
   name: "Research",
   color: "#4f8ef7",
   glyph: 3,
-  has_content: true,
-  members: [],
+  tabs: [],
+  shortcuts: [],
 };
 
 type VnodeLike = {

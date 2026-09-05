@@ -8,7 +8,7 @@ import { MarkdownContent } from "../markdown";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
-import { getAgentById } from "../../models/AgentManager";
+import { getAgentById } from "../models/AgentManager";
 import { openProviderChooser } from "../../models/Providers";
 import { openSubagentTab, startChatOnAccount } from "../shell";
 import { hoverTooltipAttrs } from "../../views/hoverTooltip";

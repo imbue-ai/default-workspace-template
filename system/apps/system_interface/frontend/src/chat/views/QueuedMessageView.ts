@@ -22,8 +22,8 @@
  */
 
 import m from "mithril";
-import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../../models/AgentManager";
-import type { QueuedMessage } from "../../models/AgentManager";
+import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../models/AgentManager";
+import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
 import { prependToComposer, raiseFailureNotice } from "./MessageInput";
 import { describeRequestError, describeRequestErrorKind } from "../../models/request-error";

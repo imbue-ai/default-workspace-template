@@ -17,10 +17,9 @@ vi.hoisted(() => {
 const agentState: { agent: unknown } = { agent: null };
 vi.mock("../models/AgentManager", () => ({ getAgentById: () => agentState.agent }));
 
-// The real IframePanel manages live-surface bookkeeping this test has no use for; the
-// stub just marks where the terminal iframe would mount.
-vi.mock("./IframePanel", () => ({
-  IframePanel: {
+// The stub just marks where the terminal iframe would mount.
+vi.mock("./TerminalFrame", () => ({
+  TerminalFrame: {
     view: () => m("div", { class: "iframe-panel-stub" }),
   },
 }));

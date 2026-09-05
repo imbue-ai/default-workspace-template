@@ -21,7 +21,7 @@
  */
 import m from "mithril";
 
-import { addAgentsUpdatedListener } from "../../models/AgentManager";
+import { addAgentsUpdatedListener } from "./AgentManager";
 
 export interface OutgoingMessage {
   id: string;

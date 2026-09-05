@@ -17,7 +17,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../../base-path";
-import { getAgentById } from "../../models/AgentManager";
+import { getAgentById } from "../models/AgentManager";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
@@ -180,6 +180,35 @@ export function ModelBar(): m.Component<{ agentId: string }> {
    *  bubble lives on <body>, so the row needs no container of its own. */
   function tooltipAttrs(text: string | null): m.Attributes {
     return text === null ? {} : hoverTooltipAttrs(text);
+  }
+
+  /** The chat's reversible process verb: ``mngr stop`` on the agent, which a later message or
+   *  start brings back. Lives on the chat's own page because the agent is the chat app's
+   *  instance; the shell offers only the app-level Stop of a whole app. No confirmation -- it is
+   *  one message away from undone. The agent list catches up through the observe stream. */
+  function stopAgentRow(targetAgentId: string): m.Vnode {
+    return m(
+      "button",
+      {
+        type: "button",
+        class: css.ROW,
+        "data-card-row": "stop-agent",
+        onclick: (event: MouseEvent) => {
+          event.stopPropagation();
+          closeCard();
+          void fetch(apiUrl(`/api/agents/${encodeURIComponent(targetAgentId)}/stop`), { method: "POST" })
+            .then(async (response) => {
+              if (response.ok) return;
+              const data = (await response.json().catch(() => ({}))) as { detail?: string };
+              alert(`Failed to stop the agent: ${data.detail ?? `HTTP ${response.status}`}`);
+            })
+            .catch((e: Error) => {
+              alert(`Failed to stop the agent: ${e.message}`);
+            });
+        },
+      },
+      [m("span", { class: css.ROW_LABEL }, "Stop agent"), m("span", { class: css.ROW_VALUE }, "")],
+    );
   }
 
   /** One card row that opens a flyout, or -- when `openable` is false -- one that just states
@@ -684,6 +713,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 },
               })
             : null,
+          m("div", { class: css.DIVIDER }),
+          stopAgentRow(agentId),
         ]),
       );
 

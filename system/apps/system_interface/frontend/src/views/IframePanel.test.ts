@@ -35,8 +35,8 @@ function mountPanel(): { frame: HTMLIFrameElement; sent: ReturnType<typeof vi.fn
       m(IframePanel, {
         url: "http://chat.example/agent-1",
         title: "Chat 1",
-        serviceName: "chat",
-        liveKey: "chat:agent-1",
+        appName: "chat",
+        address: ADDRESS,
         contract,
       }),
   });

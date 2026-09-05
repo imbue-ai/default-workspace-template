@@ -52,13 +52,8 @@ export interface ShellConnection {
   focused(): void;
   /** Report where this page is now (a path under the app's origin). */
   location(path: string): void;
-  /**
-   * Ask the shell to dock an instance of this app beside this tab. `title` is a display
-   * hint the shell uses until phase 7 of the workspace app model titles tabs from the
-   * inventory.
-   * CLEANUP: drop the `title` hint once phase 7 reads titles from the instances API.
-   */
-  open(address: string, title?: string): void;
+  /** Ask the shell to dock an instance of this app beside this tab. */
+  open(address: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
@@ -113,8 +108,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     isFramed,
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string) => send(SHELL_LOCATION, { path }),
-    open: (address: string, title?: string) =>
-      send(SHELL_OPEN, title === undefined ? { address } : { address, title }),
+    open: (address: string) => send(SHELL_OPEN, { address }),
     disconnect: () => boundWindow.removeEventListener("message", onMessage),
   };
 }

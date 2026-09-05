@@ -18,7 +18,7 @@ vi.hoisted(() => {
 });
 
 const agentState: { agent: unknown } = { agent: null };
-vi.mock("../../models/AgentManager", () => ({
+vi.mock("../models/AgentManager", () => ({
   getAgentById: () => agentState.agent,
 }));
 

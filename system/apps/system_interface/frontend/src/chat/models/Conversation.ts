@@ -3,7 +3,7 @@
  * Delegates to AgentManager for state, kept for plugin/hook backward compatibility.
  */
 
-import { getAgents as getAgentManagerAgents, type AgentState } from "../../models/AgentManager";
+import { getAgents as getAgentManagerAgents, type AgentState } from "./AgentManager";
 
 export interface Agent {
   id: string;

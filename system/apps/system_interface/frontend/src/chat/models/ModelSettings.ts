@@ -15,7 +15,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../../base-path";
-import { getAgentById } from "../../models/AgentManager";
+import { getAgentById } from "./AgentManager";
 import type { CatalogModelOption } from "./HarnessCatalog";
 
 export interface ModelIdentity {

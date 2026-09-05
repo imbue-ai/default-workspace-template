@@ -11,7 +11,7 @@
 
 import m from "mithril";
 import { backdropDismissAttrs } from "../../views/modalBackdrop";
-import { getAgentById } from "../../models/AgentManager";
+import { getAgentById } from "../models/AgentManager";
 import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
 import { icon } from "../../views/icons";
 

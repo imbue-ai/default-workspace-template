@@ -20,7 +20,7 @@ vi.hoisted(() => {
 });
 
 const agentState: { agent: unknown } = { agent: null };
-vi.mock("../../models/AgentManager", () => ({ getAgentById: () => agentState.agent }));
+vi.mock("../models/AgentManager", () => ({ getAgentById: () => agentState.agent }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
 vi.mock("../models/HarnessCatalog", () => ({
