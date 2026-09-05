@@ -26,6 +26,7 @@ from app_instances.blueprint import HTTP_SERVICE_UNAVAILABLE
 from app_instances.blueprint import INSTANCES_PATH
 from app_instances.data_types import InstanceRecord
 from app_instances.data_types import InstanceStatus
+from app_manifest.errors import RegistryReadError
 from app_manifest.registry import read_registry
 from loguru import logger
 from pydantic import Field
@@ -272,8 +273,16 @@ class AppInventory(MutableModel):
     # ---------- the registry ----------
 
     def reload_registry(self) -> None:
-        """Re-read the registry, keeping each known app's liveness and list across the read."""
-        rows = read_registry(self.registry_path)
+        """Re-read the registry, keeping each known app's liveness and list across the read.
+
+        A file that cannot be read or parsed keeps the last good read (logged): a hand-edited
+        registry must degrade to a stale inventory, not crash the shell or end the watch.
+        """
+        try:
+            rows = read_registry(self.registry_path)
+        except RegistryReadError as e:
+            logger.opt(exception=e).error("Kept the last app registry read: {} is unreadable", self.registry_path)
+            return
         is_changed = False
         with self._lock:
             previous = dict(self._entry_by_name)

@@ -193,6 +193,23 @@ def test_a_registry_change_keeps_known_lists_and_drops_removed_rows(
     assert entries[0].addresses() == [Address("app:terminal?instance=terminal-1")]
 
 
+def test_an_unreadable_registry_keeps_the_last_good_read(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    fetcher = FakeInstanceFetcher()
+    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
+    registry_path = _registry(tmp_path)
+    inventory = build_inventory(registry_path, broadcaster, fetcher=fetcher)
+    inventory.refetch_now("terminal")
+    client_queue = broadcaster.register()
+
+    registry_path.write_text("[[apps]\nname = ")
+    inventory.reload_registry()
+
+    entries = inventory.entries()
+    assert [str(entry.row.name) for entry in entries] == ["terminal", "files"]
+    assert entries[0].addresses() == [Address("app:terminal?instance=terminal-1")]
+    assert drain_messages(client_queue) == []
+
+
 def test_the_grace_period_follows_the_first_listing(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     now = [1000.0]
     fetcher = FakeInstanceFetcher()
