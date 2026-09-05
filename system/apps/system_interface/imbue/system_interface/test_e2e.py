@@ -1814,8 +1814,7 @@ def test_two_windows_of_one_client_mirror_a_server_made_arrangement(tmp_path: Pa
             second.close()
 
 
-# Seen to fail once in ten local runs at its first tab expectation, unreproduced since; the
-# chat's instance list can arrive late on a fresh shell.
+# The chat's instance list can arrive late on a fresh shell, and the first tab expectation then misses it.
 @pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, page: Page) -> None:
