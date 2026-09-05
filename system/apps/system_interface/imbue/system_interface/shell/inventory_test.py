@@ -6,9 +6,14 @@ from app_instances.data_types import InstanceLifetime
 from app_instances.data_types import InstanceStatus
 from app_instances.testing import StubInstanceSource
 from app_instances.testing import wait_until
+from watchdog.events import DirModifiedEvent
+from watchdog.events import FileModifiedEvent
+from watchdog.events import FileMovedEvent
 
+from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
+from imbue.system_interface.shell.inventory import _make_registry_file_handler
 from imbue.system_interface.shell.inventory import parse_instances_body
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
@@ -205,3 +210,62 @@ def test_the_fetcher_reads_a_503_as_not_ready_and_a_listing_as_listed(
     assert listed.kind is FetchOutcomeKind.LISTED
     assert [str(record.key) for record in listed.records] == ["k1"]
     assert HttpInstanceFetcher().fetch("http://127.0.0.1:1").kind is FetchOutcomeKind.FAILED
+
+
+def test_the_registry_watch_fires_for_the_registry_file_alone(tmp_path: Path) -> None:
+    fired: list[bool] = []
+    handler = _make_registry_file_handler("apps.toml", lambda: fired.append(True))
+    handler.on_modified(FileModifiedEvent(str(tmp_path / "apps.toml")))
+    # forward_port.py replaces the file atomically: the move's destination is the registry.
+    handler.on_moved(FileMovedEvent(str(tmp_path / "apps.toml.tmp-1"), str(tmp_path / "apps.toml")))
+    handler.on_modified(FileModifiedEvent(str(tmp_path / "apps.toml.tmp-2")))
+    handler.on_modified(DirModifiedEvent(str(tmp_path)))
+    assert len(fired) == 2
+
+
+def test_start_watches_the_registry_and_lists_a_row_that_appears(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    fetcher = FakeInstanceFetcher()
+    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
+    files_row = registry_row_toml("files", _FILES_URL, program="files")
+    registry_path = write_registry(tmp_path / "apps.toml", files_row)
+    inventory = AppInventory(
+        registry_path=registry_path,
+        broadcaster=broadcaster,
+        liveness_prober=FakeLivenessProber(),
+        fetcher=fetcher,
+        coalesce_seconds=0.01,
+        sweep_interval_seconds=60.0,
+    )
+    inventory.start()
+    try:
+        assert [str(entry.row.name) for entry in inventory.entries()] == ["files"]
+        write_registry(
+            registry_path,
+            files_row,
+            registry_row_toml("terminal", _TERMINAL_URL, True, program="terminal", actions=[("new", "New terminal")]),
+        )
+        assert wait_until(
+            lambda: inventory.find_instance(Address("app:terminal?instance=terminal-1")) is not None,
+            timeout_seconds=5.0,
+        )
+    finally:
+        inventory.stop()
+
+
+def test_refetch_all_fetches_every_running_app_with_instances(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    fetcher = FakeInstanceFetcher()
+    fetcher.list(_TERMINAL_URL, instance_record("terminal-1"))
+    prober = FakeLivenessProber()
+    inventory = build_inventory(_registry(tmp_path), broadcaster, fetcher=fetcher, prober=prober)
+    inventory.refetch_all()
+    # The single-instance files app is never fetched.
+    assert fetcher.fetched_urls == [_TERMINAL_URL]
+    prober.is_running_by_name = {"terminal": False}
+    inventory.refresh_liveness()
+    inventory.refetch_all()
+    # A stopped app is skipped too.
+    assert fetcher.fetched_urls == [_TERMINAL_URL]
