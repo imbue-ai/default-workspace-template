@@ -287,6 +287,10 @@ const PICKER_ATTR = "data-provider-picker";
 const PICKER_WIDTH = 260;
 const PICKER_MIN_HEIGHT = 120;
 
+// Marks a section's filter toggle, so the menu's outside-press listener leaves the toggle's
+// own press to the click that follows it.
+const FILTER_TOGGLE_ATTR = "data-launcher-filter-toggle";
+
 export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   const hiddenAppsBySection: Record<LauncherSectionKey, Set<string>> = {
     "in-project": new Set(),
@@ -301,7 +305,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   };
 
   const onDocumentPointerDown = (event: Event): void => {
-    if (menuElement !== null && event.target instanceof Node && menuElement.contains(event.target)) return;
+    if (!(event.target instanceof Node)) return closeFilterMenu();
+    if (menuElement !== null && menuElement.contains(event.target)) return;
+    // A press on a toggle is the click that follows: it closes, or moves, the menu itself.
+    if (event.target instanceof Element && event.target.closest(`[${FILTER_TOGGLE_ATTR}]`) !== null) return;
     closeFilterMenu();
   };
 
@@ -435,6 +442,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           {
             type: "button",
             "aria-expanded": openFilterFor === section.key ? "true" : "false",
+            [FILTER_TOGGLE_ATTR]: "",
             class:
               "text-text-faint flex h-6 w-6 cursor-pointer items-center justify-center rounded " +
               "hover:bg-bg-hover hover:text-text-primary",
