@@ -23,7 +23,7 @@ Make the shell generic: an app-agnostic inventory over the registry and every ap
 - `clients.py`: `clients.json`, active view, last seen, and the 90-day pruning sweep.
 - `client_activity.py`: the append-only log at `data/.state/system_interface/events/client_activity/events.jsonl` with the `message` and `view_switch` shapes, the `context` summary, and the client-for-instance attribution the layout ops use.
 - `layout_ops.py`: the op tables (known, mutating, broadcasting, addressed), `list`, `inspect`, `views`, and the advisory `LayoutMutex` (a `MutableModel` with a TTL field).
-- `routes.py`: module-level view functions registered by `register_shell_routes(application)` for every route of contracts sections 5 and 6 (the inventory endpoint is phase 8's), plus `/api/layout/broadcast`, whose addressed ops parse the address and refuse an unregistered app before anything is broadcast.
+- `routes.py`: module-level view functions registered by `register_shell_routes(application)` for every route of contracts sections 5 and 6 (the inventory and clients endpoints are phase 8's), plus `/api/layout/broadcast`, whose addressed ops parse the address and refuse an unregistered app before anything is broadcast.
 - `state.py`: `ShellState` (inventory, the three stores, the activity log, the broadcaster, the mutex, the relay's http client) built by `build_shell_state`; `start()` prunes stale clients and starts the inventory, and `delete_unreferenced_instances()` is the referenced-deletion rule of contracts section 4.1, run after every layout save and tab-set removal.
 - `testing.py` and `conftest.py`: registry rows and files, a fake fetcher and prober, `build_inventory`, and a real instances API served over loopback for the relay tests.
 
