@@ -890,9 +890,9 @@ def _parse_params(raw_params: list[str] | None) -> dict[str, str]:
 
 
 def _open_target(
-    target: str, action: str | None, raw_params: list[str] | None
+    op: str, target: str, action: str | None, raw_params: list[str] | None
 ) -> tuple[str, dict[str, Any]]:
-    """The address an ``open`` / ``split`` names and the create arguments it carries.
+    """The address an ``open`` / ``split`` (``op``) names and the create arguments it carries.
 
     A bare URL is the browser app's ``new`` with the URL as its ``url`` param; an app address
     carries ``--action`` and every ``--param``; an instance address takes neither.
@@ -909,7 +909,7 @@ def _open_target(
         }
     address = _resolve_address(target)
     if address == _SELF_REF:
-        _fail("open needs an address, not 'self'")
+        _fail(f"{op} needs an address, not 'self'")
     _app, key = _address_parts(address)
     if key is not None and (action or params):
         _fail(
@@ -944,7 +944,7 @@ def _describe_docked(
 
 
 def _cmd_open(args: argparse.Namespace) -> int:
-    address, create_args = _open_target(args.target, args.action, args.param)
+    address, create_args = _open_target("open", args.target, args.action, args.param)
     app, _key = _address_parts(address)
     if (err := _require_registered(app)) is not None:
         return err
@@ -973,7 +973,7 @@ def _cmd_split(args: argparse.Namespace) -> int:
             f"(within tabs into the anchor's own group)\n"
         )
         return EXIT_ERROR
-    address, create_args = _open_target(args.target, args.action, args.param)
+    address, create_args = _open_target("split", args.target, args.action, args.param)
     app, _key = _address_parts(address)
     if (err := _require_registered(app)) is not None:
         return err
