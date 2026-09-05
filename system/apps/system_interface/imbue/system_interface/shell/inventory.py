@@ -21,9 +21,10 @@ from typing import Any
 from typing import Final
 
 import httpx
+from app_instances.blueprint import HTTP_SERVICE_UNAVAILABLE
+from app_instances.blueprint import INSTANCES_PATH
 from app_instances.data_types import InstanceRecord
 from app_instances.data_types import InstanceStatus
-from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 from loguru import logger
 from pydantic import Field
@@ -42,13 +43,12 @@ from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import InventoryInstance
 from imbue.system_interface.shell.data_types import app_wire_json
+from imbue.system_interface.shell.data_types import instances_url_of
 from imbue.system_interface.shell.data_types import inventory_instance_from_record
 from imbue.system_interface.shell.data_types import synthesized_single_instance
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-
-INSTANCES_PATH: Final[str] = "/_instances"
 
 # The nudge window of contracts.md section 5: the first nudge for an app starts it, one refetch
 # runs when it closes.
@@ -64,8 +64,6 @@ FETCH_TIMEOUT_SECONDS: Final[float] = 5.0
 # How long a freshly listed referenced instance is exempt from the unreferenced-deletion sweep,
 # so the tab docking it has time to be saved.
 NEW_INSTANCE_GRACE_SECONDS: Final[float] = 30.0
-
-HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 
 class FetchOutcomeKind(UpperCaseStrEnum):
@@ -158,11 +156,6 @@ class _RegistryFileHandler(FileSystemEventHandler):
     on_deleted = _maybe_fire
     on_moved = _maybe_fire
     on_closed = _maybe_fire
-
-
-@pure
-def _instances_url(row: RegistryRow) -> str:
-    return str(row.instances_url) if row.instances_url is not None else str(row.url)
 
 
 @pure
@@ -388,14 +381,14 @@ class AppInventory(MutableModel):
             return
         if not entry.is_running:
             return
-        outcome = self.fetcher.fetch(_instances_url(entry.row))
+        outcome = self.fetcher.fetch(instances_url_of(entry.row))
         self._fold_fetch(app_name, outcome)
         self._broadcast_if_changed()
 
     def refetch_all(self) -> None:
         for entry in self.entries():
             if entry.row.instances and entry.is_running:
-                outcome = self.fetcher.fetch(_instances_url(entry.row))
+                outcome = self.fetcher.fetch(instances_url_of(entry.row))
                 self._fold_fetch(str(entry.row.name), outcome)
         self._broadcast_if_changed()
 

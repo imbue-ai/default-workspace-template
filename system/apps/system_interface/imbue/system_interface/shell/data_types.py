@@ -150,13 +150,19 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "internal": row.internal,
         "program": row.program or "",
         "critical": row.critical,
-        "instances_url": str(row.instances_url) if row.instances_url is not None else str(row.url),
+        "instances_url": instances_url_of(row),
         "has_instances": row.instances,
         "actions": [action_wire_json(action) for action in effective_actions(row)],
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "is_running": entry.is_running,
         "instances": [instance.model_dump(mode="json") for instance in entry.instances],
     }
+
+
+@pure
+def instances_url_of(row: RegistryRow) -> str:
+    """Where the app's instances API is reached: its ``instances_url``, else its ``url`` (contracts.md section 3)."""
+    return str(row.instances_url) if row.instances_url is not None else str(row.url)
 
 
 @pure
