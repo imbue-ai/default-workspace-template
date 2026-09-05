@@ -89,7 +89,7 @@ An app that learns from its own backend that a tab now shows a different instanc
 
 A project's tab set is shared truth: adding an instance to a project is visible to every client at once.
 A layout is client-scoped: each client arranges each view for itself, and decides which of the view's instances it docks.
-Layouts are stored on the server, keyed by view and client, and layout changes are broadcast with the originating client id, which is what makes a later "follow another client" feature a rendering choice rather than new plumbing.
+Layouts are stored on the server, keyed by view and client, and the stored file is the truth: the browser writes it for the user's own gestures, the shell writes it for agent ops and its own bookkeeping, and every write is broadcast with the owning client id, which is what makes a later "follow another client" feature a rendering choice rather than new plumbing.
 A client visiting a view for the first time starts from that view's seed layout for its device kind, then diverges.
 Everything is a view like any other for arrangement purposes; its tab set is derived rather than stored.
 
@@ -288,7 +288,8 @@ A stopped app's tabs render the existing placeholder with a Start button; instan
 ### 6.5 `layout.py`
 
 The agent-facing helper keeps its subcommand surface and speaks addresses.
-Every op targets one client, the requester by default or `--client <id>`; `--view <name>` switches that client to the view first, then applies the op to that client's layout of it.
+Every op targets exactly one client, the requester by default or `--client <id>`, and is applied by the shell to that client's layout file, so no browser needs to be connected for it to land; `--view <name>` names the view whose layout the op edits and switches that client to it.
+Only the verbs with nothing to store (maximize, restore, refresh, the interface reload) still travel to the browser as messages.
 `open app:<name>` runs the app's default action (the first one its manifest declares) in focus mode; `open app:<name> --action <id>` runs a named action; `open app:<name>?instance=<key>` docks an existing instance.
 `list` prints apps and instances with status from the inventory.
 `rename` and `delete` gain instance forms that call through to the app.
@@ -412,7 +413,7 @@ Tests follow the code: the instances library and each app backend get unit tests
 5. **Browser app.** The instances adapter and status. Verify: a fleet browser shows `working` while an agent drives it.
 6. **Chat as a document.** The chat pages and their bundle become a separate document served by the system-interface process at a registered `chat` origin whose registry URL is the shell's own port (requests dispatched by Host label and by the `/_instances` path), with the instances API implemented over the existing agent manager, the browser-side contract module, and the embedder relay (permission cards live in chat pages, which are child frames from here on). Nothing moves between packages yet. Verify: every chat opens as an iframe at the chat origin and behaves as before; the shell's own bundle carries no chat views; a permission card reaches the minds inbox.
 7. **Shell core.** Addresses, the app-agnostic inventory, the verb definition, the location relay, shortcuts as data, the New Tab page as the only empty state, the state files of 6.1, and deletion of the per-kind code and side stores; chat is already an ordinary iframe app, so the shell has no special case. Verify: every verb on every app from both the tab and the rail.
-8. **Client-scoped layouts.** Client-tagged broadcasts with save ids and `layout_updated` first (the seam phase 7's review left open), then the per-client active view across a client's windows, the inventory endpoint and deep links (6.7), and the rest of `layout.py` (`--client`, `--action`, `--param`, the bare-URL open). The tab route, pruning, referenced-lifetime deletion, the address grammar, and the skill rewrites landed in phase 7. Verify: two browsers on one workspace arrange independently and share projects; two windows of one browser mirror each other; closing the last file-browser tab everywhere removes the instance; a deep link lands on the named view and instance.
+8. **Client-scoped layouts.** Client-tagged broadcasts with save ids and `layout_updated` first (the seam phase 7's review left open), then the layout file as the truth: the shell applies agent ops to the target client's file and broadcasts, replacing phase 7's browser-applied ops, their mutex, and the connected-browser requirement; then the per-client active view across a client's windows, the inventory endpoint and deep links (6.7), and the rest of `layout.py` (`--client`, `--action`, `--param`, the bare-URL open). The tab route, pruning, referenced-lifetime deletion, the address grammar, and the skill rewrites landed in phase 7. Verify: two browsers on one workspace arrange independently and share projects; two windows of one browser mirror each other; an agent op lands with no browser connected; closing the last file-browser tab everywhere removes the instance; a deep link lands on the named view and instance.
 9. **Migration.** The script, its marker, and its wiring into bootstrap and the apply; and the migration of pre-manifest apps to the manifest form (a generated `app.toml`, a tool install, the rewritten program line, the root-pyproject entries dropped) followed by `system/apps/*` leaving the root workspace's member glob. Verify: a workspace created before this arc upgrades with its projects, tabs, and folder paths intact, and a user-built app from before the arc runs from its own tool afterwards.
 10. **Chat app.** The move of the chat package and process to `system/apps/chat` with its own tool environment, program, manifest, and registry row, the provisional-instance create flow, subagent instances, the first-chat claim, and the shell's mngr-free invariant landing as an import contract and a ratchet. Verify: chats create, rename, delete, stop, and show status; permission cards reach the minds inbox through the relay; a fresh workspace lands on New Tab.
 11. **Updates, sharing, and cleanup.** The apply changes, the external-caller retargeting (8.4), the sharing note in the share-gateway docs, the service-to-app rename across shell code and docs, deletion of the old stores, README and skill rewrites, and changelog entries.
@@ -424,7 +425,7 @@ After phase 11, an existing workspace is upgraded through update-self and exerci
 - Stable app ids and app renaming; the home for an id, if ever needed, is the manifest.
 - Protocol and intent handlers; only the reserved `handles` table exists.
 - Follow mode between clients; the client-tagged layout broadcasts are its prerequisite.
-- The fast switcher in the minds chrome; the inventory endpoint and deep links (6.7) are its prerequisites.
+- The fast switcher in the minds chrome; the inventory endpoint and deep links (6.7) are its prerequisites, and so is the chrome forwarding a deep link's query string to the shell frame, which no phase of this arc does.
 - Minimum terminal size across viewers.
 - Read-only sharing of one chat.
 - Chat-internal cleanups from the old plan (per-chat channel consolidation, chooser refactoring, proto-agent broadcasts), which are invisible to the shell once chat is an app.

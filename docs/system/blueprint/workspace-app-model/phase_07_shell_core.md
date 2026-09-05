@@ -76,6 +76,8 @@ These were the open questions going in, with the answer each got:
 
 Also: `load_layout` (the `load` op's message) stays until phase 8 lands `active_view_changed` and `layout_updated`; the first landing after this commit is the New Tab page, with no starter project and no auto-open, until phase 9's migration creates one.
 
+Phase 8 then replaced this phase's model for agent ops (an op broadcast to a browser that has the view active, which applies it and autosaves; the advisory mutex; the `412`) with the shell applying `open`, `focus`, `split`, `close`, and `move` to the client's layout file itself, so the `layout_ops.py` tables, `routes.py`'s broadcast path, and the dock's op handlers described here are what phase 8 removed; see `phase_08_client_layouts.md`.
+
 ## Behaviour
 
 - On connect a client receives `apps_updated` and `projects_updated`, fetches its layout for the active view, and renders; a tab whose address is not in the inventory renders the stopped placeholder when its app is stopped, waits while its app's list has not arrived yet (`is_listed` false), and is pruned from the layout otherwise.
