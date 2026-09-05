@@ -103,9 +103,9 @@ What `open` does with each target:
   `open browser` (a new browser), and `open files` (a new file viewer: the
   files app has instances too, so `app:files` never names an open viewer).
 
-A terminal created this way starts in the workspace root. Pass a different
-directory by creating it through the terminal app's own action (the rail's
-menu) or by `cd`-ing in the shell.
+A terminal created this way starts in the workspace root; `cd` in it to go
+elsewhere (passing a `workdir` to the terminal's action lands with `--param`
+in phase 8 of the workspace app model).
 
 ## Less common operations
 
