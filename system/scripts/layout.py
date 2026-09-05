@@ -173,7 +173,10 @@ def _retired_spelling_message(value: str) -> str:
     )
     remainder = value[len(prefix) :]
     if prefix == "chat:":
-        hint = f"a chat is addressed by its agent id: app:chat?instance=<agent-id> (this one may be app:chat?instance={remainder})"
+        hint = (
+            f"a chat is addressed by its agent id, not its name: app:chat?instance=<agent-id> "
+            f"(the chat rows of 'layout.py list' carry the id of the one titled {remainder!r})"
+        )
     elif prefix == "chat-terminal:":
         hint = "an agent's terminal is the back face of its chat: address the chat as app:chat?instance=<agent-id>"
     elif prefix == "terminal:":
