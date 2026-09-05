@@ -22,7 +22,7 @@ import {
   startChatOnAccount,
   startProjectChat,
   switchToView,
-  toggleAppLifecycle,
+  requestAppLifecycle,
 } from "./DockviewWorkspace";
 import { ProviderChooserModal } from "./ProviderChooserModal";
 import { Sidebar } from "./Sidebar";
@@ -130,8 +130,8 @@ export function App(): m.Component {
               onRemoveFromView: (row: SidebarTabRow) => {
                 removeAddressFromView(row.address);
               },
-              onAppLifecycle: (appName: string) => {
-                toggleAppLifecycle(appName);
+              onAppLifecycle: (appName: string, action: "stop" | "start") => {
+                requestAppLifecycle(appName, action);
               },
               onDeleteRow: (row: SidebarTabRow) => {
                 deleteAddress(row.address);
