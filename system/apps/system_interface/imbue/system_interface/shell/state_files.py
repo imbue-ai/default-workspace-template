@@ -38,10 +38,11 @@ def read_json_object(path: Path) -> dict[str, Any] | None:
 
 def write_json_atomic(path: Path, document: dict[str, Any]) -> None:
     """Write ``document`` through a same-directory temp file and a rename, so a reader never sees a partial file."""
+    temp_path = path.with_name(f"{path.name}.tmp-{uuid4().hex}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(f"{path.name}.tmp-{uuid4().hex}")
         temp_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
         os.replace(temp_path, path)
     except OSError as e:
+        temp_path.unlink(missing_ok=True)
         raise ShellStateError(f"cannot write shell state file {path}: {e}") from e
