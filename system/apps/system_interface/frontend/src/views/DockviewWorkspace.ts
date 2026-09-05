@@ -1306,12 +1306,19 @@ async function runActionInPane(
   }
   actionsAwaitingCreate.add(key);
   if (launcherPanelId !== null) launchersAwaitingCreate.add(launcherPanelId);
+  const originViewId = mountedViewId;
   m.redraw();
   try {
     const record = await createInstance(app.name, actionId, params);
     const address = addressFor(app.name, record.key);
     if (!(await whenAddressListed(address))) {
       throw new Error(`${app.display_name} created ${record.key} but has not listed it`);
+    }
+    if (mountedViewId !== originViewId) {
+      // The user left the view the action was run in: the instance belongs to that project's
+      // tab set, and the view they are looking at now did not ask for it.
+      fileIntoProject(originViewId, address);
+      return;
     }
     if (openAddressInGroup(address, targetGroup) !== null) retireLauncher(launcherPanelId);
   } catch (e) {
@@ -1413,7 +1420,10 @@ function addPanelForAddress(address: string, placement: AddPanelPlacementOptions
  * Best-effort: failing to reach the shell must never stop a tab from opening.
  */
 function fileIntoActiveProject(address: string): void {
-  const viewId = mountedViewId;
+  fileIntoProject(mountedViewId, address);
+}
+
+function fileIntoProject(viewId: string | null, address: string): void {
   if (viewId === null || isEverythingView(viewId)) return;
   if (projectForViewId(availableProjects, viewId)?.tabs.includes(address) === true) return;
   void addProjectTab(viewId, address)
@@ -1922,12 +1932,17 @@ async function openForAgent(address: string, placement: AddPanelPlacementOptions
     const key = actionKey(app.name, action.id);
     if (actionsAwaitingCreate.has(key)) return;
     actionsAwaitingCreate.add(key);
+    const originViewId = mountedViewId;
     m.redraw();
     try {
       const record = await createInstance(app.name, action.id, {});
       const address = addressFor(app.name, record.key);
       if (!(await whenAddressListed(address))) {
         console.warn(`[si] ${app.name} created ${record.key} for an agent but has not listed it`);
+        return;
+      }
+      if (mountedViewId !== originViewId) {
+        fileIntoProject(originViewId, address);
         return;
       }
       addPanelForAddress(address, placement);
