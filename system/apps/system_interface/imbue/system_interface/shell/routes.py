@@ -60,6 +60,7 @@ from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
 from imbue.system_interface.shell.liveness import supervisor_socket_path
 from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.primitives import AppLifecycleAction
 from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
@@ -264,7 +265,7 @@ def relay_location_route(name: str, key: str) -> ResponseReturnValue:
 # ---------- section 6: stop and start ----------
 
 
-def _lifecycle(name: str, action: str) -> ResponseReturnValue:
+def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
     shell = _shell()
     entry = _entry_or_raise(name)
     program = entry.row.program or ""
@@ -282,24 +283,27 @@ def _lifecycle(name: str, action: str) -> ResponseReturnValue:
             f"App {name!r} is critical to the workspace and cannot be stopped or started here"
         )
     try:
-        if action == "stop":
-            stop_supervisor_program(program, supervisor_socket_path())
-        else:
-            start_supervisor_program(program, supervisor_socket_path())
+        match action:
+            case AppLifecycleAction.STOP:
+                stop_supervisor_program(program, supervisor_socket_path())
+            case AppLifecycleAction.START:
+                start_supervisor_program(program, supervisor_socket_path())
+            case _ as unreachable:
+                assert_never(unreachable)
     except SupervisorProgramActionError as e:
         return _detail(str(e), HTTP_BAD_GATEWAY)
-    logger.info("{} app {} (program {})", "Stopped" if action == "stop" else "Started", name, program)
+    logger.info("{} app {} (program {})", "Stopped" if action is AppLifecycleAction.STOP else "Started", name, program)
     shell.inventory.refresh_liveness()
     refreshed = shell.inventory.entry(name)
     return jsonify({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
 
 
 def stop_app(name: str) -> ResponseReturnValue:
-    return _lifecycle(name, "stop")
+    return _lifecycle(name, AppLifecycleAction.STOP)
 
 
 def start_app(name: str) -> ResponseReturnValue:
-    return _lifecycle(name, "start")
+    return _lifecycle(name, AppLifecycleAction.START)
 
 
 # ---------- section 6: projects ----------

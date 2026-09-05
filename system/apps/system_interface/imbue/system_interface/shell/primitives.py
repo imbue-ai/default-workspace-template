@@ -170,6 +170,13 @@ class ClientActivityKind(LowerCaseStrEnum):
     VIEW_SWITCH = auto()
 
 
+class AppLifecycleAction(LowerCaseStrEnum):
+    """The two verbs the workspace has for an app's supervised program (a wire value: the route's last path segment)."""
+
+    STOP = auto()
+    START = auto()
+
+
 class DeviceKind(LowerCaseStrEnum):
     """Which arrangement a client saves into: desktop or mobile (a wire value)."""
 
