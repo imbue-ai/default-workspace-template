@@ -116,9 +116,7 @@ import { areAccountsLoaded, getAccounts, loadAccounts, openProviderChooser } fro
 import {
   addProjectTab,
   chooseInitialViewId,
-  displayNameForView,
   fetchProjectsList,
-  findShortcut,
   isEverythingView,
   projectForViewId,
   removeProjectShortcut,
@@ -2400,6 +2398,3 @@ export const DockviewWorkspace: m.Component = {
     );
   },
 };
-
-/** What to call a view in a message to the user (re-exported for the rail's notices). */
-export { displayNameForView, findShortcut };

@@ -62,7 +62,7 @@ export const IFRAME_PANEL_ADDRESS_ATTR = "data-address";
 
 // App pages are cross-origin iframes (each app owns its own origin), so allow-same-origin only
 // lets the framed app be a normal page on ITS origin -- it grants nothing on the shell's.
-export const DEFAULT_FRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups";
+const DEFAULT_FRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups";
 
 // An app page may open transcript links in real tabs, download files, and raise modals, none
 // of which a sandboxed frame may do without these. Every instance frame gets them: the shell

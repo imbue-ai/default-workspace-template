@@ -447,10 +447,6 @@ export function whenAppsLoaded(timeoutMs = 5000): Promise<boolean> {
   });
 }
 
-export function getProjects(): ProjectInfo[] {
-  return projects;
-}
-
 // ---------- Listeners ----------
 
 export function addAppsUpdatedListener(listener: AppsUpdatedListener): void {
