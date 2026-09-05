@@ -1474,10 +1474,12 @@ async function flushPendingSave(): Promise<void> {
   }
 }
 
+/** Re-list the projects after a write of ours; the projects-updated listener takes the list. A
+ *  listing the shell could not answer changes nothing: the push that follows the write will. */
 async function refreshProjectsList(): Promise<void> {
   const listed = await fetchProjectsList();
+  if (listed === null) return;
   applyProjects(listed);
-  takeProjects(listed);
 }
 
 /** Take the shell's project list; a client whose mounted project is gone (deleted here or
@@ -1557,7 +1559,7 @@ function setActiveView(viewId: string): void {
 
 /** Pick this client's initial view, register it with the shell, and mount its arrangement. */
 async function initializeActiveView(): Promise<void> {
-  availableProjects = await fetchProjectsList();
+  availableProjects = (await fetchProjectsList()) ?? [];
   applyProjects(availableProjects);
   const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
   setActiveView(chosenId);

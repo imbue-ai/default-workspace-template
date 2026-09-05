@@ -28,16 +28,20 @@ export function isEverythingView(viewId: string): boolean {
   return viewId === EVERYTHING_VIEW_ID;
 }
 
-/** Fetch the project registry. Everything is never in it. Defensive: an unreachable server
- *  yields an empty list so the workspace still renders (nothing will persist). */
-export async function fetchProjectsList(): Promise<ProjectInfo[]> {
+/** Fetch the project registry. Everything is never in it. Null when the shell could not answer
+ *  (logged), which is not the same as an empty registry: a caller keeps what it has. */
+export async function fetchProjectsList(): Promise<ProjectInfo[] | null> {
   try {
     const response = await fetch(apiUrl("/api/projects"));
-    if (!response.ok) return [];
+    if (!response.ok) {
+      console.warn(`[si] could not list projects: HTTP ${response.status}`);
+      return null;
+    }
     const data = (await response.json()) as { projects?: ProjectInfo[] };
     return data.projects ?? [];
-  } catch {
-    return [];
+  } catch (e) {
+    console.warn("[si] could not list projects", e);
+    return null;
   }
 }
 
