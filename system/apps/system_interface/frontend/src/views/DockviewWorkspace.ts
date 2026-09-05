@@ -148,7 +148,11 @@ import {
   setAppLifecycle,
 } from "../models/Relay";
 
+// A resize is saved once the splitter comes to rest; a tab added, removed, or moved is saved almost at
+// once, because the shell edits the saved arrangement for agent ops and an op that follows a click has
+// to see the click's tab in the file.
 const AUTOSAVE_DEBOUNCE_MS = 1500;
+const STRUCTURAL_SAVE_DELAY_MS = 100;
 
 // A launcher panel's id. The prefix is what tells a launcher apart after a layout restore,
 // when all that survives is the panel id and its component name.
@@ -1574,14 +1578,20 @@ function runPendingLayoutRefresh(): void {
   void refreshMountedLayoutFromServer();
 }
 
-function scheduleSave(): void {
+function scheduleSave(delayMs: number = AUTOSAVE_DEBOUNCE_MS): void {
   if (saveTimer !== null) {
     clearTimeout(saveTimer);
   }
   saveTimer = setTimeout(() => {
     saveTimer = null;
     void persistLayout();
-  }, AUTOSAVE_DEBOUNCE_MS);
+  }, delayMs);
+}
+
+/** A panel was added, removed, or moved: save without waiting out the resize debounce. */
+function scheduleStructuralSave(): void {
+  if (isApplyingLayout) return;
+  scheduleSave(STRUCTURAL_SAVE_DELAY_MS);
 }
 
 /** Flush a pending debounced autosave now, so edits made just before a switch land in the
@@ -2222,6 +2232,7 @@ function initializeDockview(parentElement: HTMLElement): void {
   });
   dv.api.onDidMovePanel(() => {
     scheduleReconcile();
+    scheduleStructuralSave();
   });
   dv.api.onDidMaximizedGroupChange(() => {
     scheduleReconcile();
@@ -2234,9 +2245,11 @@ function initializeDockview(parentElement: HTMLElement): void {
     lastFocusedMsByPanelId.delete(panel.id);
     ensureDockIsNotEmpty();
     scheduleTabWidthRecompute();
+    scheduleStructuralSave();
   });
   dv.api.onDidAddPanel(() => {
     scheduleTabWidthRecompute();
+    scheduleStructuralSave();
   });
 
   dv.api.onDidActivePanelChange((panel) => {
