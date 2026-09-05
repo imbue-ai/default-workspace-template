@@ -117,9 +117,6 @@ _STUB_TAB_TITLE_RE = re.compile(r"^Stub \d+$")
 
 _TRIGGER_TIMEOUT_MS = 20000
 
-# Comfortably past the workspace's 1500ms autosave debounce, so a test can wait for the
-# writes an action already triggered to land before provoking the next.
-
 
 def _chat(page: Page, agent_id: str = _FIXTURE_AGENT_ID) -> FrameLocator:
     """The chat's page, framed at the chat origin under the instance's address.
