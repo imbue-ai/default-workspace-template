@@ -302,6 +302,24 @@ def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClie
     assert client.get("/api/layouts/everything?client=c2&device=mobile").get_json()["tabs"] == {}
 
 
+def test_a_recorded_client_reads_the_seed_of_its_own_device_kind(client: FlaskClient, app: Flask) -> None:
+    """The ``device`` query names the seed only for a client the shell has no record of."""
+    mobile_body = {
+        "client_id": "m1",
+        "device_kind": "mobile",
+        "dockview": {"panels": {"p0": {}}},
+        "tabs": {"p0": {"address": str(_FILES), "tab_id": str(_TAB), "last_focused_ms": 0}},
+    }
+    assert client.post("/api/layouts/everything", json=mobile_body).status_code == 204
+    _shell(app).clients.record_report(
+        ClientStateReport(client_id=ClientId("c2"), device_kind=DeviceKind.MOBILE, active_view=ViewId("everything")),
+        TEST_NOW,
+    )
+
+    seeded = client.get("/api/layouts/everything?client=c2&device=desktop").get_json()
+    assert seeded["device_kind"] == "mobile" and seeded["tabs"]["p0"]["address"] == str(_FILES)
+
+
 # ---------- the broadcast endpoint ----------
 
 
@@ -348,6 +366,27 @@ def test_the_read_ops_answer_from_the_inventory_and_the_state_files(client: Flas
     context = _broadcast(client, "context").get_json()["clients"]
     assert context[0]["client_id"] == "c1" and context[0]["is_connected"] is True
     assert context[0]["recent_messages"][0]["address"] == "app:chat?instance=agent-1"
+
+
+def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_agent(
+    client: FlaskClient, app: Flask
+) -> None:
+    """With several clients on the view, the requester's own client is the one that last messaged its chat;
+    an explicit ``client`` outranks that, and with neither there is no client to answer for."""
+    shell = _shell(app)
+    client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
+    _register_client(app, "c1", "alpha")
+    _register_client(app, "c7", "alpha")
+    shell.layouts.save_layout("alpha", "c7", layout_showing(_TERMINAL_1), TEST_NOW)
+
+    assert _broadcast(client, "inspect", {"view": "alpha"}).get_json()["client_id"] is None
+
+    shell.activity.append_message("c7", "desktop", "alpha", "chat", "agent-1", "hello")
+    attributed = _broadcast(client, "inspect", {"view": "alpha"}).get_json()
+    assert attributed["client_id"] == "c7"
+    assert [panel["address"] for panel in attributed["layout"]["panels"]] == [str(_TERMINAL_1)]
+    assert _broadcast(client, "inspect", {"view": "alpha"}, agent_id="agent-2").get_json()["client_id"] is None
+    assert _broadcast(client, "inspect", {"view": "alpha", "client": "c1"}).get_json()["client_id"] == "c1"
 
 
 def test_load_switches_the_requesting_agents_client(client: FlaskClient, app: Flask) -> None:

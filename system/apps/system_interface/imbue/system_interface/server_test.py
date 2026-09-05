@@ -65,8 +65,10 @@ from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
+from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
+from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
@@ -2518,6 +2520,63 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert [message["type"] for message in messages] == ["apps_updated", "projects_updated", "agents_updated"]
     assert messages[0]["apps"] == []
     assert messages[1]["projects"] == []
+
+
+def test_client_state_reports_register_the_client_and_log_only_real_view_switches(app: Flask) -> None:
+    """A report registers the connection with the broadcaster and records the client; a view_switch is
+    logged only when the report names a previous view that differs; anything malformed is ignored."""
+    shell = state_of(app).shell
+    client_queue = shell.broadcaster.register()
+    try:
+        first = json.dumps(
+            {"type": "client_state", "client_id": "c1", "device_kind": "mobile", "active_view": "everything"}
+        )
+        assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
+        assert shell.broadcaster.get_client_info(client_queue) == {
+            "client_id": "c1",
+            "active_view": "everything",
+            "device_kind": "mobile",
+        }
+        recorded = shell.clients.get_client("c1")
+        assert recorded is not None
+        assert recorded.device_kind is DeviceKind.MOBILE and recorded.active_view == "everything"
+        assert shell.activity.read_events() == []
+
+        switched = json.dumps(
+            {
+                "type": "client_state",
+                "client_id": "c1",
+                "device_kind": "mobile",
+                "active_view": "alpha",
+                "previous_view": "everything",
+            }
+        )
+        assert _handle_client_state_message(switched, client_queue, shell, is_first_report=False) is True
+        unchanged = json.dumps(
+            {
+                "type": "client_state",
+                "client_id": "c1",
+                "device_kind": "mobile",
+                "active_view": "alpha",
+                "previous_view": "alpha",
+            }
+        )
+        assert _handle_client_state_message(unchanged, client_queue, shell, is_first_report=False) is True
+        events = shell.activity.read_events()
+        assert [(event["type"], event["from_view_id"], event["to_view_id"]) for event in events] == [
+            ("view_switch", "everything", "alpha")
+        ]
+        assert shell.broadcaster.get_client_info(client_queue) == {
+            "client_id": "c1",
+            "active_view": "alpha",
+            "device_kind": "mobile",
+        }
+
+        for malformed in ("{", json.dumps({"type": "other"}), json.dumps({"type": "client_state", "client_id": "c1"})):
+            assert _handle_client_state_message(malformed, client_queue, shell, is_first_report=False) is False
+        assert shell.broadcaster.get_client_info(client_queue)["active_view"] == "alpha"
+    finally:
+        shell.broadcaster.unregister(client_queue)
 
 
 def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
