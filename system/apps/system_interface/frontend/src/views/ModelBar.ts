@@ -277,8 +277,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
         m("span", { class: css.SLIDER_WRAP }, [
-          // Tick marks behind the track: without them the slider is a bare line and the levels
-          // it can land on are guesswork.
+          // A dot at each level: without them the slider is a bare line and the levels it can
+          // land on are guesswork.
           m(
             "span",
             { class: css.SLIDER_TICKS },

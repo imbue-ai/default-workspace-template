@@ -65,8 +65,8 @@ export const ROW_WRAP = "group/conn relative";
 
 // --- the effort slider ---------------------------------------------------------------------
 export const EFFORT_VALUE = "type-helper text-primary";
-/** Wraps the track so tick marks can sit behind it -- a bare slider gives no clue where the
- *  levels are, which is exactly what makes it feel like guesswork. */
+/** Wraps the track so the level dots can be positioned over it -- a bare slider gives no clue
+ *  where the levels are, which is exactly what makes it feel like guesswork. */
 export const SLIDER_WRAP = "relative flex h-4 w-32 items-center";
 /** Inset by half the thumb's width on each side.
  *
@@ -75,11 +75,17 @@ export const SLIDER_WRAP = "relative flex h-4 w-32 items-center";
  *  6px outside anywhere the ball can reach, and the ball sits off its own mark at both ends.
  *  Spanning the thumb's real travel instead makes every tick a position the ball lands on. */
 export const SLIDER_TICKS =
-  "pointer-events-none absolute left-1.5 right-1.5 top-1/2 flex -translate-y-1/2 justify-between";
-/** Taller than the 12px knob and dark enough to read through it: these are the delimiters
- *  that say where the levels ARE, so they have to survive the thumb passing over them. */
-/** Hairline, but dark and taller than the 12px thumb, so it reads through the ball. */
-export const SLIDER_TICK = "h-[15px] w-px bg-primary/70";
+  "pointer-events-none absolute left-1.5 right-1.5 top-1/2 z-10 flex -translate-y-1/2 justify-between";
+/** A dot at each level, sitting ON the track (hence the container's `z-10`) rather than
+ *  behind it.
+ *
+ *  A mark small enough to read as a dot is smaller than the 3px track, so behind the track it
+ *  would show only the crescents the track fails to cover -- and it would not even be the same
+ *  shape at both ends, because the filled half of the track is an opaque green while the
+ *  unfilled half is a translucent black that the dot shows through. Above the track every dot
+ *  is identical wherever the fill happens to end, and the one the thumb is parked on still
+ *  reads through the ball, which is what the tall hairlines these replace were for. */
+export const SLIDER_TICK = "h-[3px] w-[3px] shrink-0 rounded-full bg-primary/70";
 export const SLIDER =
   "relative h-[3px] w-full cursor-pointer appearance-none rounded-full " +
   "[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full " +
