@@ -1304,7 +1304,9 @@ async function runActionInPane(
   try {
     const record = await createInstance(app.name, actionId, params);
     const address = addressFor(app.name, record.key);
-    await whenAddressListed(address);
+    if (!(await whenAddressListed(address))) {
+      throw new Error(`${app.display_name} created ${record.key} but has not listed it`);
+    }
     if (openAddressInGroup(address, targetGroup) !== null) retireLauncher(launcherPanelId);
   } catch (e) {
     alert(`Failed to open ${app.display_name}: ${(e as Error).message}`);
@@ -1713,27 +1715,30 @@ function openInstanceForChildFrame(frame: HTMLIFrameElement, payload: Record<str
   void openAddressWhenListed(address, targetGroup);
 }
 
-/** Resolve once the inventory lists ``address``, or after ``AWAIT_ADDRESS_TIMEOUT_MS`` so a
- *  caller never hangs on an address that will not appear. */
-function whenAddressListed(address: string): Promise<void> {
-  if (findInstance(address) !== null) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    const done = (): void => {
+/** Resolve to whether the inventory lists ``address``: at once, when its next list arrives, or
+ *  false once ``AWAIT_ADDRESS_TIMEOUT_MS`` passes without it. */
+function whenAddressListed(address: string): Promise<boolean> {
+  if (findInstance(address) !== null) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const settle = (isListed: boolean): void => {
       removeAppsUpdatedListener(listener);
       clearTimeout(timer);
-      resolve();
+      resolve(isListed);
     };
     const listener = (): void => {
-      if (findInstance(address) !== null) done();
+      if (findInstance(address) !== null) settle(true);
     };
-    const timer = setTimeout(done, AWAIT_ADDRESS_TIMEOUT_MS);
+    const timer = setTimeout(() => settle(false), AWAIT_ADDRESS_TIMEOUT_MS);
     addAppsUpdatedListener(listener);
   });
 }
 
 /** Dock ``address`` once the inventory lists it. */
 async function openAddressWhenListed(address: string, targetGroup: DockviewGroupPanel | null): Promise<void> {
-  await whenAddressListed(address);
+  if (!(await whenAddressListed(address))) {
+    console.warn(`[si] cannot open ${address}: its app has not listed it`);
+    return;
+  }
   openAddressInGroup(address, targetGroup);
   m.redraw();
 }
@@ -1899,7 +1904,10 @@ async function openForAgent(address: string, placement: AddPanelPlacementOptions
     try {
       const record = await createInstance(app.name, action.id, {});
       const address = addressFor(app.name, record.key);
-      await whenAddressListed(address);
+      if (!(await whenAddressListed(address))) {
+        console.warn(`[si] ${app.name} created ${record.key} for an agent but has not listed it`);
+        return;
+      }
       addPanelForAddress(address, placement);
     } catch (e) {
       console.warn(`[si] could not run ${action.id} on ${app.name} for an agent: ${(e as Error).message}`);
