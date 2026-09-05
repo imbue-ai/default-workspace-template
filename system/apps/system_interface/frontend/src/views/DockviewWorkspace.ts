@@ -199,6 +199,10 @@ let lastPersistedLayoutJson: string | null = null;
 // Set when the mounted view's layout could not be fetched: what the dock shows then is not the
 // client's arrangement, and saving it would overwrite the real one. Cleared by the next fetch.
 let isLayoutSaveSuspended = false;
+// Bumped by every mount of a view, the initial one included. A mount whose generation has moved
+// on after an await abandons its remaining steps, so two overlapping switches (a double click,
+// a load pushed mid-switch) cannot leave one view's arrangement under the other's autosave.
+let viewMountGeneration = 0;
 
 // Target fraction of horizontal space a newly-opened pane takes when it splits alongside the
 // requesting agent's chat.
@@ -1507,12 +1511,13 @@ function takeProjects(projects: ProjectInfo[]): void {
  */
 async function applyLayout(
   layout: { dockview: SerializedDockview | null; tabs: Record<string, TabRecord> } | null,
+  generation: number,
 ): Promise<void> {
   if (!dockview) return;
   // Every page url is derived from its app's origin label, which only resolves once the app
   // list has loaded; bounded, so a workspace that reports no apps still proceeds.
   const isInventoryKnown = await whenAppsLoaded();
-  if (!dockview) return;
+  if (!dockview || generation !== viewMountGeneration) return;
   const dv = dockview;
   isApplyingLayout = true;
 
@@ -1568,14 +1573,17 @@ function setActiveView(viewId: string): void {
 
 /** Pick this client's initial view, register it with the shell, and mount its arrangement. */
 async function initializeActiveView(): Promise<void> {
+  const generation = ++viewMountGeneration;
   availableProjects = (await fetchProjectsList()) ?? [];
+  if (generation !== viewMountGeneration) return;
   applyProjects(availableProjects);
   const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
   setActiveView(chosenId);
   reportClientState();
   const layout = await fetchLayoutOrSuspendSaves(chosenId);
+  if (generation !== viewMountGeneration) return;
   lastPersistedLayoutJson = null;
-  await applyLayout(layout);
+  await applyLayout(layout, generation);
   m.redraw();
 }
 
@@ -1601,12 +1609,15 @@ export async function switchToView(viewId: string): Promise<void> {
   if (!dockview) return;
   const previousViewId = mountedViewId ?? getActiveProjectId();
   if (previousViewId === viewId) return;
+  const generation = ++viewMountGeneration;
   await flushPendingSave();
+  if (generation !== viewMountGeneration) return;
   setActiveView(viewId);
   reportClientState(previousViewId);
   const layout = await fetchLayoutOrSuspendSaves(viewId);
+  if (generation !== viewMountGeneration) return;
   lastPersistedLayoutJson = null;
-  await applyLayout(layout);
+  await applyLayout(layout, generation);
   m.redraw();
 }
 
