@@ -1192,22 +1192,24 @@ export function mostRecentAddressOfApp(
 ): string | null {
   const ofApp = candidates.filter((candidate) => candidate.appName === appName);
   if (ofApp.length === 0) return null;
-  let best = ofApp[0];
-  let bestScore = score(ofApp[0]);
-  for (const candidate of ofApp.slice(1)) {
-    const candidateScore = score(candidate);
-    if (candidateScore > bestScore) {
-      best = candidate;
-      bestScore = candidateScore;
+  // An open tab outranks every instance that is not open, however recently that one was active.
+  const open = ofApp.filter((candidate) => lastFocusedMs[candidate.address] !== undefined);
+  if (open.length > 0) return latestBy(open, (candidate) => lastFocusedMs[candidate.address]).address;
+  return latestBy(ofApp, (candidate) => candidate.lastActiveMs ?? Number.NEGATIVE_INFINITY).address;
+}
+
+/** The first of ``items`` with the greatest ``stamp``; ties keep the earlier one. */
+function latestBy<T>(items: readonly T[], stamp: (item: T) => number): T {
+  let best = items[0];
+  let bestStamp = stamp(best);
+  for (const item of items.slice(1)) {
+    const itemStamp = stamp(item);
+    if (itemStamp > bestStamp) {
+      best = item;
+      bestStamp = itemStamp;
     }
   }
-  return best.address;
-
-  function score(candidate: { address: string; lastActiveMs: number | null }): number {
-    const focused = lastFocusedMs[candidate.address];
-    if (focused !== undefined) return focused;
-    return candidate.lastActiveMs ?? Number.NEGATIVE_INFINITY;
-  }
+  return best;
 }
 
 /** Go to the most recently used instance of ``appName`` the active view shows; false when it shows none. */
