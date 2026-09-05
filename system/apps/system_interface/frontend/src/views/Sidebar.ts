@@ -20,6 +20,7 @@
 
 import m from "mithril";
 import { addressFor, getApp, getOpenableApps, primaryActionForApp } from "../models/Inventory";
+import { normalizeTabTitle } from "./tab-rename";
 import type {
   AppAction,
   AppRecord,
@@ -363,8 +364,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
 
   function commitRename(row: SidebarTabRow, typed: string, attrs: SidebarAttrs): void {
     endRename();
-    const title = typed.trim();
-    if (title === "" || title === row.label) return;
+    const title = normalizeTabTitle(typed);
+    if (title === null || title === row.label) return;
     attrs.onRenameRow(row, title);
   }
 
