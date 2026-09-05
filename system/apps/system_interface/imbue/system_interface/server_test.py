@@ -3052,13 +3052,11 @@ def test_websocket_snapshot_exposes_each_agent_project_label(app: Flask) -> None
 def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     """The placeholder derives a service origin, so it carries a copy of the rule.
 
-    ``frontend/src/origin.ts`` is canonical and two mirrors already exist
-    (``layout_ops.py`` and ``system/scripts/layout.py``, pinned to each other by
-    ``layout_ops_test``). The placeholder cannot import any of them -- it runs in
-    the browser, in the one state where the bundle those live in is missing -- so
-    it holds a fourth copy, and this pins it to the source of truth the way the
-    others are pinned. Without it the rule can be corrected in one place and
-    silently rot in the page that only renders when everything else is broken.
+    ``frontend/src/origin.ts`` is canonical. The placeholder cannot import it -- it
+    runs in the browser, in the one state where the bundle it lives in is missing --
+    so it holds its own copy, and this pins that copy to the source of truth.
+    Without it the rule can be corrected in one place and silently rot in the page
+    that only renders when everything else is broken.
     """
     origin_ts = Path(__file__).parents[2] / "frontend" / "src" / "origin.ts"
     canonical = re.search(r"WORKSPACE_COORDINATE_LABEL = (/.+/i);", origin_ts.read_text())
