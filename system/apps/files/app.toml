@@ -1,0 +1,18 @@
+name = "files"
+display_name = "File Viewer"
+icon = "icon.svg"
+instances = true
+# The instances API port (served by the files sidecar from phase 4 of the
+# workspace app model on); dufs itself stays on 8300.
+instances_url = "http://127.0.0.1:8301"
+critical = false
+priority = "files"
+
+[default_shortcut]
+action = "new"
+mode = "focus"
+
+[[actions]]
+id = "new"
+label = "New File Viewer"
+params = [{name = "path", label = "Path", required = false}]

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Shared workspace build for default-workspace-template hosts.
 #
-# Builds the workspace from full source: builds the frontend, installs the mngr /
-# system-interface tools and their plugins, registers the editable workspace +
-# vendored mngr packages, and exposes the tk ticket tracker. Needs the full repo
+# Builds the workspace from full source: builds the frontend, installs the mngr
+# tool and one tool per Python app (with their mngr plugins), registers the
+# editable workspace + vendored mngr packages, and exposes the tk ticket tracker. Needs the full repo
 # present, so the Dockerfile runs it after copying all source and the Lima
 # provider runs it after the repo is synced into the VM. Runs as root and is
 # idempotent.
@@ -43,22 +43,33 @@ git config --global --add safe.directory "$REPO_ROOT"
 # Build the system_interface frontend (deps installed by install_dependencies.sh).
 ( cd "$REPO_ROOT/system/apps/system_interface/frontend" && npm run build )
 
-# Install mngr and system-interface as tools (both need the plugin packages so
-# they can parse plugin-specific config). The plugin set comes from
-# system/config/mngr_plugins.toml, which the update-self apply reads too, so a
-# release adding a plugin registers it in existing workspaces as well as here.
-# mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
-SI_PLUGIN_ARGS=()
-while IFS= read -r plugin_path; do
-    SI_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
-done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool system-interface --repo-root "$REPO_ROOT")
+# Install mngr as a tool, then every Python app (each system/apps/<package>/
+# with both a pyproject.toml and an app.toml manifest) as its own tool from its
+# own pyproject, so no app runs from the root venv and one app's pins never
+# constrain another's. The manifest is the discriminator: an app with a
+# pyproject but no manifest was scaffolded before manifests existed, still runs
+# `uv run <name>` from the root venv, and is left to the migration. An app's
+# tool also gets the mngr plugins system/config/mngr_plugins.toml assigns to
+# its manifest name, as editable extras, so it can parse plugin-specific
+# config; the update-self apply reads the same table, so a release adding a
+# plugin registers it in existing workspaces as well as here. mngr_modal is
+# intentionally not registered (providers.modal.is_enabled=false).
 MNGR_PLUGIN_ARGS=()
 while IFS= read -r plugin_path; do
     MNGR_PLUGIN_ARGS+=(--path "$plugin_path")
 done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --repo-root "$REPO_ROOT")
 
 uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
-uv tool install -e "$REPO_ROOT/system/apps/system_interface" "${SI_PLUGIN_ARGS[@]}"
+
+for app_dir in "$REPO_ROOT"/system/apps/*/; do
+    [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
+    app_name="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "$app_dir/app.toml")"
+    APP_PLUGIN_ARGS=()
+    while IFS= read -r plugin_path; do
+        APP_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
+    done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
+    uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
+done
 
 mngr plugin add "${MNGR_PLUGIN_ARGS[@]}"
 

@@ -47,6 +47,7 @@ _BUILTIN_SERVICE_ORDER = (
     "owner-exec",
     "terminal",
     "system_interface",
+    "chat",
     "share-gateway",
     "github-sync",
     "host-backup",
@@ -89,7 +90,7 @@ def test_unrecognized_supervisord_program_falls_back_to_the_user_service_band() 
     # The core fail-expendable guarantee: a program the policy does not know
     # (a user-created service that skipped the tagging prefix) must default to
     # the user-service band, never to a protected one.
-    assert bands.supervisord_program_band("some-user-service") == bands.USER_SERVICE
+    assert bands.supervisord_program_band("some-user-service", {}) == bands.USER_SERVICE
 
 
 def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
@@ -97,13 +98,13 @@ def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     # the OOM machinery itself stays protected; the browser stays the single
     # most-expendable thing, above even an agent's subprocesses.
     for key in _BUILTIN_SERVICE_ORDER:
-        assert bands.supervisord_program_band(key) == bands.SERVICE_BANDS[key]
-    assert bands.supervisord_program_band("earlyoom") == bands.PROTECTED
-    assert bands.supervisord_program_band("oom-tag-backstop") == bands.PROTECTED
+        assert bands.supervisord_program_band(key, {}) == bands.SERVICE_BANDS[key]
+    assert bands.supervisord_program_band("earlyoom", {}) == bands.PROTECTED
+    assert bands.supervisord_program_band("oom-tag-backstop", {}) == bands.PROTECTED
     assert bands.SHARED_BROWSER > bands.AGENT_SUBPROCESS
     # The `browser` program is the coordinator, not Chromium: it resolves to its
     # service band, never to the shared-browser band its children occupy.
-    assert bands.supervisord_program_band("browser") == bands.SERVICE_BANDS["browser"]
+    assert bands.supervisord_program_band("browser", {}) == bands.SERVICE_BANDS["browser"]
 
 
 def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
@@ -302,3 +303,28 @@ def test_unknown_idle_time_is_treated_as_fresh() -> None:
         idle_seconds=None,
         is_mid_turn=False,
     )
+
+
+def test_a_registered_apps_priority_resolves_its_program_through_the_band_table() -> None:
+    # The manifest's ``priority`` is the band name; the program name itself
+    # need not be a key. A row that says ``user`` (every scaffolded app) or
+    # names a band that does not exist lands at USER_SERVICE.
+    registry = {"news-dashboard": "files", "my-tool": "user", "odd": "no-such-band", "browser": "system_interface"}
+    assert bands.supervisord_program_band("news-dashboard", registry) == bands.SERVICE_BANDS["files"]
+    assert bands.supervisord_program_band("my-tool", registry) == bands.USER_SERVICE
+    assert bands.supervisord_program_band("odd", registry) == bands.USER_SERVICE
+    # A row wins over the by-name table for the same program.
+    assert bands.supervisord_program_band("browser", registry) == bands.SERVICE_BANDS["system_interface"]
+
+
+def test_a_program_without_a_registry_row_keeps_its_by_name_band() -> None:
+    # The services that never register (share-gateway, cron, ...) and the
+    # non-service programs resolve exactly as before the registry lookup.
+    registry = {"files": "files"}
+    assert bands.supervisord_program_band("share-gateway", registry) == bands.SERVICE_BANDS["share-gateway"]
+    assert bands.supervisord_program_band("env-converge", registry) == bands.PROTECTED
+    assert bands.supervisord_program_band("something-else", registry) == bands.USER_SERVICE
+
+
+def test_the_chat_app_sits_between_the_shell_and_the_sharing_stack() -> None:
+    assert bands.SERVICE_BANDS["system_interface"] < bands.SERVICE_BANDS["chat"] < bands.SERVICE_BANDS["share-gateway"]

@@ -116,8 +116,8 @@ This is the exact thing layer 2 exists to prevent, happening one layer down, and
 | --- | --- |
 | declared popups, `notice_body` | `imbue/system_interface/harnesses/registry.py` |
 | composer guard, notices | `frontend/src/views/MessageInput.ts` |
-| the one notice modal (overlay, Escape, backdrop, focus) | `frontend/src/views/NoticeDialog.ts` |
-| backdrop press semantics | `frontend/src/views/modalBackdrop.ts` |
+| the one notice modal (overlay, Escape, backdrop, focus) | `frontend/src/views/components/NoticeDialog.ts` |
+| backdrop press semantics | `frontend/src/views/components/modalBackdrop.ts` |
 | dialog catalogue, `classify` | `mngr_claude/imbue/mngr_claude/dialogs.py` |
 | preflight, consent tokens | `mngr_claude/imbue/mngr_claude/plugin.py` |
 | the reason's route to the UI | `imbue/system_interface/agent_discovery.py`, `server.py` |

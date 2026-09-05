@@ -199,7 +199,7 @@ is best-effort, and a failure is not a reason to stop:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    surface-chat-tab --name "$MNGR_AGENT_NAME"
+    surface-chat-tab --agent-id "$MNGR_AGENT_ID"
 ```
 
 Open a tracking ticket (note the id it prints), then `tk start <ticket-id>` as
@@ -463,9 +463,13 @@ If a stray system-interface preview is registered (an older pass may have left
 one; `update-system-interface` refuses its next pass while one is):
 
 ```bash
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
 python3 system/scripts/layout.py close si-preview
+python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
 ```
+
+The close goes first: an op addressed to an app the registry no longer holds is refused,
+so once `unpreview` has deregistered the row there is nothing left to close (the tab is
+pruned on its own when the app leaves the inventory).
 
 **The rest is only for a successful apply (exit 0).** After a rollback the
 worker's branch, worktree and report are the retry path: keep them until the

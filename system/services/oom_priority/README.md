@@ -14,7 +14,9 @@ into one of a few bands.
 
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
-  services (`SERVICE_BANDS`, 5-70, ending with the browser coordinator) <
+  services and apps (`SERVICE_BANDS`, 5-75, keyed by service name and by the
+  `priority` an app's manifest declares; the chat app sits at 25, just above
+  the shell) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
   (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
   at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
@@ -29,6 +31,9 @@ into one of a few bands.
   inherited default of 0 and is additionally shielded by earlyoom `--avoid`. The
   service order is a best-effort steer, not a hard guarantee -- see "Protection
   is soft" below.
+- **`app_registry`** -- the narrow, stdlib-only reader of the app registry the
+  backstop listener uses: each registered app's `priority` band name, by the
+  supervisord program that runs it.
 - **`agent_identity`** -- classifies an agent from its label (primary, chat, or
   worker), used by the launch wrapper to pick the band. An agent whose record
   can't be read matches none of these and is tagged least-protected (worker band).
@@ -43,8 +48,8 @@ without inspecting the process tree:
 | What | When | Band | Set by |
 |---|---|---|---|
 | never-kill infra (sshd, supervisord, earlyoom, tini, tmux) | (inherited) | protected (0) | nothing -- 0 is the default, plus earlyoom `--avoid` |
-| a built-in supervisord service | launch | its `SERVICE_BANDS` value | `system/services/oom_priority/bin/oom_tag_service.py <service>` (command prefix) |
-| a user-created supervisord service | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
+| a built-in supervisord service or app | launch | its `SERVICE_BANDS` value (an app's is the `priority` its manifest declares) | `system/services/oom_priority/bin/oom_tag_service.py <service>` (command prefix) |
+| a user-created supervisord service or app | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
 | an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
 | the browser coordinator | launch | its `SERVICE_BANDS` value (70, the most expendable built-in service) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
@@ -64,10 +69,21 @@ A **backstop event listener** (`system/services/oom_priority/bin/oom_tag_backsto
 service whose command omits the wrapper entirely, which would otherwise keep the
 inherited `oom_score_adj` of 0 and sit as protected as sshd/supervisord. On
 every `PROCESS_STATE_RUNNING` event (boot and each restart) it resolves the
-program's expected band by *program name* (`bands.supervisord_program_band`: a
-built-in's own band; `USER_SERVICE` for anything unrecognized) and raises the
+program's expected band (`bands.supervisord_program_band`) and raises the
 process -- plus any children it already spawned, found via a
-`/proc/<pid>/task/*/children` walk -- up to that band. It only ever raises,
+`/proc/<pid>/task/*/children` walk -- up to that band. The resolution reads
+the app registry first: an app's manifest (`system/apps/<package>/app.toml`)
+declares a `priority`, which `forward_port.py` copies onto the app's
+`data/.state/apps.toml` row together with its `program`, and the listener
+re-reads the registry (`oom_priority.app_registry`, stdlib-only) on every
+event and maps the program to that row's `priority`, a `SERVICE_BANDS` key
+(`user`, the default every scaffolded app declares, is `USER_SERVICE`; so is
+a band name that does not exist). A program with no row -- the services that
+never register, such as `share-gateway` or `cron` -- resolves by *program
+name*: a built-in's own `SERVICE_BANDS` key, or `_NON_SERVICE_PROGRAM_BANDS`
+for the infrastructure and the one-shots, and `USER_SERVICE` for anything
+unrecognized. The `oom_tag_service.py <key>` prefix keeps passing band keys
+by name and is unchanged. It only ever raises,
 never lowers, so a process already tagged higher (a Chromium process the
 browser sweep has remapped into its band) and the `PROTECTED` programs
 (earlyoom, the listener itself, and the one-shots env-converge and
@@ -77,7 +93,9 @@ missing from either band map is not merely left alone but actively pushed to
 `oom_tag_service_test.test_every_built_in_supervisord_program_has_an_explicit_band`
 requires every program in `supervisord.conf` to name its band outright, unless
 it declares itself user-created by passing the `user` key (for those the
-fallback is the intended band, and the two mechanisms agree on it). The
+fallback is the intended band, and the two mechanisms agree on it), and
+`system/test_app_manifests.py` requires every built-in app manifest's
+`priority` to be a `SERVICE_BANDS` key other than `user`. The
 prefix remains the primary mechanism because it tags at spawn:
 the RUNNING event fires only after `startsecs` (~1s), leaving a short window
 where an unwrapped service runs untagged.

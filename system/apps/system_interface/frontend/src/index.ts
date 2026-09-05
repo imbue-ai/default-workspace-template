@@ -1,22 +1,9 @@
-import { llmApi } from "./llm-api";
-import type { LlmApi } from "./llm-api";
-import { runHook } from "./hooks";
-import { getPluginRouteMithrilComponents } from "./plugin-routes";
 import { getBasePath } from "./base-path";
-import { initAgentManager } from "./models/AgentManager";
-import { initShellPermissionResolutions } from "./views/permission-card";
+import { initInventory } from "./models/Inventory";
+import { initEmbedderRelay } from "./relay";
 import m from "mithril";
 import "./style.css";
 import { App } from "./views/App";
-
-declare global {
-  interface Window {
-    $llm: LlmApi;
-  }
-  var $llm: LlmApi;
-}
-
-window.$llm = llmApi;
 
 function getEffectiveRoutePrefix(): string {
   // When served through the desktop client proxy, the <base> tag contains
@@ -33,20 +20,16 @@ function getEffectiveRoutePrefix(): string {
   return getBasePath();
 }
 
-async function bootstrap(): Promise<void> {
+function bootstrap(): void {
   m.route.prefix = getEffectiveRoutePrefix();
-  initAgentManager();
-  // Flip in-chat permission cards as soon as the Minds app reports a verdict.
-  initShellPermissionResolutions();
+  initInventory();
+  // The child-frame boundary: the minds relay for the chat pages' permission cards, and the
+  // shell side of the app contract.
+  initEmbedderRelay();
   const rootElement = document.getElementById("app");
   if (rootElement) {
-    const pluginRoutes = getPluginRouteMithrilComponents();
     const appResolver: m.RouteResolver = { render: () => m(App) };
-    m.route(rootElement, "/", {
-      "/": appResolver,
-      ...pluginRoutes,
-    });
-    await runHook("ready");
+    m.route(rootElement, "/", { "/": appResolver });
   }
 }
 

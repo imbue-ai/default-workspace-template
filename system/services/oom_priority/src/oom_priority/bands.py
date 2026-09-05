@@ -22,6 +22,7 @@ This module is stdlib-only (see ``paths``): it is imported by the agent-tagging
 and subprocess-tagging Claude hooks, which run under a plain ``python3``.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -173,17 +174,19 @@ def chat_agent_oom_score_adj(
 
 
 # Supervisord service bands, keyed by the service key passed to
-# ``system/services/oom_priority/bin/oom_tag_service.py``. Every value sits strictly between PROTECTED (0)
-# and USER_AGENT (300), so a service is *less* expendable than any agent (an
-# agent's work revives on the next message, so it is shed first) but still
-# steerable relative to the other services.
+# ``system/services/oom_priority/bin/oom_tag_service.py`` and by the ``priority``
+# an app's manifest (``system/apps/<package>/app.toml``) declares. Every value
+# sits strictly between PROTECTED (0) and USER_AGENT (300), so a service is
+# *less* expendable than any agent (an agent's work revives on the next
+# message, so it is shed first) but still steerable relative to the other
+# services.
 #
 # The services are ordered from least- to most-expendable by how much losing one
 # hurts: the two authority paths into the workspace (owner-exec, then the
-# terminal) come first, then the UI, then the sharing stack, then the
-# runtime-state sync (github-sync, opt-in) and the host backup, then the job
-# scheduler and the app-watcher, then the browser stack (its X display, then
-# the coordinator), and last the file viewer.
+# terminal) come first, then the UI and the chat app, then the sharing stack,
+# then the runtime-state sync (github-sync, opt-in) and the host backup, then
+# the job scheduler and the app-watcher, then the browser stack (its X display,
+# then the coordinator), and last the file viewer.
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
@@ -215,6 +218,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "owner-exec": 5,
     "terminal": 10,
     "system_interface": 20,
+    # The chat app (the agent harness UI, once it runs as its own program): just
+    # above the shell it is embedded in, and below every other service, since
+    # a shed chat app costs every open chat its page until it restarts.
+    "chat": 25,
     # The sharing stack (gateway + caddy + frpc children inherit its band): a
     # shed share tunnel drops live viewers, so it sits just above the UI.
     "share-gateway": 35,
@@ -245,9 +252,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
-    # The file viewer (dufs): a tiny static file server holding almost no
-    # memory, restarted by supervisord if shed, so it is the most expendable
-    # built-in service of all.
+    # The file viewer: the files-app sidecar (a small Python HTTP server for
+    # the instances API) and dufs, the tiny static file server it runs as its
+    # child. Together they hold little memory and supervisord restarts them if
+    # shed, so this is the most expendable built-in service of all.
     "files": 75,
     "user": USER_SERVICE,
 }
@@ -325,15 +333,23 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
 }
 
 
-def supervisord_program_band(program_name: str) -> int:
-    """The band a supervisord program is expected to occupy, by program name.
+def supervisord_program_band(program_name: str, priority_by_program: Mapping[str, str]) -> int:
+    """The band a supervisord program is expected to occupy.
 
-    A built-in service's program name doubles as its SERVICE_BANDS key; the
-    handful of programs outside that map have explicit expected bands above.
-    Anything unrecognized is a user-created service and falls back to
-    ``USER_SERVICE``: an unknown process must default to being expendable, never
-    to the protected default it would otherwise inherit.
+    ``priority_by_program`` is the app registry's view (``app_registry``): the
+    ``priority`` band name each registered app's manifest declares, keyed by the
+    supervisord program that runs it. A program with a row resolves through that
+    name (``user``, or a band name that does not exist, is the user-service
+    band). A program without one falls back to the tables: a built-in service's
+    program name doubles as its SERVICE_BANDS key, and the handful of programs
+    outside that map have explicit expected bands above. Anything else is a
+    user-created service and lands at ``USER_SERVICE``: an unknown process must
+    default to being expendable, never to the protected default it would
+    otherwise inherit.
     """
+    priority = priority_by_program.get(program_name)
+    if priority is not None:
+        return SERVICE_BANDS.get(priority, USER_SERVICE)
     if program_name in SERVICE_BANDS:
         return SERVICE_BANDS[program_name]
     return _NON_SERVICE_PROGRAM_BANDS.get(program_name, USER_SERVICE)

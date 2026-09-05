@@ -34,7 +34,7 @@ The daemon address is discovered from ``data/.state/apps.toml`` (the same
 registry ``layout.py`` reads), overridable via ``MINDS_BROWSER_SERVICE_URL``,
 falling back to ``http://127.0.0.1:8081``. Browser panes are pulled into the
 agent's view via ``system/scripts/layout.py`` (anchored at ``$BROWSER_FLEET_ANCHOR`` if
-set -- a parent passes its chat ref to sub-agents -- else the caller's own chat).
+set -- a parent passes its chat address to sub-agents -- else the caller's own chat).
 """
 
 import argparse
@@ -184,21 +184,21 @@ def _layout(*args: str, quiet: bool = False, no_wait: bool = False) -> bool:
     return result.returncode == 0
 
 
-def _resolve_active_layout() -> tuple[bool, str | None]:
-    """Resolve the layout to surface a browser pane into, via ``layout.py context``.
+def _resolve_active_view() -> tuple[bool, str | None]:
+    """Resolve the view to surface a browser pane into, via ``layout.py context``.
 
-    ``split`` requires a ``--layout`` (mutating ops only apply on clients that have that
-    named layout active), so the pane-pull must name the layout the human is actually
-    viewing. ``context`` is a read-only query over the client-activity log.
+    ``split`` needs a ``--view`` (mutating ops only apply on clients that have that view
+    active), so the pane-pull must name the view the human is actually looking at.
+    ``context`` is a read-only query over the client-activity log.
 
-    Returns ``(reachable, layout)``:
-    * ``reachable`` is False when the layout server can't be reached at all -- an isolated
+    Returns ``(reachable, view)``:
+    * ``reachable`` is False when the shell can't be reached at all -- an isolated
       ``launch-task`` sub-agent in its own container, or no daemon. The caller skips
       silently: there is no screen of ours to surface into.
-    * When reachable, ``layout`` is the active layout to target -- the current layout of
-      the connected client that most recently messaged THIS agent (matched by name, since
-      the context summary carries ``agent_name`` not id), else the most-recently-active
-      connected client's layout, else None (reachable but nothing to place it on).
+    * When reachable, ``view`` is the view to target -- the active view of the connected
+      client that most recently messaged THIS agent (its chat instance is addressed by the
+      agent id), else the most-recently-active connected client's view, else None
+      (reachable but nothing to place it on).
     """
     root = _repo_root()
     script = root / "system" / "scripts" / "layout.py"
@@ -213,19 +213,20 @@ def _resolve_active_layout() -> tuple[bool, str | None]:
         clients = json.loads(result.stdout or "[]")
     except json.JSONDecodeError:
         return (True, None)
-    # ``context`` lists clients most-recently-active first; keep connected ones reporting a layout.
+    # ``context`` lists clients most-recently-active first; keep connected ones reporting a view.
     connected = [
         client
         for client in clients
-        if isinstance(client, dict) and client.get("is_connected") and client.get("current_layout")
+        if isinstance(client, dict) and client.get("is_connected") and client.get("active_view")
     ]
-    my_name = os.environ.get("MNGR_AGENT_NAME")
-    if my_name:
+    my_id = os.environ.get("MNGR_AGENT_ID")
+    if my_id:
+        my_address = f"app:chat?instance={my_id}"
         for client in connected:
-            if any(msg.get("agent_name") == my_name for msg in client.get("recent_messages", [])):
-                return (True, str(client["current_layout"]))
+            if any(msg.get("address") == my_address for msg in client.get("recent_messages", [])):
+                return (True, str(client["active_view"]))
     if connected:
-        return (True, str(connected[0]["current_layout"]))
+        return (True, str(connected[0]["active_view"]))
     return (True, None)
 
 
@@ -233,32 +234,31 @@ def _pull_in_pane(browser_name: str) -> None:
     """Surface browser ``browser_name`` as its OWN pane beside the requesting agent's chat,
     optimistically.
 
-    Resolves the layout the requester's client is viewing via ``layout.py context`` (see
-    ``_resolve_active_layout``). If the layout server is unreachable -- an isolated
-    ``launch-task`` sub-agent in its own container -- we **skip silently**: there is no
-    screen of ours to surface into. Otherwise we split the browser into that layout next
-    to the agent's own chat (``--relative-to self``), or the parent's chat when a parent
-    handed a sub-agent its ref via ``$BROWSER_FLEET_ANCHOR``. ``--new-group`` makes each
-    browser its own pane; splitting an already-open one just focuses it, so this is safe
-    to call repeatedly.
+    Resolves the view the requester's client is looking at via ``layout.py context`` (see
+    ``_resolve_active_view``). If the shell is unreachable -- an isolated ``launch-task``
+    sub-agent in its own container -- we **skip silently**: there is no screen of ours to
+    surface into. Otherwise we split the browser into that view next to the agent's own
+    chat (``--relative-to self``), or the parent's chat when a parent handed a sub-agent
+    its address via ``$BROWSER_FLEET_ANCHOR``. ``--new-group`` makes each browser its own
+    pane; splitting an already-open one just focuses it, so this is safe to call repeatedly.
 
-    If the split can't land (no target layout, or the human isn't currently viewing it),
+    If the split can't land (no target view, or the human isn't currently viewing it),
     we fall back to one neutral line offering the manual "+"-menu route -- the browser is
     up and fully drivable from the CLI either way; the pane is only a live-view convenience.
     """
-    reachable, layout = _resolve_active_layout()
+    reachable, view = _resolve_active_view()
     if not reachable:
-        return  # isolated sub-agent / no layout server -- nothing of ours to surface into
-    ref = f"service:browser?session={browser_name}"
-    if layout is not None:
+        return
+    address = f"app:browser?instance={browser_name}"
+    if view is not None:
         # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.
         anchor = os.environ.get(_ENV_ANCHOR)
         if anchor and _layout(
-            "split", ref, "--relative-to", anchor, "--direction", "right", "--new-group", "--layout", layout, quiet=True, no_wait=True
+            "split", address, "--relative-to", anchor, "--direction", "right", "--new-group", "--view", view, quiet=True, no_wait=True
         ):
             return
         if _layout(
-            "split", ref, "--relative-to", "self", "--direction", "right", "--new-group", "--layout", layout, quiet=True, no_wait=True
+            "split", address, "--relative-to", "self", "--direction", "right", "--new-group", "--view", view, quiet=True, no_wait=True
         ):
             return
     # Reachable but couldn't place the pane. Not an error -- offer the manual route

@@ -174,7 +174,7 @@ That is all -- no new agent template is required. `system/libs/automations/run_a
 <skill>` creates a persistent singleton agent (labelled `automation=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh; the agent surfaces its own chat tab
-right after its first message via `system/scripts/layout.py open --layout <desktop|mobile>`
+right after its first message via `system/scripts/layout.py open "app:chat?instance=$MNGR_AGENT_ID"`
 (the same way web apps are surfaced). Pass `--template <t>` only when you want a custom agent
 template; otherwise the generic `automation` template is used.
 

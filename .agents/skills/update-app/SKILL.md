@@ -142,6 +142,23 @@ process restarts:
   supervisorctl status <name>   # confirm it came back RUNNING
   ```
 
+- **Dependency or entry-point change to an app** (its `pyproject.toml`):
+  an app with an `app.toml` manifest runs from its own uv tool environment,
+  an editable install of `system/apps/<package>/` that picks up source
+  edits on its own but not a new dependency or console script. Reinstall
+  the tool, then restart (an app scaffolded before manifests existed has
+  no `app.toml` and still runs from the root venv: for it, only the
+  `uv sync --all-packages` below is needed):
+
+  ```bash
+  uv tool install -e system/apps/<package> --reinstall
+  uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
+  supervisorctl restart <name>
+  ```
+
+  (Background services under `system/services/` run from the root venv
+  instead: `uv sync --all-packages`, then restart.)
+
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new
   markup. Skip straight to the refresh.
@@ -172,10 +189,10 @@ python3 system/scripts/layout.py refresh <name>
 ```
 
 `refresh` reloads every iframe for the service. If no tab is open yet and
-the change is ready to show, surface it instead by opening it on each named
-layout -- `open` requires `--layout` and only applies on clients with that
-layout active, so the layout the user is not on fails fast and harmlessly:
-`python3 system/scripts/layout.py open <name>`.
+the change is ready to show, surface it instead with
+`python3 system/scripts/layout.py open <name>`: with no `--view` it lands in
+the view the user is looking at, and `--view <name>` targets one view (it
+fails fast and harmlessly when no client has that view active).
 For any other tab manipulation, see `manage-layout`. Background daemons have
 no tab -- skip the tab refresh, but not the rest of this step.
 

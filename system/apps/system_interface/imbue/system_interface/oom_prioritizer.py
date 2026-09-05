@@ -8,10 +8,12 @@ the worker a live chat just spawned.
 
 Signals, and where each comes from:
 
-- **open** / **visible** -- the chat's tab presence in the workspace UI, reported
-  by the frontend through ``/api/activity``,
-- **messaged** -- a message sent through the UI, also from ``/api/activity``;
-  drives a recency ranking across all chats, newest-first,
+- **open** / **visible** -- the chat page's presence in each client, reported by
+  the page itself through the chat app's presence route and aggregated by the
+  ``PresenceTracker`` (open while any client's report is unexpired, visible
+  while any client's last report says so),
+- **messaged** -- a message sent through the chat app's send route; drives a
+  recency ranking across all chats, newest-first,
 - **running** -- the chat's mngr lifecycle state, pushed in from the observe
   stream via ``record_running_agents``. Entering a running state counts as
   engagement (it is the only evidence of a message sent outside the UI -- by
@@ -31,14 +33,14 @@ switching to, or messaging one of them never moves its score. A chat with no liv
 process (dormant, revives on its next message) is simply skipped until its
 process exists.
 
-Re-tagging is event-driven plus a slow sweep. The events (``/api/activity``
-reports and lifecycle changes) cover everything that *raises* a chat's
+Re-tagging is event-driven plus a slow sweep. The events (presence reports,
+sends, and lifecycle changes) cover everything that *raises* a chat's
 protection; the sweep exists because staleness is the one signal that changes
 with no event to announce it -- a chat crosses a ramp threshold simply by sitting
 there. The messaged-revive path is race-free without the sweep: the send blocks
 until the revived process is ready (and the launch wrapper registers its pid
-before that), and the frontend reports activity only after the send returns, so
-``reapply``'s pid lookup finds the live process.
+before that), and the send route records the message only after the send
+returns, so ``reapply``'s pid lookup finds the live process.
 
 The band arithmetic lives in ``oom_priority.bands`` (the stdlib-only, testable
 policy); this engine only holds the activity state and drives the writes. All
@@ -53,6 +55,9 @@ from collections.abc import Iterable
 from typing import Final
 
 from oom_priority import bands
+
+from imbue.system_interface.presence import PresenceState
+from imbue.system_interface.presence import PresenceTracker
 
 # How often the sweep re-evaluates staleness. The ramp is measured in hours, so
 # minute-granularity is ample; each pass is a handful of stats and ``/proc``
@@ -72,6 +77,8 @@ class ChatOomPrioritizer:
     engagement clock so a revived chat is never treated as stale. ``clock``
     supplies wall-clock epoch seconds -- absolute, not monotonic, because idle
     time is compared against filesystem mtimes and seeded log timestamps.
+    ``presence`` holds the per-client presence reports the open and visible
+    signals are read from; one on the same clock is built when none is given.
     """
 
     def __init__(
@@ -83,6 +90,7 @@ class ChatOomPrioritizer:
         resolve_process_started_at: Callable[[str], float | None],
         clock: Callable[[], float] = time.time,
         sweep_interval_seconds: float = SWEEP_INTERVAL_SECONDS,
+        presence: PresenceTracker | None = None,
     ) -> None:
         self._list_chat_agent_ids = list_chat_agent_ids
         self._resolve_pid = resolve_pid
@@ -91,8 +99,7 @@ class ChatOomPrioritizer:
         self._clock = clock
         self._sweep_interval_seconds = sweep_interval_seconds
         self._lock = threading.Lock()
-        self._open: set[str] = set()
-        self._visible: set[str] = set()
+        self._presence = presence if presence is not None else PresenceTracker(clock=clock)
         # agent_id -> time of its most recent message, for recency ranking.
         self._last_message_at: dict[str, float] = {}
         # agent_id -> time of its most recent engagement of *any* kind (messaged,
@@ -137,37 +144,36 @@ class ChatOomPrioritizer:
             for agent_id, messaged_at in last_message_at_by_agent_id.items():
                 self._stamp_message_locked(agent_id, messaged_at)
 
-    def record_activity(
-        self,
-        *,
-        open_ids: Iterable[str],
-        visible_ids: Iterable[str],
-        messaged_id: str | None = None,
-    ) -> None:
-        """Apply a frontend activity report, then re-tag every chat.
+    def record_presence(self, agent_id: str, client_id: str, state: PresenceState) -> None:
+        """Apply one client's presence report about one chat, then re-tag every chat.
 
-        ``open_ids`` / ``visible_ids`` replace the tracked presence sets wholesale
-        (idempotent and self-healing: a later report corrects any missed one).
-        ``messaged_id`` -- when set -- stamps that chat as just-messaged so it
-        ranks newest. The ids may include non-chat agents (the frontend reports
-        every tab); they are ignored by ``reapply``, which only iterates the
-        managed chats.
+        The report replaces that client's standing one (idempotent and self-healing:
+        the page's heartbeat corrects any missed one). Non-chat ids are accepted and
+        ignored by ``reapply``, which only iterates the managed chats.
 
         Engagement is stamped on the *transition* into visibility, not for
         everything currently visible: a tab left visible and untouched is not
-        continuing engagement, and re-stamping it every report would make it
+        continuing engagement, and re-stamping it every heartbeat would make it
         permanently fresh.
         """
+        was_visible = self._presence.is_visible(agent_id)
+        self._presence.record(agent_id, client_id, state)
+        if not was_visible and self._presence.is_visible(agent_id):
+            now = self._clock()
+            with self._lock:
+                self._stamp_engagement_locked(agent_id, now)
+        self.reapply()
+
+    def record_message(self, agent_id: str) -> None:
+        """Stamp a chat as just-messaged so it ranks newest, then re-tag every chat."""
         now = self._clock()
         with self._lock:
-            new_visible = set(visible_ids)
-            for agent_id in new_visible - self._visible:
-                self._stamp_engagement_locked(agent_id, now)
-            self._open = set(open_ids)
-            self._visible = new_visible
-            if messaged_id is not None:
-                self._stamp_message_locked(messaged_id, now)
+            self._stamp_message_locked(agent_id, now)
         self.reapply()
+
+    def forget_agent(self, agent_id: str) -> None:
+        """Drop a destroyed chat's presence so its reports never count again."""
+        self._presence.forget_agent(agent_id)
 
     def record_running_agents(self, running_ids: Iterable[str]) -> None:
         """Record which agents are currently mid-turn, then re-tag if it changed.
@@ -203,13 +209,13 @@ class ChatOomPrioritizer:
         skipped. Idempotent: concurrent reapplies converge on the same result.
         """
         with self._lock:
-            open_ids = set(self._open)
-            visible_ids = set(self._visible)
             running_ids = set(self._running)
             last_message_at = dict(self._last_message_at)
             last_engaged_at = dict(self._last_engaged_at)
 
         now = self._clock()
+        open_ids = self._presence.open_agent_ids()
+        visible_ids = self._presence.visible_agent_ids()
         chat_ids = list(self._list_chat_agent_ids())
 
         # Rank the chats that have been messaged, newest first (rank 0 = most
@@ -227,9 +233,8 @@ class ChatOomPrioritizer:
             pid = self._resolve_pid(chat_id)
             if pid is None:
                 continue
-            # ``visible`` implies ``open`` even if a report omitted it from the open set.
             is_visible = chat_id in visible_ids
-            is_open = is_visible or chat_id in open_ids
+            is_open = chat_id in open_ids
             adj = bands.chat_agent_oom_score_adj(
                 is_open=is_open,
                 is_visible=is_visible,

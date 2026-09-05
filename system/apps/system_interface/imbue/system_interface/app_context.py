@@ -19,7 +19,7 @@ from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.registry import build_watcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
-from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -56,7 +56,10 @@ class SystemInterfaceState(MutableModel):
     exclude_filters: tuple[str, ...]
     agent_manager: AgentManager
     event_queues: AgentEventQueues
-    layout_mutex: LayoutMutex
+    # The shell's own collaborators (the inventory, the stores, the activity log). Held here
+    # because the two documents share one process and one Flask ``config`` slot until phase
+    # 10 of the workspace app model splits them; ``ShellState`` is what the shell routes read.
+    shell: ShellState
     claude_auth_service: ClaudeAuthService
     auth_flows: AuthFlowService
     http_client: httpx.Client
@@ -80,11 +83,12 @@ class SystemInterfaceState(MutableModel):
 
     @property
     def broadcaster(self) -> WebSocketBroadcaster:
-        """The agent manager's broadcaster, kept paired with the manager itself.
+        """The one WebSocket broadcaster of the process, as the agent manager holds it.
 
-        Derived from ``agent_manager`` (rather than stored separately) so that
-        seeding a test manager via ``state.agent_manager = ...`` transparently
-        repoints the broadcaster too -- the two must never diverge.
+        The shell (``ShellState`` and its inventory) is built over the same object and keeps
+        its own reference, so the manager and the shell are always constructed together
+        (``main.build_production_state``, ``testing.build_test_state``) and never swapped
+        apart afterwards.
         """
         return self.agent_manager.broadcaster
 
@@ -189,6 +193,7 @@ class SystemInterfaceState(MutableModel):
         self.broadcaster.shutdown()
         self.agent_manager.stop()
         self.stop_all_watchers()
+        self.shell.stop()
         try:
             self.http_client.close()
         except (httpx.HTTPError, RuntimeError) as e:

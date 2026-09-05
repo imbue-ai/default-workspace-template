@@ -18,26 +18,27 @@ recovers on its own once the agent resolves, with no reload and no tab switch.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
-import re
 import threading
 import urllib.request
 from collections.abc import Callable
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
-from imbue.system_interface.accounts import commit_account
-from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -127,6 +128,20 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
         WebSocketBroadcaster.broadcast_proto_agent_completed(self, agent_id=agent_id, success=success, error=error)
 
 
+class _ReplayHidingAgentManager(AgentManager):
+    """Hides in-flight creations from a fresh WebSocket client's connect-time replay.
+
+    The chat page is its own document and connects to the agents WebSocket after its tab
+    opened, so the shell's replay of in-flight proto
+    agents would cover the creation window with the build log on its own. These tests model
+    the window the replay cannot cover -- a page whose socket only comes up after the create
+    finished, or that fell a whole creation window behind -- so the replay is what they hide.
+    """
+
+    def get_proto_agents(self) -> list[dict[str, Any]]:
+        return []
+
+
 @contextlib.contextmanager
 def _serving_workspace(
     tmp_path: Path,
@@ -167,7 +182,7 @@ def _serving_workspace(
     account_id, _ = mint_account_dir()
     commit_account(account_id, "anthropic", "Anthropic")
 
-    manager = AgentManager.build(
+    manager = _ReplayHidingAgentManager.build(
         broadcaster,
         messenger=RecordingMngrMessenger(),
         mngr_binary=str(fake_mngr),
@@ -212,27 +227,31 @@ def _is_serving(base_url: str) -> bool:
     return True
 
 
-def _create_chat_through_ui(page: Page, base_url: str) -> None:
-    """Drive the New Tab launcher's Chat tile, exactly as a user would.
+def _shown_chat(page: Page) -> Page:
+    """The chat page under test, which the browser shows as its own document."""
+    return page
 
-    The "+" no longer drops a menu down: it opens a full-page launcher tab whose
-    "Open new" row starts a chat. There is no naming dialog: the tile creates
-    the agent directly under a machine-minted name and files a friendly
-    "Chat N" display title on its own.
+
+def _create_chat_and_open_its_page(page: Page, base_url: str) -> str:
+    """Create a chat through the chat app's API and open its page directly; returns its display name.
+
+    The shell docks a chat only once the chat app lists it, and these tests hide the
+    in-flight creation from that list on purpose, so the page is opened the way the
+    shell's iframe would load it -- by its own URL -- rather than through the New Tab
+    page. The create mints the first free "Chat N" display name on its own.
     """
-    page.goto(base_url)
-    page.wait_for_selector(".dockview-add-tab-button", timeout=_RECOVERY_TIMEOUT_MS)
-    page.locator(".dockview-add-tab-button").first.click()
-    page.wait_for_selector(".new-tab-launcher", timeout=_RECOVERY_TIMEOUT_MS)
-    # Anchored, and it has to stay anchored: ``has_text`` is a case-insensitive SUBSTRING match,
-    # so an unanchored "Chat" would also match whatever the provider picker beside the tile says.
-    # Anchoring on the label's exact text is also what makes this break loudly when the label
-    # changes -- it once cost a suite three 30-second action timeouts, which read as the whole
-    # run being slow rather than as a stale selector.
-    page.locator(".new-tab-launcher-tile:visible", has_text=re.compile(r"^Chat$")).click()
+    request = urllib.request.Request(
+        f"{base_url}/api/agents/create-chat",
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        created = json.loads(response.read())
+    page.goto(f"{base_url}/{created['agent_id']}")
+    return str(created["display_name"])
 
 
-@pytest.mark.tmux
 @pytest.mark.timeout(120, func_only=False)
 def test_not_found_panel_recovers_when_the_agent_resolves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
@@ -245,27 +264,18 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
     once ``agents_updated`` names the agent.
     """
     with _serving_workspace(tmp_path, monkeypatch, port=_PORT, release_on_completion=False) as base_url:
-        _create_chat_through_ui(page, base_url)
+        # The create minted the first free "Chat N" display name the moment it returned; the
+        # machine petname the agent actually runs under was never asked for.
+        assert _create_chat_and_open_its_page(page, base_url) == "Chat 1"
 
-        # The tile filed the first free "Chat N" the moment the create
-        # returned, so the new tab wears the friendly display name -- the
-        # machine petname the agent actually runs under never shows on the
-        # strip and was never asked for.
-        expect(page.locator(".dv-default-tab-content", has_text="Chat 1").first).to_be_visible(
-            timeout=_RECOVERY_TIMEOUT_MS
-        )
-
-        not_found = page.locator(".message-list-not-found")
+        not_found = _shown_chat(page).locator(".message-list-not-found")
         expect(not_found).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
         expect(not_found).to_have_count(0, timeout=_RECOVERY_TIMEOUT_MS)
         # Recovered into the transcript view -- empty, since the fresh agent has
         # no messages yet, but a real transcript rather than the error state.
-        # Scoped to `:visible` because dockview keeps the inactive primary chat
-        # mounted at zero size, and it carries an empty transcript too.
-        expect(page.locator(".message-list-empty:visible")).to_have_count(1, timeout=_RECOVERY_TIMEOUT_MS)
+        expect(_shown_chat(page).locator(".message-list-empty")).to_have_count(1, timeout=_RECOVERY_TIMEOUT_MS)
 
 
-@pytest.mark.tmux
 @pytest.mark.timeout(120, func_only=False)
 def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
@@ -279,15 +289,14 @@ def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
     recover from the agent resolving.
     """
     with _serving_workspace(tmp_path, monkeypatch, port=_PORT + 1, release_on_completion=True) as base_url:
-        _create_chat_through_ui(page, base_url)
+        _create_chat_and_open_its_page(page, base_url)
 
-        not_found = page.locator(".message-list-not-found")
+        not_found = _shown_chat(page).locator(".message-list-not-found")
         expect(not_found).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
         expect(not_found).to_have_count(0, timeout=_RECOVERY_TIMEOUT_MS)
-        expect(page.locator(".message-list-empty:visible")).to_have_count(1, timeout=_RECOVERY_TIMEOUT_MS)
+        expect(_shown_chat(page).locator(".message-list-empty")).to_have_count(1, timeout=_RECOVERY_TIMEOUT_MS)
 
 
-@pytest.mark.tmux
 @pytest.mark.timeout(120, func_only=False)
 def test_not_found_panel_does_not_poll_the_screen_capture_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
@@ -307,9 +316,9 @@ def test_not_found_panel_does_not_poll_the_screen_capture_endpoint(
             lambda request: screen_requests.append(request.url) if "/screen" in request.url else None,
         )
 
-        _create_chat_through_ui(page, base_url)
-        expect(page.locator(".message-list-not-found")).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
-        expect(page.locator(".message-list-not-found")).not_to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
+        _create_chat_and_open_its_page(page, base_url)
+        expect(_shown_chat(page).locator(".message-list-not-found")).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
+        expect(_shown_chat(page).locator(".message-list-not-found")).not_to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
 
         # One capture attempt for the agent, however many times the view redrew.
         assert len(screen_requests) <= 2, f"screen capture was polled {len(screen_requests)} times"

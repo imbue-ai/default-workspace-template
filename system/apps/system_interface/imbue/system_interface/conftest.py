@@ -57,6 +57,13 @@ def _isolate_system_interface_tests(
     that gap.
     """
     monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path_factory.mktemp("minds-accounts") / "accounts"))
+    # The shell's inventory reads the app registry from the working directory otherwise, which
+    # in a workspace is the live one.
+    monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
+    # The chat's posts to the shell (nudges, client activity) go to the workspace's real shell
+    # otherwise; a port nothing listens on refuses them at once. The pipeline and e2e tests
+    # serve a shell of their own and point at it.
+    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")
     if "agent_manager_test.py" in request.node.nodeid:
         return None
     isolated = tmp_path_factory.mktemp("mngr-host-isolation")

@@ -679,23 +679,60 @@ class AppPort(NamedTuple):
 # The forward_port.py call every app's supervisord program block chains before
 # its own start command. Reading the block rather than only the registry file
 # matters: the registry is runtime state that a stopped workspace's app may never
-# have written, while the block is committed.
-_FORWARD_PORT_RE = re.compile(
-    r"forward_port\.py\s+--url\s+(?P<url>http://localhost:(?P<port>\d+))\s+--name\s+(?P<name>[\w-]+)"
-)
+# have written, while the block is committed. The call's flags run to the next
+# ``&&`` or line end.
+_PROGRAM_HEADER_RE = re.compile(r"^\[program:(?P<program>[^\]]+)\]", re.MULTILINE)
+_FORWARD_PORT_CALL_RE = re.compile(r"forward_port\.py(?P<flags>[^\n&]*)")
+_URL_FLAG_RE = re.compile(r"--url\s+(?P<url>http://localhost:(?P<port>\d+))")
+_NAME_FLAG_RE = re.compile(r"--name\s+(?P<name>[\w-]+)")
+
+
+def _forward_port_calls_in(block: str, program: str | None) -> list[AppPort]:
+    ports: list[AppPort] = []
+    for call in _FORWARD_PORT_CALL_RE.finditer(block):
+        flags = call.group("flags")
+        url_match = _URL_FLAG_RE.search(flags)
+        name_match = _NAME_FLAG_RE.search(flags)
+        name = name_match.group("name") if name_match is not None else program
+        if url_match is None or name is None:
+            continue
+        # A program that registers two manifests at one port (the shell registers the
+        # chat app's beside its own) is one row here; the registry scan names them both.
+        if any(
+            port.name == name and port.port == int(url_match.group("port"))
+            for port in ports
+        ):
+            continue
+        ports.append(
+            AppPort(
+                name=name,
+                port=int(url_match.group("port")),
+                url=url_match.group("url"),
+                found_in="supervisord.conf",
+            )
+        )
+    return ports
 
 
 def parse_supervisord_ports(text: str) -> list[AppPort]:
-    """Extract each app's name and port from ``forward_port.py`` calls in a supervisord config."""
-    return [
-        AppPort(
-            name=match.group("name"),
-            port=int(match.group("port")),
-            url=match.group("url"),
-            found_in="supervisord.conf",
+    """Extract each app's name and port from ``forward_port.py`` calls in a supervisord config.
+
+    A call names its app with ``--name``, or registers through the app's manifest
+    (``--manifest system/apps/<package>/app.toml``), in which case the name is the
+    enclosing ``[program:<name>]``: an app's supervisord program is its registered
+    name (the build-app scaffold writes the block that way, and every built-in
+    matches), and a program name is exactly the wiring a collision is about.
+    """
+    headers = list(_PROGRAM_HEADER_RE.finditer(text))
+    ports = _forward_port_calls_in(
+        text[: headers[0].start()] if headers else text, None
+    )
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        ports.extend(
+            _forward_port_calls_in(text[header.start() : end], header.group("program"))
         )
-        for match in _FORWARD_PORT_RE.finditer(text)
-    ]
+    return ports
 
 
 # The registry's array-of-tables key: ``applications`` pre-rename, ``apps``
@@ -710,25 +747,36 @@ def parse_apps_registry(toml_text: str) -> list[AppPort]:
     Accepts both the current ``[[apps]]`` shape and the pre-rename
     ``[[applications]]`` one. An entry whose URL carries no parseable port is
     skipped -- it is a registration the migration cannot act on mechanically, and
-    the supervisord scan is the authoritative source anyway.
+    the supervisord scan is the authoritative source anyway. A row whose
+    ``instances_url`` names a second port (an app serving its instances API
+    beside a wrapped server, such as the terminal's 7682) reports that port too:
+    it is listening just as surely, and only the registry knows about it.
     """
     parsed = tomllib.loads(toml_text)
     ports: list[AppPort] = []
+    seen: set[tuple[str, int]] = set()
     for key in _REGISTRY_KEYS:
         for entry in parsed.get(key, []):
             name = entry.get("name")
-            url = entry.get("url", "")
-            match = re.search(r":(\d+)", url)
-            if not name or match is None:
+            if not name:
                 continue
-            ports.append(
-                AppPort(
-                    name=name,
-                    port=int(match.group(1)),
-                    url=url,
-                    found_in=f"registry [[{key}]]",
+            for url_key in ("url", "instances_url"):
+                url = entry.get(url_key, "")
+                match = re.search(r":(\d+)", url)
+                if match is None:
+                    continue
+                port = int(match.group(1))
+                if (name, port) in seen:
+                    continue
+                seen.add((name, port))
+                ports.append(
+                    AppPort(
+                        name=name,
+                        port=port,
+                        url=url,
+                        found_in=f"registry [[{key}]] {url_key}",
+                    )
                 )
-            )
     return ports
 
 

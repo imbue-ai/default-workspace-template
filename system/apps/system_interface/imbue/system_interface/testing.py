@@ -19,25 +19,32 @@ import os
 import socket
 import socketserver
 import sys
+import tempfile
 import threading
 import time
 import xmlrpc.client
 from collections.abc import Generator
 from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
+from typing import Final
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 
 import httpx
 import pexpect
 import simple_websocket
+from app_manifest.registry import registry_path
 from flask import Flask
+from flask import request
 
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
+from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.agent_manager import AgentManager
@@ -45,10 +52,13 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
-from imbue.system_interface.harnesses.signed_in import SignedIn
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
-from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.harnesses.signed_in import SignedIn
+from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -185,6 +195,29 @@ def is_e2e_browser_installed() -> bool:
     return cache_dir.exists() and any(cache_dir.iterdir())
 
 
+def seed_agent_state(
+    manager: AgentManager,
+    agent_id: str,
+    *,
+    name: str,
+    state: str = "RUNNING",
+    labels: Mapping[str, str] | None = None,
+    harness: HarnessType = HarnessType.CLAUDE,
+    activity_state: ActivityState | None = None,
+) -> None:
+    """Insert an ``AgentStateItem`` straight into the manager's tracked map, bypassing discovery."""
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id,
+            name=name,
+            state=state,
+            labels=dict(labels) if labels is not None else {},
+            work_dir=None,
+            harness=harness,
+            activity_state=activity_state,
+        )
+
+
 class RecordingMngrMessenger(MngrMessenger):
     """A `MngrMessenger` that records sends and key-chord presses and never contacts mngr.
 
@@ -214,6 +247,32 @@ class RecordingMngrMessenger(MngrMessenger):
         return self.press_succeeds
 
 
+class RecordingClientActivityShell:
+    """A stand-in shell that records every body posted to ``/api/client-activity``."""
+
+    def __init__(self) -> None:
+        self.received: list[dict[str, Any]] = []
+        self.application = Flask("recording-shell")
+        self.application.add_url_rule(
+            "/api/client-activity", view_func=self._accept, methods=["POST"], endpoint="client_activity"
+        )
+
+    def _accept(self) -> tuple[str, int]:
+        self.received.append(request.get_json())
+        return "", 204
+
+
+# The directories minted for states built without a ``shell_state_directory``; each is removed
+# by its finalizer when the test process exits, so a run leaves nothing under the temp root.
+_MINTED_SHELL_STATE_DIRECTORIES: Final[list[tempfile.TemporaryDirectory[str]]] = []
+
+
+def _fresh_shell_state_directory() -> Path:
+    directory = tempfile.TemporaryDirectory(prefix="si-shell-state-")
+    _MINTED_SHELL_STATE_DIRECTORIES.append(directory)
+    return Path(directory.name)
+
+
 def build_test_state(
     *,
     config: Config | None = None,
@@ -221,23 +280,32 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
+    shell_state_directory: Path | None = None,
+    inventory: AppInventory | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
     Every collaborator left unset gets a cheap default production instance;
     pass one to substitute a fake. The agent manager is built but never started,
-    so no `mngr observe` pipeline is spawned. The state's broadcaster is derived
-    from the agent manager, so injecting `agent_manager` (often built with a fake
-    `MngrMessenger`) repoints the broadcaster too.
+    so no `mngr observe` pipeline is spawned, and the shell state is built but
+    never started, so no registry watch or inventory sweep runs. The state's
+    broadcaster is derived from the agent manager, so injecting `agent_manager`
+    (often built with a fake `MngrMessenger`) repoints the broadcaster too.
 
-    Only the collaborators tests actually override are parameters; the agent
-    filters and the local-service http client (which no test substitutes) are
-    fixed to their production defaults inline.
+    ``shell_state_directory`` is where the shell's state files go (a fresh temp
+    directory by default); ``inventory`` substitutes an inventory built over a
+    fake fetcher.
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
     # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
+    shell = build_shell_state(
+        state_directory=shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory(),
+        registry_path=registry_path(),
+        broadcaster=manager.broadcaster,
+        inventory=inventory,
+    )
     state = SystemInterfaceState(
         # Never the production probe: it shells out to whatever claude/codex/agy/pi this
         # machine happens to have, over the network, from any test that reaches a sign-in
@@ -252,7 +320,7 @@ def build_test_state(
         exclude_filters=(),
         agent_manager=manager,
         event_queues=event_queues,
-        layout_mutex=LayoutMutex(),
+        shell=shell,
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
@@ -351,7 +419,6 @@ class FakePexpectProcess:
 
     def close(self) -> None:
         self.close_calls += 1
-
 
 
 def _find_free_port() -> int:

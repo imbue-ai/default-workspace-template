@@ -293,33 +293,21 @@ def test_evicted_client_receives_shutdown_sentinel() -> None:
     assert stuck_queue.get_nowait() is None
 
 
-def test_broadcast_terminal_session_delivers_typed_event() -> None:
-    """A session switch broadcasts the terminal_id-tagged terminal_session event."""
+def test_broadcast_projects_updated_and_tab_rebound_are_typed_events() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
 
-    broadcaster.broadcast_terminal_session("term-abc", "$3", "terminal-2")
+    broadcaster.broadcast_projects_updated([{"id": "p1"}])
+    broadcaster.broadcast_tab_rebound("client-1", "everything", "tab-0123456789abcdef", "app:terminal?instance=k")
 
-    message = json.loads(_get_message(client_queue))
-    assert message == {
-        "type": "terminal_session",
-        "terminal_id": "term-abc",
-        "session_id": "$3",
-        "session_name": "terminal-2",
+    assert json.loads(_get_message(client_queue)) == {"type": "projects_updated", "projects": [{"id": "p1"}]}
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "tab_rebound",
+        "client_id": "client-1",
+        "view_id": "everything",
+        "tab_id": "tab-0123456789abcdef",
+        "address": "app:terminal?instance=k",
     }
-
-
-def test_broadcast_terminal_session_allows_null_terminal_id_for_rename() -> None:
-    """A rename broadcasts with terminal_id=None so the frontend matches by session_id."""
-    broadcaster = WebSocketBroadcaster()
-    client_queue = broadcaster.register()
-
-    broadcaster.broadcast_terminal_session(None, "$5", "renamed-terminal")
-
-    message = json.loads(_get_message(client_queue))
-    assert message["terminal_id"] is None
-    assert message["session_id"] == "$5"
-    assert message["session_name"] == "renamed-terminal"
 
 
 def test_shutdown_delivers_sentinel_even_to_full_queue() -> None:
@@ -340,24 +328,24 @@ def test_shutdown_delivers_sentinel_even_to_full_queue() -> None:
     assert drained[-1] is None
 
 
-def test_set_client_info_and_layout_lookup() -> None:
+def test_set_client_info_and_view_lookup() -> None:
     broadcaster = WebSocketBroadcaster()
     first_queue = broadcaster.register()
     broadcaster.register()
 
-    broadcaster.set_client_info(first_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(first_queue, "client-1", "everything", "desktop")
 
-    assert broadcaster.has_client_on_layout("desktop") is True
-    assert broadcaster.has_client_on_layout("mobile") is False
+    assert broadcaster.has_client_on_view("everything") is True
+    assert broadcaster.has_client_on_view("project-1") is False
     infos = broadcaster.get_connected_client_infos()
-    assert infos == [{"client_id": "client-1", "active_layout_slug": "desktop", "device_kind": "desktop"}]
+    assert infos == [{"client_id": "client-1", "active_view": "everything", "device_kind": "desktop"}]
 
 
 def test_set_client_info_ignores_unregistered_queue() -> None:
     broadcaster = WebSocketBroadcaster()
     stray_queue: queue.Queue[str | None] = queue.Queue()
 
-    broadcaster.set_client_info(stray_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(stray_queue, "client-1", "everything", "desktop")
 
     assert broadcaster.get_connected_client_infos() == []
 
@@ -365,27 +353,27 @@ def test_set_client_info_ignores_unregistered_queue() -> None:
 def test_unregister_drops_client_info() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
 
     broadcaster.unregister(client_queue)
 
-    assert broadcaster.has_client_on_layout("desktop") is False
+    assert broadcaster.has_client_on_view("everything") is False
 
 
-def test_broadcast_to_layout_targets_only_matching_clients() -> None:
+def test_broadcast_to_view_targets_only_matching_clients() -> None:
     broadcaster = WebSocketBroadcaster()
-    desktop_queue = broadcaster.register()
-    mobile_queue = broadcaster.register()
+    everything_queue = broadcaster.register()
+    project_queue = broadcaster.register()
     unregistered_queue = broadcaster.register()
-    broadcaster.set_client_info(desktop_queue, "client-1", "desktop", "desktop")
-    broadcaster.set_client_info(mobile_queue, "client-2", "mobile", "mobile")
+    broadcaster.set_client_info(everything_queue, "client-1", "everything", "desktop")
+    broadcaster.set_client_info(project_queue, "client-2", "project-1", "mobile")
 
-    broadcaster.broadcast_layout_op("close", {"ref": "service:web"}, "agent-1", target_layout_slug="desktop")
+    broadcaster.broadcast_layout_op("close", {"address": "app:files"}, "agent-1", target_view="everything")
 
-    message = json.loads(_get_message(desktop_queue))
+    message = json.loads(_get_message(everything_queue))
     assert message["op"] == "close"
-    assert mobile_queue.empty()
-    # A client that never registered its layout is not targeted either.
+    assert project_queue.empty()
+    # A client that never registered its view is not targeted either.
     assert unregistered_queue.empty()
 
 
@@ -393,9 +381,9 @@ def test_broadcast_layout_op_without_target_reaches_everyone() -> None:
     broadcaster = WebSocketBroadcaster()
     desktop_queue = broadcaster.register()
     unregistered_queue = broadcaster.register()
-    broadcaster.set_client_info(desktop_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(desktop_queue, "client-1", "everything", "desktop")
 
-    broadcaster.broadcast_layout_op("refresh", {"ref": "service:web"}, "agent-1")
+    broadcaster.broadcast_layout_op("refresh", {"address": "app:files"}, "agent-1")
 
     assert json.loads(_get_message(desktop_queue))["op"] == "refresh"
     assert json.loads(_get_message(unregistered_queue))["op"] == "refresh"
@@ -410,7 +398,7 @@ def test_load_layout_broadcast_reaches_all_clients() -> None:
     load = json.loads(_get_message(client_queue))
     assert load == {
         "type": "load_layout",
-        "layout_slug": "project-1",
+        "view_id": "project-1",
         "display_name": "Project 1",
         "target_client_id": None,
     }

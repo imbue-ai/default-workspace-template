@@ -1,30 +1,33 @@
 # The mngr plugins this workspace registers, and which tool environment each
-# one goes into. Read at image build by system/scripts/build_workspace.sh and
-# again by the update-self apply after a merge, so a release that ships a new
-# plugin registers it in the workspace being updated rather than only in
-# freshly built images. Paths are relative to the workspace root.
+# one goes into: ``mngr`` is the vendored mngr CLI's tool; any other entry is an
+# app's manifest name (``system/apps/<package>/app.toml``), whose own tool
+# environment gets the plugin as an editable extra. Read at image build by
+# system/scripts/build_workspace.sh and again by the update-self apply after a
+# merge, so a release that ships a new plugin registers it in the workspace
+# being updated rather than only in freshly built images. Paths are relative
+# to the workspace root.
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_claude"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "system_interface"]
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_codex"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "system_interface"]
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_pi_coding"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "system_interface"]
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_opencode"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "system_interface"]
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_antigravity"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "system_interface"]
 
-# The wait plugin only adds a CLI command, so the system interface has no use for it.
+# The wait plugin only adds a CLI command, so no app's tool has a use for it.
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_wait"
 tools = ["mngr"]

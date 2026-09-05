@@ -1,27 +1,20 @@
 import json
 import os
 import queue
-import re
 import shlex
 import threading
-import tomllib
 from collections.abc import Callable
 from collections.abc import Sequence
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_instances.interfaces import InstanceNudgerInterface
+from app_instances.nudge import SilentNudger
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
 from pydantic import Field
-from watchdog.events import FileMovedEvent
-from watchdog.events import FileSystemEvent
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer as _Observer
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.concurrency_group import InvalidConcurrencyGroupStateError
@@ -43,8 +36,6 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostName
-from imbue.system_interface import client_activity
-from imbue.system_interface import projects
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import account_dir
 from imbue.system_interface.accounts import claim_first_chat
@@ -53,7 +44,6 @@ from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import is_lifecycle_dead
-from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import SendFailure
@@ -61,7 +51,6 @@ from imbue.system_interface.agent_discovery import delivered_or_raise
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
-from imbue.system_interface.auto_open import AutoOpenLedger
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.binding import BindingError
 from imbue.system_interface.harnesses.binding import create_args as binding_create_args
@@ -69,6 +58,7 @@ from imbue.system_interface.harnesses.binding import harness_for
 from imbue.system_interface.harnesses.binding import resolve_binding
 from imbue.system_interface.harnesses.codex.live_user_turns import drop_live_user_turns
 from imbue.system_interface.harnesses.codex.live_user_turns import note_live_user_turn
+from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -87,12 +77,12 @@ from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SessionDeps
-from imbue.system_interface.liveness import probe_all_app_liveness
+from imbue.system_interface.message_stamps import MessageStampStore
 from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentDestroyError
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
-from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import CreatedChatAgent
 from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.naming import AUTO_NAME_WORD_BY_HARNESS
@@ -100,6 +90,7 @@ from imbue.system_interface.naming import canonical_agent_name
 from imbue.system_interface.naming import first_free_numbered_name
 from imbue.system_interface.naming import is_name_conflict
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.presence import PresenceState
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The role template every UI-created agent gets. The harness is chosen separately via
@@ -111,8 +102,6 @@ CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 # on different harnesses.
 CHAT_CREATION_TYPE: Final[str] = CHAT_ROLE_TEMPLATE
 
-_APPS_TOML_FILENAME = "data/.state/apps.toml"
-_APPS_TOML_BASENAME = "apps.toml"
 _DEFAULT_MNGR_BINARY = "mngr"
 # The production messenger: a stateless, frozen value whose discover/send are the
 # real mngr calls, so one shared instance is the default for every built manager.
@@ -121,14 +110,10 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 
-# How often the liveness sweep re-derives each app's ``is_running``. Stop and
-# start land through our own endpoints (which nudge the sweep), so the poll
-# only has to catch out-of-band transitions -- supervisorctl from a terminal,
-# a crashed program -- for which several seconds of lag is fine. Each sweep
-# costs one supervisord RPC plus a TCP connect per unsupervised row, so the
-# interval also bounds the service's idle wake-up rate (which costs ~3x under
-# gVisor).
-_LIVENESS_POLL_INTERVAL_SECONDS: Final[float] = 10.0
+# How often the session sweep retries the live backend of every tracked agent that does not
+# have one yet (see ``_reconnect_pending_sessions``). Also bounds the service's idle wake-up
+# rate, which costs ~3x under gVisor.
+_SESSION_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 
 # How long one ``mngr rename`` / ``mngr label`` may take. Both edit the
 # provider's persisted agent data (rename also moves the tmux session on a live
@@ -136,53 +121,14 @@ _LIVENESS_POLL_INTERVAL_SECONDS: Final[float] = 10.0
 # user is waiting on, so they are bounded rather than left to hang.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 
-# Labels that ask for a chat's tab to be surfaced when the chat appears, so the
-# user lands on it without hunting. ``assist`` is the original, set by the minds
-# "get help -> have an agent help" flow; ``auto_open`` is the purpose-neutral
-# form any spawner can set (the minds update flow sets both, for interfaces
-# that predate the second).
-_ASSIST_AUTO_OPEN_LABEL = "assist"
-_AUTO_OPEN_LABEL = "auto_open"
-_AUTO_OPEN_LABELS: Final[tuple[str, ...]] = (_AUTO_OPEN_LABEL, _ASSIST_AUTO_OPEN_LABEL)
-
-# How recently a chat found at startup must have been created for its
-# undelivered open to still be owed. Older than this and a restart restores
-# the saved layout as it always has -- the chat was either surfaced by an
-# interface that kept no ledger, or has been sitting there long enough that
-# popping it now would be a surprise rather than a hand-off.
-_AUTO_OPEN_STARTUP_FRESHNESS: Final[timedelta] = timedelta(hours=12)
-
-
-def _is_auto_open_labeled(labels: dict[str, str]) -> bool:
-    return any(labels.get(label) == "true" for label in _AUTO_OPEN_LABELS)
-
-
-# An app's icon is SVG markup carried verbatim on its registry row and handed to
-# the browser, which inlines it. ``system/scripts/forward_port.py`` is the real
-# validator (it parses the markup and rejects anything that is not a single,
-# inert ``<svg>`` element); the checks below are a backstop for a hand-edited or
-# otherwise unvalidated ``apps.toml``, so a bad icon is dropped here instead of
-# reaching the DOM. They deliberately mirror, and are never looser than, that
-# validator. Keep the cap in step with its ``MAX_ICON_LENGTH``.
-_MAX_ICON_LENGTH = 16384
-_FORBIDDEN_ICON_SUBSTRINGS = ("<script", "<style", "<foreignobject", "javascript:", "<!", "<?")
-# An ``on*=`` attribute anywhere in a tag, e.g. ``<svg onload="...">``.
-_ICON_EVENT_HANDLER_PATTERN = re.compile(r"<[^>]*\son[a-z]+\s*=", re.IGNORECASE)
-
-
-def _accepted_icon(raw_icon: str) -> str:
-    """Return ``raw_icon`` when it is safe to inline as an app icon, else ''."""
-    icon = raw_icon.strip()
-    if not icon or len(icon) > _MAX_ICON_LENGTH:
-        return ""
-    if not icon.startswith("<svg") or not icon.endswith(">"):
-        return ""
-    lowered = icon.lower()
-    if any(forbidden in lowered for forbidden in _FORBIDDEN_ICON_SUBSTRINGS):
-        return ""
-    if _ICON_EVENT_HANDLER_PATTERN.search(icon) is not None:
-        return ""
-    return icon
+# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
+# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
+# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
+# teardown (a partial destroy the user saw as a 500). Every internal mngr
+# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
+# generous cap only converts spurious kills into patience. ``mngr stop`` rides
+# the same CLI startup and host-lock path, so it shares the bound.
+DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 
 
 def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
@@ -325,6 +271,15 @@ def _rename_failure_detail(cmd: list[str], result: FinishedProcess) -> str:
     return f"'{cmd[1]}' exited with code {result.returncode}"
 
 
+def _build_chat_destroy_command(mngr_binary: str, agent_name: str) -> list[str]:
+    """Build the ``mngr destroy --force`` argv for one agent.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``server_test.py``).
+    """
+    return [mngr_binary, "destroy", agent_name, "--force"]
+
+
 def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
     """Build the ``mngr label`` argv for a display-only rename.
 
@@ -432,58 +387,6 @@ class _LogQueueCallback(MutableModel):
         _safe_log_put(self.log_queue, json.dumps({"line": line.rstrip("\n")}))
 
 
-class _AppsFileHandler(FileSystemEventHandler):
-    """Watchdog handler that triggers on mutating changes to apps.toml.
-
-    Subscribes to mutation events (modified/created/deleted/moved/closed)
-    rather than ``on_any_event`` because watchdog's default inotify mask also
-    includes ``IN_OPEN`` / ``IN_CLOSE_NOWRITE``. Reacting to those would form
-    a feedback loop -- the handler reads the file, the read triggers fresh
-    open/close-no-write events, and one CPU core is pinned per agent watcher.
-
-    ``on_modified`` alone is insufficient because system/scripts/forward_port.py
-    upserts atomically via ``tempfile.mkstemp`` + ``os.replace``, which
-    surfaces as a moved/created event, not a modified event. ``on_closed``
-    (``IN_CLOSE_WRITE``) is included so that direct writers which don't go
-    through an atomic rename still trigger a re-read on close.
-
-    Events are filtered to only those whose src or dest path basename is
-    ``apps.toml``. Without this filter we'd also fire on every write
-    to forward_port.py's ``apps.toml.*.tmp`` scratch files, which is
-    correctness-neutral (the re-read is idempotent) but produces a broadcast
-    storm per upsert.
-    """
-
-    agent_id: str
-    on_change: Any
-
-    def _maybe_fire(self, event: FileSystemEvent) -> None:
-        if event.is_directory:
-            return
-        paths = [event.src_path]
-        if isinstance(event, FileMovedEvent):
-            paths.append(event.dest_path)
-        if any(os.path.basename(p) == _APPS_TOML_BASENAME for p in paths):
-            self.on_change(self.agent_id)
-
-    on_modified = _maybe_fire
-    on_created = _maybe_fire
-    on_deleted = _maybe_fire
-    on_moved = _maybe_fire
-    on_closed = _maybe_fire
-
-
-def _make_apps_file_handler(
-    agent_id: str,
-    on_change: Any,
-) -> _AppsFileHandler:
-    """Create an apps-registry file handler for the given agent."""
-    handler = _AppsFileHandler()
-    handler.agent_id = agent_id
-    handler.on_change = on_change
-    return handler
-
-
 def _assert_special_kinds_declared(harness: HarnessType, events: list[dict[str, Any]]) -> None:
     """Fail fast when a harness emits a ``special`` kind it never declared.
 
@@ -505,11 +408,11 @@ def _assert_special_kinds_declared(harness: HarnessType, events: list[dict[str, 
 
 
 class AgentManager:
-    """Manages agent lifecycle detection, app-registry watching, and agent creation.
+    """Manages agent lifecycle detection, per-agent activity and model tracking, and agent creation.
 
     Runs mngr observe as a subprocess for event-driven agent lifecycle detection.
-    Watches data/.state/apps.toml for each agent.
-    Handles agent creation via local mngr create calls.
+    Handles agent creation via local mngr create calls, and nudges the shell whenever
+    the agent list (the chat app's instance list) changes.
     """
 
     _broadcaster: WebSocketBroadcaster
@@ -519,28 +422,18 @@ class AgentManager:
     # stream: an AGENTS_FULL_STATE snapshot rebuilds it wholesale, an AGENT_STATE
     # upserts one agent, and an AGENT_REMOVED drops one. ``_agents`` /
     # ``_match_by_agent_id`` are rebuilt from it after each event, and its
-    # before/after key diff drives the per-agent membership side-effects.
+    # before/after key diff starts and stops the per-agent tracking.
     _agent_details_by_id: dict[str, AgentDetails]
     _agents: dict[str, AgentStateItem]
-    # Derives ``is_running`` for the whole registry in one sweep from
-    # ``(name, program, url)`` rows (see ``liveness.probe_all_app_liveness``,
-    # which batches all supervised rows into one supervisord RPC); injectable
-    # so tests control liveness without a supervisord or open ports.
-    _liveness_prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]]
-    # The liveness sweep's own lifecycle: ``_liveness_stop`` ends the loop,
-    # ``_liveness_wake`` cuts the current poll interval short (a registry
-    # change, a stop/start endpoint) so the next probe lands promptly.
-    _liveness_stop: threading.Event
-    _liveness_wake: threading.Event
-    _liveness_thread: threading.Thread | None
+    # The session sweep's lifecycle: ``_session_sweep_stop`` ends the loop.
+    _session_sweep_stop: threading.Event
+    _session_sweep_thread: threading.Thread | None
     # agent id -> its discovered location (host/provider), maintained from the
     # observe snapshot/discovered/destroy events so messaging can resolve an
     # agent's location without a fresh find_all_agents discovery. Best-effort:
     # paths that mutate _agents without a discovery event (creation/refresh) skip
     # it, and a miss in get_agent_matches_by_id just falls back to discovery.
     _match_by_agent_id: dict[str, AgentMatch]
-    _apps: list[AppEntry]
-    _app_observers: dict[str, Any]
     _proto_agents: dict[str, dict[str, Any]]
     _log_queues: dict[str, queue.Queue[str | None]]
     _own_agent_id: str
@@ -579,20 +472,31 @@ class AgentManager:
     # None = the harness has recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
     _model_watcher_by_agent: dict[str, PathWatcher]
-    # Auto-open chats whose open has reached a client (persisted, so a restart
-    # never reopens them) and those still owed one because no registered client
-    # was there to take it, keyed by id -> chat name. Between them, both
-    # discovery paths -- the per-agent delta and the full snapshot -- open each
-    # chat exactly once.
-    _auto_open_ledger: AutoOpenLedger
-    _pending_auto_open_name_by_id: dict[str, str]
-    # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: UI presence and
-    # messages (via ``record_activity``, from the ``/api/activity`` endpoint),
+    # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
+    # prioritizer's recency ranking from real history.
+    _message_stamps: MessageStampStore
+    # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: page presence and
+    # messages (via ``record_presence`` and ``record_message_sent``, from the chat app's
+    # presence and send routes),
     # lifecycle changes (via ``record_running_agents``, from the observe stream),
     # and elapsed idle time (via its own slow sweep, started in ``start``). A chat
     # is protected while engaged and climbs past the worker band once it has been
     # left alone long enough.
     _oom_prioritizer: ChatOomPrioritizer
+    # Tells the shell that the chat app's instance list changed (contracts.md section 5):
+    # every broadcast of the agent list is a change of that list or of a status in it, so the
+    # nudge rides ``_broadcast_agents_updated``. ``SilentNudger`` until ``main`` installs the
+    # real one, so a manager built by a test posts nothing to the workspace shell.
+    _nudger: InstanceNudgerInterface
+    # Whether the agent list has been read from mngr at least once (the initial discovery
+    # or the observe stream's first full snapshot). Before that the list is empty because
+    # nothing has been asked yet, not because there are no agents, and the instances API
+    # answers "not ready" rather than an empty list the shell would prune tabs against.
+    _is_agent_list_known: bool
+    # Per agent, the ids of the filed permission requests no verdict has landed for, folded
+    # from the transcript events the watcher parses. A non-empty set is the ``attention``
+    # status of the chat's instance record.
+    _pending_permission_ids_by_agent: dict[str, set[str]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -612,37 +516,27 @@ class AgentManager:
         broadcaster: WebSocketBroadcaster,
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
-        liveness_prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] = probe_all_app_liveness,
-        auto_open_ledger: AutoOpenLedger | None = None,
+        message_stamps: MessageStampStore | None = None,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
-
-        ``auto_open_ledger`` remembers which chats' tabs have been surfaced; the
-        default keeps that in memory only, so a real server passes one backed
-        by the workspace's layout dir.
 
         ``messenger`` is the agent-messaging collaborator; it defaults to the
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
         fakes to avoid touching mngr. ``mngr_binary`` is the path or name of the
         mngr executable used for the stream-events observe subprocess and for
-        agent-creation commands. ``liveness_prober`` derives every app's
-        ``is_running`` from the registry's (name, program, url) rows in one
-        sweep; tests inject a fake so liveness needs neither a supervisord nor
-        an open port.
+        agent-creation commands. ``message_stamps`` remembers when each chat was
+        last messaged; the default keeps that in memory only, so a real server
+        passes one backed by the chat app's state directory.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
         manager._messenger = messenger
         manager._lock = threading.Lock()
-        manager._liveness_prober = liveness_prober
-        manager._liveness_stop = threading.Event()
-        manager._liveness_wake = threading.Event()
-        manager._liveness_thread = None
+        manager._session_sweep_stop = threading.Event()
+        manager._session_sweep_thread = None
         manager._agent_details_by_id = {}
         manager._agents = {}
         manager._match_by_agent_id = {}
-        manager._apps = []
-        manager._app_observers = {}
         manager._proto_agents = {}
         manager._log_queues = {}
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
@@ -662,10 +556,12 @@ class AgentManager:
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
-        manager._auto_open_ledger = auto_open_ledger if auto_open_ledger is not None else AutoOpenLedger(path=None)
-        manager._pending_auto_open_name_by_id = {}
+        manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
+        manager._nudger = SilentNudger()
+        manager._is_agent_list_known = False
+        manager._pending_permission_ids_by_agent = {}
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
         # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
@@ -686,7 +582,7 @@ class AgentManager:
         self._initial_discover()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
-        self._start_liveness_sweep()
+        self._start_session_sweep()
         self._start_observe()
 
     def start_without_observe(self) -> None:
@@ -694,15 +590,14 @@ class AgentManager:
         self._initial_discover()
 
     def stop(self) -> None:
-        """Stop the observe subprocess, file watchers, and creation threads."""
+        """Stop the observe subprocess, the session sweep, and creation threads."""
         self._shutdown_event.set()
         self._oom_prioritizer.stop()
 
-        self._liveness_stop.set()
-        self._liveness_wake.set()
-        if self._liveness_thread is not None:
-            self._liveness_thread.join(timeout=5)
-            self._liveness_thread = None
+        self._session_sweep_stop.set()
+        if self._session_sweep_thread is not None:
+            self._session_sweep_thread.join(timeout=5)
+            self._session_sweep_thread = None
 
         if self._observe_cg is not None:
             self._observe_cg.shutdown()
@@ -710,12 +605,6 @@ class AgentManager:
             self._observe_cg = None
 
         self._creation_cg.__exit__(None, None, None)
-
-        for observer in self._app_observers.values():
-            observer.stop()
-        for observer in self._app_observers.values():
-            observer.join(timeout=5)
-        self._app_observers.clear()
 
         with self._lock:
             model_watchers = list(self._model_watcher_by_agent.values())
@@ -742,6 +631,29 @@ class AgentManager:
         application state (e.g. the system_interface lifespan when an
         externally-constructed AgentManager is injected for tests)."""
         return self._broadcaster
+
+    def set_nudger(self, nudger: InstanceNudgerInterface) -> None:
+        """Install the nudger every agent-list broadcast also fires; ``main`` installs the real one."""
+        self._nudger = nudger
+
+    def is_agent_list_known(self) -> bool:
+        """Whether the agent list has been read from mngr at least once."""
+        with self._lock:
+            return self._is_agent_list_known
+
+    def note_agent_list_known(self) -> None:
+        """Mark the agent list as read; the discovery paths call this, and a test that seeds ``_agents`` directly."""
+        with self._lock:
+            self._is_agent_list_known = True
+
+    def nudge_shell(self) -> None:
+        """Fire the installed nudger: the instance list changed with no agent-list broadcast to carry it."""
+        self._nudger.nudge()
+
+    def _broadcast_agents_updated(self) -> None:
+        """Push the agent list to every WebSocket client, then nudge the shell about the instance list."""
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._nudger.nudge()
 
     def get_agents(self) -> list[AgentStateItem]:
         """Return current agent list."""
@@ -826,39 +738,50 @@ class AgentManager:
                 if agent.labels.get("agent_created") != "true" and agent.labels.get("is_primary") != "true"
             ]
 
-    def record_activity(
-        self,
-        *,
-        open_ids: list[str],
-        visible_ids: list[str],
-        messaged_id: str | None = None,
-    ) -> None:
-        """Feed a frontend activity report to the OOM prioritizer (re-tags chats)."""
-        self._oom_prioritizer.record_activity(
-            open_ids=open_ids,
-            visible_ids=visible_ids,
-            messaged_id=messaged_id,
+    def record_presence(self, agent_id: str, client_id: str, state: PresenceState) -> None:
+        """Feed one chat page's presence report to the OOM prioritizer (re-tags chats)."""
+        self._oom_prioritizer.record_presence(agent_id, client_id, state)
+
+    def record_message_sent(self, agent_id: str) -> None:
+        """Stamp a chat as just-messaged for the OOM prioritizer's recency ranking (and on disk, for the next restart)."""
+        self._oom_prioritizer.record_message(agent_id)
+        self._message_stamps.record(agent_id)
+
+    def has_pending_permission(self, agent_id: str) -> bool:
+        """Whether a permission request the agent filed is still awaiting the user's verdict."""
+        with self._lock:
+            return bool(self._pending_permission_ids_by_agent.get(agent_id))
+
+    def destroy_chat_agent(self, agent_id: str) -> None:
+        """Run ``mngr destroy --force`` for a tracked agent and drop it from the tracked state at once.
+
+        Raises ``AgentDestroyError`` when mngr refuses or fails; the caller has already
+        refused the primary services agent, which is never a chat.
+        """
+        agent_state = self.get_agent_by_id(agent_id)
+        if agent_state is None:
+            raise AgentDestroyError(f"Agent '{agent_id}' not found")
+        result = run_local_command_modern_version(
+            command=_build_chat_destroy_command(self._mngr_binary, agent_state.name),
+            cwd=None,
+            is_checked=False,
+            timeout=DESTROY_TIMEOUT_SECONDS,
         )
+        if result.returncode != 0:
+            raise AgentDestroyError(f"Failed to destroy agent '{agent_state.name}': {result.stderr.strip()}")
+        # Reflect the destruction immediately rather than waiting for mngr observe.
+        self.remove_agent(agent_id)
 
     def _seed_oom_prioritizer(self) -> None:
-        """Seed the prioritizer's per-chat message times from the client-activity log.
+        """Seed the prioritizer's per-chat message times from the on-disk message stamps.
 
         The prioritizer's own recency state is in-memory, so without this a
         restart of the system interface would forget which chats are in active use
         and start every one of them aging from its process-start time. Quietly
-        does nothing when the log is unavailable (a dev/test setup with no layout
-        dir, or a workspace where nothing has been messaged yet).
+        does nothing when nothing has been stamped (a dev/test setup, or a
+        workspace where nothing has been messaged yet).
         """
-        if not self._own_agent_id:
-            return
-        layout_dir = projects.primary_agent_layout_dir(self._host_dir, self._own_agent_id)
-        events = client_activity.read_client_activity_events(client_activity.get_events_path(layout_dir))
-        last_message_at_by_agent_id: dict[str, float] = {}
-        for agent_id, timestamp in client_activity.last_message_time_by_agent(events).items():
-            messaged_at = parse_iso_timestamp_to_epoch(timestamp)
-            if messaged_at is not None:
-                last_message_at_by_agent_id[agent_id] = messaged_at
-        self._oom_prioritizer.seed_last_message_times(last_message_at_by_agent_id)
+        self._oom_prioritizer.seed_last_message_times(self._message_stamps.read())
 
     def get_agent_info_by_id(self, agent_id: str) -> AgentInfo | None:
         """Resolve an agent id to its web-UI :class:`AgentInfo` (with resolved dirs), or None."""
@@ -915,10 +838,8 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
             if agent_state is None or not is_lifecycle_dead(agent_state.state):
                 return
-            self._agents[agent_id] = agent_state.model_copy_update(
-                to_update(agent_state.field_ref().state, "WAITING")
-            )
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._agents[agent_id] = agent_state.model_copy_update(to_update(agent_state.field_ref().state, "WAITING"))
+        self._broadcast_agents_updated()
 
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
@@ -950,22 +871,23 @@ class AgentManager:
         with self._lock:
             self._agents.pop(agent_id, None)
             self._match_by_agent_id.pop(agent_id, None)
+            self._pending_permission_ids_by_agent.pop(agent_id, None)
+        self._oom_prioritizer.forget_agent(agent_id)
+        self._message_stamps.forget(agent_id)
 
-        self._stop_app_watcher(agent_id)
         self._stop_activity_tracking(agent_id)
         self._stop_model_tracking(agent_id)
         # The agent is positively gone, so its watcher's resident transcript goes with it,
         # and so does the codex live-user-turn record keyed by its id.
         self._evict_watcher(agent_id)
         drop_live_user_turns(agent_id)
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
     def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
         """Give a chat agent the name the user just typed, keeping its name pair matched.
 
-        ``agent_ref`` is what a ``chat:`` member ref carries -- an agent id from
-        every UI surface, or an agent name from the agent-facing layout listing --
-        so both are resolved here. The display name's canonical form becomes the
+        ``agent_ref`` is an agent id (what the chat app's rename route and the
+        instance key carry) or an agent name, so both are resolved here. The display name's canonical form becomes the
         agent's true name and the typed form its ``display_name`` label, the same
         pairing ``mngr create`` establishes. When the canonical form is already
         the agent's name (a display-only change, e.g. "chat 2" -> "Chat 2"),
@@ -1042,49 +964,18 @@ class AgentManager:
                     to_update(renamed.field_ref().name, new_canonical_name),
                     to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
                 )
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
-    def get_apps(self) -> list[AppEntry]:
-        """Return the primary agent's app list."""
-        with self._lock:
-            return list(self._apps)
-
-    def get_apps_serialized(self) -> list[dict[str, str | bool]]:
-        """Return the primary agent's app list serialized for JSON."""
-        with self._lock:
-            return [
-                {
-                    "name": app.name,
-                    "url": app.url,
-                    "label": app.label,
-                    "icon": app.icon,
-                    "internal": app.internal,
-                    "program": app.program,
-                    "is_running": app.is_running,
-                }
-                for app in self._apps
-            ]
-
-    def get_app_by_name(self, app_name: str) -> AppEntry | None:
-        """Look up one registered app by its service name."""
-        with self._lock:
-            for app in self._apps:
-                if app.name == app_name:
-                    return app
-            return None
-
-    def _start_liveness_sweep(self) -> None:
-        """Start the background sweep that keeps ``AppEntry.is_running`` honest."""
-        thread = threading.Thread(target=self._run_liveness_sweep, daemon=True, name="app-liveness-sweep")
-        self._liveness_thread = thread
+    def _start_session_sweep(self) -> None:
+        """Start the background sweep that connects tracked agents' live backends once they come up."""
+        thread = threading.Thread(target=self._run_session_sweep, daemon=True, name="agent-session-sweep")
+        self._session_sweep_thread = thread
         thread.start()
 
-    def _run_liveness_sweep(self) -> None:
-        while not self._liveness_stop.is_set():
-            self.refresh_app_liveness()
+    def _run_session_sweep(self) -> None:
+        while not self._session_sweep_stop.is_set():
             self._reconnect_pending_sessions()
-            self._liveness_wake.wait(timeout=_LIVENESS_POLL_INTERVAL_SECONDS)
-            self._liveness_wake.clear()
+            self._session_sweep_stop.wait(timeout=_SESSION_SWEEP_INTERVAL_SECONDS)
 
     def _reconnect_pending_sessions(self) -> None:
         """Retry the live backend for tracked agents that do not have one yet.
@@ -1121,45 +1012,6 @@ class AgentManager:
             # that its callers are already about to broadcast the whole agent list. Nothing
             # follows this one, so a bar that just became resolvable would stay unrendered.
             self._recompute_model_choice(agent_id, broadcast_on_change=True)
-
-    def refresh_app_liveness(self) -> None:
-        """Re-derive every app's ``is_running`` and broadcast when any changed.
-
-        The probes run outside the lock (each is a blocking connect or RPC
-        call), against a snapshot of the list; results are folded back in by
-        name so a registry change mid-probe simply keeps its carried-over state
-        until the next pass. Public so the stop/start endpoints can land the
-        transition in the same request that caused it.
-        """
-        with self._lock:
-            probe_targets = [(app.name, app.program, app.url) for app in self._apps]
-        is_running_by_name = self._liveness_prober(probe_targets)
-        is_changed = False
-        with self._lock:
-            updated_apps: list[AppEntry] = []
-            for app in self._apps:
-                probed = is_running_by_name.get(app.name)
-                if probed is None or probed == app.is_running:
-                    updated_apps.append(app)
-                else:
-                    updated_apps.append(app.model_copy_update(to_update(app.field_ref().is_running, probed)))
-                    is_changed = True
-            self._apps = updated_apps
-        if is_changed:
-            self._broadcaster.broadcast_apps_updated(self.get_apps_serialized())
-
-    def get_service_url(self, service_name: str) -> str | None:
-        """Return the local backend URL for a service, or None if it isn't registered."""
-        with self._lock:
-            for app in self._apps:
-                if app.name == service_name:
-                    return app.url
-            return None
-
-    def list_service_names(self) -> tuple[str, ...]:
-        """Return the names of all currently registered services, sorted alphabetically."""
-        with self._lock:
-            return tuple(sorted(app.name for app in self._apps))
 
     def get_agents_serialized(self) -> list[dict[str, Any]]:
         """Return agent list serialized for JSON.
@@ -1256,7 +1108,6 @@ class AgentManager:
         requested_name: str,
         extra_role_templates: tuple[str, ...] = (),
         project_id: str = "",
-        extra_taken_names: tuple[str, ...] = (),
         account_id: str = "",
     ) -> CreatedChatAgent:
         """Create a chat agent in the primary agent's work dir on the given harness.
@@ -1267,9 +1118,6 @@ class AgentManager:
         first free "<word> N" for the harness ("Chat 1", "Codex 2", ...) here,
         server-side, under the same lock that registers the in-flight create --
         so two simultaneous creates cannot both mint "Chat 1".
-        ``extra_taken_names`` widens the taken set beyond the machine's agents
-        (the caller passes the member-title store's chosen names, so a terminal
-        someone renamed to "Chat 2" blocks that slot too).
 
         The harness comes from the account, not from the caller: it is the name of the
         create template stacked on top, and the `chat` role template supplies everything
@@ -1316,7 +1164,7 @@ class AgentManager:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
 
-            taken_names = self._taken_names_locked() + list(extra_taken_names)
+            taken_names = self._taken_names_locked()
             if explicit_name:
                 if is_name_conflict(explicit_name, taken_names):
                     raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
@@ -1391,6 +1239,7 @@ class AgentManager:
             creation_type=CHAT_CREATION_TYPE,
             parent_agent_id=None,
         )
+        self._nudger.nudge()
 
         # Mirror the labels the created mngr agent will carry (see
         # ``_build_chat_create_command``), so the pre-observe AgentStateItem below
@@ -1533,11 +1382,15 @@ class AgentManager:
         if success:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
-            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._broadcast_agents_updated()
+        else:
+            # The provisional record left the instance list with no agent-list broadcast to
+            # carry the change (a success nudges through the broadcast above).
+            self._nudger.nudge()
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
 
     def _initial_discover(self) -> None:
-        """Perform initial agent discovery and start app-registry watchers."""
+        """Perform initial agent discovery and start per-agent tracking."""
         try:
             agents = discover_agents()
             with self._lock:
@@ -1551,56 +1404,13 @@ class AgentManager:
                         harness=agent_info.harness,
                     )
                     self._agents[agent_info.id] = agent_state
-            self._seed_auto_opens_at_startup(agents)
+                self._is_agent_list_known = True
 
             for agent_info in agents:
-                if agent_info.id == self._own_agent_id and agent_info.work_dir:
-                    self._start_app_watcher(agent_info.id, Path(agent_info.work_dir))
                 self._ensure_activity_tracking(agent_info.id)
                 self._ensure_model_tracking(agent_info.id)
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Initial agent discovery failed")
-
-    def _seed_auto_opens_at_startup(self, agents: list[AgentInfo]) -> None:
-        """Queue or record the auto-open of every labeled chat found at startup.
-
-        The decisions are taken under the manager lock (they write the pending
-        map); the ledger writes they imply are file I/O and happen after it is
-        released.
-        """
-        with self._lock:
-            ids_to_record_as_delivered = [
-                agent_info.id
-                for agent_info in agents
-                if _is_auto_open_labeled(agent_info.labels) and self._seed_auto_open_at_startup(agent_info)
-            ]
-        for agent_id in ids_to_record_as_delivered:
-            self._auto_open_ledger.mark_delivered(agent_id)
-
-    def _seed_auto_open_at_startup(self, agent_info: AgentInfo) -> bool:
-        """Decide what a labeled chat found at startup is owed: its open, or nothing.
-
-        Returns whether the chat must now be recorded as delivered; the caller
-        writes that outside the lock this runs under.
-
-        A restart normally restores the saved layout rather than reopening
-        tabs, so a chat already delivered stays as the user left it. The one
-        chat still owed its open is a recent one that was never delivered
-        anywhere -- an update run started while no client was connected, whose
-        apply then restarted this interface before anyone looked. Everything
-        else is recorded as delivered, which is also how a chat surfaced by an
-        interface that kept no ledger is kept from popping again.
-        """
-        if self._auto_open_ledger.is_delivered(agent_info.id):
-            return False
-        is_fresh = (
-            agent_info.create_time is not None
-            and datetime.now(timezone.utc) - agent_info.create_time < _AUTO_OPEN_STARTUP_FRESHNESS
-        )
-        if is_fresh and agent_info.state in RUNNING_LIFECYCLE_STATES:
-            self._pending_auto_open_name_by_id[agent_info.id] = agent_info.name
-            return False
-        return True
 
     def _refresh_agents(self) -> None:
         """Re-discover all agents and broadcast updates."""
@@ -1626,11 +1436,10 @@ class AgentManager:
                 self._ensure_activity_tracking(agent_id)
                 self._ensure_model_tracking(agent_id)
             for agent_id in old_ids - new_ids:
-                self._stop_app_watcher(agent_id)
                 self._stop_activity_tracking(agent_id)
                 self._stop_model_tracking(agent_id)
 
-            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._broadcast_agents_updated()
 
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Agent refresh failed")
@@ -1757,15 +1566,16 @@ class AgentManager:
         agent, and ``AGENT_REMOVED`` drops one. ``self._agents`` and
         ``self._match_by_agent_id`` are then rebuilt from the folded view -- now
         carrying each agent's real lifecycle ``state`` (``AgentDetails.state``)
-        rather than a hardcoded literal -- while the before/after key diff drives
-        per-agent resource start/stop (app watcher, activity tracking) and assist
-        auto-open, exactly as the discovery membership delta used to.
+        rather than a hardcoded literal -- while the before/after key diff starts
+        and stops the per-agent tracking (activity, model choice, the resident
+        watcher), exactly as the discovery membership delta used to.
         """
         with self._lock:
             before_details = dict(self._agent_details_by_id)
             match event:
                 case FullAgentStateEvent():
                     self._agent_details_by_id = {str(agent.id): agent for agent in event.agents}
+                    self._is_agent_list_known = True
                 case AgentStateEvent():
                     self._agent_details_by_id[str(event.agent.id)] = event.agent
                 case AgentRemovedEvent():
@@ -1832,19 +1642,17 @@ class AgentManager:
             added_agent_state = new_agents.get(agent_id)
             if added_agent_state is None:
                 continue
-            if agent_id == self._own_agent_id and added_agent_state.work_dir:
-                self._start_app_watcher(agent_id, Path(added_agent_state.work_dir))
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
 
         for agent_id in removed_agent_ids:
-            self._stop_app_watcher(agent_id)
             self._stop_activity_tracking(agent_id)
             self._stop_model_tracking(agent_id)
             self._evict_watcher(agent_id)
             with self._lock:
-                self._pending_auto_open_name_by_id.pop(agent_id, None)
-            self._auto_open_ledger.forget(agent_id)
+                self._pending_permission_ids_by_agent.pop(agent_id, None)
+            self._oom_prioritizer.forget_agent(agent_id)
+            self._message_stamps.forget(agent_id)
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
@@ -1865,10 +1673,7 @@ class AgentManager:
         for agent_id in newly_dead_ids:
             self._evict_watcher(agent_id)
 
-        # Broadcast the updated agent list BEFORE any auto-open: the frontend's open
-        # handler resolves ``chat:<name>`` against its known-agents list and drops the
-        # open if the agent is not there yet, so the chat must be known first.
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
         # Hand the OOM prioritizer the current mid-turn set. This is its only view
         # of a chat messaged outside the workspace UI (by mngr or another agent):
@@ -1879,101 +1684,6 @@ class AgentManager:
         self._oom_prioritizer.record_running_agents(
             [agent_id for agent_id, agent in new_agents.items() if agent.state in RUNNING_LIFECYCLE_STATES]
         )
-
-        # A newly-created chat usually surfaces as a freshly-added agent here, so
-        # surface the labeled chats that have appeared. ``_maybe_auto_open``
-        # dedupes, so a chat already delivered or already owed is not reopened.
-        for agent_id in added_agent_ids:
-            appeared_agent_state = new_agents.get(agent_id)
-            if appeared_agent_state is not None:
-                self._maybe_auto_open(appeared_agent_state)
-
-    def _maybe_auto_open(self, agent_state: AgentStateItem) -> None:
-        """Surface ``agent_state``'s tab if it is a labeled chat not yet delivered.
-
-        Delivered means a registered client was there to take the open: one
-        that has reported its ``client_state``, which the frontend sends once
-        its dock is mounted and able to apply ops. With no such client the open
-        is held until one registers (``flush_pending_auto_opens``), rather than
-        broadcast to nobody and lost -- which is what happens to a chat created
-        from outside the workspace, before the user's frame has connected.
-        """
-        if not _is_auto_open_labeled(agent_state.labels):
-            return
-        if self._auto_open_ledger.is_delivered(agent_state.id):
-            return
-        with self._lock:
-            if agent_state.id in self._pending_auto_open_name_by_id:
-                return
-            is_client_registered = len(self._broadcaster.get_connected_client_infos()) > 0
-            if not is_client_registered:
-                self._pending_auto_open_name_by_id[agent_state.id] = agent_state.name
-                return
-        self._deliver_auto_open(agent_state.id, agent_state.name)
-
-    def flush_pending_auto_opens(self) -> None:
-        """Surface every chat still owed its tab; called when a client registers."""
-        with self._lock:
-            pending = list(self._pending_auto_open_name_by_id.items())
-            self._pending_auto_open_name_by_id.clear()
-        for agent_id, name in pending:
-            self._deliver_auto_open(agent_id, name)
-
-    def _deliver_auto_open(self, agent_id: str, name: str) -> None:
-        self._auto_open_ledger.mark_delivered(agent_id)
-        self._broadcaster.broadcast_layout_op(
-            op="open",
-            args={"ref": f"chat:{name}"},
-            requester_agent_id=self._own_agent_id,
-        )
-
-    def _start_app_watcher(self, agent_id: str, work_dir: Path) -> None:
-        """Start watching data/.state/apps.toml for an agent."""
-        with self._lock:
-            if agent_id in self._app_observers:
-                return
-
-        toml_path = work_dir / _APPS_TOML_FILENAME
-        watch_dir = toml_path.parent
-
-        if not watch_dir.exists():
-            watch_dir.mkdir(parents=True, exist_ok=True)
-
-        self._read_apps(toml_path)
-
-        handler = _make_apps_file_handler(agent_id, self._on_apps_changed)
-        observer = _Observer()
-        observer.schedule(handler, str(watch_dir), recursive=False)
-        observer.daemon = True
-        try:
-            observer.start()
-            with self._lock:
-                if agent_id in self._app_observers:
-                    observer.stop()
-                    return
-                self._app_observers[agent_id] = observer
-        except OSError as e:
-            _loguru_logger.opt(exception=e).error("Failed to start app-registry watcher for agent {}", agent_id)
-
-    def _stop_app_watcher(self, agent_id: str) -> None:
-        """Stop watching apps.toml for an agent."""
-        with self._lock:
-            observer = self._app_observers.pop(agent_id, None)
-        if observer is not None:
-            observer.stop()
-
-    def _on_apps_changed(self, agent_id: str) -> None:
-        """Called when the primary agent's apps.toml changes."""
-        with self._lock:
-            agent = self._agents.get(agent_id)
-            work_dir = agent.work_dir if agent is not None else None
-
-        if work_dir is None:
-            return
-
-        toml_path = Path(work_dir) / _APPS_TOML_FILENAME
-        self._read_apps(toml_path)
-        self._broadcaster.broadcast_apps_updated(self.get_apps_serialized())
 
     def _get_agent_state_dir(self, agent_id: str) -> Path:
         """Return the per-agent state directory under the local mngr host dir.
@@ -2052,7 +1762,7 @@ class AgentManager:
             harness=harness,
             state_dir=state_dir,
             send_to_harness=lambda text: delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text)),
-            notify_agents_changed=lambda: self._broadcaster.broadcast_agents_updated(self.get_agents_serialized()),
+            notify_agents_changed=self._broadcast_agents_updated,
             is_tracked=lambda: self.is_activity_tracked(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
             on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),
@@ -2115,7 +1825,7 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(
                 to_update(agent_state.field_ref().queued_messages, ())
             )
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
     def set_transcript_broadcaster(self, broadcaster: Callable[[str, list[dict[str, Any]]], None]) -> None:
         """Wire the transcript-event fan-out (the composition root calls this once).
@@ -2216,7 +1926,7 @@ class AgentManager:
         # otherwise broadcast and stick. ``broadcast_on_change=False`` keeps the single
         # broadcast below authoritative -- it carries the post-sweep state.
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+        self._broadcast_agents_updated()
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
         """Watch the agent's live model-state file once its state dir exists.
@@ -2297,7 +2007,7 @@ class AgentManager:
                 to_update(agent_state.field_ref().model_choice, choice)
             )
         if broadcast_on_change:
-            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._broadcast_agents_updated()
 
     def refresh_model_choice(self, agent_id: str) -> None:
         """Force one authoritative model-choice broadcast (bypassing the no-op guard).
@@ -2439,7 +2149,7 @@ class AgentManager:
                     )
 
         if broadcast_on_change:
-            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+            self._broadcast_agents_updated()
 
     def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
         """Fold a batch of transcript events into the agent's activity signals.
@@ -2461,11 +2171,35 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
             if agent_state is not None:
                 _assert_special_kinds_declared(agent_state.harness, events)
+            is_permission_state_changed = self._fold_pending_permissions_locked(agent_id, events)
             tracker = self._activity_tracker_by_agent.get(agent_id)
-            if tracker is None or not tracker.observe(events):
-                return
+            is_activity_changed = tracker is not None and tracker.observe(events)
+        if is_activity_changed:
+            self._recompute_activity_state(agent_id, broadcast_on_change=True)
+        if is_permission_state_changed:
+            # No agents_updated carries the verdict (it is transcript-only), so the instance
+            # list's ``attention`` status changes with nothing else to announce it.
+            self._nudger.nudge()
 
-        self._recompute_activity_state(agent_id, broadcast_on_change=True)
+    def _fold_pending_permissions_locked(self, agent_id: str, events: list[dict[str, Any]]) -> bool:
+        """Fold a batch of events into the agent's pending permission requests; True when the set changed.
+
+        A tool result carrying the gateway's echoed ``permission_request`` object files a
+        request (the same field the card renders from); a user message classified as a
+        ``permission_resolution`` for that request id settles it. Must be called with the
+        lock held.
+        """
+        pending = self._pending_permission_ids_by_agent.setdefault(agent_id, set())
+        before = set(pending)
+        for event in events:
+            filed = event.get("permission_request")
+            if isinstance(filed, dict) and isinstance(filed.get("request_id"), str):
+                pending.add(filed["request_id"])
+            if event.get("display") == DisplayKind.PERMISSION_RESOLUTION.value:
+                resolved_id = event.get("request_id")
+                if isinstance(resolved_id, str):
+                    pending.discard(resolved_id)
+        return pending != before
 
     def reset_activity_state(self, agent_id: str) -> None:
         """Force ``agent_id`` back to IDLE after an interrupt/restart.
@@ -2490,45 +2224,3 @@ class AgentManager:
                 return
             tracker.reset()
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
-
-    def _read_apps(self, toml_path: Path) -> None:
-        """Read and parse data/.state/apps.toml for the primary agent.
-
-        ``is_running`` is derived state rather than registry state, so each
-        re-read carries the previous probe result forward (new rows default to
-        running) and nudges the liveness sweep to re-probe promptly.
-        """
-        apps: list[AppEntry] = []
-        if toml_path.exists():
-            try:
-                data = tomllib.loads(toml_path.read_text())
-                for entry in data.get("apps", []):
-                    name = entry.get("name", "")
-                    url = entry.get("url", "")
-                    label = entry.get("label", "")
-                    icon = _accepted_icon(str(entry.get("icon", "")))
-                    internal = bool(entry.get("internal", False))
-                    program = str(entry.get("program", ""))
-                    if name and url:
-                        apps.append(
-                            AppEntry(
-                                name=name,
-                                url=url,
-                                label=label,
-                                icon=icon,
-                                internal=internal,
-                                program=program,
-                            )
-                        )
-            except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError) as e:
-                _loguru_logger.opt(exception=e).error("Failed to parse {}", toml_path)
-
-        with self._lock:
-            previous_is_running_by_name = {app.name: app.is_running for app in self._apps}
-            self._apps = [
-                app.model_copy_update(to_update(app.field_ref().is_running, previous_is_running_by_name[app.name]))
-                if app.name in previous_is_running_by_name
-                else app
-                for app in apps
-            ]
-        self._liveness_wake.set()

@@ -124,12 +124,13 @@ class BackupConfig(FrozenModel):
             # start/restore, and restoring an old copy onto a new host would
             # lock the tooling out.
             "**/.ssh/authorized_keys",
-            # The update apply's pre-apply copies: a venv, two uv tool
-            # environments and a built bundle, which are exactly what the
-            # globs above exclude everywhere else. They are also only
-            # meaningful to an apply on this container, and the emergency exit
-            # keeps them indefinitely -- so without this every hourly tick
-            # would sweep a full venv plus two tool environments.
+            # The update apply's pre-apply copies: a venv, uv tool
+            # environments (the mngr tool and each critical app's own) and a
+            # built bundle, which are exactly what the globs above exclude
+            # everywhere else. They are also only meaningful to an apply on
+            # this container, and the emergency exit keeps them indefinitely
+            # -- so without this every hourly tick would sweep a full venv
+            # plus several tool environments.
             "**/data/.state/update-apply/snapshots",
         ),
         description="Glob patterns passed to `restic backup --exclude=...`",

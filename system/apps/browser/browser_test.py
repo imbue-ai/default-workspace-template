@@ -9,10 +9,22 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_instances.testing import RecordingNudger
 from browser import chrome_args
 from browser import chrome_launcher
 from browser import manifest
+from browser import runner
 from browser import session as bsession
+from browser.bridged_fleet import BridgedFleet
+from browser.data_types import BrowserController
+from browser.data_types import BrowserLifecycle
+from browser.data_types import BrowserSnapshot
+from browser.errors import FleetCreateRefusedError
+from browser.errors import FleetUnavailableError
+from browser.errors import NavigationFailedError
+from browser.errors import UnknownBrowserError
+from browser.primitives import BrowserName
+from mock_cdp_client_test import NavigatingCdpClient
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
@@ -962,7 +974,7 @@ def test_a_closed_name_is_gone_until_recreated(monkeypatch: pytest.MonkeyPatch) 
         assert a.browser_id == "alex-smith"
         await mgr.close("alex-smith")
         # The closed name is gone -- a command on it would 404.
-        with pytest.raises(KeyError):
+        with pytest.raises(UnknownBrowserError):
             mgr.get("alex-smith")
 
     asyncio.run(go())
@@ -1505,3 +1517,200 @@ def test_a_new_browser_lands_on_a_blank_page() -> None:
     assert bsession._HOME_URL == "about:blank"
     # ...and it must not be persisted as a restorable tab, or every restart would reopen it.
     assert bsession._is_restorable_url(bsession._HOME_URL) is False
+
+
+# --- the shell nudge (every fleet event the instances API's status derives from) ---
+
+
+def test_every_ownership_write_nudges_the_shell_once() -> None:
+    browser = _running_browser(browser_id="b1")
+    nudger = RecordingNudger()
+    browser._nudger = nudger
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+        assert nudger.nudge_count == 1
+        # The same agent re-acquiring writes nothing, so it tells the shell nothing.
+        await browser.acquire("A", "Alice")
+        assert nudger.nudge_count == 1
+        await browser.release("A")
+        assert nudger.nudge_count == 2
+        await browser.take_control()
+        assert nudger.nudge_count == 3
+        await browser.return_to_agents()
+        assert nudger.nudge_count == 4
+
+    asyncio.run(go())
+
+
+def test_a_crash_nudges_the_shell_once() -> None:
+    browser = _running_browser(browser_id="b1")
+    nudger = RecordingNudger()
+    browser._nudger = nudger
+
+    browser._crashed = True
+    browser._crashed = True
+
+    assert nudger.nudge_count == 1
+
+
+def test_registering_and_closing_a_browser_nudge_the_shell_and_hand_it_the_nudger() -> None:
+    mgr = bsession.BrowserSessionManager()
+    nudger = RecordingNudger()
+    mgr.set_nudger(nudger)
+
+    registered = mgr._register_init_locked("browser-1")
+
+    assert nudger.nudge_count == 1
+    assert registered._nudger is nudger
+    asyncio.run(mgr.close("browser-1"))
+    assert nudger.nudge_count == 2
+    asyncio.run(mgr.close("browser-1"))  # an unknown name changes nothing
+    assert nudger.nudge_count == 2
+
+
+def test_set_nudger_reaches_browsers_registered_before_it() -> None:
+    mgr = bsession.BrowserSessionManager()
+    registered = mgr._register_init_locked("browser-1")
+    nudger = RecordingNudger()
+
+    mgr.set_nudger(nudger)
+    registered._crashed = True
+
+    assert nudger.nudge_count == 1
+
+
+# --- the bridged fleet (the instances adapter's verbs, run on the daemon's loop) ---
+
+
+def _bridged_fleet(manager: bsession.BrowserSessionManager, route_timeout_seconds: float) -> BridgedFleet:
+    return BridgedFleet(
+        bridge=runner.bridge,
+        manager=manager,
+        ready_gate=runner._init_done,
+        route_timeout_seconds=route_timeout_seconds,
+    )
+
+
+def test_bridged_fleet_answers_a_daemon_failure_under_a_verb_as_unavailable() -> None:
+    async def fail_to_start() -> None:
+        raise bsession.BrowserStartupError("no CDP endpoint")
+
+    with pytest.raises(FleetUnavailableError, match="no CDP endpoint") as caught:
+        _bridged_fleet(bsession.BrowserSessionManager(), route_timeout_seconds=5)._run_on_loop(fail_to_start())
+
+    assert isinstance(caught.value.__cause__, bsession.BrowserStartupError)
+
+
+def test_bridged_fleet_answers_a_stalled_loop_as_unavailable() -> None:
+    async def outlast_the_route() -> None:
+        await asyncio.sleep(3600)
+
+    with pytest.raises(FleetUnavailableError, match="could not complete"):
+        _bridged_fleet(bsession.BrowserSessionManager(), route_timeout_seconds=0.05)._run_on_loop(outlast_the_route())
+
+
+def test_bridged_fleet_passes_the_fleets_own_refusal_through() -> None:
+    async def refuse() -> None:
+        raise bsession.FleetFullError("2/2 browsers open -- close one first.")
+
+    with pytest.raises(bsession.FleetFullError, match="close one first"):
+        _bridged_fleet(bsession.BrowserSessionManager(), route_timeout_seconds=5)._run_on_loop(refuse())
+
+
+def test_bridged_fleet_create_refuses_a_full_fleet_with_the_daemons_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Skip the install check (there is no Chromium here) and fill the cap with un-launched
+    # init browsers: the cap rejects before anything registers, so nothing launches.
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    mgr = bsession.BrowserSessionManager()
+    for idx in range(bsession._MAX_SESSIONS):
+        mgr._browsers[f"browser-{idx + 1}"] = bsession.LiveBrowser(browser_id=f"browser-{idx + 1}")
+
+    with pytest.raises(FleetCreateRefusedError, match="close one first") as caught:
+        _bridged_fleet(mgr, route_timeout_seconds=5).create_browser()
+
+    assert isinstance(caught.value.__cause__, bsession.FleetFullError)
+    assert len(mgr._browsers) == bsession._MAX_SESSIONS
+
+
+def test_create_snapshot_reports_the_new_browser_as_launching() -> None:
+    mgr = bsession.BrowserSessionManager()
+
+    async def go() -> BrowserSnapshot:
+        snapshot = await mgr.create_snapshot()
+        # The launch was only scheduled; cancel it before it gets a turn, so no Chromium starts.
+        for launch in mgr._launch_tasks:
+            launch.cancel()
+        return snapshot
+
+    snapshot = asyncio.run(go())
+
+    assert snapshot == BrowserSnapshot(
+        name=BrowserName("browser-1"),
+        lifecycle=BrowserLifecycle.INIT,
+        controller=BrowserController.HUMAN,
+    )
+    assert mgr.has_browser("browser-1")
+
+
+# --- the location verb (navigate the active tab, then checkpoint the manifest) ---
+
+
+def _page(target_id: str, url: str) -> dict[str, Any]:
+    return {"targetId": target_id, "url": url, "type": "page"}
+
+
+def test_navigate_browser_points_the_active_tab_at_the_url_and_checkpoints_the_manifest() -> None:
+    mgr = bsession.BrowserSessionManager()
+    browser = _running_browser(browser_id="browser-1")
+    cdp = NavigatingCdpClient(
+        targets=[_page("t1", "https://first.example/"), _page("t2", "https://second.example/")],
+        navigation_failure=None,
+    )
+    browser._cdp = cdp
+    browser._active_target_id = "t2"
+    mgr._browsers["browser-1"] = browser
+
+    async def go() -> None:
+        await mgr.navigate_browser("browser-1", "https://new.example/page")
+        # The checkpoint is fire-and-forget on the loop; let it land before the loop closes.
+        await asyncio.gather(*mgr._bg_save_tasks)
+
+    asyncio.run(go())
+
+    assert cdp.navigations == [("t2", "https://new.example/page")]
+    assert browser._active_target() == "t2"
+    saved = manifest.read_manifest()
+    assert saved is not None
+    assert [(entry.id, entry.tabs, entry.active_tab) for entry in saved.browsers] == [
+        ("browser-1", ["https://first.example/", "https://new.example/page"], 1)
+    ]
+
+
+def test_navigate_active_tab_falls_back_to_the_first_page_when_none_was_foregrounded() -> None:
+    browser = _running_browser(browser_id="browser-1")
+    cdp = NavigatingCdpClient(
+        targets=[_page("t1", "about:blank"), _page("t2", "https://second.example/")],
+        navigation_failure=None,
+    )
+    browser._cdp = cdp
+
+    asyncio.run(browser.navigate_active_tab("https://new.example/"))
+
+    assert cdp.navigations == [("t1", "https://new.example/")]
+    assert browser._active_target() == "t1"
+
+
+def test_navigate_active_tab_reports_a_refused_navigation_and_a_tabless_browser_as_failed() -> None:
+    refusing = _running_browser(browser_id="browser-1")
+    refusing._cdp = NavigatingCdpClient(
+        targets=[_page("t1", "about:blank")], navigation_failure="net::ERR_NAME_NOT_RESOLVED"
+    )
+    tabless = _running_browser(browser_id="browser-2")
+    tabless._cdp = NavigatingCdpClient(targets=[], navigation_failure=None)
+
+    with pytest.raises(NavigationFailedError, match="ERR_NAME_NOT_RESOLVED"):
+        asyncio.run(refusing.navigate_active_tab("https://nowhere.invalid/"))
+    with pytest.raises(NavigationFailedError, match="no tab to navigate"):
+        asyncio.run(tabless.navigate_active_tab("https://example.com/"))
+    assert refusing._active_target() is None

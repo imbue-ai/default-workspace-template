@@ -1,0 +1,125 @@
+# app_instances
+
+The shared implementation of the instances API every multi-instance workspace
+app serves (`contracts.md` sections 4 and 5 of the workspace app model, in
+`docs/system/blueprint/workspace-app-model/`): the Flask blueprint over a
+pluggable instance source, a JSON store for apps whose instances have no other
+backing state, the nudge that tells the shell a list changed, and a sidecar
+launcher that wraps a third-party server. A user who wants two dashboards side
+by side pays nothing new: mount the blueprint over a source, or let the sidecar
+serve it beside the wrapped server.
+
+The shell is the only caller of the API, over loopback, at the registry row's
+`instances_url`. Browsers never reach it; the shell relays every instance verb.
+
+## API
+
+- `app_instances.blueprint`: `build_instances_blueprint(source, nudger)` serves
+  exactly `GET /_instances`, `POST /_instances` (201), `DELETE /_instances/<key>`
+  (204, idempotent), `POST /_instances/<key>/rename`, and
+  `POST /_instances/<key>/location`. Every mutating route calls the source, then
+  `nudger.nudge()`, then answers; reads never nudge. A key that fails the key
+  rule, a body that is not the route's shape, `UnknownActionError`,
+  `InvalidParamsError`, `NotRenameableError`, and `LocationNotTrackedError` are
+  `400`; `UnknownInstanceError` is `404`; `InstanceConflictError` is `409`;
+  `NotReadyError` is `503`; any other library error is `500`. Every error body
+  is `{"detail": "<message>"}`. Bodies are read with `force=True`, so a caller
+  need not send a JSON content type. The two halves of that are public for an
+  app that serves routes of its own beside the blueprint (the terminal's hook
+  route): `parse_request_body(model)` reads the current request's body as
+  `model` (raising `MalformedRequestError`, a `400`), and `answer_typed_error`
+  is the `AppInstancesError` handler to register on the app's own blueprint, so
+  its routes answer the app's errors (subclasses of the library's) the same
+  way. `build_instances_app(source, nudger)` is a Flask app that serves
+  nothing but the blueprint, which is what the sidecar and the stub app run.
+- `app_instances.interfaces`: `InstanceSourceInterface` (`list_instances`,
+  `create_instance(action, params)`, `delete_instance(key)`,
+  `rename_instance(key, title)`, `set_location(key, path)`; implementations
+  must be thread-safe, the API is served threaded) and
+  `InstanceNudgerInterface` (`nudge()`).
+- `app_instances.data_types`: `InstanceStatus` (`working`, `idle`,
+  `attention`, `stopped`, `error`), `InstanceLifetime` (`explicit`,
+  `referenced`), `InstanceRecord` (the wire record; `model_dump(mode="json")`
+  is what the API emits, with `last_active` anchored to UTC), and the request
+  bodies `CreateRequest`, `RenameRequest`, `LocationRequest`.
+- `app_instances.primitives`: `InstanceKey` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`),
+  `InstanceKeyPrefix`, `InstanceUrl` (rooted with a single slash, at most 2048
+  characters, no control characters, `{tab}` at most once), `LocationPath` (the
+  same without the placeholder), `AbsoluteHttpUrl` (an absolute `http(s)` URL
+  with a host, under the same length and character rules) and `LocationTarget`,
+  the union a location report carries (a source takes the form that fits it:
+  the JSON store records paths and answers `400` for a URL; the browser
+  navigates to a URL), `InstanceTitle` (non-blank, trimmed, at most
+  256 characters), `TitleTemplate` (must contain `{n}`),
+  `render_title_template(template, number)`, which fills the placeholder in,
+  and the workspace's naming rule as the shell applies it to chats:
+  `canonical_name_from_title` ("My Build" to "My-Build"; "" when nothing
+  usable remains) and `is_name_conflict(candidate_title, taken_names)`
+  (canonical forms compared case-insensitively), for an app whose keys are
+  the true names of user-typed titles (the terminal).
+- `app_instances.json_store`: `JsonStoreInstanceSource` keeps records in one
+  `instances.json` (`{"version": 1, "instances": [record, ...]}`), rewritten
+  atomically (temp file plus rename) under the source's own lock, so one source
+  per process must be the file's only writer; a stray temp file from a crashed
+  write is ignored. Its one action is `new`, which mints the lowest free
+  `<key_prefix>-<N>` (a deleted number is reused) and stores `params.path`
+  (default `/`) as the URL; a location report replaces the URL and refreshes
+  `last_active`. `key_prefix`, `title_template`, `lifetime`, `is_renameable`,
+  and `is_location_tracked` are constructor fields. `app_store_path(name)` is
+  the conventional `data/.apps/<name>/instances.json`; `allocate_key(prefix,
+  taken_keys)` (or `allocate_instance_number` plus `allocated_key`, when the
+  number itself is wanted) and `instance_number(prefix, key)` are the
+  allocator, for sources that keep their own record of keys.
+  `read_json_document(path, model)` (None for a missing file; a file that
+  cannot be read, is not JSON, or does not fit raises `InstanceStoreError`)
+  and `write_json_document(path, document)` (the atomic replace) are the
+  store's file handling, for an app that keeps a document shape of its own.
+- `app_instances.nudge`: `post_to_shell(url, body)` is every post an app
+  makes to the shell: JSON body (or none) with a two-second timeout, an
+  unreachable or refusing shell logged at debug level (until phase 7 of the
+  model the shell answers `404`, which is expected), a warning when the post
+  took over half a second. `ShellNudger(app_name, shell_url)` posts
+  `POST <shell>/api/apps/<name>/changed` through it; an app's own posts to the
+  shell's tab routes (the terminal's) go through it too. `ThreadedNudger(inner)`
+  hands each nudge to a daemon thread, for an app whose list changes on a thread
+  that must not wait on the shell (the browser's event loop); `SilentNudger`
+  nudges nobody (the default before an app installs its shell nudger, and for
+  tests). `shell_base_url()`
+  resolves the shell exactly as `system/scripts/layout.py` does
+  (`MINDS_WORKSPACE_SERVER_URL`, default `http://127.0.0.1:8000`).
+- `app_instances.sidecar`: `app_url_port(app_url)` is the port the wrapped
+  server must listen on (the app URL's; a `SidecarError` when it names none).
+  `run_sidecar(manifest_path, app_url, instances_url,
+  child_argv, source)` starts the blueprint at `instances_url` on a daemon
+  thread (werkzeug's threaded server), registers the app by running
+  `system/scripts/forward_port.py --manifest <path> --url <app_url>` under its
+  own interpreter (after the listener is up, so the shell's first fetch
+  succeeds), spawns the
+  child, forwards `SIGTERM` and `SIGINT` to it, and returns the exit status to
+  end the program with: the child's code, or 128 plus the signal number when a
+  signal killed it. It must run on the main thread and from the repo root
+  (the registration script and the registry are cwd-relative, like everything
+  supervisord runs). The manifest must declare `instances = true` with an
+  `instances_url` equal to the one served. `run_sidecar_app(manifest_path,
+  app_url, instances_url, child_argv, build_app)` is the same with the Flask
+  app built by `build_app(manifest, nudger)`, for an app that mounts routes of
+  its own beside the blueprint (the terminal's hook route); `run_sidecar` wraps
+  it. `serve_in_background(host, port,
+  app)` is the context manager it serves through (bind, daemon thread, shut
+  down on exit), which tests reuse for scratch servers.
+- `app_instances.testing`: `StubInstanceSource` (in-memory, records every
+  call), `RecordingNudger`, `free_port`, `is_port_accepting`, `wait_until`,
+  `write_sidecar_manifest` (a valid multi-instance `app.toml` plus its icon),
+  `SidecarEnvironment` (the scratch directory and registry a sidecar test runs
+  against) and `prepare_sidecar_environment(tmp_path, monkeypatch, repo_root)`,
+  which builds one for a fixture (cwd at the repo root, the registry and an
+  unreachable shell in the environment), `serve_recording_shell()` (a fake
+  shell that records every request's method, path, and JSON body and answers
+  `404`), and `run_stub_app(port)` for the shell's tests in later phases; as a
+  module it serves the stub app (`python -m app_instances.testing stub --port
+  <port>`) or runs the sidecar over a JSON store (`... sidecar --manifest ...
+  --app-url ... --instances-url ... --store ... -- <child argv>`).
+
+The terminal app (`system/apps/terminal`, phase 3) and the files app
+(`system/apps/files`, phase 4, the sidecar around dufs) are its users; phase 5
+(browser) of the model follows.

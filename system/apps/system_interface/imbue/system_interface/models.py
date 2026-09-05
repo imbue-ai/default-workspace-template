@@ -72,7 +72,9 @@ class SendMessageRequest(FrozenModel):
         ),
     )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
-    active_layout: str = Field(default="", description="The sender's active layout slug at send time")
+    active_layout: str = Field(
+        default="", description="The id of the view the sender was on at send time ('' for legacy callers)"
+    )
     device_kind: str = Field(default="", description="'mobile' or 'desktop', derived from the sender's user agent")
 
 
@@ -182,25 +184,10 @@ class AgentRestartError(RuntimeError):
     ...
 
 
-class ActivityRequest(FrozenModel):
-    """Request body for the /api/activity endpoint.
+class AgentDestroyError(RuntimeError):
+    """Raised when ``mngr destroy`` refuses or fails for a chat agent."""
 
-    A snapshot of the workspace UI's current agent-tab activity, posted by the
-    frontend whenever a tab opens/closes, the visible tab changes, or a message
-    is sent. The backend uses it to re-tag chat agents' OOM priority. ``open`` and
-    ``visible`` are the full current sets (replaced wholesale); ``messaged`` is
-    set only when the report was triggered by a send, to bump that chat's recency.
-    """
-
-    open: list[str] = Field(default_factory=list, description="Agent ids of all currently open tabs")
-    visible: list[str] = Field(default_factory=list, description="Agent ids of the currently visible tabs")
-    messaged: str | None = Field(default=None, description="Agent id just messaged, if this report was a send")
-
-
-class ActivityResponse(FrozenModel):
-    """Response from the /api/activity endpoint."""
-
-    status: str = Field(description="Status of the activity report")
+    ...
 
 
 class ErrorResponse(FrozenModel):
@@ -271,63 +258,6 @@ class AgentStateItem(FrozenModel):
             "live state pushed on the agents WebSocket, replaced wholesale each push."
         ),
     )
-
-
-class AppEntry(FrozenModel):
-    """An app registered in data/.state/apps.toml."""
-
-    name: str = Field(description="App name (e.g., 'web', 'terminal')")
-    url: str = Field(description="Local URL where the app is accessible")
-    label: str = Field(
-        default="",
-        description=(
-            "Unguessable ``<name>-<rand>`` hostname label the service's public "
-            "origin uses. Empty for legacy rows written before labels existed."
-        ),
-    )
-    icon: str = Field(
-        default="",
-        description=(
-            "The app's icon as SVG markup (a single ``<svg>`` element), stored "
-            "verbatim in the registry by ``system/scripts/forward_port.py``. "
-            "Empty when the app registered no icon, which is the normal case; "
-            "consumers fall back to their generic app glyph."
-        ),
-    )
-    internal: bool = Field(
-        default=False,
-        description=(
-            "Registered with ``forward_port.py --internal``: has a port to "
-            "forward but no page of its own, so the frontend must not offer it "
-            "as something to open (the New Tab launcher's machine table, the "
-            "rail's All apps popover, its shortcuts)."
-        ),
-    )
-    program: str = Field(
-        default="",
-        description=(
-            "The supervisord program running this app, registered via "
-            "``forward_port.py --program``. Its presence is the capability "
-            "grant 'this app can be stopped and started through supervisord'; "
-            "empty means unsupervised (or registered before the field existed)."
-        ),
-    )
-    is_running: bool = Field(
-        default=True,
-        description=(
-            "Derived liveness, never stored in the registry: supervisord's "
-            "process state for ``program`` rows, a TCP probe of ``url`` "
-            "otherwise. Rows default to running until the first probe lands."
-        ),
-    )
-
-
-class TerminalSessionInfo(FrozenModel):
-    """A live user-terminal tmux session (one per ad-hoc dockview terminal tab)."""
-
-    session_name: str = Field(description="The tmux session name (e.g. 'terminal-1')")
-    session_id: str = Field(description="The immutable tmux session id (e.g. '$3'), stable across rename")
-    cwd: str = Field(description="The session's current working directory (tmux session_path)")
 
 
 class CreateChatRequest(FrozenModel):

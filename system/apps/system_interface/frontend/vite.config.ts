@@ -37,6 +37,15 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "../imbue/system_interface/static"),
     emptyOutDir: true,
+    rollupOptions: {
+      // Two documents from one build: the shell (index.html) and the chat page
+      // (chat.html), which the chat app serves at /<agent-id>. The browser-side
+      // contract module is a separate library build (vite.contract.config.ts).
+      input: {
+        index: path.resolve(__dirname, "index.html"),
+        chat: path.resolve(__dirname, "chat.html"),
+      },
+    },
   },
   server: {
     proxy: {

@@ -5,9 +5,32 @@ Uses file locking to safely upsert or remove entries. Called by services
 on startup to declare the ports they expose.
 
 Usage:
+    python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml --url http://localhost:8300
     python3 system/scripts/forward_port.py --name terminal --url http://localhost:7681
     python3 system/scripts/forward_port.py --icon-file system/apps/foo/icon.svg --name foo --url http://localhost:8090
     python3 system/scripts/forward_port.py --remove --name terminal
+
+This script is deliberately standard-library only: every supervisord program
+line runs it under a plain ``python3`` before the program's own command, so
+registration must never depend on the root venv being intact. It reads TOML
+with ``tomllib`` and writes the registry's flat ``[[apps]]`` shape with the
+private writer below.
+
+Manifests
+---------
+An app with a directory ships ``system/apps/<package>/app.toml`` (see
+``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
+and copies its static fields onto the row: ``display_name``, ``instances``,
+``instances_url``, ``critical``, ``priority``, ``program`` (default: the name),
+``internal``, ``default_shortcut``, and ``actions`` (id and label only); the
+icon is read from the file the manifest names, relative to the manifest. Every
+manifest field is authoritative on every call, so a re-registration with a
+changed manifest updates the row. Only what is copied from files is checked
+here (the name rule, the icon markup, the value types); the manifest's other
+rules are the ``app_manifest`` library's job, applied by ``validate-manifest``
+and by every reader of the registry. ``--name --url`` without a manifest keeps
+registering rows for things with no app directory (owner-exec, the VM exec
+service, previews, isolated test servers).
 
 Icons
 -----
@@ -19,8 +42,9 @@ reading the registry off a shared host -- at whatever moment it renders, and
 those do not share a filesystem view with the service that registered. The
 markup travels with the entry through the existing apps.toml -> app-watcher
 event -> WebSocket path with no extra plumbing and no file access at all.
-``--icon-file`` is only an input convenience: the file is read once here, at
-registration time, and its contents (not its path) are what gets persisted.
+``--icon-file`` (and the manifest's ``icon``) is only an input convenience: the
+file is read once here, at registration time, and its contents (not its path)
+are what gets persisted.
 
 The markup is validated before it is stored, because it is eventually inlined
 into the workspace DOM: ``validate_icon`` accepts exactly one well-formed
@@ -39,10 +63,9 @@ import re
 import secrets
 import sys
 import tempfile
+import tomllib
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
-
-import tomlkit
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -72,7 +95,8 @@ MAX_SERVICE_NAME_LENGTH = 32
 # ``system_interface`` predates this scheme and underscore labels resolve
 # fine in browsers -- but new apps should stick to kebab-case (the build-app
 # scaffold enforces the stricter rule; a drift test in forward_port_test.py
-# keeps that rule a subset of this one).
+# keeps that rule a subset of this one, and keeps the app_manifest library's
+# copy of this rule identical).
 NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 
 # Workspace hostnames carry their coordinate as a ``host-<hex>`` label (and
@@ -110,6 +134,52 @@ _ICON_REFERENCE_ATTRIBUTES = frozenset({"href", "src"})
 # whitespace in XML and are kept.
 _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
+# The manifest keys copied verbatim onto the row, with the type each must have.
+# ``name`` (validated separately), ``icon`` (read from the named file), and the
+# two structured keys (``default_shortcut``, ``actions``) are handled on their
+# own. ``program`` defaults to the name when the manifest omits it.
+_MANIFEST_STRING_KEYS = ("display_name", "instances_url", "priority", "program")
+_MANIFEST_BOOL_KEYS = ("instances", "critical", "internal")
+
+# The registry keys a manifest owns. A manifest registration rewrites every one
+# of them (absent in the manifest means absent on the row), so a stale value
+# from an earlier manifest never lingers.
+_MANIFEST_OWNED_KEYS = (
+    "display_name",
+    "instances",
+    "instances_url",
+    "critical",
+    "priority",
+    "program",
+    "internal",
+    "default_shortcut",
+    "actions",
+)
+
+# The TOML basic-string escapes for the characters that have a short form;
+# every other control character is written as ``\uXXXX``.
+_TOML_SHORT_ESCAPES = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\b": "\\b",
+    "\t": "\\t",
+    "\n": "\\n",
+    "\f": "\\f",
+    "\r": "\\r",
+}
+
+
+class RegistryError(Exception):
+    """Base error for the registry this script maintains."""
+
+
+class UnsupportedRegistryValueError(RegistryError, TypeError):
+    """A value the registry's flat ``[[apps]]`` shape cannot hold."""
+
+
+class MalformedRegistryError(RegistryError, ValueError):
+    """A registry file whose top-level shape is not ``[[apps]]`` tables."""
+
 
 def _local_name(tag: str) -> str:
     """Strip ElementTree's ``{namespace}`` prefix from a tag or attribute name."""
@@ -134,7 +204,9 @@ def _validate_icon_element(element: ElementTree.Element) -> str | None:
                 return f"invalid icon: event-handler attribute {name!r} is not allowed"
             if "javascript:" in attribute_value.lower().replace(" ", ""):
                 return f"invalid icon: attribute {name!r} contains a javascript: URL"
-            if name in _ICON_REFERENCE_ATTRIBUTES and not attribute_value.startswith("#"):
+            if name in _ICON_REFERENCE_ATTRIBUTES and not attribute_value.startswith(
+                "#"
+            ):
                 return (
                     f"invalid icon: attribute {name!r} must reference the icon "
                     "itself (a '#id' fragment); icons may not point at external "
@@ -192,7 +264,10 @@ def read_icon_file(path: Path) -> tuple[str | None, str | None]:
     stripped) are what gets persisted; the path is not recorded anywhere.
     """
     if path.suffix.lower() != ".svg":
-        return None, f"icon file {str(path)!r} must be an .svg file (icons are SVG-only so every glyph stays in the same vector style)"
+        return (
+            None,
+            f"icon file {str(path)!r} must be an .svg file (icons are SVG-only so every glyph stays in the same vector style)",
+        )
     if not path.is_file():
         return None, f"icon file {str(path)!r} does not exist"
     try:
@@ -220,7 +295,7 @@ def validate_service_name(name: str) -> str | None:
     bad name fails loudly instead of silently registering an unroutable (or
     unremovable) entry.
     """
-    if not NAME_PATTERN.match(name):
+    if not NAME_PATTERN.fullmatch(name):
         return (
             f"invalid app name {name!r}: names must be lowercase "
             "alphanumeric/underscore runs separated by single hyphens (no "
@@ -256,16 +331,88 @@ def _apps_file() -> Path:
     return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
 
 
-def _load_apps(path: Path) -> tomlkit.TOMLDocument:
+def _toml_string(value: str) -> str:
+    """``value`` as a TOML basic string: ``\\``, ``"``, and control characters escaped."""
+    escaped: list[str] = []
+    for character in value:
+        short = _TOML_SHORT_ESCAPES.get(character)
+        if short is not None:
+            escaped.append(short)
+        elif character < " " or character == "\x7f":
+            escaped.append(f"\\u{ord(character):04X}")
+        else:
+            escaped.append(character)
+    return '"' + "".join(escaped) + '"'
+
+
+def _toml_inline_table(table: dict[str, object]) -> str:
+    return (
+        "{"
+        + ", ".join(f"{key} = {_toml_scalar(value)}" for key, value in table.items())
+        + "}"
+    )
+
+
+def _toml_scalar(value: object) -> str:
+    """A string or boolean as TOML; the registry's tables and arrays hold nothing else."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return _toml_string(value)
+    raise UnsupportedRegistryValueError(
+        f"the registry cannot hold a value of type {type(value).__name__}: {value!r}"
+    )
+
+
+def _toml_value(value: object) -> str:
+    """A registry row value as TOML: a scalar, an inline table of scalars, or an array of such tables."""
+    if isinstance(value, dict):
+        return _toml_inline_table(value)
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                raise UnsupportedRegistryValueError(
+                    f"the registry cannot hold an array element of type {type(item).__name__}: {item!r}"
+                )
+        return "[" + ", ".join(_toml_inline_table(item) for item in value) + "]"
+    return _toml_scalar(value)
+
+
+def dump_registry(apps: list[dict[str, object]]) -> str:
+    """Render the registry as ``[[apps]]`` tables, one key per line, in the order given.
+
+    The output is what ``tomllib`` reads back byte-for-byte equal in every
+    value (icons carry newlines and quotes; both survive the escaping). Keys are
+    bare, which every registry key is.
+    """
+    chunks: list[str] = []
+    for app in apps:
+        lines = ["[[apps]]"]
+        for key, value in app.items():
+            lines.append(f"{key} = {_toml_value(value)}")
+        chunks.append("\n".join(lines) + "\n")
+    return "\n".join(chunks)
+
+
+def _load_apps(path: Path) -> list[dict[str, object]]:
     if not path.exists():
-        doc = tomlkit.document()
-        doc.add("apps", tomlkit.aot())
-        return doc
+        return []
     with open(path, "rb") as f:
-        return tomlkit.load(f)
+        doc = tomllib.load(f)
+    apps = doc.get("apps", [])
+    if not isinstance(apps, list):
+        raise MalformedRegistryError(
+            f"registry {path} has an 'apps' key that is not an array of tables"
+        )
+    for app in apps:
+        if not isinstance(app, dict):
+            raise MalformedRegistryError(
+                f"registry {path} has an 'apps' element that is not a table: {app!r}"
+            )
+    return [dict(app) for app in apps]
 
 
-def _save_apps(path: Path, doc: tomlkit.TOMLDocument) -> None:
+def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
     # Atomic write: write to a temp file in the same directory, then os.replace()
     # into place. This guarantees that readers (like app-watcher) never observe
     # a truncated/partial file during the write window.
@@ -274,13 +421,105 @@ def _save_apps(path: Path, doc: tomlkit.TOMLDocument) -> None:
         dir=path.parent, prefix=path.name + ".", suffix=".tmp"
     )
     try:
-        with os.fdopen(tmp_fd, "w") as f:
-            tomlkit.dump(doc, f)
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(dump_registry(apps))
         os.replace(tmp_path, path)
     except Exception:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise
+
+
+def _read_manifest(
+    path: Path, name_from_flag: str | None
+) -> tuple[dict[str, object], Path | None, str | None]:
+    """Read ``path`` and return ``(row_fields, icon_path, error)``.
+
+    ``row_fields`` holds every manifest-owned registry key the manifest sets
+    (plus ``name``), with each value checked to be the type the registry
+    stores. ``icon_path`` is the icon file resolved against the manifest's
+    directory, or None for a manifest without one. Only one of ``row_fields``
+    and ``error`` is meaningful.
+    """
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        return {}, None, f"manifest {str(path)!r} could not be read: {error}"
+    except tomllib.TOMLDecodeError as error:
+        return {}, None, f"manifest {str(path)!r} is not valid TOML: {error}"
+
+    name = raw.get("name")
+    if not isinstance(name, str):
+        return {}, None, f"manifest {str(path)!r} has no string 'name'"
+    name_error = validate_service_name(name)
+    if name_error is not None:
+        return {}, None, f"manifest {str(path)!r}: {name_error}"
+    if name_from_flag is not None and name_from_flag != name:
+        return (
+            {},
+            None,
+            f"--name {name_from_flag!r} does not match the manifest's name {name!r}",
+        )
+
+    fields: dict[str, object] = {"name": name}
+    for key in _MANIFEST_STRING_KEYS:
+        if key in raw:
+            if not isinstance(raw[key], str):
+                return {}, None, f"manifest {str(path)!r}: {key} must be a string"
+            fields[key] = raw[key]
+    for key in _MANIFEST_BOOL_KEYS:
+        if key in raw:
+            if not isinstance(raw[key], bool):
+                return {}, None, f"manifest {str(path)!r}: {key} must be a boolean"
+            fields[key] = raw[key]
+    if "program" not in fields:
+        fields["program"] = name
+
+    shortcut = raw.get("default_shortcut")
+    if shortcut is not None:
+        if not (
+            isinstance(shortcut, dict)
+            and isinstance(shortcut.get("action"), str)
+            and isinstance(shortcut.get("mode"), str)
+        ):
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: default_shortcut must be a table with string 'action' and 'mode'",
+            )
+        fields["default_shortcut"] = {
+            "action": shortcut["action"],
+            "mode": shortcut["mode"],
+        }
+
+    actions = raw.get("actions")
+    if actions is not None:
+        if not isinstance(actions, list):
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: actions must be an array of tables",
+            )
+        copied_actions: list[dict[str, object]] = []
+        for action in actions:
+            if not (
+                isinstance(action, dict)
+                and isinstance(action.get("id"), str)
+                and isinstance(action.get("label"), str)
+            ):
+                return (
+                    {},
+                    None,
+                    f"manifest {str(path)!r}: every action needs a string 'id' and 'label'",
+                )
+            copied_actions.append({"id": action["id"], "label": action["label"]})
+        fields["actions"] = copied_actions
+
+    icon = raw.get("icon")
+    if icon is not None and not isinstance(icon, str):
+        return {}, None, f"manifest {str(path)!r}: icon must be a string path"
+    icon_path = path.parent / icon if icon is not None else None
+    return fields, icon_path, None
 
 
 def _upsert(
@@ -290,6 +529,7 @@ def _upsert(
     icon: str | None = None,
     internal: bool = False,
     program: str | None = None,
+    manifest_fields: dict[str, object] | None = None,
 ) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
 
@@ -308,9 +548,15 @@ def _upsert(
     through supervisord". Like ``internal``, every call is authoritative:
     passing it sets the field and omitting it clears it, so a registration
     that stops passing it cannot leave a stale capability behind.
+
+    ``manifest_fields`` (a ``--manifest`` registration) is authoritative for
+    every manifest-owned key the same way: each is set to the manifest's value
+    or removed when the manifest omits it.
     """
-    doc = _load_apps(path)
-    apps = doc.get("apps", [])
+    apps = _load_apps(path)
+    manifest_owned = _manifest_owned_values(
+        manifest_fields, internal=internal, program=program
+    )
 
     # Update an existing entry's URL in place, minting a label only if one was
     # never assigned (a legacy row, or a row written before labels existed).
@@ -322,66 +568,94 @@ def _upsert(
                 app["label"] = mint_service_label(name)
             if icon is not None:
                 app["icon"] = icon
-            if internal:
-                app["internal"] = True
-            elif "internal" in app:
-                del app["internal"]
-            if program is not None:
-                app["program"] = program
-            elif "program" in app:
-                del app["program"]
-            _save_apps(path, doc)
+            for key in _MANIFEST_OWNED_KEYS:
+                if key in manifest_owned:
+                    app[key] = manifest_owned[key]
+                elif key in app:
+                    del app[key]
+            _save_apps(path, apps)
             return
 
     # No existing entry -- append with a freshly-minted label. The ``icon``,
-    # ``internal``, and ``program`` keys are omitted entirely when there is
-    # nothing to say, so the common row keeps the shape it has always had (a
-    # missing key reads as "no icon" / "not internal" / "not supervised").
-    entry = tomlkit.table()
-    entry.add("name", name)
-    entry.add("url", url)
-    entry.add("label", mint_service_label(name))
+    # ``internal``, ``program``, and manifest keys are omitted entirely when
+    # there is nothing to say, so the common row keeps the shape it has always
+    # had (a missing key reads as "no icon" / "not internal" / "not supervised").
+    entry: dict[str, object] = {
+        "name": name,
+        "url": url,
+        "label": mint_service_label(name),
+    }
     if icon is not None:
-        entry.add("icon", icon)
-    if internal:
-        entry.add("internal", True)
-    if program is not None:
-        entry.add("program", program)
+        entry["icon"] = icon
+    for key in _MANIFEST_OWNED_KEYS:
+        if key in manifest_owned:
+            entry[key] = manifest_owned[key]
     apps.append(entry)
-    _save_apps(path, doc)
+    _save_apps(path, apps)
+
+
+def _manifest_owned_values(
+    manifest_fields: dict[str, object] | None, internal: bool, program: str | None
+) -> dict[str, object]:
+    """The manifest-owned keys a registration sets, from the manifest or from the plain flags."""
+    if manifest_fields is not None:
+        values = {
+            key: value
+            for key, value in manifest_fields.items()
+            if key in _MANIFEST_OWNED_KEYS
+        }
+        # ``internal`` keeps its flag shape on the row (present only when true).
+        if not values.get("internal", False):
+            values.pop("internal", None)
+        return values
+    values = {}
+    if internal:
+        values["internal"] = True
+    if program is not None:
+        values["program"] = program
+    return values
 
 
 def _has_entry(path: Path, name: str) -> bool:
-    return any(app.get("name") == name for app in _load_apps(path).get("apps", []))
+    return any(app.get("name") == name for app in _load_apps(path))
 
 
 def _remove(path: Path, name: str) -> None:
     if not path.exists():
         return
-    doc = _load_apps(path)
-    apps = doc.get("apps", [])
-    original_len = len(apps)
-
-    # Remove matching entries
-    to_remove = [i for i, app in enumerate(apps) if app.get("name") == name]
-    for i in reversed(to_remove):
-        del apps[i]
-
-    if len(apps) != original_len:
-        _save_apps(path, doc)
+    apps = _load_apps(path)
+    remaining = [app for app in apps if app.get("name") != name]
+    if len(remaining) != len(apps):
+        _save_apps(path, remaining)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Register or remove an app port")
     parser.add_argument(
-        "--name", required=True, help="App name (e.g. 'terminal', 'browser')"
+        "--name",
+        help="App name (e.g. 'terminal', 'browser'). Required without --manifest; must match the manifest's name with it.",
+    )
+    parser.add_argument(
+        "--manifest",
+        help=(
+            "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
+            "instances, instances_url, critical, priority, program, internal, default_shortcut, "
+            "actions) are copied onto the row on every call."
+        ),
     )
     parser.add_argument(
         "--url",
         help="Full URL where the app is accessible (e.g. http://localhost:7681)",
     )
-    parser.add_argument("--icon-file", help="Path to the app's .svg icon; its contents are read now, validated, and stored (the path is not recorded). Omit to leave any stored icon untouched.")
-    parser.add_argument("--no-icon", action="store_true", help="Register a brand-new entry without an icon, keeping the generic letter monogram. Does NOT hide the entry (that is --internal's job). Prefer --icon-file; use only when an icon was explicitly declined or would never be rendered.")
+    parser.add_argument(
+        "--icon-file",
+        help="Path to the app's .svg icon; its contents are read now, validated, and stored (the path is not recorded). Omit to leave any stored icon untouched.",
+    )
+    parser.add_argument(
+        "--no-icon",
+        action="store_true",
+        help="Register a brand-new entry without an icon, keeping the generic letter monogram. Does NOT hide the entry (that is --internal's job). Prefer --icon-file; use only when an icon was explicitly declined or would never be rendered.",
+    )
     parser.add_argument(
         "--program",
         help=(
@@ -411,6 +685,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.manifest is None and args.name is None:
+        parser.error("--name is required without --manifest")
+
     if not args.remove and not args.url:
         parser.error("--url is required when not using --remove")
 
@@ -423,17 +700,45 @@ def main() -> None:
     if args.remove and args.program is not None:
         parser.error("--program cannot be combined with --remove")
 
+    if args.manifest is not None and (
+        args.remove
+        or args.icon_file is not None
+        or args.no_icon
+        or args.program is not None
+        or args.internal
+    ):
+        parser.error(
+            "--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, or --internal"
+        )
+
     if args.program is not None and not args.program.strip():
         parser.error("--program must not be empty")
 
-    name_error = validate_service_name(args.name)
-    if name_error is not None:
-        parser.error(name_error)
+    manifest_fields: dict[str, object] | None = None
+    icon_path: Path | None = (
+        Path(args.icon_file) if args.icon_file is not None else None
+    )
+    if args.manifest is not None:
+        manifest_fields, icon_path, manifest_error = _read_manifest(
+            Path(args.manifest), args.name
+        )
+        if manifest_error is not None:
+            parser.error(manifest_error)
+        name = str(manifest_fields["name"])
+    else:
+        name = args.name
+        name_error = validate_service_name(name)
+        if name_error is not None:
+            parser.error(name_error)
 
     icon: str | None = None
     icon_error: str | None = None
-    if args.icon_file is not None:
-        icon, icon_error = read_icon_file(Path(args.icon_file))
+    if icon_path is not None:
+        icon, icon_error = read_icon_file(icon_path)
+
+    is_internal = args.internal or bool(
+        manifest_fields is not None and manifest_fields.get("internal", False)
+    )
 
     apps_file = _apps_file()
     lock_path = apps_file.parent / ".apps.lock"
@@ -443,9 +748,9 @@ def main() -> None:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
         try:
             if args.remove:
-                _remove(apps_file, args.name)
+                _remove(apps_file, name)
             else:
-                is_new_pickable = not args.internal and not _has_entry(apps_file, args.name)
+                is_new_pickable = not is_internal and not _has_entry(apps_file, name)
                 # A bad icon file fails a NEW registration (the author is present to
                 # fix it) but must not brick an existing app's restart: warn and
                 # register without it, keeping any already-stored icon (the UI
@@ -453,19 +758,23 @@ def main() -> None:
                 if icon_error is not None:
                     if is_new_pickable:
                         parser.error(icon_error)
-                    sys.stderr.write(f"warning: {icon_error}; registering without an icon\n")
+                    sys.stderr.write(
+                        f"warning: {icon_error}; registering without an icon\n"
+                    )
                 if icon is None and not args.no_icon and is_new_pickable:
                     parser.error(
-                        f"app {args.name!r} is new and has no icon: pass --icon-file with a house-style "
-                        "SVG (see the build-app skill), or --no-icon to keep the generic letter monogram"
+                        f"app {name!r} is new and has no icon: pass --icon-file with a house-style "
+                        "SVG (see the build-app skill), name one in the manifest, or pass --no-icon "
+                        "to keep the generic letter monogram"
                     )
                 _upsert(
                     apps_file,
-                    args.name,
+                    name,
                     args.url,
                     icon,
                     internal=args.internal,
                     program=args.program.strip() if args.program is not None else None,
+                    manifest_fields=manifest_fields,
                 )
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)

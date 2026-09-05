@@ -34,7 +34,7 @@ def test_prevent_while_true() -> None:
 def test_prevent_time_sleep() -> None:
     # +1 for testing.py's _wait_until_serving TCP-ready poll loop, used by the
     # WebSocket/SSE tests that need a real Werkzeug listener.
-    rc.check_time_sleep(_DIR, snapshot(6))
+    rc.check_time_sleep(_DIR, snapshot(4))
 
 
 def test_prevent_global_keyword() -> None:
@@ -67,7 +67,7 @@ def test_prevent_broad_exception_catch() -> None:
     # same thread-boundary shape. The worker is the ONLY thing that ever delivers
     # a held message, so an escaping exception would strand every queued message
     # for the life of the process; it logs and keeps looping instead.
-    rc.check_broad_exception_catch(_DIR, snapshot(5))
+    rc.check_broad_exception_catch(_DIR, snapshot(3))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -88,14 +88,14 @@ def test_prevent_builtin_exception_raises() -> None:
 # failure -- a permission request we cannot read -- is already visible: the card
 # says so, which is the bug this parser exists to fix.
 def test_prevent_silent_decode_error_catches() -> None:
-    rc.check_silent_decode_error_catches(_DIR, snapshot(5))
+    rc.check_silent_decode_error_catches(_DIR, snapshot(4))
 
 
 # --- Import style ---
 
 
 def test_prevent_inline_imports() -> None:
-    rc.check_inline_imports(_DIR, snapshot(2))
+    rc.check_inline_imports(_DIR, snapshot(0))
 
 
 def test_prevent_relative_imports() -> None:
@@ -283,10 +283,6 @@ def test_prevent_init_methods_in_non_exception_classes() -> None:
     # The watchdog file-change handler's __init__ is counted toward the
     # project's existing total: it lived in session_watcher.py and now lives
     # in watcher_common.py as the shared WakeOnChangeHandler.
-    # +1 for layout_ops.LayoutMutex.__init__. The mutex holds runtime state
-    # (a ``threading.Lock`` and a holder dict mutated under that lock) that
-    # is not a natural fit for a Pydantic model, matching the precedent
-    # already set by session_watcher / event_queues entries here.
     # +1 for oom_prioritizer.ChatOomPrioritizer.__init__. Same category: it
     # holds a ``threading.Lock``, mutable presence sets, a recency-timestamp
     # dict mutated under that lock, and injected callables -- runtime state
@@ -296,7 +292,7 @@ def test_prevent_init_methods_in_non_exception_classes() -> None:
     # (``http.client.HTTPConnection`` / ``xmlrpc.client.Transport``) whose
     # construction contract is fixed by the stdlib, so a Pydantic model cannot
     # stand in and the socket path has to arrive through ``__init__``.
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(8))
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(7))
 
 
 def test_prevent_cast_usage() -> None:
