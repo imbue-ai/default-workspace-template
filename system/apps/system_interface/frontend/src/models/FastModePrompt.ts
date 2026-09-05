@@ -79,7 +79,7 @@ export function resolveFastModePrompt(isFastModeEnabled: boolean): void {
   void m
     .request({
       method: "POST",
-      url: apiUrl(`/api/agents/${encodeURIComponent(agentId)}/fast-mode-answered`),
+      url: apiUrl(`/api/chats/${encodeURIComponent(agentId)}/fast-mode-answered`),
     })
     .catch((error) => {
       // The live agent still got the change; only the durable latch is lost, so

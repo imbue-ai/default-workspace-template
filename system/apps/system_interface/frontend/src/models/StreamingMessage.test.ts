@@ -11,6 +11,7 @@ vi.mock("mithril", () => ({
 }));
 
 import { loadSnapshotWithStream } from "./StreamingMessage";
+import { asChatId } from "../ids";
 import { getConversationLoadState, getEventsForAgent, type TranscriptEvent } from "./Response";
 
 interface Deferred<T> {
@@ -68,7 +69,7 @@ afterEach(() => {
 
 describe("loadSnapshotWithStream", () => {
   it("does not drop an SSE delta that races the initial snapshot fetch", async () => {
-    const agentId = `agent-${agentCounter++}`;
+    const agentId = asChatId(`agent-${agentCounter++}`);
     const snapshotEvent = makeEvent("snap-1", "from snapshot");
     const delta = makeEvent("delta-1", "live delta during fetch");
 
@@ -100,7 +101,7 @@ describe("snapshot retry after reconnect", () => {
     // were silently missing forever (transcript desynchronized from the TUI).
     vi.useFakeTimers();
     try {
-      const agentId = `agent-${agentCounter++}`;
+      const agentId = asChatId(`agent-${agentCounter++}`);
       mockRequest.mockResolvedValueOnce({ events: [makeEvent("initial", "before outage")] });
       await loadSnapshotWithStream(agentId);
 
@@ -132,7 +133,7 @@ describe("snapshot retry after reconnect", () => {
     // recoverable only by reloading the page.
     vi.useFakeTimers();
     try {
-      const agentId = `agent-${agentCounter++}`;
+      const agentId = asChatId(`agent-${agentCounter++}`);
       mockRequest.mockRejectedValueOnce(Object.assign(new Error(String(null)), { code: 503, response: null }));
       await expect(loadSnapshotWithStream(agentId)).rejects.toThrow();
       expect(getConversationLoadState(agentId).error).toBe("request failed (HTTP 503)");

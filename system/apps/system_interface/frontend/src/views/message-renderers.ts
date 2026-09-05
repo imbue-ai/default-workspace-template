@@ -6,6 +6,7 @@
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
+import { asChatId } from "../ids";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getAgentById } from "../models/AgentManager";
@@ -205,7 +206,7 @@ export function StableAssistantMessage(): m.Component<{
         currentToolResultCount !== renderedToolResultCount ||
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
-        getEventDetailVersion(agentId) !== renderedDetailVersion
+        getEventDetailVersion(asChatId(agentId)) !== renderedDetailVersion
       );
     },
     view(vnode) {
@@ -216,7 +217,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
-      renderedDetailVersion = getEventDetailVersion(agentId);
+      renderedDetailVersion = getEventDetailVersion(asChatId(agentId));
 
       return m("div", renderAssistantMessageChildren(event, toolResults, agentId));
     },
@@ -324,6 +325,7 @@ export function renderToolCallBlock(
   agentId: string,
   assistantEventId: string,
 ): m.Vnode {
+  const chatId = asChatId(agentId);
   // The harness's parser already worked out what this call should read as -- for
   // codex that means unwrapping an `exec` whose real operation is buried in a JS
   // argument, which is not something this view should have to know. Falls back to
@@ -341,10 +343,10 @@ export function renderToolCallBlock(
   const hasOutput = Boolean(toolResult && (toolResult.output_chars > 0 || toolResult.output));
   const requestPayloads = () => {
     if (toolCall.input_chars > 0) {
-      requestEventDetail(agentId, assistantEventId);
+      requestEventDetail(chatId, assistantEventId);
     }
     if (toolResult && toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")) {
-      requestEventDetail(agentId, toolResult.event_id);
+      requestEventDetail(chatId, toolResult.event_id);
     }
   };
   if (isExpanded) {
@@ -355,7 +357,7 @@ export function renderToolCallBlock(
 
   let inputSection: m.Vnode | null = null;
   if (hasInput) {
-    const inputDetail = getEventDetailState(agentId, assistantEventId);
+    const inputDetail = getEventDetailState(chatId, assistantEventId);
     if (inputDetail?.state === "loaded") {
       const inputText = inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? toolCall.tk_command ?? "";
       inputSection = renderPayloadSection("tool-call-input", inputText, "loaded");
@@ -375,7 +377,7 @@ export function renderToolCallBlock(
     // expansion), the fetched output leads and the expansion follows.
     const fetched =
       toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")
-        ? getEventDetailState(agentId, toolResult.event_id)
+        ? getEventDetailState(chatId, toolResult.event_id)
         : undefined;
     const inline = toolResult.output ?? "";
     if (fetched?.state === "loaded") {
@@ -480,14 +482,15 @@ function providerFaultNote(kind: string | null): string {
  *  readable reasoning. The text itself loads on demand (payload-free wire) and expands
  *  inline; the toggle is deliberately minimal -- most readers never open it. */
 function renderThinkingDisclosure(event: AssistantMessageEvent, agentId: string): m.Vnode {
+  const chatId = asChatId(agentId);
   const expansionKey = `think:${event.event_id}`;
   const isExpanded = isBlockExpanded(expansionKey);
   if (isExpanded) {
-    requestEventDetail(agentId, event.event_id);
+    requestEventDetail(chatId, event.event_id);
   }
   // The body is always in the DOM (CSS reveals it under --expanded), so the click
   // handler's direct class toggle is all a collapse needs -- no re-render.
-  const detail = getEventDetailState(agentId, event.event_id);
+  const detail = getEventDetailState(chatId, event.event_id);
   let body: m.Vnode;
   if (detail?.state === "loaded") {
     body = m("div", { class: "thinking-body" }, detail.detail.thinking ?? "");
@@ -512,7 +515,7 @@ function renderThinkingDisclosure(event: AssistantMessageEvent, agentId: string)
             if (nowExpanded) {
               // Kick off the fetch; the redraw renders the loading note (or the
               // cached text) into the just-revealed body.
-              requestEventDetail(agentId, event.event_id);
+              requestEventDetail(chatId, event.event_id);
               m.redraw();
             }
           }

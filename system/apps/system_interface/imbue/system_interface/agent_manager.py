@@ -62,6 +62,7 @@ from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.auto_open import AutoOpenLedger
+from imbue.system_interface.chat_registry import ChatRegistry
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.binding import BindingError
 from imbue.system_interface.harnesses.binding import create_args as binding_create_args
@@ -93,6 +94,7 @@ from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.models import ChatId
 from imbue.system_interface.models import CreatedChatAgent
 from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.naming import AUTO_NAME_WORD_BY_HARNESS
@@ -120,6 +122,16 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
+
+# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
+# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
+# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
+# teardown (a partial destroy the user saw as a 500). Every internal mngr
+# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
+# generous cap only converts spurious kills into patience. ``mngr stop`` is
+# lighter work (no resource teardown) but rides the same CLI startup and
+# host-lock path, so the stop endpoint shares this bound.
+DESTROY_TIMEOUT_SECONDS = 120.0
 
 # How often the liveness sweep re-derives each app's ``is_running``. Stop and
 # start land through our own endpoints (which nudge the sweep), so the poll
@@ -155,6 +167,15 @@ _AUTO_OPEN_STARTUP_FRESHNESS: Final[timedelta] = timedelta(hours=12)
 
 def _is_auto_open_labeled(labels: dict[str, str]) -> bool:
     return any(labels.get(label) == "true" for label in _AUTO_OPEN_LABELS)
+
+
+def _is_chat_agent(labels: dict[str, str]) -> bool:
+    """Whether an agent is a chat: not a worker, not the primary services agent.
+
+    The one classification rule for "this agent IS a user-visible chat", shared
+    by the chat registry bootstrap and the OOM prioritizer's chat enumeration.
+    """
+    return labels.get("agent_created") != "true" and labels.get("is_primary") != "true"
 
 
 # An app's icon is SVG markup carried verbatim on its registry row and handed to
@@ -263,6 +284,15 @@ def _build_chat_create_command(
     # lands after the first turn has already run on the wrong credential.
     cmd.extend(account_args)
     return cmd
+
+
+def _build_destroy_command(agent_name: str) -> list[str]:
+    """Build the ``mngr destroy --force`` argv for one agent.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``agent_manager_test.py``).
+    """
+    return ["mngr", "destroy", agent_name, "--force"]
 
 
 def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
@@ -515,6 +545,14 @@ class AgentManager:
     _broadcaster: WebSocketBroadcaster
     _messenger: MngrMessenger
     _lock: threading.Lock
+    # Scope note for the id-keyed state below: nearly all of it is keyed by the
+    # id of a PHYSICAL agent and is built and torn down with that agent's
+    # process (details, matches, trackers, sessions, model watchers, queues,
+    # proto/creation entries). The state that instead follows the CHAT -- the
+    # user-visible conversation, which will outlive any one backing agent once
+    # harness switching lands -- is ``_chat_registry`` (the chat->agent mapping
+    # itself), ``_auto_open_ledger`` and ``_pending_auto_open_name_by_id`` (a
+    # tab is owed to the chat), and the OOM prioritizer's presence/recency.
     # The live view of observed agents keyed by id, folded from the observe
     # stream: an AGENTS_FULL_STATE snapshot rebuilds it wholesale, an AGENT_STATE
     # upserts one agent, and an AGENT_REMOVED drops one. ``_agents`` /
@@ -586,6 +624,10 @@ class AgentManager:
     # chat exactly once.
     _auto_open_ledger: AutoOpenLedger
     _pending_auto_open_name_by_id: dict[str, str]
+    # The durable chat->backing-agent registry (see :mod:`chat_registry`).
+    # Bootstrapped idempotently from every discovery pass; resolution falls
+    # back to identity, so a missing record never changes behavior today.
+    _chat_registry: ChatRegistry
     # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: UI presence and
     # messages (via ``record_activity``, from the ``/api/activity`` endpoint),
     # lifecycle changes (via ``record_running_agents``, from the observe stream),
@@ -614,12 +656,15 @@ class AgentManager:
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         liveness_prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] = probe_all_app_liveness,
         auto_open_ledger: AutoOpenLedger | None = None,
+        chat_registry: ChatRegistry | None = None,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
         ``auto_open_ledger`` remembers which chats' tabs have been surfaced; the
         default keeps that in memory only, so a real server passes one backed
-        by the workspace's layout dir.
+        by the workspace's layout dir. ``chat_registry`` is the durable
+        chat->backing-agent mapping with the same default: in-memory unless the
+        composition root passes one backed by the layout dir.
 
         ``messenger`` is the agent-messaging collaborator; it defaults to the
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
@@ -664,6 +709,7 @@ class AgentManager:
         manager._model_watcher_by_agent = {}
         manager._auto_open_ledger = auto_open_ledger if auto_open_ledger is not None else AutoOpenLedger(path=None)
         manager._pending_auto_open_name_by_id = {}
+        manager._chat_registry = chat_registry if chat_registry is not None else ChatRegistry(chats_dir=None)
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
@@ -810,21 +856,37 @@ class AgentManager:
                 _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
         return restarted
 
-    def get_chat_agent_ids(self) -> list[str]:
-        """Ids of the agents the OOM prioritizer manages: chat agents only.
+    def get_chat_agent_ids(self) -> list[ChatId]:
+        """Ids of the chats the OOM prioritizer manages.
 
         Excludes workers (``agent_created=true``) and the primary services agent
         (``is_primary=true``); those keep their launch bands -- workers maximally
         expendable, the primary pinned -- so no UI activity moves their score.
         Remote agents are left in (they have no local pid, so the prioritizer's
-        pid lookup skips them harmlessly).
+        pid lookup skips them harmlessly). Typed as chat ids: OOM presence and
+        recency belong to the visible chat, not to any one backing agent.
         """
         with self._lock:
-            return [
-                agent.id
-                for agent in self._agents.values()
-                if agent.labels.get("agent_created") != "true" and agent.labels.get("is_primary") != "true"
-            ]
+            return [ChatId(agent.id) for agent in self._agents.values() if _is_chat_agent(agent.labels)]
+
+    @property
+    def chat_registry(self) -> ChatRegistry:
+        """The chat->backing-agent registry this manager bootstraps and owns."""
+        return self._chat_registry
+
+    def _ensure_chat_recorded(self, agent_id: str, labels: dict[str, str], harness: HarnessType) -> None:
+        """Give a chat agent its registry record (a chat's id is its first agent's id).
+
+        No-op for workers and the primary services agent, and for chats already
+        recorded, which makes it safe on every discovery pass and restart.
+        Called outside ``_lock``: the registry has its own lock and may write a
+        file.
+        """
+        if not _is_chat_agent(labels):
+            return
+        self._chat_registry.ensure_chat(
+            ChatId(agent_id), agent_id=agent_id, harness=harness, account_id=labels.get("account")
+        )
 
     def record_activity(
         self,
@@ -959,6 +1021,28 @@ class AgentManager:
         self._evict_watcher(agent_id)
         drop_live_user_turns(agent_id)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def destroy_agent_process(self, agent_id: AgentId, agent_name: str) -> str | None:
+        """Tear one agent's process down with ``mngr destroy --force``, then untrack it.
+
+        Returns None when the agent is gone, or the failure detail. This is the
+        PHYSICAL half of a destroy and deliberately says nothing about chats:
+        the agent behind a chat is replaceable, so retiring one (a harness
+        handoff) destroys the process while the chat's registry record and its
+        history live on. Deleting the chat itself is the caller's separate step,
+        which is why ``chat_registry.remove`` is not called here.
+        """
+        result = run_local_command_modern_version(
+            command=_build_destroy_command(agent_name),
+            cwd=None,
+            is_checked=False,
+            timeout=DESTROY_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            return f"Failed to destroy agent '{agent_name}': {result.stderr.strip()}"
+        # Reflect the destruction now rather than waiting for the observe stream.
+        self.remove_agent(agent_id)
+        return None
 
     def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
         """Give a chat agent the name the user just typed, keeping its name pair matched.
@@ -1405,7 +1489,7 @@ class AgentManager:
             agent_id, canonical_name, cmd, Path(work_dir), log_queue, labels, harness, is_first_chat
         )
 
-        return CreatedChatAgent(agent_id=agent_id, name=canonical_name, display_name=display_name)
+        return CreatedChatAgent(agent_id=ChatId(agent_id), name=canonical_name, display_name=display_name)
 
     def _launch_creation_thread(
         self,
@@ -1533,6 +1617,7 @@ class AgentManager:
         if success:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
+            self._ensure_chat_recorded(agent_id, labels, harness)
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
 
@@ -1558,6 +1643,7 @@ class AgentManager:
                     self._start_app_watcher(agent_info.id, Path(agent_info.work_dir))
                 self._ensure_activity_tracking(agent_info.id)
                 self._ensure_model_tracking(agent_info.id)
+                self._ensure_chat_recorded(agent_info.id, agent_info.labels, agent_info.harness)
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Initial agent discovery failed")
 
@@ -1836,6 +1922,7 @@ class AgentManager:
                 self._start_app_watcher(agent_id, Path(added_agent_state.work_dir))
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
+            self._ensure_chat_recorded(agent_id, added_agent_state.labels, added_agent_state.harness)
 
         for agent_id in removed_agent_ids:
             self._stop_app_watcher(agent_id)
@@ -1845,6 +1932,10 @@ class AgentManager:
             with self._lock:
                 self._pending_auto_open_name_by_id.pop(agent_id, None)
             self._auto_open_ledger.forget(agent_id)
+            # A destroyed agent is a deleted chat today (one backing agent per
+            # chat), so its chat record goes too. No-op for workers and for
+            # ids that were never chats.
+            self._chat_registry.remove(ChatId(agent_id))
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the

@@ -2,41 +2,42 @@
  * SSE connection management for real-time agent events.
  * Connects to the backend's SSE stream and appends new events.
  *
- * Streams are keyed by agentId so multiple chat panels can subscribe
- * independently; each agent gets its own EventSource.
+ * Streams are keyed by ChatId so multiple chat panels can subscribe
+ * independently; each chat gets its own EventSource.
  */
 
 import { apiUrl } from "../base-path";
+import type { ChatId } from "../ids";
 import { ReconnectBackoff } from "./backoff";
 import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
 import { parseJsonMessage } from "./ws-json";
 
-const activeStreams = new Map<string, EventSource>();
+const activeStreams = new Map<ChatId, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
 // from a transient error.
-const explicitlyDisconnectedAgents = new Set<string>();
+const explicitlyDisconnectedAgents = new Set<ChatId>();
 // Per-agent reconnect backoff, so a healthy stream's success does not reset an
 // unhealthy stream's growing delay.
-const backoffByAgent = new Map<string, ReconnectBackoff>();
+const backoffByAgent = new Map<ChatId, ReconnectBackoff>();
 
-function getBackoff(agentId: string): ReconnectBackoff {
-  let backoff = backoffByAgent.get(agentId);
+function getBackoff(chatId: ChatId): ReconnectBackoff {
+  let backoff = backoffByAgent.get(chatId);
   if (backoff === undefined) {
     backoff = new ReconnectBackoff();
-    backoffByAgent.set(agentId, backoff);
+    backoffByAgent.set(chatId, backoff);
   }
   return backoff;
 }
 // Holds SSE deltas that arrive while a snapshot fetch is in flight (on either
 // the initial mount or a reconnect), so fetchEvents replacing
 // eventsByAgent[agentId] does not drop them.
-const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
+const inFlightSnapshotBuffersByAgent = new Map<ChatId, TranscriptEvent[]>();
 // Pending reconnect timers, ONE per agent. Both failure paths (a stream error
 // and a failed snapshot refetch) schedule through scheduleReconnectWithSnapshot,
 // which no-ops while a timer is already pending. Without this dedup each failed
 // cycle would spawn two future loops (the new stream's error handler plus the
 // snapshot retry), multiplying attempts for as long as the backend stays down.
-const pendingReconnectTimersByAgent = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingReconnectTimersByAgent = new Map<ChatId, ReturnType<typeof setTimeout>>();
 
 export interface StreamingMessage {
   conversationId: string;
@@ -47,22 +48,22 @@ export interface StreamingMessage {
   error: string | null;
 }
 
-export function connectToStream(agentId: string): void {
-  if (activeStreams.has(agentId)) {
+export function connectToStream(chatId: ChatId): void {
+  if (activeStreams.has(chatId)) {
     return;
   }
 
   // A fresh connect supersedes any prior explicit-disconnect tombstone.
-  explicitlyDisconnectedAgents.delete(agentId);
+  explicitlyDisconnectedAgents.delete(chatId);
 
-  console.info(`[si-sse] opening stream for agent ${agentId}`);
-  const eventSource = new EventSource(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/stream`));
-  activeStreams.set(agentId, eventSource);
+  console.info(`[si-sse] opening stream for chat ${chatId}`);
+  const eventSource = new EventSource(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/stream`));
+  activeStreams.set(chatId, eventSource);
 
   eventSource.onopen = () => {
-    console.info(`[si-sse] stream open for agent ${agentId}`);
-    // A successful (re)connection resets this agent's backoff.
-    getBackoff(agentId).reset();
+    console.info(`[si-sse] stream open for chat ${chatId}`);
+    // A successful (re)connection resets this chat's backoff.
+    getBackoff(chatId).reset();
   };
 
   eventSource.onmessage = (messageEvent: MessageEvent) => {
@@ -71,20 +72,20 @@ export function connectToStream(agentId: string): void {
       return;
     }
     const event = raw as TranscriptEvent;
-    const pending = inFlightSnapshotBuffersByAgent.get(agentId);
+    const pending = inFlightSnapshotBuffersByAgent.get(chatId);
     if (pending !== undefined) {
       pending.push(event);
     } else {
-      appendEvents(agentId, [event]);
+      appendEvents(chatId, [event]);
     }
   };
 
   eventSource.onerror = () => {
-    if (activeStreams.get(agentId) === eventSource) {
+    if (activeStreams.get(chatId) === eventSource) {
       eventSource.close();
-      activeStreams.delete(agentId);
-      console.warn(`[si-sse] stream error for agent ${agentId}`);
-      scheduleReconnectWithSnapshot(agentId);
+      activeStreams.delete(chatId);
+      console.warn(`[si-sse] stream error for chat ${chatId}`);
+      scheduleReconnectWithSnapshot(chatId);
     }
   };
 }
@@ -97,19 +98,19 @@ export function connectToStream(agentId: string): void {
  * way the old error path did: a disconnect issued during the delay keeps the
  * stream down.
  */
-function scheduleReconnectWithSnapshot(agentId: string): void {
-  if (pendingReconnectTimersByAgent.has(agentId)) {
+function scheduleReconnectWithSnapshot(chatId: ChatId): void {
+  if (pendingReconnectTimersByAgent.has(chatId)) {
     return;
   }
-  const delayMs = getBackoff(agentId).nextDelay();
-  console.info(`[si-sse] scheduling reconnect for agent ${agentId} in ${delayMs}ms`);
+  const delayMs = getBackoff(chatId).nextDelay();
+  console.info(`[si-sse] scheduling reconnect for chat ${chatId} in ${delayMs}ms`);
   pendingReconnectTimersByAgent.set(
-    agentId,
+    chatId,
     setTimeout(() => {
-      pendingReconnectTimersByAgent.delete(agentId);
-      const wasExplicitlyDisconnected = explicitlyDisconnectedAgents.delete(agentId);
+      pendingReconnectTimersByAgent.delete(chatId);
+      const wasExplicitlyDisconnected = explicitlyDisconnectedAgents.delete(chatId);
       if (!wasExplicitlyDisconnected) {
-        void reconnectWithSnapshot(agentId);
+        void reconnectWithSnapshot(chatId);
       }
     }, delayMs),
   );
@@ -126,59 +127,59 @@ function scheduleReconnectWithSnapshot(agentId: string): void {
  * errors so the caller can surface a load error; buffered deltas are flushed
  * first regardless.
  */
-export async function loadSnapshotWithStream(agentId: string): Promise<void> {
+export async function loadSnapshotWithStream(chatId: ChatId): Promise<void> {
   // Subscribe to SSE before the snapshot fetch so deltas that arrive
   // between the snapshot read and the EventSource being registered land in
   // `buffer` instead of being dropped. Hold `buffer` by reference (not via
   // map lookup in `finally`) so a concurrent load that replaces the
   // map slot cannot orphan our buffered events.
   const buffer: TranscriptEvent[] = [];
-  inFlightSnapshotBuffersByAgent.set(agentId, buffer);
-  connectToStream(agentId);
+  inFlightSnapshotBuffersByAgent.set(chatId, buffer);
+  connectToStream(chatId);
   try {
-    await fetchEvents(agentId);
+    await fetchEvents(chatId);
   } finally {
-    if (inFlightSnapshotBuffersByAgent.get(agentId) === buffer) {
-      inFlightSnapshotBuffersByAgent.delete(agentId);
+    if (inFlightSnapshotBuffersByAgent.get(chatId) === buffer) {
+      inFlightSnapshotBuffersByAgent.delete(chatId);
     }
-    if (buffer.length > 0 && !explicitlyDisconnectedAgents.has(agentId)) {
-      appendEvents(agentId, buffer);
+    if (buffer.length > 0 && !explicitlyDisconnectedAgents.has(chatId)) {
+      appendEvents(chatId, buffer);
     }
   }
 }
 
-async function reconnectWithSnapshot(agentId: string): Promise<void> {
+async function reconnectWithSnapshot(chatId: ChatId): Promise<void> {
   try {
-    await loadSnapshotWithStream(agentId);
-    console.info(`[si-sse] snapshot loaded for agent ${agentId}`);
+    await loadSnapshotWithStream(chatId);
+    console.info(`[si-sse] snapshot loaded for chat ${chatId}`);
   } catch (error) {
     // Until the snapshot lands, the stream (if it connected) is appending
     // deltas onto the pre-outage window, so events emitted during the outage
     // are missing from it. A single failure must not be terminal -- that
     // permanently desynchronizes the transcript from the server -- so keep
     // retrying until the snapshot succeeds or the panel disconnects.
-    console.warn(`[si-sse] snapshot refetch failed for agent ${agentId}`, error);
-    scheduleReconnectWithSnapshot(agentId);
+    console.warn(`[si-sse] snapshot refetch failed for chat ${chatId}`, error);
+    scheduleReconnectWithSnapshot(chatId);
   }
 }
 
-export function disconnectFromStream(agentId: string): void {
-  console.info(`[si-sse] explicit disconnect for agent ${agentId}`);
+export function disconnectFromStream(chatId: ChatId): void {
+  console.info(`[si-sse] explicit disconnect for chat ${chatId}`);
   // Always record the intent, even with no active stream, so a pending
   // error-triggered reconnect timeout sees the tombstone and stays down.
-  explicitlyDisconnectedAgents.add(agentId);
-  const pendingTimer = pendingReconnectTimersByAgent.get(agentId);
+  explicitlyDisconnectedAgents.add(chatId);
+  const pendingTimer = pendingReconnectTimersByAgent.get(chatId);
   if (pendingTimer !== undefined) {
     clearTimeout(pendingTimer);
-    pendingReconnectTimersByAgent.delete(agentId);
+    pendingReconnectTimersByAgent.delete(chatId);
   }
   // Drop the backoff so a later fresh connectToStream starts from the base
   // delay rather than inheriting a stale grown delay.
-  backoffByAgent.delete(agentId);
-  const eventSource = activeStreams.get(agentId);
+  backoffByAgent.delete(chatId);
+  const eventSource = activeStreams.get(chatId);
   if (eventSource !== undefined) {
     eventSource.close();
-    activeStreams.delete(agentId);
+    activeStreams.delete(chatId);
   }
 }
 

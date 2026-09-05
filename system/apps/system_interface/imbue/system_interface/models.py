@@ -1,3 +1,5 @@
+from typing import NewType
+
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -8,6 +10,16 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelChoice
 from imbue.system_interface.harnesses.model import ModelOption
+
+# A chat's stable identity, distinct from the id of the mngr agent currently
+# backing it. Today every chat is backed by exactly one agent and the chat id
+# IS that first agent's id (so persisted refs, panel ids, and browser state
+# need no migration); when a chat's backing agent is later replaced (harness
+# switching), the chat id stays fixed while the agent id changes. A NewType
+# rather than a validating id class, deliberately: chat ids permanently carry
+# the adopted agent's "agent-" prefix, and a raising constructor at the HTTP
+# boundary would turn today's clean 404 on a malformed id into a 500.
+ChatId = NewType("ChatId", str)
 
 
 class AgentCreationError(ValueError):
@@ -347,7 +359,9 @@ class CreateChatRequest(FrozenModel):
 class CreatedChatAgent(FrozenModel):
     """A freshly-created chat agent's identity: its id and its name pair."""
 
-    agent_id: str = Field(description="The pre-generated agent ID")
+    agent_id: ChatId = Field(
+        description="The pre-generated agent ID, which is also the chat's stable ChatId"
+    )
     name: str = Field(description="The agent's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 

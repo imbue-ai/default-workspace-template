@@ -5,6 +5,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { asChatId } from "../ids";
 import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
@@ -464,7 +465,9 @@ function handleEvent(event: WsEvent): void {
         // (no overlap). Deduped by queued_id, so re-pushed snapshots are harmless.
         const queuedIds = (agent.queued_messages ?? []).map((queued) => queued.queued_id);
         if (queuedIds.length > 0) {
-          noteBackendArrivals(agent.id, queuedIds);
+          // Boundary cast: the WS payload carries the physical agent id, which is
+          // (today) the same value as the chat's id.
+          noteBackendArrivals(asChatId(agent.id), queuedIds);
         }
       }
       break;

@@ -11,17 +11,18 @@ import {
   getOutgoingMessages,
   noteBackendArrivals,
 } from "./OutgoingMessages";
+import { asChatId } from "../ids";
 
 describe("OutgoingMessages", () => {
   it("adds a sending bubble and preserves send order", () => {
-    const agent = `a-${Math.random()}`;
+    const agent = asChatId(`a-${Math.random()}`);
     addOutgoing(agent, "first");
     addOutgoing(agent, "second");
     expect(getOutgoingMessages(agent).map((o) => o.content)).toEqual(["first", "second"]);
   });
 
   it("drops the oldest bubble when a backend arrival lands (real first, then remove)", () => {
-    const agent = `a-${Math.random()}`;
+    const agent = asChatId(`a-${Math.random()}`);
     addOutgoing(agent, "first");
     addOutgoing(agent, "second");
     // A real user item arrives (a transcript event_id or a queued_id) -> the
@@ -33,7 +34,7 @@ describe("OutgoingMessages", () => {
   });
 
   it("dedupes arrival ids so a re-streamed event or re-pushed snapshot drops nothing extra", () => {
-    const agent = `a-${Math.random()}`;
+    const agent = asChatId(`a-${Math.random()}`);
     addOutgoing(agent, "first");
     addOutgoing(agent, "second");
     noteBackendArrivals(agent, ["real-1"]);
@@ -42,7 +43,7 @@ describe("OutgoingMessages", () => {
   });
 
   it("does not drop a bubble for an arrival id seen before that bubble existed", () => {
-    const agent = `a-${Math.random()}`;
+    const agent = asChatId(`a-${Math.random()}`);
     noteBackendArrivals(agent, ["real-early"]); // observed with nothing to drop
     addOutgoing(agent, "later");
     noteBackendArrivals(agent, ["real-early"]); // already seen -> must not drop
@@ -50,14 +51,14 @@ describe("OutgoingMessages", () => {
   });
 
   it("drops a specific bubble on the failure path (text is returned to the composer by the caller)", () => {
-    const agent = `a-${Math.random()}`;
+    const agent = asChatId(`a-${Math.random()}`);
     const id = addOutgoing(agent, "hello");
     dropOutgoing(agent, id);
     expect(getOutgoingMessages(agent)).toHaveLength(0);
   });
 
   it("clears only the pre-interrupt snapshot, leaving a bubble sent during the round-trip", () => {
-    const agent = `a-${Math.random()}`;
+    const agent = asChatId(`a-${Math.random()}`);
     const first = addOutgoing(agent, "first");
     const second = addOutgoing(agent, "second");
     // Snapshot taken before the interrupt round-trip; a NEW send lands during it.
@@ -71,7 +72,7 @@ describe("OutgoingMessages", () => {
   });
 
   it("clearOutgoing with no ids is a no-op", () => {
-    const agent = `a-${Math.random()}`;
+    const agent = asChatId(`a-${Math.random()}`);
     addOutgoing(agent, "only");
     clearOutgoing(agent, []);
     expect(getOutgoingMessages(agent).map((o) => o.content)).toEqual(["only"]);

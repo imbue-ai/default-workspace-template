@@ -32,6 +32,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface import app_instances
+from imbue.system_interface import chat_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import member_last_used
@@ -44,6 +45,7 @@ from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.agent_manager import DESTROY_TIMEOUT_SECONDS
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
@@ -94,6 +96,7 @@ from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
+from imbue.system_interface.models import ChatId
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
 from imbue.system_interface.models import DestroyAgentResponse
@@ -407,13 +410,6 @@ _FORWARD_PORT_TIMEOUT_SECONDS = 60.0
 # each connection owns its own thread, so a wedged send only stalls that thread.
 _WS_PING_INTERVAL_SECONDS = 25
 
-# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
-# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
-# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
-# teardown (a partial destroy the user saw as a 500). Every internal mngr
-# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
-# generous cap only converts spurious kills into patience.
-_DESTROY_TIMEOUT_SECONDS = 120.0
 # `mngr label` is a metadata write (data.json merge), fast even on a busy host.
 _LABEL_TIMEOUT_SECONDS = 30.0
 
@@ -2901,17 +2897,14 @@ def _run_proto_agent_logs_loop(
         pass
 
 
-def _build_destroy_command(agent_name: str) -> list[str]:
-    """Build the ``mngr destroy --force`` argv for one agent.
-
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess (see ``server_test.py``).
-    """
-    return ["mngr", "destroy", agent_name, "--force"]
-
-
 def _destroy_agent(agent_id: str) -> Response:
-    """Destroy an agent by running mngr destroy --force.
+    """Delete a chat: destroy the agent backing it, then drop the chat's record.
+
+    The user-facing half of a destroy, as against the physical
+    ``AgentManager.destroy_agent_process`` it calls: destroying a chat's only
+    backing agent is what "delete this chat" means, so the chat's registry
+    record goes with it. A harness handoff retires an agent through the
+    physical half alone, leaving the chat (and its history) in place.
 
     Refuses to destroy agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and destroying it would tear down
@@ -2935,23 +2928,15 @@ def _destroy_agent(agent_id: str) -> Response:
         )
         return _json_response(error.model_dump(), status_code=400)
 
-    agent_name = agent_state.name
-
-    result = run_local_command_modern_version(
-        command=_build_destroy_command(agent_name),
-        cwd=None,
-        is_checked=False,
-        timeout=_DESTROY_TIMEOUT_SECONDS,
-    )
-    success = result.returncode == 0
-    output = result.stdout.strip() if success else result.stderr.strip()
-    if not success:
-        error = ErrorResponse(detail=f"Failed to destroy agent '{agent_name}': {output}")
+    # Safe to narrow: the lookup above proves this id names a real agent, so the
+    # validating AgentId constructor cannot reject it.
+    failure = agent_manager.destroy_agent_process(AgentId(agent_state.id), agent_state.name)
+    if failure is not None:
+        error = ErrorResponse(detail=failure)
         return _json_response(error.model_dump(), status_code=500)
 
-    # Remove the agent from the system_interface's tracked state immediately
-    # so the frontend reflects the destruction without waiting for mngr observe.
-    agent_manager.remove_agent(agent_id)
+    # No-op for ids that were never chats (workers).
+    agent_manager.chat_registry.remove(ChatId(agent_id))
 
     return _json_response(DestroyAgentResponse(status="ok").model_dump())
 
@@ -2998,7 +2983,7 @@ def _stop_agent(agent_id: str) -> Response:
         command=_build_stop_command(agent_state.name),
         cwd=None,
         is_checked=False,
-        timeout=_DESTROY_TIMEOUT_SECONDS,
+        timeout=DESTROY_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         error = ErrorResponse(detail=f"Failed to stop agent '{agent_state.name}': {result.stderr.strip()}")
@@ -3591,6 +3576,34 @@ def create_application(state: SystemInterfaceState) -> Flask:
     auth_endpoints.register_routes(application)
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
+    # The chat-facing twins of the agent routes above: /api/chats/<chat_id>/...
+    # resolves the chat's currently active agent at request time and dispatches
+    # to the very same view functions, so the two families cannot drift. The
+    # /api/agents family stays as the physical/internal contract. The agent
+    # list, create-chat, and proto-agent logs stay physical-only.
+    chat_endpoints.register_chat_routes(
+        application,
+        (
+            ("/events", _get_events, ("GET",)),
+            ("/events/<event_id>/detail", _get_event_detail, ("GET",)),
+            ("/stream", _stream_events, ("GET",)),
+            ("/message", _send_message_endpoint, ("POST",)),
+            ("/model", _set_model_choice_endpoint, ("POST",)),
+            ("/model-options", _get_model_options_endpoint, ("GET",)),
+            ("/powered-by", _get_powered_by_endpoint, ("GET",)),
+            ("/fast-mode-answered", _mark_fast_mode_prompt_answered, ("POST",)),
+            ("/interrupt", _interrupt_agent_endpoint, ("POST",)),
+            ("/flush-queue", _flush_queue_endpoint, ("POST",)),
+            ("/shoulder-tap-atomic", _shoulder_tap_atomic_endpoint, ("POST",)),
+            ("/drain-to-composer", _drain_to_composer_endpoint, ("POST",)),
+            ("/screen", _get_screen_capture, ("GET",)),
+            ("/destroy", _destroy_agent, ("POST",)),
+            ("/start", _start_agent, ("POST",)),
+            ("/stop", _stop_agent, ("POST",)),
+            ("/subagents/<subagent_session_id>/events", _get_subagent_events, ("GET",)),
+            ("/subagents/<subagent_session_id>/stream", _stream_subagent_events, ("GET",)),
+        ),
+    )
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(
         "/api/agents/<agent_id>/subagents/<subagent_session_id>/events",
