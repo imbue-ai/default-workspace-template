@@ -178,6 +178,27 @@ def test_open_of_an_app_with_instances_prints_the_created_address(
     ]
 
 
+def test_open_of_an_app_with_instances_prints_no_address_when_the_pre_op_inspect_fails(
+    registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without a before-snapshot an already-docked instance could pass for the new one, so none is claimed."""
+    monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE)
+    posted: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+        if op == "inspect":
+            return 500, "boom"
+        posted.append((op, args))
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(layout, "_post_layout", fake_post)
+    assert layout.main(["open", "terminal"]) == layout.EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "cannot be told apart" in captured.err
+    assert [op for op, _args in posted] == ["open"]
+
+
 def test_open_of_an_instance_reports_a_noop_when_it_is_docked(
     registry: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

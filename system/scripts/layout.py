@@ -672,10 +672,18 @@ def _run_creating_op(op: str, args: dict[str, Any], app: str) -> int:
         return EXIT_OK
     view = args.get("view")
     before_layout = _fetch_layout(view)
-    before = _panel_addresses(before_layout) if before_layout is not None else set()
     status, body = _post_layout(op, args)
     if status != 200:
         return _report_failure(op, status, body)
+    if before_layout is None:
+        # Without the pre-op snapshot an instance docked earlier cannot be told from the new
+        # one, and printing the wrong address as created would be worse than printing none.
+        sys.stderr.write(
+            f"(broadcast sent; inspect could not be read before the {op}, so the new {app} "
+            "instance cannot be told apart. Run 'layout.py list' to find it)\n"
+        )
+        return EXIT_OK
+    before = _panel_addresses(before_layout)
     wait_status, after = _wait_stable(
         op,
         lambda layout: _new_instance_address(app, before, layout) is not None,
@@ -689,8 +697,12 @@ def _run_creating_op(op: str, args: dict[str, Any], app: str) -> int:
         )
         return EXIT_OK
     if wait_status == "timeout":
+        # The client runs the app's action itself; an app that refused the create (no signed-in
+        # account, a full fleet) shows up here as nothing new docked, not as an error body.
         sys.stderr.write(
-            f"error: timeout waiting for {op!r} to settle after {_WAIT_STABLE_CAP_SECONDS:.0f}s\n"
+            f"error: timeout waiting for {op!r} to settle after {_WAIT_STABLE_CAP_SECONDS:.0f}s: "
+            f"no new {app} instance was docked. The app may have refused the create; run "
+            "'layout.py list' to see its instances\n"
         )
         return EXIT_ERROR
     sys.stderr.write("(broadcast sent; could not read inspect to confirm new state)\n")
