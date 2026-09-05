@@ -117,6 +117,7 @@ def test_broadcast_layout_op_open() -> None:
         "op": "open",
         "args": {"ref": "service:web"},
         "requester_agent_id": "agent-1",
+        "target_client_id": None,
     }
 
 
@@ -134,6 +135,7 @@ def test_broadcast_layout_op_passes_args_through_unchanged() -> None:
         "op": "split",
         "args": payload,
         "requester_agent_id": "agent-2",
+        "target_client_id": None,
     }
 
 
@@ -335,8 +337,7 @@ def test_set_client_info_and_view_lookup() -> None:
 
     broadcaster.set_client_info(first_queue, "client-1", "everything", "desktop")
 
-    assert broadcaster.has_client_on_view("everything") is True
-    assert broadcaster.has_client_on_view("project-1") is False
+    assert broadcaster.connected_client_ids() == {"client-1"}
     infos = broadcaster.get_connected_client_infos()
     assert infos == [{"client_id": "client-1", "active_view": "everything", "device_kind": "desktop"}]
 
@@ -357,24 +358,7 @@ def test_unregister_drops_client_info() -> None:
 
     broadcaster.unregister(client_queue)
 
-    assert broadcaster.has_client_on_view("everything") is False
-
-
-def test_broadcast_to_view_targets_only_matching_clients() -> None:
-    broadcaster = WebSocketBroadcaster()
-    everything_queue = broadcaster.register()
-    project_queue = broadcaster.register()
-    unregistered_queue = broadcaster.register()
-    broadcaster.set_client_info(everything_queue, "client-1", "everything", "desktop")
-    broadcaster.set_client_info(project_queue, "client-2", "project-1", "mobile")
-
-    broadcaster.broadcast_layout_op("close", {"address": "app:files"}, "agent-1", target_view="everything")
-
-    message = json.loads(_get_message(everything_queue))
-    assert message["op"] == "close"
-    assert project_queue.empty()
-    # A client that never registered its view is not targeted either.
-    assert unregistered_queue.empty()
+    assert broadcaster.connected_client_ids() == set()
 
 
 def test_broadcast_layout_op_without_target_reaches_everyone() -> None:
@@ -389,16 +373,41 @@ def test_broadcast_layout_op_without_target_reaches_everyone() -> None:
     assert json.loads(_get_message(unregistered_queue))["op"] == "refresh"
 
 
-def test_load_layout_broadcast_reaches_all_clients() -> None:
+def test_broadcast_to_client_reaches_every_window_of_that_client_only() -> None:
+    broadcaster = WebSocketBroadcaster()
+    first_window = broadcaster.register()
+    second_window = broadcaster.register()
+    other_client = broadcaster.register()
+    unregistered_queue = broadcaster.register()
+    broadcaster.set_client_info(first_window, "client-1", "everything", "desktop")
+    broadcaster.set_client_info(second_window, "client-1", "project-1", "desktop")
+    broadcaster.set_client_info(other_client, "client-2", "project-1", "mobile")
+
+    broadcaster.broadcast_layout_op("maximize", {"address": "app:files"}, "agent-1", target_client_id="client-1")
+
+    for window in (first_window, second_window):
+        message = json.loads(_get_message(window))
+        assert message["op"] == "maximize" and message["target_client_id"] == "client-1"
+    assert other_client.empty()
+    # A window that never registered its client is not targeted either.
+    assert unregistered_queue.empty()
+
+
+def test_layout_updated_and_active_view_changed_are_typed_events() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
 
-    broadcaster.broadcast_load_layout("project-1", "Project 1", None)
+    broadcaster.broadcast_layout_updated("project-1", "client-1", "save-0123456789abcdef")
+    broadcaster.broadcast_active_view_changed("client-1", "project-1")
 
-    load = json.loads(_get_message(client_queue))
-    assert load == {
-        "type": "load_layout",
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "layout_updated",
         "view_id": "project-1",
-        "display_name": "Project 1",
-        "target_client_id": None,
+        "client_id": "client-1",
+        "save_id": "save-0123456789abcdef",
+    }
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "active_view_changed",
+        "client_id": "client-1",
+        "view_id": "project-1",
     }

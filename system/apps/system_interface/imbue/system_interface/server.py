@@ -500,9 +500,14 @@ def _handle_client_state_message(
     # A state file the shell cannot write is a warning, not a dropped socket: the live
     # registration above is what the layout ops need, and the next report retries the write.
     try:
-        shell.clients.record_report(report, datetime.now(timezone.utc))
+        outcome = shell.clients.record_report(report, datetime.now(timezone.utc))
     except ShellStateError as e:
         _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
+    else:
+        # Only a report that moved the stored view is broadcast: a window following a push reports the
+        # view it was pushed to, which matches the record, so the chain ends after one hop.
+        if outcome.is_active_view_changed:
+            shell.broadcaster.broadcast_active_view_changed(str(report.client_id), str(report.active_view))
     if is_first_report:
         _loguru_logger.info(
             "WS client registered: client_id={} view={} device={} (conn {})",

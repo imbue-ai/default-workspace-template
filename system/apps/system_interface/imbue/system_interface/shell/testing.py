@@ -193,8 +193,26 @@ def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, An
 
 def layout_showing(*addresses: Address) -> LayoutRecord:
     """A desktop arrangement with one panel per address (``p0``, ``p1``, ...), each under a fixed tab id."""
+    panel_ids = [f"p{index}" for index in range(len(addresses))]
     return LayoutRecord(
-        dockview={"panels": {f"p{index}": {} for index in range(len(addresses))}},
+        dockview={
+            "grid": {
+                "root": {
+                    "type": "branch",
+                    "data": [
+                        {"type": "leaf", "data": {"views": panel_ids, "activeView": "p0", "id": "g0"}, "size": 1200}
+                    ],
+                    "size": 800,
+                },
+                "width": 1200,
+                "height": 800,
+                "orientation": "HORIZONTAL",
+            },
+            "panels": {panel_id: {"id": panel_id} for panel_id in panel_ids},
+            "activeGroup": "g0",
+        }
+        if addresses
+        else None,
         tabs={
             f"p{index}": TabRecord(address=address, tab_id=TabId(f"tab-{index:016x}"), last_focused_ms=0)
             for index, address in enumerate(addresses)

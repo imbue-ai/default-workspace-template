@@ -14,7 +14,9 @@ import time
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from enum import auto
 from pathlib import Path
 from typing import Any
@@ -42,14 +44,19 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
+from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import InventoryInstance
+from imbue.system_interface.shell.data_types import Project
 from imbue.system_interface.shell.data_types import app_wire_json
 from imbue.system_interface.shell.data_types import instances_url_of
 from imbue.system_interface.shell.data_types import inventory_instance_from_record
 from imbue.system_interface.shell.data_types import synthesized_single_instance
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_ID
+from imbue.system_interface.shell.projects import project_wire_json
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The nudge window of contracts.md section 5: the first nudge for an app starts it, one refetch
@@ -168,6 +175,33 @@ def _with_status(instances: Sequence[InventoryInstance], status: InstanceStatus)
 @pure
 def serialize_apps(entries: Sequence[AppInventoryEntry]) -> list[dict[str, Any]]:
     return [app_wire_json(entry) for entry in entries]
+
+
+@pure
+def build_inventory_document(
+    entries: Sequence[AppInventoryEntry],
+    projects: Sequence[Project],
+    clients: Sequence[ClientRecord],
+    connected_client_ids: AbstractSet[str],
+    # The addresses in each client's layout of its active view.
+    docked_by_client_id: Mapping[str, Sequence[Address]],
+) -> dict[str, Any]:
+    """The one document of contracts.md section 9: projects, Everything's tabs, every app, and every known client."""
+    return {
+        "projects": [project_wire_json(project) for project in projects],
+        "everything": {
+            "id": EVERYTHING_VIEW_ID,
+            "tabs": [str(address) for entry in entries if not entry.row.internal for address in entry.addresses()],
+        },
+        "apps": serialize_apps(entries),
+        "clients": [
+            {
+                **client_wire_json(client, str(client.id) in connected_client_ids),
+                "docked": [str(address) for address in docked_by_client_id.get(str(client.id), [])],
+            }
+            for client in clients
+        ],
+    }
 
 
 def _make_registry_file_handler(basename: str, on_change: Callable[[], None]) -> _RegistryFileHandler:

@@ -1,10 +1,16 @@
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import TabRecord
+from imbue.system_interface.shell.errors import StaleLayoutSaveError
 from imbue.system_interface.shell.layouts import LayoutStore
 from imbue.system_interface.shell.layouts import empty_layout
+from imbue.system_interface.shell.layouts import is_stale_save
+from imbue.system_interface.shell.layouts import rebind_tab_in_layout
 from imbue.system_interface.shell.layouts import strip_address_from_layout
 from imbue.system_interface.shell.layouts import strip_panel_from_dockview
 from imbue.system_interface.shell.layouts import unreferenced_addresses
@@ -50,8 +56,8 @@ def test_read_falls_back_from_own_to_seed_to_empty(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
     assert store.read_layout("everything", "c1", DeviceKind.DESKTOP) == empty_layout(DeviceKind.DESKTOP)
 
-    saved = store.save_layout("everything", "c1", _layout(), TEST_NOW)
-    assert saved.updated_at == TEST_NOW
+    saved = store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
+    assert saved is not None and saved.updated_at == TEST_NOW
     assert store.read_layout("everything", "c1", DeviceKind.MOBILE) == saved
     # Another desktop client inherits the seed; a mobile one has no seed yet.
     assert store.read_layout("everything", "c2", DeviceKind.DESKTOP) == saved
@@ -62,8 +68,8 @@ def test_read_falls_back_from_own_to_seed_to_empty(tmp_path: Path) -> None:
 
 def test_all_client_layouts_skips_seeds_and_unreadable_files(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
-    store.save_layout("everything", "c1", _layout(), TEST_NOW)
-    store.save_layout("alpha", "c2", _layout(DeviceKind.MOBILE), TEST_NOW)
+    store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
+    store.save_browser_layout("alpha", "c2", _layout(DeviceKind.MOBILE), None, TEST_NOW)
     (tmp_path / "layouts" / "alpha" / "broken.json").write_text("{")
     stored = store.all_client_layouts()
     assert [(str(item.view_id), str(item.client_id)) for item in stored] == [("alpha", "c2"), ("everything", "c1")]
@@ -72,8 +78,8 @@ def test_all_client_layouts_skips_seeds_and_unreadable_files(tmp_path: Path) -> 
 
 def test_tabs_are_found_and_rebound_by_id(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
-    store.save_layout("everything", "c1", _layout(), TEST_NOW)
-    store.save_layout("alpha", "c1", _layout(), TEST_NOW)
+    store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
+    store.save_browser_layout("alpha", "c1", _layout(), None, TEST_NOW)
     assert [(str(stored.view_id), panel_id) for stored, panel_id in store.find_tab(_TAB_B)] == [
         ("alpha", "p2"),
         ("everything", "p2"),
@@ -84,11 +90,14 @@ def test_tabs_are_found_and_rebound_by_id(tmp_path: Path) -> None:
     assert store.read_layout("alpha", "c1", DeviceKind.DESKTOP).tabs["p2"].address == rebound
     assert store.read_layout("alpha", "c1", DeviceKind.DESKTOP).tabs["p2"].tab_id == _TAB_B
     assert store.find_tab(TabId("tab-00000000000000ff")) == []
+    # The seeds follow, so a client that arrives later starts from the rebound tab too.
+    assert store.read_layout("alpha", "c9", DeviceKind.DESKTOP).tabs["p2"].address == rebound
+    assert rebind_tab_in_layout(_layout(), TabId("tab-00000000000000ff"), rebound) == _layout()
 
 
 def test_removed_addresses_leave_every_layout_and_its_grid(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
-    store.save_layout("everything", "c1", _layout(), TEST_NOW)
+    store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
     rewritten = store.remove_addresses_everywhere([_TERMINAL_1], TEST_NOW)
     assert len(rewritten) == 1
     layout = store.read_layout("everything", "c1", DeviceKind.DESKTOP)
@@ -102,6 +111,46 @@ def test_removed_addresses_leave_every_layout_and_its_grid(tmp_path: Path) -> No
     assert emptied.dockview is None and emptied.tabs == {}
     # Nothing to remove rewrites nothing.
     assert store.remove_addresses_everywhere([_FILES], TEST_NOW) == []
+    # The seed was stripped too, rather than overwritten with a client's layout.
+    assert store.read_layout("everything", "c9", DeviceKind.DESKTOP).tabs == {}
+
+
+def test_a_browser_save_is_refused_when_the_stored_arrangement_is_newer(tmp_path: Path) -> None:
+    store = LayoutStore(state_directory=tmp_path)
+    first = store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
+    assert first is not None
+    later = TEST_NOW + timedelta(seconds=5)
+    # The shell edited the file after the window fetched it.
+    store.write_client_layout("everything", "c1", strip_address_from_layout(_layout(), _FILES), later)
+    with pytest.raises(StaleLayoutSaveError):
+        store.save_browser_layout("everything", "c1", _layout(), TEST_NOW, later + timedelta(seconds=1))
+    # A window that fetched the newer arrangement may save over it.
+    saved = store.save_browser_layout("everything", "c1", _layout(), later, later + timedelta(seconds=2))
+    assert saved is not None and saved.updated_at == later + timedelta(seconds=2)
+    # A window that never fetched anything is stale against any stored arrangement.
+    with pytest.raises(StaleLayoutSaveError):
+        store.save_browser_layout("everything", "c1", _layout(), None, later + timedelta(seconds=3))
+    assert is_stale_save(None, None) is False
+    assert is_stale_save(empty_layout(DeviceKind.DESKTOP), None) is False
+
+
+def test_a_browser_save_that_changes_nothing_is_skipped(tmp_path: Path) -> None:
+    store = LayoutStore(state_directory=tmp_path)
+    first = store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
+    assert first is not None
+    assert store.save_browser_layout("everything", "c1", _layout(), TEST_NOW, TEST_NOW + timedelta(seconds=1)) is None
+    assert store.read_layout("everything", "c1", DeviceKind.DESKTOP).updated_at == TEST_NOW
+
+
+def test_the_shells_own_write_leaves_the_seed_alone(tmp_path: Path) -> None:
+    store = LayoutStore(state_directory=tmp_path)
+    store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
+    edited = strip_address_from_layout(_layout(), _FILES)
+    written = store.write_client_layout("everything", "c1", edited, TEST_NOW + timedelta(seconds=1))
+    assert set(written.tabs) == {"p2"}
+    assert store.read_client_layout("everything", "c1") == written
+    assert store.read_client_layout("everything", "c9") is None
+    assert set(store.read_layout("everything", "c9", DeviceKind.DESKTOP).tabs) == {"p1", "p2"}
 
 
 def test_strip_helpers_are_pure_over_the_dockview_shape() -> None:
@@ -117,9 +166,9 @@ def test_strip_helpers_are_pure_over_the_dockview_shape() -> None:
 
 def test_client_and_view_layouts_can_be_deleted(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
-    store.save_layout("everything", "c1", _layout(), TEST_NOW)
-    store.save_layout("alpha", "c1", _layout(), TEST_NOW)
-    store.save_layout("alpha", "c2", _layout(), TEST_NOW)
+    store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
+    store.save_browser_layout("alpha", "c1", _layout(), None, TEST_NOW)
+    store.save_browser_layout("alpha", "c2", _layout(), None, TEST_NOW)
     assert store.delete_client_layouts(ClientId("c1")) == 2
     assert [str(stored.client_id) for stored in store.all_client_layouts()] == ["c2"]
     store.delete_view_layouts("alpha")
