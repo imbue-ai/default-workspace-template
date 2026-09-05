@@ -25,12 +25,12 @@ Only the four verbs with nothing to store (`maximize`, `restore`, `refresh`, the
 Backend (`system/apps/system_interface/imbue/system_interface/shell/`):
 
 - `dockview_document.py` (new): pure functions over a `LayoutRecord`'s dockview JSON and tab records: find a panel by address, add a panel into a group or beside one in a direction (tree-based neighbours, sizes taken as a ratio of the anchor's own extent, a nominal 1200 by 800 root for a never-arranged view), remove a panel, focus a panel, move a panel, and the launcher-panel rules.
-- `layouts.py`: `write_client_layout` (the shell's own writes, no seed), `save_browser_layout` (a browser's save: the client file and the seed, the stale check, the equal-content no-op), `materialize_client_layout`, seed-level strip and rebind.
-- `layout_ops.py`: the op tables become `DOCUMENT_OPS`, `TRANSIENT_OPS`, and the read ops; the mutex is gone; the op-application functions live here over the editor.
+- `layouts.py`: `write_client_layout` (the shell's own writes, no seed), `save_browser_layout` (a browser's save: the client file and the seed, the stale check, the equal-content no-op), `read_client_layout`, seed-level strip and rebind.
+- `layout_ops.py`: the op tables become `DOCUMENT_OPS`, `TRANSIENT_OPS`, and the read ops, with `DocumentOpArguments` (what a document op posts); the mutex is gone.
 - `clients.py`: `set_active_view`; `record_report` reports whether the view changed; `client_wire_json` carries `is_connected`.
 - `inventory.py`: `build_inventory_document`.
-- `routes.py`: `GET /api/inventory`, `GET /api/clients`, the stale-save `409`, and the op dispatch of contracts section 12 (client and view resolution, the document ops, the transient broadcasts).
-- `state.py`: the one write path for client layouts with its `layout_updated` broadcast; pruning and rebinding go through it.
+- `routes.py`: `GET /api/inventory`, `GET /api/clients`, the stale-save `409`, and the op route of contracts section 12: client and view resolution, the document ops applied over the editor (placement, creates through the relay), and the transient broadcasts.
+- `state.py`: the one write path for client layouts with its `layout_updated` broadcast (a write that leaves the stored arrangement as it was is neither written nor announced), and `materialize_client_layout` (the client's own file, else the seed of its device kind); pruning and rebinding go through it.
 - `primitives.py`: `mint_save_id`.
 - `ws_broadcaster.py`: `broadcast_layout_updated`, `broadcast_active_view_changed`, `broadcast_to_client`; `broadcast_load_layout` deleted; `broadcast_layout_op` takes the target client.
 - `server.py`: the `client_state` handler broadcasts `active_view_changed` only when the stored view changed.
