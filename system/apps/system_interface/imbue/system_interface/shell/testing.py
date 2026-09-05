@@ -17,8 +17,11 @@ from app_instances.data_types import InstanceStatus
 from app_instances.primitives import InstanceKey
 from app_instances.primitives import InstanceTitle
 from app_instances.primitives import InstanceUrl
+from flask import Flask
 from pydantic import Field
 
+from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import TabRecord
 from imbue.system_interface.shell.inventory import AppInventory
@@ -28,10 +31,13 @@ from imbue.system_interface.shell.inventory import InstanceFetcherInterface
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
+from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The one clock the shell tests stamp records with.
 TEST_NOW: Final[datetime] = datetime(2026, 9, 4, tzinfo=timezone.utc)
+# The instances URL of the supervised multi-instance app of ``write_two_app_registry``.
+TEST_TERMINAL_URL: Final[str] = "http://localhost:7681"
 
 
 def registry_row_toml(
@@ -72,6 +78,31 @@ def write_registry(path: Path, *rows: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(rows))
     return path
+
+
+def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
+    """``apps.toml`` under ``tmp_path`` with a supervised multi-instance ``terminal`` row, a single-instance ``files`` row, and ``extra_rows``."""
+    return write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "terminal",
+            TEST_TERMINAL_URL,
+            True,
+            program="terminal",
+            actions=[("new", "New terminal")],
+            default_shortcut=("new", "new"),
+        ),
+        registry_row_toml("files", "http://localhost:7000", program="files", default_shortcut=("open", "focus")),
+        *extra_rows,
+    )
+
+
+def shell_application(tmp_path: Path, inventory: AppInventory, broadcaster: WebSocketBroadcaster) -> Flask:
+    """The shell app over ``inventory``, its state under ``tmp_path``; the agent manager shares the inventory's broadcaster, as in production."""
+    state = build_test_state(
+        agent_manager=AgentManager.build(broadcaster), shell_state_directory=tmp_path / "state", inventory=inventory
+    )
+    return create_application(state)
 
 
 def instance_record(
