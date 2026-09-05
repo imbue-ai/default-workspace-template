@@ -454,10 +454,16 @@ def _launcher_row(page: Page, address: str) -> Any:
 
 def _open_from_launcher(page: Page, address: str) -> None:
     """Open an instance from the New Tab page (opening the page from the "+" when none is up)."""
-    # The dock must be up first: before it mounts there is neither a launcher nor a "+".
+    # The dock must be up first: before it mounts there is neither a launcher nor a "+". A view
+    # that mounts its launcher does so a beat after the switch lands, so the launcher gets a
+    # moment to appear before the "+" (which a launcher hides) is reached for.
     expect(page.locator(".dv-default-tab-content").first).to_be_visible(timeout=15000)
-    if page.locator(".new-tab-launcher:visible").count() == 0:
-        page.locator(".dockview-add-tab-button:visible").first.click()
+    launcher = page.locator(".new-tab-launcher:visible")
+    if launcher.count() == 0:
+        try:
+            expect(launcher.first).to_be_visible(timeout=3000)
+        except AssertionError:
+            page.locator(".dockview-add-tab-button:visible").first.click()
     expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
     row = _launcher_row(page, address)
     expect(row.first).to_be_visible(timeout=15000)
