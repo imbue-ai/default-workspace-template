@@ -2522,6 +2522,26 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert messages[1]["projects"] == []
 
 
+def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:
+    """The live registration is what the layout ops need; a state file the shell cannot write is logged, not fatal."""
+    shell = state_of(app).shell
+    (shell.state_directory / "clients.json").mkdir(parents=True)
+    (shell.activity.events_path).mkdir(parents=True)
+    client_queue = shell.broadcaster.register()
+    try:
+        report = {"type": "client_state", "client_id": "c1", "device_kind": "desktop", "active_view": "everything"}
+        assert _handle_client_state_message(json.dumps(report), client_queue, shell, is_first_report=True) is True
+        switched = {**report, "active_view": "alpha", "previous_view": "everything"}
+        assert _handle_client_state_message(json.dumps(switched), client_queue, shell, is_first_report=False) is True
+        assert shell.broadcaster.get_client_info(client_queue) == {
+            "client_id": "c1",
+            "active_view": "alpha",
+            "device_kind": "desktop",
+        }
+    finally:
+        shell.broadcaster.unregister(client_queue)
+
+
 def test_client_state_reports_register_the_client_and_log_only_real_view_switches(app: Flask) -> None:
     """A report registers the connection with the broadcaster and records the client; a view_switch is
     logged only when the report names a previous view that differs; anything malformed is ignored."""
