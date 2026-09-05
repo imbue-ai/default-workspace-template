@@ -1,6 +1,7 @@
 """Projects: the shared views of contracts.md section 6, stored in ``projects.json`` (section 7)."""
 
 import re
+from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -276,7 +277,7 @@ class ProjectStore(MutableModel):
     def referenced_addresses(self) -> set[Address]:
         return {address for project in self.list_projects() for address in project.tabs}
 
-    def _replace(self, project_id: str, transform: Any) -> Project:
+    def _replace(self, project_id: str, transform: Callable[[Project], Project]) -> Project:
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             updated: list[Project] = []
