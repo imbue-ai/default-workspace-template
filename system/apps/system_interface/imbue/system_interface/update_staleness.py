@@ -73,12 +73,12 @@ _GIT_TIMEOUT_SECONDS = 10.0
 # holds nothing worth a graceful exit, and this runs on a request thread.
 _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 
-# What makes THIS running process stale: the code it holds in memory, the
-# manifests its environment was resolved from, and the settings file it
-# re-reads with long-lived parsing code. Deliberately NOT the frontend (the
-# served bundle is rebuilt on disk without a restart), docs, skills, tests, the
-# chat app (another process, restarted with this one by every apply), or
-# anything else agents routinely commit. (The update apply itself restarts the
+# What makes THIS running process stale: the code it holds in memory and the
+# manifests its environment was resolved from. Deliberately NOT the frontend
+# (the served bundle is rebuilt on disk without a restart), docs, skills,
+# tests, the chat app (another process, restarted with this one by every
+# apply), the mngr settings file (read by the chat app's mngr, never by this
+# process), or anything else agents routinely commit. (The update apply itself restarts the
 # services agent on every apply, so it keeps no such rule; this one exists for
 # a tree moved by anything else.) Everything under the vendored mngr tree but
 # docs and tests counts -- a missed skew is the failure this whole detector
@@ -99,7 +99,6 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/app_instances/",
     "system/libs/app_manifest/",
 )
-_LIVE_SETTINGS_FILE = ".mngr/settings.toml"
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
@@ -118,7 +117,7 @@ def _is_test_file(path: str) -> bool:
 
 def _is_path_relevant_to_this_server(path: str) -> bool:
     """Whether a change to ``path`` leaves this running server stale."""
-    if path == _LIVE_SETTINGS_FILE or path in _BACKEND_MANIFESTS:
+    if path in _BACKEND_MANIFESTS:
         return True
     if path.startswith(_VENDORED_MNGR_PREFIX):
         return not path.endswith(".md") and not _is_test_file(path)
