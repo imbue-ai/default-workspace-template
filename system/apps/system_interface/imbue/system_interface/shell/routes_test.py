@@ -18,6 +18,7 @@ from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.shell.primitives import ViewId
+from imbue.system_interface.shell.routes import _resolve_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
 from imbue.system_interface.shell.testing import TEST_NOW
@@ -575,6 +576,17 @@ def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_age
     assert _broadcast(client, "inspect", {"view": "alpha", "client": "c1"}).get_json()["client_id"] == "c1"
     # A client id names a layout file, so one outside the id's alphabet is refused before any read.
     assert _broadcast(client, "inspect", {"view": "alpha", "client": "../c1"}).status_code == 400
+
+
+def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
+    """A requester that names an app and no instance has no client that last messaged it: the log is not
+    searched under a made-up key."""
+    shell = _shell(app)
+    _register_client(app, "c7", "alpha")
+    shell.activity.append_message("c7", "desktop", "alpha", "files", "None", "hello")
+    _register_client(app, "c1", "alpha")
+
+    assert _resolve_client(shell, {}, Address("app:files")) is None
 
 
 def test_load_switches_the_requesting_agents_client(client: FlaskClient, app: Flask) -> None:
