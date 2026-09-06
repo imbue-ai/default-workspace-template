@@ -66,7 +66,7 @@ and echo the app's refusal when it gives one.
 All dock ops POST one body ``{op, args, requester}`` to a loopback-only endpoint on the
 shell: ``requester`` is the caller's own chat, ``app:chat?instance=$MNGR_AGENT_ID``, which is
 what ``self`` means and how the shell attributes the op to a client (the one that last
-messaged that chat). The id is also sent as the ``X-Mngr-Agent-Id`` request header.
+messaged that chat).
 
 Output for ``list`` / ``views`` / ``context`` / ``shortcuts`` is YAML by default; pass
 ``--json`` for the raw structured object. ``inspect`` and ``where`` default to a compact
@@ -93,7 +93,6 @@ ENV_APPS_FILE = "MINDS_APPS_FILE"
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
 ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
-MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
 ADDRESS_SCHEME = "app:"
 ADDRESS_INSTANCE_PARAMETER = "instance="
 EVERYTHING_VIEW_ID = "everything"
@@ -356,10 +355,7 @@ def _request_json(
     timeout: float = _READ_TIMEOUT_SECONDS,
 ) -> tuple[int, dict[str, Any] | str]:
     data = None if body is None else json.dumps(body).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        MNGR_AGENT_ID_HEADER: _mngr_agent_id(),
-    }
+    headers = {"Content-Type": "application/json"}
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
