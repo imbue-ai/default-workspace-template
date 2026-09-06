@@ -1040,8 +1040,8 @@ function createLauncherRenderer(panelId: string): IContentRenderer {
             memberRows: launcherMemberRows(),
             isEverything: mountedViewId !== null && isEverythingView(mountedViewId),
             isAwaitingCreate: isLauncherAwaitingCreate(panelId),
-            onRunAction: (app: AppRecord, actionId: string, params: Record<string, string>) => {
-              void runActionInPane(app, actionId, params, groupForPanel(panelId), panelId);
+            onRunAction: (app: AppRecord, actionId: string) => {
+              void runActionInPane(app, actionId, {}, groupForPanel(panelId), panelId);
             },
             onOpenRow: (row: LauncherRow) => {
               const openPanelId = panelIdForAddress(row.address);
@@ -1294,8 +1294,8 @@ export function focusLastOfShortcut(shortcut: ProjectShortcut): void {
 }
 
 /** Run an app's action from the launcher or the All apps popover: always creates. */
-export function runAppAction(app: AppRecord, actionId: string, params: Record<string, string> = {}): void {
-  void runActionInPane(app, actionId, params, null, null);
+export function runAppAction(app: AppRecord, actionId: string): void {
+  void runActionInPane(app, actionId, {}, null, null);
 }
 
 /**
