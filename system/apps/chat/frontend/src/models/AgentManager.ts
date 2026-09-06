@@ -29,7 +29,7 @@ export interface AgentState {
   // The agent's harness ("claude", "codex", ...), from the backend. Used only as a lookup key
   // into the per-harness catalog (GET /api/harnesses).
   harness?: string;
-  // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the system interface has
+  // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the chat app has
   // no per-agent activity tracking available.
   activity_state?: string | null;
   // The agent's live model/effort/fast selection plus the catalog option it matched, pushed by

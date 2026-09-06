@@ -228,7 +228,7 @@
   background: var(--c-text-faint);
 }
 
-/* Chat panel within dockview */
+/* Chat panel: the chat document's front face */
 .chat-panel {
   /* The pane card's own surface: a chat fills its pane edge to edge, so anything
      else here would read as a second surface inside the card. */
