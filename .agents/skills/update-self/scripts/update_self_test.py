@@ -1300,8 +1300,10 @@ def _write_app(
 
 
 def _make_apply_repo(tmp_path: Path) -> Path:
+    """A repo root shaped like the live tree: the npm workspace at ``system/`` over the shell's frontend."""
     repo_root = tmp_path / "repo"
     (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
+    (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
     for package, tool_name, executable, is_critical in _APP_FIXTURES:
         _write_app(repo_root, package, tool_name, executable, is_critical)
     return repo_root
@@ -1355,6 +1357,7 @@ class _RecordingRunner(update_runtime.Runner):
 
     calls: list[list[str]] = field(default_factory=list)
     raw_calls: list[list[str]] = field(default_factory=list)
+    cwds: list[str | None] = field(default_factory=list)
     envs: list[dict | None] = field(default_factory=list)
     timeouts: list[float | None] = field(default_factory=list)
     executables: dict[str, str] = field(default_factory=dict)
@@ -1379,6 +1382,8 @@ class _RecordingRunner(update_runtime.Runner):
         self.raw_calls.append(list(argv))
         argv_list = _unwrap_expendable(list(argv))
         self.calls.append(argv_list)
+        cwd = kwargs.get("cwd")
+        self.cwds.append(None if cwd is None else str(cwd))
         self.envs.append(kwargs.get("env"))
         self.timeouts.append(kwargs.get("timeout"))
         if self.on_command is not None:
@@ -1415,6 +1420,14 @@ class _RecordingRunner(update_runtime.Runner):
 
     def argvs_starting(self, *prefix: str) -> list[list[str]]:
         return [c for c in self.calls if tuple(c[: len(prefix)]) == prefix]
+
+    def cwds_of(self, *prefix: str) -> list[str | None]:
+        """Where each command starting with ``prefix`` ran, in order."""
+        return [
+            cwd
+            for call, cwd in zip(self.calls, self.cwds)
+            if tuple(call[: len(prefix)]) == prefix
+        ]
 
     def ran(self, *prefix: str) -> bool:
         return bool(self.argvs_starting(*prefix))
@@ -4639,6 +4652,58 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
     # restored node_modules rather than wiping it.
     assert len(runner.argvs_starting("npm", "ci")) == 1
     assert (node_modules / "left-pad.js").read_text() == "restored"
+
+
+def _make_pre_split_tree(repo_root: Path) -> None:
+    """Shape the tree like one from before the chat's split: no npm workspace and no chat
+    bundle, just the shell's frontend directory."""
+    (repo_root / update_layout.NPM_ROOT_DIR / "package.json").unlink()
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        if bundle.frontend_dir != update_layout.FRONTEND_DIR:
+            shutil.rmtree(repo_root / bundle.static_dir, ignore_errors=True)
+
+
+def test_a_rollback_into_a_pre_split_tree_restores_the_shell_bundle_without_a_rebuild(
+    apply_repo: Path,
+) -> None:
+    # The first update to the release that split the chat out rolls back to a tree
+    # with no npm workspace and no chat bundle. The shell's bundle was copied aside,
+    # and that is every bundle the restored tree serves -- so recovery puts it back
+    # and rebuilds nothing, rather than running npm at a root the tree does not have.
+    _make_pre_split_tree(apply_repo)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert (
+        len(runner.argvs_starting("npm", "run", "build")) == 1
+    )  # the forward build only
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
+    assert not (apply_repo / update_layout.CHAT_STATIC_DIR).exists()
+
+
+def test_a_rollback_into_a_pre_split_tree_rebuilds_at_the_shell_frontend(
+    unbuilt_apply_repo: Path,
+) -> None:
+    # Nothing was copied aside (the tree never built a bundle), so recovery rebuilds --
+    # from the shell's own frontend directory, where a tree from before the split keeps
+    # its manifest and node_modules, not from the npm root the merged tree introduced.
+    _make_pre_split_tree(unbuilt_apply_repo)
+    runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, unbuilt_apply_repo)
+    runner.respond(
+        ("npm", "run", "build"), [_Result(returncode=1, stderr="boom"), _Result()]
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), unbuilt_apply_repo)
+
+    assert code == 2
+    npm_root = str(unbuilt_apply_repo / update_layout.NPM_ROOT_DIR)
+    shell_frontend = str(unbuilt_apply_repo / update_layout.FRONTEND_DIR)
+    # The forward pass ran at the merged tree's npm root; recovery at the restored tree's.
+    assert runner.cwds_of("npm", "ci") == [npm_root, shell_frontend]
+    assert runner.cwds_of("npm", "run", "build") == [npm_root, shell_frontend]
 
 
 def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(

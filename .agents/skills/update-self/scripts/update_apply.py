@@ -75,6 +75,7 @@ from update_layout import (
     DEFAULT_WORKSPACE_URL,
     ENV_WORKSPACE_URL,
     FRONTEND_BUNDLES,
+    FRONTEND_DIR,
     FRONTEND_LIB_DIR,
     LAYOUT_MIGRATION_SCRIPT,
     NPM_LOCKFILE,
@@ -311,9 +312,10 @@ def _assert_bundles_built(
     expected_hashes: Mapping[str, str | None] | None,
     *,
     live_service_restarted: bool,
+    bundles: Sequence[FrontendBundle] = FRONTEND_BUNDLES,
 ) -> None:
-    """Raise unless the build actually left every servable bundle of the merged
-    source behind.
+    """Raise unless the build actually left every servable bundle (``bundles``: every
+    one by default) of the merged source behind.
 
     A build tool that empties its output directory and then exits 0 without
     writing passes an exit-code check while leaving nothing to serve; the index
@@ -325,7 +327,7 @@ def _assert_bundles_built(
     degrades to a warning when a bundle simply carries no stamp (a build
     without a git repo writes none).
     """
-    for bundle in FRONTEND_BUNDLES:
+    for bundle in bundles:
         index = repo_root / bundle.index_path
         if not index.exists():
             raise ApplyFailed(
@@ -472,6 +474,44 @@ def _app_tools_to_rebuild(
     return tuple(rebuildable)
 
 
+class _RestoredFrontend(NamedTuple):
+    """What a restored tree's frontend looks like: where npm runs and which bundles it serves."""
+
+    npm_root: Path
+    bundles: tuple[FrontendBundle, ...]
+    is_npm_workspace: bool
+
+
+def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
+    """The frontend layout of the tree the rollback restored.
+
+    A tree from before the chat's split has no npm workspace at ``system/`` and no chat
+    frontend: its one bundle builds from the shell's own frontend directory, with the
+    node_modules there. The forward apply never asks this (the merged tree always has the
+    workspace), but a rollback lands on whatever tree the workspace ran before.
+    """
+    if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
+        return _RestoredFrontend(repo_root / NPM_ROOT_DIR, FRONTEND_BUNDLES, True)
+    served = tuple(
+        bundle
+        for bundle in FRONTEND_BUNDLES
+        if (repo_root / bundle.frontend_dir).is_dir()
+    )
+    return _RestoredFrontend(repo_root / FRONTEND_DIR, served, False)
+
+
+def _is_recovery_npm_ci_needed(
+    layout: _RestoredFrontend, restored: Collection[str]
+) -> bool:
+    """Whether the restored tree's node_modules must be reinstalled before its rebuild:
+    the workspace's when its copy could not be put back (the forward ``npm ci`` replaced
+    it), the pre-split frontend's only when there is none (the forward apply never
+    touched it)."""
+    if layout.is_npm_workspace:
+        return "node_modules" not in restored
+    return not (layout.npm_root / "node_modules").is_dir()
+
+
 def _recover_running_state(
     plan: ApplyPlan,
     repo_root: Path,
@@ -515,22 +555,30 @@ def _recover_running_state(
                     "ahead of the tree. The rollback still counts as recovered -- re-run "
                     f"`bash {PROVISIONER_SCRIPT}` once the cause (often no network) is fixed.\n"
                 )
+        # Only the bundles the restored tree serves count, at the npm root that tree
+        # has: a rollback into a tree from before the chat's split has neither a chat
+        # bundle to restore nor a workspace to build it from.
+        frontend = _restored_frontend_layout(repo_root)
         if plan.frontend and any(
-            bundle.snapshot_name not in restored for bundle in FRONTEND_BUNDLES
+            bundle.snapshot_name not in restored for bundle in frontend.bundles
         ):
             # No copy to put back: compile from source. node_modules likewise
             # has to match the restored lockfile when its own copy is gone.
-            if plan.frontend_manifest and "node_modules" not in restored:
-                run_checked(runner, ["npm", "ci"], repo_root / NPM_ROOT_DIR, "npm ci")
+            if plan.frontend_manifest and _is_recovery_npm_ci_needed(
+                frontend, restored
+            ):
+                run_checked(runner, ["npm", "ci"], frontend.npm_root, "npm ci")
             run_checked(
                 runner,
                 ["npm", "run", "build"],
-                repo_root / NPM_ROOT_DIR,
+                frontend.npm_root,
                 "npm run build",
             )
             # No stamp comparison here: the tree is rolled back, and an older
             # tree's build may predate the stamping postbuild step.
-            _assert_bundles_built(repo_root, None, live_service_restarted=False)
+            _assert_bundles_built(
+                repo_root, None, live_service_restarted=False, bundles=frontend.bundles
+            )
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(repo_root, runner, keep_protected)
         rebuildable_app_tools = _app_tools_to_rebuild(
