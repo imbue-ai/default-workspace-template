@@ -599,8 +599,8 @@ class AgentManager:
     def broadcaster(self) -> WebSocketBroadcaster:
         """The WebSocketBroadcaster this manager owns. Primarily useful to
         callers that need to reuse the same broadcaster across related
-        application state (e.g. the system_interface lifespan when an
-        externally-constructed AgentManager is injected for tests)."""
+        application state (``ChatState.broadcaster`` reads it here, so a manager
+        a test injects brings its broadcaster with it)."""
         return self._broadcaster
 
     def set_nudger(self, nudger: InstanceNudgerInterface) -> None:
