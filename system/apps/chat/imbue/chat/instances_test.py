@@ -25,9 +25,11 @@ from imbue.chat.instances import AgentManagerInstanceSource
 from imbue.chat.instances import AgentManagerNudger
 from imbue.chat.instances import instance_status_for_agent
 from imbue.chat.instances import subagent_instance_key
+from imbue.chat.models import CreatedChatAgent
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
 
 def _agent_id() -> str:
@@ -270,6 +272,58 @@ def test_new_with_an_account_named_that_does_not_exist_is_refused(agent_manager:
     source = _source(agent_manager)
     with pytest.raises(ChatCreateRefusedError):
         source.create_instance(ActionId("new"), {"account_id": "no-such-account"})
+
+
+class _LandingAgentManager(AgentManager):
+    """A manager whose create has landed by the time it answers: the agent is registered under
+    the id it returns and no provisional record is left, as a ``mngr create`` that exits before
+    the instances API reads the record back leaves things."""
+
+    def create_chat_agent(
+        self,
+        requested_name: str,
+        extra_role_templates: tuple[str, ...] = (),
+        project_id: str = "",
+        account_id: str = "",
+        agent_id: str = "",
+    ) -> CreatedChatAgent:
+        landed_id = _agent_id()
+        _seed_agent(self, landed_id, "Chat-1")
+        return CreatedChatAgent(agent_id=landed_id, name="Chat-1", display_name="Chat 1")
+
+
+class _VanishingAgentManager(AgentManager):
+    """A manager whose create answers an id that is neither a provisional record nor an agent."""
+
+    def create_chat_agent(
+        self,
+        requested_name: str,
+        extra_role_templates: tuple[str, ...] = (),
+        project_id: str = "",
+        account_id: str = "",
+        agent_id: str = "",
+    ) -> CreatedChatAgent:
+        return CreatedChatAgent(agent_id=_agent_id(), name="Chat-1", display_name="Chat 1")
+
+
+def test_new_answers_the_agents_own_record_when_the_create_lands_before_it_is_read_back() -> None:
+    """The creation thread drops the provisional record the moment ``mngr create`` exits 0, which
+    can be before the route reads it back: the chat is then an ordinary, explicit instance."""
+    source = _source(_LandingAgentManager.build(WebSocketBroadcaster()))
+
+    record = source.create_instance(ActionId("new"), {"account_id": "acct-1"})
+
+    assert record.lifetime is InstanceLifetime.EXPLICIT
+    assert record.renameable is True
+    assert record.title == "Chat 1"
+    assert [candidate.key for candidate in source.list_instances()] == [record.key]
+
+
+def test_new_is_refused_when_the_created_chat_is_nowhere_to_be_listed() -> None:
+    source = _source(_VanishingAgentManager.build(WebSocketBroadcaster()))
+
+    with pytest.raises(ChatCreateRefusedError, match="vanished"):
+        source.create_instance(ActionId("new"), {"account_id": "acct-1"})
 
 
 def test_delete_drops_a_reserved_chat_and_leaves_a_create_in_flight_alone(agent_manager: AgentManager) -> None:
