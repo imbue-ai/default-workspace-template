@@ -1067,6 +1067,32 @@ def plan_as_json(plan: MigrationPlan) -> dict[str, Any]:
     }
 
 
+def _add_records_to_store(
+    app: str,
+    store_path: Path,
+    records_key: str,
+    identity_key: str,
+    records: Sequence[dict[str, Any]],
+) -> None:
+    """Fold the records an app store lacks into it; a store that cannot be read, or is of another
+    version, is left alone (logged)."""
+    store_notes: list[str] = []
+    existing = _read_json_object(store_path, store_notes)
+    if store_notes:
+        _log(f"left the {app} store alone: {store_notes[0]}")
+        return
+    if existing is not None and existing.get("version") != STORE_VERSION:
+        _log(
+            f"left the {app} store alone: {store_path} is version "
+            f"{existing.get('version')!r}; this script writes version {STORE_VERSION}"
+        )
+        return
+    merged = merged_store_document(existing, records_key, identity_key, records)
+    if merged.added_count > 0:
+        _write_json_atomic(store_path, merged.document)
+        _log(f"added {merged.added_count} record(s) to {store_path}")
+
+
 def apply_plan(
     plan: MigrationPlan, state_dir: Path, apps_data_dir: Path, now_iso: str
 ) -> None:
@@ -1101,22 +1127,13 @@ def apply_plan(
             ("files", "instances", "key", plan.files_records),
             ("terminal", "sessions", "name", plan.terminal_records),
         ):
-            store_path = apps_data_dir / app / STORE_FILENAME
-            store_notes: list[str] = []
-            existing = _read_json_object(store_path, store_notes)
-            if store_notes:
-                _log(f"left the {app} store alone: {store_notes[0]}")
-                continue
-            if existing is not None and existing.get("version") != STORE_VERSION:
-                _log(
-                    f"left the {app} store alone: {store_path} is version "
-                    f"{existing.get('version')!r}; this script writes version {STORE_VERSION}"
-                )
-                continue
-            merged = merged_store_document(existing, records_key, identity_key, records)
-            if merged.added_count > 0:
-                _write_json_atomic(store_path, merged.document)
-                _log(f"added {merged.added_count} record(s) to {store_path}")
+            _add_records_to_store(
+                app,
+                apps_data_dir / app / STORE_FILENAME,
+                records_key,
+                identity_key,
+                records,
+            )
     elif plan.source_dir.is_dir():
         _log(
             f"no readable {LEGACY_META_FILENAME} in {plan.source_dir}; nothing to migrate"
