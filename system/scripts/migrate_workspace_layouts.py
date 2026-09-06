@@ -796,6 +796,25 @@ def _has_projects(document: dict[str, Any] | None) -> bool:
     return isinstance(projects, list) and len(projects) > 0
 
 
+def _skipped_seed(
+    view_id: str,
+    device: str,
+    path: Path,
+    dropped_panel_ids: tuple[str, ...],
+    note: str,
+) -> SeedPlan:
+    return SeedPlan(
+        view_id=view_id,
+        device=device,
+        path=path,
+        layout=None,
+        addresses=(),
+        dropped_panel_ids=dropped_panel_ids,
+        is_skipped=True,
+        note=note,
+    )
+
+
 def plan_migration(
     source_dir: Path,
     state_dir: Path,
@@ -848,15 +867,8 @@ def plan_migration(
             content = _read_json_object(content_path, notes)
             if content is None:
                 seeds.append(
-                    SeedPlan(
-                        view_id=view_id,
-                        device=device,
-                        path=seed_path,
-                        layout=None,
-                        addresses=(),
-                        dropped_panel_ids=(),
-                        is_skipped=True,
-                        note=f"unreadable {content_path}",
+                    _skipped_seed(
+                        view_id, device, seed_path, (), f"unreadable {content_path}"
                     )
                 )
                 continue
@@ -865,15 +877,12 @@ def plan_migration(
             )
             if layout is None:
                 seeds.append(
-                    SeedPlan(
-                        view_id=view_id,
-                        device=device,
-                        path=seed_path,
-                        layout=None,
-                        addresses=(),
-                        dropped_panel_ids=dropped,
-                        is_skipped=True,
-                        note="no panel maps to an instance",
+                    _skipped_seed(
+                        view_id,
+                        device,
+                        seed_path,
+                        dropped,
+                        "no panel maps to an instance",
                     )
                 )
                 continue
