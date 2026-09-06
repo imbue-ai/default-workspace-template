@@ -12,9 +12,15 @@ import tempfile
 import tomllib
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 from update_banding import ExpendWrapper, as_expendable
-from update_layout import APPS_REGISTRY_PATH, SYSTEM_INTERFACE_DIR, TOOL_NAME
+from update_layout import (
+    APPS_REGISTRY_PATH,
+    CHAT_DIR,
+    SYSTEM_INTERFACE_DIR,
+    TOOL_NAME,
+)
 from update_runtime import (
     FrontendProbe,
     HttpClient,
@@ -51,6 +57,12 @@ CHAT_APP_NAME = "chat"
 # Where the chat app listens when the registry does not say (the manifest's app
 # URL; the registry row is authoritative once the chat has registered).
 DEFAULT_CHAT_URL = "http://127.0.0.1:8010"
+# The chat program's entry point: present in a tree whose chat runs as its own
+# process, absent from one where the shell still served the chat itself.
+CHAT_PROGRAM_ENTRY = f"{CHAT_DIR}/imbue/chat/main.py"
+# The names one loopback server answers to, folded together when two base URLs are
+# compared for being the same origin.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 SERVE_PATH = "/"
 
@@ -96,12 +108,27 @@ def wait_healthy(
     return False
 
 
-def chat_health_url(repo_root: Path) -> str:
+def has_chat_program(repo_root: Path) -> bool:
+    """Whether the tree runs the chat as its own program, so its health is probeable.
+
+    A tree from before the chat's split has no such program: the shell served the
+    chat itself, and the registry's chat row names the shell.
+    """
+    return (repo_root / CHAT_PROGRAM_ENTRY).is_file()
+
+
+def chat_health_url(repo_root: Path, shell_base_url: str) -> str:
     """The chat app's health URL: its registry row's ``url``, else the default port.
 
     Read off the registry rather than assumed, so a workspace whose chat listens
     elsewhere is probed where it actually is; an unreadable registry (a fresh
     workspace, a hand edit) degrades to the default rather than failing the apply.
+
+    A row that names the shell's own origin is not the chat's: the shell registered
+    the chat's manifest at its own URL before the chat ran as its own program, and
+    the row keeps saying so until the restarted chat re-registers at the end of its
+    boot. The shell answers long before that, so probing such a row would pass on
+    the shell's health and miss a chat that never came up.
     """
     registry_path = repo_root / APPS_REGISTRY_PATH
     try:
@@ -118,8 +145,29 @@ def chat_health_url(repo_root: Path) -> str:
             and row.get("name") == CHAT_APP_NAME
             and isinstance(row.get("url"), str)
         ):
-            return f"{row['url'].rstrip('/')}{CHAT_HEALTH_PATH}"
+            row_url = row["url"].rstrip("/")
+            if _is_same_origin(row_url, shell_base_url):
+                sys.stderr.write(
+                    f"note: the app registry's chat row names the shell's own origin ({row_url}), "
+                    f"a registration from before the chat ran as its own program; probing the "
+                    f"chat app at {DEFAULT_CHAT_URL}.\n"
+                )
+                return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
+            return f"{row_url}{CHAT_HEALTH_PATH}"
     return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
+
+
+def _is_same_origin(url: str, other: str) -> bool:
+    """Whether two base URLs name one server, with the loopback spellings folded together."""
+    return _origin_key(url) == _origin_key(other)
+
+
+def _origin_key(url: str) -> tuple[str, str, int | None]:
+    parsed = urlsplit(url.rstrip("/"))
+    host = (parsed.hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        host = "127.0.0.1"
+    return (parsed.scheme.lower(), host, parsed.port)
 
 
 def preflight(
