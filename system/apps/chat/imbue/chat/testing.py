@@ -386,8 +386,8 @@ def open_ws(served: ServedApp, path: str, subprotocols: list[str] | None = None)
 def close_ws(ws: simple_websocket.Client) -> None:
     """Close a WebSocket client, tolerating an already-closed connection.
 
-    A handler that finishes (e.g. the proto-agent-logs not-found path) closes
-    the socket server-side first, so the client-side close races the client's
+    A handler that finishes first (the ``/api/ws`` loop exiting on the broadcaster's
+    shutdown sentinel) closes the socket server-side, so the client-side close races the client's
     background thread processing that server close. Depending on how far that
     thread has gotten, ``ws.close()`` raises either ``ConnectionClosed`` (the
     close was fully processed and ``connected`` is already False) or ``OSError``
