@@ -106,6 +106,7 @@ FILES_KEY_NUMBER_PATTERN = re.compile(r"^files-([1-9][0-9]*)$")
 INSTANCE_COMPONENT = "instance"
 CUSTOM_TAB_COMPONENT = "custom"
 MINTED_ID_BYTES = 8
+UNMIGRATED_DOCKVIEW_KEYS = frozenset({"floatingGroups", "popoutGroups"})
 
 ADDRESS_SCHEME = "app:"
 
@@ -524,12 +525,13 @@ def migrate_layout_content(
         return None, (), ()
     panel_params = content.get("panelParams")
     params_by_panel_id = panel_params if isinstance(panel_params, dict) else {}
-    document: dict[str, Any] | None = copy.deepcopy(dockview)
     # dockview's floating and popout groups also name panel ids; nothing in the old shell made
     # any, so they are dropped rather than renamed.
-    for key in ("floatingGroups", "popoutGroups"):
-        if document is not None:
-            document.pop(key, None)
+    document: dict[str, Any] | None = {
+        key: value
+        for key, value in copy.deepcopy(dockview).items()
+        if key not in UNMIGRATED_DOCKVIEW_KEYS
+    }
     tabs: dict[str, dict[str, Any]] = {}
     kept_addresses: list[str] = []
     dropped: list[str] = []
