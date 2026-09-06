@@ -52,9 +52,6 @@ const ON_MACHINE_TITLE = "On this machine";
 
 const SECTION_HEADING_CLASS = "type-section text-faint";
 
-// The chat app's ``new`` action takes the provider account the picker beside its tile chose.
-// CLEANUP: phase 10 of the workspace app model moves the picker into the chat app's own page.
-
 /**
  * Assemble the launcher's tables. A project's "In this project" table IS its tab set, in tab
  * order; "On this machine" is the rest of the machine, deduped by address. Everything gets the
