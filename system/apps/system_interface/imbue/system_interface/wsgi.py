@@ -40,10 +40,10 @@ class ReflectClientSubprotocols:
     Chrome aborts a WebSocket handshake (close 1006) if the client offered a
     subprotocol and the 101 response echoes none, so any future WS route that
     negotiates a subprotocol works without touching this list. Today's own
-    endpoint (the ``/api/ws`` broadcaster)
-    offer no subprotocol, so the negotiation loop never runs and no
-    subprotocol is echoed -- the passthrough is inert for them but keeps the
-    server permissive for subprotocol-bearing clients.
+    endpoint (the ``/api/ws`` broadcaster) offers no subprotocol, so the
+    negotiation loop never runs and no subprotocol is echoed -- the passthrough
+    is inert for it but keeps the server permissive for subprotocol-bearing
+    clients.
     """
 
     def __contains__(self, _subprotocol: object) -> bool:
@@ -51,7 +51,7 @@ class ReflectClientSubprotocols:
 
 
 def build_sock(application: Flask) -> Sock:
-    """Wire flask-sock onto ``application`` with the keepalive and subprotocol policy both documents share."""
+    """Wire flask-sock onto ``application`` with the keepalive and subprotocol policy the shell's WebSocket uses."""
     application.config["SOCK_SERVER_OPTIONS"] = {
         "ping_interval": WS_PING_INTERVAL_SECONDS,
         # Echo back whatever subprotocol a client offers so subprotocol-bearing
