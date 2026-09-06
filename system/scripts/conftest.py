@@ -215,7 +215,7 @@ def _legacy_content(
 
 # The old panel params, one per kind the pre-arc frontend saved (``PanelParams`` in its
 # ``liveSurfaces.ts``): the address each maps to is what the migration tests assert.
-LEGACY_PANELS: dict[str, dict[str, Any]] = {
+_LEGACY_PANELS: dict[str, dict[str, Any]] = {
     "chat-agent-aaa": {
         "panelType": "chat",
         "agentId": "agent-aaa",
@@ -268,7 +268,7 @@ LEGACY_PANELS: dict[str, dict[str, Any]] = {
 }
 
 
-def write_legacy_layout_dir(layout_dir: Path) -> None:
+def _write_legacy_layout_dir(layout_dir: Path) -> None:
     """A pre-arc ``workspace_layout`` directory in the shape today's retired writers left: two
     projects (one with every panel kind and the overrides map, one hand-edited with the legacy
     unpinned list, the old sessionless files viewer as a member, and a corrupt mobile file), an
@@ -330,7 +330,7 @@ def write_legacy_layout_dir(layout_dir: Path) -> None:
                         600,
                     ),
                 ],
-                LEGACY_PANELS,
+                _LEGACY_PANELS,
             )
         )
     )
@@ -338,7 +338,7 @@ def write_legacy_layout_dir(layout_dir: Path) -> None:
         json.dumps(
             _legacy_content(
                 [("m1", ["chat-agent-aaa"], 400)],
-                {"chat-agent-aaa": LEGACY_PANELS["chat-agent-aaa"]},
+                {"chat-agent-aaa": _LEGACY_PANELS["chat-agent-aaa"]},
             )
         )
     )
@@ -351,7 +351,7 @@ def write_legacy_layout_dir(layout_dir: Path) -> None:
                 [("r1", ["chat-agent-bbb", "iframe-url-1"], 1200)],
                 {
                     "chat-agent-bbb": research_chat,
-                    "iframe-url-1": LEGACY_PANELS["iframe-url-1"],
+                    "iframe-url-1": _LEGACY_PANELS["iframe-url-1"],
                 },
             )
         )
@@ -361,7 +361,7 @@ def write_legacy_layout_dir(layout_dir: Path) -> None:
         json.dumps(
             _legacy_content(
                 [("e1", ["iframe-url-1"], 1200)],
-                {"iframe-url-1": LEGACY_PANELS["iframe-url-1"]},
+                {"iframe-url-1": _LEGACY_PANELS["iframe-url-1"]},
             )
         )
     )
@@ -400,7 +400,7 @@ def write_legacy_layout_dir(layout_dir: Path) -> None:
 @pytest.fixture
 def legacy_layout_dir(tmp_path: Path) -> Path:
     layout_dir = tmp_path / "host" / "agents" / "agent-primary" / "workspace_layout"
-    write_legacy_layout_dir(layout_dir)
+    _write_legacy_layout_dir(layout_dir)
     return layout_dir
 
 
