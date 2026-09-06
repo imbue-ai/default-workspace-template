@@ -409,14 +409,15 @@ def read_legacy_projects(meta: dict[str, Any], notes: list[str]) -> list[LegacyP
             notes.append(f"skipped project {project_id!r}: not a usable project id")
             continue
         color = entry.get("color")
+        trimmed_color = color.strip() if isinstance(color, str) else ""
         glyph = entry.get("glyph")
         members = entry.get("members")
         projects.append(
             LegacyProject(
                 project_id=project_id,
                 name=str(entry.get("name") or project_id).strip() or project_id,
-                color=color
-                if isinstance(color, str) and COLOR_PATTERN.fullmatch(color.strip())
+                color=trimmed_color
+                if COLOR_PATTERN.fullmatch(trimmed_color)
                 else DEFAULT_PROJECT_COLOR,
                 glyph=glyph
                 if isinstance(glyph, int)
