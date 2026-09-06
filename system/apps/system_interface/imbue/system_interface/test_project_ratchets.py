@@ -73,8 +73,8 @@ def _import_from_base(source_file: Path, package_root: Path, node: ast.ImportFro
 
 def _imported_module_names(source_file: Path, package_root: Path = _PACKAGE_ROOT) -> Iterator[str]:
     """Every absolute name a module's import statements reach: the module of an ``import``, and
-    for a ``from`` import both its base and ``base.name`` per imported name (so a ``from imbue``
-    import of ``chat`` is seen as ``imbue.chat``)."""
+    for a ``from`` import both its base and ``base.name`` per imported name, so ``imbue.chat`` is
+    seen behind ``from imbue import chat``."""
     for node in ast.walk(ast.parse(source_file.read_text())):
         if isinstance(node, ast.Import):
             for alias in node.names:
