@@ -305,3 +305,18 @@ body {
     transform: translateY(0) scale(1);
   }
 }
+
+/* The activity dot's pulse (components/activityDot.ts, used by the chat's activity
+ * indicator and its sub-agent card's status dot); like the modal's, only the
+ * @keyframes live here, the utility references them by name. */
+@keyframes agent-activity-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}

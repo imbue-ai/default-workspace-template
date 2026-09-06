@@ -80,7 +80,7 @@ export function labelForActivityState(state: string | null | undefined, events: 
 function renderStrip(label: string, state: string | null | undefined): m.Vnode {
   // `flex` (not inline-flex) so the auto side-margins can horizontally center
   // the strip within the footer above the centered input. The dot's pulse
-  // keyframes (agent-activity-pulse) stay in style.css.
+  // keyframes (agent-activity-pulse) live in the library's base.css.
   return m(
     "div",
     {

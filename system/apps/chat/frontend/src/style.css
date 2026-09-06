@@ -493,19 +493,6 @@
   margin: 0.5em 0;
 }
 
-/* The activity indicator's dot pulse (views/ActivityIndicator.ts), shared
-   with the sub-agent card's status dot (views/message-renderers.ts). */
-@keyframes agent-activity-pulse {
-  0%,
-  100% {
-    opacity: 0.35;
-    transform: scale(0.85);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.15);
-  }
-}
 /* --- Transcript custom scrollbar (transcript-smooth-scroll spec) ----------- */
 
 /* The transcript scroll container hides its native scrollbar entirely; the
