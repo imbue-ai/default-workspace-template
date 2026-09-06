@@ -168,11 +168,12 @@ live-applicable, rebuild-only, or `stuck`.
   toolchain, so it does not exercise a global-dependency bump.
 - **Playwright** for a web surface (system interface or a user service) only
   when the merge needed nontrivial merge work there. For the system interface,
-  build it in your worktree (`uv sync --all-packages`, then `cd
-  system/apps/system_interface/frontend && npm ci && npm run build`) and drive
-  it per `.agents/shared/worker/references/web-frontend-testing.md`. That
-  bundle is what the lead's apply installs live (`--worker-bundle`) -- name its
-  location in your report.
+  build the frontends in your worktree (`uv sync --all-packages`, then `cd
+  system && npm ci && npm run build`: one npm workspace emits the shell's bundle
+  and the chat app's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those two bundles
+  are what the lead's apply installs live (`--worker-bundle`, one per app,
+  installed only as a pair) -- name both locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -238,9 +239,10 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     service; the lead attaches the rollback offer to each nontrivial one.
   - **Customization survival** -- each touched creation classified per 4b,
     with evidence paths for anything not plainly intact.
-  - **Built system-interface bundle** -- when you built it, the absolute path
-    (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`);
-    omit when you did not build.
+  - **Built frontend bundles** -- when you built them, the absolute paths of
+    both (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`
+    and `<your work_dir>/system/apps/chat/imbue/chat/static`); omit when you did
+    not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file.
   - **Dockerfile split** (if it merged) -- each hunk live-applicable or
