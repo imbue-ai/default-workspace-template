@@ -43,6 +43,6 @@ Phase 8 of the workspace app model (the layout file is the truth):
 
 Phase 9 of the workspace app model (the migration):
 
-- The update-self apply runs `system/scripts/migrate_workspace_layouts.py run` from the merged tree after the pre-flight and before the services restart, so the restarted shell reads a pre-app-model workspace's migrated projects and layouts at once. A failure (or a script that cannot be spawned) is a warning, never a rollback: the migration writes only state files that do not exist yet and runs again at the next boot.
+- The update-self apply runs `system/scripts/migrate_workspace_layouts.py run` from the merged tree after the pre-flight and before the services restart, so the restarted shell reads a pre-app-model workspace's migrated projects and layouts at once. A failure (or a script that cannot be spawned) is a warning, never a rollback: the migration never overwrites an output that holds anything (the app stores only gain records), leaves the old store untouched, and runs again at the next boot.
 
 - The comments in the apply's classification and layout modules no longer promise that a migration rewrites pre-manifest apps: an app scaffolded before manifests keeps running `uv run <name>` from the root venv for as long as it exists, beside the manifest apps' tool environments.
