@@ -97,6 +97,11 @@ describe("the provisional chats over the socket", () => {
     await expect(manager.whenAgentRegistered("agent-1")).resolves.toBeUndefined();
   });
 
+  it("resolves at once for a chat the app neither lists nor is creating, so the send reports the refusal", async () => {
+    push({ type: "agents_updated", agents: [] });
+    await expect(manager.whenAgentRegistered("agent-gone")).resolves.toBeUndefined();
+  });
+
   it("marks a failed create on its record and rejects a held send with the reason", async () => {
     push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
     const registered = manager.whenAgentRegistered("agent-1");

@@ -226,9 +226,13 @@ function settleRegistration(agentId: string, error: Error | null): void {
  * for a chat still being created when its create lands. Rejects, with the reason, when the
  * create fails or the chat is discarded first. What a send typed into a chat that does not
  * exist yet waits on.
+ *
+ * A chat the app neither lists nor holds a provisional record for (destroyed while its page
+ * was open, a stale URL) resolves at once too: no push is coming that could settle it, and the
+ * send itself reports the backend's refusal.
  */
 export function whenAgentRegistered(agentId: string): Promise<void> {
-  if (getAgentById(agentId) !== undefined) return Promise.resolve();
+  if (getAgentById(agentId) !== undefined || getProtoAgent(agentId) === undefined) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const waiters = registrationWaiters.get(agentId) ?? [];
     waiters.push({ resolve, reject });
