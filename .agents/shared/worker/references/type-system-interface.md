@@ -62,8 +62,10 @@ System-interface specifics:
   Extend the one that frames what you changed -- and use it as the same instance
   you screenshot.
 - To drive the UI manually, launch a **throwaway** instance on an alternate port,
-  e.g. `SYSTEM_INTERFACE_PORT=8137 uv run system-interface` from
-  `system/apps/system_interface/`. With `MINDS_APPS_FILE` left at its default it reads
+  e.g. `SYSTEM_INTERFACE_PORT=8137 uv run system-interface` from the repo root
+  (the registry path and the shell's `--state-dir` default are relative to the
+  cwd, as they are under supervisord; run from anywhere else, the shell finds no
+  registry and lists no apps). With `MINDS_APPS_FILE` left at its default it reads
   the live app registry and lists the **live** chat app's real chats (this is how
   you open the motivating conversation named in `## Real scenario` -- see below);
   point it at a registry of fixture apps instead when you want an isolated,
