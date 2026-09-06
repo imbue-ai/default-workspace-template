@@ -1,4 +1,6 @@
-"""Fixtures for the layout.py tests: a registry file and a fake shell over loopback."""
+"""Fixtures for the scripts' tests: a registry file and a fake shell over loopback for
+layout.py, and a pre-arc ``workspace_layout`` directory and its registry for
+migrate_workspace_layouts.py."""
 
 from __future__ import annotations
 
