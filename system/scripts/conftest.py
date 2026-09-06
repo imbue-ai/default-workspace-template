@@ -14,11 +14,22 @@ from typing import Any
 import pytest
 import tomlkit
 
-_SCRIPT = Path(__file__).parent / "layout.py"
-_spec = importlib.util.spec_from_file_location("layout_for_fixtures", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-layout = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(layout)
+
+def _load_script_module(module_name: str, filename: str) -> Any:
+    """Import one of the scripts beside this file under ``module_name`` (they are not a package)."""
+    spec = importlib.util.spec_from_file_location(
+        module_name, Path(__file__).parent / filename
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+layout = _load_script_module("layout_for_fixtures", "layout.py")
+migrate_workspace_layouts = _load_script_module(
+    "migrate_workspace_layouts_for_fixtures", "migrate_workspace_layouts.py"
+)
 
 
 def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
@@ -160,15 +171,6 @@ def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-
-
-_MIGRATE_SCRIPT = Path(__file__).parent / "migrate_workspace_layouts.py"
-_migrate_spec = importlib.util.spec_from_file_location(
-    "migrate_workspace_layouts_for_fixtures", _MIGRATE_SCRIPT
-)
-assert _migrate_spec is not None and _migrate_spec.loader is not None
-migrate_workspace_layouts = importlib.util.module_from_spec(_migrate_spec)
-_migrate_spec.loader.exec_module(migrate_workspace_layouts)
 
 
 def _legacy_leaf(group_id: str, views: list[str], size: int) -> dict[str, Any]:
