@@ -86,14 +86,15 @@ Going live, after approval, is the general **update apply** -- shared with the
 ```bash
 python3 .agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref "mngr/update-<slug>" \
-    --worker-bundle "<work_dir>/system/apps/system_interface/imbue/system_interface/static"
+    --worker-bundle "system_interface=<work_dir>/system/apps/system_interface/imbue/system_interface/static" \
+    --worker-bundle "chat=<work_dir>/system/apps/chat/imbue/chat/static"
 ```
 
 It merges the worker's branch (capturing the rollback point internally),
 classifies what changed and does only what is needed: refreshes dependencies
 if a manifest changed (`npm ci`, plus the vendored mngr tool, the backend tool
 and the workspace venv -- the same environments `build_workspace.sh` builds),
-installs the worker's already-built `static/` bundle (live build as fallback),
+installs the worker's already-built `static/` bundles (live build as fallback),
 and/or pre-flights the merged code on a throwaway port before restarting the
 services agent so the editable backend re-imports the merged `.py` (backend).
 It then polls the loopback endpoint to confirm health and checks that the
