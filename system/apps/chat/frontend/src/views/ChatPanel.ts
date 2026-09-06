@@ -101,7 +101,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // and mithril redraws globally, so the component keeps running while hidden against an
   // element collapsed to zero size; running scroll work then would corrupt the retained
   // scroll position. The page feeds the shell's authoritative visibility in via the
-  // ``isVisible`` attr (see isFrameRendered in index.ts); the scroll hooks below skip
+  // ``isVisible`` attr (see isFrameRendered in shell.ts); the scroll hooks below skip
   // while it is false.
   // Defaults to true so the panel works before the first render sets it.
   let panelVisible = true;
