@@ -93,6 +93,7 @@ def _running_e2e_server(
     session_events: list[dict[str, Any]] | None = None,
     is_stub_app_offered: bool = False,
     stub_instances: tuple[str, ...] = (),
+    is_account_signed_in: bool = True,
 ) -> Any:
     """The two-process workspace, with the chat on the port above the shell's."""
     return running_workspace(
@@ -102,6 +103,7 @@ def _running_e2e_server(
         session_events=session_events,
         is_stub_app_offered=is_stub_app_offered,
         stub_instances=stub_instances,
+        is_account_signed_in=is_account_signed_in,
     )
 
 
@@ -161,6 +163,19 @@ def _open_from_launcher(page: Page, address: str) -> None:
     row = _launcher_row(page, address)
     expect(row.first).to_be_visible(timeout=15000)
     row.first.click()
+
+
+def _start_new_chat(page: Page) -> FrameLocator:
+    """Run the chat app's ``new`` from the New Tab page's tile, and return the frame of the chat it docked."""
+    expect(page.locator(".dv-default-tab-content").first).to_be_visible(timeout=15000)
+    if page.locator(".new-tab-launcher:visible").count() == 0:
+        page.locator(".dockview-add-tab-button:visible").first.click()
+    tile = page.locator('.new-tab-launcher-tile[data-launch="chat:new"]:visible')
+    expect(tile.first).to_be_visible(timeout=15000)
+    tile.first.click()
+    frame = page.frame_locator('iframe[data-address^="app:chat?instance="]')
+    expect(page.locator('iframe[data-address^="app:chat?instance="]').first).to_be_attached(timeout=15000)
+    return frame
 
 
 def _open_fixture_chat(page: Page) -> None:
@@ -651,3 +666,66 @@ _MOBILE_CONTEXT_ARGS: dict[str, Any] = {
 
 
 # ---------- phase 8: the layout file is the truth ----------
+
+
+# ---------- starting a chat ----------
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_own_tab(
+    tmp_path: Path, page: Page
+) -> None:
+    """The tab opens either way: with no account the chat waits for one, and its page shows the
+    chooser, so signing in happens where the chat will be rather than on the shell."""
+    with _running_e2e_server(tmp_path, _PORT + 1, is_account_signed_in=False) as server:
+        page.goto(server.shell_url)
+        chat = _start_new_chat(page)
+        expect(chat.locator(".message-list-awaiting-account")).to_contain_text(
+            "Sign in to a provider to start this chat", timeout=15000
+        )
+        expect(chat.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=10000)
+        # The shell itself renders no chooser: the sign-in lives in the chat's page.
+        assert page.locator('[data-e2e="provider-chooser"]').count() == 0
+        # The chat is listed as an instance waiting on the user, so the tab is back on reload
+        # (once the arrangement holding it has been saved).
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing="app:chat?instance=")
+        page.reload()
+        chat = page.frame_locator('iframe[data-address^="app:chat?instance="]')
+        expect(chat.locator(".message-list-awaiting-account")).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_it_lands(
+    tmp_path: Path, page: Page
+) -> None:
+    """With an account signed in the create runs immediately on it; the page says so while the
+    create runs (no creation log), and the composer arrives when the agent registers."""
+    with _running_e2e_server(tmp_path, _PORT + 2) as server:
+        page.goto(server.shell_url)
+        chat = _start_new_chat(page)
+        expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        expect(chat.locator(".message-list-creating")).to_have_count(0, timeout=15000)
+        assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_create_that_fails_keeps_the_tab_with_the_reason_and_a_retry(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed ``mngr create`` is a notice in the chat's own tab, with what mngr printed and a
+    "Try again" on the same account, not a tab that vanishes."""
+    monkeypatch.setenv("FAKE_MNGR_CREATE_EXIT_CODE", "3")
+    with _running_e2e_server(tmp_path, _PORT + 3) as server:
+        page.goto(server.shell_url)
+        chat = _start_new_chat(page)
+        failed = chat.locator(".message-list-create-failed")
+        expect(failed).to_contain_text("This chat could not be started", timeout=20000)
+        expect(failed).to_contain_text("exited with code 3")
+        expect(failed).to_contain_text("create failed on purpose")
+        expect(failed.locator(".message-list-create-retry")).to_be_visible()
+        # The instance stays listed, in the error state, so the tab survives a reload.
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing="app:chat?instance=")
+        page.reload()
+        chat = page.frame_locator('iframe[data-address^="app:chat?instance="]')
+        expect(chat.locator(".message-list-create-failed")).to_be_visible(timeout=15000)

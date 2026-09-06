@@ -554,13 +554,13 @@ def test_client_state_reports_register_the_client_and_log_only_real_view_switche
 def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     """The placeholder derives a service origin, so it carries a copy of the rule.
 
-    ``frontend/src/origin.ts`` is canonical. The placeholder cannot import it -- it
-    runs in the browser, in the one state where the bundle it lives in is missing --
-    so it holds its own copy, and this pins that copy to the source of truth.
-    Without it the rule can be corrected in one place and silently rot in the page
-    that only renders when everything else is broken.
+    The shared library's ``origin.ts`` is canonical. The placeholder cannot import
+    it -- it runs in the browser, in the one state where the bundle it lives in is
+    missing -- so it holds its own copy, and this pins that copy to the source of
+    truth. Without it the rule can be corrected in one place and silently rot in the
+    page that only renders when everything else is broken.
     """
-    origin_ts = Path(__file__).parents[2] / "frontend" / "src" / "origin.ts"
+    origin_ts = Path(__file__).parents[4] / "libs" / "workspace_ui" / "src" / "origin.ts"
     canonical = re.search(r"WORKSPACE_COORDINATE_LABEL = (/.+/i);", origin_ts.read_text())
     assert canonical is not None, f"the canonical regex is no longer declared in {origin_ts}"
 

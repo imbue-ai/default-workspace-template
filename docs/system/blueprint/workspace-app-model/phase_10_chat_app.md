@@ -1,50 +1,62 @@
 # Phase 10: the chat app
 
-Contracts: [contracts.md](contracts.md) sections 2, 4.3 (chat row), 14, and 15.
+Contracts: [contracts.md](contracts.md) sections 2, 4.3 (chat row), 8, 12, 14, and 15.
 
 ## Goal
 
-Move the chat package and process out of the system interface into `system/apps/chat`, running from its own tool environment and program at its own port, and land the shell's mngr-free invariant as an import contract and a ratchet.
+Move the chat package, process, and frontend out of the system interface into `system/apps/chat`, running from its own tool environment and program at its own port, with the sign-in flow inside the chat, and land the shell's mngr-free invariant as ratchets.
 
-## Files
+## What landed
 
-Created:
+Four commits on the arc branch, in this order.
 
-- `system/apps/chat/pyproject.toml`: name `chat`, entry points `chat-app`, `chat-default-account-args`, `chat-migrate-claude-auth`; dependencies `imbue-mngr`, the five harness plugins, `app-instances`, `app-manifest`, `oom-priority`, `tk-command-parsing`, `imbue-common`, and the runtime deps the shell drops (`pexpect`, `pyte`, `watchdog`).
-- `system/apps/chat/imbue/chat/`: every module moved from `imbue/system_interface/` that is not under `shell/` or the shell's serving files, renamed to `imbue.chat.*`: `agent_discovery`, `agent_manager`, `accounts`, `accounts_endpoints`, `activity_state`, `attachments`, `event_queues`, `file_serving`, `harnesses/`, `latchkey_endpoints`, `naming`, `oom_prioritizer`, `presence`, `chat_instances`, `chat_document` (becomes `server.py`), `watcher_common`, `models` (the chat half), `config` (the chat half), and their tests, plus a new `main.py` (`chat-app`: registers through `forward_port.py --manifest`, builds `ChatState`, starts observe, serves on port 8010 with the same threaded server) and `state.py` (`ChatState`, the former `SystemInterfaceState` minus the shell fields).
-- `system/apps/chat/frontend/`: `package.json`, `vite.config.ts`, `index.html`, `src/` from the shell frontend's `src/chat/` (which already holds `hooks.ts`, `slots.ts`, `plugin-routes.ts`, and `llm-api.ts` since phase 6) plus the shared modules it still imports from the shell tree copied in (`base-path.ts`, `origin.ts`, `embed.ts` and the vendored contract alias, `app_contract.ts`, `models/AgentManager.ts`'s agent half, `models/ClientIdentity.ts`, `models/Providers.ts`, the provider chooser and its account rows and styles, `views/AgentTerminalPanel.ts`, `style.css` tokens); builds into `imbue/chat/static/`.
-- The provider sign-in chooser, the launcher's provider picker, and the first-run greeting leave the shell in this phase (phase 6 kept them there: a fresh workspace needs a way to sign in before any chat page exists, and the page-side create flow that binds an account after the fact is this phase's). The shell's New Tab page then offers the chat app's `new` action like any other app's, and the chat app's `new` with no signed-in account answers the `409` the shell shows verbatim, with the sign-in surface reachable from the chat app's own page.
-- `system/apps/chat/README.md` (the chat half of today's shell README), `changelog/mngr-better-chat-app-arc.md`, `test_chat_ratchets.py`, `test_project_ratchets.py` (the conservation and message-lifecycle suites move here as `test_*.py`).
-- `system/apps/system_interface/test_project_ratchets.py`: runs `lint-imports` in-process against the new `[tool.importlinter]` contract forbidding `imbue.system_interface` from importing `imbue.mngr`, `imbue.mngr_*`, `imbue.chat`, and a regex ratchet forbidding `subprocess` invocations of `mngr` under the shell package.
+### The package and program
 
-Modified:
+- `system/apps/chat/`: the `chat` package (`imbue/chat/`, console script `chat-app`), moved verbatim from `imbue/system_interface/` with `chat_document.py` as `server.py`, `chat_instances.py` as `instances.py`, `chat_errors.py` as `errors.py`, and `SystemInterfaceState` as `ChatState` (`state.py`); `main.py` registers the manifest and port 8010 through `forward_port.py` at startup (`--no-register` for a throwaway boot) and starts `mngr observe`; `config.py` reads `CHAT_HOST`, `CHAT_PORT`, `CHAT_JAVASCRIPT_PLUGINS`, `CHAT_STATIC_PATHS`.
+- The chat serves its own WebSocket at `/api/ws` (`agents_updated` and the proto-agent messages), `/api/health`, the chat document with the terminal app's origin label from the registry in a meta tag, and everything it served before.
+- `system/supervisord.conf` runs `[program:chat]` in the `chat` band; the shell's line registers only its own manifest.
+- `system/config/mngr_plugins.toml` assigns the five harness plugins to `chat` beside `mngr`; the shell's tool has none.
+- The shell keeps `main.py` over a slim `SystemInterfaceState`, `config.py` (host and port), `documents.py`, `request_helpers.py`, and the `shell/` subpackage; `wsgi_dispatch.py` and the path dispatch are gone.
+- `test_project_ratchets.py` in the shell walks every non-test module's imports for `imbue.mngr*` and `imbue.chat` (an AST scan: import-linter's scanner panics on this package once external packages are included), keeps the "never runs `mngr`" regex, and forbids the literal `"chat"` in the shell package and its frontend.
+- Tests moved with the code; `imbue.chat.testing.running_workspace` is the two-process fixture (the chat app and the shell on two ports over a registry) the chat's e2e tests and the shell's `test_chat_system.py` share.
+- The update apply's health probe polls the shell's `/api/health` and then the chat's (its URL from the registry, `http://127.0.0.1:8010` without a row); the apply plan refreshes the `chat` tool like every app's.
+- `system/scripts/default_account_args.py` and `migrate_claude_auth.py` import `imbue.chat` from the root venv rather than shimming to the tool's entry points.
 
-- `system/supervisord.conf`: `[program:chat]` runs `chat-app` at band `chat`; `[program:system_interface]` no longer registers the chat row.
-- `system/apps/chat/app.toml`: `program = "chat"`; `instances_url` omitted (the app URL, `http://localhost:8010`).
-- `system/config/mngr_plugins.toml`: the five harness plugins list `tools = ["mngr", "chat"]`.
-- `system/apps/system_interface/pyproject.toml`: drops `imbue-mngr`, every plugin, `pexpect`, `pyte`, `watchdog`, and `tk-command-parsing`; adds `app-manifest`, `app-instances` (for `testing`).
-- `system/apps/system_interface/imbue/system_interface/main.py` and `server.py`: the dispatcher goes; the shell serves alone.
-- `system/apps/system_interface/frontend/vite.config.ts`: two entries (`index.html`, the contract library).
-- `system/scripts/default_account_args.py` and `migrate_claude_auth.py`: one-line shims that `exec` the chat tool's entry points, so `run_automation.sh` and the docs keep their paths.
-- `system/scripts/build_workspace.sh`: builds both frontends; the tool loop already installs `chat`.
-- `.agents/skills/update-self/scripts/update_apply.py`: `critical` bundles are `imbue/system_interface/static` and `imbue/chat/static`; `--worker-bundle` takes a repeated `<app>=<path>`.
-- `.mngr/settings.toml`: comments naming the system interface as the creator of chats name the chat app.
+### The sign-in flow
 
-Deleted from the shell package: everything moved above and `wsgi_dispatch.py`, `chat_document.py`.
+- `new` launches at once on the most recently used account.
+  With nothing signed in it mints a chat that waits for an account (`ProvisionalChatPhase.AWAITING_ACCOUNT`); its page shows the provider chooser, and a sign-in launches the chat under the same id through `POST /api/agents/create-chat` with `agent_id`.
+- A provisional chat has a phase (`awaiting_account`, `creating`, `failed`), and the instances API maps it to `attention`, `working`, and `error`.
+  A failed create keeps the record with the reason (the exit status and the last lines `mngr create` printed) and the page offers a retry on the same account; deleting a waiting or failed chat drops it.
+- The streamed creation log and its socket are gone; while the create runs the page shows the composer over an empty transcript, and a message typed then is held as "Sending" until the agent registers (`whenAgentRegistered`), then sent.
+- The shell lost its provider chooser, the first-run greeting, the launcher's provider picker, and every chat special case; creating a project only switches to it and lands on the New Tab page.
+- The chat page creates subagent instances through its own `/_instances` and reads the terminal app's origin label from its document.
+- `layout.py` posts `{op, args, requester}` with the caller's own chat as an address; the shell resolves `self` and attributes the op from that address, and the `layout_op` message carries `requester`.
 
-## Behaviour
+### The frontend split
 
-- The chat app starts its own `mngr observe`, exactly as the shell did; the shell never touches mngr.
-- The provisional-instance flow, subagent instances, presence, the first-chat claim with the `first` template, and `/welcome` are unchanged from phase 6 in behaviour; the chat page's `openSubagentTab` creates the subagent instance through the shell's relay route rather than the chat app's own `/_instances` (phase 6's `# CLEANUP:`).
-- Provider accounts stay under `~/.minds/accounts`; `migrate_claude_auth` runs from the chat tool.
-- The shell's not-built placeholder still embeds the terminal; a stopped or crashed chat app leaves the shell up with every chat tab showing the stopped placeholder.
+- One npm workspace rooted at `system/package.json` (one `npm ci`, one lockfile, shared `eslint.config.js`, `.prettierrc`, `tsconfig.base.json`) with three members: `system/libs/workspace_ui` (source only), `system/apps/system_interface/frontend`, and `system/apps/chat/frontend`.
+- The library holds the design system's token layer (`src/base.css`, imported by each app's stylesheet after `@import "tailwindcss"`), the shared components, `DestroyConfirmDialog`, `portal`, `flyout-position`, the base helpers (`base-path`, `origin`, `addresses`, `views`, `models/ClientIdentity`, `http`, `backoff`, `ws-json`, `request-error`), and the boundary modules (`app_contract`, `embed` with the vendored contract alias, `terminalFocus`); the apps import it as `@imbue/workspace-ui/src/<module>`.
+- The chat frontend is the old `src/chat/` plus the provider UI (`Providers`, `ProviderChooserModal`, `accountRow`, `providerSignInStyles`, `providerMarks`, `removeAccountDialog`, `modelCardStyles`) and the chat half of the stylesheet, building into `imbue/chat/static/`; the shell builds `index.html` and the contract module (from the library's source) into its own `static/`.
+- Each build stamps its bundle with the tree hashes of its frontend directory, the library, and the lockfile; the update apply builds at the npm root, snapshots and verifies both bundles, refreshes `node_modules` at the npm root, and takes `--worker-bundle <app>=<path>` per app (installed only as a pair).
+- The Dockerfile copies the workspace root's manifests and every member's `package.json`; `install_dependencies.sh` runs `npm ci` and `build_workspace.sh` runs `npm run build` at `system/`; CI does the same.
+
+## Decisions taken on the way
+
+- Two separate builds over one shared library rather than one multi-entry build: the chat app owns its bundle and the shell never compiles chat code.
+- The shell keeps no chat name anywhere: the op body carries the requester's address, and the ratchet holds it.
+- Small shared backend modules (the broadcaster, the documents and request helpers, the WSGI server, the config) are duplicated and trimmed per package rather than lifted into a library.
+- The `--worker-bundle` flag is per app and all-or-nothing, because one build emits both bundles.
+- The chat's ratchet file uses mngr's `test_ratchets.py` set with `ty`; `test_meta_ratchets.py` exempts the chat package like the shell.
+- The evals bridge's two tests of the created page and the recovery e2e tests keep the pre-phase-10 shape (a chat page opened by its own URL) because they model the window before the shell lists the chat.
 
 ## Tests
 
-- Every moved test passes under the new package name.
-- `test_project_ratchets.py` in the shell: the import contract holds and the regex ratchet is at zero.
-- The shell's e2e suite runs with the stub app only; the chat e2e suite (moved) boots `chat-app` against the fake-agent fixtures as `test_e2e.py` does today.
-- A new integration test boots both processes and asserts the shell's inventory carries the chat app's instances with status.
+- Every moved test passes under the new package name; the shell suite runs without mngr installed in its tool.
+- `test_project_ratchets.py` in the shell: the import scan and both regex ratchets are at zero.
+- The shell's e2e suite runs over two stub apps; the chat's e2e suite boots the two-process fixture and, in this phase, covers the sign-in flow (a chat without an account offers the chooser in its own tab, a chat with one starts at once and shows its composer when it lands).
+- `test_chat_system.py` boots both processes and asserts the shell's inventory carries the chat app's instances with status, and that a rename through the relay relists.
+- The update apply's suite covers the second bundle, the npm root, and the per-app worker bundles.
 
 ## Manual verification
 
@@ -56,4 +68,4 @@ Chats create, rename, delete, stop, and show status; a permission card reaches t
 
 ## Exit criteria
 
-`uv tool list` shows `chat` with the harness plugins and `system-interface` with none; the import contract test passes; every manual check above holds.
+`uv tool list` shows `chat` with the harness plugins and `system-interface` with none; the ratchets pass; every manual check above holds.

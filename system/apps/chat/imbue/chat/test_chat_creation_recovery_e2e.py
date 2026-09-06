@@ -60,7 +60,7 @@ def _frontend_built() -> bool:
     module (``imbue/system_interface/`` holds both this file and the build output)
     so it holds regardless of the cwd.
     """
-    return (Path(__file__).parent / "static" / "index.html").is_file()
+    return (Path(__file__).parent / "static" / "chat.html").is_file()
 
 
 pytestmark = [
@@ -68,10 +68,7 @@ pytestmark = [
     pytest.mark.skipif(not _playwright_browsers_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
         not _frontend_built(),
-        reason=(
-            "System interface frontend not built "
-            "(run `cd system/apps/system_interface/frontend && npm run build`); skipping e2e."
-        ),
+        reason=("System interface frontend not built (run `cd system && npm run build`); skipping e2e."),
     ),
 ]
 
@@ -192,7 +189,7 @@ def _serving_workspace(
     thread.start()
 
     base_url = f"http://127.0.0.1:{port}"
-    # The index, not /api/agents: the manager above is the only source of agents
+    # The health probe, not /api/agents: the manager above is the only source of agents
     # these tests use, and the discovery endpoint would load the repo's real mngr
     # config, which refuses to run under pytest.
     wait_for(
@@ -210,7 +207,7 @@ def _serving_workspace(
 
 def _is_serving(base_url: str) -> bool:
     try:
-        urllib.request.urlopen(f"{base_url}/", timeout=0.5)
+        urllib.request.urlopen(f"{base_url}/api/health", timeout=0.5)
     except OSError:
         return False
     return True

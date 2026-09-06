@@ -2352,6 +2352,22 @@ def test_stop_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
 # test client.
 
 
+def test_serves_the_built_bundle_from_its_static_assets(tmp_path: Path) -> None:
+    """The chat document links its hashed assets under ``/assets/``; the app serves them itself."""
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "assets" / "chat-abc123.js").write_text("console.log('chat');")
+    state = build_test_state()
+    state.static_directory = static
+    client = create_application(state).test_client()
+
+    served = client.get("/assets/chat-abc123.js")
+    assert served.status_code == 200
+    assert served.data == b"console.log('chat');"
+    assert client.get("/assets/missing.js").status_code == 404
+    assert client.get("/assets/../chat.html").status_code == 404
+
+
 def test_serves_image_at_its_absolute_path(client: FlaskClient, tmp_path: Path) -> None:
     """A request for an existing image file's absolute path streams its bytes inline."""
     image_path = tmp_path / "chart.png"

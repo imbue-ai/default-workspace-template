@@ -223,7 +223,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   var terminalLabel = __TERMINAL_LABEL__;
 
   // Mirrors deriveServiceOrigin/workspaceHostCoordinate in
-  // frontend/src/origin.ts, which is canonical: a service origin is its label
+  // system/libs/workspace_ui/src/origin.ts, which is canonical: a service origin is its label
   // prefixed onto the workspace COORDINATE -- the first host-<hex> (or, on a
   // workspace-keyed share domain, bare 32-hex share) label and everything
   // after it -- and never onto this page's host verbatim, which
