@@ -178,7 +178,7 @@ _MAC_ARM64_PLATFORM: Final[str] = "mac-arm64"
 _DEFAULT_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
     # For _MAC_ARM64_PLATFORM, this is the hardcoded fallback, used only when the live manifest is down.
     _MAC_ARM64_PLATFORM: (
-        "https://download.todesktop.com/26032588hqdzk/Minds%200.4.2%20-%20Build%20260825un55i8ix7-arm64.dmg"
+        "https://download.todesktop.com/26032588hqdzk/Minds%200.5.0%20-%20Build%20260902shwco3ynx-arm64.dmg"
     ),
     "source": "https://github.com/imbue-ai/mngr",
 }

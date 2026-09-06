@@ -174,22 +174,22 @@ Fresh-env verification depends on `dwt_branch` being pinned to a SHA at generati
 
 The accounting the design leans on, so nothing here is rebuilt.
 
-**harbor** (pinned v0.21.0):
+**harbor** (pinned v0.22.0):
 
 - `artifacts` in `task.toml`: environment paths pulled from the trial and re-materialized at the same absolute paths in the verifier container. This is the only channel into the verifier; everything below rides it.
 - `environment_mode = "separate"` + `harbor trial regrade`: the replayability contract the evidence/judgment split preserves.
 - `solution/solve.sh` (oracle): must fabricate a passing evidence bundle so oracle runs exercise the new dimension end to end.
 - `[agent].timeout_sec`: already `timeout_seconds + AGENT_TIMEOUT_GRACE_SECONDS`; the verification phase needs its own explicit slice (see Driver changes).
 
-**rewardkit** (0.1.x, the verifier engine):
+**rewardkit** (0.2.x, the verifier engine):
 
 - Judge tomls: an LLM judge over listed `files`, with `likert` (1-N) and `binary` criteria, per-criterion or judge-level files (per-criterion files force `mode = "individual"`), a `prompt_template`, and weights.
   Files are inlined as text; images become vision blocks; **any file over 1 MiB is skipped with a visible `[skipped: file too large]` block** -- a hard sizing constraint on every judge input.
-  `.html`/`.pdf`/office documents convert via markitdown and `image_similarity` needs Pillow, but both live behind optional extras (`documents`, `image`) that the verifier's bare `uvx --from 'harbor-rewardkit==0.1.*'` pin does NOT install -- and the resulting ImportError is uncaught, aborting the entire grading run with no reward file for any dimension.
+  `.html`/`.pdf`/office documents convert via markitdown and `image_similarity` needs Pillow, but both live behind optional extras (`documents`, `image`) that the verifier's bare `uvx --from 'harbor-rewardkit==0.2.0'` pin does NOT install -- and the resulting ImportError is uncaught, aborting the entire grading run with no reward file for any dimension.
   Any judge input or criterion needing an extra must add it to the `test.sh` pin explicitly; until then, judge files stay to plain text, JSON/JSONL, and images.
 - Programmatic criteria: `@criterion` functions in `.py` files returning bool/float, plus a stock library of criterion factories: `file_exists`, `file_contains(_regex)`, `file_matches`, `json_path_equals`, `http_status_equals`, `http_response_contains`, `command_succeeds`, `command_output_*`, `image_similarity`, `sqlite_query_equals`, `diff_ratio`, `trajectory_*`, and more.
   **Edge:** these run in the verifier container at grade time, so in this topology `http_*` (live requests) and `command_succeeds` (needs the project's toolchain) cannot reach the app -- the same checks are instead performed at trial time and their *recorded results* asserted on with plain criteria over the manifest.
-- Dimensions: each subdirectory of `tests/` is a scoring dimension with its own entry in `reward.json` (`gates/` and `quality/` today, `outcome/` added by this spec); `finalize.py` composes the final reward because rewardkit's own aggregations cannot express gating (see concise.md, Implementation corrections).
+- Dimensions: each *immediate* subdirectory of `tests/` is a scoring dimension with its own entry in `reward.json` -- `gates/` and `quality/` today, `outcome/` added by this spec. rewardkit recurses below them, but a nested directory joins its parent dimension's weighted mean rather than becoming a dimension of its own. `finalize.py` composes the final reward because rewardkit's own aggregations cannot express gating (see concise.md, Implementation corrections).
 
 **The Minds workspace** (default-workspace-template):
 

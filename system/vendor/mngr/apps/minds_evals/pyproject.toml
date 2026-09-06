@@ -5,7 +5,7 @@ description = "Harbor-based Minds persona evals: generate task datasets from eva
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "harbor[modal]==0.21.0",
+    "harbor[modal]==0.22.0",
     "anthropic>=0.40",
     "click>=8.0.0",
     "loguru>=0.7",
@@ -46,12 +46,19 @@ required-version = ">=0.10"
 # Keep it equal to DEPENDENCY_COOLDOWN in scripts/release.py, which
 # scripts/release_test.py enforces.
 exclude-newer = "14 days"
+# CLEANUP: delete this override once harbor-rewardkit 0.2.0 (published 2026-08-22) is older than the
+# window above, which it becomes on 2026-09-05. The cooldown exists to keep a freshly published
+# registry artifact out of the code that grades trials, and here it cannot: the verifier container
+# resolves rewardkit itself with `uvx`, which honours no cooldown, so the graded version is whatever
+# `templates/tests/verifier/test.sh` names. All this pin does is let the type checker see that same
+# version; holding it a release behind would check the criteria against a rewardkit no trial runs.
+exclude-newer-package = { harbor-rewardkit = "2026-08-23T00:00:00Z" }
 
 [tool.uv.sources]
 # The upstream git tag for the same release the PyPI wheel carries. Pinned to the
 # tag rather than the registry so the source is exact and independent of the
 # cooldown window above, which the PyPI upload was inside of when this was written.
-harbor = { git = "https://github.com/harbor-framework/harbor", tag = "v0.21.0" }
+harbor = { git = "https://github.com/harbor-framework/harbor", tag = "v0.22.0" }
 # Monorepo packages this project shares with the workspace. They are path
 # sources rather than workspace members because this project has no workspace.
 # Only the direct dependencies need an entry: a path source that points into the
@@ -82,7 +89,7 @@ dev = [
     # so this pin must match the one in templates/tests/verifier/test.sh, which runs the
     # whole verifier -- rewardkit_pin_test.py asserts that.
     # Its only base dependency is litellm, already present via harbor.
-    "harbor-rewardkit==0.1.*",
+    "harbor-rewardkit==0.2.0",
 ]
 
 [build-system]
