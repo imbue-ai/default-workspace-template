@@ -92,6 +92,22 @@ def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> Non
     assert response.headers["Cache-Control"] == "no-store"
 
 
+def test_an_unknown_path_falls_through_to_the_shell_document(tmp_path: Path) -> None:
+    """A path the shell does not serve is a client-side route: it answers the shell document, not a 404."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><body>the shell</body></html>")
+
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/some/client/route")
+
+    assert response.status_code == 200
+    assert "text/html" in response.content_type
+    assert "the shell" in response.text
+
+
 def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) -> None:
     """The placeholder and the real app are both HTTP 200 HTML.
 
