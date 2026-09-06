@@ -287,11 +287,18 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   /** The page of a chat that is not an agent yet, by its phase. */
   function renderProvisional(agentId: string, proto: ProtoAgent): m.Vnode {
     if (proto.phase === "creating") {
-      return m(
-        "div",
-        { class: "message-list-creating flex items-center justify-center h-full" },
-        m("p", { class: "text-secondary" }, "Starting the chat..."),
-      );
+      // A message typed while the create runs is held by the composer until the agent lands
+      // (see MessageInput); its "Sending" bubble renders here so the message is visibly
+      // waiting rather than gone.
+      const outgoing = renderOutgoingMessages(agentId);
+      return m("div", { class: "message-list-creating flex flex-col h-full" }, [
+        m(
+          "div",
+          { class: "flex-1 flex items-center justify-center" },
+          m("p", { class: "text-secondary" }, "Starting the chat..."),
+        ),
+        outgoing.length > 0 ? m("div", { class: MESSAGE_LIST_CLASS }, outgoing) : null,
+      ]);
     }
     if (proto.phase === "awaiting_account") {
       // Offered once per chat, on the page's first render of this phase: the user may dismiss
