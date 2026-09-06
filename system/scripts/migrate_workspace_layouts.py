@@ -834,14 +834,14 @@ def plan_migration(
             if content is None:
                 seeds.append(
                     SeedPlan(
-                        view_id,
-                        device,
-                        seed_path,
-                        None,
-                        (),
-                        (),
-                        True,
-                        f"unreadable {content_path}",
+                        view_id=view_id,
+                        device=device,
+                        path=seed_path,
+                        layout=None,
+                        addresses=(),
+                        dropped_panel_ids=(),
+                        is_skipped=True,
+                        note=f"unreadable {content_path}",
                     )
                 )
                 continue
@@ -851,28 +851,28 @@ def plan_migration(
             if layout is None:
                 seeds.append(
                     SeedPlan(
-                        view_id,
-                        device,
-                        seed_path,
-                        None,
-                        (),
-                        dropped,
-                        True,
-                        "no panel maps to an instance",
+                        view_id=view_id,
+                        device=device,
+                        path=seed_path,
+                        layout=None,
+                        addresses=(),
+                        dropped_panel_ids=dropped,
+                        is_skipped=True,
+                        note="no panel maps to an instance",
                     )
                 )
                 continue
             is_existing = seed_path.exists() and not is_forced
             seeds.append(
                 SeedPlan(
-                    view_id,
-                    device,
-                    seed_path,
-                    layout,
-                    addresses,
-                    dropped,
-                    is_existing,
-                    "seed already exists" if is_existing else "",
+                    view_id=view_id,
+                    device=device,
+                    path=seed_path,
+                    layout=layout,
+                    addresses=addresses,
+                    dropped_panel_ids=dropped,
+                    is_skipped=is_existing,
+                    note="seed already exists" if is_existing else "",
                 )
             )
 
