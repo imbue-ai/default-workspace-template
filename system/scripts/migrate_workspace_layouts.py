@@ -1022,6 +1022,12 @@ def apply_plan(
             if store_notes:
                 _log(f"left the {app} store alone: {store_notes[0]}")
                 continue
+            if existing is not None and existing.get("version") != STORE_VERSION:
+                _log(
+                    f"left the {app} store alone: {store_path} is version "
+                    f"{existing.get('version')!r}; this script writes version {STORE_VERSION}"
+                )
+                continue
             merged = merged_store_document(existing, records_key, identity_key, records)
             if merged.added_count > 0:
                 _write_json_atomic(store_path, merged.document)
