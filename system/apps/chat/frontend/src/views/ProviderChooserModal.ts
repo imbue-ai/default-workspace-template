@@ -920,6 +920,3 @@ function errorText(e: unknown): string {
   if (response?.detail) return response.detail;
   return (e as Error)?.message ?? "Something went wrong.";
 }
-
-/** Re-exported for the launcher's picker, which lists the same accounts. */
-export type { ProviderAccount };
