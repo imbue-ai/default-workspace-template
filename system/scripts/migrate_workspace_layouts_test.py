@@ -491,6 +491,24 @@ def test_a_missing_old_store_writes_only_the_marker(
     assert not apps_dir.exists()
 
 
+def test_an_unreadable_old_registry_is_reported_and_writes_only_the_marker(
+    legacy_layout_dir: Path,
+    tmp_path: Path,
+    migration_registry: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (legacy_layout_dir / "projects_meta.json").write_text("{corrupt")
+
+    code, state_dir, apps_dir = _run(legacy_layout_dir, tmp_path, migration_registry)
+
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "skipped unreadable" in err
+    assert "no readable projects_meta.json" in err
+    assert sorted(path.name for path in state_dir.iterdir()) == ["migrated.json"]
+    assert not apps_dir.exists()
+
+
 def test_plan_json_describes_the_run_without_writing(
     legacy_layout_dir: Path,
     tmp_path: Path,

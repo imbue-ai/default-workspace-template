@@ -1022,6 +1022,10 @@ def apply_plan(
             if merged.added_count > 0:
                 _write_json_atomic(store_path, merged.document)
                 _log(f"added {merged.added_count} record(s) to {store_path}")
+    elif plan.source_dir.is_dir():
+        _log(
+            f"no readable {LEGACY_META_FILENAME} in {plan.source_dir}; nothing to migrate"
+        )
     else:
         _log(f"no old layout store at {plan.source_dir}; nothing to migrate")
     _write_json_atomic(
