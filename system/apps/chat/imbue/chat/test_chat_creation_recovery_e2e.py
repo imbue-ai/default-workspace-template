@@ -118,7 +118,7 @@ class _ReplayHidingAgentManager(AgentManager):
     """Hides in-flight creations from a fresh WebSocket client's connect-time replay.
 
     The chat page is its own document and connects to the agents WebSocket after its tab
-    opened, so the shell's replay of in-flight proto
+    opened, so the chat app's replay of in-flight proto
     agents would cover the creation window with the starting page on its own. These tests model
     the window the replay cannot cover -- a page whose socket only comes up after the create
     finished, or that fell a whole creation window behind -- so the replay is what they hide.
@@ -195,7 +195,7 @@ def _serving_workspace(
     wait_for(
         lambda: _is_serving(base_url),
         timeout=15.0,
-        error_message=f"system interface did not start on {base_url}",
+        error_message=f"chat app did not start on {base_url}",
     )
 
     try:
