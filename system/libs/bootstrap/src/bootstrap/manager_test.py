@@ -815,10 +815,17 @@ def test_main_migrates_workspace_layouts_after_the_rollback_and_before_superviso
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
     _write_apply_marker("agent-omega")
-    stub = _StubSubprocess()
-    stub.on_command = _clear_marker_on_recover
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    migration_argv = ["python3", str(WORKSPACE_LAYOUT_MIGRATION_SCRIPT), "run"]
     order: list[str] = []
+
+    def _record_migration(argv: list[str]) -> None:
+        _clear_marker_on_recover(argv)
+        if argv == migration_argv:
+            order.append("migration")
+
+    stub = _StubSubprocess()
+    stub.on_command = _record_migration
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
     for name in (
         "_migrate_legacy_claude_state_best_effort",
         "_write_update_recovery_cron_entry",
@@ -832,13 +839,12 @@ def test_main_migrates_workspace_layouts_after_the_rollback_and_before_superviso
 
     main()
 
-    migration_argv = ["python3", str(WORKSPACE_LAYOUT_MIGRATION_SCRIPT), "run"]
     recover_index = next(
         index for index, argv in enumerate(stub.calls) if "recover" in argv
     )
     migration_index = stub.calls.index(migration_argv)
     assert recover_index < migration_index
-    assert order == ["supervisord"]
+    assert order == ["migration", "supervisord"]
 
 
 def test_a_failing_layout_migration_never_blocks_boot(
