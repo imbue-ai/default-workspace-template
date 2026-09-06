@@ -405,10 +405,13 @@ That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the
 affected environments, re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend, installs or builds the frontend
-bundle, restarts the services agent (every apply), probes the live UI, refreshes
-every open view, writes the `docs/VERSION_HISTORY.md` entry, and runs `uv run
-env-converge upgrade` -- reverting the entire merge and restoring the
-snapshots on any failure. Exit codes:
+bundle, runs the workspace layout migration
+(`system/scripts/migrate_workspace_layouts.py`, a warning-only step: a failure
+there is reported and left to the next boot's run), restarts the services
+agent (every apply), probes the live UI, refreshes every open view, writes the
+`docs/VERSION_HISTORY.md` entry, and runs `uv run env-converge upgrade` --
+reverting the entire merge and restoring the snapshots on any other failure.
+Exit codes:
 
 - **`0` -- applied.** Read the closing stderr lines: a UI that was already
   broken beforehand still exits 0 naming the breakage (report it separately);
