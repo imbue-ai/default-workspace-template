@@ -303,11 +303,6 @@ def ref_for_panel(params: dict[str, Any]) -> str | None:
     return None
 
 
-def address_for_panel(params: dict[str, Any]) -> str | None:
-    ref = ref_for_panel(params)
-    return None if ref is None else address_for_ref(ref)
-
-
 # --- Reading the old store ------------------------------------------------------------------
 
 
@@ -550,7 +545,8 @@ def migrate_layout_content(
             break
         params = params_by_panel_id.get(panel_id)
         params = params if isinstance(params, dict) else {}
-        address = address_for_panel(params)
+        ref = ref_for_panel(params)
+        address = None if ref is None else address_for_ref(ref)
         if address is None or address in kept_addresses:
             document = strip_panel_from_dockview(document, panel_id)
             dropped.append(panel_id)
@@ -567,13 +563,10 @@ def migrate_layout_content(
             address,
             _panel_title(entry if isinstance(entry, dict) else {}, params, address),
         )
-        ref = ref_for_panel(params)
         tabs[tab_id] = {
             "address": address,
             "tab_id": tab_id,
-            "last_focused_ms": last_used_ms_by_ref.get(ref, 0)
-            if ref is not None
-            else 0,
+            "last_focused_ms": last_used_ms_by_ref.get(ref, 0),
         }
         kept_addresses.append(address)
     if document is None or not tabs:
