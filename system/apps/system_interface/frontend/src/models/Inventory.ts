@@ -16,7 +16,7 @@
 
 import { addressFor, parseAddress } from "@imbue/workspace-ui/src/addresses";
 import m from "mithril";
-import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { deriveServiceOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
@@ -241,19 +241,9 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 const reconnectBackoff = new ReconnectBackoff();
 
-function getWsUrl(): string {
-  const base = apiUrl("/api/ws");
-  const loc = window.location;
-  const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
-  if (base.startsWith("http")) {
-    return base.replace(/^http/, "ws");
-  }
-  return `${protocol}//${loc.host}${base}`;
-}
-
 function connect(): void {
   if (ws !== null) return;
-  const url = getWsUrl();
+  const url = wsUrl("/api/ws");
   console.info(`[si-ws] connecting to ${url}`);
   ws = new WebSocket(url);
 

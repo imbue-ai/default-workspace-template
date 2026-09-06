@@ -24,6 +24,17 @@ export function apiUrl(path: string): string {
   return getBasePath() + path;
 }
 
+/** The WebSocket URL for an API path: ``apiUrl`` with the page's ws(s) scheme and host. */
+export function wsUrl(path: string): string {
+  const base = apiUrl(path);
+  const loc = window.location;
+  const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
+  if (base.startsWith("http")) {
+    return base.replace(/^http/, "ws");
+  }
+  return `${protocol}//${loc.host}${base}`;
+}
+
 /** The chat the chat document shows; "" on the shell's own document. */
 export function getChatAgentId(): string {
   return document.querySelector('meta[name="system-interface-chat-agent-id"]')?.getAttribute("content") ?? "";

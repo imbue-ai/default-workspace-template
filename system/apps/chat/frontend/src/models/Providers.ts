@@ -86,9 +86,6 @@ let lanes: Lane[] = [];
 let accounts: ProviderAccount[] = [];
 let mru: string | null = null;
 let lanesLoaded = false;
-// Whether the account list has been fetched even once. Distinct from "it is empty": both read
-// as zero accounts, and one of them means "ask the user to sign in".
-let accountsLoaded = false;
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -130,13 +127,6 @@ export async function loadAccounts(): Promise<void> {
   });
   accounts = body.accounts;
   mru = body.mru;
-  accountsLoaded = true;
-}
-
-/** Whether `getAccounts()` has an answer yet. Anything that treats "no accounts" as "sign in
- *  first" has to ask this too, or it diverts the user on a workspace that has providers. */
-export function areAccountsLoaded(): boolean {
-  return accountsLoaded;
 }
 
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
@@ -316,10 +306,10 @@ export function clearFlow(): void {
 /**
  * Which account the next chat launches on.
  *
- * Explicitly chosen wins; otherwise the most recently used, which the server bumps on
- * every launch -- so "start another one like the last" needs no click. Null means there
- * is nothing to launch on yet: a new chat then waits for an account, and its page offers
- * the chooser.
+ * The account just signed in to wins; otherwise the most recently used, which the server
+ * bumps on every launch -- so "start another one like the last" needs no click. Null means
+ * there is nothing to launch on yet: a new chat then waits for an account, and its page
+ * offers the chooser.
  */
 let selectedAccountId: string | null = null;
 
@@ -328,11 +318,6 @@ export function getSelectedAccount(): ProviderAccount | null {
   if (chosen !== undefined) return chosen;
   const recent = accounts.find((account) => account.id === mru);
   return recent ?? accounts[0] ?? null;
-}
-
-export function selectAccount(accountId: string): void {
-  selectedAccountId = accountId;
-  m.redraw();
 }
 
 /**

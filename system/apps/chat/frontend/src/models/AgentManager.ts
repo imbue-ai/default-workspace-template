@@ -5,7 +5,7 @@
  */
 
 import m from "mithril";
-import { apiUrl, getTerminalOriginLabel } from "@imbue/workspace-ui/src/base-path";
+import { apiUrl, getTerminalOriginLabel, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { deriveServiceOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice } from "./ModelSettings";
@@ -96,19 +96,9 @@ let connected = false;
 
 const reconnectBackoff = new ReconnectBackoff();
 
-function getWsUrl(): string {
-  const base = apiUrl("/api/ws");
-  const loc = window.location;
-  const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
-  if (base.startsWith("http")) {
-    return base.replace(/^http/, "ws");
-  }
-  return `${protocol}//${loc.host}${base}`;
-}
-
 function connect(): void {
   if (ws !== null) return;
-  const url = getWsUrl();
+  const url = wsUrl("/api/ws");
   console.info(`[chat-ws] connecting to ${url}`);
   ws = new WebSocket(url);
 

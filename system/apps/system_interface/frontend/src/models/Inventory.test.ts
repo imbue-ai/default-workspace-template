@@ -213,11 +213,21 @@ describe("the socket's cross-window events", () => {
     });
     try {
       const ops: unknown[] = [];
-      addLayoutOpListener((event) => ops.push(event.op));
-      dispatchSocketEventForTesting({ type: "layout_op", op: "refresh", args: {}, target_client_id: null });
+      addLayoutOpListener((event) => ops.push([event.op, event.requester]));
+      dispatchSocketEventForTesting({
+        type: "layout_op",
+        op: "refresh",
+        args: {},
+        requester: "app:notes?instance=n1",
+        target_client_id: null,
+      });
       dispatchSocketEventForTesting({ type: "layout_op", op: "maximize", args: {}, target_client_id: "someone-else" });
       dispatchSocketEventForTesting({ type: "layout_op", op: "restore", args: {}, target_client_id: getClientId() });
-      expect(ops).toEqual(["refresh", "restore"]);
+      // The requester (the invoking agent's own address) rides along, "" when the op names none.
+      expect(ops).toEqual([
+        ["refresh", "app:notes?instance=n1"],
+        ["restore", ""],
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }

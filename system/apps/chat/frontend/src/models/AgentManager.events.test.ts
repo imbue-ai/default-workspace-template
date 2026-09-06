@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("mithril", () => ({ default: { redraw: vi.fn(), request: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   apiUrl: (path: string) => path,
+  wsUrl: (path: string) => `ws://test${path}`,
   getTerminalOriginLabel: () => "",
 }));
 
