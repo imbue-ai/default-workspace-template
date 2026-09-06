@@ -313,6 +313,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   /** The page of a chat that is not an agent yet, by its phase. */
   function renderProvisional(agentId: string, proto: ProtoAgent): m.Vnode {
     if (proto.phase === "creating") {
+      // The create is running, whoever started it: a refusal this page recorded while the
+      // chat waited (another page's launch won the race) is over, and must not be shown
+      // under a later failure's own reason.
+      launchError = null;
       return renderStarting(agentId);
     }
     if (proto.phase === "awaiting_account") {
