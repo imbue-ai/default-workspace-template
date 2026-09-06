@@ -33,6 +33,7 @@ from app_manifest.primitives import AppName
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_manager import AgentManager
@@ -267,7 +268,13 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         page shows the provider chooser, so the tab opens either way."""
         _require_params(NEW_ACTION_ID, params, _NEW_PARAMS)
         account_id = params.get(ACCOUNT_ID_PARAM, "")
-        if not account_id and not has_usable_account():
+        try:
+            is_reserved = not account_id and not has_usable_account()
+        except AccountError as e:
+            # The account store is unreadable: the same refusal the manager gives when it
+            # cannot resolve a binding, so the shell shows the reason rather than a 500.
+            raise ChatCreateRefusedError(str(e)) from e
+        if is_reserved:
             created = self.manager.reserve_chat()
         else:
             try:
@@ -280,9 +287,14 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             except AgentCreationError as e:
                 raise ChatCreateRefusedError(str(e)) from e
         proto = self.manager.get_proto_agent(created.agent_id)
-        if proto is None:
+        if proto is not None:
+            return instance_record_for_provisional_chat(proto)
+        # The create can land before this reads the record back (the creation thread drops it
+        # the moment ``mngr create`` exits 0): the chat is then an ordinary instance.
+        landed = self.manager.get_agent_by_id(created.agent_id)
+        if landed is None:
             raise ChatCreateRefusedError(f"chat {created.agent_id} vanished before it could be listed")
-        return instance_record_for_provisional_chat(proto)
+        return instance_record_for_agent(landed, self.manager.has_pending_permission(landed.id))
 
     def _create_subagent(self, params: Mapping[str, str]) -> InstanceRecord:
         _require_params(SUBAGENT_ACTION_ID, params, _SUBAGENT_PARAMS)
