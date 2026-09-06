@@ -23,7 +23,7 @@ import { TEXT_BODY_SIZE } from "./typography";
  * the workspace's dialogs share, emitted by the Modal component below. The
  * copy classes (message, label) are used directly by callers for dialog body
  * content. The enter animations' @keyframes (modal-overlay-in / modal-card-in)
- * live in style.css. `.modal-card` also anchors contextual stylesheet rules
+ * live in base.css. `.modal-card` also anchors contextual stylesheet rules
  * (the glyph-picker pressed-state feedback). */
 
 // Exported for the one dialog that owns its own card DOM (the provider
