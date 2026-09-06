@@ -268,10 +268,6 @@ export function getShoulderTapAvailableForAgent(agentId: string): boolean {
   return getAgentById(agentId)?.shoulder_tap_available === true;
 }
 
-export function getProtoAgents(): ProtoAgent[] {
-  return protoAgents;
-}
-
 /** The provisional record of ``agentId``, while the app lists it as one. */
 export function getProtoAgent(agentId: string): ProtoAgent | undefined {
   return protoAgents.find((p) => p.agent_id === agentId);
