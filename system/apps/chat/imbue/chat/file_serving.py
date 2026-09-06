@@ -4,20 +4,20 @@ An agent (Claude Code) running in this container can write files and read them
 back, but the browser rendering the chat cannot reach the container's
 filesystem. Markdown like ``![chart](/home/user/workspace/data/images/chart.png)``
 (an inline image) or ``[report](/home/user/workspace/data/documents/report.pdf)`` (a
-download link) makes the browser issue an HTTP GET for that path; the system
-interface runs in the same container as the agent, so it answers the GET by
-streaming the file's bytes. The absolute on-disk path therefore doubles as the
-URL -- no rewriting, no dedicated directory, no separate server.
+download link) makes the browser issue an HTTP GET for that path; the chat app
+runs in the same container as the agent, so it answers the GET by streaming the
+file's bytes. The absolute on-disk path therefore doubles as the URL -- no
+rewriting, no dedicated directory, no separate server.
 
-This hangs off the single-page-app catch-all (see ``server._index_catch_all``):
+This hangs off the chat app's path route (see ``server._serve_file_or_document``):
 
 - An image file is served inline so it renders in the chat.
 - Any other existing file is served as an attachment, so a plain markdown link
   downloads it rather than rendering/executing it in the chat's own origin.
 - A path carrying an image extension with no file behind it 404s, so a typo'd
-  image renders a broken image rather than the app shell.
-- A path that matches no file on disk returns ``None``, so the caller falls
-  through to the app shell and client-side routing is unaffected.
+  image renders a broken image rather than a chat page.
+- A path that matches no file on disk returns ``None``, and the caller decides
+  what it is: a chat page's key when it is a single segment, else not found.
 """
 
 from pathlib import Path
@@ -100,16 +100,16 @@ def _serve_download(file_path: Path) -> Response:
 def try_serve_file(url_path: str) -> Response | None:
     """Serve the on-disk file addressed by a chat markdown URL.
 
-    ``url_path`` is the catch-all's path component (the request path with its
+    ``url_path`` is the path route's component (the request path with its
     leading slash stripped and percent-escapes already decoded). The leading
     slash is restored to recover the absolute on-disk path the agent emitted.
 
     An image file is streamed inline so it renders; any other existing file is
     streamed as an attachment (a download). A path carrying an image extension
     but no file yields a 404, so a typo'd image renders a broken image rather
-    than the app shell. A path with no image extension that matches no file
-    yields ``None``, so the caller falls through to the single-page-app catch-all
-    and client-side routing is unaffected.
+    than a chat page. A path with no image extension that matches no file
+    yields ``None``, and the caller decides between a chat page (a single
+    segment) and not found.
 
     ``url_path`` never includes the query string (Flask splits it off before
     routing), so the frontend's per-message ``?requested_at=<post time>`` cache

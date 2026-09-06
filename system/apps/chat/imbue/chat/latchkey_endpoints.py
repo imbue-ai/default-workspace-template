@@ -3,10 +3,10 @@
 Resolves a latchkey permission scope (e.g. ``slack-api``) to its catalog entry
 -- the human-readable service name plus per-permission descriptions -- by
 querying the latchkey gateway's per-service catalog endpoint
-(``GET /permissions/available/<service>``, the same one agents use). The
-``system_interface`` backend runs inside the agent container, so it inherits the
-agent's gateway address and credentials from the environment and is authorized
-for that per-service endpoint.
+(``GET /permissions/available/<service>``, the same one agents use). The chat
+app's backend runs inside the agent container, so it inherits the agent's
+gateway address and credentials from the environment and is authorized for that
+per-service endpoint.
 
 The frontend calls this to label a permission-request card with the real service
 name and to show permission descriptions, rather than bundling a copy of the
