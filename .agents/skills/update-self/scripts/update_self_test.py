@@ -4772,6 +4772,28 @@ def test_a_rollback_into_a_pre_split_tree_ignores_the_chat_frontend_directory_gi
     assert not (apply_repo / update_layout.CHAT_STATIC_DIR).exists()
 
 
+def test_a_rollback_into_a_pre_split_tree_removes_the_chat_bundle_the_forward_build_wrote(
+    apply_repo: Path,
+) -> None:
+    # The forward build succeeds and writes the chat bundle; the apply then fails on the
+    # chat probe. Nothing copied that bundle aside (it did not exist before), the tree
+    # restore only touches tracked paths, and a tree from before the split neither tracks
+    # nor ignores it -- so recovery must remove it, or the rolled-back tree is dirty and
+    # the retry the rollback promises is refused.
+    _make_pre_split_tree(apply_repo)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
+
+    def chat_never_healthy(url: str) -> int | None:
+        return 500 if url == chat_health else 200
+
+    code = _apply(runner, _FakeHttp(chat_never_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
+    assert not (apply_repo / update_layout.CHAT_STATIC_DIR).exists()
+
+
 def test_a_rollback_into_a_pre_split_tree_rebuilds_at_the_shell_frontend(
     unbuilt_apply_repo: Path,
 ) -> None:

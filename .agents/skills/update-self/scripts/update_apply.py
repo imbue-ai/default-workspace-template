@@ -564,6 +564,14 @@ def _recover_running_state(
         # has: a rollback into a tree from before the chat's split has neither a chat
         # bundle to restore nor a workspace to build it from.
         frontend = _restored_frontend_layout(repo_root)
+        # A bundle the forward build wrote that the restored tree does not serve (the
+        # chat's, on a rollback into a tree from before the split) has no copy to put
+        # back and nothing that tracks or ignores it there: left standing, it keeps the
+        # tree dirty and every later apply refused.
+        for bundle in FRONTEND_BUNDLES:
+            unserved_static = repo_root / bundle.static_dir
+            if bundle not in frontend.bundles and unserved_static.exists():
+                shutil.rmtree(unserved_static)
         if plan.frontend and any(
             bundle.snapshot_name not in restored for bundle in frontend.bundles
         ):
