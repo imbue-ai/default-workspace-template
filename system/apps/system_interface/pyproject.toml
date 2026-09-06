@@ -34,8 +34,11 @@ dev = [
     "inline-snapshot>=0.13",
     "resource-guards",
     # The live mngr CLI, for the contract test that pins the not-built placeholder's repair
-    # command to the CLI it names (server_test).
+    # command to the CLI it names (test_chat_system.py, the one module that may import the
+    # chat package's command builder beside it).
     "mngr-cli-contract",
+    # The tests' polling helper (imbue.mngr.utils.polling); the shell's own code imports
+    # nothing from mngr (the import ratchet holds that).
     "imbue-mngr",
     # The chat app, for the system tests that boot the shell and the chat together
     # (``test_chat_system.py``); the shell's own code never imports it (the import
