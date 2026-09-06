@@ -62,6 +62,11 @@ import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
+// The terminal output a page shows in place of a transcript: what mngr printed when a create
+// failed, or the tmux screen of an agent with no session. Shared so the two read the same.
+const TERMINAL_OUTPUT_CLASS =
+  "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono";
+
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
   // the first trailing arg becomes $0 (not $1). ``buildAgentTerminalUrl``
@@ -380,14 +385,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
       [
         m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
-        m(
-          "pre",
-          {
-            class:
-              "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono whitespace-pre-wrap",
-          },
-          proto.error ?? "mngr create failed",
-        ),
+        m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre-wrap` }, proto.error ?? "mngr create failed"),
         launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
         proto.account_id !== ""
           ? m(
@@ -523,14 +521,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         screenLoading
           ? m("p", { class: "text-secondary" }, "Loading terminal output...")
           : screenContent
-            ? m(
-                "pre",
-                {
-                  class:
-                    "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono whitespace-pre",
-                },
-                screenContent,
-              )
+            ? m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre` }, screenContent)
             : screenError
               ? m("p", { class: "text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
               : null,
