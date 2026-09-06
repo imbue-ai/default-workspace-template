@@ -2694,7 +2694,7 @@ def test_an_unhealthy_chat_after_the_restart_rolls_back(apply_repo: Path) -> Non
     """The chat app restarts with the shell and is probed beside it: a chat that does
     not come back healthy fails the apply like the shell would."""
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    chat_health = update_probes.chat_health_url(apply_repo)
+    chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
     restarts = {"seen": 0}
 
     def responder(url: str) -> int | None:
@@ -2721,7 +2721,7 @@ def test_the_chat_health_url_comes_from_the_registry_row_else_the_default(
     default_url = f"{update_probes.DEFAULT_CHAT_URL}{update_probes.CHAT_HEALTH_PATH}"
 
     # No registry yet (a fresh workspace): the default, and a note saying so.
-    assert update_probes.chat_health_url(tmp_path) == default_url
+    assert update_probes.chat_health_url(tmp_path, _LIVE_BASE) == default_url
     assert "could not read the app registry" in capsys.readouterr().err
 
     registry.parent.mkdir(parents=True)
@@ -2729,15 +2729,84 @@ def test_the_chat_health_url_comes_from_the_registry_row_else_the_default(
         '[[apps]]\nname = "terminal"\nurl = "http://127.0.0.1:7682"\n\n'
         '[[apps]]\nname = "chat"\nurl = "http://localhost:8123/"\n'
     )
-    assert update_probes.chat_health_url(tmp_path) == "http://localhost:8123/api/health"
+    assert (
+        update_probes.chat_health_url(tmp_path, _LIVE_BASE)
+        == "http://localhost:8123/api/health"
+    )
     assert capsys.readouterr().err == ""
 
     # A registry with no chat row, and a corrupt one, both degrade to the default.
     registry.write_text('[[apps]]\nname = "terminal"\nurl = "http://127.0.0.1:7682"\n')
-    assert update_probes.chat_health_url(tmp_path) == default_url
+    assert update_probes.chat_health_url(tmp_path, _LIVE_BASE) == default_url
     registry.write_text("[[apps\n")
-    assert update_probes.chat_health_url(tmp_path) == default_url
+    assert update_probes.chat_health_url(tmp_path, _LIVE_BASE) == default_url
     assert "TOMLDecodeError" in capsys.readouterr().err
+
+
+def test_a_chat_row_naming_the_shells_origin_is_the_pre_split_registration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The row the shell wrote for the chat before the chat ran as its own program names
+    the shell's own URL; probing it would pass on the shell's health, so it is not the
+    chat's address, whichever loopback spelling either side uses."""
+    registry = tmp_path / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True)
+    default_url = f"{update_probes.DEFAULT_CHAT_URL}{update_probes.CHAT_HEALTH_PATH}"
+
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://localhost:8000"\n')
+    assert (
+        update_probes.chat_health_url(tmp_path, "http://127.0.0.1:8000") == default_url
+    )
+    assert "names the shell's own origin" in capsys.readouterr().err
+
+    # A row at another port on the same host is the chat's own registration.
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://localhost:8010/"\n')
+    assert (
+        update_probes.chat_health_url(tmp_path, "http://127.0.0.1:8000")
+        == "http://localhost:8010/api/health"
+    )
+    assert capsys.readouterr().err == ""
+
+
+def _write_chat_program(repo_root: Path) -> None:
+    entry = repo_root / update_probes.CHAT_PROGRAM_ENTRY
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text("")
+
+
+def test_recovery_holds_the_chat_to_health_where_the_restored_tree_runs_it(
+    apply_repo: Path,
+) -> None:
+    """A rollback into a tree whose chat is its own program is confirmed like the forward
+    apply: a shell that answers over a chat that never comes back is not a recovery."""
+    _write_chat_program(apply_repo)
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
+
+    def chat_never_healthy(url: str) -> int | None:
+        return 500 if url == chat_health else 200
+
+    code = _apply(runner, _FakeHttp(chat_never_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 3
+    assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
+
+
+def test_recovery_does_not_probe_a_chat_the_restored_tree_does_not_run(
+    apply_repo: Path,
+) -> None:
+    """Rolled back into a tree from before the chat's split, there is no chat process to
+    answer, so the shell's health alone confirms the recovery."""
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
+
+    def chat_never_healthy(url: str) -> int | None:
+        return 500 if url == chat_health else 200
+
+    code = _apply(runner, _FakeHttp(chat_never_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
 
 
 _PROVISIONER_DIFF = "M\tsystem/scripts/setup_system.sh\n"

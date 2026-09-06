@@ -89,6 +89,7 @@ from update_probes import (
     HEALTH_PATH,
     chat_health_url,
     describe_frontend_failure,
+    has_chat_program,
     preflight,
     refresh_workspace_view,
     wait_healthy,
@@ -551,6 +552,21 @@ def _recover_running_state(
             HEALTH_INTERVAL_SECONDS,
             sleeper,
         )
+        # The chat is probed beside the shell as the forward apply does, but only
+        # where the restored tree runs it as its own program: a tree from before
+        # the split has no chat process to answer.
+        if healthy and has_chat_program(repo_root):
+            healthy = wait_healthy(
+                http,
+                chat_health_url(repo_root, base_url),
+                HEALTH_ATTEMPTS,
+                HEALTH_INTERVAL_SECONDS,
+                sleeper,
+            )
+            if not healthy:
+                sys.stderr.write(
+                    "recovery: the chat app did not become healthy after the restart\n"
+                )
     except (ApplyFailed, OSError) as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
         return _NOT_RECOVERED
@@ -971,7 +987,7 @@ def apply_update(
         # process that imports mngr, so its health is the update's too.
         if not wait_healthy(
             http,
-            chat_health_url(repo_root),
+            chat_health_url(repo_root, resolved_base),
             HEALTH_ATTEMPTS,
             HEALTH_INTERVAL_SECONDS,
             sleeper,
