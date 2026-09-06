@@ -150,9 +150,9 @@ EXIT_ERROR = 1
 EXIT_CONFLICT = 3
 
 # The caller's own chat. Valid as a ``--relative-to`` value for ``split`` / ``move`` and as
-# a target for any dock op; ``_resolve_address`` turns it into the chat's address from
-# ``MNGR_AGENT_ID`` (the key the frontend resolves it to as well), and passes it through
-# unresolved when that is unset, which the frontend reads as the active panel for an anchor.
+# a target for any dock op; ``_resolve_address`` turns it into ``_requester_address()``. Every
+# op also carries that address as ``requester``, which is what the shell (and, for a transient
+# op, the windows) resolve ``self`` from; with no requester the shell refuses ``self`` (400).
 _SELF_REF = "self"
 
 
