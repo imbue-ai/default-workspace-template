@@ -52,3 +52,5 @@ The README lists every message the shell's WebSocket carries and the three tree 
 The dev-group comment in the shell's `pyproject.toml` names `test_chat_system.py` as the home of the repair-command contract test and says what the tests still import `imbue-mngr` for.
 
 The shell's `pyproject.toml` declares `concurrency-group`, which its staleness tracker imports and which only the dev-group `imbue-mngr` had carried since the split (the shell's own tool environment would not have started). A layout op whose `requester` is not an address is refused with a 400 rather than dropped, so an op never silently loses its attribution; the launcher's `onRunAction` no longer carries the params argument only the removed provider picker filled; and the README documents the op body as `{op, args, requester}`.
+
+The README runs the backend from the repo root (its registry path and state directory are relative to it), shows the apply's `--worker-bundle` in its `<app>=<path>` form for both bundles, and names both app tool environments the apply refreshes; `wsgi.py`'s docstrings describe the shell's one WebSocket.
