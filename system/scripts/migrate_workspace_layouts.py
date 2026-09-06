@@ -143,6 +143,15 @@ class LegacyProject(NamedTuple):
     overrides: dict[str, dict[str, Any]]
 
 
+class MigratedLayout(NamedTuple):
+    """One old content file as a layout record, with what was kept and what was pruned."""
+
+    # None when no panel maps to an instance.
+    record: dict[str, Any] | None
+    addresses: tuple[str, ...]
+    dropped_panel_ids: tuple[str, ...]
+
+
 class SeedPlan(NamedTuple):
     """One seed layout a run writes, or skips."""
 
@@ -554,18 +563,17 @@ def migrate_layout_content(
     last_used_ms_by_ref: dict[str, int],
     now_iso: str,
     mint: Callable[[], str],
-) -> tuple[dict[str, Any] | None, tuple[str, ...], tuple[str, ...]]:
+) -> MigratedLayout:
     """One old content file as a layout record (the ``layout`` of contracts.md section 6).
 
     The grid is kept as dockview saved it; every panel that maps to an address is renamed to a
     fresh tab id and its entry rebuilt in the frontend's current shape; every other panel (a
     launcher, a subagent view, an ad-hoc URL page, a second panel of an address already kept)
-    is pruned. Answers ``(record, addresses kept, panel ids dropped)``; the record is None when
-    nothing is left to show.
+    is pruned.
     """
     dockview = content.get("dockview")
     if not isinstance(dockview, dict) or not isinstance(dockview.get("panels"), dict):
-        return None, (), ()
+        return MigratedLayout(record=None, addresses=(), dropped_panel_ids=())
     panel_params = content.get("panelParams")
     params_by_panel_id = panel_params if isinstance(panel_params, dict) else {}
     # dockview's floating and popout groups also name panel ids; nothing in the old shell made
@@ -608,14 +616,18 @@ def migrate_layout_content(
         }
         kept_addresses.append(address)
     if document is None or not tabs:
-        return None, (), tuple(dropped)
+        return MigratedLayout(
+            record=None, addresses=(), dropped_panel_ids=tuple(dropped)
+        )
     record = {
         "dockview": document,
         "tabs": tabs,
         "device_kind": device,
         "updated_at": now_iso,
     }
-    return record, tuple(kept_addresses), tuple(dropped)
+    return MigratedLayout(
+        record=record, addresses=tuple(kept_addresses), dropped_panel_ids=tuple(dropped)
+    )
 
 
 # --- Projects -------------------------------------------------------------------------------
@@ -907,16 +919,16 @@ def plan_migration(
                     )
                 )
                 continue
-            layout, addresses, dropped = migrate_layout_content(
+            migrated = migrate_layout_content(
                 content, device, last_used_ms_by_ref, now_iso, mint
             )
-            if layout is None:
+            if migrated.record is None:
                 seeds.append(
                     _skipped_seed(
                         view_id,
                         device,
                         seed_path,
-                        dropped,
+                        migrated.dropped_panel_ids,
                         "no panel maps to an instance",
                     )
                 )
@@ -927,9 +939,9 @@ def plan_migration(
                     view_id=view_id,
                     device=device,
                     path=seed_path,
-                    layout=layout,
-                    addresses=addresses,
-                    dropped_panel_ids=dropped,
+                    layout=migrated.record,
+                    addresses=migrated.addresses,
+                    dropped_panel_ids=migrated.dropped_panel_ids,
                     is_skipped=is_existing,
                     note="seed already exists" if is_existing else "",
                 )
