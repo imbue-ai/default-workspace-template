@@ -497,10 +497,13 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     """
     if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
         return _RestoredFrontend(repo_root / NPM_ROOT_DIR, FRONTEND_BUNDLES, True)
+    # The shell's bundle is served by every tree the workspace ever ran, manifest or not;
+    # only the chat's depends on the restored tree carrying the chat frontend.
     served = tuple(
         bundle
         for bundle in FRONTEND_BUNDLES
-        if (repo_root / bundle.frontend_dir / "package.json").is_file()
+        if bundle.frontend_dir == FRONTEND_DIR
+        or (repo_root / bundle.frontend_dir / "package.json").is_file()
     )
     return _RestoredFrontend(repo_root / FRONTEND_DIR, served, False)
 
