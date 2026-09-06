@@ -188,6 +188,29 @@ def test_plan_derives_shortcuts_from_overrides_pins_and_the_registry(
     ]
 
 
+def test_a_pin_whose_registry_action_the_shell_would_refuse_is_dropped() -> None:
+    # One shortcut the shell cannot validate would cost it the whole projects file, so the
+    # pin goes rather than the action id.
+    project = migrate.LegacyProject(
+        project_id="p",
+        name="P",
+        color=migrate.DEFAULT_PROJECT_COLOR,
+        glyph=migrate.DEFAULT_PROJECT_GLYPH,
+        members=("service:notes",),
+        overrides={},
+    )
+    rows = [{"name": "notes", "instances": True, "actions": [{"id": "Not Valid"}]}]
+
+    shortcuts = migrate.derive_shortcuts(project, rows)
+
+    assert [shortcut["app"] for shortcut in shortcuts] == [
+        "chat",
+        "terminal",
+        "files",
+        "browser",
+    ]
+
+
 def test_plan_prunes_panels_that_map_to_nothing_and_skips_empty_views(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:
