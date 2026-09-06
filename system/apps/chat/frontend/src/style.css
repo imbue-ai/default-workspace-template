@@ -230,9 +230,9 @@
 
 /* Chat panel within dockview */
 .chat-panel {
-  /* The pane card's own white: a chat fills its pane edge to edge, so anything
+  /* The pane card's own surface: a chat fills its pane edge to edge, so anything
      else here would read as a second surface inside the card. */
-  background: var(--si-pane-surface);
+  background: var(--c-surface);
 }
 
 .chat-panel .app-footer {
