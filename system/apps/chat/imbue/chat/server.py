@@ -111,7 +111,8 @@ from imbue.mngr.primitives import AgentId
 
 logger = _loguru_logger
 
-# The vite build's chat entry, beside the shell's index.html in the static directory.
+# The vite build's chat entry: the document the chat's own static/ directory serves, beside its
+# assets/ and favicon.
 CHAT_DOCUMENT_FILENAME: Final[str] = "chat.html"
 
 # What the chat origin answers when the bundle is missing: the shell's placeholder carries the
