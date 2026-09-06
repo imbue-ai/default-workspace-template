@@ -310,8 +310,9 @@ def test_create_chat_agent_refuses_a_name_or_project_beside_a_reserved_id(agent_
         agent_manager.create_chat_agent("Renamed", agent_id=reserved.agent_id)
     with pytest.raises(AgentCreationError, match="keeps the name and project"):
         agent_manager.create_chat_agent("", project_id="project-1", agent_id=reserved.agent_id)
-    assert agent_manager.get_proto_agent(reserved.agent_id) is not None
-    assert agent_manager.get_proto_agent(reserved.agent_id).phase is ProvisionalChatPhase.AWAITING_ACCOUNT
+    reserved_proto = agent_manager.get_proto_agent(reserved.agent_id)
+    assert reserved_proto is not None
+    assert reserved_proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
     agent_manager.stop()
 
 
