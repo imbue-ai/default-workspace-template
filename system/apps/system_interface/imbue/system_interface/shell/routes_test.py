@@ -507,6 +507,12 @@ def test_the_broadcast_endpoint_validates_its_input(client: FlaskClient) -> None
     assert _broadcast(client, "explode").status_code == 400
     assert client.post("/api/layout/broadcast", json={"op": "open", "args": []}).status_code == 400
     assert client.post("/api/layout/broadcast", data="{", content_type="application/json").status_code == 400
+    # A requester that is not an address is refused, not dropped: dropped, the op would lose its
+    # attribution and ``self`` would be reported as unset although the caller sent one.
+    refused = client.post("/api/layout/broadcast", json={"op": "context", "requester": "chat:agent-1"})
+    assert refused.status_code == 400
+    assert "requester" in refused.get_json()["detail"]
+    assert client.post("/api/layout/broadcast", json={"op": "context", "requester": 7}).status_code == 400
 
 
 def test_the_read_ops_answer_from_the_state_files_and_the_activity_log(client: FlaskClient, app: Flask) -> None:

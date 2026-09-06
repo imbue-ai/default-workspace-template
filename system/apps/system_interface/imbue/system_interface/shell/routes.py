@@ -519,7 +519,13 @@ def layout_broadcast() -> ResponseReturnValue:
         return _detail("Request body must be a JSON object", HTTP_BAD_REQUEST)
     op = body.get("op")
     args_raw = body.get("args", {})
-    requester = _requester_address(str(body.get("requester") or ""))
+    raw_requester = body.get("requester") or ""
+    if not isinstance(raw_requester, str):
+        return _detail("``requester`` must be an address", HTTP_BAD_REQUEST)
+    try:
+        requester = _requester_address(raw_requester)
+    except InvalidAddressError as e:
+        return _detail(f"``requester`` is not an address: {e}", HTTP_BAD_REQUEST)
     if not isinstance(op, str) or not is_known_op(op):
         return _detail(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
     if not isinstance(args_raw, dict):
@@ -860,14 +866,13 @@ def _parse_document_arguments(args_raw: dict[str, Any]) -> DocumentOpArguments:
 
 
 def _requester_address(raw: str) -> Address | None:
-    """The requester the op names (``layout.py`` sends the caller's own instance), or None for none or an unparseable one."""
-    if not raw:
-        return None
-    try:
-        return Address(raw)
-    except InvalidAddressError as e:
-        logger.debug("Ignored a requester that is not an address ({}): {}", raw, e)
-        return None
+    """The requester the op names (``layout.py`` sends the caller's own instance), or None for none.
+
+    Held to the address rule like every other identifier the route takes: a requester that is
+    not an address is refused rather than dropped, since dropping it would silently cost the op
+    its attribution. Raises InvalidAddressError.
+    """
+    return Address(raw) if raw else None
 
 
 def _resolve_op_address(raw: str, requester: Address | None) -> Address:
