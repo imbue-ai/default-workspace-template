@@ -38,7 +38,7 @@ import { backdropDismissAttrs } from "@imbue/workspace-ui/src/components/modalBa
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
 import * as css from "./providerSignInStyles";
-import type { Lane, LaneMethod, ProviderAccount } from "../models/Providers";
+import type { Lane, LaneMethod } from "../models/Providers";
 import {
   abortFlow,
   areLanesLoaded,
