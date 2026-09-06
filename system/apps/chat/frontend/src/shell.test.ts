@@ -10,7 +10,6 @@ vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 const createChatAgent = vi.fn();
 vi.mock("./models/AgentManager", () => ({ createChatAgent }));
-vi.mock("@imbue/workspace-ui/src/views", () => ({ isEverythingView: () => false }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
@@ -118,8 +117,21 @@ describe("startChatOnAccount", () => {
 
     await startChatOnAccount("account-1");
 
-    expect(createChatAgent).toHaveBeenCalledWith("everything", "account-1");
+    // Started from Everything, the chat is filed in no project.
+    expect(createChatAgent).toHaveBeenCalledWith("", "account-1");
     expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:open", address: "app:chat?instance=agent-2" }, "*");
+  });
+
+  it("files the new chat in the project this one is shown in", async () => {
+    const parent = framed();
+    const { connectChatToShell, startChatOnAccount } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    deliver({ ...HANDSHAKE, viewId: "project-7" }, parent);
+    createChatAgent.mockResolvedValueOnce({ agentId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
+
+    await startChatOnAccount("account-1");
+
+    expect(createChatAgent).toHaveBeenCalledWith("project-7", "account-1");
   });
 
   it("tells the user when the create fails rather than opening nothing silently", async () => {
