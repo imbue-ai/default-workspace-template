@@ -5887,7 +5887,9 @@ def test_a_layout_migration_that_cannot_be_spawned_is_a_warning_not_a_traceback(
 def test_worker_bundle_flags_are_read_per_app() -> None:
     assert update_self._parse_worker_bundles(None) is None
     assert update_self._parse_worker_bundles([]) is None
-    assert update_self._parse_worker_bundles(["system_interface=/w/shell", "chat=/w/chat"]) == {
+    assert update_self._parse_worker_bundles(
+        ["system_interface=/w/shell", "chat=/w/chat"]
+    ) == {
         "system_interface": "/w/shell",
         "chat": "/w/chat",
     }

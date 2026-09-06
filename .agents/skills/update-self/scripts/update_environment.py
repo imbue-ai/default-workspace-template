@@ -23,12 +23,12 @@ from update_layout import (
     MNGR_EXECUTABLE,
     MNGR_PLUGIN_KEY,
     MNGR_TOOL_NAME,
+    NPM_ROOT_DIR,
     PLUGIN_MANIFEST_PATH,
     PROVISIONER_HOME,
     PROVISIONER_PATH,
     PROVISIONER_SCRIPT,
     RECEIPT,
-    NPM_ROOT_DIR,
 )
 from update_runtime import Runner, run_checked, tail
 
