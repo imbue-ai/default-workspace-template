@@ -188,27 +188,72 @@ def test_plan_derives_shortcuts_from_overrides_pins_and_the_registry(
     ]
 
 
-def test_a_pin_whose_registry_action_the_shell_would_refuse_is_dropped() -> None:
-    # One shortcut the shell cannot validate would cost it the whole projects file, so the
-    # pin goes rather than the action id.
+_TWO_ACTIONS = [{"id": "new"}, {"id": "note"}]
+
+
+@pytest.mark.parametrize(
+    ("row", "mode_override", "shortcut"),
+    [
+        # An app the registry does not list counts as single-instance: the synthesized open.
+        (None, None, {"app": "notes", "action": "open", "mode": "focus"}),
+        (
+            {"name": "notes", "instances": False},
+            None,
+            {"app": "notes", "action": "open", "mode": "focus"},
+        ),
+        # The member's own mode override wins over the default mode.
+        (
+            {"name": "notes", "instances": False},
+            "new",
+            {"app": "notes", "action": "open", "mode": "new"},
+        ),
+        # An app with instances pins the registry's default_shortcut, mode included, over its
+        # first declared action.
+        (
+            {
+                "name": "notes",
+                "instances": True,
+                "default_shortcut": {"action": "note", "mode": "new"},
+                "actions": _TWO_ACTIONS,
+            },
+            None,
+            {"app": "notes", "action": "note", "mode": "new"},
+        ),
+        (
+            {"name": "notes", "instances": True, "actions": _TWO_ACTIONS},
+            None,
+            {"app": "notes", "action": "new", "mode": "focus"},
+        ),
+        # A row declaring no action, or none the shell would read back (one bad shortcut
+        # would cost the shell the whole projects file), drops the pin.
+        ({"name": "notes", "instances": True}, None, None),
+        (
+            {"name": "notes", "instances": True, "actions": [{"id": "Not Valid"}]},
+            None,
+            None,
+        ),
+    ],
+)
+def test_derive_shortcuts_maps_a_pin_through_its_registry_row(
+    row: dict[str, Any] | None,
+    mode_override: str | None,
+    shortcut: dict[str, str] | None,
+) -> None:
     project = migrate.LegacyProject(
         project_id="p",
         name="P",
         color=migrate.DEFAULT_PROJECT_COLOR,
         glyph=migrate.DEFAULT_PROJECT_GLYPH,
         members=("service:notes",),
-        overrides={},
+        overrides={}
+        if mode_override is None
+        else {"app:notes": {"mode": mode_override}},
     )
-    rows = [{"name": "notes", "instances": True, "actions": [{"id": "Not Valid"}]}]
 
-    shortcuts = migrate.derive_shortcuts(project, rows)
+    shortcuts = migrate.derive_shortcuts(project, [] if row is None else [row])
 
-    assert [shortcut["app"] for shortcut in shortcuts] == [
-        "chat",
-        "terminal",
-        "files",
-        "browser",
-    ]
+    pinned = [candidate for candidate in shortcuts if candidate["app"] == "notes"]
+    assert pinned == ([] if shortcut is None else [shortcut])
 
 
 def test_plan_prunes_panels_that_map_to_nothing_and_skips_empty_views(
