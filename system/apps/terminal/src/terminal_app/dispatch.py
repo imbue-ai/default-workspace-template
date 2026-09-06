@@ -37,7 +37,8 @@ exit 1
 """
 
 # CLEANUP: agent.sh serves the chat UI's terminal back face (``?arg=_&arg=agent&arg=<name>``);
-# move it to the chat app when phase 10 of the workspace app model gives chat its own package.
+# it belongs to the chat app (system/apps/chat, its own package since phase 10 of the workspace
+# app model) and can move there in the model's cleanup phase (phase 11).
 _AGENT_SCRIPT: Final[str] = """#!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
 #
