@@ -641,33 +641,6 @@ def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -
         expect(_chat(page).locator(".message-list-not-found")).to_have_count(0)
 
 
-# ---------- verbs ----------
-
-
-# ---------- the launcher ----------
-
-
-# ---------- the tab strip ----------
-
-
-# ---------- devices ----------
-
-# A phone-shaped browser context, inlined so the emulated UA is pinned rather than drifting
-# with the Playwright version; the client classifies itself as mobile off the UA string.
-_MOBILE_CONTEXT_ARGS: dict[str, Any] = {
-    "user_agent": (
-        "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-    ),
-    "viewport": {"width": 412, "height": 915},
-    "device_scale_factor": 2.625,
-    "is_mobile": True,
-    "has_touch": True,
-}
-
-
-# ---------- phase 8: the layout file is the truth ----------
-
-
 # ---------- starting a chat ----------
 
 
