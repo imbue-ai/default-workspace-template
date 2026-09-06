@@ -2704,9 +2704,14 @@ def test_failed_post_restart_health_rolls_back_and_restarts_into_known_good(
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
 
 
-def test_an_unhealthy_chat_after_the_restart_rolls_back(apply_repo: Path) -> None:
+def test_an_unhealthy_chat_after_the_restart_rolls_back(
+    apply_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The chat app restarts with the shell and is probed beside it: a chat that does
-    not come back healthy fails the apply like the shell would."""
+    not come back healthy fails the apply like the shell would, and the rollback's
+    own probe of it (the restored tree runs the chat too) is what makes the rollback
+    count as recovered."""
+    _write_chat_program(apply_repo)
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
     restarts = {"seen": 0}
@@ -2726,6 +2731,9 @@ def test_an_unhealthy_chat_after_the_restart_rolls_back(apply_repo: Path) -> Non
 
     assert code == 2
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
+    assert f"did not become healthy after restart (probed {chat_health})" in (
+        capsys.readouterr().err
+    )
 
 
 def test_the_chat_health_url_comes_from_the_registry_row_else_the_default(
@@ -4695,9 +4703,9 @@ def test_a_rollback_into_a_pre_split_tree_ignores_the_chat_frontend_directory_gi
     # cannot build, which would rebuild where restoring the shell's copy was the whole
     # job and then fail on the chat bundle that never comes.
     _make_pre_split_tree(apply_repo)
-    (apply_repo / update_layout.CHAT_FRONTEND_DIR / "node_modules" / ".vite-temp").mkdir(
-        parents=True
-    )
+    (
+        apply_repo / update_layout.CHAT_FRONTEND_DIR / "node_modules" / ".vite-temp"
+    ).mkdir(parents=True)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
 
