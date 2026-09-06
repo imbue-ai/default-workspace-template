@@ -340,12 +340,9 @@ def write_legacy_layout_dir(layout_dir: Path) -> None:
             )
         )
     )
-    research_chat = {
-        "panelType": "chat",
-        "agentId": "agent-bbb",
-        "chatAgentId": "agent-bbb",
-        "title": "Reading",
-    }
+    # The older chat panel shape, from before ``chatAgentId`` existed: the agent is named by
+    # ``agentId`` alone.
+    research_chat = {"panelType": "chat", "agentId": "agent-bbb", "title": "Reading"}
     (projects_dir / "research.json").write_text(
         json.dumps(
             _legacy_content(
