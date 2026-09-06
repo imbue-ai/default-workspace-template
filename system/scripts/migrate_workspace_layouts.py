@@ -780,8 +780,12 @@ def merged_store_document(
 def _write_json_atomic(path: Path, document: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp-{secrets.token_hex(8)}")
-    temp_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
-    os.replace(temp_path, path)
+    try:
+        temp_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+        os.replace(temp_path, path)
+    except OSError:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def _has_projects(document: dict[str, Any] | None) -> bool:
