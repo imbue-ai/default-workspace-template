@@ -15,6 +15,7 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from bootstrap.manager import (
     _DRI_WAKE_TIMEOUT_SECONDS,
     _UPDATE_RECOVER_TIMEOUT_SECONDS,
+    _WORKSPACE_LAYOUT_MIGRATION_TIMEOUT_SECONDS,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
@@ -860,6 +861,6 @@ def test_a_failing_layout_migration_never_blocks_boot(
         logger.remove(sink)
 
     assert len(stub.calls) == 2
-    assert stub.kwargs[0]["timeout"] == 60.0
+    assert stub.kwargs[0]["timeout"] == _WORKSPACE_LAYOUT_MIGRATION_TIMEOUT_SECONDS
     assert any("migration failed (rc=1)" in line for line in errors)
     assert any("could not run" in line for line in errors)
