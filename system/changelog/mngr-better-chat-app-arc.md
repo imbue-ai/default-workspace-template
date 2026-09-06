@@ -74,3 +74,5 @@ The frontends are one npm workspace rooted at `system/package.json` (with `packa
 `system/libs/workspace_ui` exports `wsUrl`, the WebSocket URL helper both frontends had duplicated, and the earlyoom note in `supervisord.conf` lists the `chat` program in the shed order.
 
 `system/scripts/layout.py` and `refresh_workspace_view.py` no longer send the `X-Mngr-Agent-Id` header with a layout op: the shell reads only the body's `requester` address since phase 10 (it names no app, so an agent id alone means nothing to it), and the header was dead.
+
+`system/libs/workspace_ui` keeps only what both frontends share: the chat document's meta readers moved into the chat frontend, the activity dot's keyframes moved into the library's `base.css` beside the component that references them, and `wsUrl` is tested. The Dockerfile's manifest layer copies the chat's `pyproject.toml` so its dependencies are pre-warmed, both dev servers proxy the WebSocket, the agy shim points at the moved tool-call policies, and the root's unused `import-linter` dependency is gone.
