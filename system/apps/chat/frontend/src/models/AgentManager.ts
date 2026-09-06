@@ -5,7 +5,8 @@
  */
 
 import m from "mithril";
-import { apiUrl, getTerminalOriginLabel, wsUrl } from "@imbue/workspace-ui/src/base-path";
+import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
+import { getTerminalOriginLabel } from "../document-meta";
 import { deriveServiceOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice } from "./ModelSettings";

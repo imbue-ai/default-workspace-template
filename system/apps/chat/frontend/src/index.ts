@@ -5,7 +5,7 @@
 
 import m from "mithril";
 import "./style.css";
-import { getChatAgentId, getChatSessionId } from "@imbue/workspace-ui/src/base-path";
+import { getChatAgentId, getChatSessionId } from "./document-meta";
 import { initAgentManager } from "./models/AgentManager";
 import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
 import { ProviderChooserModal } from "./views/ProviderChooserModal";

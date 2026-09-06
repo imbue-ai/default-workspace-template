@@ -8,7 +8,7 @@ import { claimSlot } from "./slots";
 import type { SlotRenderCallback } from "./slots";
 import type { RouteRenderCallback, PluginRouteHandler } from "./plugin-routes";
 import { registerPluginRoute } from "./plugin-routes";
-import { getPrimaryAgentId } from "@imbue/workspace-ui/src/base-path";
+import { getPrimaryAgentId } from "./document-meta";
 import { openSubagentTab } from "./shell";
 
 interface OpenTabOptions {

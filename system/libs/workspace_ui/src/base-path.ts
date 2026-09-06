@@ -35,29 +35,3 @@ export function wsUrl(path: string, location: Pick<Location, "protocol" | "host"
   }
   return `${protocol}//${loc.host}${base}`;
 }
-
-/** The chat the chat document shows; "" on the shell's own document. */
-export function getChatAgentId(): string {
-  return document.querySelector('meta[name="system-interface-chat-agent-id"]')?.getAttribute("content") ?? "";
-}
-
-/** The terminal app's origin label, which the chat app reads from the registry into the page. */
-export function getTerminalOriginLabel(): string {
-  return document.querySelector('meta[name="system-interface-terminal-label"]')?.getAttribute("content") ?? "";
-}
-
-/** The subagent session the chat document shows; "" for a chat's own page. */
-export function getChatSessionId(): string {
-  return document.querySelector('meta[name="system-interface-chat-session-id"]')?.getAttribute("content") ?? "";
-}
-
-let cachedPrimaryAgentId: string | null = null;
-
-export function getPrimaryAgentId(): string {
-  if (cachedPrimaryAgentId !== null) {
-    return cachedPrimaryAgentId;
-  }
-  const metaElement = document.querySelector('meta[name="system-interface-agent-id"]');
-  cachedPrimaryAgentId = metaElement?.getAttribute("content") ?? "";
-  return cachedPrimaryAgentId;
-}
