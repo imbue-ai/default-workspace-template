@@ -88,7 +88,7 @@ _NOT_BUILT_POLL_SECONDS = 10
 # already sets it, and the builder spells it out only because it is assembling
 # an argv rather than a line for a reader. It is not optional the way the harness
 # is -- an agent in a worktree would repair a copy of the workspace instead of
-# the workspace -- so ``server_test.py`` reads the template and fails if that
+# the workspace -- so ``test_chat_system.py`` reads the template and fails if that
 # setting ever leaves it, rather than trusting this comment.
 #
 # ``--connect`` instead of its ``--no-connect``, which exists to keep a headless
@@ -112,7 +112,7 @@ _NOT_BUILT_POLL_SECONDS = 10
 # ``shlex.join`` would (``'i'"'"'m ...``): the message carries apostrophes, and
 # this is the one line on the page a reader has to be able to read in full.
 #
-# Kept in sync with that builder by ``server_test.py``, which also validates it
+# Kept in sync with that builder by ``test_chat_system.py``, which also validates it
 # against the live CLI. It is a suggestion, not a dispatch: the server never
 # runs it, so an agent is created only if the reader decides to.
 _NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
