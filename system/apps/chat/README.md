@@ -29,8 +29,8 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
 - Every `/api/agents/...` route (events, streams, sends, model choice, the
   queue actions, presence, destroy, start, stop), `/api/agents/create-chat`,
   `/api/harnesses`, `/api/uploads`, `/api/claude-auth`, `/api/accounts`,
-  `/api/lanes`, `/api/latchkey`, and the proto-agent log socket, verbatim as
-  the shell served them before phase 10.
+  `/api/lanes`, and `/api/latchkey`, verbatim as the shell served them before
+  phase 10.
 - `/api/ws`: the chat pages' socket, carrying `agents_updated` and the
   proto-agent events.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
@@ -55,8 +55,7 @@ venv.
 ## Development
 
 ```bash
-# Backend
-cd system/apps/chat
+# Backend, from the repo root (the app's data paths are relative to it)
 uv run chat-app --no-register
 
 # Tests

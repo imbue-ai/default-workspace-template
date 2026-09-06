@@ -176,9 +176,10 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
 
     Raises when there are none. There is no shared login to fall back to -- the settings-env
     writer is deleted and `~/.claude` is left alone -- so an agent created without an account
-    is simply unauthenticated, and returning one used to let a caller create it anyway. The UI
-    makes that unreachable (the launcher opens the chooser), and this is the backstop for
-    anything that does not.
+    is simply unauthenticated, and returning one used to let a caller create it anyway. The
+    instances API makes that unreachable (with nothing signed in it mints a chat that waits
+    for an account, whose page offers the chooser), and this is the backstop for anything
+    that does not.
     """
     if account_id:
         account = accounts.resolve_account(account_id, home)
@@ -191,9 +192,9 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     if not usable:
         raise accounts.AccountError("no provider accounts exist yet")
     # The most recently used account, else the oldest -- which is the same rule the picker
-    # shows (`Providers.ts`: `recent ?? accounts[0]`). It matters that the two agree: the
-    # launcher and a new project's starter chat both land here, and a disagreement means
-    # two chats started seconds apart run on different providers with nothing saying so.
+    # shows (`Providers.ts`: `recent ?? accounts[0]`). It matters that the two agree: every
+    # launch without an explicit account lands here, and a disagreement means two chats
+    # started seconds apart run on different providers with nothing saying so.
     chosen = next((a for a in usable if a.id == index.mru), usable[0])
     # Back through `resolve_account` for the folder check. The explicit-id path above has
     # always had it; this one did not, so a row whose folder had gone bound an agent to a

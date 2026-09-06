@@ -5,7 +5,7 @@ module reverse-engineers an *undocumented* format: agy publishes no ``.proto`` s
 the field/enum map below is recovered empirically from the binary's embedded descriptors.
 It is a deliberate near-duplicate of ``mngr_antigravity``'s ``decode_agy_transcript.py``
 (the source of truth for the recovered map + its release-marked descriptor-diff test); we
-keep our own copy so system_interface never has to import mngr internals, and we EXTEND it
+keep our own copy so the chat app never has to import mngr internals, and we EXTEND it
 to surface what mngr's stream drops -- tool call id/name/args, agy's own short/long
 captions (``f30``/``f31``), and the tool result text. If agy's schema drifts, update both
 in lockstep (see ``libs/mngr_antigravity/regenerating_protobuf_schema.md``).

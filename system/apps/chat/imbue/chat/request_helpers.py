@@ -1,4 +1,4 @@
-"""The request and response helpers the shell document and the chat document share."""
+"""The request and response helpers the chat app's routes share."""
 
 import json
 import traceback

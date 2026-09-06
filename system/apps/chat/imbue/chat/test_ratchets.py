@@ -122,7 +122,7 @@ def test_prevent_setattr() -> None:
 
 
 def test_prevent_asyncio_import() -> None:
-    # The system interface is fully synchronous (Flask + flask-sock on the
+    # The chat app is fully synchronous (Flask + flask-sock on the
     # threaded Werkzeug server); there is no asyncio anywhere.
     rc.check_asyncio_import(_DIR, snapshot(0))
 

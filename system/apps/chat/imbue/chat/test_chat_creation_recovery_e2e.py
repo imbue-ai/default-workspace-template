@@ -52,12 +52,12 @@ def _playwright_browsers_installed() -> bool:
 
 
 def _frontend_built() -> bool:
-    """Check whether the frontend has been built (``static/index.html`` exists).
+    """Check whether the chat frontend has been built (``static/chat.html`` exists).
 
     Without a build the Flask server serves a "Frontend not built" placeholder, so
     every e2e test would ``page.goto()`` and then burn its per-test timeout waiting
     for selectors that can never appear. The path is resolved relative to this test
-    module (``imbue/system_interface/`` holds both this file and the build output)
+    module (``imbue/chat/`` holds both this file and the build output)
     so it holds regardless of the cwd.
     """
     return (Path(__file__).parent / "static" / "chat.html").is_file()
@@ -68,7 +68,7 @@ pytestmark = [
     pytest.mark.skipif(not _playwright_browsers_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
         not _frontend_built(),
-        reason=("System interface frontend not built (run `cd system && npm run build`); skipping e2e."),
+        reason=("Chat frontend not built (run `cd system && npm run build`); skipping e2e."),
     ),
 ]
 

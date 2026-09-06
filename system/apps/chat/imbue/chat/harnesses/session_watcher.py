@@ -10,7 +10,7 @@ activity tracker both work against this interface, never a concrete watcher.
 Harnesses need different pieces of it -- claude reads ``claude_config_dir``, codex does
 not -- so passing individual arguments would force the CALLER to know which harness needs
 what, which is exactly the knowledge this interface removes. Handing over the record lets
-each implementation take what it needs and leaves ``app_context`` free of harness names.
+each implementation take what it needs and leaves ``ChatState`` free of harness names.
 
 Adding a harness is a new subclass plus one entry in ``harnesses.registry``; no edits
 here and none in the caller.

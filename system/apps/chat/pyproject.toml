@@ -108,8 +108,7 @@ venv = ".venv"
 pythonVersion = "3.12"
 strict = ["**/*.py"]
 
-# Ruff config mirrors system/vendor/mngr/pyproject.toml, as the system interface's does: the
-# chat's code was held to it while it lived there.
+# Ruff config mirrors system/vendor/mngr/pyproject.toml, as the system interface's does.
 [tool.ruff]
 line-length = 119
 

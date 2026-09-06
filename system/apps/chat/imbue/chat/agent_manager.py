@@ -2157,7 +2157,7 @@ class AgentManager:
         """Fold a batch of transcript events into the agent's activity signals.
 
         Called with exactly the events the :class:`AgentSessionWatcher` just
-        parsed -- the ``on_events`` fan-out in ``app_context`` -- plus once at
+        parsed -- the ``on_events`` fan-out in ``ChatState`` -- plus once at
         watcher build with the whole primed backlog (the seed). The tracker is
         incremental, so it never needs the full transcript again. Cheap to
         call: the tracker short circuits when none of its derived signals
