@@ -102,6 +102,24 @@ def test_address_for_ref_maps_every_old_spelling(ref: str, address: str | None) 
     assert migrate.address_for_ref(ref) == address
 
 
+@pytest.mark.parametrize(
+    ("params", "ref"),
+    [
+        ({"panelType": "chat", "agentId": "agent-aaa"}, "chat:agent-aaa"),
+        (
+            {"panelType": "chat", "agentId": "agent-aaa", "chatAgentId": "agent-ccc"},
+            "chat:agent-ccc",
+        ),
+        ({"panelType": "chat"}, None),
+        ({"panelType": "launcher", "agentId": "agent-aaa"}, None),
+    ],
+)
+def test_ref_for_panel_reads_the_old_panel_shapes(
+    params: dict[str, Any], ref: str | None
+) -> None:
+    assert migrate.ref_for_panel(params) == ref
+
+
 def test_plan_files_members_and_docked_panels_and_drops_dead_refs(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:

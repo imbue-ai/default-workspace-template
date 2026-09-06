@@ -271,7 +271,9 @@ def _browser_session_from_url(url: Any) -> str | None:
 
 def ref_for_panel(params: dict[str, Any]) -> str | None:
     """The member ref a saved panel's params filed it under (the old ``projects`` grammar), or None."""
-    chat_agent_id = params.get("chatAgentId")
+    # A chat panel from before ``chatAgentId`` existed names its agent by ``agentId`` alone,
+    # the fallback the old frontend read too.
+    chat_agent_id = params.get("chatAgentId") or params.get("agentId")
     terminal_session_name = params.get("terminalSessionName")
     service_name = params.get("serviceName")
     service_instance_id = params.get("serviceInstanceId")
