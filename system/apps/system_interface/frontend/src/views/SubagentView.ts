@@ -12,6 +12,7 @@ import {
 } from "./conversation-rows";
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import { TranscriptScrollbar } from "./TranscriptScrollbar";
+import { badgeClass } from "./components/Badge";
 
 interface SubagentViewAttrs {
   agentId: string;
@@ -175,10 +176,14 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       const title = metadata?.description || "Sub-agent conversation";
       const agentType = metadata?.agent_type || "";
 
-      const header = m("header", { class: "app-header" }, [
-        m("h1", { class: "app-header-title" }, title),
-        agentType ? m("span", { class: "app-header-model-badge" }, agentType) : null,
-      ]);
+      const header = m(
+        "header",
+        { class: "app-header flex shrink-0 items-baseline gap-3 border-b border-default bg-page px-8 py-3.5" },
+        [
+          m("h1", { class: "app-header-title type-heading text-primary" }, title),
+          agentType ? m("span", { class: badgeClass("neutral", { mono: true }) }, agentType) : null,
+        ],
+      );
 
       let content: m.Vnode;
 
@@ -186,19 +191,19 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         content = m(
           "div",
           { class: "message-list-loading flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "Loading events..."),
+          m("p", { class: "text-secondary" }, "Loading events..."),
         );
       } else if (loadingError) {
         content = m(
           "div",
           { class: "message-list-error flex items-center justify-center h-full" },
-          m("p", { class: "text-red-500" }, `Error: ${loadingError}`),
+          m("p", { class: "text-danger" }, `Error: ${loadingError}`),
         );
       } else if (events.length === 0) {
         content = m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "No events yet."),
+          m("p", { class: "text-secondary" }, "No events yet."),
         );
       } else {
         content = renderWindowedList(agentId);
@@ -210,7 +215,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
           m(
             "main",
             {
-              class: "app-content transcript-scroll flex-1 overflow-y-auto px-8 py-6",
+              class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-8 py-6",
               tabindex: 0,
               oncreate: (mainVnode: m.VnodeDOM) => {
                 engine.afterRender(mainVnode.dom as HTMLElement);

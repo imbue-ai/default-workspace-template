@@ -49,9 +49,12 @@ import {
 import type { MatchRange, MemberKind, ProjectInfo, ShortcutMode } from "../models/Projects";
 import { AllAppsPicker, appDisplayName, pickableApps } from "./AllAppsPicker";
 import type { UnpinnedShortcutRow } from "./AllAppsPicker";
-import { appIconMarkup, serviceIconMarkup } from "./appIcon";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
+import { appIconMarkup, serviceIconMarkup } from "./components/appIcon";
+import { Button, buttonClass } from "./components/Button";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
+import type { TooltipPlacement } from "./components/hoverTooltip";
+import { icon } from "./components/icons";
 import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
 import type { ObjectMenuActions, ObjectMenuKind } from "./objectMenu";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
@@ -167,7 +170,7 @@ export interface SidebarAttrs {
 }
 
 const COLLAPSED_CLASS = "w-[37px] border-transparent bg-transparent";
-const EXPANDED_CLASS = "w-[240px] rounded-lg border-border bg-surface shadow-lg";
+const EXPANDED_CLASS = "w-[240px] rounded-lg border-default bg-surface shadow-lg";
 
 // The rail's own padding, and the leading icon box every row shares. The box
 // is sized to hug ROW_ICON_SIZE (see below) rather than pad it, so the flex
@@ -190,7 +193,7 @@ const ICON_BOX_CLASS = "flex w-[20px] shrink-0 items-center justify-center";
 // forgets it renders as a black rule against the rail's text color instead of
 // the intended hairline. A call site overrides it (to transparent) rather than
 // supplying it.
-const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t border-border";
+const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t border-default";
 
 // The rail's whole type scale, defined once so a new row inherits it rather
 // than picking its own size. ROW_TEXT_CLASS is every row's label, rail rows
@@ -199,24 +202,55 @@ const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t border-border";
 // row's trailing controls draw at instead (a kebab, a rename pencil, a pin
 // toggle, the switcher's chevron) -- those are secondary to the row, not what
 // it is, and stayed a consistent 14px even while the rows around them drifted.
-const ROW_TEXT_CLASS = "text-[13px]";
+const ROW_TEXT_CLASS = "text-(length:--font-size-row)";
 const ROW_ICON_SIZE = 16;
 const ACTION_ICON_SIZE = 14;
 
 const ROW_CLASS = "flex h-7 w-full shrink-0 cursor-pointer items-center gap-1 rounded-md text-left";
 
-// Menu chrome, settled in the design (§6): a floating card on the primary
-// surface with a hairline border, 8px radius and the overlay elevation shadow,
-// holding 32px rows of icon + label.
-const MENU_CARD_CLASS = `project-rail-menu fixed z-50 rounded-lg border border-border bg-surface py-1 ${ROW_TEXT_CLASS} text-text-primary`;
-const MENU_SHADOW_STYLE = "box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);";
+/** One hover-revealed row action -- every trailing micro-control on a rail or
+ *  menu row (unpin, kebab, rename pencil, remove-from-project) is this single
+ *  recipe: the shared Button at its xs icon size, ghost variant, hidden until
+ *  the row's `group` hover reveals it (or held visible while its own menu is
+ *  open), and always stopping propagation so the row underneath never also
+ *  fires. Positioning and marker classes ride `extra`. */
+function railAction(options: {
+  iconMarkup: string;
+  label: string;
+  tooltip?: string;
+  tooltipPlacement?: TooltipPlacement;
+  /** Hold the control visible regardless of hover (its own menu is open). */
+  isRevealed?: boolean;
+  extra?: string;
+  onclick: (event: MouseEvent) => void;
+}): m.Vnode {
+  const reveal =
+    (options.isRevealed === true ? "opacity-100" : "opacity-0") + " focus-visible:opacity-100 group-hover:opacity-100";
+  return m(
+    Button,
+    {
+      variant: "ghost",
+      icon: true,
+      xs: true,
+      extra: `${reveal} ${options.extra ?? ""}`,
+      "aria-label": options.label,
+      ...(options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip, options.tooltipPlacement)),
+      onclick: (event: MouseEvent) => {
+        event.stopPropagation();
+        options.onclick(event);
+      },
+    },
+    m.trust(options.iconMarkup),
+  );
+}
+
+const MENU_CARD_CLASS = `project-rail-menu ${menuCardClass(`fixed ${ROW_TEXT_CLASS} text-primary`)}`;
 // `group` so a row's own trailing controls (the switcher's edit pencil) can
 // reveal themselves on `group-hover:`, the same reveal-on-hover pattern the
-// tab list's kebab uses. `gap-1` (4px) matches the rail's own rows
-// (ROW_CLASS) -- it used to be a looser `gap-2`, which is what made a menu
-// row read as less tight than the rail row sitting right above it.
-const MENU_ROW_CLASS =
-  "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-1 px-3 text-left hover:bg-bg-hover";
+// tab list's kebab uses. tightGap (4px) matches the rail's own rows
+// (ROW_CLASS), so a menu row reads as tight as the rail row sitting right
+// above it.
+const MENU_ROW_CLASS = `project-rail-menu-item group ${menuRowClass({ tightGap: true })}`;
 
 // A transparent overlay rendered behind any open menu and above everything
 // else. Menus already dismiss on an outside pointerdown (see
@@ -224,8 +258,11 @@ const MENU_ROW_CLASS =
 // falls through to whatever control happens to sit underneath -- activating
 // it, and dragging hover state across it on the way. The scrim gives the
 // dismissing press somewhere of its own to land, so closing the menu is *all*
-// it does.
-const MENU_SCRIM_CLASS = "fixed inset-0 z-40";
+// it does. It shares the menu card's --z-dropdown layer; the card stays on top
+// because it renders after the scrim as a sibling (see the view's tail).
+// `project-rail-menu-scrim` is a bare marker like `btn` (tests find the scrim
+// by it).
+const MENU_SCRIM_CLASS = "project-rail-menu-scrim fixed inset-0 z-(--z-dropdown)";
 
 // Minimum gap between a floating menu and the window edges, matching the
 // tooltip's own margin so everything that floats clears the frame alike.
@@ -251,7 +288,7 @@ const SWITCHER_MENU_WIDTH = 256;
 // beside it.
 const SWITCHER_ROW_CLASS =
   "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-1 pl-[5px] pr-3 text-left " +
-  "hover:bg-bg-hover";
+  "hover:bg-fill-hover";
 
 // Inner markup for the rail's own glyphs, drawn on the same 24x24 Feather grid
 // as `icons.ts`. They live here rather than in that shared table because the
@@ -997,7 +1034,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       "span",
       {
         class:
-          `min-w-0 flex-1 truncate pr-1 ${ROW_TEXT_CLASS} whitespace-nowrap transition-opacity duration-150 ` +
+          `min-w-0 flex-1 truncate pr-1 ${ROW_TEXT_CLASS} whitespace-nowrap transition-opacity duration-(--dur-base) ` +
           `${extraClass} ` +
           (expanded ? "opacity-100" : "opacity-0"),
       },
@@ -1024,9 +1061,14 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       {
         role: "button",
         tabindex: 0,
-        class:
-          "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-faint opacity-0 " +
-          "hover:bg-bg-hover hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100",
+        // The Button recipe via buttonClass -- the escape hatch, since this
+        // control lives inside the header <button> and buttons do not nest --
+        // plus the same reveal-on-row-hover treatment railAction applies.
+        class: buttonClass("ghost", {
+          icon: true,
+          xs: true,
+          extra: "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
+        }),
         "aria-label": "Project settings",
         ...hoverTooltipAttrs("Project settings"),
         onclick: openSettings,
@@ -1048,7 +1090,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         type: "button",
         class:
           "project-rail-header group -mx-[5px] -mt-[5px] flex h-[34px] w-[calc(100%+10px)] shrink-0 cursor-pointer " +
-          "items-center gap-1 px-[5px] text-left text-text-primary hover:bg-bg-hover",
+          "items-center gap-1 px-[5px] text-left text-primary hover:bg-fill-hover",
         "aria-haspopup": "menu",
         "aria-expanded": openMenu?.kind === "switcher" ? "true" : "false",
         // Static, not the current project's name: the header's own label
@@ -1098,7 +1140,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           "span",
           {
             class:
-              "flex shrink-0 items-center pr-1 text-text-secondary transition-opacity duration-150 " +
+              "flex shrink-0 items-center pr-1 text-secondary transition-opacity duration-(--dur-base) " +
               (expanded ? "opacity-100" : "opacity-0"),
           },
           m.trust(icon("chevron-down", { size: ACTION_ICON_SIZE })),
@@ -1154,7 +1196,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         // own `:hover` would drop the fill the moment the pointer reached one.
         class:
           "project-rail-shortcut-slot group relative flex w-full shrink-0 items-center rounded-md " +
-          (options.onclick === null ? "" : "hover:bg-bg-hover"),
+          (options.onclick === null ? "" : "hover:bg-fill-hover"),
         ...hoverTooltipAttrs(options.tooltip, "right"),
         oncontextmenu:
           options.onMenu === null
@@ -1176,52 +1218,31 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               // trailing controls rather than running underneath them.
               (hasUnpin && hasKebab ? "pr-12 " : hasUnpin || hasKebab ? "pr-7 " : "") +
               (isDisabled
-                ? "cursor-default text-text-faint opacity-60"
+                ? "cursor-default text-faint opacity-60"
                 : options.isDimmed === true
-                  ? "project-rail-shortcut-stopped text-text-faint opacity-60"
-                  : "text-text-primary"),
+                  ? "project-rail-shortcut-stopped text-faint opacity-60"
+                  : "text-primary"),
             onclick: options.onclick ?? undefined,
           },
           [m("span", { class: ICON_BOX_CLASS }, m.trust(options.iconMarkup)), railLabel(options.label, "")],
         ),
         options.onUnpin === null
           ? null
-          : m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "project-rail-shortcut-unpin absolute right-1 flex h-5 w-5 shrink-0 cursor-pointer " +
-                  "items-center justify-center rounded text-text-faint opacity-0 hover:text-text-primary " +
-                  "focus-visible:opacity-100 group-hover:opacity-100",
-                "aria-label": `Unpin ${options.baseLabel} from this project`,
-                onclick: (event: MouseEvent) => {
-                  event.stopPropagation();
-                  options.onUnpin?.();
-                },
-              },
-              m.trust(railIcon("pin", ACTION_ICON_SIZE)),
-            ),
+          : railAction({
+              iconMarkup: railIcon("pin", ACTION_ICON_SIZE),
+              label: `Unpin ${options.baseLabel} from this project`,
+              extra: "project-rail-shortcut-unpin absolute right-1",
+              onclick: () => options.onUnpin?.(),
+            }),
         options.onMenu === null
           ? null
-          : m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "project-rail-shortcut-menu absolute flex h-5 w-5 shrink-0 cursor-pointer items-center " +
-                  "justify-center rounded text-text-faint hover:text-text-primary focus-visible:opacity-100 " +
-                  "group-hover:opacity-100 " +
-                  (hasUnpin ? "right-6 " : "right-1 ") +
-                  (options.isMenuOpen ? "opacity-100" : "opacity-0"),
-                "aria-label": `Shortcut options for ${options.baseLabel}`,
-                onclick: (event: MouseEvent) => {
-                  event.stopPropagation();
-                  options.onMenu?.(event);
-                },
-              },
-              m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
-            ),
+          : railAction({
+              iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
+              label: `Shortcut options for ${options.baseLabel}`,
+              isRevealed: options.isMenuOpen,
+              extra: "project-rail-shortcut-menu absolute " + (hasUnpin ? "right-6" : "right-1"),
+              onclick: (event) => options.onMenu?.(event),
+            }),
       ],
     );
   }
@@ -1267,8 +1288,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         "div",
         {
           class:
-            `project-rail-shortcut group ${ROW_CLASS} pr-1 hover:bg-bg-hover ` +
-            (isStopped ? "project-rail-shortcut-stopped text-text-faint opacity-60" : "text-text-primary"),
+            `project-rail-shortcut group ${ROW_CLASS} pr-1 hover:bg-fill-hover ` +
+            (isStopped ? "project-rail-shortcut-stopped text-faint opacity-60" : "text-primary"),
           onclick: () => pick(() => attrs.onOpenApp(app)),
           oncontextmenu: (event: MouseEvent) => {
             event.preventDefault();
@@ -1287,53 +1308,31 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           // by construction, with no registry entry to record an unpin
           // against -- so only a project's rows carry the toggle.
           expanded && !isEverythingView(attrs.activeViewId)
-            ? m(
-                "button",
-                {
-                  type: "button",
-                  class:
-                    "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
-                    "text-text-faint opacity-0 hover:bg-bg-hover hover:text-text-primary " +
-                    "focus-visible:opacity-100 group-hover:opacity-100",
-                  "aria-label": `Unpin ${label}`,
-                  ...hoverTooltipAttrs(
-                    "Unpins it here only. It keeps running, and stays in every other project showing it.",
-                    "right",
-                  ),
-                  onclick: (event: MouseEvent) => {
-                    // The row underneath opens the app; the pin toggle must not.
-                    event.stopPropagation();
-                    attrs.onSetAppPinned(app, false);
-                  },
-                },
-                m.trust(railIcon("pin", ACTION_ICON_SIZE)),
-              )
+            ? railAction({
+                iconMarkup: railIcon("pin", ACTION_ICON_SIZE),
+                label: `Unpin ${label}`,
+                tooltip: "Unpins it here only. It keeps running, and stays in every other project showing it.",
+                tooltipPlacement: "right",
+                extra: "project-rail-pin",
+                onclick: () => attrs.onSetAppPinned(app, false),
+              })
             : null,
           // The app's own verbs -- Refresh, Share, Quit -- reached the same way
           // a tab-list row's are. Absent when the row is not in this view's
           // members, since there is then no object here to act on.
           expanded && memberRow !== null
-            ? m(
-                "button",
-                {
-                  type: "button",
-                  class:
-                    "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-faint " +
-                    "hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
-                    (isMenuOpenHere ? "opacity-100" : "opacity-0"),
-                  "aria-label": `Actions for ${label}`,
-                  onclick: (event: MouseEvent) => {
-                    // The row underneath opens the app; the kebab must not.
-                    event.stopPropagation();
-                    if (isMenuOpenHere) {
-                      openMenu = null;
-                      return;
-                    }
-                    openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: appRef, shortcutAppName: app.name });
-                  },
+            ? railAction({
+                iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
+                label: `Actions for ${label}`,
+                isRevealed: isMenuOpenHere,
+                onclick: (event) => {
+                  if (isMenuOpenHere) {
+                    openMenu = null;
+                    return;
+                  }
+                  openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: appRef, shortcutAppName: app.name });
                 },
-                m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
-              )
+              })
             : null,
         ],
       ),
@@ -1411,7 +1410,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         type: "button",
         // Quieter than the shortcuts above it: this is the way to the rest of
         // the machine, not one of the machine's own starting points.
-        class: `project-rail-all-apps ${ROW_CLASS} text-text-faint hover:bg-bg-hover hover:text-text-secondary`,
+        class: `project-rail-all-apps ${ROW_CLASS} text-faint hover:bg-fill-hover hover:text-secondary`,
         "aria-haspopup": "menu",
         "aria-expanded": openMenu?.kind === "allApps" ? "true" : "false",
         onclick: (event: MouseEvent) => {
@@ -1427,27 +1426,23 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   function searchPill(viewName: string): m.Vnode {
-    return m(
-      "div",
-      { class: "my-1 flex h-7 shrink-0 items-center gap-2 rounded-md bg-bg-sidebar px-2 text-text-faint" },
-      [
-        m("span", { class: "flex shrink-0 items-center" }, m.trust(railIcon("search", ACTION_ICON_SIZE))),
-        m("input", {
-          type: "text",
-          class:
-            `project-rail-search min-w-0 flex-1 bg-transparent ${ROW_TEXT_CLASS} text-text-primary outline-none ` +
-            "placeholder:text-text-faint",
-          placeholder: `Find a tab in ${viewName}`,
-          value: searchQuery,
-          oninput: (event: InputEvent) => {
-            searchQuery = (event.target as HTMLInputElement).value;
-          },
-          onkeydown: (event: KeyboardEvent) => {
-            if (event.key === "Escape") searchQuery = "";
-          },
-        }),
-      ],
-    );
+    return m("div", { class: "my-1 flex h-7 shrink-0 items-center gap-2 rounded-md bg-sidebar px-2 text-faint" }, [
+      m("span", { class: "flex shrink-0 items-center" }, m.trust(railIcon("search", ACTION_ICON_SIZE))),
+      m("input", {
+        type: "text",
+        class:
+          `project-rail-search min-w-0 flex-1 bg-transparent ${ROW_TEXT_CLASS} text-primary outline-none ` +
+          "placeholder:text-faint",
+        placeholder: `Find a tab in ${viewName}`,
+        value: searchQuery,
+        oninput: (event: InputEvent) => {
+          searchQuery = (event.target as HTMLInputElement).value;
+        },
+        onkeydown: (event: KeyboardEvent) => {
+          if (event.key === "Escape") searchQuery = "";
+        },
+      }),
+    ]);
   }
 
   /** A tab-list label with the searched-for substrings picked out. */
@@ -1477,8 +1472,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       m("input", {
         type: "text",
         class:
-          `min-w-0 flex-1 rounded border border-border bg-bg-sidebar px-1 ${ROW_TEXT_CLASS} ` +
-          "text-text-primary outline-none",
+          `min-w-0 flex-1 rounded border border-default bg-sidebar px-1 ${ROW_TEXT_CLASS} ` +
+          "text-primary outline-none",
         value: renameDraft,
         oncreate: (vnode: m.VnodeDOM) => {
           const input = vnode.dom as HTMLInputElement;
@@ -1512,12 +1507,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         // once, so marking one row as "the" selection would misread. Hover is
         // the only fill.
         class:
-          `project-rail-tab group ${ROW_CLASS} pr-1 hover:bg-bg-hover ` +
+          `project-rail-tab group ${ROW_CLASS} pr-1 hover:bg-fill-hover ` +
           (row.stoppedDetail !== undefined
-            ? "project-rail-tab-stopped text-text-faint opacity-60"
+            ? "project-rail-tab-stopped text-faint opacity-60"
             : row.isOpen
-              ? "text-text-primary"
-              : "text-text-faint"),
+              ? "text-primary"
+              : "text-faint"),
         ...(row.stoppedDetail === undefined ? {} : hoverTooltipAttrs(`${row.label} — ${row.stoppedDetail}`, "right")),
         onclick: () =>
           pick(() => {
@@ -1551,50 +1546,29 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         // home: an object leaves it only by being destroyed.
         isEverythingView(attrs.activeViewId) || hasMenu
           ? null
-          : m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "project-rail-remove flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
-                  "text-text-faint hover:bg-bg-hover hover:text-text-primary " +
-                  "focus-visible:opacity-100 group-hover:opacity-100 opacity-0",
-                "aria-label": `Remove ${row.label} from this project`,
-                ...hoverTooltipAttrs(
-                  "Removes it from this project only. It keeps running, and stays in Everything and in any " +
-                    "other project showing it.",
-                  "right",
-                ),
-                onclick: (event: MouseEvent) => {
-                  // The row underneath opens the object; this must not.
-                  event.stopPropagation();
-                  attrs.onRemoveFromView(row);
-                },
-              },
-              m.trust(railIcon("remove-from-view", ACTION_ICON_SIZE)),
-            ),
+          : railAction({
+              iconMarkup: railIcon("remove-from-view", ACTION_ICON_SIZE),
+              label: `Remove ${row.label} from this project`,
+              tooltip:
+                "Removes it from this project only. It keeps running, and stays in Everything and in any " +
+                "other project showing it.",
+              tooltipPlacement: "right",
+              extra: "project-rail-remove",
+              onclick: () => attrs.onRemoveFromView(row),
+            }),
         hasMenu
-          ? m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-faint " +
-                  "hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
-                  (isMenuOpenHere ? "opacity-100" : "opacity-0"),
-                "aria-label": `Actions for ${row.label}`,
-                onclick: (event: MouseEvent) => {
-                  // The row underneath opens the object; the kebab must not.
-                  event.stopPropagation();
-                  if (isMenuOpenHere) {
-                    openMenu = null;
-                    return;
-                  }
-                  openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: row.ref });
-                },
+          ? railAction({
+              iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
+              label: `Actions for ${row.label}`,
+              isRevealed: isMenuOpenHere,
+              onclick: (event) => {
+                if (isMenuOpenHere) {
+                  openMenu = null;
+                  return;
+                }
+                openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: row.ref });
               },
-              m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
-            )
+            })
           : null,
       ],
     );
@@ -1621,7 +1595,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     if (results.length === 0) {
       return m(
         "div",
-        { class: `px-2 py-2 ${ROW_TEXT_CLASS} text-text-faint` },
+        { class: `px-2 py-2 ${ROW_TEXT_CLASS} text-faint` },
         listedRows.length === 0 ? "Nothing here yet." : "No tabs match that.",
       );
     }
@@ -1685,7 +1659,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       {
         class: MENU_CARD_CLASS,
         role: options.role,
-        style: `left: 0; top: 0; ${options.width === null ? "" : `width: ${options.width}px;`} ${MENU_SHADOW_STYLE}`,
+        style: `left: 0; top: 0; ${options.width === null ? "" : `width: ${options.width}px;`}`,
         oncreate: place,
         onupdate: place,
       },
@@ -1697,9 +1671,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     iconMarkup: string | null;
     label: string;
     isDestructive?: boolean;
-    // Tertiary at rest ("New project" is the one user today), text-text-faint
-    // -- but reads as clickable rather than disabled, so it goes fully
-    // primary on hover rather than staying faint.
+    // Tertiary at rest, text-faint -- but reads as clickable rather than
+    // disabled, so it goes fully primary on hover rather than staying faint.
     isQuiet?: boolean;
     // Rendered faint and inert: the verb exists but cannot act right now
     // ("Focus last X" while the view shows no X). Distinct from isQuiet,
@@ -1718,12 +1691,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     iconBoxClass?: string;
   }): m.Vnode {
     const tone = options.isDisabled
-      ? "project-rail-menu-item-disabled text-text-faint cursor-default hover:bg-transparent"
+      ? "project-rail-menu-item-disabled text-faint cursor-default hover:bg-transparent"
       : options.isDestructive
-        ? "text-red-600"
+        ? "text-danger"
         : options.isQuiet
-          ? "text-text-faint hover:text-text-primary"
-          : "text-text-primary";
+          ? "text-faint hover:text-primary"
+          : "text-primary";
     return m(
       "div",
       {
@@ -1762,23 +1735,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     onOpen: (project: ProjectInfo) => void,
     isStacked: boolean,
   ): m.Vnode {
-    return m(
-      "button",
-      {
-        type: "button",
-        class:
-          "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-faint opacity-0 " +
-          "hover:bg-bg-hover hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
-          (isStacked ? "absolute inset-0" : ""),
-        "aria-label": `Edit ${project.name}`,
-        ...hoverTooltipAttrs(`Edit ${project.name}`),
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
-          onOpen(project);
-        },
-      },
-      m.trust(icon("edit", { size: ACTION_ICON_SIZE, strokeWidth: 1.75 })),
-    );
+    return railAction({
+      iconMarkup: icon("edit", { size: ACTION_ICON_SIZE, strokeWidth: 1.75 }),
+      label: `Edit ${project.name}`,
+      tooltip: `Edit ${project.name}`,
+      extra: isStacked ? "absolute inset-0" : "",
+      onclick: () => onOpen(project),
+    });
   }
 
   /**
@@ -1804,7 +1767,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         ? m(
             "span",
             {
-              class: "project-rail-check flex h-5 w-5 shrink-0 items-center justify-center text-text-secondary",
+              class: "project-rail-check flex h-5 w-5 shrink-0 items-center justify-center text-secondary",
             },
             m.trust(icon("check", { size: ACTION_ICON_SIZE })),
           )
@@ -1817,7 +1780,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         {
           class:
             "project-rail-check pointer-events-none absolute inset-0 flex items-center justify-center " +
-            "text-text-secondary transition-opacity duration-100 group-hover:opacity-0",
+            "text-secondary transition-opacity duration-(--dur-base) group-hover:opacity-0",
         },
         m.trust(icon("check", { size: ACTION_ICON_SIZE })),
       ),
@@ -1871,8 +1834,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             void createNewProject(attrs);
           },
         }),
-        menuError === null ? null : m("div", { class: "px-3 py-1 text-[12px] text-red-600" }, menuError),
-        m("div", { class: "my-1 border-t border-border" }),
+        menuError === null ? null : m("div", { class: "px-3 py-1 text-[12px] text-danger" }, menuError),
+        m("div", { class: menuDividerClass() }),
         // Everything sits below the divider because it is not one of the
         // projects -- it is the unfiltered view they all live inside -- but it
         // is picked exactly like one, and has a dock of its own.
@@ -1934,7 +1897,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       children: [
         ...entries.map((entry) =>
           entry === OBJECT_MENU_DIVIDER
-            ? m("div", { class: "my-1 border-t border-border" })
+            ? m("div", { class: menuDividerClass() })
             : menuRow({
                 iconMarkup: icon(entry.iconName, { size: ACTION_ICON_SIZE }),
                 label: entry.label,
@@ -1942,7 +1905,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 onclick: () => pick(entry.run),
               }),
         ),
-        ...(shortcutEntries.length === 0 ? [] : [m("div", { class: "my-1 border-t border-border" })]),
+        ...(shortcutEntries.length === 0 ? [] : [m("div", { class: menuDividerClass() })]),
         ...shortcutEntries.map((entry) =>
           menuRow({
             iconMarkup: null,
@@ -2133,8 +2096,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 // sees is the 35px .dv-tab, not the 34px label box inside it.
                 // Flush at top-0 the header rode 1px above the chips; at
                 // top-[2px] (aligned to the label box) it rode 1px below.
-                "machine-sidebar absolute top-[1px] bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border " +
-                `${RAIL_PADDING_CLASS} transition-[width] duration-150 ease-out ` +
+                //
+                // `select-none`: the expanded rail overlays the panels to its
+                // right, so a drag starting on a row must not select the
+                // labels it sweeps across.
+                "machine-sidebar absolute top-[1px] bottom-[4px] left-0 z-(--z-sticky) flex flex-col overflow-hidden border select-none " +
+                `${RAIL_PADDING_CLASS} transition-[width] duration-(--dur-base) ease-out ` +
                 (expanded ? EXPANDED_CLASS : COLLAPSED_CLASS),
             },
             [
@@ -2144,7 +2111,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               // header and the shortcuts), so removing it collapsed rather
               // than just hiding its line would shift those shared rows down
               // by its height the instant the rail expands.
-              m("div", { class: `${DIVIDER_CLASS} mb-1 ` + (expanded ? "border-border" : "border-transparent") }),
+              m("div", { class: `${DIVIDER_CLASS} mb-1 ` + (expanded ? "border-default" : "border-transparent") }),
               shortcuts(attrs, shortcutApps),
               expanded ? allAppsRow() : null,
               expanded ? m("div", { class: `${DIVIDER_CLASS} mt-1` }) : null,

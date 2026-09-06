@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => {
     key: () => null,
     length: 0,
   } as Storage;
-  // The notice registers a document keydown listener for Escape; capture it so a test can fire it.
+  // The node test env has no document; provide a minimal one for code that wires
+  // document listeners when lifecycle hooks actually run (they don't in these
+  // vnode-only tests, but imports must not explode).
   const listeners = new Map<string, ((event: unknown) => void)[]>();
   globalThis.document ??= {
     addEventListener: (type: string, fn: (event: unknown) => void) => {
@@ -128,12 +130,24 @@ function flatten(node: unknown): AnyVnode[] {
     return node.flatMap(flatten);
   }
   const vnode = node as AnyVnode;
-  // Descend into component vnodes by running their view. The notices are their own component now
-  // (NoticeDialog), so their markup does not exist in this tree until it is asked for -- without
-  // this, every assertion about a notice's wording or buttons would silently see nothing.
+  // A closure-component vnode (e.g. m(Button, ...)) carries no markup of its
+  // own -- its view runs only when mithril renders it -- so expand it and
+  // flatten what it renders.
+  if (typeof vnode.tag === "function") {
+    const component = (vnode.tag as (v: AnyVnode) => { view: (v: AnyVnode) => unknown })(vnode);
+    return flatten(component.view(vnode));
+  }
+  // Likewise for object component vnodes (an instance with a view method),
+  // e.g. NoticeDialog: their markup does not exist in this tree until the
+  // view is asked for it.
   const tag = vnode.tag as unknown;
   if (tag !== null && typeof tag === "object" && typeof (tag as { view?: unknown }).view === "function") {
-    const rendered = (tag as { view: (v: unknown) => unknown }).view({ attrs: vnode.attrs ?? {} });
+    // Children come along too: NoticeDialog renders its body through the Modal
+    // shell, which reads it off vnode.children.
+    const rendered = (tag as { view: (v: unknown) => unknown }).view({
+      attrs: vnode.attrs ?? {},
+      children: vnode.children,
+    });
     return [vnode, ...flatten(rendered)];
   }
   return [vnode, ...flatten(vnode.children)];
@@ -156,6 +170,38 @@ function findByClass(node: unknown, className: string): AnyVnode | undefined {
   });
 }
 
+/** The first onEscape guard in the tree -- the attr a dialog hands the Modal shell. Walks the
+ *  raw vnodes rather than flatten(), which drops closure-component vnodes (Modal is one). */
+function findEscapeGuard(node: unknown): (() => void) | undefined {
+  if (node === null || node === undefined || typeof node !== "object") {
+    return undefined;
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findEscapeGuard(child);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  const vnode = node as AnyVnode;
+  if (typeof vnode.attrs?.onEscape === "function") {
+    return vnode.attrs.onEscape as () => void;
+  }
+  if (typeof vnode.tag === "function") {
+    const component = (vnode.tag as (v: AnyVnode) => { view: (v: AnyVnode) => unknown })(vnode);
+    return findEscapeGuard(component.view(vnode));
+  }
+  const tag = vnode.tag as unknown;
+  if (tag !== null && typeof tag === "object" && typeof (tag as { view?: unknown }).view === "function") {
+    const rendered = (tag as { view: (v: unknown) => unknown }).view({
+      attrs: vnode.attrs ?? {},
+      children: vnode.children,
+    });
+    return findEscapeGuard(rendered);
+  }
+  return findEscapeGuard(vnode.children);
+}
+
 /** Let queued promise callbacks run. The notice's buttons are `() => void action()`, which is
  *  right for mithril but discards the promise, so awaiting the handler does not await the work. */
 async function flushAsync(): Promise<void> {
@@ -172,6 +218,11 @@ function findByTag(node: unknown, tag: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => vnode.tag === tag);
 }
 
+/** Find a vnode by an exact attribute value (e.g. a stable aria-label). */
+function findByAttr(node: unknown, attr: string, value: string): AnyVnode | undefined {
+  return flatten(node).find((vnode) => (vnode.attrs ?? {})[attr] === value);
+}
+
 /** Render the composer for one agent, type `text`, then press the send button. */
 async function typeAndSend(component: m.Component<{ agentId: string | null }>, agentId: string, text: string) {
   const render = () => component.view!({ attrs: { agentId } } as never);
@@ -179,7 +230,7 @@ async function typeAndSend(component: m.Component<{ agentId: string | null }>, a
   const oninput = textarea?.attrs?.oninput as ((event: unknown) => void) | undefined;
   oninput?.({ target: { value: text, style: {}, scrollHeight: 10 } });
 
-  const sendButton = findByClass(render(), "message-input-send-button");
+  const sendButton = findByAttr(render(), "aria-label", "Send message");
   const onclick = sendButton?.attrs?.onclick as (() => Promise<void>) | undefined;
   expect(onclick, "send button should be present once text is typed").toBeTruthy();
   await onclick!();
@@ -231,26 +282,15 @@ describe("MessageInput send guard", () => {
   it("dismisses the notice on Escape", async () => {
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "/status");
-    // Run the overlay's oncreate so the keydown listener registers, as mithril would on mount.
-    const overlay = findByClass(after, "custom-url-dialog-overlay");
-    (overlay?.attrs?.oncreate as (() => void) | undefined)?.();
-
-    const keydownHandlers = mocks.listeners.get("keydown") ?? [];
-    expect(keydownHandlers.length, "notice should register a keydown listener").toBeGreaterThan(0);
-    keydownHandlers.forEach((handler) => handler({ key: "Escape" }));
+    // The notice hands its Escape guard to the Modal shell via onEscape; the
+    // shell's real document listener is covered in NoticeDialog.test.ts (these
+    // tests render vnodes with no DOM), so fire the guard directly here.
+    const escapeGuard = findEscapeGuard(after);
+    expect(escapeGuard, "notice should hand the shell an Escape guard").toBeTypeOf("function");
+    escapeGuard!();
 
     const reRendered = component.view!({ attrs: { agentId: "agent-1" } } as never);
     expect(renderedText(reRendered)).not.toContain("can't be sent from chat");
-  });
-
-  it("removes the keydown listener when the notice goes away", async () => {
-    const component = MessageInput();
-    const after = await typeAndSend(component, "agent-1", "/status");
-    const overlay = findByClass(after, "custom-url-dialog-overlay");
-    (overlay?.attrs?.oncreate as (() => void) | undefined)?.();
-    const registered = (mocks.listeners.get("keydown") ?? []).length;
-    (overlay?.attrs?.onremove as (() => void) | undefined)?.();
-    expect((mocks.listeners.get("keydown") ?? []).length).toBe(registered - 1);
   });
 
   it("sends a command another harness never declared", async () => {
@@ -279,7 +319,7 @@ describe("MessageInput send guard", () => {
 
     // The notice offers the provider chooser, which signs in to an account of its
     // own rather than running the agent's auth flow inside the agent's terminal.
-    const openButton = findByClass(after, "custom-url-dialog-open");
+    const openButton = findByClass(after, "btn--primary");
     (openButton?.attrs?.onclick as (() => void) | undefined)?.();
     expect(mocks.openProviderChooser).toHaveBeenCalled();
   });
@@ -340,7 +380,9 @@ describe("MessageInput stop-to-composer handback", () => {
     agentId: string,
   ): Promise<AnyVnode | undefined> {
     const render = () => component.view!({ attrs: { agentId } } as never);
-    const stopButton = findByClass(render(), "message-input-stop-button");
+    // The label states what the press will do; with nothing queued (this mock
+    // agent has no queued_messages) it reads as a plain interrupt.
+    const stopButton = findByAttr(render(), "aria-label", "Interrupt agent");
     const onclick = stopButton?.attrs?.onclick as (() => Promise<void>) | undefined;
     expect(onclick, "stop button should be present while the agent works").toBeTruthy();
     await onclick!();
@@ -398,7 +440,7 @@ describe("MessageInput send failure notice", () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
-    const okButton = findByClass(after, "custom-url-dialog-cancel");
+    const okButton = findByClass(after, "notice-dismiss");
     expect(okButton, "the notice should offer an OK button").toBeTruthy();
     (okButton!.attrs!.onclick as () => void)();
     const dismissed = component.view!({ attrs: { agentId: "agent-1" } } as never);

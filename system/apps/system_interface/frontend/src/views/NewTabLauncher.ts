@@ -35,13 +35,15 @@ import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } fro
 import { getApps } from "../models/AgentManager";
 import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 import type { MachineInventory, MemberKind } from "../models/Projects";
-import { serviceIconMarkup } from "./appIcon";
+import { serviceIconMarkup } from "./components/appIcon";
 import { getAccounts, getSelectedAccount, openProviderChooser, selectAccount } from "../models/Providers";
 import { Portal } from "./portal";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
+import { icon } from "./components/icons";
+import { buttonClass } from "./components/Button";
 import { SHORTCUT_TOOLTIPS } from "./Sidebar";
 
 /** What one "Open new" tile starts, as data rather than as an encoded name.
@@ -97,7 +99,7 @@ const ON_MACHINE_TITLE = "On this machine";
 
 // The small-caps heading over each block. Uppercasing is the stylesheet's job,
 // so the titles stay readable as text (and as test assertions).
-const SECTION_HEADING_CLASS = "text-text-faint text-[11px] font-semibold tracking-wider uppercase";
+const SECTION_HEADING_CLASS = "type-section text-faint";
 
 /** The order kinds are offered in, in the filter menu and in kindsInRows. */
 const KIND_ORDER: readonly MemberKind[] = ["chat", "browser", "terminal", "app", "url"];
@@ -449,7 +451,7 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
         {
           type: "button",
           class:
-            "text-text-secondary hover:bg-bg-hover hover:text-text-primary flex min-w-0 max-w-[190px] " +
+            "text-secondary hover:bg-fill-hover hover:text-primary flex min-w-0 max-w-[190px] " +
             "cursor-pointer items-center gap-1 truncate bg-transparent py-0 pr-2 pl-3 text-[13px] focus:outline-none",
           "aria-label": "Provider for the new chat",
           "aria-expanded": open ? "true" : "false",
@@ -468,7 +470,7 @@ function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => vo
         },
         [
           m("span", { class: "min-w-0 truncate" }, selected?.label ?? "No provider yet"),
-          m("span", { class: "shrink-0 text-text-faint" }, m.trust(icon("chevron-down", { size: 14 }))),
+          m("span", { class: "shrink-0 text-faint" }, m.trust(icon("chevron-down", { size: 14 }))),
         ],
       );
 
@@ -572,7 +574,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "label",
       {
         key: kind,
-        class: "flex h-8 cursor-pointer items-center gap-2 px-3 text-[13px] text-text-primary hover:bg-bg-hover",
+        class: menuRowClass({ extra: "text-(length:--font-size-row) text-primary" }),
       },
       [
         m("span", { class: "relative flex h-4 w-4 shrink-0 items-center justify-center" }, [
@@ -588,7 +590,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             },
             class:
               "absolute inset-0 m-0 h-4 w-4 cursor-pointer appearance-none rounded border " +
-              (isShown ? "border-accent bg-accent" : "border-border bg-surface"),
+              (isShown ? "border-accent bg-accent" : "border-default bg-surface"),
           }),
           isShown
             ? m(
@@ -600,7 +602,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         ]),
         m(
           "span",
-          { class: "text-text-faint flex w-5 shrink-0 items-center justify-center" },
+          { class: "text-faint flex w-5 shrink-0 items-center justify-center" },
           m.trust(kindIconMarkup(kind)),
         ),
         LAUNCHER_KIND_PLURAL_LABELS[kind],
@@ -616,8 +618,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     return m(
       "div",
       {
-        class:
-          "absolute top-full right-0 z-30 mt-1 min-w-[170px] rounded-lg border border-border bg-surface py-1 shadow-lg",
+        class: menuCardClass("absolute top-full right-0 mt-1 min-w-[170px]"),
         oncreate: (vnode: m.VnodeDOM) => {
           menuElement = vnode.dom as HTMLElement;
           document.addEventListener("pointerdown", onDocumentPointerDown);
@@ -631,7 +632,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       },
       [
         kindsInRows(section.rows).map((kind) => filterMenuRow(section, kind)),
-        m("div", { class: "my-1 border-t border-border" }),
+        m("div", { class: menuDividerClass() }),
         // Muted like a secondary action either way; only clickable (and only
         // wearing the rows' hover) while a filter is actually on.
         m(
@@ -640,8 +641,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             type: "button",
             disabled: isPristine,
             class:
-              "flex h-8 w-full items-center px-3 text-left text-[13px] " +
-              (isPristine ? "text-text-faint cursor-default" : "text-text-secondary cursor-pointer hover:bg-bg-hover"),
+              "flex h-8 w-full items-center px-3 text-left text-(length:--font-size-row) " +
+              (isPristine ? "text-faint cursor-default" : "text-secondary cursor-pointer hover:bg-fill-hover"),
             onclick: () => resetHiddenKinds(hidden),
           },
           "Reset filters",
@@ -662,24 +663,16 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         type: "button",
         class:
           "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
-          "text-[13px] hover:bg-bg-hover " +
-          (stoppedApp !== null ? "new-tab-launcher-row-stopped text-text-faint opacity-60" : "text-text-primary"),
+          "text-(length:--font-size-row) hover:bg-fill-hover " +
+          (stoppedApp !== null ? "new-tab-launcher-row-stopped text-faint opacity-60" : "text-primary"),
         ...(stoppedApp !== null ? hoverTooltipAttrs(`${row.label} — ${appStoppedDetail(stoppedApp)}`) : {}),
         onclick: () => onOpen(row),
       },
       [
-        m(
-          "span",
-          { class: "text-text-faint flex w-5 shrink-0 items-center justify-center" },
-          m.trust(rowIconMarkup(row)),
-        ),
+        m("span", { class: "text-faint flex w-5 shrink-0 items-center justify-center" }, m.trust(rowIconMarkup(row))),
         m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
-        m("span", { class: "text-text-faint w-24 shrink-0 truncate" }, LAUNCHER_KIND_LABELS[row.kind]),
-        m(
-          "span",
-          { class: "text-text-faint w-28 shrink-0 truncate text-right" },
-          formatRecency(row.lastActiveMs, nowMs),
-        ),
+        m("span", { class: "text-faint w-24 shrink-0 truncate" }, LAUNCHER_KIND_LABELS[row.kind]),
+        m("span", { class: "text-faint w-28 shrink-0 truncate text-right" }, formatRecency(row.lastActiveMs, nowMs)),
       ],
     );
   }
@@ -701,10 +694,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           "button",
           {
             type: "button",
+            class: buttonClass("ghost", { icon: true, xs: true }),
             "aria-expanded": openFilterFor === section.key ? "true" : "false",
-            class:
-              "text-text-faint flex h-6 w-6 cursor-pointer items-center justify-center rounded " +
-              "hover:bg-bg-hover hover:text-text-primary",
             onclick: () => {
               openFilterFor = openFilterFor === section.key ? null : section.key;
             },
@@ -715,7 +706,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         openFilterFor === section.key ? filterMenu(section) : null,
       ]),
       visible.length === 0
-        ? m("p", { class: "text-text-faint px-2 py-1 text-[13px]" }, emptyMessage)
+        ? m("p", { class: "text-faint px-2 py-1 text-(length:--font-size-row)" }, emptyMessage)
         : visible.map((row) => memberRow(row, nowMs, onOpen)),
     ]);
   }
@@ -757,9 +748,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                   // account name -- the wider half -- wins the space and truncates the label to
                   // a letter or two.
                   class:
-                    "border-border flex h-9 items-stretch overflow-hidden rounded-lg border " +
+                    "border-default flex h-9 items-stretch overflow-hidden rounded-lg border " +
                     (isChatTile ? "min-w-0 flex-[1.7]" : "min-w-0 flex-1") +
-                    (isDisabled ? " text-text-faint" : " text-text-primary"),
+                    (isDisabled ? " text-faint" : " text-primary"),
                 },
                 [
                   m(
@@ -769,8 +760,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                       "aria-disabled": isDisabled ? "true" : undefined,
                       class:
                         "new-tab-launcher-tile flex min-w-0 flex-1 items-center justify-center gap-2 px-4 " +
-                        "text-[13px] font-medium " +
-                        (isDisabled ? "cursor-not-allowed" : "hover:bg-bg-hover cursor-pointer"),
+                        "text-(length:--font-size-row) font-medium " +
+                        (isDisabled ? "cursor-not-allowed" : "hover:bg-fill-hover cursor-pointer"),
                       onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
                       // Every idle tile explains what it starts (the rail's own
                       // copy for the same four kinds), except the unbacked file
@@ -791,7 +782,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                     [
                       m(
                         "span",
-                        { class: "text-text-faint flex shrink-0 items-center" },
+                        { class: "text-faint flex shrink-0 items-center" },
                         m.trust(launcherIcon(tile.target.kind, GLYPH_SIZE)),
                       ),
                       // Truncates rather than wrapping: a second line would change
