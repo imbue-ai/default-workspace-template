@@ -623,6 +623,33 @@ def test_plan_json_describes_the_run_without_writing(
     )
 
 
+def test_plan_text_describes_the_run_without_writing(
+    legacy_layout_dir: Path,
+    tmp_path: Path,
+    migration_registry: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, state_dir, apps_dir = _run(
+        legacy_layout_dir, tmp_path, migration_registry, command="plan"
+    )
+
+    assert code == 0
+    assert not state_dir.exists() and not apps_dir.exists()
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == f"source: {legacy_layout_dir} (present)"
+    assert "project project-1: 5 tab(s), 5 shortcut(s)" in lines
+    assert "  dropped member url:abcd1234" in lines
+    assert "seed project-1 desktop: 5 tab(s); 3 panel(s) dropped" in lines
+    assert (
+        "seed everything desktop: skipped (no panel maps to an instance); 1 panel(s) dropped"
+        in lines
+    )
+    assert "files: 1 record(s); terminals: 1 record(s)" in lines
+    assert any(
+        line.startswith("note: ") and "research.mobile.json" in line for line in lines
+    )
+
+
 def test_the_source_comes_from_the_mngr_environment(tmp_path: Path) -> None:
     environ = {
         "MNGR_HOST_DIR": str(tmp_path / "host"),
