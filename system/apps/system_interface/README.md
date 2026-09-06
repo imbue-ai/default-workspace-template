@@ -15,7 +15,8 @@ Beside the document the process serves `/api/health`
 browser-side contract module at `/_static/app_contract.js`, the shell's
 routes (apps, instances relay, projects, layouts, tabs, client activity),
 and the WebSocket (`/api/ws`: `apps_updated`, `projects_updated`,
-`layout_op`, `tab_rebound`). The frontend (`frontend/`, one member of the
+`layout_updated`, `active_view_changed`, `layout_op`, `tab_rebound`; contracts.md
+section 8). The frontend (`frontend/`, one member of the
 npm workspace rooted at `system/package.json`) builds `index.html` and the
 contract library into `imbue/system_interface/static/`; the design system,
 the base helpers, and the contract modules it shares with the chat page live
@@ -401,9 +402,11 @@ npm run build
 ```
 
 This compiles the frontend into `imbue/system_interface/static/`. The
-`postbuild` step stamps the output with `git rev-parse HEAD:./` -- the hash of
-the *committed* frontend tree, not of the files just built. A build from a
-frontend tree with uncommitted changes is stamped as its last commit, so the
+`postbuild` step stamps the output with three `git rev-parse` tree hashes --
+this frontend directory, the shared `system/libs/workspace_ui`, and the
+workspace's `package-lock.json`, each as *committed*, not as the files just
+built. A build from a tree with uncommitted changes is stamped as its last
+commit, so the
 update apply's stamp check (which compares it against the merged tree) cannot
 tell that bundle from one built at that commit. Commit before building a
 bundle that will be handed to the apply.
