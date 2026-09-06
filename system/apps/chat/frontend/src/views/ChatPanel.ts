@@ -505,8 +505,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   function renderMessages(agentId: string): m.Vnode {
-    // Nothing is loaded for a chat that is not an agent yet: the first load runs on the
-    // render after the agent registers (a load before that would 404 and latch not-found).
+    // A provisional record short-circuits the load: there is no agent to read yet. A load that
+    // raced ahead of the record (a page opened before the socket replayed it) 404s and latches
+    // not-found until the agent registers, which retries it (retryAfterAgentResolved).
     const proto = provisionalRecord(agentId);
     if (proto !== null) {
       return renderProvisional(agentId, proto);
