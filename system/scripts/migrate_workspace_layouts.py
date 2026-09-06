@@ -862,50 +862,20 @@ def _skipped_seed(
     )
 
 
-def plan_migration(
+def _plan_seeds(
     source_dir: Path,
     state_dir: Path,
-    registry_path: Path,
+    view_ids: Sequence[str],
+    last_used_ms_by_ref: dict[str, int],
     now_iso: str,
     is_forced: bool,
     mint: Callable[[], str],
-) -> MigrationPlan:
-    """Read the old store and compute every output, without writing anything."""
-    notes: list[str] = []
-    marker_path = state_dir / MARKER_FILENAME
-    is_already_migrated = marker_path.exists() and not is_forced
-    meta = _read_json_object(source_dir / LEGACY_META_FILENAME, notes)
-    is_source_present = source_dir.is_dir() and meta is not None
-    if not is_source_present:
-        return MigrationPlan(
-            source_dir=source_dir,
-            is_source_present=False,
-            is_already_migrated=is_already_migrated,
-            projects=(),
-            is_projects_skipped=False,
-            projects_note="",
-            seeds=(),
-            files_records=(),
-            terminal_records=(),
-            notes=tuple(notes),
-        )
-    title_by_ref = _read_ref_map(
-        source_dir / LEGACY_TITLES_FILENAME, "title_by_ref", str, notes
-    )
-    last_used_ms_by_ref = _read_ref_map(
-        source_dir / LEGACY_LAST_USED_FILENAME, "last_used_ms_by_ref", int, notes
-    )
-    location_by_ref = _read_ref_map(
-        source_dir / LEGACY_LOCATIONS_FILENAME, "location_by_ref", str, notes
-    )
-    registry_rows = read_registry_rows(registry_path, notes)
-    legacy_projects = read_legacy_projects(meta, notes)
-
-    # Every view's seeds: each project's, then Everything's.
+    notes: list[str],
+) -> list[SeedPlan]:
+    """Each view's per-device seeds, from the content files it has; what cannot be read or shows
+    nothing is a skipped seed, and an existing seed is skipped unless forced."""
     seeds: list[SeedPlan] = []
-    for view_id in [project.project_id for project in legacy_projects] + [
-        EVERYTHING_VIEW_ID
-    ]:
+    for view_id in view_ids:
         for device, suffix in LEGACY_CONTENT_SUFFIX_BY_DEVICE.items():
             content_path = source_dir / LEGACY_PROJECTS_SUBDIR / f"{view_id}{suffix}"
             seed_path = state_dir / LAYOUTS_DIRNAME / view_id / f"seed.{device}.json"
@@ -946,6 +916,85 @@ def plan_migration(
                     note="seed already exists" if is_existing else "",
                 )
             )
+    return seeds
+
+
+def _projects_note(state_dir: Path, is_forced: bool, notes: list[str]) -> str:
+    """Why the projects file is kept as it is, or "" when the run writes it."""
+    projects_notes: list[str] = []
+    existing_projects = _read_json_object(state_dir / PROJECTS_FILENAME, projects_notes)
+    notes.extend(projects_notes)
+    if is_forced:
+        return ""
+    if projects_notes:
+        return "it cannot be read; pass --force to overwrite it"
+    if _has_projects(existing_projects):
+        return "it already holds projects"
+    return ""
+
+
+def _referenced_addresses(
+    projects: Sequence[ProjectPlan], seeds: Sequence[SeedPlan]
+) -> list[str]:
+    """Every address a project's tab set or a seed docks, with repeats."""
+    referenced: list[str] = []
+    for project_plan in projects:
+        referenced.extend(project_plan.document["tabs"])
+    for seed in seeds:
+        referenced.extend(seed.addresses)
+    return referenced
+
+
+def plan_migration(
+    source_dir: Path,
+    state_dir: Path,
+    registry_path: Path,
+    now_iso: str,
+    is_forced: bool,
+    mint: Callable[[], str],
+) -> MigrationPlan:
+    """Read the old store and compute every output, without writing anything."""
+    notes: list[str] = []
+    marker_path = state_dir / MARKER_FILENAME
+    is_already_migrated = marker_path.exists() and not is_forced
+    meta = _read_json_object(source_dir / LEGACY_META_FILENAME, notes)
+    is_source_present = source_dir.is_dir() and meta is not None
+    if not is_source_present:
+        return MigrationPlan(
+            source_dir=source_dir,
+            is_source_present=False,
+            is_already_migrated=is_already_migrated,
+            projects=(),
+            is_projects_skipped=False,
+            projects_note="",
+            seeds=(),
+            files_records=(),
+            terminal_records=(),
+            notes=tuple(notes),
+        )
+    title_by_ref = _read_ref_map(
+        source_dir / LEGACY_TITLES_FILENAME, "title_by_ref", str, notes
+    )
+    last_used_ms_by_ref = _read_ref_map(
+        source_dir / LEGACY_LAST_USED_FILENAME, "last_used_ms_by_ref", int, notes
+    )
+    location_by_ref = _read_ref_map(
+        source_dir / LEGACY_LOCATIONS_FILENAME, "location_by_ref", str, notes
+    )
+    registry_rows = read_registry_rows(registry_path, notes)
+    legacy_projects = read_legacy_projects(meta, notes)
+
+    # Every view's seeds: each project's, then Everything's.
+    seeds = _plan_seeds(
+        source_dir,
+        state_dir,
+        [project.project_id for project in legacy_projects] + [EVERYTHING_VIEW_ID],
+        last_used_ms_by_ref,
+        now_iso,
+        is_forced,
+        mint,
+        notes,
+    )
 
     # The projects, with the addresses their seeds dock folded into their tab sets.
     projects: list[ProjectPlan] = []
@@ -957,24 +1006,10 @@ def plan_migration(
             for address in seed.addresses
         ]
         projects.append(build_project_plan(project, seed_addresses, registry_rows))
-    projects_notes: list[str] = []
-    existing_projects = _read_json_object(state_dir / PROJECTS_FILENAME, projects_notes)
-    notes.extend(projects_notes)
-    if is_forced:
-        projects_note = ""
-    elif projects_notes:
-        projects_note = "it cannot be read; pass --force to overwrite it"
-    elif _has_projects(existing_projects):
-        projects_note = "it already holds projects"
-    else:
-        projects_note = ""
+    projects_note = _projects_note(state_dir, is_forced, notes)
 
     # The app stores: one record per instance any project or seed references.
-    referenced: list[str] = []
-    for project_plan in projects:
-        referenced.extend(project_plan.document["tabs"])
-    for seed in seeds:
-        referenced.extend(seed.addresses)
+    referenced = _referenced_addresses(projects, seeds)
     files_records = tuple(
         files_record(key, location_by_ref, last_used_ms_by_ref, now_iso)
         for key in _instance_keys_of("files", referenced)
