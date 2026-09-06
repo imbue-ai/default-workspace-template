@@ -107,6 +107,7 @@ MAX_APP_NAME_LENGTH = 32
 INSTANCE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 TMUX_SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 VIEW_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
+ACTION_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 MAX_INSTANCE_TITLE_LENGTH = 256
 MAX_LOCATION_LENGTH = 2048
@@ -658,28 +659,36 @@ def migrate_layout_content(
 # --- Projects -------------------------------------------------------------------------------
 
 
+def _is_action_id(action_id: Any) -> bool:
+    return (
+        isinstance(action_id, str)
+        and ACTION_ID_PATTERN.fullmatch(action_id) is not None
+    )
+
+
 def _pin_shortcut(
     app: str, registry_rows: Sequence[dict[str, Any]]
 ) -> tuple[str, str] | None:
     """The ``(action, mode)`` an app's pin becomes: its default action when the registry says it has
-    instances, else the synthesized ``open`` of a single-instance app."""
+    instances, else the synthesized ``open`` of a single-instance app; None (the pin is dropped) when
+    the row declares no action id the shell would read back."""
     for row in registry_rows:
         if row.get("name") != app:
             continue
         if row.get("instances") is not True:
             return OPEN_ACTION_ID, "focus"
         default_shortcut = row.get("default_shortcut")
-        if isinstance(default_shortcut, dict) and isinstance(
-            default_shortcut.get("action"), str
+        if isinstance(default_shortcut, dict) and _is_action_id(
+            default_shortcut.get("action")
         ):
             mode = default_shortcut.get("mode")
-            return default_shortcut[
-                "action"
-            ], mode if mode in SHORTCUT_MODES else "focus"
+            return default_shortcut["action"], (
+                mode if mode in SHORTCUT_MODES else "focus"
+            )
         actions = row.get("actions")
         if isinstance(actions, list):
             for action in actions:
-                if isinstance(action, dict) and isinstance(action.get("id"), str):
+                if isinstance(action, dict) and _is_action_id(action.get("id")):
                     return action["id"], "focus"
         return None
     return OPEN_ACTION_ID, "focus"
