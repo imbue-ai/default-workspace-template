@@ -80,3 +80,5 @@ The frontends are one npm workspace rooted at `system/package.json` (with `packa
 `CLAUDE.md` and `AGENTS.md` name the chat package's own `uv run pytest`; `system/apps/README.md` says an app registers its manifest from its program line or from inside its entry point; the latchkey hook's header points at the moved `permission-card.ts`.
 
 `layout.py`'s note on `self` says it resolves to the requester address the script sends and that the shell refuses it when none was sent.
+
+The root `pyproject.toml` keeps `import-linter` in its dev group: the vendored ratchet library imports it at module level, so every project's `test_ratchets.py` needs it even where no import contract is declared.

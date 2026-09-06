@@ -24,6 +24,9 @@ dev = [
     "ruff>=0.4",
     "pyright>=1.1",
     "inline-snapshot>=0.31",
+    # The vendored ratchet library (imbue_common.ratchet_testing) imports it at module level,
+    # so every project's test_ratchets.py needs it even where no import contract is declared.
+    "import-linter>=2.0",
     "tomlkit>=0.12",
     "pyyaml>=6",
     # used by test_mngr_template_stacking.py to verify .mngr/settings.toml
