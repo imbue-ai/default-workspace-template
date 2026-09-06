@@ -72,6 +72,7 @@ COPY system/libs/bootstrap/pyproject.toml /home/user/workspace/system/libs/boots
 COPY system/services/share_gateway/pyproject.toml /home/user/workspace/system/services/share_gateway/pyproject.toml
 COPY system/libs/github_sync/pyproject.toml /home/user/workspace/system/libs/github_sync/pyproject.toml
 COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/apps/system_interface/pyproject.toml
+COPY system/apps/chat/pyproject.toml /home/user/workspace/system/apps/chat/pyproject.toml
 
 # system/vendor/mngr path-dependency manifests. The root pyproject.toml's
 # [tool.uv.sources] points imbue-common, imbue-mngr, imbue-mngr-claude,
