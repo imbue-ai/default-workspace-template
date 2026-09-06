@@ -267,7 +267,8 @@ LEGACY_PANELS: dict[str, dict[str, Any]] = {
 def write_legacy_layout_dir(layout_dir: Path) -> None:
     """A pre-arc ``workspace_layout`` directory in the shape today's retired writers left: two
     projects (one with every panel kind and the overrides map, one hand-edited with the legacy
-    unpinned list and a corrupt mobile file), an Everything view showing only an ad-hoc page,
+    unpinned list, the old sessionless files viewer as a member, and a corrupt mobile file), an
+    Everything view showing only an ad-hoc page,
     and the three per-ref side stores."""
     projects_dir = layout_dir / "projects"
     projects_dir.mkdir(parents=True)
@@ -300,7 +301,7 @@ def write_legacy_layout_dir(layout_dir: Path) -> None:
                         "name": "Research",
                         "color": "purple",
                         "glyph": 42,
-                        "members": ["chat:agent-bbb"],
+                        "members": ["chat:agent-bbb", "service:files"],
                         "unpinned_shortcuts": ["files"],
                     },
                 },

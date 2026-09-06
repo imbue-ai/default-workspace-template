@@ -121,6 +121,8 @@ def test_plan_files_members_and_docked_panels_and_drops_dead_refs(
         "terminal:bad.name",
     )
     assert research.document["tabs"] == ["app:chat?instance=agent-bbb"]
+    # The old sessionless files viewer is neither a tab nor a pin.
+    assert research.dropped_members == ("service:files",)
     # A hand-edited entry falls back to the display defaults.
     assert research.document["color"] == migrate.DEFAULT_PROJECT_COLOR
     assert research.document["glyph"] == migrate.DEFAULT_PROJECT_GLYPH
@@ -142,7 +144,8 @@ def test_plan_derives_shortcuts_from_overrides_pins_and_the_registry(
         {"app": "docs", "action": "open", "mode": "new"},
         {"app": "notes", "action": "new", "mode": "focus"},
     ]
-    # The legacy unpinned list still counts.
+    # The legacy unpinned list still counts, and the bare ``service:files`` member does not
+    # pin the row back.
     assert [shortcut["app"] for shortcut in research.document["shortcuts"]] == [
         "chat",
         "terminal",
