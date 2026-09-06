@@ -6,7 +6,7 @@
  * Reached from the sidebar's switcher header context menu, and only ever for a
  * real project. Creating no longer goes through here: the switcher's "New
  * project" mints "Project N" with the next unused glyph on the spot, so the
- * user lands in the new project's first chat instead of on a form. Everything
+ * user lands on the new project's New Tab page instead of on a form. Everything
  * never reaches here either -- it is a view rather than a project, with no
  * name, color, glyph or tab set of its own and nothing to delete.
  *

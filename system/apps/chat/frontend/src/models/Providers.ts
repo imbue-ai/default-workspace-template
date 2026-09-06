@@ -318,7 +318,8 @@ export function clearFlow(): void {
  *
  * Explicitly chosen wins; otherwise the most recently used, which the server bumps on
  * every launch -- so "start another one like the last" needs no click. Null means there
- * is nothing to launch on yet, and the New Chat button opens the chooser instead.
+ * is nothing to launch on yet: a new chat then waits for an account, and its page offers
+ * the chooser.
  */
 let selectedAccountId: string | null = null;
 

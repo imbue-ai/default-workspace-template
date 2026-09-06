@@ -16,7 +16,7 @@
  *     saved layouts and tab sets; this dock drops the live panel when the list arrives).
  *
  * The dock is never empty. A view with no panels gets a New Tab launcher, which is also what
- * the "+" opens (a freshly-created project shows it only until its first chat is created).
+ * the "+" opens (and where a freshly-created project lands).
  */
 
 import m from "mithril";
@@ -158,11 +158,6 @@ const LAUNCHER_PANEL_ID_PREFIX = "new-tab-";
 const LAUNCHER_PANEL_TITLE = "New tab";
 const INSTANCE_COMPONENT = "instance";
 const LAUNCHER_COMPONENT = "launcher";
-
-// The chat app, which two rules here still name (CLEANUP: phase 10 of the workspace app model):
-// its ``new`` action takes the provider account the launcher's picker chose, and is diverted to
-// the provider chooser when nothing is signed in; and ``self`` in an agent's layout op is the
-// requester's own chat instance.
 
 // Second paragraph of the delete confirmation: deleting is not a louder Close.
 const DELETE_INSTANCE_DETAILS =
