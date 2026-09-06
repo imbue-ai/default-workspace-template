@@ -4816,6 +4816,30 @@ def test_a_rollback_into_a_pre_split_tree_rebuilds_at_the_shell_frontend(
     assert runner.cwds_of("npm", "run", "build") == [npm_root, shell_frontend]
 
 
+def test_a_rollback_into_a_pre_split_tree_reinstalls_the_shell_frontends_node_modules(
+    unbuilt_apply_repo: Path,
+) -> None:
+    # The forward `npm ci` at the workspace root empties every member's node_modules, the
+    # shell frontend's included, and the forward build then leaves only vite's temp files
+    # there -- so the directory standing is no sign of an install. Nothing copied it aside
+    # (only the workspace root's is), so recovery's rebuild at the shell frontend must
+    # reinstall from the restored lockfile first.
+    _make_pre_split_tree(unbuilt_apply_repo)
+    shell_frontend = unbuilt_apply_repo / update_layout.FRONTEND_DIR
+    (shell_frontend / "node_modules" / ".vite-temp").mkdir(parents=True)
+    runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, unbuilt_apply_repo)
+    runner.respond(
+        ("npm", "run", "build"), [_Result(returncode=1, stderr="boom"), _Result()]
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), unbuilt_apply_repo)
+
+    assert code == 2
+    npm_root = str(unbuilt_apply_repo / update_layout.NPM_ROOT_DIR)
+    assert runner.cwds_of("npm", "ci") == [npm_root, str(shell_frontend)]
+    assert runner.cwds_of("npm", "run", "build") == [npm_root, str(shell_frontend)]
+
+
 def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     apply_repo: Path, capsys
 ) -> None:

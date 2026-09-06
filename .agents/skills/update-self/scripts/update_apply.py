@@ -510,11 +510,12 @@ def _is_recovery_npm_ci_needed(
 ) -> bool:
     """Whether the restored tree's node_modules must be reinstalled before its rebuild:
     the workspace's when its copy could not be put back (the forward ``npm ci`` replaced
-    it), the pre-split frontend's only when there is none (the forward apply never
-    touched it)."""
+    it), the pre-split frontend's always -- the forward ``npm ci`` at the workspace root
+    empties every member's node_modules, the shell frontend's included, and nothing
+    copied that one aside."""
     if layout.is_npm_workspace:
         return "node_modules" not in restored
-    return not (layout.npm_root / "node_modules").is_dir()
+    return True
 
 
 def _recover_running_state(
