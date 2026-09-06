@@ -2634,3 +2634,28 @@ def test_websocket_snapshot_exposes_each_agent_project_label(app: Flask) -> None
     assert agents_message["type"] == "agents_updated"
     project_by_agent_id = {agent["id"]: agent["project"] for agent in agents_message["agents"]}
     assert project_by_agent_id == {"chat-1": "alpha", "chat-2": None}
+
+
+@pytest.mark.timeout(15)
+def test_websocket_replays_the_provisional_chats_before_the_agent_list(
+    app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agent list ends the connect-time replay: a page drops the records the replay did not
+    carry when the list arrives, so the records have to come first."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    reserved = state_of(app).agent_manager.reserve_chat()
+
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            first = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            second = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+        finally:
+            close_ws(ws)
+
+    assert first["type"] == "proto_agent_created"
+    assert first["agent_id"] == reserved.agent_id
+    assert first["phase"] == ProvisionalChatPhase.AWAITING_ACCOUNT.value
+    assert second["type"] == "agents_updated"

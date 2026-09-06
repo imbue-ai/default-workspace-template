@@ -37,6 +37,13 @@ function push(message: object): void {
   socket.onmessage({ data: JSON.stringify(message) });
 }
 
+/** The socket (re)opening, after which the app replays what it holds. */
+function open(): void {
+  const socket = FakeSocket.latest;
+  if (socket === null || socket.onopen === null) throw new Error("the manager opened no socket");
+  socket.onopen();
+}
+
 function agent(id: string): AgentState {
   return { id, name: id, state: "RUNNING", labels: {}, work_dir: null };
 }
@@ -151,6 +158,40 @@ describe("the provisional chats over the socket", () => {
 
     await expect(registered).rejects.toThrow("closed before it started");
     expect(manager.getProtoAgent("agent-1")).toBeUndefined();
+  });
+
+  it("drops a record a reconnect's replay does not carry and releases the send held for it", async () => {
+    push({ type: "agents_updated", agents: [] });
+    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    push({ type: "proto_agent_created", ...proto("agent-2", "creating") });
+    const registered = manager.whenAgentRegistered("agent-1");
+
+    // The chat app restarted while agent-1's create ran: the new process replays only the
+    // record it holds, then an agent list identical to the last one.
+    open();
+    push({ type: "proto_agent_created", ...proto("agent-2", "creating") });
+    // Nothing is dropped until the list says the replay is over.
+    expect(manager.getProtoAgent("agent-1")?.phase).toBe("creating");
+    expect(await settledState(registered)).toBe("pending");
+    push({ type: "agents_updated", agents: [] });
+
+    expect(manager.getProtoAgent("agent-1")).toBeUndefined();
+    expect(manager.getProtoAgent("agent-2")?.phase).toBe("creating");
+    await expect(registered).resolves.toBeUndefined();
+  });
+
+  it("keeps a record a reconnect's replay carries, and the send held for it", async () => {
+    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    const registered = manager.whenAgentRegistered("agent-1");
+
+    open();
+    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    push({ type: "agents_updated", agents: [] });
+
+    expect(manager.getProtoAgent("agent-1")?.phase).toBe("creating");
+    expect(await settledState(registered)).toBe("pending");
+    push({ type: "agents_updated", agents: [agent("agent-1")] });
+    await expect(registered).resolves.toBeUndefined();
   });
 
   it("rejects a held send when a reconnect replays the chat as failed", async () => {

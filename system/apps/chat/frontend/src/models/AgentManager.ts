@@ -86,6 +86,9 @@ let agents: AgentState[] = [];
 // The JSON of the last agents_updated payload, to skip redundant identical pushes.
 let lastAgentsSerialized = "";
 let protoAgents: ProtoAgent[] = [];
+// The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
+// is in flight: from the socket opening to the agent list that ends it. Null otherwise.
+let replayedProtoIds: Set<string> | null = null;
 // Who is waiting for a provisional chat to become an agent (a send typed while it was being
 // created), settled by the push that registers it or the one that fails it.
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
@@ -107,6 +110,10 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
+    // The app replays what it holds (its provisional chats, then its agent list) on every
+    // connection; the list ends the replay and must be handled even when nothing changed.
+    replayedProtoIds = new Set();
+    lastAgentsSerialized = "";
     m.redraw();
   };
 
@@ -159,6 +166,17 @@ function handleEvent(event: WsEvent): void {
       const registeredIds = new Set(agents.map((a) => a.id));
       protoAgents = protoAgents.filter((p) => !registeredIds.has(p.agent_id));
       for (const agentId of registeredIds) settleRegistration(agentId, null);
+      if (replayedProtoIds !== null) {
+        // The list ends a (re)connect's replay. A record the app did not replay is one it no
+        // longer holds (it restarted while the create ran), so no push is coming for it: the
+        // record goes, and a send held for it proceeds to report the backend's refusal.
+        const replayed = replayedProtoIds;
+        replayedProtoIds = null;
+        protoAgents = protoAgents.filter((p) => replayed.has(p.agent_id));
+        for (const agentId of [...registrationWaiters.keys()]) {
+          if (getProtoAgent(agentId) === undefined) settleRegistration(agentId, null);
+        }
+      }
       for (const listener of agentsUpdatedListeners) {
         listener(getAgents());
       }
@@ -180,6 +198,7 @@ function handleEvent(event: WsEvent): void {
       // completion message would have.
       const { type: _type, ...proto } = event;
       protoAgents = [...protoAgents.filter((p) => p.agent_id !== proto.agent_id), proto];
+      replayedProtoIds?.add(proto.agent_id);
       if (proto.phase === "failed") {
         settleRegistration(proto.agent_id, new Error(proto.error ?? "The chat could not be started"));
       }
@@ -220,7 +239,8 @@ function settleRegistration(agentId: string, error: Error | null): void {
  *
  * A chat the app neither lists nor holds a provisional record for (destroyed while its page
  * was open, a stale URL) resolves at once too: no push is coming that could settle it, and the
- * send itself reports the backend's refusal.
+ * send itself reports the backend's refusal. A held send is released the same way when a
+ * reconnect's replay turns out not to carry the chat's record any more.
  */
 export function whenAgentRegistered(agentId: string): Promise<void> {
   if (getAgentById(agentId) !== undefined || getProtoAgent(agentId) === undefined) return Promise.resolve();
