@@ -9,7 +9,7 @@ Instead agy is never allowed to park anything: EVERY message is held here, and o
 the only typist -- delivers the block once agy is idle. See
 ``system/apps/chat/imbue/chat/harnesses/core-contracts/messages-lifecycle-contract-state-of-things.md`` (E12).
 
-LIFETIME (contract Part B). The queue must survive a ``system_interface`` restart -- the
+LIFETIME (contract Part B). The queue must survive a chat app restart -- the
 session is still alive, and "never silently dropped while the session lives" applies -- but
 must NOT survive the agy session. Entries are journalled and stamped with the session's
 identity; a new session clears them rather than replaying, because the contract forbids a

@@ -17,7 +17,7 @@ from flask import Response
 
 # Stamped on every document response so a caller can tell the real app from
 # the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
-# response. The reveal flow's frontend health check reads it.
+# response. A health check can read it rather than pattern-match markup.
 FRONTEND_BUILT_HEADER: Final[str] = "X-Frontend-Built"
 
 BASE_PATH_META_NAME: Final[str] = "system-interface-base-path"
@@ -43,7 +43,7 @@ def html_response(html_content: str, status_code: int = 200) -> Response:
 
     That matters because a page cannot drop its own HTTP cache -- the
     ``location.reload(true)`` form is a Firefox-only extension -- so
-    ``reloadInterface`` (see ``frontend/src/reload.ts``) can only reload and
+    ``reloadInterface`` (the shell frontend's ``reload.ts``) can only reload and
     trust the response to be fresh. ``no-store`` is what makes that trust
     well-founded, including for viewers reaching the workspace through a
     shared tunnel, where an intermediary is free to cache anything we do not

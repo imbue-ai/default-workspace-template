@@ -36,7 +36,8 @@ from imbue.chat.wsgi import make_threaded_server
 logger = _loguru_logger
 
 # The chat's manifest, relative to the repo root every supervised program runs from.
-# ``test_app_manifests.py`` checks the program registers with this manifest by importing it here.
+# ``test_app_manifests.py`` reads this constant from the source to check the program registers
+# with this manifest.
 MANIFEST_PATH: Final[Path] = Path("system/apps/chat/app.toml")
 
 

@@ -555,8 +555,10 @@ def running_workspace(
     The chat app lists the fixture agent (plus any ``additional_agents``, bare state dirs with
     a manager entry) from a patched discovery and a never-started manager, so no ``mngr observe``
     runs; the shell reads a registry holding the chat row at the chat's own URL and, when
-    ``is_stub_app_offered``, a stub app whose ``stub_instances`` are seeded as records. A
-    signed-in account exists, so a create is never diverted to the chooser. ``project_names``
+    ``is_stub_app_offered``, a stub app whose ``stub_instances`` are seeded as records. With
+    ``is_account_signed_in`` (the default) a signed-in account exists, so a create starts at
+    once; without one a create mints a chat that waits for an account, and its page offers
+    the provider chooser. ``project_names``
     are created through the shell's API before anything connects, so a client's first view is
     the first of them (or Everything when there are none).
     """
