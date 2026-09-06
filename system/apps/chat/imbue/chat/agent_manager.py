@@ -747,7 +747,7 @@ class AgentManager:
         """Seed the prioritizer's per-chat message times from the on-disk message stamps.
 
         The prioritizer's own recency state is in-memory, so without this a
-        restart of the system interface would forget which chats are in active use
+        restart of the chat app would forget which chats are in active use
         and start every one of them aging from its process-start time. Quietly
         does nothing when nothing has been stamped (a dev/test setup, or a
         workspace where nothing has been messaged yet).

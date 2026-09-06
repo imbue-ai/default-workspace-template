@@ -242,7 +242,7 @@ _FAST_MODE_PROMPT_POPUP: Final[HarnessPopup] = HarnessPopup(
 
 
 class HarnessSpec(FrozenModel):
-    """Everything the system interface needs to run one harness."""
+    """Everything the chat app needs to run one harness."""
 
     # The watcher/tracker fields hold CLASSES, which pydantic cannot validate structurally.
     model_config = {"arbitrary_types_allowed": True}
