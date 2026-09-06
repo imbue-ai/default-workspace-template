@@ -364,17 +364,15 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                   {
                     variant: "primary",
                     extra: "message-list-launch-retry",
-                    readonly: launchInFlight,
                     onclick: () => launch(agentId, account.id),
                   },
-                  launchInFlight ? "Starting…" : "Try again",
+                  "Try again",
                 )
               : null,
             m(
               Button,
               {
                 variant: account !== null && launchError !== null ? "secondary" : "primary",
-                readonly: launchInFlight,
                 onclick: () => offerProviderChooser(agentId),
               },
               "Choose a provider",
