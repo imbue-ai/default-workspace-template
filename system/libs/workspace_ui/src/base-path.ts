@@ -29,12 +29,12 @@ export function getChatAgentId(): string {
   return document.querySelector('meta[name="system-interface-chat-agent-id"]')?.getAttribute("content") ?? "";
 }
 
-/** The subagent session the chat document shows; "" for a chat's own page. */
 /** The terminal app's origin label, which the chat app reads from the registry into the page. */
 export function getTerminalOriginLabel(): string {
   return document.querySelector('meta[name="system-interface-terminal-label"]')?.getAttribute("content") ?? "";
 }
 
+/** The subagent session the chat document shows; "" for a chat's own page. */
 export function getChatSessionId(): string {
   return document.querySelector('meta[name="system-interface-chat-session-id"]')?.getAttribute("content") ?? "";
 }
