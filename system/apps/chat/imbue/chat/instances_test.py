@@ -16,6 +16,7 @@ from app_instances.primitives import MAX_INSTANCE_TITLE_LENGTH
 from app_instances.testing import RecordingNudger
 from app_manifest.primitives import ActionId
 
+from imbue.chat.accounts import index_path
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.errors import ChatCreateRefusedError
@@ -250,6 +251,19 @@ def test_new_without_a_signed_in_account_reserves_a_chat_awaiting_one(agent_mana
     assert proto is not None
     assert proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
     assert [candidate.key for candidate in source.list_instances()] == [record.key]
+
+
+def test_new_over_an_unreadable_account_index_is_refused_with_the_reason(agent_manager: AgentManager) -> None:
+    """A corrupt index is the account store's failure, answered like every other refusal (a 409
+    with a detail through the blueprint) rather than escaping as a 500."""
+    index_path().parent.mkdir(parents=True, exist_ok=True)
+    index_path().write_text("{not json")
+    source = _source(agent_manager)
+
+    with pytest.raises(ChatCreateRefusedError, match="unreadable"):
+        source.create_instance(ActionId("new"), {})
+
+    assert agent_manager.get_proto_agents() == []
 
 
 def test_new_with_an_account_named_that_does_not_exist_is_refused(agent_manager: AgentManager) -> None:
