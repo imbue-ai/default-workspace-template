@@ -959,8 +959,7 @@ def plan_migration(
     marker_path = state_dir / MARKER_FILENAME
     is_already_migrated = marker_path.exists() and not is_forced
     meta = _read_json_object(source_dir / LEGACY_META_FILENAME, notes)
-    is_source_present = source_dir.is_dir() and meta is not None
-    if not is_source_present:
+    if meta is None or not source_dir.is_dir():
         return MigrationPlan(
             source_dir=source_dir,
             is_source_present=False,
