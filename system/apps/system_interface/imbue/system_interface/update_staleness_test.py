@@ -55,8 +55,8 @@ _IRRELEVANT_PATHS = (
 @pytest.mark.parametrize(
     ("path", "is_relevant"),
     [
-        # The settings file the long-lived mngr config parser re-reads.
-        (".mngr/settings.toml", True),
+        # The mngr settings file: read by the chat app's mngr, which is another process.
+        (".mngr/settings.toml", False),
         # Every manifest the served environment was resolved from.
         ("pyproject.toml", True),
         ("uv.lock", True),
