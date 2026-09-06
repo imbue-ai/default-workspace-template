@@ -257,7 +257,7 @@ body {
  * --c-accent, overridable via --spinner-track / --spinner-arc.
  * .spinner--current makes it monochrome (currentColor ring with a transparent
  * gap) for use on coloured contexts. (The login screen's fancier SVG arc is
- * its own svg drawing -- see loginSpinnerIcon in views/icons.ts -- but shares
+ * its own svg drawing -- see loginSpinnerIcon in components/icons.ts -- but shares
  * this @keyframes.) */
 @keyframes spin {
   to {

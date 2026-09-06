@@ -572,7 +572,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* The tab-action buttons (close, kebab) wear the shared ghost icon-Button
- * recipe (buttonClass in views/components/Button.ts) for their box, radius and
+ * recipe (buttonClass in the workspace_ui library's components/Button.ts) for their box, radius and
  * hover square; `.dv-custom-tab-action` is only a bare marker the E2E
  * selectors query, and the 12px glyph size is set on the icon markup at the
  * call site. Only the `.dv-custom-tab-actions` container styling lives here. */
