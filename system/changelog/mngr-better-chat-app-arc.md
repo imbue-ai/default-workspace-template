@@ -76,3 +76,5 @@ The frontends are one npm workspace rooted at `system/package.json` (with `packa
 `system/scripts/layout.py` and `refresh_workspace_view.py` no longer send the `X-Mngr-Agent-Id` header with a layout op: the shell reads only the body's `requester` address since phase 10 (it names no app, so an agent id alone means nothing to it), and the header was dead.
 
 `system/libs/workspace_ui` keeps only what both frontends share: the chat document's meta readers moved into the chat frontend, the activity dot's keyframes moved into the library's `base.css` beside the component that references them, and `wsUrl` is tested. The Dockerfile's manifest layer copies the chat's `pyproject.toml` so its dependencies are pre-warmed, both dev servers proxy the WebSocket, the agy shim points at the moved tool-call policies, and the root's unused `import-linter` dependency is gone.
+
+`CLAUDE.md` and `AGENTS.md` name the chat package's own `uv run pytest`; `system/apps/README.md` says an app registers its manifest from its program line or from inside its entry point; the latchkey hook's header points at the moved `permission-card.ts`.
