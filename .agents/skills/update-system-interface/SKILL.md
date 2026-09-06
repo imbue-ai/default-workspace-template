@@ -1,6 +1,6 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the dockview shell, the sidebar, the New Tab launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / dockview; the chat pages themselves are the chat app's (system/apps/chat).
 metadata:
   author: imbue
 ---
@@ -8,7 +8,8 @@ metadata:
 # Updating the system interface
 
 `system/apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the chat panels, the progress view). A broken build here is
+(the dockview shell, the sidebar, the New Tab launcher; the chat pages it docks are
+the chat app's, `system/apps/chat`). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This
@@ -219,12 +220,14 @@ If the user **approves** the preview:
    verdict (that wait happens *before* this step).
 
 2. **Freshness check** -- the branch is only mergeable if
-   `system/apps/system_interface/` has not changed since the worker branched (for
-   example, another pass merged in the meantime):
+   `system/apps/system_interface/`, the shared `system/libs/workspace_ui/`, and
+   the npm lockfile (the three trees the shell's bundle is stamped over) have not
+   changed since the worker branched (for example, another pass merged in the
+   meantime):
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/ system/libs/workspace_ui/ system/package-lock.json
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale --
