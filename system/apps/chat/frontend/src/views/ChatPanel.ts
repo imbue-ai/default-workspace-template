@@ -288,21 +288,25 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     openProviderChooser({ onSignedIn: (accountId) => launch(agentId, accountId) });
   }
 
+  /** The page of a chat whose create is running: an empty transcript with the composer's held
+   *  "Sending" bubbles (a message typed now waits for the agent to land, see MessageInput), so
+   *  the message is visibly waiting rather than gone. */
+  function renderStarting(agentId: string): m.Vnode {
+    const outgoing = renderOutgoingMessages(agentId);
+    return m("div", { class: "message-list-creating flex flex-col h-full" }, [
+      m(
+        "div",
+        { class: "flex-1 flex items-center justify-center" },
+        m("p", { class: "text-secondary" }, "Starting the chat..."),
+      ),
+      outgoing.length > 0 ? m("div", { class: MESSAGE_LIST_CLASS }, outgoing) : null,
+    ]);
+  }
+
   /** The page of a chat that is not an agent yet, by its phase. */
   function renderProvisional(agentId: string, proto: ProtoAgent): m.Vnode {
     if (proto.phase === "creating") {
-      // A message typed while the create runs is held by the composer until the agent lands
-      // (see MessageInput); its "Sending" bubble renders here so the message is visibly
-      // waiting rather than gone.
-      const outgoing = renderOutgoingMessages(agentId);
-      return m("div", { class: "message-list-creating flex flex-col h-full" }, [
-        m(
-          "div",
-          { class: "flex-1 flex items-center justify-center" },
-          m("p", { class: "text-secondary" }, "Starting the chat..."),
-        ),
-        outgoing.length > 0 ? m("div", { class: MESSAGE_LIST_CLASS }, outgoing) : null,
-      ]);
+      return renderStarting(agentId);
     }
     if (proto.phase === "awaiting_account") {
       // The account list decides between launching and offering the chooser, so neither
@@ -320,10 +324,19 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // ``new`` would have with one signed in: the chooser lists signed-in accounts as facts,
       // not as something to pick, so there is no other way onto it.
       const account = getSelectedAccount();
-      if (account !== null && !launchInFlight && launchError === null && launchedFor !== agentId) {
+      // A launch this page started (on the selected account, or through the chooser) that is
+      // in flight or waiting for the push that moves the record to the creating phase: the
+      // page is starting the chat, not asking for a sign-in.
+      const isLaunching = launchInFlight || (launchedFor === agentId && launchError === null);
+      if (account !== null && !isLaunching && launchError === null) {
         closeProviderChooser();
         launch(agentId, account.id);
-      } else if (account === null && chooserOfferedFor !== agentId) {
+        return renderStarting(agentId);
+      }
+      if (isLaunching) {
+        return renderStarting(agentId);
+      }
+      if (account === null && chooserOfferedFor !== agentId) {
         // Offered once per chat, on the page's first render of this phase: the user may
         // dismiss it and come back through the button. With an account signed in the page
         // launched on it instead, and a refusal is shown here with a retry on that account
