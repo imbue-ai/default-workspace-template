@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_instances.testing import free_port
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
 from playwright.sync_api import Page
@@ -59,8 +60,6 @@ pytestmark = [
 ]
 
 # The shell's port and the chat's, one pair per test that runs its own workspace.
-_PORT = 18865
-_CHAT_PORT_OFFSET = 100
 EVERYTHING_VIEW_NAME = "Everything"
 
 _TRIGGER_TIMEOUT_MS = 20000
@@ -90,17 +89,16 @@ def _chat_frame(page: Page, agent_id: str = FIXTURE_AGENT_ID) -> Frame:
 
 def _running_e2e_server(
     tmp_path: Path,
-    port: int,
     session_events: list[dict[str, Any]] | None = None,
     is_stub_app_offered: bool = False,
     stub_instances: tuple[str, ...] = (),
     is_account_signed_in: bool = True,
 ) -> AbstractContextManager[RunningWorkspace]:
-    """The two-process workspace, with the chat on the port above the shell's."""
+    """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
         tmp_path,
-        port,
-        port + _CHAT_PORT_OFFSET,
+        free_port(),
+        free_port(),
         session_events=session_events,
         is_stub_app_offered=is_stub_app_offered,
         stub_instances=stub_instances,
@@ -111,7 +109,7 @@ def _running_e2e_server(
 @pytest.fixture
 def e2e_server(tmp_path: Path) -> Generator[RunningWorkspace, None, None]:
     """Start the shell and the chat with the fixture agent and the starter project."""
-    with _running_e2e_server(tmp_path, _PORT) as server:
+    with _running_e2e_server(tmp_path) as server:
         yield server
 
 
@@ -350,7 +348,7 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
 @pytest.mark.timeout(60, func_only=False)
 def test_tool_calls_render_as_collapsible(tmp_path: Path, page: Page) -> None:
     """Tool calls render as collapsible blocks that expand to show input/output."""
-    with _running_e2e_server(tmp_path, _PORT + 1, session_events=_TOOL_CALL_SESSION_EVENTS) as server:
+    with _running_e2e_server(tmp_path, session_events=_TOOL_CALL_SESSION_EVENTS) as server:
         page.goto(server.shell_url)
         _open_fixture_chat(page)
 
@@ -427,7 +425,7 @@ _QUEUED_SESSION_EVENTS: list[dict[str, Any]] = [
 @pytest.mark.timeout(60, func_only=False)
 def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -> None:
     """A harness-queued message renders as a distinct group with the shoulder-tap action."""
-    with _running_e2e_server(tmp_path, _PORT + 5, session_events=_QUEUED_SESSION_EVENTS) as server:
+    with _running_e2e_server(tmp_path, session_events=_QUEUED_SESSION_EVENTS) as server:
         page.goto(server.shell_url)
         _open_fixture_chat(page)
 
@@ -449,7 +447,7 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
 @pytest.mark.timeout(60, func_only=False)
 def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page) -> None:
     """A chat whose transcript fetch failed recovers on Refresh, without reloading the page."""
-    with _running_e2e_server(tmp_path, _PORT + 6) as server:
+    with _running_e2e_server(tmp_path) as server:
         events_url = "**/api/agents/*/events"
         page.route(
             events_url,
@@ -522,7 +520,7 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
     events = _make_long_conversation_events(150)
     probe = _stub_address("stub-1")
     with _running_e2e_server(
-        tmp_path, _PORT + 4, session_events=events, is_stub_app_offered=True, stub_instances=("stub-1",)
+        tmp_path, session_events=events, is_stub_app_offered=True, stub_instances=("stub-1",)
     ) as server:
         _serve_stub_pages(page, server)
         page.goto(server.shell_url)
@@ -620,7 +618,7 @@ def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -
     leaves it open in the starter project too. Switching back restores the starter
     project's layout, whose panel must bind to the same instance.
     """
-    with _running_e2e_server(tmp_path, _PORT + 9) as server:
+    with _running_e2e_server(tmp_path) as server:
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(server.shell_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
@@ -651,7 +649,7 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
 ) -> None:
     """The tab opens either way: with no account the chat waits for one, and its page shows the
     chooser, so signing in happens where the chat will be rather than on the shell."""
-    with _running_e2e_server(tmp_path, _PORT + 1, is_account_signed_in=False) as server:
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         page.goto(server.shell_url)
         chat = _start_new_chat(page)
         expect(chat.locator(".message-list-awaiting-account")).to_contain_text(
@@ -674,7 +672,7 @@ def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_i
 ) -> None:
     """With an account signed in the create runs immediately on it; the page says so while the
     create runs (no creation log), and the composer arrives when the agent registers."""
-    with _running_e2e_server(tmp_path, _PORT + 2) as server:
+    with _running_e2e_server(tmp_path) as server:
         page.goto(server.shell_url)
         chat = _start_new_chat(page)
         expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=15000)
@@ -690,7 +688,7 @@ def test_a_create_that_fails_keeps_the_tab_with_the_reason_and_a_retry(
     """A failed ``mngr create`` is a notice in the chat's own tab, with what mngr printed and a
     "Try again" on the same account, not a tab that vanishes."""
     monkeypatch.setenv("FAKE_MNGR_CREATE_EXIT_CODE", "3")
-    with _running_e2e_server(tmp_path, _PORT + 3) as server:
+    with _running_e2e_server(tmp_path) as server:
         page.goto(server.shell_url)
         chat = _start_new_chat(page)
         failed = chat.locator(".message-list-create-failed")

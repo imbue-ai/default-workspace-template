@@ -329,12 +329,6 @@ class FakePexpectProcess:
         self.close_calls += 1
 
 
-def _find_free_port() -> int:
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 def _wait_until_serving(host: str, port: int, timeout: float = 10.0) -> None:
     """Poll a TCP connect until the server accepts, or raise on timeout."""
     deadline = time.monotonic() + timeout
@@ -372,7 +366,7 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
     is shut down on exit.
     """
     host = "127.0.0.1"
-    port = _find_free_port()
+    port = free_port()
     server = make_threaded_server(host, port, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
