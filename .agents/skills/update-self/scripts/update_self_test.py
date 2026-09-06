@@ -2690,6 +2690,56 @@ def test_failed_post_restart_health_rolls_back_and_restarts_into_known_good(
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
 
 
+def test_an_unhealthy_chat_after_the_restart_rolls_back(apply_repo: Path) -> None:
+    """The chat app restarts with the shell and is probed beside it: a chat that does
+    not come back healthy fails the apply like the shell would."""
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    chat_health = update_probes.chat_health_url(apply_repo)
+    restarts = {"seen": 0}
+
+    def responder(url: str) -> int | None:
+        if url == chat_health:
+            return 200 if restarts["seen"] >= 2 else 500
+        return 200
+
+    def count_restarts(argv: list[str]) -> None:
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = count_restarts
+
+    code = _apply(runner, _FakeHttp(responder), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
+
+
+def test_the_chat_health_url_comes_from_the_registry_row_else_the_default(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = tmp_path / update_layout.APPS_REGISTRY_PATH
+    default_url = f"{update_probes.DEFAULT_CHAT_URL}{update_probes.CHAT_HEALTH_PATH}"
+
+    # No registry yet (a fresh workspace): the default, and a note saying so.
+    assert update_probes.chat_health_url(tmp_path) == default_url
+    assert "could not read the app registry" in capsys.readouterr().err
+
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        '[[apps]]\nname = "terminal"\nurl = "http://127.0.0.1:7682"\n\n'
+        '[[apps]]\nname = "chat"\nurl = "http://localhost:8123/"\n'
+    )
+    assert update_probes.chat_health_url(tmp_path) == "http://localhost:8123/api/health"
+    assert capsys.readouterr().err == ""
+
+    # A registry with no chat row, and a corrupt one, both degrade to the default.
+    registry.write_text('[[apps]]\nname = "terminal"\nurl = "http://127.0.0.1:7682"\n')
+    assert update_probes.chat_health_url(tmp_path) == default_url
+    registry.write_text("[[apps\n")
+    assert update_probes.chat_health_url(tmp_path) == default_url
+    assert "TOMLDecodeError" in capsys.readouterr().err
+
+
 _PROVISIONER_DIFF = "M\tsystem/scripts/setup_system.sh\n"
 
 

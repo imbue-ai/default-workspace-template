@@ -106,7 +106,11 @@ def chat_health_url(repo_root: Path) -> str:
     registry_path = repo_root / APPS_REGISTRY_PATH
     try:
         rows = tomllib.loads(registry_path.read_text()).get("apps", [])
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        sys.stderr.write(
+            f"note: could not read the app registry at {registry_path} "
+            f"({type(exc).__name__}: {exc}); probing the chat app at {DEFAULT_CHAT_URL}.\n"
+        )
         return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
     for row in rows:
         if (
