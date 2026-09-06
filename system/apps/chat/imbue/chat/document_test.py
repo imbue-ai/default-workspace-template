@@ -16,6 +16,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.documents import CHAT_AGENT_ID_META_NAME
 from imbue.chat.documents import CHAT_SESSION_ID_META_NAME
 from imbue.chat.documents import FRONTEND_BUILT_HEADER
+from imbue.chat.documents import TERMINAL_LABEL_META_NAME
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.server import _record_client_message_activity
 from imbue.chat.server import client_activity_report
@@ -76,6 +77,25 @@ def test_a_subagent_page_names_its_session(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert f'<meta name="{CHAT_AGENT_ID_META_NAME}" content="{chat_id}">' in response.text
     assert f'<meta name="{CHAT_SESSION_ID_META_NAME}" content="{session_id}">' in response.text
+
+
+def test_the_chat_page_carries_the_terminal_apps_origin_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page derives the terminal app's origin (its terminal back face) from the label the
+    registry holds for the terminal, read per request; with no terminal registered the tag is
+    present and empty, so the page falls back to the default label rather than a missing tag."""
+    registry = tmp_path / "registry" / "apps.toml"
+    registry.parent.mkdir()
+    registry.write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path / "static", chat_id)
+
+    with_terminal = client.get(f"/{chat_id}")
+    registry.write_text('[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nlabel = "browser-aaaa1111"\n')
+    without_terminal = client.get(f"/{chat_id}")
+
+    assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="terminal-x7k9q2w1">' in with_terminal.text
+    assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="">' in without_terminal.text
 
 
 def test_a_chat_page_without_a_bundle_is_the_not_built_placeholder(tmp_path: Path) -> None:
