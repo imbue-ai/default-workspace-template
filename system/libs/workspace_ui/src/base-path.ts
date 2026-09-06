@@ -24,10 +24,11 @@ export function apiUrl(path: string): string {
   return getBasePath() + path;
 }
 
-/** The WebSocket URL for an API path: ``apiUrl`` with the page's ws(s) scheme and host. */
-export function wsUrl(path: string): string {
+/** The WebSocket URL for an API path: ``apiUrl`` with the page's ws(s) scheme and host
+ *  (``location`` is the page's own; a test passes another). */
+export function wsUrl(path: string, location: Pick<Location, "protocol" | "host"> = window.location): string {
   const base = apiUrl(path);
-  const loc = window.location;
+  const loc = location;
   const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
   if (base.startsWith("http")) {
     return base.replace(/^http/, "ws");
