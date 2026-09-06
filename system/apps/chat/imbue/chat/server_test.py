@@ -2395,6 +2395,8 @@ def test_serves_the_built_bundle_from_its_static_assets(tmp_path: Path) -> None:
     static = tmp_path / "static"
     (static / "assets").mkdir(parents=True)
     (static / "assets" / "chat-abc123.js").write_text("console.log('chat');")
+    # The document beside assets/: what a traversal out of assets/ would reach if the route let it.
+    (static / "chat.html").write_text("<!doctype html><html></html>")
     state = build_test_state()
     state.static_directory = static
     client = create_application(state).test_client()
