@@ -112,7 +112,7 @@ Everything is a view like any other for arrangement purposes; its tab set is der
 
 ### 3.5 Invariants
 
-- The shell imports nothing from `imbue.mngr` and never runs the `mngr` binary. Enforced by an import-linter contract and a ratchet.
+- The shell imports nothing from `imbue.mngr` or the chat app, never runs the `mngr` binary, and names no app. Enforced by the shell's `test_project_ratchets.py`: an AST scan of every non-test module's imports, a regex ratchet on `mngr` argvs, and a regex ratchet on the literal `"chat"` in the package and its frontend.
 - The shell reads and writes nothing under an mngr host or agent state directory. Its state lives under `data/.state/system_interface/`.
 - The only app the shell needs in order to boot and render is itself. With no chat app registered, every view lands on the New Tab page and the launcher offers whatever is registered.
 - Every app, built-in or user-built, is reachable by the shell only through the manifest, the registry, the instances API, and the browser-side contract.
