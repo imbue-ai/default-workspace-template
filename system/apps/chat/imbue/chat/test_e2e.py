@@ -14,6 +14,7 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Generator
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
@@ -94,7 +95,7 @@ def _running_e2e_server(
     is_stub_app_offered: bool = False,
     stub_instances: tuple[str, ...] = (),
     is_account_signed_in: bool = True,
-) -> Any:
+) -> AbstractContextManager[RunningWorkspace]:
     """The two-process workspace, with the chat on the port above the shell's."""
     return running_workspace(
         tmp_path,
