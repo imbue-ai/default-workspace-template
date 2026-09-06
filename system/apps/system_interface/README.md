@@ -92,8 +92,9 @@ python3 .agents/skills/update-self/scripts/update_self.py apply \
 
 It merges the worker's branch (capturing the rollback point internally),
 classifies what changed and does only what is needed: refreshes dependencies
-if a manifest changed (`npm ci`, plus the vendored mngr tool, the backend tool
-and the workspace venv -- the same environments `build_workspace.sh` builds),
+if a manifest changed (`npm ci`, plus the vendored mngr tool, the shell's and
+the chat app's tool environments and the workspace venv -- the same
+environments `build_workspace.sh` builds),
 installs the worker's already-built `static/` bundles (live build as fallback),
 and/or pre-flights the merged code on a throwaway port before restarting the
 services agent so the editable backend re-imports the merged `.py` (backend).
