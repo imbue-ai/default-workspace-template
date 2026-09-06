@@ -590,11 +590,11 @@ def migrate_layout_content(
     for panel_id, entry in list(dockview["panels"].items()):
         if document is None:
             break
-        params = params_by_panel_id.get(panel_id)
-        params = params if isinstance(params, dict) else {}
+        raw_params = params_by_panel_id.get(panel_id)
+        params = raw_params if isinstance(raw_params, dict) else {}
         ref = ref_for_panel(params)
-        address = None if ref is None else address_for_ref(ref)
-        if address is None or address in kept_addresses:
+        address = address_for_ref(ref) if ref is not None else None
+        if ref is None or address is None or address in kept_addresses:
             document = strip_panel_from_dockview(document, panel_id)
             dropped.append(panel_id)
             continue
