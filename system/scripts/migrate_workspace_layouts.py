@@ -46,9 +46,10 @@ import re
 import secrets
 import sys
 import tomllib
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, NamedTuple, Sequence
+from typing import Any, NamedTuple
 
 # Where the shell and the apps keep their state, relative to the repo root every supervised
 # program and the bootstrap run from (contracts.md sections 7 and 17).
