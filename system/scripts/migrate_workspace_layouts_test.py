@@ -155,6 +155,14 @@ def test_plan_files_members_and_docked_panels_and_drops_dead_refs(
     assert project_1.document["glyph"] == 3
 
 
+def test_read_legacy_projects_stores_a_padded_color_trimmed() -> None:
+    meta = {"project_by_id": {"padded": {"name": "Padded", "color": " #abcdef "}}}
+
+    (project,) = migrate.read_legacy_projects(meta, [])
+
+    assert project.color == "#abcdef"
+
+
 def test_plan_derives_shortcuts_from_overrides_pins_and_the_registry(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:
