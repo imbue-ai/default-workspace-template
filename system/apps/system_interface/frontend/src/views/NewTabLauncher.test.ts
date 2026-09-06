@@ -113,9 +113,9 @@ describe("NewTabLauncher", () => {
   it("runs a tile's action with no parameters, whichever app it is", () => {
     const attrs = mount({});
     root.querySelector<HTMLElement>('[data-launch="terminal:new"]')!.click();
-    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "terminal" }), "new", {});
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "terminal" }), "new");
     root.querySelector<HTMLElement>('[data-launch="chat:new"]')!.click();
-    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new", {});
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new");
   });
 
   it("opens a row from either table through the same callback", () => {

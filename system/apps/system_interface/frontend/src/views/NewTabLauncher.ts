@@ -150,7 +150,7 @@ export interface NewTabLauncherAttrs {
   // Whether this pane is waiting on an action it already ran: the tiles stand down and say so.
   isAwaitingCreate?: boolean;
   // Run an app's action in this pane.
-  onRunAction: (app: AppRecord, actionId: string, params: Record<string, string>) => void;
+  onRunAction: (app: AppRecord, actionId: string) => void;
   // Open an instance into this pane (the workspace files it into the project when it is not there yet).
   onOpenRow: (row: LauncherRow) => void;
 }
@@ -320,7 +320,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
   function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs): m.Vnode {
     const isDisabled = attrs.isAwaitingCreate === true;
-    const run = (): void => attrs.onRunAction(tile.app, tile.action.id, {});
+    const run = (): void => attrs.onRunAction(tile.app, tile.action.id);
     return m(
       "div",
       {
