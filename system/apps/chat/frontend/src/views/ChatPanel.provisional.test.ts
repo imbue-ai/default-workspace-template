@@ -200,6 +200,33 @@ describe("ChatPanel over a provisional chat", () => {
     expect(findByClass(render(), "message-list-creating")).toBeTruthy();
   });
 
+  it("forgets a refusal once the chat is being created, so a later failure shows its own reason", async () => {
+    // Two pages of one waiting chat both launch on the selected account; the backend
+    // takes one and refuses the other, and the push then moves both to creating.
+    mocks.selectedAccount = { id: "acct-1" };
+    mocks.launchChat.mockImplementationOnce(async () => {
+      throw new Error("Chat agent-1 is not waiting to be launched");
+    });
+    const render = mountPanel();
+    render();
+    await flushAsync();
+    expect(renderedText(render())).toContain("is not waiting to be launched");
+
+    mocks.proto = { agent_id: AGENT_ID, name: "Chat 1", account_id: "acct-1", phase: "creating", error: null };
+    render();
+    mocks.proto = {
+      agent_id: AGENT_ID,
+      name: "Chat 1",
+      account_id: "acct-1",
+      phase: "failed",
+      error: "mngr create exited with code 1",
+    };
+    const tree = render();
+
+    expect(renderedText(tree)).toContain("mngr create exited with code 1");
+    expect(renderedText(tree)).not.toContain("is not waiting to be launched");
+  });
+
   it("shows a failed create's reason and retries it on the record's account", () => {
     mocks.proto = {
       agent_id: AGENT_ID,
