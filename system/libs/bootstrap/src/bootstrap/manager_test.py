@@ -753,13 +753,11 @@ def test_a_partial_restore_at_boot_is_an_error_that_still_wakes_the_dri_agent(
     assert any("could not put the pre-apply state back" in line for line in errors)
 
 
-def test_main_rolls_back_before_the_venv_sync_and_wakes_the_agent_after_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # The two orderings the boot path is built around: the rollback must run
-    # before the venv converge (which has to converge against the restored
-    # tree, not the half-applied one), and the DRI agent must be woken only
-    # after it (a live agent's `uv run` would race the venv rewrite).
+def _prepare_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _StubSubprocess:
+    """A ``main()`` run that touches nothing real: an ephemeral cwd holding an apply
+    marker for agent-omega, a subprocess stub that models the rollback clearing it, and
+    the steps that touch the host stubbed out. ``_exec_supervisord`` is left to the caller,
+    since each test watches it differently."""
     # chdir into tmp_path so the marker and signal files land somewhere
     # ephemeral; MNGR_AGENT_WORK_DIR is unset so the git-identity and
     # main-branch steps short-circuit.
@@ -769,15 +767,25 @@ def test_main_rolls_back_before_the_venv_sync_and_wakes_the_agent_after_it(
     stub = _StubSubprocess()
     stub.on_command = _clear_marker_on_recover
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    # The steps that touch the host or replace the process.
     for name in (
         "_migrate_legacy_claude_state_best_effort",
         "_write_update_recovery_cron_entry",
         "_ensure_supervisor_log_dir",
-        "_exec_supervisord",
     ):
         monkeypatch.setattr(f"bootstrap.manager.{name}", lambda: None)
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
+    return stub
+
+
+def test_main_rolls_back_before_the_venv_sync_and_wakes_the_agent_after_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The two orderings the boot path is built around: the rollback must run
+    # before the venv converge (which has to converge against the restored
+    # tree, not the half-applied one), and the DRI agent must be woken only
+    # after it (a live agent's `uv run` would race the venv rewrite).
+    stub = _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
 
     main()
 
@@ -812,9 +820,6 @@ def test_main_migrates_workspace_layouts_after_the_rollback_and_before_superviso
     # The migration must see the restored tree (so it runs after the rollback)
     # and must have written the shell's state files before supervisord starts
     # the shell that reads them.
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
-    _write_apply_marker("agent-omega")
     migration_argv = ["python3", str(WORKSPACE_LAYOUT_MIGRATION_SCRIPT), "run"]
     order: list[str] = []
 
@@ -823,19 +828,11 @@ def test_main_migrates_workspace_layouts_after_the_rollback_and_before_superviso
         if argv == migration_argv:
             order.append("migration")
 
-    stub = _StubSubprocess()
+    stub = _prepare_boot(monkeypatch, tmp_path)
     stub.on_command = _record_migration
-    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
-    for name in (
-        "_migrate_legacy_claude_state_best_effort",
-        "_write_update_recovery_cron_entry",
-        "_ensure_supervisor_log_dir",
-    ):
-        monkeypatch.setattr(f"bootstrap.manager.{name}", lambda: None)
     monkeypatch.setattr(
         "bootstrap.manager._exec_supervisord", lambda: order.append("supervisord")
     )
-    monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
 
     main()
 
