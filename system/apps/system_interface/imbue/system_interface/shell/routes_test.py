@@ -717,6 +717,39 @@ def test_document_ops_edit_the_target_clients_file_and_announce_the_write(client
     assert shell.projects.get_project("alpha").tabs == (_TERMINAL_1, _FILES)
 
 
+def test_self_names_the_requesters_own_docked_instance(client: FlaskClient, app: Flask) -> None:
+    """``self`` is the requester's own instance, read from the op's ``requester``: where ``open`` lands, the target of
+    any addressed op, and the anchor a split or a move defaults to. An op that carried no requester cannot mean it."""
+    client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
+    _register_client(app, "c1", "alpha")
+
+    def as_terminal_1(op: str, args: dict[str, Any]) -> Any:
+        return client.post("/api/layout/broadcast", json={"op": op, "args": args, "requester": str(_TERMINAL_1)})
+
+    def leaf_addresses(layout: dict[str, Any]) -> list[list[str]]:
+        tree = layout["tree"]
+        leaves = tree["children"] if tree["type"] == "branch" else [tree]
+        return [[panel["address"] for panel in leaf["panels"]] for leaf in leaves]
+
+    assert as_terminal_1("open", {"address": str(_TERMINAL_1)}).status_code == 200
+    # An open lands beside the requester's own docked instance.
+    opened = as_terminal_1("open", {"address": str(_FILES)})
+    assert opened.status_code == 200
+    assert leaf_addresses(opened.get_json()["layout"]) == [[str(_TERMINAL_1)], [str(_FILES)]]
+
+    unattributed = client.post("/api/layout/broadcast", json={"op": "focus", "args": {"address": "self"}})
+    assert unattributed.status_code == 400 and "requester" in unattributed.get_json()["detail"]
+
+    focused = as_terminal_1("focus", {"address": "self"})
+    assert focused.status_code == 200
+    assert focused.get_json()["layout"]["active_panel"] != opened.get_json()["layout"]["active_panel"]
+
+    # A move with no anchor is relative to self: within its group tabs beside it.
+    moved = as_terminal_1("move", {"address": str(_FILES), "direction": "within"})
+    assert moved.status_code == 200
+    assert leaf_addresses(moved.get_json()["layout"]) == [[str(_TERMINAL_1), str(_FILES)]]
+
+
 def test_an_op_lands_with_no_browser_connected_and_never_on_a_guessed_client(client: FlaskClient, app: Flask) -> None:
     shell = _shell(app)
     client.post("/api/projects", json={"name": "Alpha", "color": "#111111", "glyph": 1})
