@@ -11,7 +11,7 @@
 #                                      (whole raw text), one card per tool call
 #     find_permission_request()     -- lifts the gateway's echoed object out of
 #                                      that call's RESULT, first match only
-#   system/apps/system_interface/frontend/src/views/permission-card.ts
+#   system/apps/chat/frontend/src/views/permission-card.ts
 #     parsePermissionRequest()      -- reads the request_id the card's
 #                                      "Review & respond" button opens the dialog with
 #
