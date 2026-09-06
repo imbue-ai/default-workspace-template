@@ -164,7 +164,9 @@ def resolve_primary_agent_id(runner: Runner) -> str:
         if candidate:
             return candidate
     if completed.returncode != 0:
-        return unresolved(f"mngr ls exited {completed.returncode} and listed no primary agent")
+        return unresolved(
+            f"mngr ls exited {completed.returncode} and listed no primary agent"
+        )
     return unresolved("mngr ls listed no primary agent")
 
 
@@ -177,7 +179,7 @@ def broadcast_reload(http: HttpClient, base_url: str) -> bool:
     agent_id = os.environ.get(ENV_MNGR_AGENT_ID, "")
     status = http.post_json(
         f"{base_url}/api/layout/broadcast",
-        {"op": RELOAD_OP, "args": {}, "agent_id": agent_id},
+        {"op": RELOAD_OP, "args": {}},
         {"Content-Type": "application/json", MNGR_AGENT_ID_HEADER: agent_id},
         timeout=_TIMEOUT_SECONDS,
     )

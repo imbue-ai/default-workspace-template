@@ -100,6 +100,7 @@ from imbue.chat.request_helpers import parse_json_object_body
 from imbue.chat.state import ChatState
 from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
+from imbue.chat.ws_broadcaster import proto_agent_created_message
 from imbue.chat.wsgi import build_sock
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.pure import pure
@@ -984,6 +985,7 @@ def _create_chat_agent() -> Response:
             extra_role_templates=(),
             project_id=project_id,
             account_id=create_request.account_id,
+            agent_id=create_request.agent_id,
         )
         response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
         return json_response(response.model_dump(), status_code=201)
@@ -1091,44 +1093,6 @@ def _start_agent(agent_id: str) -> Response:
     # agent was stopped); reflect it now so the UI's liveness unblocks with the start.
     get_state().agent_manager.note_agent_alive(agent_info.id)
     return json_response(StartAgentResponse(status="ok").model_dump())
-
-
-def _proto_agent_logs_endpoint(websocket: Any, agent_id: str) -> None:
-    """WebSocket for streaming proto-agent creation logs."""
-    agent_manager: AgentManager = get_state().agent_manager
-    log_queue = agent_manager.get_log_queue(agent_id)
-    _run_proto_agent_logs_loop(websocket=websocket, log_queue=log_queue)
-
-
-def _run_proto_agent_logs_loop(
-    websocket: Any,
-    log_queue: "queue.Queue[str | None] | None",
-) -> None:
-    """Stream ``log_queue`` messages to ``websocket`` until the proto-agent finishes.
-
-    If ``log_queue`` is ``None`` the proto-agent does not exist; send a
-    structured not-found error and close the socket.
-    """
-    if log_queue is None:
-        try:
-            websocket.send(json.dumps({"done": True, "success": False, "error": "Proto-agent not found"}))
-        except ConnectionClosed:
-            pass
-        return
-
-    try:
-        finished = False
-        while not finished:
-            try:
-                message = log_queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-            if message is None:
-                finished = True
-            else:
-                websocket.send(message)
-    except ConnectionClosed:
-        pass
 
 
 def _presence_endpoint(agent_id: str) -> Response:
@@ -1244,7 +1208,7 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
     try:
         websocket.send(json.dumps({"type": "agents_updated", "agents": agent_manager.get_agents_serialized()}))
         for proto in agent_manager.get_proto_agents():
-            websocket.send(json.dumps({"type": "proto_agent_created", **proto}))
+            websocket.send(json.dumps(proto_agent_created_message(proto)))
         shutdown = False
         while not shutdown:
             # The pages send nothing; anything that arrives is drained and ignored.
@@ -1344,7 +1308,6 @@ def create_application(state: ChatState) -> Flask:
     auth_endpoints.register_routes(application)
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
-    sock.route("/api/proto-agents/<agent_id>/logs")(_proto_agent_logs_endpoint)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

@@ -5,7 +5,6 @@ import os
 import queue
 import shutil
 import signal
-import threading
 import time
 import tomllib
 from datetime import datetime
@@ -22,7 +21,6 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_manager import AgentManager
-from imbue.chat.agent_manager import _LogQueueCallback
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
@@ -43,6 +41,8 @@ from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
@@ -63,6 +63,7 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
+from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -223,17 +224,17 @@ def test_create_chat_agent_broadcasts_proto_created(
     proto_msg = json.loads(raw)
     assert proto_msg["type"] == "proto_agent_created"
     assert proto_msg["agent_id"] == created.agent_id
-    assert proto_msg["creation_type"] == "chat"
-    assert proto_msg["parent_agent_id"] is None
+    assert proto_msg["name"] == "test-chat"
+    assert proto_msg["phase"] == "creating"
 
 
-def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type(
+def test_create_codex_agent_broadcasts_proto_created_with_its_account(
     agent_manager: AgentManager,
     broadcaster: WebSocketBroadcaster,
     git_work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Both menu entries make a chat, so creation_type is the role -- never the harness."""
+    """The proto message names the account the chat launches on, so a retry can reuse it."""
     q = broadcaster.register()
 
     with agent_manager._lock:
@@ -256,30 +257,73 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["type"] == "proto_agent_created"
-    assert proto_msg["creation_type"] == "chat"
-    assert proto_msg["parent_agent_id"] is None
+    assert proto_msg["phase"] == "creating"
+    assert proto_msg["account_id"] == codex_account_id
 
 
-def test_get_log_queue_for_proto_agent(agent_manager: AgentManager, git_work_dir: Path) -> None:
-    """The log queue is available immediately after create_chat_agent returns."""
+def test_reserve_chat_mints_a_chat_awaiting_an_account(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A reservation is a provisional chat in the awaiting-account phase, pushed like a launch."""
+    q = broadcaster.register()
+
+    reserved = agent_manager.reserve_chat()
+
+    proto = agent_manager.get_proto_agent(reserved.agent_id)
+    assert proto is not None
+    assert proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
+    assert proto.name == reserved.display_name == "Chat 1"
+    raw = q.get_nowait()
+    assert raw is not None
+    assert json.loads(raw) == {"type": "proto_agent_created", **proto.model_dump(mode="json")}
+
+
+def test_create_chat_agent_launches_a_reserved_chat_under_its_id_and_name(agent_manager: AgentManager) -> None:
+    reserved = agent_manager.reserve_chat()
+    _tracked_chat(agent_manager, "agent-2", "Chat-2", display_name="Chat 2")
+
+    created = agent_manager.create_chat_agent("", agent_id=reserved.agent_id)
+    agent_manager.stop()
+
+    assert created.agent_id == reserved.agent_id
+    assert created.display_name == reserved.display_name
+
+
+def test_create_chat_agent_refuses_launching_an_id_it_did_not_reserve(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
-        agent_manager._agents[agent_manager._own_agent_id] = AgentStateItem(
-            id=agent_manager._own_agent_id,
-            name="primary",
-            state="RUNNING",
-            labels={},
-            work_dir=str(git_work_dir),
+        agent_manager._proto_agents["proto-1"] = ProvisionalChat(
+            agent_id="proto-1", name="Chat 1", phase=ProvisionalChatPhase.CREATING
         )
-
-    created = agent_manager.create_chat_agent("test-chat")
-    log_q = agent_manager.get_log_queue(created.agent_id)
-    assert log_q is not None
-
+    with pytest.raises(AgentCreationError):
+        agent_manager.create_chat_agent("", agent_id="never-reserved")
+    with pytest.raises(AgentCreationError):
+        agent_manager.create_chat_agent("", agent_id="proto-1")
     agent_manager.stop()
 
 
-def test_get_log_queue_returns_none_for_unknown(agent_manager: AgentManager) -> None:
-    assert agent_manager.get_log_queue("nonexistent") is None
+def test_discard_provisional_chat_drops_a_reserved_chat_but_not_a_create_in_flight(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    reserved = agent_manager.reserve_chat()
+    with agent_manager._lock:
+        agent_manager._proto_agents["proto-1"] = ProvisionalChat(
+            agent_id="proto-1", name="Chat 9", phase=ProvisionalChatPhase.CREATING
+        )
+    q = broadcaster.register()
+
+    assert agent_manager.discard_provisional_chat(reserved.agent_id) is True
+    assert agent_manager.discard_provisional_chat("proto-1") is False
+    assert agent_manager.discard_provisional_chat("never-minted") is False
+
+    assert [proto.agent_id for proto in agent_manager.get_proto_agents()] == ["proto-1"]
+    raw = q.get_nowait()
+    assert raw is not None
+    assert json.loads(raw) == {
+        "type": "proto_agent_completed",
+        "agent_id": reserved.agent_id,
+        "success": False,
+        "error": None,
+    }
 
 
 def test_stop_without_start(agent_manager: AgentManager) -> None:
@@ -508,40 +552,51 @@ def test_full_snapshot_replaces_agent_set(agent_manager: AgentManager, broadcast
     assert len(msg["agents"]) == 2
 
 
-def test_run_creation_logs_header_and_completion(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """Creation thread logs a header line and a done message."""
-    log_q: queue.Queue[str | None] = queue.Queue(maxsize=10000)
-    cmd = ["true"]
-
-    done_event = threading.Event()
-
-    def run_and_signal() -> None:
-        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {}, HarnessType.CLAUDE)
-        done_event.set()
-
-    t = threading.Thread(target=run_and_signal, daemon=True)
-    t.start()
-    done_event.wait(timeout=10)
-
-    messages = [json.loads(item) for item in iter(log_q.get_nowait, None)]
-
-    assert any("line" in m and str(tmp_path) in m["line"] for m in messages)
-    done_msgs = [m for m in messages if "done" in m]
-    assert len(done_msgs) == 1
-    assert done_msgs[0]["success"] is True
+def _seed_creating_chat(agent_manager: AgentManager, agent_id: str, name: str) -> None:
+    with agent_manager._lock:
+        agent_manager._proto_agents[agent_id] = ProvisionalChat(
+            agent_id=agent_id, name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        )
 
 
-def test_log_queue_callback_puts_json_line(
-    agent_manager: AgentManager,
+def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """_LogQueueCallback writes each line as a JSON object to the queue."""
-    q: queue.Queue[str | None] = queue.Queue()
-    cb = _LogQueueCallback(log_queue=q)
-    cb("hello\n", True)
+    _seed_creating_chat(agent_manager, "test-id", "Chat 1")
+    q = broadcaster.register()
 
-    item = q.get_nowait()
-    assert item is not None
-    assert json.loads(item) == {"line": "hello"}
+    agent_manager._run_creation("test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE)
+
+    assert agent_manager.get_proto_agent("test-id") is None
+    agent = agent_manager.get_agent_by_id("test-id")
+    assert agent is not None
+    assert agent.name == "test-agent"
+    messages = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        messages.append(json.loads(raw))
+    completed = [message for message in messages if message["type"] == "proto_agent_completed"]
+    assert completed == [{"type": "proto_agent_completed", "agent_id": "test-id", "success": True, "error": None}]
+
+
+def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_tail(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A failed create is not forgotten: the page shows why, and can try again on the same account."""
+    _seed_creating_chat(agent_manager, "test-id", "Chat 1")
+    cmd = ["sh", "-c", "echo first line; echo the real reason >&2; exit 3"]
+
+    agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, {}, HarnessType.CLAUDE)
+
+    assert agent_manager.get_agent_by_id("test-id") is None
+    proto = agent_manager.get_proto_agent("test-id")
+    assert proto is not None
+    assert proto.phase is ProvisionalChatPhase.FAILED
+    assert proto.account_id == "acct-1"
+    assert proto.error is not None
+    assert proto.error.startswith("mngr create exited with code 3")
+    assert "the real reason" in proto.error
 
 
 def test_handle_observe_output_line_empty_is_ignored(agent_manager: AgentManager) -> None:
@@ -852,7 +907,9 @@ def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
     manager = AgentManager.build(broadcaster)
     try:
         with manager._lock:
-            manager._proto_agents["proto-1"] = {"agent_id": "proto-1", "name": "Chat 2"}
+            manager._proto_agents["proto-1"] = ProvisionalChat(
+                agent_id="proto-1", name="Chat 2", phase=ProvisionalChatPhase.CREATING
+            )
         manager.rename_chat_agent("proto-1", "Chat 2")
         with pytest.raises(AgentRenameError):
             manager.rename_chat_agent("proto-1", "Something else")
@@ -1030,7 +1087,9 @@ def test_create_chat_agent_counts_in_flight_creates_as_taken(
     proto entry blocks the slot. The in-flight create is pinned as a proto
     entry directly, so the test cannot race its background completion."""
     with agent_manager._lock:
-        agent_manager._proto_agents["proto-1"] = {"agent_id": "proto-1", "name": "Chat 1"}
+        agent_manager._proto_agents["proto-1"] = ProvisionalChat(
+            agent_id="proto-1", name="Chat 1", phase=ProvisionalChatPhase.CREATING
+        )
     created = agent_manager.create_chat_agent("")
     agent_manager.stop()
 
@@ -1083,8 +1142,8 @@ def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
     canonical name + display_name label the created mngr agent will hold, so
     the UI renders identically before and after the relist.
 
-    ``true`` stands in for a succeeding ``mngr create``; the log queue's
-    ``done`` sentinel is the deterministic "creation thread finished" signal.
+    ``true`` stands in for a succeeding ``mngr create``; the agent's registration is the
+    "creation thread finished" signal.
     """
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
@@ -1096,16 +1155,11 @@ def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
         created = manager.create_chat_agent("My planning chat")
         assert created.name == "My-planning-chat"
 
-        log_q = manager.get_log_queue(created.agent_id)
-        assert log_q is not None
-        done_message: dict[str, Any] | None = None
-        deadline = time.monotonic() + 30.0
-        while done_message is None:
-            raw = log_q.get(timeout=max(0.1, deadline - time.monotonic()))
-            message = None if raw is None else json.loads(raw)
-            if message is not None and message.get("done"):
-                done_message = message
-        assert done_message["success"] is True
+        wait_for(
+            lambda: manager.get_agent_by_id(created.agent_id) is not None,
+            timeout=30.0,
+            error_message="the creation thread never registered the agent",
+        )
 
         agent = manager.get_agent_by_id(created.agent_id)
         assert agent is not None

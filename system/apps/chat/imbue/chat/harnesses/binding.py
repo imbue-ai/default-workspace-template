@@ -201,6 +201,11 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     return accounts.resolve_account(chosen.id, home)
 
 
+def has_usable_account(home: Path | None = None) -> bool:
+    """Whether any signed-in account is on a lane this build runs: what ``resolve_binding("")`` needs."""
+    return any(harness_for(account) is not None for account in accounts.read_index(home).accounts)
+
+
 def harness_for(account: Account) -> HarnessType | None:
     """The harness an account's lane runs on, or None if this build no longer has that lane."""
     try:

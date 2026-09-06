@@ -582,7 +582,7 @@ def test_transport_failures_map_to_exit_codes(
     assert fragment in capsys.readouterr().err
 
 
-def test_post_layout_sends_the_agent_id_in_body_and_header(
+def test_post_layout_sends_the_requester_address_in_the_body_and_the_agent_id_in_the_header(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: dict[str, Any] = {}
@@ -614,7 +614,7 @@ def test_post_layout_sends_the_agent_id_in_body_and_header(
         "body": {
             "op": "focus",
             "args": {"address": "app:files"},
-            "agent_id": "agent-42",
+            "requester": "app:chat?instance=agent-42",
         },
         "header": "agent-42",
     }

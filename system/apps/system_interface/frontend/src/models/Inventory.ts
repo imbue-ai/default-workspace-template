@@ -107,8 +107,8 @@ export type LayoutOpName = "maximize" | "restore" | "refresh" | "reload_system_i
 export interface LayoutOpEvent {
   op: LayoutOpName;
   args: Record<string, unknown>;
-  /** ``MNGR_AGENT_ID`` of the agent that invoked the helper, "" when unset. */
-  requesterAgentId: string;
+  /** The address of the instance that invoked the helper (its own chat), "" when unknown. */
+  requester: string;
 }
 
 /** A client layout was written on the shell (a save of ours or another window's, or the shell's own edit). */
@@ -140,7 +140,7 @@ type WsEvent =
       type: "layout_op";
       op: LayoutOpName;
       args: Record<string, unknown>;
-      requester_agent_id?: string;
+      requester?: string;
       target_client_id?: string | null;
     }
   | { type: "layout_updated"; view_id: string; client_id: string; save_id: string }
@@ -326,7 +326,7 @@ function handleEvent(event: WsEvent): void {
       // interface reload) is for every window.
       if (event.target_client_id != null && event.target_client_id !== getClientId()) break;
       for (const listener of layoutOpListeners) {
-        listener({ op: event.op, args: event.args, requesterAgentId: event.requester_agent_id ?? "" });
+        listener({ op: event.op, args: event.args, requester: event.requester ?? "" });
       }
       break;
     case "layout_updated":

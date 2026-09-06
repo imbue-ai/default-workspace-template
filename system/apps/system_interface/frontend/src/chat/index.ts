@@ -51,8 +51,7 @@ function ChatDocument(agentId: string, sessionId: string): m.Component {
 async function bootstrap(): Promise<void> {
   const agentId = getChatAgentId();
   const sessionId = getChatSessionId();
-  // The same WebSocket the shell uses (the process is shared until phase 10), read for this
-  // page's own agent; the page is not a client of its own, so it registers none.
+  // The chat app's own WebSocket, read for this page's own agent.
   initAgentManager();
   trackBackendArrivals();
   initShellPermissionResolutions();

@@ -18,7 +18,7 @@ import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from ".
 import { describeRequestError, describeRequestErrorKind } from "../../models/request-error";
 import { openProviderChooser } from "../../models/Providers";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
-import { getAgentById } from "../models/AgentManager";
+import { getAgentById, whenAgentRegistered } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { hoverTooltipAttrs } from "../../views/components/hoverTooltip";
 import { icon, stopIcon } from "../../views/components/icons";
@@ -377,6 +377,10 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         m.redraw();
 
         try {
+          // A chat still being created has no agent to deliver to yet: the bubble stays
+          // "Sending…" until the create lands, and the send goes out then. A create that
+          // fails rejects here and the message goes back to the composer like any failed send.
+          await whenAgentRegistered(agentId);
           await sendMessage(agentId, finalText);
           // The send resolved: the message is now real (committed or queued), so its
           // "Sending…" bubble is removed by the arriving transcript turn or queued
@@ -645,6 +649,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // not simply absent from the transcript until the backend catches up.
         const outgoingId = addOutgoing(recovery.agentId, recovery.text);
         try {
+          await whenAgentRegistered(recovery.agentId);
           await sendMessage(recovery.agentId, recovery.sentText);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.agentId, recovery.text, recovery.attachments);

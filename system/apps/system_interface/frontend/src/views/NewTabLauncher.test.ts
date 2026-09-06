@@ -3,14 +3,6 @@ import "../testing/dom";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The chat tile's provider picker reads the account list; the launcher itself never needs one.
-vi.mock("../models/Providers", () => ({
-  getAccounts: vi.fn(() => []),
-  getSelectedAccount: vi.fn(() => ({ id: "acct-1", label: "Anthropic" })),
-  openProviderChooser: vi.fn(),
-  selectAccount: vi.fn(),
-}));
-
 import m from "mithril";
 
 import { appRecord } from "../testing/records";
@@ -118,14 +110,12 @@ describe("NewTabLauncher", () => {
     return attrs;
   }
 
-  it("runs a tile's action, passing the chat tile the picked provider account", () => {
+  it("runs a tile's action with no parameters, whichever app it is", () => {
     const attrs = mount({});
     root.querySelector<HTMLElement>('[data-launch="terminal:new"]')!.click();
     expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "terminal" }), "new", {});
     root.querySelector<HTMLElement>('[data-launch="chat:new"]')!.click();
-    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new", {
-      account_id: "acct-1",
-    });
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new", {});
   });
 
   it("opens a row from either table through the same callback", () => {

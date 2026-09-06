@@ -3,6 +3,8 @@
 import json
 import queue
 
+from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.ws_broadcaster import _CLIENT_QUEUE_MAX_SIZE
 from imbue.chat.ws_broadcaster import _MAX_CONSECUTIVE_QUEUE_FULL
@@ -71,14 +73,15 @@ def test_broadcast_proto_agent_created() -> None:
     q = broadcaster.register()
 
     broadcaster.broadcast_proto_agent_created(
-        agent_id="a1", name="test", creation_type="worktree", parent_agent_id=None
+        ProvisionalChat(agent_id="a1", name="test", phase=ProvisionalChatPhase.AWAITING_ACCOUNT)
     )
 
     msg = json.loads(_get_message(q))
     assert msg["type"] == "proto_agent_created"
     assert msg["agent_id"] == "a1"
-    assert msg["creation_type"] == "worktree"
-    assert msg["parent_agent_id"] is None
+    assert msg["name"] == "test"
+    assert msg["phase"] == "awaiting_account"
+    assert msg["error"] is None
 
 
 def test_broadcast_proto_agent_completed() -> None:

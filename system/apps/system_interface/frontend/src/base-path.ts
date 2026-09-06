@@ -30,6 +30,11 @@ export function getChatAgentId(): string {
 }
 
 /** The subagent session the chat document shows; "" for a chat's own page. */
+/** The terminal app's origin label, which the chat app reads from the registry into the page. */
+export function getTerminalOriginLabel(): string {
+  return document.querySelector('meta[name="system-interface-terminal-label"]')?.getAttribute("content") ?? "";
+}
+
 export function getChatSessionId(): string {
   return document.querySelector('meta[name="system-interface-chat-session-id"]')?.getAttribute("content") ?? "";
 }

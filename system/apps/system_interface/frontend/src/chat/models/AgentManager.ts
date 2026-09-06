@@ -1,16 +1,11 @@
 /**
  * The chat pages' live agent state: the agent list (activity, model choice, queued messages)
- * and the proto agents, as the chat app pushes them.
- *
- * The chat app shares the shell's process, so its pages read this off the shell's own
- * WebSocket: the socket sends ``agents_updated`` and the proto-agent events beside the
- * shell's own messages, and this document never registers as a client of it.
- * CLEANUP: point this at the chat app's own socket in phase 10 of the workspace app model,
- * when the chat app runs as its own process and serves its own.
+ * and the provisional chats (minted here, not agents yet), as the chat app pushes them over
+ * its own WebSocket (``/api/ws``).
  */
 
 import m from "mithril";
-import { apiUrl } from "../../base-path";
+import { apiUrl, getTerminalOriginLabel } from "../../base-path";
 import { deriveServiceOrigin } from "../../origin";
 import { ReconnectBackoff } from "../../models/backoff";
 import type { ModelChoice } from "./ModelSettings";
@@ -59,32 +54,23 @@ export interface QueuedMessage {
   is_sending?: boolean;
 }
 
+/** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
+export type ProvisionalChatPhase = "awaiting_account" | "creating" | "failed";
+
+/** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
 export interface ProtoAgent {
   agent_id: string;
   name: string;
-  creation_type: "chat";
-  parent_agent_id: string | null;
-}
-
-// The terminal app's origin label, off the shell's ``apps_updated`` push: the chat's terminal
-// back face is served from that origin.
-// CLEANUP: phase 10 hands the chat app its own configuration for the terminal origin; until
-// then the label rides the shared socket.
-interface AppLabelRow {
-  name: string;
-  label: string;
+  // The account it launches on; empty while it waits for one.
+  account_id: string;
+  phase: ProvisionalChatPhase;
+  // Why the create failed, in the failed phase.
+  error: string | null;
 }
 
 type WsEvent =
   | { type: "agents_updated"; agents: AgentState[] }
-  | { type: "apps_updated"; apps: AppLabelRow[] }
-  | {
-      type: "proto_agent_created";
-      agent_id: string;
-      name: string;
-      creation_type: string;
-      parent_agent_id: string | null;
-    }
+  | ({ type: "proto_agent_created" } & ProtoAgent)
   | { type: "proto_agent_completed"; agent_id: string; success: boolean; error: string | null };
 
 export type AgentsUpdatedListener = (agents: AgentState[]) => void;
@@ -98,8 +84,10 @@ export type AgentActivityListener = (agentId: string, previous: string | null, c
 let agents: AgentState[] = [];
 // The JSON of the last agents_updated payload, to skip redundant identical pushes.
 let lastAgentsSerialized = "";
-let appLabelByName: Record<string, string> = {};
 let protoAgents: ProtoAgent[] = [];
+// Who is waiting for a provisional chat to become an agent (a send typed while it was being
+// created), settled by the push that registers it or the one that fails it.
+const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
 let ws: WebSocket | null = null;
@@ -176,6 +164,10 @@ function handleEvent(event: WsEvent): void {
       // transitions can be reported before replacing it.
       const previousActivityById = new Map(agents.map((a) => [a.id, a.activity_state ?? null]));
       agents = event.agents;
+      // A provisional chat the list now names is an agent, whatever order the pushes came in.
+      const registeredIds = new Set(agents.map((a) => a.id));
+      protoAgents = protoAgents.filter((p) => !registeredIds.has(p.agent_id));
+      for (const agentId of registeredIds) settleRegistration(agentId, null);
       for (const listener of agentsUpdatedListeners) {
         listener(getAgents());
       }
@@ -190,21 +182,53 @@ function handleEvent(event: WsEvent): void {
       }
       break;
     }
-    case "apps_updated":
-      appLabelByName = Object.fromEntries(event.apps.map((app) => [app.name, app.label]));
+    case "proto_agent_created": {
+      // Also how a chat moves between phases (a reserved chat launched, a failed one retried):
+      // the backend pushes the whole record again.
+      const { type: _type, ...proto } = event;
+      protoAgents = [...protoAgents.filter((p) => p.agent_id !== proto.agent_id), proto];
       break;
-    case "proto_agent_created":
-      protoAgents.push({
-        agent_id: event.agent_id,
-        name: event.name,
-        creation_type: event.creation_type as "chat",
-        parent_agent_id: event.parent_agent_id,
-      });
-      break;
+    }
     case "proto_agent_completed":
-      protoAgents = protoAgents.filter((p) => p.agent_id !== event.agent_id);
+      if (event.success) {
+        // The agent itself arrives on the agents_updated push, which is what settles waiters.
+        protoAgents = protoAgents.filter((p) => p.agent_id !== event.agent_id);
+      } else if (event.error === null) {
+        // Discarded (its tab was closed before it launched): gone, with nothing to show.
+        protoAgents = protoAgents.filter((p) => p.agent_id !== event.agent_id);
+        settleRegistration(event.agent_id, new Error("The chat was closed before it started"));
+      } else {
+        const error = event.error;
+        protoAgents = protoAgents.map((p) => (p.agent_id === event.agent_id ? { ...p, phase: "failed", error } : p));
+        settleRegistration(event.agent_id, new Error(error));
+      }
       break;
   }
+}
+
+function settleRegistration(agentId: string, error: Error | null): void {
+  const waiters = registrationWaiters.get(agentId);
+  if (waiters === undefined) return;
+  registrationWaiters.delete(agentId);
+  for (const waiter of waiters) {
+    if (error === null) waiter.resolve();
+    else waiter.reject(error);
+  }
+}
+
+/**
+ * Resolves once ``agentId`` is an agent the app lists: at once for one it already lists, and
+ * for a chat still being created when its create lands. Rejects, with the reason, when the
+ * create fails or the chat is discarded first. What a send typed into a chat that does not
+ * exist yet waits on.
+ */
+export function whenAgentRegistered(agentId: string): Promise<void> {
+  if (getAgentById(agentId) !== undefined) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const waiters = registrationWaiters.get(agentId) ?? [];
+    waiters.push({ resolve, reject });
+    registrationWaiters.set(agentId, waiters);
+  });
 }
 
 export function initAgentManager(): void {
@@ -243,6 +267,11 @@ export function getProtoAgents(): ProtoAgent[] {
   return protoAgents;
 }
 
+/** The provisional record of ``agentId``, while the app lists it as one. */
+export function getProtoAgent(agentId: string): ProtoAgent | undefined {
+  return protoAgents.find((p) => p.agent_id === agentId);
+}
+
 export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {
   agentsUpdatedListeners.push(listener);
 }
@@ -259,9 +288,10 @@ export function removeAgentActivityListener(listener: AgentActivityListener): vo
   agentActivityListeners = agentActivityListeners.filter((l) => l !== listener);
 }
 
-/** The terminal app's origin, where the chat's terminal back face is served from. */
+/** The terminal app's origin, where the chat's terminal back face is served from: derived
+ *  from the label the chat app read out of the registry into the page. */
 export function getTerminalUrl(): string {
-  return deriveServiceOrigin(appLabelByName.terminal ?? "terminal");
+  return deriveServiceOrigin(getTerminalOriginLabel() || "terminal");
 }
 
 /** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The ttyd
@@ -290,12 +320,24 @@ export interface CreatedChatAgent {
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project. Throws with the server's detail on rejection.
  */
-export async function createChatAgent(projectId: string, accountId: string = ""): Promise<CreatedChatAgent> {
+export function createChatAgent(projectId: string, accountId: string = ""): Promise<CreatedChatAgent> {
+  // No harness: the account decides it. An empty account_id takes the most recently used account.
+  return postCreateChat({ project_id: projectId, account_id: accountId });
+}
+
+/**
+ * Launch a chat minted earlier (one that waited for an account, or one whose create failed)
+ * on ``accountId``: it keeps its id and name, so the tab showing it becomes the chat.
+ */
+export function launchChat(agentId: string, accountId: string): Promise<CreatedChatAgent> {
+  return postCreateChat({ agent_id: agentId, account_id: accountId });
+}
+
+async function postCreateChat(body: Record<string, string>): Promise<CreatedChatAgent> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // No harness: the account decides it. An empty account_id takes the most recently used account.
-    body: JSON.stringify({ project_id: projectId, account_id: accountId }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as { detail?: string };

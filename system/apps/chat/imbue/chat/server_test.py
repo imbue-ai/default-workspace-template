@@ -4,7 +4,6 @@ import fcntl
 import io
 import json
 import os
-import queue
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,53 +15,53 @@ from urllib.parse import quote
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
-from imbue.chat.accounts import commit_account, mint_account_dir
+from mngr_cli_contract.contract import assert_mngr_argv_valid
+from oom_priority import bands
+
+from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
-from imbue.chat.agent_manager import AgentManager, _build_chat_destroy_command
+from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
 from imbue.chat.harnesses.codex.live_connection import CodexLiveConnection
-from imbue.chat.harnesses.codex.model import (
-    codex_models_to_options,
-    get_codex_model_options_path,
-    read_codex_model_options,
-)
+from imbue.chat.harnesses.codex.model import codex_models_to_options
+from imbue.chat.harnesses.codex.model import get_codex_model_options_path
+from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
-from imbue.chat.harnesses.registry import (
-    build_interrupt_to_composer,
-    build_shoulder_tap,
-)
-from imbue.chat.harnesses.session import FileHarnessSession, SendOutcome, SessionDeps
-from imbue.chat.models import AgentStateItem, SendMessageRequest
+from imbue.chat.harnesses.registry import build_interrupt_to_composer
+from imbue.chat.harnesses.registry import build_shoulder_tap
+from imbue.chat.harnesses.session import FileHarnessSession
+from imbue.chat.harnesses.session import SendOutcome
+from imbue.chat.harnesses.session import SessionDeps
+from imbue.chat.models import AgentStateItem
+from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
-from imbue.chat.server import (
-    _DEFAULT_TAIL_COUNT,
-    _agent_switch_options,
-    _build_fast_mode_answered_label_command,
-    _build_stop_command,
-    _revive_and_retry_send,
-    _stream_filtered_events,
-    create_application,
-)
-from imbue.chat.state import ChatState, state_of
-from imbue.chat.testing import (
-    RecordingMngrMessenger,
-    build_test_state,
-    close_ws,
-    open_ws,
-    serve_app,
-)
+from imbue.chat.server import _DEFAULT_TAIL_COUNT
+from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _build_fast_mode_answered_label_command
+from imbue.chat.server import _build_stop_command
+from imbue.chat.server import _revive_and_retry_send
+from imbue.chat.server import _stream_filtered_events
+from imbue.chat.server import create_application
+from imbue.chat.state import ChatState
+from imbue.chat.state import state_of
+from imbue.chat.testing import RecordingMngrMessenger
+from imbue.chat.testing import build_test_state
+from imbue.chat.testing import close_ws
+from imbue.chat.testing import open_ws
+from imbue.chat.testing import serve_app
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
-from imbue.mngr.errors import AgentStartError, MngrError
+from imbue.mngr.errors import AgentStartError
+from imbue.mngr.errors import MngrError
 from imbue.mngr_codex.app_server_client import CodexModel
-from mngr_cli_contract.contract import assert_mngr_argv_valid
-from oom_priority import bands
 
 # Generous: the first receive occasionally exceeded the previous 5.0s cap on a
 # loaded machine (~1-in-8 locally, failing as ``json.loads(None)``) even though
@@ -2066,6 +2065,38 @@ def test_create_chat_mints_a_numbered_display_name_server_side(
     assert body["agent_id"]
 
 
+def test_create_chat_launches_a_reserved_chat_under_its_id(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chat minted while nothing was signed in is launched by naming its id: the tab the
+    shell docked for it keeps its id and name, and only the phase changes."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+    reserved = agent_manager.reserve_chat()
+
+    response = client.post("/api/agents/create-chat", json={"agent_id": reserved.agent_id})
+
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["agent_id"] == reserved.agent_id
+    assert body["display_name"] == reserved.display_name
+
+
+def test_create_chat_refuses_an_id_that_was_never_reserved(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+
+    response = client.post("/api/agents/create-chat", json={"agent_id": "never-reserved"})
+
+    assert response.status_code == 400
+    assert "never-reserved" in response.get_json()["detail"]
+
+
 def test_create_chat_rejects_a_conflicting_explicit_name_with_a_409(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2166,41 +2197,6 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
             assert manager._activity_state_by_agent[agent_id] == ActivityState.TOOL_RUNNING
     finally:
         manager.stop()
-
-
-@pytest.mark.timeout(15)
-def test_proto_agent_logs_endpoint_not_found_sends_error_and_closes(app: Flask) -> None:
-    """When the proto-agent is missing, the endpoint sends a structured not-found message and closes."""
-    with serve_app(app) as served:
-        ws = open_ws(served, "/api/proto-agents/missing-agent/logs")
-        try:
-            payload = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-        finally:
-            close_ws(ws)
-    assert payload == {"done": True, "success": False, "error": "Proto-agent not found"}
-
-
-@pytest.mark.timeout(15)
-def test_proto_agent_logs_endpoint_streams_messages_until_sentinel(app: Flask) -> None:
-    """The endpoint forwards real log lines and closes when the queue yields ``None``."""
-    log_queue: queue.Queue[str | None] = queue.Queue()
-    log_queue.put(json.dumps({"line": "starting"}))
-    log_queue.put(json.dumps({"line": "still going"}))
-    log_queue.put(None)
-
-    agent_manager: AgentManager = state_of(app).agent_manager
-    agent_manager._log_queues["proto-1"] = log_queue
-
-    with serve_app(app) as served:
-        ws = open_ws(served, "/api/proto-agents/proto-1/logs")
-        try:
-            first = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-            second = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-        finally:
-            close_ws(ws)
-
-    assert first == {"line": "starting"}
-    assert second == {"line": "still going"}
 
 
 def test_stream_filtered_events_forwards_only_matching_events() -> None:

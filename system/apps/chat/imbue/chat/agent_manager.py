@@ -1,8 +1,7 @@
-import json
 import os
-import queue
 import shlex
 import threading
+from collections import deque
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
@@ -64,6 +63,8 @@ from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreatedChatAgent
+from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.naming import AUTO_NAME_WORD_BY_HARNESS
 from imbue.chat.naming import canonical_agent_name
@@ -83,6 +84,7 @@ from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.imbue_common.pure import pure
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import AgentRemovedEvent
 from imbue.mngr.api.observe import AgentStateEvent
@@ -98,17 +100,14 @@ from imbue.mngr.primitives import HostName
 # and it travels as `harness`, not folded into the role name.
 CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 
-# What the UI is told it just created. Always the role: both menu entries make a chat,
-# on different harnesses.
-CHAT_CREATION_TYPE: Final[str] = CHAT_ROLE_TEMPLATE
-
 _DEFAULT_MNGR_BINARY = "mngr"
 # The production messenger: a stateless, frozen value whose discover/send are the
 # real mngr calls, so one shared instance is the default for every built manager.
 _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
-_COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
+# How much of a failed ``mngr create``'s output the failure notice carries.
+_CREATION_OUTPUT_TAIL_LINES: Final[int] = 20
 
 # How often the session sweep retries the live backend of every tracked agent that does not
 # have one yet (see ``_reconnect_pending_sessions``). Also bounds the service's idle wake-up
@@ -335,56 +334,29 @@ def _build_agent_match(agent: AgentDetails) -> AgentMatch:
     )
 
 
-def _safe_log_put(log_queue: queue.Queue[str | None], message: str | None) -> None:
-    """Non-blocking put for a creation-log queue.
+class _CreationOutputTail(MutableModel):
+    """Keeps the last lines a ``mngr create`` printed, for the notice a failed create shows.
 
-    The creation thread must never block on individual log lines. If the
-    WebSocket client streaming proto-agent logs disconnects mid-creation,
-    nothing is draining the queue, and a blocking ``put`` would hang the
-    thread at the next log line -- which in turn prevents
-    ``proto_agent_completed`` from ever firing. We drop log lines on a
-    full queue; callers that need delivery guarantees for sentinels
-    (``done: True`` + the ``None`` terminator) should use
-    :func:`_completion_signal_put` instead.
+    Every line is also logged as it arrives, so a create that fails is diagnosable from the
+    app's log after the fact; the tail is what the chat page can show at once.
     """
-    try:
-        log_queue.put_nowait(message)
-    except queue.Full:
-        _loguru_logger.trace("Creation log queue full; dropping line")
 
-
-def _completion_signal_put(log_queue: queue.Queue[str | None], message: str | None) -> None:
-    """Blocking put (with timeout) for completion sentinels.
-
-    Unlike per-line log writes, the completion sentinel + None terminator
-    must reach the consumer -- otherwise ``_proto_agent_logs_endpoint``
-    loops forever on ``queue.get()`` and the log WebSocket never closes.
-    We therefore block briefly (bounded by
-    ``_COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS``) to give a slow consumer
-    time to drain. If the queue is still full at the deadline, log at
-    warning level and drop -- the out-of-band
-    ``broadcast_proto_agent_completed`` WS broadcast is the authoritative
-    signal to the main UI, so the log-channel sentinel being dropped
-    only degrades the dedicated log view, not overall correctness.
-    """
-    try:
-        log_queue.put(message, block=True, timeout=_COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS)
-    except queue.Full:
-        _loguru_logger.warning(
-            "Creation log queue full; dropping completion sentinel. "
-            "The log WebSocket consumer may hang until the queue is garbage-collected."
-        )
-
-
-class _LogQueueCallback(MutableModel):
-    """Callable that appends process output lines as JSON to a queue."""
-
-    model_config = {"arbitrary_types_allowed": True}
-
-    log_queue: queue.Queue[str | None] = Field(description="Queue to write log lines into")
+    lines: deque[str] = Field(default_factory=lambda: deque(maxlen=_CREATION_OUTPUT_TAIL_LINES))
 
     def __call__(self, line: str, _is_stdout: bool) -> None:
-        _safe_log_put(self.log_queue, json.dumps({"line": line.rstrip("\n")}))
+        stripped = line.rstrip("\n")
+        _loguru_logger.debug("mngr create: {}", stripped)
+        self.lines.append(stripped)
+
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+
+@pure
+def _failure_notice(error: str | None, output_tail: str) -> str:
+    """What a failed create's page says: the reason, then the last lines mngr printed."""
+    reason = error or "mngr create failed"
+    return f"{reason}\n{output_tail}" if output_tail else reason
 
 
 def _assert_special_kinds_declared(harness: HarnessType, events: list[dict[str, Any]]) -> None:
@@ -434,8 +406,8 @@ class AgentManager:
     # paths that mutate _agents without a discovery event (creation/refresh) skip
     # it, and a miss in get_agent_matches_by_id just falls back to discovery.
     _match_by_agent_id: dict[str, AgentMatch]
-    _proto_agents: dict[str, dict[str, Any]]
-    _log_queues: dict[str, queue.Queue[str | None]]
+    # The chats minted here that mngr does not know yet, by the id they will carry.
+    _proto_agents: dict[str, ProvisionalChat]
     _own_agent_id: str
     _own_work_dir: str
     _shutdown_event: ShutdownEvent
@@ -538,7 +510,6 @@ class AgentManager:
         manager._agents = {}
         manager._match_by_agent_id = {}
         manager._proto_agents = {}
-        manager._log_queues = {}
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
         manager._own_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
         manager._shutdown_event = ShutdownEvent.build_root()
@@ -918,7 +889,7 @@ class AgentManager:
             taken_names = () if agent_state is None else tuple(self._taken_names_locked(agent_state.id))
 
         if agent_state is None:
-            if proto_agent is not None and str(proto_agent.get("name", "")) != display_name:
+            if proto_agent is not None and proto_agent.name != display_name:
                 raise AgentRenameError(
                     f"Chat '{agent_ref}' is still being created; it cannot be renamed to '{display_name}' yet"
                 )
@@ -1064,15 +1035,14 @@ class AgentManager:
             return False
         return session.is_tap_available(has_queued=bool(agent_state.queued_messages))
 
-    def get_proto_agents(self) -> list[dict[str, Any]]:
-        """Return list of proto-agents (agents being created)."""
+    def get_proto_agents(self) -> list[ProvisionalChat]:
+        """The provisional chats: minted here and not yet agents, in every phase."""
         with self._lock:
             return list(self._proto_agents.values())
 
-    def get_log_queue(self, agent_id: str) -> queue.Queue[str | None] | None:
-        """Get the log queue for a proto-agent creation process."""
+    def get_proto_agent(self, agent_id: str) -> ProvisionalChat | None:
         with self._lock:
-            return self._log_queues.get(agent_id)
+            return self._proto_agents.get(agent_id)
 
     def get_own_agent_id(self) -> str:
         """Return this server's own agent ID from the environment."""
@@ -1098,10 +1068,46 @@ class AgentManager:
         for proto_agent_id, proto in self._proto_agents.items():
             if proto_agent_id == exclude_agent_id:
                 continue
-            proto_name = str(proto.get("name", ""))
-            if proto_name:
-                taken.append(proto_name)
+            if proto.name:
+                taken.append(proto.name)
         return taken
+
+    def reserve_chat(self, project_id: str = "") -> CreatedChatAgent:
+        """Mint a chat with nothing to launch it on yet.
+
+        The instance exists from this moment (the shell docks its page under the id mngr
+        will give it), in the awaiting-account phase: the page shows the provider chooser,
+        and a sign-in launches it through ``create_chat_agent`` with this id. The name is
+        the first free "Chat N", counted like a launch's, so the reservation holds it.
+        """
+        agent_id = str(AgentId())
+        with self._lock:
+            display_name = first_free_numbered_name(
+                AUTO_NAME_WORD_BY_HARNESS[DEFAULT_HARNESS], self._taken_names_locked()
+            )
+            proto = ProvisionalChat(
+                agent_id=agent_id,
+                name=display_name,
+                project_id=project_id,
+                phase=ProvisionalChatPhase.AWAITING_ACCOUNT,
+            )
+            self._proto_agents[agent_id] = proto
+        self._broadcaster.broadcast_proto_agent_created(proto)
+        self._nudger.nudge()
+        return CreatedChatAgent(agent_id=agent_id, name=canonical_agent_name(display_name), display_name=display_name)
+
+    def discard_provisional_chat(self, agent_id: str) -> bool:
+        """Drop a provisional chat that is not being created: one awaiting an account, or one
+        whose create failed. Returns whether anything was dropped; a create in flight cannot be
+        taken back and is left alone."""
+        with self._lock:
+            proto = self._proto_agents.get(agent_id)
+            if proto is None or proto.phase is ProvisionalChatPhase.CREATING:
+                return False
+            del self._proto_agents[agent_id]
+        self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=False, error=None)
+        self._nudger.nudge()
+        return True
 
     def create_chat_agent(
         self,
@@ -1109,6 +1115,7 @@ class AgentManager:
         extra_role_templates: tuple[str, ...] = (),
         project_id: str = "",
         account_id: str = "",
+        agent_id: str = "",
     ) -> CreatedChatAgent:
         """Create a chat agent in the primary agent's work dir on the given harness.
 
@@ -1118,6 +1125,10 @@ class AgentManager:
         first free "<word> N" for the harness ("Chat 1", "Codex 2", ...) here,
         server-side, under the same lock that registers the in-flight create --
         so two simultaneous creates cannot both mint "Chat 1".
+
+        ``agent_id`` names a chat minted earlier (``reserve_chat``, or one whose create
+        failed): it is launched under that id and keeps the name it was minted with, so the
+        tab the shell docked for it becomes the chat. Any other id is refused.
 
         The harness comes from the account, not from the caller: it is the name of the
         create template stacked on top, and the `chat` role template supplies everything
@@ -1131,15 +1142,8 @@ class AgentManager:
         collision mngr itself would reject).
 
         ``account_id`` binds the chat to one signed-in account; empty picks the most recently
-        used one. With no accounts at all the chat is created unbound and on the claude
-        harness -- there is no shared login behind that any more, so it will not be able to
-        take a turn. The launcher opens the chooser rather than reaching this.
-
-        There is no signed-out preflight any more. An account is committed only after the
-        harness's own probe agreed it was signed in, and a chat runs on the account it binds
-        to -- so "is this harness authenticated" is answered by the account existing. The old
-        gate probed the SHARED login, which is a different credential from the account and
-        would have refused creates that were about to work fine.
+        used one. With no accounts at all the create is refused (the instances API reserves
+        the chat instead, see ``reserve_chat``).
         """
         try:
             account = resolve_binding(account_id)
@@ -1152,9 +1156,6 @@ class AgentManager:
         if explicit_name and not canonical_agent_name(explicit_name):
             raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
 
-        agent_id = str(AgentId())
-        log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
-
         # Name resolution and proto registration happen under one lock hold, so a
         # concurrent create sees this one's name as taken (and vice versa).
         with self._lock:
@@ -1164,31 +1165,41 @@ class AgentManager:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
 
-            taken_names = self._taken_names_locked()
-            if explicit_name:
-                if is_name_conflict(explicit_name, taken_names):
-                    raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
-                display_name = explicit_name
+            if agent_id:
+                reserved = self._proto_agents.get(agent_id)
+                if reserved is None or reserved.phase is ProvisionalChatPhase.CREATING:
+                    raise AgentCreationError(f"Chat {agent_id} is not waiting to be launched")
+                display_name = reserved.name
+                project_id = reserved.project_id
             else:
-                # The lane's word where it has one, else the harness's. Two lanes can share a
-                # harness -- Opencode Go and OpenRouter both run on pi -- and naming those tabs
-                # after the harness made both fleets count as "Pi N", so the strip could not
-                # say which provider a chat was spending.
-                word = AUTO_NAME_WORD_BY_LANE.get(account.lane, AUTO_NAME_WORD_BY_HARNESS[harness])
-                display_name = first_free_numbered_name(word, taken_names)
+                agent_id = str(AgentId())
+                taken_names = self._taken_names_locked()
+                if explicit_name:
+                    if is_name_conflict(explicit_name, taken_names):
+                        raise AgentNameConflictError(
+                            f"A chat named '{explicit_name}' already exists; pick another name"
+                        )
+                    display_name = explicit_name
+                else:
+                    # The lane's word where it has one, else the harness's. Two lanes can share a
+                    # harness -- Opencode Go and OpenRouter both run on pi -- and naming those tabs
+                    # after the harness made both fleets count as "Pi N", so the strip could not
+                    # say which provider a chat was spending.
+                    word = AUTO_NAME_WORD_BY_LANE.get(account.lane, AUTO_NAME_WORD_BY_HARNESS[harness])
+                    display_name = first_free_numbered_name(word, taken_names)
 
-            proto_info = {
-                "agent_id": agent_id,
-                "name": display_name,
-                "creation_type": CHAT_CREATION_TYPE,
-                "parent_agent_id": None,
-            }
-            self._proto_agents[agent_id] = proto_info
-            self._log_queues[agent_id] = log_queue
+            proto = ProvisionalChat(
+                agent_id=agent_id,
+                name=display_name,
+                project_id=project_id,
+                account_id=account.id,
+                phase=ProvisionalChatPhase.CREATING,
+            )
+            self._proto_agents[agent_id] = proto
 
         # Launching on an account makes it the most recently used one, which is what the
-        # new-tab picker offers next time. Set here rather than in the picker so a chat
-        # started from the rail's shortcut counts the same.
+        # next launch picks. Set here rather than by the page so a chat started from the
+        # rail's shortcut counts the same.
         #
         # Best-effort, and deliberately so: the mru is a convenience, not an input to
         # correctness. It runs AFTER the proto agent is registered and outside the try that
@@ -1233,12 +1244,7 @@ class AgentManager:
             account_args,
         )
 
-        self._broadcaster.broadcast_proto_agent_created(
-            agent_id=agent_id,
-            name=display_name,
-            creation_type=CHAT_CREATION_TYPE,
-            parent_agent_id=None,
-        )
+        self._broadcaster.broadcast_proto_agent_created(proto)
         self._nudger.nudge()
 
         # Mirror the labels the created mngr agent will carry (see
@@ -1250,9 +1256,7 @@ class AgentManager:
             labels["project"] = project_label
         labels["account"] = account.id
         canonical_name = canonical_agent_name(display_name)
-        self._launch_creation_thread(
-            agent_id, canonical_name, cmd, Path(work_dir), log_queue, labels, harness, is_first_chat
-        )
+        self._launch_creation_thread(agent_id, canonical_name, cmd, Path(work_dir), labels, harness, is_first_chat)
 
         return CreatedChatAgent(agent_id=agent_id, name=canonical_name, display_name=display_name)
 
@@ -1262,15 +1266,14 @@ class AgentManager:
         agent_name: str,
         cmd: list[str],
         work_dir: Path,
-        log_queue: queue.Queue[str | None],
         labels: dict[str, str],
         harness: HarnessType,
         is_first_chat: bool = False,
     ) -> None:
-        """Start a background thread to run agent creation and stream logs."""
+        """Start a background thread to run agent creation."""
         self._creation_cg.start_new_thread(
             target=self._run_creation,
-            args=(agent_id, agent_name, cmd, work_dir, log_queue, labels, harness, is_first_chat),
+            args=(agent_id, agent_name, cmd, work_dir, labels, harness, is_first_chat),
             name=f"create-{agent_id[:8]}",
             is_checked=False,
         )
@@ -1290,41 +1293,31 @@ class AgentManager:
         agent_name: str,
         cmd: list[str],
         work_dir: Path,
-        log_queue: queue.Queue[str | None],
         labels: dict[str, str],
         harness: HarnessType,
         is_first_chat: bool = False,
     ) -> None:
-        """Run mngr create in the background, capture output, and always emit completion.
+        """Run mngr create in the background and always settle the provisional chat.
 
-        This thread is started with ``is_checked=False``, so any exception
-        that escaped here was silently swallowed -- which left the client's
-        ChatPanel stuck on "Creating agent..." forever, because neither the
-        log stream's ``{done: true}`` sentinel nor the WS
-        ``proto_agent_completed`` broadcast fired.
-
-        The whole body runs inside a single catch-all so that *no matter
-        what* the subprocess, its callbacks, or the pydantic / broadcaster
-        calls below throw, the proto-agent entry is always cleared on the
-        client and any error is surfaced as a string to the UI. The
-        catch-all is intentional belt-and-suspenders: see
-        ``test_prevent_broad_exception_catch``'s snapshot bump.
+        This thread is started with ``is_checked=False``, so any exception that escaped here
+        would be silently swallowed -- and the chat's page would wait forever, because the
+        ``proto_agent_completed`` broadcast never fired. The whole body runs inside a single
+        catch-all so that no matter what the subprocess, its callbacks, or the calls below
+        throw, the provisional chat ends up either an agent or failed with a reason.
         """
         success = False
         error: str | None = None
+        output_tail = _CreationOutputTail()
 
         try:
-            cmd_str = shlex.join(cmd)
-            header_line = f"[cwd: {work_dir}] {cmd_str}"
-            _safe_log_put(log_queue, json.dumps({"line": header_line}))
-
+            _loguru_logger.info("mngr create: [cwd: {}] {}", work_dir, shlex.join(cmd))
             try:
                 result = run_local_command_modern_version(
                     command=cmd,
                     cwd=work_dir,
                     is_checked=False,
                     trace_output=True,
-                    trace_on_line_callback=_LogQueueCallback(log_queue=log_queue),
+                    trace_on_line_callback=output_tail,
                     shutdown_event=self._shutdown_event,
                 )
                 success = result.returncode == 0
@@ -1341,9 +1334,8 @@ class AgentManager:
                 release_first_chat()
 
             with self._lock:
-                self._proto_agents.pop(agent_id, None)
-                self._log_queues.pop(agent_id, None)
                 if success:
+                    self._proto_agents.pop(agent_id, None)
                     self._agents[agent_id] = AgentStateItem(
                         id=agent_id,
                         name=agent_name,
@@ -1352,6 +1344,8 @@ class AgentManager:
                         work_dir=str(work_dir),
                         harness=harness,
                     )
+                else:
+                    self._mark_creation_failed_locked(agent_id, _failure_notice(error, output_tail.text()))
         except Exception as e:
             # Force-demote success: the happy path sets success=True before
             # constructing AgentStateItem, so if pydantic validation (or
@@ -1366,28 +1360,29 @@ class AgentManager:
             _loguru_logger.opt(exception=e).error("Unexpected error creating agent {}", agent_id)
             if is_first_chat:
                 release_first_chat()
-            # The proto-agent entry may still be sitting in _proto_agents if
-            # the exception fired before the cleanup block. Try once more,
-            # safely, before we broadcast completion.
             try:
                 with self._lock:
-                    self._proto_agents.pop(agent_id, None)
-                    self._log_queues.pop(agent_id, None)
+                    self._mark_creation_failed_locked(agent_id, error)
             except (OSError, RuntimeError) as cleanup_exc:
-                _loguru_logger.opt(exception=cleanup_exc).error("Failed to clean proto-agent entry for {}", agent_id)
-
-        _completion_signal_put(log_queue, json.dumps({"done": True, "success": success, "error": error}))
-        _completion_signal_put(log_queue, None)
+                _loguru_logger.opt(exception=cleanup_exc).error("Failed to settle the provisional chat {}", agent_id)
 
         if success:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
             self._broadcast_agents_updated()
         else:
-            # The provisional record left the instance list with no agent-list broadcast to
-            # carry the change (a success nudges through the broadcast above).
+            # The provisional record changed phase with no agent-list broadcast to carry the
+            # change (a success nudges through the broadcast above).
             self._nudger.nudge()
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
+
+    def _mark_creation_failed_locked(self, agent_id: str, error: str) -> None:
+        """Keep the provisional chat, in the failed phase: its page shows the reason and can
+        try again on the same account. Must be called with the lock held."""
+        proto = self._proto_agents.get(agent_id)
+        if proto is None:
+            return
+        self._proto_agents[agent_id] = proto.model_copy(update={"phase": ProvisionalChatPhase.FAILED, "error": error})
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""

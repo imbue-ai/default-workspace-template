@@ -1,3 +1,5 @@
+from enum import auto
+
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -7,6 +9,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
+from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -272,6 +275,36 @@ class CreateChatRequest(FrozenModel):
         default="",
         description="Signed-in account to bind the chat to; empty picks the most recently used one",
     )
+    agent_id: str = Field(
+        default="",
+        description="A chat minted earlier while nothing was signed in (or one whose create failed) to launch now",
+    )
+
+
+class ProvisionalChatPhase(LowerCaseStrEnum):
+    """Where a chat that is not an agent yet stands."""
+
+    # Minted with nothing signed in: the page shows the provider chooser, and the launch waits.
+    AWAITING_ACCOUNT = auto()
+    # Its ``mngr create`` is running.
+    CREATING = auto()
+    # Its ``mngr create`` failed; ``error`` says how, and the page can try again.
+    FAILED = auto()
+
+
+class ProvisionalChat(FrozenModel):
+    """A chat the app has minted but mngr does not know yet (a "proto agent").
+
+    Listed as a referenced instance under the id mngr will give it, and pushed to the chat
+    pages verbatim as the ``proto_agent_created`` message.
+    """
+
+    agent_id: str = Field(description="The id the agent will carry")
+    name: str = Field(description="The display name minted for it")
+    project_id: str = Field(default="", description="The project it was started in, for the agent's label")
+    account_id: str = Field(default="", description="The account it launches on; empty while awaiting one")
+    phase: ProvisionalChatPhase = Field(description="Where the creation stands")
+    error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
 
 
 class CreatedChatAgent(FrozenModel):
