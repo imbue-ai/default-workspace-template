@@ -71,12 +71,13 @@ package = false
 # (system/scripts/build_workspace.sh, the build-app scaffold, and the
 # update-self apply all do that), and its supervisord program runs the tool's
 # entry point. An app scaffolded before manifests existed has no app.toml and
-# still runs `uv run <name>` from this venv. Both kinds stay members for now,
-# so one lockfile covers the whole tree and such a pre-manifest app's entries
-# in this file keep resolving; the cost is that `uv sync --all-packages` also
-# installs the manifest apps here, unused. The workspace app model's migration
-# phase rewrites pre-manifest apps to the manifest form and takes apps out of
-# the workspace.
+# still runs `uv run <name>` from this venv. Both kinds are members, and stay
+# so: one lockfile covers the whole tree, such a pre-manifest app's entries in
+# this file keep resolving, and a user-built app never has to edit this file.
+# The cost is that `uv sync --all-packages` also installs the manifest apps
+# here, unused, which uv's shared cache makes nearly free. Membership keeps
+# every environment on the same versions; an app's own tool environment keeps
+# it running while this venv is rewritten or broken.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
 # CLEANUP: drop this exclusion in phase 10 of the workspace app model, when the chat app
 # gets its own pyproject; until then system/apps/chat holds only a manifest and an icon

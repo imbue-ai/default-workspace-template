@@ -53,7 +53,7 @@ MNGR_PLUGIN_KEY = "mngr"
 # environment (see build_workspace.sh); the manifest names it and says whether
 # it is critical (a snapshot-and-rollback target in the apply). An app with a
 # pyproject but no manifest was scaffolded before manifests existed and still
-# runs ``uv run <name>`` from the root venv until the migration rewrites it.
+# runs ``uv run <name>`` from the root venv; both forms are supported for good.
 APPS_DIR = "system/apps"
 
 MANIFEST_FILENAME = "app.toml"
@@ -93,6 +93,14 @@ PROVISIONER_HOME = "/root"
 PROVISIONER_PATH = (
     "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
+
+# The one-shot carry-over of a pre-workspace-app-model workspace's projects and layouts into
+# the shell's state files. The apply runs it from the merged tree before the restart so the
+# restarted shell reads migrated state; bootstrap runs it again at every boot, guarded by the
+# script's own marker, so a failure here costs nothing but a retry.
+LAYOUT_MIGRATION_SCRIPT = "system/scripts/migrate_workspace_layouts.py"
+
+LAYOUT_MIGRATION_TIMEOUT_SECONDS = 60.0
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 

@@ -48,7 +48,8 @@ git config --global --add safe.directory "$REPO_ROOT"
 # own pyproject, so no app runs from the root venv and one app's pins never
 # constrain another's. The manifest is the discriminator: an app with a
 # pyproject but no manifest was scaffolded before manifests existed, still runs
-# `uv run <name>` from the root venv, and is left to the migration. An app's
+# `uv run <name>` from the root venv, and stays that way (both forms are
+# supported for good). An app's
 # tool also gets the mngr plugins system/config/mngr_plugins.toml assigns to
 # its manifest name, as editable extras, so it can parse plugin-specific
 # config; the update-self apply reads the same table, so a release adding a

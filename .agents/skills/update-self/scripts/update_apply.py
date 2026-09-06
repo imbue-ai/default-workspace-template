@@ -1,8 +1,9 @@
 """``apply`` lands a prepared merge and makes the live workspace consistent with
 it, as one deterministic, idempotent, rollback-on-failure motion: merge,
 state snapshots, dependency refresh, provisioner run, frontend build (or the
-worker's already-built bundle), pre-flight, restart, health probes, the
-version-history ledger entry, and the environment converge. On any failure it
+worker's already-built bundle), pre-flight, the workspace layout migration
+(warning-only), restart, health probes, the version-history ledger entry, and
+the environment converge. On any failure it
 reverts the entire merge and restores the pre-apply snapshots -- a recovery
 path needing no network, no package manager, and no working ``mngr``.
 
@@ -74,6 +75,8 @@ from update_layout import (
     ENV_WORKSPACE_URL,
     FRONTEND_BUILD_INDEX,
     FRONTEND_DIR,
+    LAYOUT_MIGRATION_SCRIPT,
+    LAYOUT_MIGRATION_TIMEOUT_SECONDS,
     PROVISIONER_SCRIPT,
     STATIC_DIR,
 )
@@ -99,6 +102,7 @@ from update_runtime import (
     diff_name_status,
     git_out,
     run_checked,
+    tail,
 )
 
 # Per-step wall-clock budgets for the forward apply steps. Nothing about an
@@ -360,6 +364,39 @@ def _install_or_build_bundle(
     )
 
 
+def _migrate_workspace_layouts(repo_root: Path, runner: Runner) -> str | None:
+    """Run the merged tree's layout migration; return why it failed, or ``None``.
+
+    Warning-only by design: the migration writes only files that do not exist
+    yet, leaves the old store untouched, and runs again at every boot behind
+    its own marker, so a failure here is a retry later, never a reason to roll
+    an otherwise healthy update back. Never raises: a hang and a spawn failure
+    both come back as the reason.
+    """
+    argv = ["python3", LAYOUT_MIGRATION_SCRIPT, "run"]
+    try:
+        result = runner.run(
+            argv,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=LAYOUT_MIGRATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"python3 {LAYOUT_MIGRATION_SCRIPT} did not finish within "
+            f"{LAYOUT_MIGRATION_TIMEOUT_SECONDS:g}s"
+        )
+    except OSError as exc:
+        return f"python3 {LAYOUT_MIGRATION_SCRIPT} could not be run ({exc})"
+    returncode = getattr(result, "returncode", 0)
+    if returncode == 0:
+        return None
+    stderr = tail((getattr(result, "stderr", "") or "").strip(), 20)
+    return f"python3 {LAYOUT_MIGRATION_SCRIPT} failed (exit {returncode}): {stderr}"
+
+
 class RecoveryOutcome(NamedTuple):
     """What a rollback's recovery confirmed.
 
@@ -462,7 +499,9 @@ def _recover_running_state(
             _assert_bundle_built(repo_root, None, live_service_restarted=False)
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(repo_root, runner, keep_protected)
-        rebuildable_app_tools = _app_tools_to_rebuild(plan.app_tools, restored, repo_root)
+        rebuildable_app_tools = _app_tools_to_rebuild(
+            plan.app_tools, restored, repo_root
+        )
         if rebuildable_app_tools:
             refresh_app_tools(rebuildable_app_tools, repo_root, runner, keep_protected)
         if live_service_restarted:
@@ -775,7 +814,11 @@ def apply_update(
             )
         if plan.app_tools:
             refresh_app_tools(
-                plan.app_tools, repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
+                plan.app_tools,
+                repo_root,
+                runner,
+                expend,
+                ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
         _advance(PHASE_REFRESHED)
 
@@ -833,6 +876,17 @@ def apply_update(
                 repo_root, expected_bundle_hash, live_service_restarted=False
             )
             _advance(PHASE_BUILT)
+
+        # The merged tree's layout migration runs before the restart, so the
+        # restarted shell reads migrated state at once rather than after the
+        # boot-time run; a failure is reported and left to that run.
+        migration_failure = _migrate_workspace_layouts(repo_root, runner)
+        if migration_failure is not None:
+            sys.stderr.write(
+                f"warning: {migration_failure}\nContinuing without rolling back: "
+                "the migration writes only state files that do not exist yet and "
+                "runs again at the next boot.\n"
+            )
 
         # Every apply restarts the services agent, whatever the diff: the
         # running system interface imports the vendored mngr and the

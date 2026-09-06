@@ -41,11 +41,12 @@ when an app's directory changes), so its program line runs the tool's entry
 point rather than `uv run`. The root venv is for the background services,
 agents, skills, and scripts. The manifest is the discriminator: an app
 scaffolded before manifests existed has no `app.toml`, still runs `uv run
-<name>` from the root venv, and is left as it is until the workspace app
-model's migration rewrites it to the manifest form. Python packages here are
-still picked up by the workspace's `system/apps/*` uv member glob for now, so
-one lockfile covers the whole tree; nothing in the root `pyproject.toml` needs
-editing for a new app.
+<name>` from the root venv, and keeps working that way for as long as it
+exists (both forms are supported; nothing rewrites an old app behind the
+user's back). Python packages here are picked up by the workspace's
+`system/apps/*` uv member glob, so one lockfile covers the whole tree and
+nothing in the root `pyproject.toml` needs editing for a new app; an app's own
+tool environment is what keeps it running while the root venv is rewritten.
 
 An app that needs a continuously running background component keeps that
 service's code in its own folder here, named `<app>-<role>` in supervisord;

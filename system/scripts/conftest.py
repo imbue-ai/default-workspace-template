@@ -158,3 +158,254 @@ def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+_MIGRATE_SCRIPT = Path(__file__).parent / "migrate_workspace_layouts.py"
+_migrate_spec = importlib.util.spec_from_file_location(
+    "migrate_workspace_layouts_for_fixtures", _MIGRATE_SCRIPT
+)
+assert _migrate_spec is not None and _migrate_spec.loader is not None
+migrate_workspace_layouts = importlib.util.module_from_spec(_migrate_spec)
+_migrate_spec.loader.exec_module(migrate_workspace_layouts)
+
+
+def _legacy_leaf(group_id: str, views: list[str], size: int) -> dict[str, Any]:
+    return {
+        "type": "leaf",
+        "data": {"views": views, "activeView": views[0], "id": group_id},
+        "size": size,
+    }
+
+
+def _legacy_content(
+    groups: list[tuple[str, list[str], int]], panels: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """One old ``projects/<id>.json``: dockview's own document (the old component names) plus the
+    ``panelParams`` sidecar the old frontend kept beside it."""
+    return {
+        "dockview": {
+            "grid": {
+                "root": {
+                    "type": "branch",
+                    "data": [_legacy_leaf(*group) for group in groups],
+                    "size": 800,
+                },
+                "width": 1200,
+                "height": 800,
+                "orientation": "HORIZONTAL",
+            },
+            "panels": {
+                panel_id: {
+                    "id": panel_id,
+                    "contentComponent": params.get("panelType", "iframe"),
+                    "title": params.get("title", panel_id),
+                    "params": params,
+                }
+                for panel_id, params in panels.items()
+            },
+            "activeGroup": groups[0][0],
+        },
+        "panelParams": panels,
+    }
+
+
+# The old panel params, one per kind the pre-arc frontend saved (``PanelParams`` in its
+# ``liveSurfaces.ts``): the address each maps to is what the migration tests assert.
+LEGACY_PANELS: dict[str, dict[str, Any]] = {
+    "chat-agent-aaa": {
+        "panelType": "chat",
+        "agentId": "agent-aaa",
+        "chatAgentId": "agent-aaa",
+        "title": "Planning",
+    },
+    "iframe-terminal-1": {
+        "panelType": "iframe",
+        "agentId": "agent-primary",
+        "url": "http://terminal-x.host-1.localhost:8421/?arg=_&arg=session&arg=terminal-1",
+        "title": "Terminal 1",
+        "terminalSessionName": "terminal-1",
+        "terminalId": "t-1",
+    },
+    "iframe-browser-1": {
+        "panelType": "iframe",
+        "agentId": "agent-primary",
+        "serviceName": "browser",
+        "url": "http://browser-x.host-1.localhost:8421/?session=browser-1",
+        "title": "Browser 1",
+    },
+    "iframe-files-2": {
+        "panelType": "iframe",
+        "agentId": "agent-primary",
+        "serviceName": "files",
+        "serviceInstanceId": "files-2",
+        "url": "http://files-x.host-1.localhost:8421/data/notes",
+        "customTitle": "My notes",
+    },
+    "iframe-docs": {
+        "panelType": "iframe",
+        "agentId": "agent-primary",
+        "serviceName": "docs",
+        "url": "http://docs-x.host-1.localhost:8421/",
+        "title": "docs",
+    },
+    "iframe-url-1": {
+        "panelType": "iframe",
+        "agentId": "agent-primary",
+        "url": "https://example.com/",
+        "title": "Example",
+    },
+    "subagent-s1": {
+        "panelType": "subagent",
+        "agentId": "agent-aaa",
+        "subagentSessionId": "s1",
+        "title": "Subagent",
+    },
+    "new-tab-1": {"panelType": "launcher", "agentId": "agent-primary"},
+}
+
+
+def write_legacy_layout_dir(layout_dir: Path) -> None:
+    """A pre-arc ``workspace_layout`` directory in the shape today's retired writers left: two
+    projects (one with every panel kind and the overrides map, one hand-edited with the legacy
+    unpinned list and a corrupt mobile file), an Everything view showing only an ad-hoc page,
+    and the three per-ref side stores."""
+    projects_dir = layout_dir / "projects"
+    projects_dir.mkdir(parents=True)
+    (layout_dir / "projects_meta.json").write_text(
+        json.dumps(
+            {
+                "project_by_id": {
+                    "project-1": {
+                        "name": "Project 1",
+                        "color": "#F0603A",
+                        "glyph": 3,
+                        "members": [
+                            "chat:agent-aaa",
+                            "terminal:terminal-1",
+                            "service:browser?session=browser-1",
+                            "service:files?instance=files-2",
+                            "service:docs",
+                            "service:notes",
+                            "url:abcd1234",
+                            "subagent:s1",
+                            "terminal:bad.name",
+                        ],
+                        "shortcut_overrides": {
+                            "browser": {"is_pinned": False},
+                            "chat": {"mode": "focus"},
+                            "app:docs": {"mode": "new"},
+                        },
+                    },
+                    "research": {
+                        "name": "Research",
+                        "color": "purple",
+                        "glyph": 42,
+                        "members": ["chat:agent-bbb"],
+                        "unpinned_shortcuts": ["files"],
+                    },
+                },
+                "last_active_id": "research",
+            }
+        )
+    )
+    (projects_dir / "project-1.json").write_text(
+        json.dumps(
+            _legacy_content(
+                [
+                    ("g1", ["chat-agent-aaa", "iframe-terminal-1", "new-tab-1"], 600),
+                    (
+                        "g2",
+                        [
+                            "iframe-browser-1",
+                            "iframe-files-2",
+                            "iframe-docs",
+                            "iframe-url-1",
+                            "subagent-s1",
+                        ],
+                        600,
+                    ),
+                ],
+                LEGACY_PANELS,
+            )
+        )
+    )
+    (projects_dir / "project-1.mobile.json").write_text(
+        json.dumps(
+            _legacy_content(
+                [("m1", ["chat-agent-aaa"], 400)],
+                {"chat-agent-aaa": LEGACY_PANELS["chat-agent-aaa"]},
+            )
+        )
+    )
+    research_chat = {
+        "panelType": "chat",
+        "agentId": "agent-bbb",
+        "chatAgentId": "agent-bbb",
+        "title": "Reading",
+    }
+    (projects_dir / "research.json").write_text(
+        json.dumps(
+            _legacy_content(
+                [("r1", ["chat-agent-bbb", "iframe-url-1"], 1200)],
+                {
+                    "chat-agent-bbb": research_chat,
+                    "iframe-url-1": LEGACY_PANELS["iframe-url-1"],
+                },
+            )
+        )
+    )
+    (projects_dir / "research.mobile.json").write_text("{not json")
+    (projects_dir / "everything.json").write_text(
+        json.dumps(
+            _legacy_content(
+                [("e1", ["iframe-url-1"], 1200)],
+                {"iframe-url-1": LEGACY_PANELS["iframe-url-1"]},
+            )
+        )
+    )
+    (layout_dir / "member_titles.json").write_text(
+        json.dumps(
+            {
+                "title_by_ref": {
+                    "terminal:terminal-1": "Build log",
+                    "chat:agent-aaa": "Planning",
+                }
+            }
+        )
+    )
+    (layout_dir / "member_last_used.json").write_text(
+        json.dumps(
+            {
+                "last_used_ms_by_ref": {
+                    "chat:agent-aaa": 1700000000000,
+                    "service:files?instance=files-2": 1700000001000,
+                    "terminal:terminal-1": "not a number",
+                }
+            }
+        )
+    )
+    (layout_dir / "member_locations.json").write_text(
+        json.dumps(
+            {
+                "location_by_ref": {
+                    "service:files?instance=files-2": "/data/notes?sort=name"
+                }
+            }
+        )
+    )
+
+
+@pytest.fixture
+def legacy_layout_dir(tmp_path: Path) -> Path:
+    layout_dir = tmp_path / "host" / "agents" / "agent-primary" / "workspace_layout"
+    write_legacy_layout_dir(layout_dir)
+    return layout_dir
+
+
+@pytest.fixture
+def migration_registry(tmp_path: Path) -> Path:
+    """A registry with a single-instance app (``docs``) and an app with instances (``notes``), the two
+    shapes an app pin can map onto."""
+    path = tmp_path / "migration-apps.toml"
+    _write_apps_toml(path, {"docs": (), "notes": ("new",)})
+    return path

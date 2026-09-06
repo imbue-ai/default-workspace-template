@@ -5,7 +5,7 @@ Nothing user-visible changes in this phase; every app registers with the same na
 
 ## Goal
 
-Give every built-in app a manifest, teach the registration script to read it, extend the registry rows, install every manifest app as its own tool environment (the manifest is the discriminator; a pre-manifest user app keeps `uv run` until phase 9), and switch the memory backstop to the registry's `priority`.
+Give every built-in app a manifest, teach the registration script to read it, extend the registry rows, install every manifest app as its own tool environment (the manifest is the discriminator; a pre-manifest user app keeps `uv run`, and phase 9 decided it does so indefinitely), and switch the memory backstop to the registry's `priority`.
 
 ## Files
 
@@ -26,7 +26,7 @@ Modified:
 - `system/scripts/build_workspace.sh`: replaces the single `system-interface` tool install with the loop of contracts section 14 and reads each app's plugin list from the plugin table by app name.
 - `system/config/mngr_plugins.toml`: the `tools` lists name apps by manifest name; `system-interface` keeps its five harness plugins until phase 10 moves them to `chat`.
 - `system/scripts/list_mngr_plugins.py`: `--tool` accepts any name in the table.
-- `pyproject.toml` (root): `browser` leaves `[project.dependencies]`; `app-manifest` joins `[tool.uv.sources]`. `system/apps/*` stays in the workspace member glob for now (contracts section 14): an existing workspace's root pyproject names its scaffolded apps as `{ workspace = true }` sources, so removing the glob before those apps are migrated would break its next `uv sync --all-packages --frozen` and roll the update back. Phase 9 removes the glob together with the pre-manifest apps.
+- `pyproject.toml` (root): `browser` leaves `[project.dependencies]`; `app-manifest` joins `[tool.uv.sources]`. `system/apps/*` stays in the workspace member glob for now (contracts section 14): an existing workspace's root pyproject names its scaffolded apps as `{ workspace = true }` sources, so removing the glob before those apps are migrated would break its next `uv sync --all-packages --frozen` and roll the update back. Phase 9 was to remove the glob together with the pre-manifest apps, and decided against both: the glob and the two app forms stay.
 - `.agents/skills/update-self/scripts/update_environment.py` and `update_classification.py`: the environment refresh reinstalls the tool of every changed app directory and snapshots the tool directories of `critical` apps; the classification treats `system/apps/<package>/**` outside `frontend/` and `static/` as that app's environment.
 - `.agents/skills/build-app/scripts/scaffold_flask_lib.py` and `SKILL.md`, `.agents/skills/update-app/SKILL.md`, `.agents/shared/references/service-processes.md`: the scaffold writes an `app.toml`, installs the new app as a tool, and writes the manifest-driven registration line; the update-app live loop reinstalls the tool after a dependency change.
 - `system/services/oom_priority/src/oom_priority/bands.py`: adds `"chat": 25`; `supervisord_program_band` takes the registry rows as an argument and resolves through `priority`.

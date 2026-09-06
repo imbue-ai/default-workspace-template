@@ -75,7 +75,7 @@ Each `[[apps]]` row:
 | `actions` | manifest | Array of inline tables `{id, label}`; `params` is not copied. |
 
 `forward_port.py --manifest <path> --url <url>` reads the manifest with `tomllib`, validates `name` (must match the manifest), reads and validates the icon file, and upserts the row with every field above; `--name` may be given and must then equal the manifest's name.
-`--name --url` without `--manifest` keeps today's behaviour for manifest-less registrations (`--internal`, `--no-icon`, `--program`, `--icon-file` unchanged until phase 11 removes `--icon-file` and `--program`).
+`--name --url` without `--manifest` keeps today's behaviour for manifest-less registrations (`--internal`, `--no-icon`, `--program`, `--icon-file` unchanged; a pre-manifest app registers this way for as long as it exists, so phase 11 keeps every flag).
 `--remove` is unchanged.
 The script validates only what it copies from files; the shell validates every row against the `AppManifest` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
 
@@ -316,11 +316,11 @@ The minds chrome does not yet forward a deep link's query to the shell frame; th
 ## 14. Tool environments
 
 - The manifest is the discriminator: every directory under `system/apps/` with both a `pyproject.toml` and an `app.toml` is a Python app that runs from its own uv tool: `uv tool install -e system/apps/<package> [--with-editable <plugin path>]...`, with the plugin list from `system/config/mngr_plugins.toml` where the app's manifest `name` appears in a plugin's `tools`.
-- A directory with a `pyproject.toml` and no manifest is a pre-manifest app (scaffolded before this arc); it keeps running `uv run <name>` from the root venv, untouched by the build and the apply, until the migration (phase 9) rewrites it to the manifest form. There are exactly these two forms and the migration retires the second, so no code path ever handles a third.
+- A directory with a `pyproject.toml` and no manifest is a pre-manifest app (scaffolded before this arc); it keeps running `uv run <name>` from the root venv, untouched by the build and the apply. There are exactly these two forms, both supported indefinitely (phase 9 decided against rewriting a user's app during an update), so no code path ever handles a third.
 - The tool's entry point is named after the program and is what the supervisord line runs.
 - `system/scripts/build_workspace.sh` loops over the manifest directories.
 - The update apply reinstalls the tool of every manifest app whose directory changed in the merge (excluding paths under `frontend/` and `static/`), and of every manifest app when a shared backend manifest changed, and snapshots the tool directory of every `critical` app before it does.
-- Until phase 9, `system/apps/*` stays in the root workspace's member glob, so one lockfile covers the tree and a pre-manifest app's `{ workspace = true }` source in the root pyproject keeps resolving; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused. Phase 9 takes apps out of the workspace once no pre-manifest app remains.
+- `system/apps/*` stays in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject keeps resolving, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
 - The `app_manifest` and `app_instances` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
 - Services stay in the root venv and keep `uv run <name>`.
 
@@ -332,7 +332,7 @@ The `oom_tag_service.py <key>` prefix keeps working unchanged for every program 
 
 ## 16. Migration table
 
-See [phase_09_migration.md](phase_09_migration.md); the mapping is the table in section 9 of the meta spec, made exact there.
+See [phase_09_migration.md](phase_09_migration.md); the mapping is the table in section 9 of the meta spec, made exact there. The migration writes the state files of section 7 (the projects document and the per-device seeds, never a client file), the files app's and the terminal app's stores of section 17, and the marker; it runs from bootstrap at every boot and from the update apply, and it never overwrites an output that exists.
 
 ## 17. Where app data and machine state live
 
