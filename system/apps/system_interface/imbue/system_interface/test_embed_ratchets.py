@@ -22,6 +22,7 @@ page is the chat app's own frontend (``system/apps/chat/frontend``), an app page
 like any other: the shell's bundle imports nothing of it.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -44,8 +45,13 @@ _RELATIVE_IMPORT = re.compile(r"""(?<![\w.])(?:from|import|vi\.mock)\s*\(?\s*["'
 _TYPE_ONLY_IMPORT = re.compile(r"""^\s*import\s+type\b""")
 # The shared library's modules, as the apps import them.
 _LIBRARY_SPECIFIER = "@imbue/workspace-ui/src/"
-_LIBRARY_IMPORT = re.compile(
-    r"""(?<![\w.])(?:from|import|vi\.mock)\s*\(?\s*["'](@imbue/workspace-ui/src/[^"']+)["']"""
+# The chat frontend is an npm workspace member too, linked into system/node_modules under its
+# package name, so a shell source could reach its files by that name as well as by a path.
+_CHAT_FRONTEND_SPECIFIER = f"{json.loads((_CHAT_FRONTEND / 'package.json').read_text())['name']}/"
+_PACKAGE_IMPORT = re.compile(
+    r"""(?<![\w.])(?:from|import|vi\.mock)\s*\(?\s*["']((?:"""
+    + "|".join(re.escape(specifier) for specifier in (_LIBRARY_SPECIFIER, _CHAT_FRONTEND_SPECIFIER))
+    + r""")[^"']+)["']"""
 )
 
 pytestmark = pytest.mark.xdist_group(name="ratchets")
@@ -104,14 +110,16 @@ _SHELL_IMPORTS_CHAT_RULE = RatchetRuleInfo(
 
 
 def _runtime_imports(source_file: Path) -> list[Path]:
-    """The modules ``source_file`` imports at runtime, resolved to files (the library's by its package name)."""
+    """The modules ``source_file`` imports at runtime, resolved to files (a workspace package's by its name)."""
     resolved: list[Path] = []
     for line in source_file.read_text().splitlines():
         if _TYPE_ONLY_IMPORT.match(line):
             continue
-        for specifier in (*_RELATIVE_IMPORT.findall(line), *_LIBRARY_IMPORT.findall(line)):
+        for specifier in (*_RELATIVE_IMPORT.findall(line), *_PACKAGE_IMPORT.findall(line)):
             if specifier.startswith(_LIBRARY_SPECIFIER):
                 candidate = (_LIBRARY_SRC / specifier[len(_LIBRARY_SPECIFIER) :]).resolve()
+            elif specifier.startswith(_CHAT_FRONTEND_SPECIFIER):
+                candidate = (_CHAT_FRONTEND / specifier[len(_CHAT_FRONTEND_SPECIFIER) :]).resolve()
             else:
                 candidate = (source_file.parent / specifier).resolve()
             for path in (candidate, candidate.with_name(f"{candidate.name}.ts"), candidate / "index.ts"):
