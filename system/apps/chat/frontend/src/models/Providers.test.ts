@@ -11,7 +11,7 @@ vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
-import { areAccountsLoaded, getAccounts, getFlow, loadAccountsWithRetry, startFlow } from "./Providers";
+import { getAccounts, getFlow, loadAccountsWithRetry, startFlow } from "./Providers";
 
 const ACCOUNTS_BODY = {
   accounts: [{ id: "acct-1", lane: "claude", harness: "claude", provider: "Anthropic", name: "" }],
@@ -34,7 +34,6 @@ describe("loadAccountsWithRetry", () => {
     await loadAccountsWithRetry();
 
     expect(mockRequest).toHaveBeenCalledTimes(1);
-    expect(areAccountsLoaded()).toBe(true);
     expect(getAccounts().map((account) => account.id)).toEqual(["acct-1"]);
   });
 
