@@ -12,9 +12,9 @@
  */
 
 import type { SerializedDockview } from "dockview-core";
-import { apiUrl } from "../base-path";
-import { getDeviceKind } from "./ClientIdentity";
-import { errorDetailFromResponse } from "./http";
+import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
+import { errorDetailFromResponse } from "@imbue/workspace-ui/src/models/http";
 
 /** What one panel of a layout shows. */
 export interface TabRecord {

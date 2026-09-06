@@ -16,10 +16,10 @@
 import m from "mithril";
 import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
 import { serviceIconMarkup } from "./components/appIcon";
-import { buttonClass } from "./components/Button";
-import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
-import { hoverTooltipAttrs } from "./components/hoverTooltip";
-import { icon } from "./components/icons";
+import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { icon } from "@imbue/workspace-ui/src/components/icons";
 
 /** One "Open new" tile: an app and the action it runs. */
 export interface LaunchTile {

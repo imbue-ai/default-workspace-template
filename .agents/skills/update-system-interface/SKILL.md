@@ -260,7 +260,8 @@ WORK_DIR=$(mngr ls --include 'name == "update-<slug>"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref "mngr/update-$SLUG" \
-    --worker-bundle "$WORK_DIR/system/apps/system_interface/imbue/system_interface/static"
+    --worker-bundle "system_interface=$WORK_DIR/system/apps/system_interface/imbue/system_interface/static" \
+    --worker-bundle "chat=$WORK_DIR/system/apps/chat/imbue/chat/static"
 ```
 
 That single command owns the whole go-live as one deterministic, self-healing

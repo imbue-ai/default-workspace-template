@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
-import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_SHOWN } from "../app_contract";
+import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import { IframePanel } from "./IframePanel";
 import type { IframeContractAttrs } from "./IframePanel";
 

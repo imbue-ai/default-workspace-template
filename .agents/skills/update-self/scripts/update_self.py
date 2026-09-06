@@ -146,6 +146,7 @@ from update_apply_contract import (
 )
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
+from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
     CeilingUnavailableError,
@@ -365,7 +366,12 @@ def wait_and_open_chat_tab(
 
 def _try_open_chat_tab(repo_root: Path, agent_id: str) -> bool:
     result = subprocess.run(
-        [sys.executable, "system/scripts/layout.py", "open", f"app:chat?instance={agent_id}"],
+        [
+            sys.executable,
+            "system/scripts/layout.py",
+            "open",
+            f"app:chat?instance={agent_id}",
+        ],
         cwd=repo_root,
         capture_output=True,
     )
@@ -478,12 +484,28 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_worker_bundles(values: list[str] | None) -> dict[str, str] | None:
+    """``--worker-bundle APP=PATH`` occurrences as a mapping; None when none were given."""
+    if not values:
+        return None
+    apps = {bundle.app for bundle in FRONTEND_BUNDLES}
+    bundles: dict[str, str] = {}
+    for value in values:
+        app, separator, path = value.partition("=")
+        if separator == "" or app not in apps or path == "":
+            raise SystemExit(
+                f"error: --worker-bundle takes APP=PATH with APP one of {sorted(apps)}, got {value!r}"
+            )
+        bundles[app] = path
+    return bundles
+
+
 def _cmd_apply(args: argparse.Namespace) -> int:
     return apply_update(
         args.merge_ref,
         _repo_root(args).resolve(),
         ff_only=args.ff_only,
-        worker_bundle=args.worker_bundle,
+        worker_bundles=_parse_worker_bundles(args.worker_bundle),
         target_ref=args.target_ref,
         runner=Runner(),
         http=HttpClient(),
@@ -688,7 +710,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parents=[common],
     )
     surface_parser.add_argument(
-        "--agent-id", required=True, help="This run's chat agent id ($MNGR_AGENT_ID); a chat is addressed by it."
+        "--agent-id",
+        required=True,
+        help="This run's chat agent id ($MNGR_AGENT_ID); a chat is addressed by it.",
     )
     surface_parser.add_argument(
         "--wait",
@@ -738,9 +762,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     apply_parser.add_argument(
         "--worker-bundle",
+        action="append",
         default=None,
-        help="Path to the worker's already-built static/ bundle (the artifact "
-        "the worker validated); a live build is the fallback.",
+        metavar="APP=PATH",
+        help="An app's already-built static/ bundle from the worker (the artifact "
+        "the worker validated): system_interface=<path> or chat=<path>, once per "
+        "app. Installed as-is only when every app's is given and verified; a live "
+        "build is the fallback.",
     )
     apply_parser.add_argument(
         "--target-ref",

@@ -27,7 +27,7 @@ export default defineConfig({
       // The minds embed contract -- the single sanctioned postMessage channel
       // between this UI and the embedding minds chrome -- is consumed from the
       // vendored mngr tree so both sides always ship from one source of truth.
-      // Types come from src/embed-contract.d.ts; keep the two in sync.
+      // Types come from the library's src/embed-contract.d.ts; keep the two in sync.
       "@minds/embed-contract": path.resolve(
         __dirname,
         "../../../vendor/mngr/apps/minds/imbue/minds/desktop_client/static/embed_contract.js",
@@ -38,12 +38,10 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "../imbue/system_interface/static"),
     emptyOutDir: true,
     rollupOptions: {
-      // Two documents from one build: the shell (index.html) and the chat page
-      // (chat.html), which the chat app serves at /<agent-id>. The browser-side
-      // contract module is a separate library build (vite.contract.config.ts).
+      // The shell document. The browser-side contract module is a separate library build
+      // (vite.contract.config.ts); the chat page is the chat app's own build.
       input: {
         index: path.resolve(__dirname, "index.html"),
-        chat: path.resolve(__dirname, "chat.html"),
       },
     },
   },

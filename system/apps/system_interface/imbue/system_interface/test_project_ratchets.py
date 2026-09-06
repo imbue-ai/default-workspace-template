@@ -100,11 +100,10 @@ _CHAT_NAME_LITERAL = re.compile(r"""["']chat["']""")
 
 
 def _frontend_source_files() -> Iterator[Path]:
-    """The shell frontend's own sources: not its tests, and not the chat document under ``src/chat/``."""
+    """The shell frontend's own sources: not its tests."""
     for source_file in _FRONTEND_SRC.rglob("*.ts"):
-        if source_file.name.endswith(".test.ts") or (_FRONTEND_SRC / "chat") in source_file.parents:
-            continue
-        yield source_file
+        if not source_file.name.endswith(".test.ts"):
+            yield source_file
 
 
 def test_the_shell_names_no_app() -> None:

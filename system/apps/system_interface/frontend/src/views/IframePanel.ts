@@ -1,7 +1,7 @@
 import m from "mithril";
-import { Button } from "./components/Button";
-import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_SHOWN } from "../app_contract";
-import { getClientId, getDeviceKind } from "../models/ClientIdentity";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
+import { getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { sendToChildFrame } from "../relay";
 
 /** What the shell tells a page that speaks the app contract (contracts.md section 10). */

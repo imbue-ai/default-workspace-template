@@ -79,6 +79,8 @@ package = false
 # every environment on the same versions; an app's own tool environment keeps
 # it running while this venv is rewritten or broken.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
+# system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python package.
+exclude = ["system/libs/workspace_ui"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }

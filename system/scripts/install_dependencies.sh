@@ -34,6 +34,7 @@ REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 cd "$REPO_ROOT"
 uv sync --all-packages --frozen --no-install-workspace --no-install-local
 
-# Frontend npm dependencies (exact, from the lockfile).
-cd "$REPO_ROOT/system/apps/system_interface/frontend"
+# Frontend npm dependencies (exact, from the lockfile): one npm workspace for the shell,
+# the chat page, and their shared library.
+cd "$REPO_ROOT/system"
 npm ci

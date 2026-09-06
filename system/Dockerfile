@@ -93,8 +93,12 @@ COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/syste
 COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml
 COPY system/vendor/mngr/libs/concurrency_group/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/concurrency_group/pyproject.toml
 
-# Frontend npm manifest (lockfile + package.json) -- install needs only these.
-COPY system/apps/system_interface/frontend/package.json system/apps/system_interface/frontend/package-lock.json /home/user/workspace/system/apps/system_interface/frontend/
+# Frontend npm manifests (the workspace root's lockfile + package.json, and each member's
+# package.json) -- install needs only these.
+COPY system/package.json system/package-lock.json /home/user/workspace/system/
+COPY system/libs/workspace_ui/package.json /home/user/workspace/system/libs/workspace_ui/
+COPY system/apps/system_interface/frontend/package.json /home/user/workspace/system/apps/system_interface/frontend/
+COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies

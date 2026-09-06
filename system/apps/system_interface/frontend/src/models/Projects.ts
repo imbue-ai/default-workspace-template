@@ -13,20 +13,14 @@
  * back from `fetchProjectsList`, has no tab set of its own, and cannot be renamed or deleted.
  */
 
-import { apiUrl } from "../base-path";
-import { postJson } from "./http";
+import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { EVERYTHING_VIEW_ID, EVERYTHING_VIEW_NAME, isEverythingView } from "@imbue/workspace-ui/src/views";
+import { postJson } from "@imbue/workspace-ui/src/models/http";
 import type { ProjectInfo, ShortcutMode } from "./Inventory";
 
-/** The id of the reserved unfiltered view, matching the backend's ``EVERYTHING_VIEW_ID``. */
-export const EVERYTHING_VIEW_ID = "everything";
-
-/** The display name of the unfiltered view, matching the backend's ``EVERYTHING_VIEW_NAME``. */
-export const EVERYTHING_VIEW_NAME = "Everything";
-
-/** Whether a view id addresses the unfiltered view rather than a project. */
-export function isEverythingView(viewId: string): boolean {
-  return viewId === EVERYTHING_VIEW_ID;
-}
+// Everything's id and name are the library's (an app page is told which view its tab is in);
+// re-exported so the shell's callers keep reading them off the projects model.
+export { EVERYTHING_VIEW_ID, EVERYTHING_VIEW_NAME, isEverythingView };
 
 /** Fetch the project registry. Everything is never in it. Null when the shell could not answer
  *  (logged), which is not the same as an empty registry: a caller keeps what it has. */

@@ -13,7 +13,9 @@ from typing import Collection, NamedTuple, Sequence
 
 from update_layout import (
     APPS_DIR,
-    FRONTEND_DIR,
+    FRONTEND_SOURCE_DIRS,
+    FRONTEND_TOOLING_PATHS,
+    NPM_MANIFEST_PATHS,
     MANIFEST_FILENAME,
     MNGR_VENDOR_DIR,
     PLUGIN_MANIFEST_PATH,
@@ -113,12 +115,14 @@ class PathClass(NamedTuple):
 def _project_for_path(path: str) -> str:
     """Return the pytest project root that owns ``path``.
 
-    Only ``system/apps/system_interface`` and ``system/vendor/mngr`` carry their own pytest
-    config (the root config ignores them); everything else -- libs, scripts,
-    ``.agents`` -- is covered by the root suite, reported as ``.``.
+    Only ``system/apps/system_interface``, ``system/apps/chat`` and ``system/vendor/mngr``
+    carry their own pytest config (the root config ignores them); everything else -- libs,
+    scripts, ``.agents`` -- is covered by the root suite, reported as ``.``.
     """
     if path.startswith("system/apps/system_interface/"):
         return "system/apps/system_interface"
+    if path.startswith("system/apps/chat/"):
+        return "system/apps/chat"
     if path.startswith("system/vendor/mngr/"):
         return "system/vendor/mngr"
     return "."
@@ -476,15 +480,15 @@ def plan_apply(
     for path in paths:
         if path in provisioner_inputs:
             provisioner = True
-        if path in (
-            f"{FRONTEND_DIR}/package.json",
-            f"{FRONTEND_DIR}/package-lock.json",
-        ):
+        if path in NPM_MANIFEST_PATHS:
             frontend_manifest = True
-        elif path.startswith(f"{FRONTEND_DIR}/"):
-            # Everything under frontend/ counts, not just src/: index.html, the
-            # vite and TypeScript configs and the public assets all change the
-            # emitted bundle.
+        elif path in FRONTEND_TOOLING_PATHS or any(
+            path.startswith(f"{directory}/") for directory in FRONTEND_SOURCE_DIRS
+        ):
+            # Everything under a frontend counts, not just src/: the entry
+            # document, the vite and TypeScript configs and the public assets
+            # all change the emitted bundle; so does the shared library, which
+            # every bundle compiles in, and the tooling every build reads.
             frontend_src = True
         elif _is_backend_manifest(path):
             backend_manifest = True

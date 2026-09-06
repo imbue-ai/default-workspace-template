@@ -109,7 +109,11 @@ def chat_health_url(repo_root: Path) -> str:
     except (OSError, tomllib.TOMLDecodeError):
         return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
     for row in rows:
-        if isinstance(row, dict) and row.get("name") == CHAT_APP_NAME and isinstance(row.get("url"), str):
+        if (
+            isinstance(row, dict)
+            and row.get("name") == CHAT_APP_NAME
+            and isinstance(row.get("url"), str)
+        ):
             return f"{row['url'].rstrip('/')}{CHAT_HEALTH_PATH}"
     return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
 

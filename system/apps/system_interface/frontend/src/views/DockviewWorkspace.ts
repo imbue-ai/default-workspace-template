@@ -31,7 +31,7 @@ import {
   type SerializedDockview,
   type TabPartInitParameters,
 } from "dockview-core";
-import { requestFrameFocus } from "./terminalFocus";
+import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import {
   IFRAME_PANEL_ADDRESS_ATTR,
   IFRAME_PANEL_APP_ATTR,
@@ -63,7 +63,7 @@ import {
   type LiveSurface,
   type PanelParams,
 } from "./liveSurfaces";
-import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
+import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
 import { ProjectMembershipDialog } from "./ProjectMembershipDialog";
 import { appIconMarkup } from "./components/appIcon";
 import { NewTabLauncher } from "./NewTabLauncher";
@@ -73,16 +73,16 @@ import type { TabMenuActions, TabMenuEntry } from "./tabMenu";
 import { placeMenu } from "./Sidebar";
 import type { MenuAnchor, SidebarTabRow } from "./Sidebar";
 import { normalizeTabTitle } from "./tab-rename";
-import { attachHoverTooltip } from "./components/hoverTooltip";
+import { attachHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
-import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
-import { SHELL_CLOSE_REQUEST, SHELL_FOCUSED, SHELL_LOCATION, SHELL_OPEN } from "../app_contract";
+import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
+import { SHELL_CLOSE_REQUEST, SHELL_FOCUSED, SHELL_LOCATION, SHELL_OPEN } from "@imbue/workspace-ui/src/app_contract";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import { reloadInterface } from "../reload";
-import { buttonClass } from "./components/Button";
-import { icon } from "./components/icons";
-import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
-import type { IconName } from "./components/icons";
+import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import type { IconName } from "@imbue/workspace-ui/src/components/icons";
 import {
   addActiveViewChangedListener,
   addAppsUpdatedListener,
@@ -114,7 +114,7 @@ import {
   type ShortcutMode,
   type TabReboundEvent,
 } from "../models/Inventory";
-import { getActiveProjectId, getClientId, setActiveProjectId } from "../models/ClientIdentity";
+import { getActiveProjectId, getClientId, setActiveProjectId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { fetchOwnActiveView } from "../models/Clients";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "../models/deepLinks";
 import type { DeepLink } from "../models/deepLinks";

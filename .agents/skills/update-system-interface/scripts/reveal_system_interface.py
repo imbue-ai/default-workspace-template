@@ -153,7 +153,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             f"preview: no frontend build in {work_dir} "
             f"({FRONTEND_BUILD_INDEX} is missing), so the preview would serve the "
             "'Frontend not built' placeholder. The worker must build the frontend "
-            "(cd system/apps/system_interface/frontend && npm ci && npm run build) before "
+            "(cd system && npm ci && npm run build) before "
             "its work_dir can be previewed -- re-brief it to build, then retry.\n"
         )
         return 1

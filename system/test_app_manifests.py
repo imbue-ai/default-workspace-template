@@ -2,8 +2,8 @@
 that program's registration line passes, and declares a memory band that exists.
 """
 
+import ast
 import configparser
-import importlib
 import re
 import tomllib
 from pathlib import Path
@@ -42,6 +42,27 @@ def _command_by_program() -> dict[str, str]:
     }
 
 
+def _manifest_path_constant(module_file: Path) -> str | None:
+    """The ``MANIFEST_PATH = Path("...")`` an entry-point module declares, read from its source.
+
+    Read rather than imported: an app's entry point pulls in its whole backend (the chat's loads
+    mngr's configuration on import), which the root test environment does not set up.
+    """
+    for node in ast.walk(ast.parse(module_file.read_text())):
+        if isinstance(node, ast.AnnAssign) and node.value is not None:
+            target: ast.expr = node.target
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        else:
+            continue
+        if not (isinstance(target, ast.Name) and target.id == "MANIFEST_PATH"):
+            continue
+        for literal in ast.walk(node.value):
+            if isinstance(literal, ast.Constant) and isinstance(literal.value, str):
+                return literal.value
+    return None
+
+
 def _entry_point_manifest_paths(command: str) -> list[str]:
     """The manifest an app's own entry point registers with, when the program's command ends in one.
 
@@ -60,11 +81,16 @@ def _entry_point_manifest_paths(command: str) -> list[str]:
         if script_name not in scripts:
             continue
         module_name = scripts[script_name].partition(":")[0]
-        manifest_path = getattr(
-            importlib.import_module(module_name), "MANIFEST_PATH", None
-        )
-        if manifest_path is not None:
-            manifest_paths.append(str(manifest_path))
+        module_relative = Path(*module_name.split(".")).with_suffix(".py")
+        for module_file in (
+            pyproject_path.parent / module_relative,
+            pyproject_path.parent / "src" / module_relative,
+        ):
+            if module_file.is_file():
+                manifest_path = _manifest_path_constant(module_file)
+                if manifest_path is not None:
+                    manifest_paths.append(manifest_path)
+                break
     return manifest_paths
 
 

@@ -21,7 +21,7 @@
  * `window.parent`, and only when this shell is framed at all.
  */
 
-import { workspaceHostCoordinate } from "./origin";
+import { workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
 
 export type ChildFrameMessageHandler = (frame: HTMLIFrameElement, payload: Record<string, unknown>) => void;
 
