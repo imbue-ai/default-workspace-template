@@ -60,7 +60,7 @@ The registry (`data/.state/apps.toml`) is read for the pins of apps with instanc
 | `terminal:<name>`, `terminalSessionName` | `app:terminal?instance=<name>` (a name tmux would refuse is dropped) |
 | `service:browser?session=<name>`, browser URL with `?session=` | `app:browser?instance=<name>` |
 | `service:<name>?instance=<key>`, `serviceInstanceId` | `app:<name>?instance=<key>` |
-| `service:<name>` member (a pin) | a shortcut `(name, open, focus)` for a single-instance app, or the registry's default action for an app with instances, in the member's own mode override if any; no tab |
+| `service:<name>` member (a pin) | a shortcut `(name, open, focus)` for a single-instance app (an app the registry does not list counts as one), or for an app with instances the registry's `default_shortcut`, else its first declared action (a row declaring none drops the pin), in the member's own mode override if any; no tab |
 | `service:<name>` panel of a single-instance app | `app:<name>` |
 | bare `service:chat`, `service:terminal`, `service:files`, `service:browser` | dropped (every tab of these apps is an instance) |
 | `url:<hash>`, an external URL panel, a launcher panel, `subagent:` panels | dropped |
