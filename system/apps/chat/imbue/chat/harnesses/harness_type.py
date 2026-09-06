@@ -16,7 +16,7 @@ from loguru import logger
 
 
 class HarnessType(StrEnum):
-    """A harness the system interface knows how to watch."""
+    """A harness the chat app knows how to watch."""
 
     CLAUDE = "claude"
     CODEX = "codex"

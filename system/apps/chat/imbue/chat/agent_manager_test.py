@@ -2406,7 +2406,7 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
 def test_seeding_recovers_chat_message_recency_from_the_message_stamps(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """A restarted system interface recovers which chats were recently messaged.
+    """A restarted chat app recovers which chats were recently messaged.
 
     The prioritizer's recency state is in-memory, so on restart it is re-seeded
     from the durable message stamps. Without that, every chat would look
