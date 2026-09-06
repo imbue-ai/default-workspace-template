@@ -23,8 +23,9 @@ The shell now reads ``data/.state/system_interface/`` and names everything by ad
 Subcommands: ``run`` (the default; writes) and ``plan`` (prints what a run would write,
 ``--json`` for the machine-readable form). Standard-library only, like the other scripts
 here, and never destructive: the old directory is left untouched, an output that already
-exists is skipped (``--force`` overwrites the projects file and the seeds), the two app stores
-only ever gain records, and one unreadable view costs that view and nothing else. A workspace
+exists is skipped (a projects file that holds projects or cannot be read, any seed;
+``--force`` overwrites the projects file and the seeds), the two app stores only ever gain
+records, and one unreadable view costs that view and nothing else. A workspace
 with no old directory is marked migrated at once, so a fresh workspace is never "unmigrated".
 """
 
@@ -155,6 +156,8 @@ class MigrationPlan(NamedTuple):
     is_already_migrated: bool
     projects: tuple[ProjectPlan, ...]
     is_projects_skipped: bool
+    # Why the projects file is kept as it is, when it is.
+    projects_note: str
     seeds: tuple[SeedPlan, ...]
     files_records: tuple[dict[str, Any], ...]
     terminal_records: tuple[dict[str, Any], ...]
@@ -792,7 +795,16 @@ def plan_migration(
     is_source_present = source_dir.is_dir() and meta is not None
     if not is_source_present:
         return MigrationPlan(
-            source_dir, False, is_already_migrated, (), False, (), (), (), tuple(notes)
+            source_dir=source_dir,
+            is_source_present=False,
+            is_already_migrated=is_already_migrated,
+            projects=(),
+            is_projects_skipped=False,
+            projects_note="",
+            seeds=(),
+            files_records=(),
+            terminal_records=(),
+            notes=tuple(notes),
         )
     title_by_ref = _read_ref_map(
         source_dir / LEGACY_TITLES_FILENAME, "title_by_ref", str, notes
@@ -872,8 +884,17 @@ def plan_migration(
             for address in seed.addresses
         ]
         projects.append(build_project_plan(project, seed_addresses, registry_rows))
-    existing_projects = _read_json_object(state_dir / PROJECTS_FILENAME, [])
-    is_projects_skipped = _has_projects(existing_projects) and not is_forced
+    projects_notes: list[str] = []
+    existing_projects = _read_json_object(state_dir / PROJECTS_FILENAME, projects_notes)
+    notes.extend(projects_notes)
+    if is_forced:
+        projects_note = ""
+    elif projects_notes:
+        projects_note = "it cannot be read; pass --force to overwrite it"
+    elif _has_projects(existing_projects):
+        projects_note = "it already holds projects"
+    else:
+        projects_note = ""
 
     # The app stores: one record per instance any project or seed references.
     referenced: list[str] = []
@@ -894,7 +915,8 @@ def plan_migration(
         is_source_present=True,
         is_already_migrated=is_already_migrated,
         projects=tuple(projects),
-        is_projects_skipped=is_projects_skipped,
+        is_projects_skipped=projects_note != "",
+        projects_note=projects_note,
         seeds=tuple(seeds),
         files_records=files_records,
         terminal_records=terminal_records,
@@ -908,6 +930,7 @@ def plan_as_json(plan: MigrationPlan) -> dict[str, Any]:
         "is_source_present": plan.is_source_present,
         "is_already_migrated": plan.is_already_migrated,
         "is_projects_skipped": plan.is_projects_skipped,
+        "projects_note": plan.projects_note,
         "projects": [
             {**project.document, "dropped_members": list(project.dropped_members)}
             for project in plan.projects
@@ -945,7 +968,7 @@ def apply_plan(
     if plan.is_source_present:
         if plan.is_projects_skipped:
             _log(
-                f"kept the existing {state_dir / PROJECTS_FILENAME}: it already holds projects"
+                f"kept the existing {state_dir / PROJECTS_FILENAME}: {plan.projects_note}"
             )
         else:
             _write_json_atomic(
