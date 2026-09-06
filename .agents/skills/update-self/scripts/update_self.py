@@ -497,7 +497,9 @@ def _parse_worker_bundles(values: list[str] | None) -> dict[str, str] | None:
                 f"error: --worker-bundle takes APP=PATH with APP one of {sorted(apps)}, got {value!r}"
             )
         if app in bundles:
-            raise SystemExit(f"error: --worker-bundle names {app} twice ({bundles[app]!r} and {path!r})")
+            raise SystemExit(
+                f"error: --worker-bundle names {app} twice ({bundles[app]!r} and {path!r})"
+            )
         bundles[app] = path
     return bundles
 
