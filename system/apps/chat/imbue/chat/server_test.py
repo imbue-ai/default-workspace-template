@@ -2466,7 +2466,7 @@ def test_nonexistent_path_is_not_a_chat_page(client: FlaskClient, tmp_path: Path
     response = client.get(str(tmp_path / "some" / "client" / "route"))
 
     assert response.status_code == 404
-    assert "not found" in response.get_json()["detail"]
+    assert response.get_json()["detail"] == f"Nothing is served at '{tmp_path / 'some' / 'client' / 'route'}'"
 
 
 def test_serves_image_with_spaces_in_filename(client: FlaskClient, tmp_path: Path) -> None:

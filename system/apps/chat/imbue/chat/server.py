@@ -1168,7 +1168,7 @@ def _serve_file_or_document(path: str) -> Response:
     if file_response is not None:
         return file_response
     if "/" in path:
-        return _agent_not_found_response(path)
+        return json_response(ErrorResponse(detail=f"Nothing is served at '/{path}'").model_dump(), status_code=404)
     return _chat_document(path)
 
 
