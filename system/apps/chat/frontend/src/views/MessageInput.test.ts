@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type m from "mithril";
 
 // vi.mock factories are hoisted above module scope, so anything they close over must come from
@@ -45,6 +45,9 @@ const mocks = vi.hoisted(() => {
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     interruptAgent: vi.fn(async () => {}),
     openProviderChooser: vi.fn(),
+    // Resolved at once by default: the agent exists. A test of a chat still being created
+    // swaps in a deferred promise.
+    whenAgentRegistered: vi.fn(async () => {}),
     listeners,
     agent,
   };
@@ -115,7 +118,7 @@ vi.mock("../models/HarnessCatalog", () => {
 });
 vi.mock("../models/AgentManager", () => ({
   getAgentById: () => mocks.agent,
-  whenAgentRegistered: () => Promise.resolve(),
+  whenAgentRegistered: (agentId: string) => mocks.whenAgentRegistered(agentId),
 }));
 vi.mock("../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));
 
@@ -412,6 +415,52 @@ describe("MessageInput stop-to-composer handback", () => {
     typeDraft(component, "agent-1", "keep me");
     const textarea = await clickStop(component, "agent-1");
     expect(textarea?.attrs?.value).toBe("keep me");
+  });
+});
+
+describe("MessageInput send to a chat still being created", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    mocks.getComposerAttachments.mockReturnValue([]);
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.whenAgentRegistered.mockImplementation(async () => {});
+  });
+
+  it("holds the send until the agent registers, then sends it", async () => {
+    let release: () => void = () => {};
+    mocks.whenAgentRegistered.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const sending = typeAndSend(MessageInput(), "agent-1", "hello");
+    await flushAsync();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+
+    release();
+    await sending;
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage.mock.calls[0]?.[0]).toBe("agent-1");
+    expect(String(mocks.sendMessage.mock.calls[0]?.[1])).toContain("hello");
+  });
+
+  it("returns the message to the composer with the reason when the create fails", async () => {
+    mocks.whenAgentRegistered.mockRejectedValueOnce("mngr create exited with code 3");
+
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't send your message");
+    expect(text).toContain("mngr create exited with code 3");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
 });
 
