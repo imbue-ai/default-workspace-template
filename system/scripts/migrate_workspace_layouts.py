@@ -3,9 +3,10 @@
 locations into the workspace app model's state files, once.
 
 Before the workspace app model (docs/system/blueprint/workspace-app-model/), the system
-interface kept its projects and layouts under the primary agent's state directory
-(``$MNGR_HOST_DIR/agents/$MNGR_AGENT_ID/workspace_layout/``) and named things by per-kind
-refs (``chat:<agent-id>``, ``terminal:<name>``, ``service:files?instance=files-2``, ...).
+interface kept its projects and layouts under the state directory of the agent it ran as
+(``$MNGR_HOST_DIR/agents/<agent-id>/workspace_layout/``; that agent is the services agent,
+which the bootstrap runs as too) and named things by per-kind refs (``chat:<agent-id>``,
+``terminal:<name>``, ``service:files?instance=files-2``, ...).
 The shell now reads ``data/.state/system_interface/`` and names everything by address
 (``app:<name>``, ``app:<name>?instance=<key>``). This script maps the one onto the other:
 
@@ -27,6 +28,12 @@ exists is skipped (a projects file that holds projects or cannot be read, any se
 ``--force`` overwrites the projects file and the seeds), the two app stores only ever gain
 records, and one unreadable view costs that view and nothing else. A workspace
 with no old directory is marked migrated at once, so a fresh workspace is never "unmigrated".
+
+The old directory is the one under the agent the environment names when that agent has one
+(the boot-time run, as the services agent); otherwise it is whichever agent of the host has
+one, since the update apply runs the script as a chat agent whose own state directory never
+held a store. Several such agents are ambiguous: the run says so and writes nothing, not
+even the marker, so a later run can be pointed at the right one with ``--source``.
 """
 
 from __future__ import annotations
@@ -60,8 +67,11 @@ LAYOUTS_DIRNAME = "layouts"
 STORE_FILENAME = "instances.json"
 STORE_VERSION = 1
 
-# The old store's files, as the retired ``projects``, ``member_titles``, ``member_last_used``,
-# and ``member_locations`` modules wrote them.
+# The old store's directory under an agent's state directory, and its files, as the retired
+# ``projects``, ``member_titles``, ``member_last_used``, and ``member_locations`` modules wrote
+# them.
+AGENTS_DIRNAME = "agents"
+LEGACY_LAYOUT_DIRNAME = "workspace_layout"
 LEGACY_META_FILENAME = "projects_meta.json"
 LEGACY_PROJECTS_SUBDIR = "projects"
 LEGACY_TITLES_FILENAME = "member_titles.json"
@@ -178,12 +188,39 @@ def mint_tab_id() -> str:
 
 
 def legacy_layout_dir_from_env(environ: dict[str, str]) -> Path | None:
-    """The old store of the primary agent this workspace serves, from the mngr environment."""
+    """The old store this workspace's shell wrote, from the mngr environment, or None (logged)
+    when the environment names nothing or the host holds more than one.
+
+    The store of the environment's own agent when it has one (the boot-time run is the
+    services agent, which the old shell ran as); else the one store any agent of the host has
+    (the update apply runs as a chat agent, whose own state directory never held one); else
+    the environment's own, absent, so a fresh workspace still gets its marker.
+    """
     host_dir = environ.get(ENV_HOST_DIR, "")
     agent_id = environ.get(ENV_AGENT_ID, "")
     if not host_dir or not agent_id:
+        _log(
+            f"neither --source nor ${ENV_HOST_DIR} and ${ENV_AGENT_ID} name the old layout store; nothing to do"
+        )
         return None
-    return Path(host_dir) / "agents" / agent_id / "workspace_layout"
+    agents_dir = Path(host_dir) / AGENTS_DIRNAME
+    own_layout_dir = agents_dir / agent_id / LEGACY_LAYOUT_DIRNAME
+    if (own_layout_dir / LEGACY_META_FILENAME).is_file():
+        return own_layout_dir
+    found = sorted(
+        meta_path.parent
+        for meta_path in agents_dir.glob(
+            f"*/{LEGACY_LAYOUT_DIRNAME}/{LEGACY_META_FILENAME}"
+        )
+    )
+    if len(found) > 1:
+        _log(
+            "several agents hold an old layout store ("
+            + ", ".join(str(path) for path in found)
+            + "); pass --source to choose one; nothing to do"
+        )
+        return None
+    return found[0] if found else own_layout_dir
 
 
 def registry_path_from_env(environ: dict[str, str]) -> Path:
@@ -1066,7 +1103,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--source",
         type=Path,
         default=None,
-        help=f"the old workspace_layout directory (default: ${ENV_HOST_DIR}/agents/${ENV_AGENT_ID}/workspace_layout)",
+        help=(
+            f"the old {LEGACY_LAYOUT_DIRNAME} directory (default: the one under "
+            f"${ENV_HOST_DIR}/{AGENTS_DIRNAME}/${ENV_AGENT_ID}, else the one any agent of "
+            f"${ENV_HOST_DIR} has)"
+        ),
     )
     parser.add_argument(
         "--state-dir",
@@ -1114,9 +1155,6 @@ def main(
         else legacy_layout_dir_from_env(environment)
     )
     if source_dir is None:
-        _log(
-            f"neither --source nor ${ENV_HOST_DIR} and ${ENV_AGENT_ID} name the old layout store; nothing to do"
-        )
         return 0
     registry_path = (
         args.registry

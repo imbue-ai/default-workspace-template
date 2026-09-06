@@ -568,3 +568,63 @@ def test_the_source_comes_from_the_mngr_environment(tmp_path: Path) -> None:
         migrate.main(["--state-dir", str(tmp_path / "state"), "run"], environ={}) == 0
     )
     assert not (tmp_path / "state").exists()
+
+
+def _run_from_environment(
+    environ: dict[str, str], tmp_path: Path, registry: Path
+) -> tuple[int, Path]:
+    """A ``run`` whose source comes from the environment rather than ``--source``."""
+    state_dir = tmp_path / "state"
+    code = migrate.main(
+        [
+            "--state-dir",
+            str(state_dir),
+            "--apps-data-dir",
+            str(tmp_path / "apps"),
+            "--registry",
+            str(registry),
+            "--now",
+            _NOW,
+            "run",
+        ],
+        environ=environ,
+    )
+    return code, state_dir
+
+
+def test_another_agents_store_is_found_when_the_environments_agent_has_none(
+    legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
+) -> None:
+    # The update apply runs as a chat agent, whose own state directory never held a store;
+    # the services agent's store is the one to migrate.
+    environ = {"MNGR_HOST_DIR": str(tmp_path / "host"), "MNGR_AGENT_ID": "agent-chat"}
+    assert migrate.legacy_layout_dir_from_env(environ) == legacy_layout_dir
+
+    code, state_dir = _run_from_environment(environ, tmp_path, migration_registry)
+
+    assert code == 0
+    assert len(ProjectStore(state_directory=state_dir).list_projects()) == 2
+    marker = json.loads((state_dir / "migrated.json").read_text())
+    assert marker["source"] == str(legacy_layout_dir)
+
+
+def test_several_old_stores_are_ambiguous_and_leave_the_workspace_unmarked(
+    legacy_layout_dir: Path,
+    tmp_path: Path,
+    migration_registry: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    other_layout_dir = tmp_path / "host" / "agents" / "agent-other" / "workspace_layout"
+    other_layout_dir.mkdir(parents=True)
+    (other_layout_dir / "projects_meta.json").write_text("{}")
+    environ = {"MNGR_HOST_DIR": str(tmp_path / "host"), "MNGR_AGENT_ID": "agent-chat"}
+
+    assert migrate.legacy_layout_dir_from_env(environ) is None
+    code, state_dir = _run_from_environment(environ, tmp_path, migration_registry)
+
+    assert code == 0
+    assert "several agents hold an old layout store" in capsys.readouterr().err
+    assert not state_dir.exists()
+    # The environment's own agent still wins when it holds a store itself.
+    own_environ = {**environ, "MNGR_AGENT_ID": "agent-primary"}
+    assert migrate.legacy_layout_dir_from_env(own_environ) == legacy_layout_dir

@@ -38,7 +38,7 @@ Modified:
 ## Inputs
 
 `$MNGR_HOST_DIR/agents/<primary>/workspace_layout/`: `projects_meta.json` (`project_by_id`, each with `name`, `color`, `glyph`, `members`, and `shortcut_overrides` or the legacy `unpinned_shortcuts`; `last_active_id`), `projects/<id>.json` and `<id>.mobile.json` (`{"dockview", "panelParams"}` as the old frontend saved them, `panelParams` carrying `panelType`, `chatAgentId`, `terminalSessionName`, `serviceName`, `serviceInstanceId`, `url`, `title`, `customTitle`), `member_titles.json` (`title_by_ref`), `member_last_used.json` (`last_used_ms_by_ref`), `member_locations.json` (`location_by_ref`); `auto_opened_chats.json` and `events/` are ignored.
-The primary agent id comes from `MNGR_AGENT_ID` and the host directory from `MNGR_HOST_DIR`, as the old shell read them.
+The old shell wrote the store under the agent it ran as, the services agent (`system-services`, `is_primary`), and read the host directory from `MNGR_HOST_DIR` and the agent id from `MNGR_AGENT_ID`. The bootstrap runs as that agent too, so at boot the environment names the store directly; the update apply runs as a chat agent, whose own state directory never held one, so when `$MNGR_HOST_DIR/agents/$MNGR_AGENT_ID/workspace_layout/` has no `projects_meta.json` the script takes the one store any agent under `$MNGR_HOST_DIR/agents/` has (only this workspace's agents live there). Several such stores are ambiguous: the run reports them, writes nothing (not even the marker), and leaves the choice to `--source`.
 The registry (`data/.state/apps.toml`) is read for the pins of apps with instances; a missing registry is fine.
 
 ## Outputs
