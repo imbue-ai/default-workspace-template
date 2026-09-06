@@ -1127,8 +1127,10 @@ class AgentManager:
         so two simultaneous creates cannot both mint "Chat 1".
 
         ``agent_id`` names a chat minted earlier (``reserve_chat``, or one whose create
-        failed): it is launched under that id and keeps the name it was minted with, so the
-        tab the shell docked for it becomes the chat. Any other id is refused.
+        failed): it is launched under that id and keeps the name and project it was minted
+        with, so the tab the shell docked for it becomes the chat. Any other id is refused,
+        and so is a ``requested_name`` or ``project_id`` beside it, which the reservation
+        would otherwise silently override.
 
         The harness comes from the account, not from the caller: it is the name of the
         create template stacked on top, and the `chat` role template supplies everything
@@ -1155,6 +1157,10 @@ class AgentManager:
         explicit_name = requested_name.strip()
         if explicit_name and not canonical_agent_name(explicit_name):
             raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
+        if agent_id and (explicit_name or project_id):
+            raise AgentCreationError(
+                f"Chat {agent_id} keeps the name and project it was minted with; a launch cannot rename or refile it"
+            )
 
         # Name resolution and proto registration happen under one lock hold, so a
         # concurrent create sees this one's name as taken (and vice versa).

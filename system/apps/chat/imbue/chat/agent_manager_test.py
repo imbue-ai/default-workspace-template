@@ -302,6 +302,19 @@ def test_create_chat_agent_refuses_launching_an_id_it_did_not_reserve(agent_mana
     agent_manager.stop()
 
 
+def test_create_chat_agent_refuses_a_name_or_project_beside_a_reserved_id(agent_manager: AgentManager) -> None:
+    """A chat minted earlier keeps the name and project it was minted with: a launch that names either
+    is refused rather than answered with a different name than it asked for."""
+    reserved = agent_manager.reserve_chat()
+    with pytest.raises(AgentCreationError, match="keeps the name and project"):
+        agent_manager.create_chat_agent("Renamed", agent_id=reserved.agent_id)
+    with pytest.raises(AgentCreationError, match="keeps the name and project"):
+        agent_manager.create_chat_agent("", project_id="project-1", agent_id=reserved.agent_id)
+    assert agent_manager.get_proto_agent(reserved.agent_id) is not None
+    assert agent_manager.get_proto_agent(reserved.agent_id).phase is ProvisionalChatPhase.AWAITING_ACCOUNT
+    agent_manager.stop()
+
+
 def _seed_failed_chat(
     agent_manager: AgentManager, agent_id: str, name: str, account_id: str = "acct-1"
 ) -> ProvisionalChat:
