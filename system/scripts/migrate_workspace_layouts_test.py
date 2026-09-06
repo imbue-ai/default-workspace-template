@@ -35,19 +35,20 @@ _DOCS = "app:docs"
 
 
 def _run(
-    legacy_layout_dir: Path,
+    # None leaves the source to the environment, as the bootstrap and the apply do.
+    source: Path | None,
     tmp_path: Path,
     registry: Path,
     *extra: str,
     command: str = "run",
     command_args: tuple[str, ...] = (),
+    environ: dict[str, str] | None = None,
 ) -> tuple[int, Path, Path]:
     state_dir = tmp_path / "state"
     apps_dir = tmp_path / "apps"
     code = migrate.main(
         [
-            "--source",
-            str(legacy_layout_dir),
+            *(() if source is None else ("--source", str(source))),
             "--state-dir",
             str(state_dir),
             "--apps-data-dir",
@@ -60,7 +61,7 @@ def _run(
             command,
             *command_args,
         ],
-        environ={},
+        environ={} if environ is None else environ,
     )
     return code, state_dir, apps_dir
 
@@ -578,28 +579,6 @@ def test_the_source_comes_from_the_mngr_environment(tmp_path: Path) -> None:
     assert not (tmp_path / "state").exists()
 
 
-def _run_from_environment(
-    environ: dict[str, str], tmp_path: Path, registry: Path
-) -> tuple[int, Path]:
-    """A ``run`` whose source comes from the environment rather than ``--source``."""
-    state_dir = tmp_path / "state"
-    code = migrate.main(
-        [
-            "--state-dir",
-            str(state_dir),
-            "--apps-data-dir",
-            str(tmp_path / "apps"),
-            "--registry",
-            str(registry),
-            "--now",
-            _NOW,
-            "run",
-        ],
-        environ=environ,
-    )
-    return code, state_dir
-
-
 def test_another_agents_store_is_found_when_the_environments_agent_has_none(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:
@@ -608,7 +587,7 @@ def test_another_agents_store_is_found_when_the_environments_agent_has_none(
     environ = {"MNGR_HOST_DIR": str(tmp_path / "host"), "MNGR_AGENT_ID": "agent-chat"}
     assert migrate.legacy_layout_dir_from_env(environ) == legacy_layout_dir
 
-    code, state_dir = _run_from_environment(environ, tmp_path, migration_registry)
+    code, state_dir, _ = _run(None, tmp_path, migration_registry, environ=environ)
 
     assert code == 0
     assert len(ProjectStore(state_directory=state_dir).list_projects()) == 2
@@ -628,7 +607,7 @@ def test_several_old_stores_are_ambiguous_and_leave_the_workspace_unmarked(
     environ = {"MNGR_HOST_DIR": str(tmp_path / "host"), "MNGR_AGENT_ID": "agent-chat"}
 
     assert migrate.legacy_layout_dir_from_env(environ) is None
-    code, state_dir = _run_from_environment(environ, tmp_path, migration_registry)
+    code, state_dir, _ = _run(None, tmp_path, migration_registry, environ=environ)
 
     assert code == 0
     assert "several agents hold an old layout store" in capsys.readouterr().err
