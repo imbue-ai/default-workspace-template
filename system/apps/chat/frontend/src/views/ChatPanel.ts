@@ -38,7 +38,7 @@ import {
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
 import type { ProtoAgent } from "../models/AgentManager";
-import { openProviderChooser } from "../models/Providers";
+import { closeProviderChooser, getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
@@ -241,6 +241,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // The chat the chooser was opened for on its own, so a chooser the user dismissed is not
   // reopened on every redraw.
   let chooserOfferedFor: string | null = null;
+  // The chat this page last launched (through the chooser, a retry, or on its own): a launch
+  // the page starts on its own initiative is never repeated for it.
+  let launchedFor: string | null = null;
 
   async function fetchScreenCapture(agentId: string): Promise<void> {
     if (screenAttemptedAgentId === agentId) {
@@ -268,6 +271,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
   function launch(agentId: string, accountId: string): void {
     if (launchInFlight) return;
+    launchedFor = agentId;
     launchInFlight = true;
     launchError = null;
     launchChat(agentId, accountId)
@@ -301,9 +305,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       ]);
     }
     if (proto.phase === "awaiting_account") {
-      // Offered once per chat, on the page's first render of this phase: the user may dismiss
-      // it and come back through the button.
-      if (chooserOfferedFor !== agentId) {
+      // Minted with nothing signed in. An account that exists by the time this page looks (a
+      // sign-in finished in another tab, a reload after one) launches the chat at once, as
+      // ``new`` would have with one signed in: the chooser lists signed-in accounts as facts,
+      // not as something to pick, so there is no other way onto it.
+      const account = getSelectedAccount();
+      if (account !== null && !launchInFlight && launchError === null && launchedFor !== agentId) {
+        closeProviderChooser();
+        launch(agentId, account.id);
+      } else if (chooserOfferedFor !== agentId) {
+        // Offered once per chat, on the page's first render of this phase: the user may
+        // dismiss it and come back through the button.
         chooserOfferedFor = agentId;
         offerProviderChooser(agentId);
       }
