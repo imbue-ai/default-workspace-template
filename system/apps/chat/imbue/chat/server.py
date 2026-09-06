@@ -30,8 +30,10 @@ from flask import Flask
 from flask import Response
 from flask import request
 from flask import send_file
+from flask import send_from_directory
 from loguru import logger as _loguru_logger
 from simple_websocket import ConnectionClosed
+from werkzeug.exceptions import NotFound
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import latchkey_endpoints
@@ -1170,6 +1172,26 @@ def _serve_file_or_document(path: str) -> Response:
     return _chat_document(path)
 
 
+def _favicon() -> Response:
+    favicon_path = get_state().static_directory / "favicon.ico"
+    if favicon_path.exists():
+        return send_file(favicon_path, mimetype="image/x-icon")
+    return Response(status=404)
+
+
+def _serve_asset(filename: str) -> Response:
+    """The chat page's built bundle (``static/assets/``), by the hashed name the document links."""
+    assets_directory = get_state().static_directory / "assets"
+    # A missing asset is a plain 404 rather than the HTML error page ``send_from_directory``
+    # would raise. Existence and safety are both left to ``send_from_directory``: ``filename``
+    # arrives with any ``..`` segments intact, so joining it onto the directory ourselves would
+    # stat paths outside it -- an existence oracle for the whole filesystem.
+    try:
+        return send_from_directory(assets_directory, filename)
+    except NotFound:
+        return Response(status=404)
+
+
 def _health_endpoint() -> Response:
     """The probe route (contracts.md section 5): alive, and whether the built chat page is being served."""
     is_frontend_built = (get_state().static_directory / CHAT_DOCUMENT_FILENAME).exists()
@@ -1250,6 +1272,8 @@ def create_application(state: ChatState) -> Flask:
     source, nudger = build_chat_instance_source(state.agent_manager)
     application.register_blueprint(build_instances_blueprint(source, nudger))
 
+    application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
+    application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     sock.route("/api/ws")(_ws_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])

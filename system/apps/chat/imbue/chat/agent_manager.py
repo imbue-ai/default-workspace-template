@@ -1374,6 +1374,10 @@ class AgentManager:
             # The provisional record changed phase with no agent-list broadcast to carry the
             # change (a success nudges through the broadcast above).
             self._nudger.nudge()
+            # The pages show what the record holds: the reason and the output behind it.
+            failed = self.get_proto_agent(agent_id)
+            if failed is not None and failed.error is not None:
+                error = failed.error
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
 
     def _mark_creation_failed_locked(self, agent_id: str, error: str) -> None:
@@ -1382,7 +1386,10 @@ class AgentManager:
         proto = self._proto_agents.get(agent_id)
         if proto is None:
             return
-        self._proto_agents[agent_id] = proto.model_copy(update={"phase": ProvisionalChatPhase.FAILED, "error": error})
+        self._proto_agents[agent_id] = proto.model_copy_update(
+            to_update(proto.field_ref().phase, ProvisionalChatPhase.FAILED),
+            to_update(proto.field_ref().error, error),
+        )
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""

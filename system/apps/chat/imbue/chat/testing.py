@@ -465,6 +465,11 @@ def make_agent_fixture(
     agent_state_dir.mkdir(parents=True, exist_ok=True)
     claude_config_dir = tmp_path / "claude_config"
     projects_dir = claude_config_dir / "projects" / "test-project"
+    # The watcher finds the transcript by the session id the agent's state dir records, under the
+    # CLAUDE_CONFIG_DIR its env file names; without both it falls back to the real ~/.claude and
+    # the fixture transcript never loads.
+    (agent_state_dir / "claude_session_id_history").write_text(f"{FIXTURE_SESSION_ID}\n")
+    (agent_state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
     session_file = make_session_file(
         projects_dir, FIXTURE_SESSION_ID, session_events if session_events is not None else _FIXTURE_SESSION_EVENTS
     )
@@ -523,7 +528,12 @@ def _write_fake_binaries(tmp_path: Path) -> Path:
     )
     fake_claude.chmod(0o755)
     fake_mngr = fake_bin_dir / "mngr"
-    fake_mngr.write_text("#!/bin/sh\nexit 0\n")
+    # A create takes a beat, so a page opened on a chat being created is seen in that phase;
+    # ``FAKE_MNGR_CREATE_EXIT_CODE`` in the environment makes it fail with that status.
+    fake_mngr.write_text(
+        '#!/bin/sh\ncase "$1" in create) sleep 2; echo "create failed on purpose" >&2; '
+        'exit "${FAKE_MNGR_CREATE_EXIT_CODE:-0}" ;; esac\nexit 0\n'
+    )
     fake_mngr.chmod(0o755)
     return fake_bin_dir
 
@@ -538,6 +548,7 @@ def running_workspace(
     is_stub_app_offered: bool = False,
     stub_instances: Sequence[str] = (),
     project_names: Sequence[str] = (STARTER_PROJECT_NAME,),
+    is_account_signed_in: bool = True,
 ) -> Iterator[RunningWorkspace]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
@@ -551,6 +562,8 @@ def running_workspace(
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
+    # The work dir every agent reports, and the one a create runs in.
+    (tmp_path / "work").mkdir(exist_ok=True)
     agent_info, session_file = make_agent_fixture(tmp_path, session_events=session_events)
     extra_infos: list[AgentInfo] = []
     for extra_id, extra_name in additional_agents:
@@ -606,6 +619,7 @@ def running_workspace(
             {
                 "MNGR_HOST_DIR": str(tmp_path),
                 "MNGR_AGENT_ID": "",
+                "MNGR_AGENT_WORK_DIR": str(tmp_path / "work"),
                 "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
                 "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
                 "MINDS_APPS_FILE": str(registry_path),
@@ -614,8 +628,11 @@ def running_workspace(
         ),
         patch("imbue.chat.server.discover_agents", return_value=agents),
     ):
-        account_id, _ = mint_account_dir()
-        commit_account(account_id, "anthropic", "Anthropic")
+        # A signed-in account is what a new chat launches on at once; without one the chat's
+        # ``new`` mints a chat that waits for an account (its page shows the provider chooser).
+        if is_account_signed_in:
+            account_id, _ = mint_account_dir()
+            commit_account(account_id, "anthropic", "Anthropic")
 
         manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
         with manager._lock:
