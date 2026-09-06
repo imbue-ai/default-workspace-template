@@ -72,3 +72,5 @@ The frontends are one npm workspace rooted at `system/package.json` (with `packa
 `system/libs/workspace_ui` exports the eslint/prettier vitest runner every package of the npm workspace shares (`src/lint-and-format-checks.ts`) and no longer declares `dompurify`, which only the chat frontend uses.
 
 `system/libs/workspace_ui` exports `wsUrl`, the WebSocket URL helper both frontends had duplicated, and the earlyoom note in `supervisord.conf` lists the `chat` program in the shed order.
+
+`system/scripts/layout.py` and `refresh_workspace_view.py` no longer send the `X-Mngr-Agent-Id` header with a layout op: the shell reads only the body's `requester` address since phase 10 (it names no app, so an agent id alone means nothing to it), and the header was dead.

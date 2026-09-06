@@ -582,9 +582,10 @@ def test_transport_failures_map_to_exit_codes(
     assert fragment in capsys.readouterr().err
 
 
-def test_post_layout_sends_the_requester_address_in_the_body_and_the_agent_id_in_the_header(
+def test_post_layout_sends_the_requester_address_in_the_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The requester rides in the body as an address; no header names the agent (the shell reads none)."""
     seen: dict[str, Any] = {}
 
     class _Response:
@@ -602,7 +603,7 @@ def test_post_layout_sends_the_requester_address_in_the_body_and_the_agent_id_in
     def fake_urlopen(request: urllib.request.Request, timeout: float) -> _Response:
         seen["url"] = request.full_url
         seen["body"] = json.loads(request.data or b"{}")
-        seen["header"] = request.get_header("X-mngr-agent-id")
+        seen["headers"] = dict(request.header_items())
         return _Response()
 
     monkeypatch.setenv(layout.ENV_MNGR_AGENT_ID, "agent-42")
@@ -616,7 +617,7 @@ def test_post_layout_sends_the_requester_address_in_the_body_and_the_agent_id_in
             "args": {"address": "app:files"},
             "requester": "app:chat?instance=agent-42",
         },
-        "header": "agent-42",
+        "headers": {"Content-type": "application/json"},
     }
 
 
