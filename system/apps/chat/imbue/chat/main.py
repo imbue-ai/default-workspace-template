@@ -29,7 +29,7 @@ from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatState
-from imbue.chat.state import get_state
+from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 
@@ -169,8 +169,7 @@ def main() -> None:
     config = load_config()
     _reconcile_account_store()
     application = build_application(config, args)
-    with application.app_context():
-        state = get_state()
+    state = state_of(application)
 
     # The chat app tells the shell when its instance list changes (contracts.md section
     # 5). Installed here, at the process entry point, so a manager a test builds nudges
