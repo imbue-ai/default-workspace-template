@@ -38,7 +38,7 @@ import {
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
 import type { ProtoAgent } from "../models/AgentManager";
-import { closeProviderChooser, getSelectedAccount, openProviderChooser } from "../models/Providers";
+import { areAccountsLoaded, closeProviderChooser, getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
@@ -305,6 +305,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       ]);
     }
     if (proto.phase === "awaiting_account") {
+      // The account list decides between launching and offering the chooser, so neither
+      // happens before it has loaded: a record replayed ahead of the accounts response would
+      // otherwise open the chooser only to close it a redraw later.
+      if (!areAccountsLoaded()) {
+        return m(
+          "div",
+          { class: "message-list-awaiting-account flex flex-col items-center justify-center h-full p-8" },
+          m("p", { class: "text-secondary" }, "Checking which providers are signed in..."),
+        );
+      }
       // Minted with nothing signed in. An account that exists by the time this page looks (a
       // sign-in finished in another tab, a reload after one) launches the chat at once, as
       // ``new`` would have with one signed in: the chooser lists signed-in accounts as facts,

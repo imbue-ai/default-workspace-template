@@ -86,6 +86,9 @@ let lanes: Lane[] = [];
 let accounts: ProviderAccount[] = [];
 let mru: string | null = null;
 let lanesLoaded = false;
+// Whether the account list has been fetched even once. Distinct from "it is empty": both read
+// as zero accounts, and one of them means "ask the user to sign in".
+let accountsLoaded = false;
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -127,6 +130,13 @@ export async function loadAccounts(): Promise<void> {
   });
   accounts = body.accounts;
   mru = body.mru;
+  accountsLoaded = true;
+}
+
+/** Whether `getAccounts()` has an answer yet. Anything that treats "no accounts" as "sign in
+ *  first" has to ask this too, or it asks for a sign-in on a workspace that has providers. */
+export function areAccountsLoaded(): boolean {
+  return accountsLoaded;
 }
 
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
