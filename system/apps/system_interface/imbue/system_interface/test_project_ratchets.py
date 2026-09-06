@@ -149,9 +149,11 @@ _SHELL_NAMES_THE_CHAT_RULE = RatchetRuleInfo(
     ),
 )
 
-# The bare app name as a string literal. Class names such as "chat-panel" and prose (``chat``
-# in a docstring) do not match.
-_CHAT_NAME_LITERAL = re.compile(r"""["']chat["']""")
+# The bare app name as a string literal, and the name as the app of an address literal
+# (``"app:chat"``, ``"app:chat?instance=..."``, a template literal's ``app:chat?``). Class names
+# such as "chat-panel" and prose (``chat`` in a docstring) do not match: the bare form takes a
+# string quote on both sides, and the address form is closed by a quote or its ``?`` at once.
+_CHAT_NAME_LITERAL = re.compile(r"""["']chat["']|app:chat(?:["'`]|\?)""")
 
 
 def _frontend_source_files() -> Iterator[Path]:
@@ -159,6 +161,24 @@ def _frontend_source_files() -> Iterator[Path]:
     for source_file in _FRONTEND_SRC.rglob("*.ts"):
         if not source_file.name.endswith(".test.ts"):
             yield source_file
+
+
+@pytest.mark.parametrize(
+    ("line", "is_named"),
+    [
+        ('const app = "chat";', True),
+        ("const app = 'chat';", True),
+        ('const address = "app:chat?instance=" + key;', True),
+        ("const address = `app:chat?instance=${key}`;", True),
+        ('open("app:chat");', True),
+        ('const panel = "chat-panel";', False),
+        ("# the chat app's own page", False),
+        ("# the ``chat`` template", False),
+        ('const address = "app:terminal?instance=" + key;', False),
+    ],
+)
+def test_the_chat_name_pattern_catches_the_name_in_an_address_and_not_in_prose(line: str, is_named: bool) -> None:
+    assert (_CHAT_NAME_LITERAL.search(line) is not None) is is_named
 
 
 def test_the_shell_names_no_app() -> None:
