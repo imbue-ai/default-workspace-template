@@ -74,7 +74,7 @@ The registry (`data/.state/apps.toml`) is read for the pins of apps with instanc
 ## Behaviour
 
 - Idempotent: the marker short-circuits `run`; `--force` runs again, overwriting the projects file and the seeds.
-- Never destructive: the old directory is untouched (a later release deletes it); a projects file that already holds projects, and any seed that already exists, are kept and reported unless `--force`; the two app stores only ever gain records (a record the app already holds wins, and a store that cannot be read is left alone); the marker is written in every case.
+- Never destructive: the old directory is untouched (a later release deletes it); a projects file that already holds projects (or cannot be read), and any seed that already exists, are kept and reported unless `--force`; the two app stores only ever gain records (a record the app already holds wins, and a store that cannot be read is left alone); the marker is written in every case.
 - A missing old directory writes the marker and nothing else, so a fresh workspace is not "unmigrated" forever.
 - An unreadable content file costs that seed and nothing else; `plan` and the log say what was skipped.
 - Bootstrap runs it at every boot (best-effort, behind the marker), so it runs after the apply's restart whatever the apply did; the apply runs it too, before the restart, as a warning-only step.

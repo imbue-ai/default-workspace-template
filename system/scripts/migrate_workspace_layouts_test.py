@@ -399,6 +399,23 @@ def test_existing_new_model_state_is_kept_without_force(
     assert (state_dir / "migrated.json").exists()
 
 
+def test_an_unreadable_projects_file_is_kept_and_reported(
+    legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
+) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "projects.json").write_text("{corrupt")
+
+    plan = _plan(legacy_layout_dir, tmp_path, migration_registry)
+    _run(legacy_layout_dir, tmp_path, migration_registry)
+
+    assert plan.is_projects_skipped and "cannot be read" in plan.projects_note
+    assert any("projects.json" in note for note in plan.notes)
+    assert (state_dir / "projects.json").read_text() == "{corrupt"
+    assert (state_dir / "layouts" / "project-1" / "seed.desktop.json").exists()
+    assert (state_dir / "migrated.json").exists()
+
+
 def test_a_missing_old_store_writes_only_the_marker(
     tmp_path: Path, migration_registry: Path
 ) -> None:
