@@ -11,9 +11,8 @@ from typing import Any
 
 import pytest
 from app_instances.data_types import InstanceLifetime
-from app_instances.json_store import JsonStoreInstanceSource
-from app_instances.primitives import InstanceKeyPrefix, TitleTemplate
 from conftest import migrate_workspace_layouts as migrate
+from files_app.main import build_files_source
 from imbue.system_interface.shell.dockview_document import (
     Direction,
     Placement,
@@ -308,15 +307,9 @@ def test_run_seeds_the_files_and_terminal_stores_their_apps_read(
 ) -> None:
     _, _, apps_dir = _run(legacy_layout_dir, tmp_path, migration_registry)
 
-    files_source = JsonStoreInstanceSource(
-        store_path=apps_dir / "files" / "instances.json",
-        key_prefix=InstanceKeyPrefix("files"),
-        title_template=TitleTemplate("File Viewer {n}"),
-        lifetime=InstanceLifetime.REFERENCED,
-        is_renameable=False,
-        is_location_tracked=True,
-    )
-    (record,) = files_source.list_instances()
+    (record,) = build_files_source(
+        apps_dir / "files" / "instances.json"
+    ).list_instances()
     assert str(record.key) == "files-2"
     assert str(record.url) == "/data/notes?sort=name"
     assert str(record.title) == "File Viewer 2"
