@@ -5,7 +5,8 @@
  * A chat that is not an agent yet (a provisional chat) renders by its phase: waiting for an
  * account, it offers the provider chooser; being created, it shows the composer over an
  * empty transcript (a message typed now is held until the agent lands); failed, it shows the
- * reason and a way to try again. The transcript takes over when creation completes.
+ * reason and a way to try again over the composer, so a message held through the failure is
+ * back in it where it can be seen. The transcript takes over when creation completes.
  */
 
 import m from "mithril";
@@ -92,11 +93,13 @@ function provisionalRecord(agentId: string): ProtoAgent | null {
   return proto !== undefined && getAgentById(agentId) === undefined ? proto : null;
 }
 
-/** Whether the composer has an agent to reach: one the app lists, or one whose create is in
- *  flight (a message typed now is held until it lands). */
+/** Whether the page has a composer: for a chat the app lists, one whose create is in flight (a
+ *  message typed now is held until it lands), or one whose create failed (the held message is
+ *  returned to the composer with the reason, and a send there is refused with it). Only a chat
+ *  still waiting for an account has nothing to type into. */
 function hasComposer(agentId: string): boolean {
   const proto = provisionalRecord(agentId);
-  return proto === null || proto.phase === "creating";
+  return proto === null || proto.phase !== "awaiting_account";
 }
 
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {

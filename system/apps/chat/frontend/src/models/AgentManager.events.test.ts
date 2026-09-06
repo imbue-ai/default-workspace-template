@@ -127,6 +127,12 @@ describe("the provisional chats over the socket", () => {
     });
   });
 
+  it("rejects a send at once for a chat whose create already failed", async () => {
+    push({ type: "proto_agent_created", ...proto("agent-1", "failed", "mngr create exited with code 3") });
+
+    await expect(manager.whenAgentRegistered("agent-1")).rejects.toThrow("mngr create exited with code 3");
+  });
+
   it("keeps a held send waiting after a successful completion until the agent list names the chat", async () => {
     push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
     const registered = manager.whenAgentRegistered("agent-1");
