@@ -46,6 +46,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": { target: "http://localhost:8010", ws: true },
+      "/_instances": { target: "http://localhost:8010" },
     },
   },
 });
