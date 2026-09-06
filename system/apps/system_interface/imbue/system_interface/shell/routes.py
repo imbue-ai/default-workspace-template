@@ -96,10 +96,9 @@ from imbue.system_interface.shell.projects import seed_shortcuts
 from imbue.system_interface.shell.projects import validated_shortcut
 from imbue.system_interface.shell.state import ShellState
 
-LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
-# The app whose instances agents are: an agent-initiated op is attributed to the client that
-# last messaged that agent's chat instance.
-CHAT_APP_NAME_FOR_ATTRIBUTION: Final[str] = "chat"
+LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset(
+    {"127.0.0.1", "::1", "localhost"}
+)
 
 HTTP_OK: Final[int] = 200
 HTTP_CREATED: Final[int] = 201
@@ -185,12 +184,16 @@ def _require_loopback() -> ResponseReturnValue | None:
 
 def _project_id(raw: str) -> ProjectId:
     if is_everything_view(raw):
-        raise EverythingIsNotAProjectError(f"{EVERYTHING_VIEW_ID!r} is a view, not a project")
+        raise EverythingIsNotAProjectError(
+            f"{EVERYTHING_VIEW_ID!r} is a view, not a project"
+        )
     return ProjectId(raw)
 
 
 def _relay_response(outcome: RelayOutcome) -> Response:
-    return Response(outcome.body, status=outcome.status_code, content_type=outcome.content_type)
+    return Response(
+        outcome.body, status=outcome.status_code, content_type=outcome.content_type
+    )
 
 
 def _now() -> datetime:
@@ -243,7 +246,9 @@ def tab_instance(tab_id: str) -> ResponseReturnValue:
                 f"tab {tab_id!r} shows {stored.layout.tabs[panel_id].address}, not the app {report.app!r}",
                 HTTP_BAD_REQUEST,
             )
-    address = address_for(report.app, None if report.key == "" else InstanceKey(report.key))
+    address = address_for(
+        report.app, None if report.key == "" else InstanceKey(report.key)
+    )
     for stored in shell.rebind_tab(TabId(tab_id), address):
         if not is_everything_view(stored.view_id):
             shell.projects.add_tab(stored.view_id, address)
@@ -270,7 +275,10 @@ def client_activity_route() -> ResponseReturnValue:
             )
         case ClientActivityKind.VIEW_SWITCH:
             shell.activity.append_view_switch(
-                str(report.client_id), report.device_kind.value, report.from_view_id, str(report.view_id)
+                str(report.client_id),
+                report.device_kind.value,
+                report.from_view_id,
+                str(report.view_id),
             )
         case _ as unreachable:
             assert_never(unreachable)
@@ -329,7 +337,9 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
     # A critical app is never stopped from here, and neither is any row running inside a
     # critical app's program (the chat row shares the shell's program until phase 10).
     critical_programs = {
-        other.row.program for other in shell.inventory.entries() if other.row.critical and other.row.program
+        other.row.program
+        for other in shell.inventory.entries()
+        if other.row.critical and other.row.program
     }
     if entry.row.critical or program in critical_programs:
         raise AppLifecycleRefusedError(
@@ -345,10 +355,20 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
                 assert_never(unreachable)
     except SupervisorProgramActionError as e:
         return _detail(str(e), HTTP_BAD_GATEWAY)
-    logger.info("{} app {} (program {})", "Stopped" if action is AppLifecycleAction.STOP else "Started", name, program)
+    logger.info(
+        "{} app {} (program {})",
+        "Stopped" if action is AppLifecycleAction.STOP else "Started",
+        name,
+        program,
+    )
     shell.inventory.refresh_liveness()
     refreshed = shell.inventory.entry(name)
-    return jsonify({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
+    return jsonify(
+        {
+            "name": name,
+            "is_running": refreshed.is_running if refreshed is not None else False,
+        }
+    )
 
 
 def stop_app(name: str) -> ResponseReturnValue:
@@ -363,14 +383,23 @@ def start_app(name: str) -> ResponseReturnValue:
 
 
 def list_projects() -> ResponseReturnValue:
-    return jsonify({"projects": [project_wire_json(project) for project in _shell().projects.list_projects()]})
+    return jsonify(
+        {
+            "projects": [
+                project_wire_json(project)
+                for project in _shell().projects.list_projects()
+            ]
+        }
+    )
 
 
 def create_project() -> ResponseReturnValue:
     body = parse_request_body(ProjectMetadataRequest)
     shell = _shell()
     shortcuts = seed_shortcuts([entry.row for entry in shell.inventory.entries()])
-    project = shell.projects.create_project(body.name, body.color, body.glyph, shortcuts)
+    project = shell.projects.create_project(
+        body.name, body.color, body.glyph, shortcuts
+    )
     shell.broadcast_projects_updated()
     return jsonify(project_wire_json(project)), HTTP_CREATED
 
@@ -378,7 +407,9 @@ def create_project() -> ResponseReturnValue:
 def update_project_settings(project_id: str) -> ResponseReturnValue:
     body = parse_request_body(ProjectMetadataRequest)
     shell = _shell()
-    project = shell.projects.update_project_settings(_project_id(project_id), body.name, body.color, body.glyph)
+    project = shell.projects.update_project_settings(
+        _project_id(project_id), body.name, body.color, body.glyph
+    )
     shell.broadcast_projects_updated()
     return jsonify(project_wire_json(project))
 
@@ -415,7 +446,8 @@ def set_project_shortcut(project_id: str) -> ResponseReturnValue:
     shell = _shell()
     entry = shell.inventory.entry(str(body.app))
     shortcut = validated_shortcut(
-        Shortcut(app=body.app, action=body.action, mode=body.mode), entry.row if entry else None
+        Shortcut(app=body.app, action=body.action, mode=body.mode),
+        entry.row if entry else None,
     )
     project = shell.projects.set_shortcut(_project_id(project_id), shortcut)
     shell.broadcast_projects_updated()
@@ -425,7 +457,9 @@ def set_project_shortcut(project_id: str) -> ResponseReturnValue:
 def remove_project_shortcut(project_id: str) -> ResponseReturnValue:
     body = parse_request_body(ProjectShortcutRemoveRequest)
     shell = _shell()
-    project = shell.projects.remove_shortcut(_project_id(project_id), str(body.app), str(body.action))
+    project = shell.projects.remove_shortcut(
+        _project_id(project_id), str(body.app), str(body.action)
+    )
     shell.broadcast_projects_updated()
     return jsonify(project_wire_json(project))
 
@@ -446,7 +480,9 @@ def get_layout(view_id: str) -> ResponseReturnValue:
         if client is not None
         else (_device_kind_from_query(raw_device) if raw_device else DeviceKind.DESKTOP)
     )
-    return jsonify(layout_wire_json(shell.layouts.read_layout(view, client_id, device_kind)))
+    return jsonify(
+        layout_wire_json(shell.layouts.read_layout(view, client_id, device_kind))
+    )
 
 
 def save_layout(view_id: str) -> ResponseReturnValue:
@@ -457,7 +493,13 @@ def save_layout(view_id: str) -> ResponseReturnValue:
         raise ProjectNotFoundError(view_id)
     saved = shell.save_browser_layout(view, body)
     # The stamp is spelled as the layout route spells it, so the window compares like with like.
-    return jsonify({"updated_at": layout_wire_json(saved)["updated_at"] if saved is not None else None})
+    return jsonify(
+        {
+            "updated_at": layout_wire_json(saved)["updated_at"]
+            if saved is not None
+            else None
+        }
+    )
 
 
 # ---------- sections 6 and 9: clients and the inventory ----------
@@ -467,7 +509,12 @@ def list_clients() -> ResponseReturnValue:
     shell = _shell()
     connected = shell.broadcaster.connected_client_ids()
     return jsonify(
-        {"clients": [client_wire_json(client, str(client.id) in connected) for client in shell.clients.list_clients()]}
+        {
+            "clients": [
+                client_wire_json(client, str(client.id) in connected)
+                for client in shell.clients.list_clients()
+            ]
+        }
     )
 
 
@@ -477,7 +524,9 @@ def inventory_document() -> ResponseReturnValue:
     docked_by_client_id = {
         str(client.id): [
             tab.address
-            for tab in shell.layouts.read_layout(client.active_view, client.id, client.device_kind).tabs.values()
+            for tab in shell.layouts.read_layout(
+                client.active_view, client.id, client.device_kind
+            ).tabs.values()
         ]
         for client in clients
     }
@@ -508,12 +557,12 @@ def layout_broadcast() -> ResponseReturnValue:
         return _detail("Request body must be a JSON object", HTTP_BAD_REQUEST)
     op = body.get("op")
     args_raw = body.get("args", {})
-    agent_id = str(body.get("agent_id") or request.headers.get("X-Mngr-Agent-Id") or "")
+    requester = _requester_address(str(body.get("requester") or ""))
     if not isinstance(op, str) or not is_known_op(op):
         return _detail(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
     if not isinstance(args_raw, dict):
         return _detail("``args`` must be a JSON object", HTTP_BAD_REQUEST)
-    return _dispatch_layout_op(_shell(), op, args_raw, agent_id)
+    return _dispatch_layout_op(_shell(), op, args_raw, requester)
 
 
 def _shell() -> ShellState:
@@ -525,16 +574,28 @@ def register_shell_routes(application: Flask) -> None:
     application.register_error_handler(ShellError, _answer_shell_error)
     application.register_error_handler(AppInstancesError, answer_typed_error)
     application.add_url_rule(
-        "/api/apps/<name>/changed", view_func=app_changed, methods=["POST"], endpoint="app_changed"
+        "/api/apps/<name>/changed",
+        view_func=app_changed,
+        methods=["POST"],
+        endpoint="app_changed",
     )
     application.add_url_rule(
-        "/api/tabs/<tab_id>/instance", view_func=tab_instance, methods=["POST"], endpoint="tab_instance"
+        "/api/tabs/<tab_id>/instance",
+        view_func=tab_instance,
+        methods=["POST"],
+        endpoint="tab_instance",
     )
     application.add_url_rule(
-        "/api/client-activity", view_func=client_activity_route, methods=["POST"], endpoint="client_activity_route"
+        "/api/client-activity",
+        view_func=client_activity_route,
+        methods=["POST"],
+        endpoint="client_activity_route",
     )
     application.add_url_rule(
-        "/api/apps/<name>/instances", view_func=relay_create_route, methods=["POST"], endpoint="relay_create_route"
+        "/api/apps/<name>/instances",
+        view_func=relay_create_route,
+        methods=["POST"],
+        endpoint="relay_create_route",
     )
     application.add_url_rule(
         "/api/apps/<name>/instances/<key>/delete",
@@ -554,10 +615,30 @@ def register_shell_routes(application: Flask) -> None:
         methods=["POST"],
         endpoint="relay_location_route",
     )
-    application.add_url_rule("/api/apps/<name>/stop", view_func=stop_app, methods=["POST"], endpoint="stop_app")
-    application.add_url_rule("/api/apps/<name>/start", view_func=start_app, methods=["POST"], endpoint="start_app")
-    application.add_url_rule("/api/projects", view_func=list_projects, methods=["GET"], endpoint="list_projects")
-    application.add_url_rule("/api/projects", view_func=create_project, methods=["POST"], endpoint="create_project")
+    application.add_url_rule(
+        "/api/apps/<name>/stop",
+        view_func=stop_app,
+        methods=["POST"],
+        endpoint="stop_app",
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/start",
+        view_func=start_app,
+        methods=["POST"],
+        endpoint="start_app",
+    )
+    application.add_url_rule(
+        "/api/projects",
+        view_func=list_projects,
+        methods=["GET"],
+        endpoint="list_projects",
+    )
+    application.add_url_rule(
+        "/api/projects",
+        view_func=create_project,
+        methods=["POST"],
+        endpoint="create_project",
+    )
     application.add_url_rule(
         "/api/projects/<project_id>/settings",
         view_func=update_project_settings,
@@ -565,10 +646,16 @@ def register_shell_routes(application: Flask) -> None:
         endpoint="update_project_settings",
     )
     application.add_url_rule(
-        "/api/projects/<project_id>/delete", view_func=delete_project, methods=["POST"], endpoint="delete_project"
+        "/api/projects/<project_id>/delete",
+        view_func=delete_project,
+        methods=["POST"],
+        endpoint="delete_project",
     )
     application.add_url_rule(
-        "/api/projects/<project_id>/tabs", view_func=add_project_tab, methods=["POST"], endpoint="add_project_tab"
+        "/api/projects/<project_id>/tabs",
+        view_func=add_project_tab,
+        methods=["POST"],
+        endpoint="add_project_tab",
     )
     application.add_url_rule(
         "/api/projects/<project_id>/tabs/remove",
@@ -588,30 +675,55 @@ def register_shell_routes(application: Flask) -> None:
         methods=["POST"],
         endpoint="remove_project_shortcut",
     )
-    application.add_url_rule("/api/layouts/<view_id>", view_func=get_layout, methods=["GET"], endpoint="get_layout")
-    application.add_url_rule("/api/layouts/<view_id>", view_func=save_layout, methods=["POST"], endpoint="save_layout")
-    application.add_url_rule("/api/clients", view_func=list_clients, methods=["GET"], endpoint="list_clients")
     application.add_url_rule(
-        "/api/inventory", view_func=inventory_document, methods=["GET"], endpoint="inventory_document"
+        "/api/layouts/<view_id>",
+        view_func=get_layout,
+        methods=["GET"],
+        endpoint="get_layout",
     )
     application.add_url_rule(
-        "/api/layout/broadcast", view_func=layout_broadcast, methods=["POST"], endpoint="layout_broadcast"
+        "/api/layouts/<view_id>",
+        view_func=save_layout,
+        methods=["POST"],
+        endpoint="save_layout",
+    )
+    application.add_url_rule(
+        "/api/clients", view_func=list_clients, methods=["GET"], endpoint="list_clients"
+    )
+    application.add_url_rule(
+        "/api/inventory",
+        view_func=inventory_document,
+        methods=["GET"],
+        endpoint="inventory_document",
+    )
+    application.add_url_rule(
+        "/api/layout/broadcast",
+        view_func=layout_broadcast,
+        methods=["POST"],
+        endpoint="layout_broadcast",
     )
 
 
 # ---------- resolving the target: which view, which client ----------
 
 
-def _find_view(shell: ShellState, requested: str) -> tuple[str | None, ResponseReturnValue | None]:
+def _find_view(
+    shell: ShellState, requested: str
+) -> tuple[str | None, ResponseReturnValue | None]:
     """The view a name or id names: a project's name or id, or Everything; a 404 naming the known views otherwise."""
     projects = shell.projects.list_projects()
     if requested.strip().lower() == EVERYTHING_VIEW_ID:
         return EVERYTHING_VIEW_ID, None
     for project in projects:
-        if project.id == requested or project.name.strip().lower() == requested.strip().lower():
+        if (
+            project.id == requested
+            or project.name.strip().lower() == requested.strip().lower()
+        ):
             return str(project.id), None
     known = ", ".join([project.name for project in projects] + ["Everything"])
-    return None, _detail(f"View {requested!r} not found (known views: {known})", HTTP_NOT_FOUND)
+    return None, _detail(
+        f"View {requested!r} not found (known views: {known})", HTTP_NOT_FOUND
+    )
 
 
 def _requested_view(args_raw: dict[str, Any]) -> str | None:
@@ -620,13 +732,17 @@ def _requested_view(args_raw: dict[str, Any]) -> str | None:
     return requested if isinstance(requested, str) and requested else None
 
 
-def _resolve_view(shell: ShellState, args_raw: dict[str, Any]) -> tuple[str | None, ResponseReturnValue | None]:
+def _resolve_view(
+    shell: ShellState, args_raw: dict[str, Any]
+) -> tuple[str | None, ResponseReturnValue | None]:
     """The view ``inspect`` reads: ``args.view``, else the one connected view, else the newest client's; None when
     nothing settles it (the read then answers with no arrangement)."""
     requested = _requested_view(args_raw)
     if requested is not None:
         return _find_view(shell, requested)
-    connected_views = {info["active_view"] for info in shell.broadcaster.get_connected_client_infos()}
+    connected_views = {
+        info["active_view"] for info in shell.broadcaster.get_connected_client_infos()
+    }
     if len(connected_views) == 1:
         return next(iter(connected_views)), None
     clients = shell.clients.list_clients()
@@ -636,32 +752,43 @@ def _resolve_view(shell: ShellState, args_raw: dict[str, Any]) -> tuple[str | No
 
 
 def _is_known_client(shell: ShellState, client_id: str) -> bool:
-    return shell.clients.get_client(client_id) is not None or client_id in shell.broadcaster.connected_client_ids()
+    return (
+        shell.clients.get_client(client_id) is not None
+        or client_id in shell.broadcaster.connected_client_ids()
+    )
 
 
-def _resolve_client(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ClientId | None:
-    """The client an op addresses: ``args.client``, else the client that last messaged the requesting agent, else the
-    one connected client; None when nothing settles it."""
+def _resolve_client(
+    shell: ShellState, args_raw: dict[str, Any], requester: Address | None
+) -> ClientId | None:
+    """The client an op addresses: ``args.client``, else the client that last messaged the requester's instance, else
+    the one connected client; None when nothing settles it."""
     explicit = args_raw.get("client")
     if isinstance(explicit, str) and explicit:
         # Held to the client id rule before it names a layout file.
         client_id = ClientId(explicit)
         if not _is_known_client(shell, client_id):
-            raise ClientNotFoundError(f"No client {client_id!r}: see `layout.py context` for the known clients")
+            raise ClientNotFoundError(
+                f"No client {client_id!r}: see `layout.py context` for the known clients"
+            )
         return client_id
-    # The requester is an agent, and agents are the chat app's instances (keyed by agent id).
-    attributed = find_client_id_for_instance(shell.activity.read_events(), CHAT_APP_NAME_FOR_ATTRIBUTION, agent_id)
-    if attributed is not None and _is_known_client(shell, attributed):
-        return ClientId(attributed)
+    if requester is not None:
+        attributed = find_client_id_for_instance(
+            shell.activity.read_events(), str(requester.app), str(requester.key)
+        )
+        if attributed is not None and _is_known_client(shell, attributed):
+            return ClientId(attributed)
     connected = shell.broadcaster.connected_client_ids()
     if len(connected) == 1:
         return ClientId(next(iter(connected)))
     return None
 
 
-def _require_client(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ClientId:
+def _require_client(
+    shell: ShellState, args_raw: dict[str, Any], requester: Address | None
+) -> ClientId:
     """Exactly one client, or a 412 that lists the connected ones: an op is never applied to a guessed client."""
-    client_id = _resolve_client(shell, args_raw, agent_id)
+    client_id = _resolve_client(shell, args_raw, requester)
     if client_id is not None:
         return client_id
     connected_clients = shell.broadcaster.get_connected_client_infos()
@@ -698,25 +825,29 @@ def _resolve_op_view(
         return _find_view(shell, requested)
     active = _active_view_of_client(shell, client_id)
     if active is None:
-        raise NoTargetClientError(f"Client {client_id!r} has no active view on record; pass --view <name>")
+        raise NoTargetClientError(
+            f"Client {client_id!r} has no active view on record; pass --view <name>"
+        )
     return active, None
 
 
 # ---------- the dispatch ----------
 
 
-def _dispatch_layout_op(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
+def _dispatch_layout_op(
+    shell: ShellState, op: str, args_raw: dict[str, Any], requester: Address | None
+) -> ResponseReturnValue:
     match op:
         case "inspect":
-            return _op_inspect(shell, args_raw, agent_id)
+            return _op_inspect(shell, args_raw, requester)
         case "context":
-            return _op_context(shell, agent_id)
+            return _op_context(shell, requester)
         case "load":
-            return _op_load(shell, args_raw, agent_id)
+            return _op_load(shell, args_raw, requester)
         case _ if is_document_op(op):
-            return _op_document(shell, op, args_raw, agent_id)
+            return _op_document(shell, op, args_raw, requester)
         case _ if is_transient_op(op):
-            return _op_transient(shell, op, args_raw, agent_id)
+            return _op_transient(shell, op, args_raw, requester)
         case _:
             return _detail(f"Op {op!r} has no handler", HTTP_INTERNAL_ERROR)
 
@@ -729,8 +860,10 @@ def _title_by_address(shell: ShellState) -> dict[str, str]:
     }
 
 
-def _op_inspect(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
-    client_id = _resolve_client(shell, args_raw, agent_id)
+def _op_inspect(
+    shell: ShellState, args_raw: dict[str, Any], requester: Address | None
+) -> ResponseReturnValue:
+    client_id = _resolve_client(shell, args_raw, requester)
     view_id: str | None
     if client_id is not None and _requested_view(args_raw) is None:
         view_id, error = _active_view_of_client(shell, client_id), None
@@ -743,31 +876,46 @@ def _op_inspect(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> R
         layout = shell.materialize_client_layout(ViewId(view_id), client_id)
     summary = layout_inspect(layout, _title_by_address(shell))
     logger.info(
-        "layout op=inspect agent_id={} view={} client={} panels={}",
-        agent_id,
+        "layout op=inspect requester={} view={} client={} panels={}",
+        requester,
         view_id,
         client_id,
         len(summary["panels"]),
     )
-    return jsonify({"ok": True, "view_id": view_id, "client_id": client_id, "layout": summary})
+    return jsonify(
+        {"ok": True, "view_id": view_id, "client_id": client_id, "layout": summary}
+    )
 
 
-def _op_context(shell: ShellState, agent_id: str) -> ResponseReturnValue:
-    clients = summarize_client_activity(shell.activity.read_events(), shell.broadcaster.get_connected_client_infos())
-    logger.info("layout op=context agent_id={} clients={}", agent_id, len(clients))
+def _op_context(shell: ShellState, requester: Address | None) -> ResponseReturnValue:
+    clients = summarize_client_activity(
+        shell.activity.read_events(), shell.broadcaster.get_connected_client_infos()
+    )
+    logger.info("layout op=context requester={} clients={}", requester, len(clients))
     return jsonify({"ok": True, "clients": clients})
 
 
-def _op_load(shell: ShellState, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
+def _op_load(
+    shell: ShellState, args_raw: dict[str, Any], requester: Address | None
+) -> ResponseReturnValue:
     requested = args_raw.get("view")
     if not isinstance(requested, str) or not requested:
         return _detail("'load' requires a view name in args.view", HTTP_BAD_REQUEST)
     view_id, error = _find_view(shell, requested)
     if error is not None or view_id is None:
-        return error if error is not None else _detail("Failed to resolve the requested view", HTTP_INTERNAL_ERROR)
-    client_id = _require_client(shell, args_raw, agent_id)
+        return (
+            error
+            if error is not None
+            else _detail("Failed to resolve the requested view", HTTP_INTERNAL_ERROR)
+        )
+    client_id = _require_client(shell, args_raw, requester)
     shell.set_client_active_view(client_id, ViewId(view_id))
-    logger.info("layout op=load agent_id={} view={} target_client={}", agent_id, view_id, client_id)
+    logger.info(
+        "layout op=load requester={} view={} target_client={}",
+        requester,
+        view_id,
+        client_id,
+    )
     return jsonify({"ok": True, "view_id": view_id, "target_client_id": str(client_id)})
 
 
@@ -776,7 +924,9 @@ _TARGET_ARG_KEYS: Final[frozenset[str]] = frozenset({"view", "client"})
 
 
 def _op_only_args(args_raw: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in args_raw.items() if key not in _TARGET_ARG_KEYS}
+    return {
+        key: value for key, value in args_raw.items() if key not in _TARGET_ARG_KEYS
+    }
 
 
 def _parse_document_arguments(args_raw: dict[str, Any]) -> DocumentOpArguments:
@@ -786,22 +936,25 @@ def _parse_document_arguments(args_raw: dict[str, Any]) -> DocumentOpArguments:
         raise LayoutOpError(f"bad op arguments: {e.errors()[0]['msg']}") from e
 
 
-def _requester_chat_address(agent_id: str) -> Address | None:
-    if not agent_id:
+def _requester_address(raw: str) -> Address | None:
+    """The requester the op names (``layout.py`` sends the caller's own chat), or None for none or an unparseable one."""
+    if not raw:
         return None
     try:
-        return address_for(AppName(CHAT_APP_NAME_FOR_ATTRIBUTION), InstanceKey(agent_id))
-    except ValueError as e:
-        logger.debug("Ignored an agent id that names no chat instance ({}): {}", agent_id, e)
+        return Address(raw)
+    except InvalidAddressError as e:
+        logger.debug("Ignored a requester that is not an address ({}): {}", raw, e)
         return None
 
 
-def _resolve_op_address(raw: str, requester_chat: Address | None) -> Address:
-    """An op's address argument: ``self`` is the requester's own chat; anything else must parse."""
+def _resolve_op_address(raw: str, requester: Address | None) -> Address:
+    """An op's address argument: ``self`` is the requester's own instance; anything else must parse."""
     if raw == SELF_ADDRESS:
-        if requester_chat is None:
-            raise LayoutOpError("'self' names the requesting agent's chat, which needs MNGR_AGENT_ID to be set")
-        return requester_chat
+        if requester is None:
+            raise LayoutOpError(
+                "'self' names the requester's own chat, which needs MNGR_AGENT_ID to be set"
+            )
+        return requester
     if not raw:
         raise LayoutOpError("this op needs an address")
     return Address(raw)
@@ -821,18 +974,24 @@ def _create_action_id(entry: AppInventoryEntry, arguments: DocumentOpArguments) 
         return arguments.action
     declared = effective_actions(entry.row)
     default_shortcut = entry.row.default_shortcut
-    if default_shortcut is not None and any(action.id == default_shortcut.action for action in declared):
+    if default_shortcut is not None and any(
+        action.id == default_shortcut.action for action in declared
+    ):
         return str(default_shortcut.action)
     if declared:
         return str(declared[0].id)
-    raise LayoutOpError(f"App {entry.row.name!r} declares no action to create an instance with")
+    raise LayoutOpError(
+        f"App {entry.row.name!r} declares no action to create an instance with"
+    )
 
 
 class _CreatedInstance(FrozenModel):
     """The instance a create made, as the app's answer described it."""
 
     address: Address = Field(description="The new instance's address")
-    title: str = Field(description="The title the app gave it, which the new panel takes")
+    title: str = Field(
+        description="The title the app gave it, which the new panel takes"
+    )
 
 
 def _create_through_relay(
@@ -840,18 +999,25 @@ def _create_through_relay(
 ) -> _CreatedInstance:
     """Run the app's action through the relay (the same route the browser uses) and answer the instance it made. The
     title comes from the app's answer rather than the inventory, which may not have listed the instance yet."""
-    body = json.dumps({"action": _create_action_id(entry, arguments), "params": dict(arguments.params)}).encode()
+    body = json.dumps(
+        {
+            "action": _create_action_id(entry, arguments),
+            "params": dict(arguments.params),
+        }
+    ).encode()
     outcome = relay_create(shell.http_client, entry, body)
     if outcome.status_code >= HTTP_BAD_REQUEST:
         raise InstanceCreateRefusedError(outcome.status_code, _relay_detail(outcome))
     try:
         record = json.loads(outcome.body)["instance"]
         created = _CreatedInstance(
-            address=address_for(entry.row.name, InstanceKey(str(record["key"]))), title=str(record["title"])
+            address=address_for(entry.row.name, InstanceKey(str(record["key"]))),
+            title=str(record["title"]),
         )
     except (ValueError, KeyError, TypeError) as e:
         raise InstanceCreateRefusedError(
-            HTTP_BAD_GATEWAY, f"App {entry.row.name!r} answered the create with an unreadable body"
+            HTTP_BAD_GATEWAY,
+            f"App {entry.row.name!r} answered the create with an unreadable body",
         ) from e
     shell.inventory.refetch_now(str(entry.row.name))
     return created
@@ -867,18 +1033,20 @@ def _relay_detail(outcome: RelayOutcome) -> str:
     return outcome.body.decode(errors="replace")
 
 
-def _anchor_panel_id(layout: LayoutRecord, raw_anchor: str, requester_chat: Address | None) -> str:
+def _anchor_panel_id(
+    layout: LayoutRecord, raw_anchor: str, requester: Address | None
+) -> str:
     """The panel a split or a move is relative to; ``self`` must be docked for that to mean anything."""
-    address = _resolve_op_address(raw_anchor, requester_chat)
+    address = _resolve_op_address(raw_anchor, requester)
     return _require_panel(layout, address)
 
 
 def _anchored_placement(
-    layout: LayoutRecord, arguments: DocumentOpArguments, requester_chat: Address | None
+    layout: LayoutRecord, arguments: DocumentOpArguments, requester: Address | None
 ) -> Placement:
     """The placement a split or a move posts: relative to its anchor, in its direction."""
     return Placement(
-        anchor_panel_id=_anchor_panel_id(layout, arguments.relative_to, requester_chat),
+        anchor_panel_id=_anchor_panel_id(layout, arguments.relative_to, requester),
         direction=arguments.direction,
         ratio=arguments.ratio,
         is_new_group=arguments.new_group,
@@ -887,13 +1055,18 @@ def _anchored_placement(
 
 
 def _docking_placement(
-    layout: LayoutRecord, op: str, arguments: DocumentOpArguments, requester_chat: Address | None
+    layout: LayoutRecord,
+    op: str,
+    arguments: DocumentOpArguments,
+    requester: Address | None,
 ) -> Placement:
     """Where ``open`` and ``split`` dock: open lands beside the requester's own chat when it is docked (else beside
     the active group), tabbing into a group already there unless ``new_group``; split follows its anchor and direction."""
     if op == "split":
-        return _anchored_placement(layout, arguments, requester_chat)
-    chat_panel = panel_id_for_address(layout, requester_chat) if requester_chat is not None else None
+        return _anchored_placement(layout, arguments, requester)
+    chat_panel = (
+        panel_id_for_address(layout, requester) if requester is not None else None
+    )
     return Placement(
         anchor_panel_id=chat_panel,
         direction=Direction.RIGHT,
@@ -906,9 +1079,15 @@ def _docking_placement(
 class _DocumentOpTarget(FrozenModel):
     """What a document op acts on once its address is settled: ``self`` resolved, or the instance the op created."""
 
-    address: Address = Field(description="The instance the op docks, focuses, closes, or moves")
-    title: str | None = Field(description="The title a dock gives the new panel; None when no app lists the address")
-    created: Address | None = Field(description="The address the op created through the relay, when it created one")
+    address: Address = Field(
+        description="The instance the op docks, focuses, closes, or moves"
+    )
+    title: str | None = Field(
+        description="The title a dock gives the new panel; None when no app lists the address"
+    )
+    created: Address | None = Field(
+        description="The address the op created through the relay, when it created one"
+    )
 
 
 def _prepare_docking_target(
@@ -916,22 +1095,28 @@ def _prepare_docking_target(
     op: str,
     snapshot: LayoutRecord,
     arguments: DocumentOpArguments,
-    requester_chat: Address | None,
+    requester: Address | None,
 ) -> _DocumentOpTarget:
     """Settle what ``open`` or ``split`` docks, over a snapshot of the arrangement and outside the state lock: the app
     must be registered, a split's anchor must be docked before any create runs (so a bad anchor makes no instance),
     and a bare app with instances is created through the relay here."""
-    address = _resolve_op_address(arguments.address, requester_chat)
+    address = _resolve_op_address(arguments.address, requester)
     entry = shell.inventory.entry(str(address.app))
     if entry is None:
         raise UnknownAppError(f"No registered app named {address.app!r}")
     if address.key is None and entry.row.instances:
         if op == "split":
-            _anchor_panel_id(snapshot, arguments.relative_to, requester_chat)
+            _anchor_panel_id(snapshot, arguments.relative_to, requester)
         created = _create_through_relay(shell, entry, arguments)
-        return _DocumentOpTarget(address=created.address, title=created.title, created=created.address)
+        return _DocumentOpTarget(
+            address=created.address, title=created.title, created=created.address
+        )
     found = shell.inventory.find_instance(address)
-    return _DocumentOpTarget(address=address, title=found[1].title if found is not None else None, created=None)
+    return _DocumentOpTarget(
+        address=address,
+        title=found[1].title if found is not None else None,
+        created=None,
+    )
 
 
 def _prepare_op_target(
@@ -939,11 +1124,15 @@ def _prepare_op_target(
     op: str,
     snapshot: LayoutRecord,
     arguments: DocumentOpArguments,
-    requester_chat: Address | None,
+    requester: Address | None,
 ) -> _DocumentOpTarget:
     if is_creating_op(op):
-        return _prepare_docking_target(shell, op, snapshot, arguments, requester_chat)
-    return _DocumentOpTarget(address=_resolve_op_address(arguments.address, requester_chat), title=None, created=None)
+        return _prepare_docking_target(shell, op, snapshot, arguments, requester)
+    return _DocumentOpTarget(
+        address=_resolve_op_address(arguments.address, requester),
+        title=None,
+        created=None,
+    )
 
 
 def _dock_target(
@@ -951,14 +1140,14 @@ def _dock_target(
     op: str,
     target: _DocumentOpTarget,
     arguments: DocumentOpArguments,
-    requester_chat: Address | None,
+    requester: Address | None,
 ) -> LayoutRecord:
     """``open`` or ``split`` over the arrangement as it is at the write: an address it already shows is focused, a
     listed one is docked per the op's placement, and one that is neither is not open anywhere."""
     already_open = panel_id_for_address(layout, target.address)
     if already_open is not None:
         return focus_panel(layout, already_open)
-    placement = _docking_placement(layout, op, arguments, requester_chat)
+    placement = _docking_placement(layout, op, arguments, requester)
     if target.title is None:
         raise InstanceNotListedError(
             f"No app lists an instance at {target.address}; run `layout.py list` to see every one"
@@ -971,12 +1160,12 @@ def _edit_layout_for_op(
     layout: LayoutRecord,
     target: _DocumentOpTarget,
     arguments: DocumentOpArguments,
-    requester_chat: Address | None,
+    requester: Address | None,
 ) -> LayoutRecord:
     """The arrangement with ``op`` applied. Pure over the layout it is handed, which is the stored one at the moment of
     the write (the panel ids are resolved on it, not on the snapshot the op was prepared over)."""
     if is_creating_op(op):
-        return _dock_target(layout, op, target, arguments, requester_chat)
+        return _dock_target(layout, op, target, arguments, requester)
     panel_id = _require_panel(layout, target.address)
     match op:
         case "focus":
@@ -984,50 +1173,76 @@ def _edit_layout_for_op(
         case "close":
             return remove_panel(layout, panel_id)
         case "move":
-            return move_panel(layout, panel_id, _anchored_placement(layout, arguments, requester_chat))
+            return move_panel(
+                layout, panel_id, _anchored_placement(layout, arguments, requester)
+            )
         case _:
             raise ShellError(f"Op {op!r} has no document handler")
 
 
-def _op_document(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
+def _op_document(
+    shell: ShellState, op: str, args_raw: dict[str, Any], requester: Address | None
+) -> ResponseReturnValue:
     """Apply one arrangement op to the target client's layout file and announce the write (contracts.md section 12)."""
     arguments = _parse_document_arguments(args_raw)
-    client_id = _require_client(shell, args_raw, agent_id)
+    client_id = _require_client(shell, args_raw, requester)
     view_raw, error = _resolve_op_view(shell, args_raw, client_id)
     if error is not None or view_raw is None:
-        return error if error is not None else _detail("Failed to resolve the target view", HTTP_INTERNAL_ERROR)
+        return (
+            error
+            if error is not None
+            else _detail("Failed to resolve the target view", HTTP_INTERNAL_ERROR)
+        )
     view_id = ViewId(view_raw)
     if not shell.projects.is_view_known(view_id):
         raise ProjectNotFoundError(view_raw)
     # What the op acts on is settled over a snapshot, outside the state lock (a create may wait on the app for a
     # while); the edit itself runs under the lock over the arrangement as it is then.
-    requester_chat = _requester_chat_address(agent_id)
     target = _prepare_op_target(
-        shell, op, shell.materialize_client_layout(view_id, client_id), arguments, requester_chat
+        shell,
+        op,
+        shell.materialize_client_layout(view_id, client_id),
+        arguments,
+        requester,
     )
     saved = shell.edit_client_layout(
-        view_id, client_id, lambda layout: _edit_layout_for_op(op, layout, target, arguments, requester_chat)
+        view_id,
+        client_id,
+        lambda layout: _edit_layout_for_op(op, layout, target, arguments, requester),
     )
     if is_creating_op(op) and not is_everything_view(view_id):
         shell.projects.add_tab(view_id, target.address)
         shell.broadcast_projects_updated()
     if op == "close":
         shell.delete_unreferenced_instances()
-    if _requested_view(args_raw) is not None and _active_view_of_client(shell, client_id) != str(view_id):
+    if _requested_view(args_raw) is not None and _active_view_of_client(
+        shell, client_id
+    ) != str(view_id):
         shell.set_client_active_view(client_id, view_id)
-    logger.info("layout op={} agent_id={} view={} client={} args={}", op, agent_id, view_id, client_id, args_raw)
+    logger.info(
+        "layout op={} requester={} view={} client={} args={}",
+        op,
+        requester,
+        view_id,
+        client_id,
+        args_raw,
+    )
     return jsonify(
         {
             "ok": True,
             "view_id": str(view_id),
             "client_id": str(client_id),
             "layout": layout_inspect(saved, _title_by_address(shell)),
-            "created_address": str(target.created) if target.created is not None else None,
+            "created_address": str(target.created)
+            if target.created is not None
+            else None,
         }
     )
 
 
-def _refuse_unregistered_address(shell: ShellState, args_raw: dict[str, Any]) -> ResponseReturnValue | None:
+def _refuse_unregistered_address(
+    shell: ShellState, args_raw: dict[str, Any]
+) -> ResponseReturnValue | None:
     """A transient op that names an instance or an app: the address must parse, and an app it names must be registered."""
     raw_address = args_raw.get("address")
     if raw_address is None or raw_address == SELF_ADDRESS:
@@ -1046,17 +1261,39 @@ def _is_machine_wide(op: str, args_raw: dict[str, Any]) -> bool:
     if op == "reload_system_interface":
         return True
     raw_address = args_raw.get("address")
-    return op == "refresh" and isinstance(raw_address, str) and raw_address != SELF_ADDRESS and "?" not in raw_address
+    return (
+        op == "refresh"
+        and isinstance(raw_address, str)
+        and raw_address != SELF_ADDRESS
+        and "?" not in raw_address
+    )
 
 
-def _op_transient(shell: ShellState, op: str, args_raw: dict[str, Any], agent_id: str) -> ResponseReturnValue:
+def _op_transient(
+    shell: ShellState, op: str, args_raw: dict[str, Any], requester: Address | None
+) -> ResponseReturnValue:
     """The four verbs with nothing to store: sent to the target client's windows as a ``layout_op`` message."""
     if is_addressed_op(op):
         refusal = _refuse_unregistered_address(shell, args_raw)
         if refusal is not None:
             return refusal
     op_args = _op_only_args(args_raw)
-    target_client_id = None if _is_machine_wide(op, args_raw) else str(_require_client(shell, args_raw, agent_id))
-    shell.broadcaster.broadcast_layout_op(op, op_args, requester_agent_id=agent_id, target_client_id=target_client_id)
-    logger.info("layout op={} agent_id={} target_client={} args={}", op, agent_id, target_client_id, op_args)
+    target_client_id = (
+        None
+        if _is_machine_wide(op, args_raw)
+        else str(_require_client(shell, args_raw, requester))
+    )
+    shell.broadcaster.broadcast_layout_op(
+        op,
+        op_args,
+        requester="" if requester is None else str(requester),
+        target_client_id=target_client_id,
+    )
+    logger.info(
+        "layout op={} requester={} target_client={} args={}",
+        op,
+        requester,
+        target_client_id,
+        op_args,
+    )
     return jsonify({"ok": True, "target_client_id": target_client_id})

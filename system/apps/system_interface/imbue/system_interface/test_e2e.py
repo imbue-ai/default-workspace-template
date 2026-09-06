@@ -64,7 +64,9 @@ def _frontend_built() -> bool:
 
 pytestmark = [
     pytest.mark.release,
-    pytest.mark.skipif(not _playwright_browsers_installed(), reason="Playwright browsers not installed"),
+    pytest.mark.skipif(
+        not _playwright_browsers_installed(), reason="Playwright browsers not installed"
+    ),
     pytest.mark.skipif(
         not _frontend_built(),
         reason=(
@@ -111,14 +113,23 @@ class E2EServer(FrozenModel):
 
     base_url: str = Field(description="The shell's loopback URL")
     state_dir: Path = Field(description="The shell's state directory")
-    stub_source: StubInstanceSource = Field(description="The stub app's in-memory instances")
-    stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
-    second_source: StubInstanceSource | None = Field(description="The second stub app's instances, when offered")
+    stub_source: StubInstanceSource = Field(
+        description="The stub app's in-memory instances"
+    )
+    stub_url: str = Field(
+        description="The stub app's loopback URL, where its pages are framed from"
+    )
+    second_source: StubInstanceSource | None = Field(
+        description="The second stub app's instances, when offered"
+    )
 
 
 def _post_json(url: str, body: dict[str, Any]) -> Any:
     request = urllib.request.Request(
-        url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST"
+        url,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
     with urllib.request.urlopen(request, timeout=5) as response:
         return json.loads(response.read())
@@ -147,7 +158,9 @@ def _running_e2e_server(
     registry_path = tmp_path / "registry" / "apps.toml"
     stub_source = StubInstanceSource()
     for key in stub_instances:
-        stub_source.records.append(instance_record(key, title=f"Stub {key.removeprefix('stub-')}"))
+        stub_source.records.append(
+            instance_record(key, title=f"Stub {key.removeprefix('stub-')}")
+        )
     stub_port = free_port()
     stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
     rows = [
@@ -191,14 +204,18 @@ def _running_e2e_server(
         stub_server = serve_in_background(
             LOOPBACK_HOST,
             stub_port,
-            build_instances_app(stub_source, ShellNudger(app_name=AppName(_STUB_APP_NAME), shell_url=base_url)),
+            build_instances_app(
+                stub_source,
+                ShellNudger(app_name=AppName(_STUB_APP_NAME), shell_url=base_url),
+            ),
         )
         second_server = (
             serve_in_background(
                 LOOPBACK_HOST,
                 second_port,
                 build_instances_app(
-                    second_source, ShellNudger(app_name=AppName(_SECOND_APP_NAME), shell_url=base_url)
+                    second_source,
+                    ShellNudger(app_name=AppName(_SECOND_APP_NAME), shell_url=base_url),
                 ),
             )
             if second_source is not None
@@ -213,7 +230,10 @@ def _running_e2e_server(
                     error_message=f"workspace server did not come up at {base_url}",
                 )
                 for name in project_names:
-                    _post_json(f"{base_url}/api/projects", {"name": name, "color": "#3B82F6", "glyph": 1})
+                    _post_json(
+                        f"{base_url}/api/projects",
+                        {"name": name, "color": "#3B82F6", "glyph": 1},
+                    )
                 # Started only once the apps are serving: the first instance fetch must find them answering.
                 state.shell.start()
                 try:
@@ -253,7 +273,10 @@ def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
 
 def _projects(base_url: str) -> dict[str, dict[str, Any]]:
     """Every project the shell holds, by id, straight off its API."""
-    return {project["id"]: project for project in _get_json(f"{base_url}/api/projects")["projects"]}
+    return {
+        project["id"]: project
+        for project in _get_json(f"{base_url}/api/projects")["projects"]
+    }
 
 
 def _project_tabs(base_url: str, project_id: str = STARTER_PROJECT_ID) -> list[str]:
@@ -265,10 +288,14 @@ def _client_layout_files(state_dir: Path, view_id: str) -> list[Path]:
     view_dir = state_dir / "layouts" / view_id
     if not view_dir.is_dir():
         return []
-    return [path for path in view_dir.glob("*.json") if not path.name.startswith("seed.")]
+    return [
+        path for path in view_dir.glob("*.json") if not path.name.startswith("seed.")
+    ]
 
 
-def _wait_for_layout_saved(state_dir: Path, view_id: str, containing: str | None = None) -> None:
+def _wait_for_layout_saved(
+    state_dir: Path, view_id: str, containing: str | None = None
+) -> None:
     def _saved() -> bool:
         files = _client_layout_files(state_dir, view_id)
         if containing is None:
@@ -286,7 +313,11 @@ def _wait_for_layout_saved(state_dir: Path, view_id: str, containing: str | None
 
 def _wait_for_view(page: Page, view_id: str) -> None:
     """The dock names the view it has mounted; the active view itself lives in the shell's client record."""
-    page.wait_for_selector(f'.dockview-workspace[data-view-id="{view_id}"]', state="attached", timeout=15000)
+    page.wait_for_selector(
+        f'.dockview-workspace[data-view-id="{view_id}"]',
+        state="attached",
+        timeout=15000,
+    )
 
 
 def _launcher_row(page: Page, address: str) -> Any:
@@ -315,21 +346,31 @@ def _open_fixture_instance(page: Page) -> None:
     """Open the fixture instance from the New Tab page and wait for its tab and frame."""
     _open_from_launcher(page, _FIXTURE_ADDRESS)
     expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
-    expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(1, timeout=15000)
+    expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(
+        1, timeout=15000
+    )
 
 
 def _tab(page: Page, title: str | re.Pattern[str]) -> Any:
     return page.locator(".dv-default-tab-content", has_text=title).first
 
 
-def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], view: str = STARTER_PROJECT_NAME) -> None:
+def _broadcast_layout_op(
+    base_url: str, op: str, args: dict[str, Any], view: str = STARTER_PROJECT_NAME
+) -> None:
     """POST a layout op to the loopback ``/api/layout/broadcast`` endpoint.
 
     This is the same path ``system/scripts/layout.py`` drives, so issuing a ``split`` here
     exercises the real frontend handler. Mutating ops are view-targeted and only succeed
     once the page's ``client_state`` registration has landed, so a 412 is retried.
     """
-    payload = json.dumps({"op": op, "args": {**args, "view": view}, "agent_id": "agent-e2e"}).encode()
+    payload = json.dumps(
+        {
+            "op": op,
+            "args": {**args, "view": view},
+            "requester": "app:chat?instance=agent-e2e",
+        }
+    ).encode()
     request = urllib.request.Request(
         f"{base_url}/api/layout/broadcast",
         data=payload,
@@ -369,7 +410,9 @@ def _open_rail_switcher(page: Page) -> None:
 
 def _switch_view_via_rail(page: Page, view_name: str) -> None:
     _open_rail_switcher(page)
-    page.locator(".project-rail-menu [role='menuitem']", has_text=view_name).first.click()
+    page.locator(
+        ".project-rail-menu [role='menuitem']", has_text=view_name
+    ).first.click()
 
 
 def _collapse_rail(page: Page) -> None:
@@ -381,13 +424,17 @@ def _collapse_rail(page: Page) -> None:
 # A page for a stub instance's frame, served by a Playwright route rather than by the stub
 # (which serves only its instances API). Its state is an ``<input>``: typing into it is a
 # change no reload survives, because the served markup has it empty.
-_FRAMED_PAGE_HTML = "<!doctype html><html><body><input id='held' value='' /></body></html>"
+_FRAMED_PAGE_HTML = (
+    "<!doctype html><html><body><input id='held' value='' /></body></html>"
+)
 
 
 def _serve_stub_pages(page: Page, server: E2EServer) -> None:
     page.route(
         f"{server.stub_url}/**",
-        lambda route: route.fulfill(status=200, content_type="text/html", body=_FRAMED_PAGE_HTML),
+        lambda route: route.fulfill(
+            status=200, content_type="text/html", body=_FRAMED_PAGE_HTML
+        ),
     )
 
 
@@ -433,7 +480,9 @@ _SURFACE_REPORT_JS = """
 """
 
 
-def _surface_report(page: Page, address: str, stamp: str | None = None) -> dict[str, Any]:
+def _surface_report(
+    page: Page, address: str, stamp: str | None = None
+) -> dict[str, Any]:
     return page.evaluate(_SURFACE_REPORT_JS, [address, stamp])
 
 
@@ -447,7 +496,9 @@ def test_page_loads_and_shows_title(e2e_server: E2EServer, page: Page) -> None:
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_first_landing_is_the_new_tab_page_offering_the_machine(e2e_server: E2EServer, page: Page) -> None:
+def test_first_landing_is_the_new_tab_page_offering_the_machine(
+    e2e_server: E2EServer, page: Page
+) -> None:
     """A fresh browser lands on the starter project's New Tab page; nothing is opened for it.
 
     The dock is never empty: a view with nothing to mount shows the launcher as its one
@@ -468,7 +519,9 @@ def test_first_landing_is_the_new_tab_page_offering_the_machine(e2e_server: E2ES
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_opening_a_row_files_it_into_the_project_and_shows_its_page(e2e_server: E2EServer, page: Page) -> None:
+def test_opening_a_row_files_it_into_the_project_and_shows_its_page(
+    e2e_server: E2EServer, page: Page
+) -> None:
     """Opening an instance from the launcher docks its page, titles the tab, and files the address into the project.
 
     Every open in a project goes through the same rule: the address joins the project's
@@ -480,9 +533,11 @@ def test_opening_a_row_files_it_into_the_project_and_shows_its_page(e2e_server: 
     _serve_stub_pages(page, e2e_server)
     _open_fixture_instance(page)
 
-    expect(page.frame_locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]').locator("#held")).to_be_visible(
-        timeout=15000
-    )
+    expect(
+        page.frame_locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]').locator(
+            "#held"
+        )
+    ).to_be_visible(timeout=15000)
     wait_for(
         lambda: _FIXTURE_ADDRESS in _project_tabs(e2e_server.base_url),
         timeout=15.0,
@@ -500,7 +555,9 @@ def test_no_projects_lands_on_everything(tmp_path: Path, page: Page) -> None:
         page.goto(server.base_url)
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
-        expect(page.locator(".new-tab-launcher-section[data-section='in-project']")).to_have_count(0)
+        expect(
+            page.locator(".new-tab-launcher-section[data-section='in-project']")
+        ).to_have_count(0)
         expect(_launcher_row(page, _FIXTURE_ADDRESS)).to_have_count(1, timeout=15000)
 
 
@@ -520,7 +577,12 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
             "model": "claude-opus-4-6",
             "content": [
                 {"type": "text", "text": "Let me read that file."},
-                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file": "test.txt"}},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_tc1",
+                    "name": "Read",
+                    "input": {"file": "test.txt"},
+                },
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5},
@@ -532,7 +594,13 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
         "timestamp": "2026-01-01T00:00:02Z",
         "message": {
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "toolu_tc1", "content": "file contents here"}],
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_tc1",
+                    "content": "file contents here",
+                }
+            ],
         },
     },
 ]
@@ -586,13 +654,17 @@ def test_new_tab_opens_in_clicked_split(tmp_path: Path, page: Page) -> None:
     "add to the active group" would land a new tab on the left), then click the RIGHT
     split's "+" and create an instance from the launcher. It must land in the RIGHT split.
     """
-    with _running_e2e_server(tmp_path, _PORT + 3, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
+    with _running_e2e_server(
+        tmp_path, _PORT + 3, stub_instances=(_FIXTURE_KEY, "stub-2")
+    ) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         _open_fixture_instance(page)
         add_buttons = page.locator(".dockview-add-tab-button")
         expect(add_buttons).to_have_count(1)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        _wait_for_layout_saved(
+            server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS
+        )
 
         _broadcast_layout_op(
             server.base_url,
@@ -609,7 +681,8 @@ def test_new_tab_opens_in_clicked_split(tmp_path: Path, page: Page) -> None:
 
         _tab(page, _FIXTURE_TITLE).click()
         left_group = page.locator(
-            ".dv-groupview", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)
+            ".dv-groupview",
+            has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE),
         )
         expect(left_group).to_have_class(re.compile(r"\bdv-active-group\b"))
 
@@ -619,7 +692,9 @@ def test_new_tab_opens_in_clicked_split(tmp_path: Path, page: Page) -> None:
         add_buttons.nth(right_index).click()
 
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
-        page.locator(f'.new-tab-launcher-tile:visible[data-launch="{_STUB_APP_NAME}:new"]').click()
+        page.locator(
+            f'.new-tab-launcher-tile:visible[data-launch="{_STUB_APP_NAME}:new"]'
+        ).click()
 
         expect(_tab(page, "Stub 3")).to_be_visible(timeout=15000)
         placement = page.evaluate(
@@ -638,11 +713,21 @@ def test_new_tab_opens_in_clicked_split(tmp_path: Path, page: Page) -> None:
             """,
             "Stub 3",
         )
-        assert placement["count"] == 2, f"new tab should join the right split, not create a third group: {placement}"
-        assert placement["inRight"], f"new tab should be in the right split: {placement}"
-        assert not placement["inLeft"], f"new tab leaked into the left split: {placement}"
+        assert placement["count"] == 2, (
+            f"new tab should join the right split, not create a third group: {placement}"
+        )
+        assert placement["inRight"], (
+            f"new tab should be in the right split: {placement}"
+        )
+        assert not placement["inLeft"], (
+            f"new tab leaked into the left split: {placement}"
+        )
         # The create went through the relay to the app, which minted the instance.
-        assert [str(record.key) for record in server.stub_source.records] == ["stub-1", "stub-2", "stub-3"]
+        assert [str(record.key) for record in server.stub_source.records] == [
+            "stub-1",
+            "stub-2",
+            "stub-3",
+        ]
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -652,7 +737,13 @@ def test_load_op_switches_the_clients_view(tmp_path: Path, page: Page) -> None:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
 
-        payload = json.dumps({"op": "load", "args": {"view": EVERYTHING_VIEW_NAME}, "agent_id": "agent-e2e"}).encode()
+        payload = json.dumps(
+            {
+                "op": "load",
+                "args": {"view": EVERYTHING_VIEW_NAME},
+                "requester": "app:chat?instance=agent-e2e",
+            }
+        ).encode()
         request = urllib.request.Request(
             f"{server.base_url}/api/layout/broadcast",
             data=payload,
@@ -670,7 +761,10 @@ def test_load_op_switches_the_clients_view(tmp_path: Path, page: Page) -> None:
                 raise
 
         wait_for(
-            _attempt, timeout=15.0, poll_interval=0.2, error_message="the load op never got past client registration"
+            _attempt,
+            timeout=15.0,
+            poll_interval=0.2,
+            error_message="the load op never got past client registration",
         )
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
@@ -692,10 +786,14 @@ def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         _open_fixture_instance(page)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        _wait_for_layout_saved(
+            server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS
+        )
 
         _open_rail_switcher(page)
-        page.locator(".project-rail-menu [role='menuitem']", has_text="New project").click()
+        page.locator(
+            ".project-rail-menu [role='menuitem']", has_text="New project"
+        ).click()
         _wait_for_view(page, "project-2")
         wait_for(
             lambda: "project-2" in _projects(server.base_url),
@@ -708,7 +806,9 @@ def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
 
         page.locator(".project-rail-header").click(button="right")
-        page.locator(".project-rail-menu [role='menuitem']", has_text="Project settings").click()
+        page.locator(
+            ".project-rail-menu [role='menuitem']", has_text="Project settings"
+        ).click()
         page.locator(".destroy-dialog-btn-cancel", has_text="Delete").click()
         page.locator(".destroy-dialog-btn-destroy", has_text="Delete project").click()
         _wait_for_view(page, STARTER_PROJECT_ID)
@@ -718,7 +818,9 @@ def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page: Page) -> None:
+def test_live_page_survives_a_view_that_does_not_include_it(
+    tmp_path: Path, page: Page
+) -> None:
     """A page keeps running, and keeps its state, while no view is showing it.
 
     There is one live page per instance, machine-wide, and a project is only a view that
@@ -737,7 +839,9 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
         page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
 
         _open_from_launcher(page, address)
-        expect(page.locator(frame_selector)).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        expect(page.locator(frame_selector)).to_have_count(
+            1, timeout=_TRIGGER_TIMEOUT_MS
+        )
         held_field = page.frame_locator(frame_selector).locator("#held")
         expect(held_field).to_have_value("", timeout=15000)
         held_field.fill("typed-by-the-user")
@@ -761,8 +865,12 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
         assert while_away["count"] == 1, (
             f"the page was taken out of the DOM by a view that does not include it: {while_away}"
         )
-        assert while_away["stamps"] == ["the-original-element"], f"the element was rebuilt while hidden: {while_away}"
-        assert while_away["removals"] == 0, f"a live surface left the DOM on the way out: {while_away}"
+        assert while_away["stamps"] == ["the-original-element"], (
+            f"the element was rebuilt while hidden: {while_away}"
+        )
+        assert while_away["removals"] == 0, (
+            f"a live surface left the DOM on the way out: {while_away}"
+        )
 
         _switch_view_via_rail(page, STARTER_PROJECT_NAME)
         _wait_for_view(page, STARTER_PROJECT_ID)
@@ -779,11 +887,15 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
             timeout=15000,
         )
         on_return = _surface_report(page, address)
-        assert on_return["count"] == 1, f"the page forked into a second copy: {on_return}"
+        assert on_return["count"] == 1, (
+            f"the page forked into a second copy: {on_return}"
+        )
         assert on_return["stamps"] == ["the-original-element"], (
             f"the element was re-created on the way back: {on_return}"
         )
-        assert on_return["removals"] == 0, f"a live surface left the DOM during the round trip: {on_return}"
+        assert on_return["removals"] == 0, (
+            f"a live surface left the DOM during the round trip: {on_return}"
+        )
         expect(held_field).to_have_value("typed-by-the-user")
 
 
@@ -803,18 +915,23 @@ def test_a_tab_opened_right_before_a_view_switch_is_saved_into_the_view_it_was_o
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         _open_from_launcher(page, address)
-        expect(page.locator(f'iframe[data-address="{address}"]')).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        expect(page.locator(f'iframe[data-address="{address}"]')).to_have_count(
+            1, timeout=_TRIGGER_TIMEOUT_MS
+        )
         # Straight on to the switch, well inside the autosave debounce.
         _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=address)
         assert not any(
-            address in path.read_text() for path in _client_layout_files(server.state_dir, EVERYTHING_VIEW_ID)
+            address in path.read_text()
+            for path in _client_layout_files(server.state_dir, EVERYTHING_VIEW_ID)
         ), "the outgoing view's arrangement was saved under the incoming view"
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, page: Page) -> None:
+def test_one_instance_is_one_element_in_every_view_showing_it(
+    tmp_path: Path, page: Page
+) -> None:
     """An instance shown by two views is ONE element, shown twice -- never two."""
     with _running_e2e_server(tmp_path, _PORT + 11) as server:
         _serve_stub_pages(page, server)
@@ -824,9 +941,15 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
         _open_fixture_instance(page)
         page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
         in_project = _surface_report(page, _FIXTURE_ADDRESS, "the-original-element")
-        assert in_project["count"] == 1, f"the starter project should hold exactly one page: {in_project}"
-        assert in_project["shownCount"] == 1, f"the starter project's page should be on screen: {in_project}"
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        assert in_project["count"] == 1, (
+            f"the starter project should hold exactly one page: {in_project}"
+        )
+        assert in_project["shownCount"] == 1, (
+            f"the starter project's page should be on screen: {in_project}"
+        )
+        _wait_for_layout_saved(
+            server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS
+        )
 
         _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
         _wait_for_view(page, EVERYTHING_VIEW_ID)
@@ -835,18 +958,26 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
         expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
 
         in_everything = _surface_report(page, _FIXTURE_ADDRESS)
-        assert in_everything["count"] == 1, f"opening the instance in Everything forked its page: {in_everything}"
-        assert in_everything["shownCount"] == 1, f"Everything is not showing the page: {in_everything}"
+        assert in_everything["count"] == 1, (
+            f"opening the instance in Everything forked its page: {in_everything}"
+        )
+        assert in_everything["shownCount"] == 1, (
+            f"Everything is not showing the page: {in_everything}"
+        )
         assert in_everything["stamps"] == ["the-original-element"], (
             f"Everything is showing a different element than the starter project: {in_everything}"
         )
-        assert in_everything["removals"] == 0, f"a live surface left the DOM on the way in: {in_everything}"
+        assert in_everything["removals"] == 0, (
+            f"a live surface left the DOM on the way in: {in_everything}"
+        )
 
         _switch_view_via_rail(page, STARTER_PROJECT_NAME)
         _wait_for_view(page, STARTER_PROJECT_ID)
         expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
         back_in_project = _surface_report(page, _FIXTURE_ADDRESS)
-        assert back_in_project["count"] == 1, f"switching back forked the page: {back_in_project}"
+        assert back_in_project["count"] == 1, (
+            f"switching back forked the page: {back_in_project}"
+        )
         assert back_in_project["stamps"] == ["the-original-element"], (
             f"switching back re-created the page's element: {back_in_project}"
         )
@@ -859,7 +990,9 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_double_click_renames_an_instance_and_the_name_survives_a_reload(tmp_path: Path, page: Page) -> None:
+def test_double_click_renames_an_instance_and_the_name_survives_a_reload(
+    tmp_path: Path, page: Page
+) -> None:
     """Double-clicking a tab's title renames the instance through its app, and the name is kept.
 
     The rename goes through the shell's relay to the app, which records the new title and
@@ -883,16 +1016,24 @@ def test_double_click_renames_an_instance_and_the_name_survives_a_reload(tmp_pat
 
         expect(_tab(page, "Design notes")).to_be_visible(timeout=10000)
         expect(page.locator(".dv-custom-tab-title-input:visible")).to_have_count(0)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        _wait_for_layout_saved(
+            server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS
+        )
 
         page.reload()
         expect(_tab(page, "Design notes")).to_be_visible(timeout=15000)
-        assert [str(record.title) for record in server.stub_source.records] == ["Design notes"]
-        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(0)
+        assert [str(record.title) for record in server.stub_source.records] == [
+            "Design notes"
+        ]
+        expect(
+            page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)
+        ).to_have_count(0)
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: Path, page: Page) -> None:
+def test_deleting_an_instance_removes_it_from_the_app_and_every_view(
+    tmp_path: Path, page: Page
+) -> None:
     """Delete from a tab's menu deletes the instance in its app; the shell drops it from every view.
 
     The instance is opened in the starter project and in Everything, then deleted from the
@@ -917,14 +1058,18 @@ def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: P
         _switch_view_via_rail(page, STARTER_PROJECT_NAME)
         _wait_for_view(page, STARTER_PROJECT_ID)
         _collapse_rail(page)
-        stub_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 1")).first
+        stub_tab = page.locator(
+            ".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 1")
+        ).first
         expect(stub_tab).to_be_visible(timeout=15000)
         stub_tab.hover()
         stub_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
         page.locator("[role='menuitem']", has_text="Delete Stub 1").click()
         page.locator(".destroy-dialog-btn-destroy").click()
 
-        expect(page.locator(".dv-default-tab-content", has_text="Stub 1")).to_have_count(0, timeout=10000)
+        expect(
+            page.locator(".dv-default-tab-content", has_text="Stub 1")
+        ).to_have_count(0, timeout=10000)
         wait_for(
             lambda: server.stub_source.records == [],
             timeout=10.0,
@@ -939,7 +1084,8 @@ def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: P
         )
         wait_for(
             lambda: not any(
-                address in path.read_text() for path in _client_layout_files(server.state_dir, EVERYTHING_VIEW_ID)
+                address in path.read_text()
+                for path in _client_layout_files(server.state_dir, EVERYTHING_VIEW_ID)
             ),
             timeout=15.0,
             poll_interval=0.1,
@@ -949,11 +1095,15 @@ def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: P
         _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
-        expect(page.locator(".dv-default-tab-content", has_text="Stub 1")).to_have_count(0)
+        expect(
+            page.locator(".dv-default-tab-content", has_text="Stub 1")
+        ).to_have_count(0)
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_path: Path, page: Page) -> None:
+def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(
+    tmp_path: Path, page: Page
+) -> None:
     """The rail row menu's "Remove from project" unfiles an address rather than deleting the instance."""
     with _running_e2e_server(tmp_path, _PORT + 14) as server:
         page.on("dialog", lambda dialog: dialog.accept())
@@ -968,12 +1118,18 @@ def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_pa
         )
 
         page.locator(".machine-sidebar").hover()
-        fixture_row = page.locator(f'.project-rail-tab[data-address="{_FIXTURE_ADDRESS}"]')
+        fixture_row = page.locator(
+            f'.project-rail-tab[data-address="{_FIXTURE_ADDRESS}"]'
+        )
         expect(fixture_row).to_have_count(1)
         fixture_row.click(button="right")
-        page.locator(".project-rail-menu [role='menuitem']", has_text="Remove from project").click()
+        page.locator(
+            ".project-rail-menu [role='menuitem']", has_text="Remove from project"
+        ).click()
 
-        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(0, timeout=10000)
+        expect(
+            page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)
+        ).to_have_count(0, timeout=10000)
         wait_for(
             lambda: _FIXTURE_ADDRESS not in _project_tabs(server.base_url),
             timeout=15.0,
@@ -994,12 +1150,19 @@ def _open_all_apps(page: Page) -> None:
     expect(page.locator(".project-rail-app").first).to_be_visible(timeout=5000)
 
 
-def _project_shortcuts(base_url: str, project_id: str = STARTER_PROJECT_ID) -> set[tuple[str, str, str]]:
-    return {(s["app"], s["action"], s["mode"]) for s in _projects(base_url)[project_id]["shortcuts"]}
+def _project_shortcuts(
+    base_url: str, project_id: str = STARTER_PROJECT_ID
+) -> set[tuple[str, str, str]]:
+    return {
+        (s["app"], s["action"], s["mode"])
+        for s in _projects(base_url)[project_id]["shortcuts"]
+    }
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: Path, page: Page) -> None:
+def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(
+    tmp_path: Path, page: Page
+) -> None:
     """Pinning from "All apps" adds the app's primary action to the project's rail; unpinning takes it off.
 
     A shortcut is the project's, stored in the shell: pinning puts it in the project's
@@ -1012,18 +1175,25 @@ def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: 
         # seeded with nothing: the stub is there to pin.
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        assert (_STUB_APP_NAME, "new", "focus") not in _project_shortcuts(server.base_url)
+        assert (_STUB_APP_NAME, "new", "focus") not in _project_shortcuts(
+            server.base_url
+        )
 
         _open_all_apps(page)
         app_row = page.locator(f'.project-rail-app[data-app="{_STUB_APP_NAME}"]')
         expect(app_row).to_have_count(1, timeout=15000)
-        expect(page.locator(".project-rail-shortcut", has_text=_STUB_APP_DISPLAY_NAME)).to_have_count(0)
+        expect(
+            page.locator(".project-rail-shortcut", has_text=_STUB_APP_DISPLAY_NAME)
+        ).to_have_count(0)
 
         page.locator(f'button[aria-label="Pin {_STUB_APP_DISPLAY_NAME}"]').click()
         expect(app_row).to_have_count(0, timeout=15000)
-        expect(page.locator(".project-rail-shortcut", has_text=_STUB_APP_DISPLAY_NAME)).to_have_count(1)
+        expect(
+            page.locator(".project-rail-shortcut", has_text=_STUB_APP_DISPLAY_NAME)
+        ).to_have_count(1)
         wait_for(
-            lambda: (_STUB_APP_NAME, "new", "focus") in _project_shortcuts(server.base_url),
+            lambda: (_STUB_APP_NAME, "new", "focus")
+            in _project_shortcuts(server.base_url),
             timeout=15.0,
             poll_interval=0.1,
             error_message="pinning never stored the shortcut on the project",
@@ -1032,12 +1202,19 @@ def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: 
         page.keyboard.press("Escape")
         expect(page.locator(".project-rail-app")).to_have_count(0, timeout=5000)
         page.locator(".machine-sidebar").hover()
-        page.locator(f'button[aria-label="Unpin {_STUB_APP_DISPLAY_NAME} from this project"]').click()
-        expect(page.locator(".project-rail-shortcut", has_text=_STUB_APP_DISPLAY_NAME)).to_have_count(0, timeout=15000)
+        page.locator(
+            f'button[aria-label="Unpin {_STUB_APP_DISPLAY_NAME} from this project"]'
+        ).click()
+        expect(
+            page.locator(".project-rail-shortcut", has_text=_STUB_APP_DISPLAY_NAME)
+        ).to_have_count(0, timeout=15000)
         _open_all_apps(page)
-        expect(page.locator(f'.project-rail-app[data-app="{_STUB_APP_NAME}"]')).to_have_count(1, timeout=15000)
+        expect(
+            page.locator(f'.project-rail-app[data-app="{_STUB_APP_NAME}"]')
+        ).to_have_count(1, timeout=15000)
         wait_for(
-            lambda: (_STUB_APP_NAME, "new", "focus") not in _project_shortcuts(server.base_url),
+            lambda: (_STUB_APP_NAME, "new", "focus")
+            not in _project_shortcuts(server.base_url),
             timeout=15.0,
             poll_interval=0.1,
             error_message="unpinning never removed the shortcut from the project",
@@ -1045,20 +1222,26 @@ def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: 
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp_path: Path, page: Page) -> None:
+def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(
+    tmp_path: Path, page: Page
+) -> None:
     """A rail shortcut in focus mode with nothing to focus creates an instance; expanding the rail never reflows it.
 
     The rail expands over the dock by growing width alone, so a row shared by both states
     sits at the same y whether collapsed or expanded; and picking a row inside the
     still-hovered rail leaves it open, since only the pointer leaving closes it.
     """
-    with _running_e2e_server(tmp_path, _PORT + 16, stub_instances=(), project_names=()) as server:
+    with _running_e2e_server(
+        tmp_path, _PORT + 16, stub_instances=(), project_names=()
+    ) as server:
         page.goto(server.base_url)
         _wait_for_view(page, EVERYTHING_VIEW_ID)
 
         rail = page.locator(".machine-sidebar")
         header = page.locator(".project-rail-header")
-        stub_shortcut = page.locator(f'.project-rail-shortcut[data-shortcut="{_STUB_APP_NAME}:new"]')
+        stub_shortcut = page.locator(
+            f'.project-rail-shortcut[data-shortcut="{_STUB_APP_NAME}:new"]'
+        )
         expect(stub_shortcut).to_have_count(1, timeout=15000)
 
         page.mouse.move(600, 400)
@@ -1072,10 +1255,18 @@ def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp
         header_expanded = header.bounding_box()
         shortcut_expanded = stub_shortcut.bounding_box()
         assert header_expanded is not None and shortcut_expanded is not None
-        assert header_expanded["width"] > header_collapsed["width"], "hovering never actually expanded the rail"
-        assert header_collapsed["y"] == header_expanded["y"], "the header row shifted vertically on expansion"
-        assert shortcut_collapsed["y"] == shortcut_expanded["y"], "a shortcut row shifted vertically on expansion"
-        assert shortcut_collapsed["height"] == shortcut_expanded["height"], "a shortcut row's height changed"
+        assert header_expanded["width"] > header_collapsed["width"], (
+            "hovering never actually expanded the rail"
+        )
+        assert header_collapsed["y"] == header_expanded["y"], (
+            "the header row shifted vertically on expansion"
+        )
+        assert shortcut_collapsed["y"] == shortcut_expanded["y"], (
+            "a shortcut row shifted vertically on expansion"
+        )
+        assert shortcut_collapsed["height"] == shortcut_expanded["height"], (
+            "a shortcut row's height changed"
+        )
 
         stub_shortcut.click()
         expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
@@ -1090,16 +1281,24 @@ def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_launcher_app_filter_hides_an_app_and_reset_restores_it(tmp_path: Path, page: Page) -> None:
+def test_launcher_app_filter_hides_an_app_and_reset_restores_it(
+    tmp_path: Path, page: Page
+) -> None:
     """Unchecking an app in a table's filter hides its rows; Reset re-checks all."""
-    with _running_e2e_server(tmp_path, _PORT + 17, is_second_app_offered=True) as server:
+    with _running_e2e_server(
+        tmp_path, _PORT + 17, is_second_app_offered=True
+    ) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
 
         section = page.locator(".new-tab-launcher-section[data-section='on-machine']")
-        notes_row = section.locator(f'.new-tab-launcher-row[data-address="{_SECOND_APP_ADDRESS}"]')
-        stub_row = section.locator(f'.new-tab-launcher-row[data-address="{_FIXTURE_ADDRESS}"]')
+        notes_row = section.locator(
+            f'.new-tab-launcher-row[data-address="{_SECOND_APP_ADDRESS}"]'
+        )
+        stub_row = section.locator(
+            f'.new-tab-launcher-row[data-address="{_FIXTURE_ADDRESS}"]'
+        )
         expect(notes_row).to_have_count(1, timeout=15000)
         expect(stub_row).to_have_count(1, timeout=15000)
 
@@ -1119,22 +1318,32 @@ def test_launcher_app_filter_hides_an_app_and_reset_restores_it(tmp_path: Path, 
 
 
 @pytest.mark.timeout(180, func_only=False)
-def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_path: Path, page: Page) -> None:
+def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(
+    tmp_path: Path, page: Page
+) -> None:
     """Tabs folded into the "N more" dropdown list as bare rows; the strip stays whole.
 
     While the dropdown is open, two live renderer instances exist for one panel -- the
     strip's and the row's -- and only the strip's may own the panel's handle and controls.
     """
     keys = tuple(f"stub-{n}" for n in range(2, 10))
-    with _running_e2e_server(tmp_path, _PORT + 18, stub_instances=(_FIXTURE_KEY, *keys)) as server:
+    with _running_e2e_server(
+        tmp_path, _PORT + 18, stub_instances=(_FIXTURE_KEY, *keys)
+    ) as server:
         page.set_viewport_size({"width": 900, "height": 700})
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         _open_fixture_instance(page)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        _wait_for_layout_saved(
+            server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS
+        )
 
         for key in keys:
-            _broadcast_layout_op(server.base_url, "open", {"address": _stub_address(key), "new_group": False})
+            _broadcast_layout_op(
+                server.base_url,
+                "open",
+                {"address": _stub_address(key), "new_group": False},
+            )
         expect(_tab(page, "Stub 9")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
 
         overflow_control = page.locator(".dv-tabs-overflow-dropdown-default")
@@ -1150,9 +1359,11 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         expect(container).to_be_visible(timeout=5000)
         rows = container.locator(".dv-default-tab-content")
         expect(rows.first).to_be_visible(timeout=5000)
-        expect(container.locator(".dv-default-tab-content", has_text=_STUB_TAB_TITLE_RE).first).to_be_visible(
-            timeout=5000
-        )
+        expect(
+            container.locator(
+                ".dv-default-tab-content", has_text=_STUB_TAB_TITLE_RE
+            ).first
+        ).to_be_visible(timeout=5000)
         expect(container.locator(".dv-custom-tab-actions")).to_have_count(0)
         expect(container.locator(".dv-custom-tab-action")).to_have_count(0)
         rows.first.hover()
@@ -1160,16 +1371,27 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
 
         clicked_title = rows.first.inner_text()
         rows.first.click()
-        expect(page.locator(".dv-tabs-overflow-container")).to_have_count(0, timeout=5000)
-        expect(page.locator(".dv-tab.dv-active-tab .dv-default-tab-content", has_text=clicked_title)).to_have_count(
-            1, timeout=5000
+        expect(page.locator(".dv-tabs-overflow-container")).to_have_count(
+            0, timeout=5000
         )
+        expect(
+            page.locator(
+                ".dv-tab.dv-active-tab .dv-default-tab-content", has_text=clicked_title
+            )
+        ).to_have_count(1, timeout=5000)
 
-        strip_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text=clicked_title)).first
+        strip_tab = page.locator(
+            ".dv-tab",
+            has=page.locator(".dv-default-tab-content", has_text=clicked_title),
+        ).first
         strip_tab.hover()
-        expect(strip_tab.locator(".dv-custom-tab-action")).to_have_count(2, timeout=5000)
+        expect(strip_tab.locator(".dv-custom-tab-action")).to_have_count(
+            2, timeout=5000
+        )
         strip_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
-        expect(page.locator("[role='menuitem']", has_text="Close tab")).to_be_visible(timeout=5000)
+        expect(page.locator("[role='menuitem']", has_text="Close tab")).to_be_visible(
+            timeout=5000
+        )
         page.keyboard.press("Escape")
 
 
@@ -1199,29 +1421,47 @@ def _drop_overlay_styles(page: Page) -> dict[str, Any] | None:
 
 
 @pytest.mark.timeout(180, func_only=False)
-def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Path, page: Page) -> None:
+def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(
+    tmp_path: Path, page: Page
+) -> None:
     """A drop onto a tab is a seam (a thin insertion line); a drop onto a pane is a region (a wash)."""
-    with _running_e2e_server(tmp_path, _PORT + 19, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
+    with _running_e2e_server(
+        tmp_path, _PORT + 19, stub_instances=(_FIXTURE_KEY, "stub-2")
+    ) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         _open_fixture_instance(page)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
-        _broadcast_layout_op(server.base_url, "open", {"address": _stub_address("stub-2"), "new_group": False})
+        _wait_for_layout_saved(
+            server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS
+        )
+        _broadcast_layout_op(
+            server.base_url,
+            "open",
+            {"address": _stub_address("stub-2"), "new_group": False},
+        )
         expect(_tab(page, "Stub 2")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
 
-        dragged = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 2")).first
+        dragged = page.locator(
+            ".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 2")
+        ).first
         target_tab = page.locator(
-            ".dv-tab", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)
+            ".dv-tab",
+            has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE),
         ).first
         source_box = dragged.bounding_box()
         assert source_box is not None, "the dragged tab has no box"
-        page.mouse.move(source_box["x"] + source_box["width"] / 2, source_box["y"] + source_box["height"] / 2)
+        page.mouse.move(
+            source_box["x"] + source_box["width"] / 2,
+            source_box["y"] + source_box["height"] / 2,
+        )
         page.mouse.down()
 
         target_box = target_tab.bounding_box()
         assert target_box is not None, "the target tab has no box"
         page.mouse.move(
-            target_box["x"] + target_box["width"] * 0.2, target_box["y"] + target_box["height"] / 2, steps=25
+            target_box["x"] + target_box["width"] * 0.2,
+            target_box["y"] + target_box["height"] / 2,
+            steps=25,
         )
         page.wait_for_timeout(400)
         target_box = target_tab.bounding_box()
@@ -1231,25 +1471,47 @@ def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Pat
         assert tab_overlay["background"] == "rgba(0, 0, 0, 0)", (
             f"a tab drop should not wash the tab, got {tab_overlay}"
         )
-        assert tab_overlay["afterContent"] not in ("none", ""), "the tab drop drew no insertion line"
-        assert tab_overlay["afterWidth"] == "2px", f"the insertion line should be 2px, got {tab_overlay['afterWidth']}"
-        assert tab_overlay["afterBackground"] != "rgba(0, 0, 0, 0)", "the insertion line is invisible"
+        assert tab_overlay["afterContent"] not in ("none", ""), (
+            "the tab drop drew no insertion line"
+        )
+        assert tab_overlay["afterWidth"] == "2px", (
+            f"the insertion line should be 2px, got {tab_overlay['afterWidth']}"
+        )
+        assert tab_overlay["afterBackground"] != "rgba(0, 0, 0, 0)", (
+            "the insertion line is invisible"
+        )
         assert tab_overlay["side"] in ("left", "right"), (
             f"a drop onto a tab should pick a side, got {tab_overlay['side']}"
         )
-        line_x = tab_overlay["left"] if tab_overlay["side"] == "left" else tab_overlay["right"]
-        seam_x = target_box["x"] if tab_overlay["side"] == "left" else target_box["x"] + target_box["width"]
+        line_x = (
+            tab_overlay["left"]
+            if tab_overlay["side"] == "left"
+            else tab_overlay["right"]
+        )
+        seam_x = (
+            target_box["x"]
+            if tab_overlay["side"] == "left"
+            else target_box["x"] + target_box["width"]
+        )
         assert abs(line_x - seam_x) <= 1, (
             f"the {tab_overlay['side']} line should sit on that edge ({seam_x}), got {line_x}"
         )
 
         pane_box = page.locator(".dv-content-container").first.bounding_box()
         assert pane_box is not None, "the pane has no box"
-        page.mouse.move(pane_box["x"] + pane_box["width"] * 0.15, pane_box["y"] + pane_box["height"] / 2, steps=25)
+        page.mouse.move(
+            pane_box["x"] + pane_box["width"] * 0.15,
+            pane_box["y"] + pane_box["height"] / 2,
+            steps=25,
+        )
         pane_overlay = _drop_overlay_styles(page)
         assert pane_overlay is not None, "no drop overlay appeared over the pane"
-        assert pane_overlay["background"] != "rgba(0, 0, 0, 0)", "a pane drop should still show its region"
-        assert pane_overlay["afterContent"] in ("none", ""), "a pane drop should not draw an insertion line"
+        assert pane_overlay["background"] != "rgba(0, 0, 0, 0)", (
+            "a pane drop should still show its region"
+        )
+        assert pane_overlay["afterContent"] in ("none", ""), (
+            "a pane drop should not draw an insertion line"
+        )
         page.mouse.up()
 
 
@@ -1279,9 +1541,11 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
             mobile_page = context.new_page()
             mobile_page.goto(server.base_url)
             _open_from_launcher(mobile_page, _FIXTURE_ADDRESS)
-            expect(mobile_page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(
-                timeout=15000
-            )
+            expect(
+                mobile_page.locator(
+                    ".dv-default-tab-content", has_text=_FIXTURE_TITLE
+                ).first
+            ).to_be_visible(timeout=15000)
             seeds_dir = server.state_dir / "layouts" / STARTER_PROJECT_ID
             wait_for(
                 lambda: (seeds_dir / "seed.mobile.json").exists(),
@@ -1298,7 +1562,9 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_two_windows_of_one_client_mirror_a_server_made_arrangement(tmp_path: Path, page: Page) -> None:
+def test_two_windows_of_one_client_mirror_a_server_made_arrangement(
+    tmp_path: Path, page: Page
+) -> None:
     """An agent's op edits the client's file on the shell; both windows of that client show it without a reload,
     and the window that did not act saves nothing back (no echo)."""
     with _running_e2e_server(tmp_path, _PORT + 21) as server:
@@ -1314,23 +1580,31 @@ def test_two_windows_of_one_client_mirror_a_server_made_arrangement(tmp_path: Pa
             _broadcast_layout_op(server.base_url, "open", {"address": _FIXTURE_ADDRESS})
 
             for window in (page, second):
-                expect(window.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(
-                    timeout=15000
-                )
+                expect(
+                    window.locator(
+                        ".dv-default-tab-content", has_text=_FIXTURE_TITLE
+                    ).first
+                ).to_be_visible(timeout=15000)
             layout_files = _client_layout_files(server.state_dir, STARTER_PROJECT_ID)
-            assert len(layout_files) == 1, "two windows of one browser are one client with one layout file"
+            assert len(layout_files) == 1, (
+                "two windows of one browser are one client with one layout file"
+            )
             stored = json.loads(layout_files[0].read_text())
             stamp = stored["updated_at"]
             # The windows applied the file rather than saving their own copies over it: the stamp holds.
             second.wait_for_timeout(3000)
             assert json.loads(layout_files[0].read_text())["updated_at"] == stamp
-            assert [tab["address"] for tab in stored["tabs"].values()] == [_FIXTURE_ADDRESS]
+            assert [tab["address"] for tab in stored["tabs"].values()] == [
+                _FIXTURE_ADDRESS
+            ]
         finally:
             second.close()
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, page: Page) -> None:
+def test_a_deep_link_lands_on_the_view_and_docks_the_instance(
+    tmp_path: Path, page: Page
+) -> None:
     """``/?view=<id>&open=<address>`` switches the requesting client to the view, docks the instance, and leaves
     a clean URL behind; a stale target is ignored."""
     with _running_e2e_server(tmp_path, _PORT + 22) as server:
@@ -1340,11 +1614,17 @@ def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, pa
         expect(_launcher_row(page, _FIXTURE_ADDRESS).first).to_be_visible(timeout=15000)
 
         address = urllib.parse.quote(_FIXTURE_ADDRESS, safe="")
-        page.goto(f"{server.base_url}/?view={EVERYTHING_VIEW_ID}&open={address}&follow=nobody")
+        page.goto(
+            f"{server.base_url}/?view={EVERYTHING_VIEW_ID}&open={address}&follow=nobody"
+        )
 
         _wait_for_view(page, EVERYTHING_VIEW_ID)
-        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(timeout=15000)
-        page.wait_for_function("!window.location.search.includes('view=')", timeout=15000)
+        expect(
+            page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first
+        ).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            "!window.location.search.includes('view=')", timeout=15000
+        )
         assert "open=" not in page.url and "follow=" not in page.url
         # The client record follows the deep link, so the next plain load lands on Everything too.
         wait_for(
@@ -1357,7 +1637,11 @@ def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, pa
             error_message="the client record never recorded the deep link's view",
         )
         # The docked tab is autosaved into Everything's file before the next load, which then restores it.
-        _wait_for_layout_saved(server.state_dir, EVERYTHING_VIEW_ID, containing=_FIXTURE_ADDRESS)
+        _wait_for_layout_saved(
+            server.state_dir, EVERYTHING_VIEW_ID, containing=_FIXTURE_ADDRESS
+        )
         page.goto(f"{server.base_url}/?open=app%3Anowhere%3Finstance%3Dgone")
         _wait_for_view(page, EVERYTHING_VIEW_ID)
-        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(timeout=15000)
+        expect(
+            page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first
+        ).to_be_visible(timeout=15000)

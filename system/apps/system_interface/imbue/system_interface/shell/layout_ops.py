@@ -1,6 +1,6 @@
 """Server-side support for the agent-driven layout surface, over addresses.
 
-``system/scripts/layout.py`` posts ``{op, args, agent_id}`` to ``POST /api/layout/broadcast``
+``system/scripts/layout.py`` posts ``{op, args, requester}`` to ``POST /api/layout/broadcast``
 (``routes.py``): the read ops (``inspect``, ``context``) are answered from the state files and the
 client-activity log, ``load`` switches a client's view, the document ops are applied by the shell to
 the target client's layout file (``dockview_document.py``), and the transient ops are sent to that
@@ -36,8 +36,8 @@ ADDRESSED_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "clo
 # Ops that dock a panel, and may therefore create the instance it shows.
 CREATING_OPS: Final[frozenset[str]] = frozenset({"open", "split"})
 
-# The one non-address an addressed op accepts: the requester's own chat, which the shell resolves
-# from the op's ``agent_id``.
+# The one non-address an addressed op accepts: the requester's own instance, which the op's
+# ``requester`` names (``layout.py`` sends the caller's chat).
 SELF_ADDRESS: Final[str] = "self"
 
 

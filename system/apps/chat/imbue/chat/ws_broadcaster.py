@@ -6,6 +6,7 @@ from typing import Any
 from loguru import logger as _loguru_logger
 from pydantic import PrivateAttr
 
+from imbue.chat.models import ProvisionalChat
 from imbue.imbue_common.mutable_model import MutableModel
 
 # Per-client buffer depth. Holds at most this many state-change broadcasts before
@@ -20,6 +21,11 @@ _CLIENT_QUEUE_MAX_SIZE = 1000
 # connected. Only a client that makes zero progress over this many broadcasts
 # gets disconnected.
 _MAX_CONSECUTIVE_QUEUE_FULL = 50
+
+
+def proto_agent_created_message(proto: ProvisionalChat) -> dict[str, Any]:
+    """The ``proto_agent_created`` message: the provisional chat's fields beside the type."""
+    return {"type": "proto_agent_created", **proto.model_dump(mode="json")}
 
 
 def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
@@ -113,23 +119,9 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast an agents_updated event."""
         self.broadcast({"type": "agents_updated", "agents": agents})
 
-    def broadcast_proto_agent_created(
-        self,
-        agent_id: str,
-        name: str,
-        creation_type: str,
-        parent_agent_id: str | None,
-    ) -> None:
-        """Broadcast a proto_agent_created event."""
-        self.broadcast(
-            {
-                "type": "proto_agent_created",
-                "agent_id": agent_id,
-                "name": name,
-                "creation_type": creation_type,
-                "parent_agent_id": parent_agent_id,
-            }
-        )
+    def broadcast_proto_agent_created(self, proto: ProvisionalChat) -> None:
+        """Broadcast a proto_agent_created event: a provisional chat, minted or moved to a new phase."""
+        self.broadcast(proto_agent_created_message(proto))
 
     def broadcast_proto_agent_completed(self, agent_id: str, success: bool, error: str | None) -> None:
         """Broadcast a proto_agent_completed event."""

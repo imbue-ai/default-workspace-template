@@ -1,10 +1,11 @@
 /**
- * Chat panel for dockview. Contains the main message list and message input
- * for an agent, mounted as a tab within the dockview workspace.
+ * Chat panel: the main message list and message input for an agent, the whole of the chat
+ * page's front face.
  *
- * If the agent is still being created (a proto-agent), shows the creation
- * log stream instead. Automatically switches to the chat view when creation
- * completes.
+ * A chat that is not an agent yet (a provisional chat) renders by its phase: waiting for an
+ * account, it offers the provider chooser; being created, it shows the composer over an
+ * empty transcript (a message typed now is held until the agent lands); failed, it shows the
+ * reason and a way to try again. The transcript takes over when creation completes.
  */
 
 import m from "mithril";
@@ -32,9 +33,13 @@ import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from ".
 import {
   addAgentsUpdatedListener,
   getAgentById,
-  getProtoAgents,
+  getProtoAgent,
+  launchChat,
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
+import type { ProtoAgent } from "../models/AgentManager";
+import { openProviderChooser } from "../../models/Providers";
+import { describeRequestError } from "../../models/request-error";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../../base-path";
 import { EmptySlot } from "./EmptySlot";
@@ -73,20 +78,20 @@ function getAgentTerminalUrl(agentId: string): string {
   return buildAgentTerminalUrl(agent.name);
 }
 
-function isProtoAgent(agentId: string): boolean {
-  return getProtoAgents().some((p) => p.agent_id === agentId);
+/** The provisional record of a chat that is not an agent yet, or null once the app lists it
+ *  as one. The proto list is rebuilt from pushes and can still name an agent that has since
+ *  registered (a `proto_agent_created` for a finished creation, delivered late), so the agent
+ *  list wins: every branch asks this, so none can show a registered chat as provisional. */
+function provisionalRecord(agentId: string): ProtoAgent | null {
+  const proto = getProtoAgent(agentId);
+  return proto !== undefined && getAgentById(agentId) === undefined ? proto : null;
 }
 
-/** Whether creation is genuinely still in flight, as opposed to merely having a proto entry.
- *
- *  The proto list is rebuilt from broadcasts and can still name an agent that has since been
- *  registered -- a `proto_agent_created` for a finished creation, delivered late. Asking
- *  `isProtoAgent` alone is therefore not the same question, and the two can disagree: the build
- *  log stops as soon as the agent registers, while the proto entry clears later. A branch
- *  keying on the proto entry alone shows a chat with an empty transcript and no composer in
- *  between. Every branch asks THIS instead, so they cannot drift apart. */
-function isStillBeingCreated(agentId: string): boolean {
-  return isProtoAgent(agentId) && getAgentById(agentId) === undefined;
+/** Whether the composer has an agent to reach: one the app lists, or one whose create is in
+ *  flight (a message typed now is held until it lands). */
+function hasComposer(agentId: string): boolean {
+  const proto = provisionalRecord(agentId);
+  return proto === null || proto.phase === "creating";
 }
 
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
@@ -229,13 +234,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // unbounded request loop rather than the one-shot capture the view wants.
   let screenAttemptedAgentId: string | null = null;
 
-  // Proto-agent log state
-  let logWs: WebSocket | null = null;
-  let logLines: string[] = [];
-  let logDone = false;
-  let logSuccess = false;
-  let logError: string | null = null;
-  let logAgentId: string | null = null;
+  // A launch of this provisional chat (the chooser's sign-in, or Try again) in flight, and
+  // how the last one was refused.
+  let launchInFlight = false;
+  let launchError: string | null = null;
+  // The chat the chooser was opened for on its own, so a chooser the user dismissed is not
+  // reopened on every redraw.
+  let chooserOfferedFor: string | null = null;
 
   async function fetchScreenCapture(agentId: string): Promise<void> {
     if (screenAttemptedAgentId === agentId) {
@@ -261,85 +266,82 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
-  function connectLogWs(agentId: string): void {
-    if (logWs !== null) {
-      logWs.close();
+  function launch(agentId: string, accountId: string): void {
+    if (launchInFlight) return;
+    launchInFlight = true;
+    launchError = null;
+    launchChat(agentId, accountId)
+      .catch((error: unknown) => {
+        launchError = describeRequestError(error);
+      })
+      .finally(() => {
+        launchInFlight = false;
+        m.redraw();
+      });
+  }
+
+  function offerProviderChooser(agentId: string): void {
+    openProviderChooser({ onSignedIn: (accountId) => launch(agentId, accountId) });
+  }
+
+  /** The page of a chat that is not an agent yet, by its phase. */
+  function renderProvisional(agentId: string, proto: ProtoAgent): m.Vnode {
+    if (proto.phase === "creating") {
+      return m(
+        "div",
+        { class: "message-list-creating flex items-center justify-center h-full" },
+        m("p", { class: "text-secondary" }, "Starting the chat..."),
+      );
     }
-    logLines = [];
-    logDone = false;
-    logSuccess = false;
-    logError = null;
-    logAgentId = agentId;
-
-    const base = apiUrl(`/api/proto-agents/${encodeURIComponent(agentId)}/logs`);
-    const loc = window.location;
-    const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
-    let url: string;
-    if (base.startsWith("http")) {
-      url = base.replace(/^http/, "ws");
-    } else {
-      url = `${protocol}//${loc.host}${base}`;
-    }
-
-    logWs = new WebSocket(url);
-
-    logWs.onmessage = (event: MessageEvent) => {
-      const data = JSON.parse(event.data as string) as
-        | { line: string }
-        | { done: true; success: boolean; error: string | null };
-
-      if ("line" in data) {
-        logLines.push(data.line);
-      } else if ("done" in data) {
-        logDone = true;
-        logSuccess = data.success;
-        logError = data.error;
+    if (proto.phase === "awaiting_account") {
+      // Offered once per chat, on the page's first render of this phase: the user may dismiss
+      // it and come back through the button.
+      if (chooserOfferedFor !== agentId) {
+        chooserOfferedFor = agentId;
+        offerProviderChooser(agentId);
       }
-      m.redraw();
-    };
-
-    logWs.onclose = () => {
-      logWs = null;
-    };
-
-    logWs.onerror = () => {
-      logWs?.close();
-    };
-  }
-
-  function disconnectLogWs(): void {
-    if (logWs !== null) {
-      logWs.close();
-      logWs = null;
-    }
-    logAgentId = null;
-  }
-
-  function renderBuildLog(agentId: string): m.Vnode {
-    if (logAgentId !== agentId) {
-      connectLogWs(agentId);
-    }
-
-    return m("div", { style: "display: flex; flex-direction: column; height: 100%; padding: 16px;" }, [
-      m(
+      return m(
         "div",
-        { style: "font-weight: 600; margin-bottom: 8px; font-size: 0.9em; color: #666;" },
-        logDone ? (logSuccess ? "Agent created successfully" : "Agent creation failed") : "Creating agent...",
-      ),
-      logError ? m("div", { style: "color: red; margin-bottom: 8px; font-size: 0.85em;" }, logError) : null,
-      m(
-        "div",
-        {
-          style:
-            "flex: 1; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 0.8em; padding: 12px; border-radius: 4px; white-space: pre-wrap; word-break: break-all;",
-          onupdate(vnode: m.VnodeDOM) {
-            const el = vnode.dom as HTMLElement;
-            el.scrollTop = el.scrollHeight;
+        { class: "message-list-awaiting-account flex flex-col items-center justify-center h-full gap-4 p-8" },
+        [
+          m("p", { class: "type-heading text-primary" }, "Sign in to a provider to start this chat"),
+          launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
+          m(
+            Button,
+            { variant: "primary", readonly: launchInFlight, onclick: () => offerProviderChooser(agentId) },
+            "Choose a provider",
+          ),
+        ],
+      );
+    }
+    return m(
+      "div",
+      { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
+      [
+        m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
+        m(
+          "pre",
+          {
+            class:
+              "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono whitespace-pre-wrap",
           },
-        },
-        logLines.map((line, i) => m("div", { key: i, style: "line-height: 1.5;" }, line)),
-      ),
-    ]);
+          proto.error ?? "mngr create failed",
+        ),
+        launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
+        proto.account_id !== ""
+          ? m(
+              Button,
+              {
+                variant: "primary",
+                extra: "message-list-create-retry",
+                readonly: launchInFlight,
+                onclick: () => launch(agentId, proto.account_id),
+              },
+              launchInFlight ? "Starting…" : "Try again",
+            )
+          : null,
+      ],
+    );
   }
 
   async function loadAgent(agentId: string): Promise<void> {
@@ -441,35 +443,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   function renderMessages(agentId: string): m.Vnode {
-    // The build log covers creation, so it only applies while the agent is not
-    // yet a real one. Both branches below are gated on that: the proto-agent
-    // list is rebuilt from broadcasts and can name an agent that has since been
-    // registered (the `proto_agent_created` for a finished creation, delivered
-    // late), and asking for its creation log then gets the backend's
-    // "Proto-agent not found" -- which reads as `logDone && !logSuccess` and
-    // would strand a perfectly healthy chat on a "creation failed" screen.
-    const isRegisteredAgent = getAgentById(agentId) !== undefined;
-
-    // If this agent is still being created, show the build log
-    if (isStillBeingCreated(agentId)) {
-      return renderBuildLog(agentId);
-    }
-
-    // Creation completed but failed -- keep the build log visible so the
-    // user can read the error and the last few log lines. Without this the
-    // build-log view transitions to the empty-chat / "no conversation data"
-    // screen the instant proto_agent_completed arrives and the error flashes
-    // by unreadably. The agent will never be added to getAgents() on
-    // failure, so nothing else in the UI would surface the error either.
-    if (logAgentId === agentId && logDone && !logSuccess && !isRegisteredAgent) {
-      return renderBuildLog(agentId);
-    }
-
-    // Agent finished creating successfully -- disconnect log WebSocket and
-    // force reload
-    if (logAgentId === agentId) {
-      disconnectLogWs();
-      currentAgentId = null;
+    // Nothing is loaded for a chat that is not an agent yet: the first load runs on the
+    // render after the agent registers (a load before that would 404 and latch not-found).
+    const proto = provisionalRecord(agentId);
+    if (proto !== null) {
+      return renderProvisional(agentId, proto);
     }
 
     ensureAgentLoaded(agentId);
@@ -639,7 +617,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     onremove() {
       removeAgentsUpdatedListener(handleAgentsUpdated);
       removeMessageSentListener(handleMessageSent);
-      disconnectLogWs();
       engine.detach();
       if (currentAgentId !== null) {
         disconnectFromStream(currentAgentId);
@@ -656,7 +633,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
       const content = isSlotClaimed("conversation-content") ? null : renderMessages(agentId);
 
-      const acceptsFileDrops = !isStillBeingCreated(agentId) && !isConversationNotFound(agentId);
+      const acceptsFileDrops = hasComposer(agentId) && !isConversationNotFound(agentId);
 
       // The two renderings of one conversation. `hasEverFlipped` is STICKY and separate from
       // `isFlipped` on purpose: mithril destroys a vnode that becomes null, and destroying the
@@ -743,9 +720,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     )
                   : null,
               ]),
-              // Only while the agent is genuinely still being created -- the same condition the
-              // build log uses, so the composer arrives with the transcript rather than after it.
-              isStillBeingCreated(agentId)
+              // Present while there is an agent to reach, a create in flight included: a message
+              // typed while the chat is being created is held and delivered when it lands.
+              !hasComposer(agentId)
                 ? null
                 : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
                     m(EmptySlot, { name: "conversation-before-input" }),
@@ -767,7 +744,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           // either rendering of it, which is the same reason it belongs to neither face.
           // Carries the bottom gutter the footer used to supply, so the 24px sits under the
           // under-bar rather than between the composer and it.
-          isStillBeingCreated(agentId)
+          !hasComposer(agentId)
             ? null
             : m(
                 "div",

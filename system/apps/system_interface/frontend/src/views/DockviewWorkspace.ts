@@ -114,12 +114,10 @@ import {
   type ShortcutMode,
   type TabReboundEvent,
 } from "../models/Inventory";
-import { CHAT_APP_NAME, CHAT_NEW_ACTION } from "../models/chatApp";
 import { getActiveProjectId, getClientId, setActiveProjectId } from "../models/ClientIdentity";
 import { fetchOwnActiveView } from "../models/Clients";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "../models/deepLinks";
 import type { DeepLink } from "../models/deepLinks";
-import { areAccountsLoaded, getAccounts, loadAccounts, openProviderChooser } from "../models/Providers";
 import {
   addProjectTab,
   chooseInitialViewId,
@@ -1312,11 +1310,6 @@ export function runAppAction(app: AppRecord, actionId: string, params: Record<st
  * through the shell's relay, which asks the app to create an instance and refetches its list
  * before answering, so the record can be docked at once. One run per (app, action) at a time:
  * a create takes seconds, and a second click while it runs must not start a second instance.
- *
- * CLEANUP (phase 10 of the workspace app model): the chat app's ``new`` is special-cased --
- * the account the launcher's provider picker chose rides as ``account_id``, and with nothing
- * signed in the user is sent to the provider chooser first, then the chat starts on the
- * account they added.
  */
 async function runActionInPane(
   app: AppRecord,
@@ -1332,17 +1325,6 @@ async function runActionInPane(
   }
   const key = actionKey(app.name, actionId);
   if (actionsAwaitingCreate.has(key)) return;
-  if (app.name === CHAT_APP_NAME && actionId === CHAT_NEW_ACTION) {
-    if (!areAccountsLoaded()) await loadAccounts().catch(() => undefined);
-    if ((params.account_id ?? "") === "" && getAccounts().length === 0) {
-      openProviderChooser({
-        onSignedIn: (accountId) => {
-          void runActionInPane(app, actionId, { ...params, account_id: accountId }, targetGroup, launcherPanelId);
-        },
-      });
-      return;
-    }
-  }
   actionsAwaitingCreate.add(key);
   if (launcherPanelId !== null) launchersAwaitingCreate.add(launcherPanelId);
   const originViewId = mountedViewId;
@@ -1818,32 +1800,6 @@ export async function switchToView(viewId: string, options: { isFollowingPush?: 
   m.redraw();
 }
 
-function soleLauncherPanelId(): string | null {
-  if (!dockview || dockview.panels.length !== 1) return null;
-  const panelId = dockview.panels[0].id;
-  return panelParams.get(panelId)?.kind === "launcher" ? panelId : null;
-}
-
-/**
- * Start the chat a freshly-created project is made with. Every project starts with one chat,
- * so the user lands in a working chat instead of an empty launcher. The create runs only if
- * that project is still the mounted one, since the open files into the mounted view.
- */
-export async function startProjectChat(projectId: string): Promise<void> {
-  if (mountedViewId !== projectId) return;
-  const chatApp = getApp(CHAT_APP_NAME);
-  if (chatApp === undefined) return;
-  const launcherPanelId = soleLauncherPanelId();
-  await runActionInPane(chatApp, CHAT_NEW_ACTION, {}, null, launcherPanelId);
-}
-
-/** Open a new chat on ``accountId``, wherever the user currently is. */
-export async function startChatOnAccount(accountId: string): Promise<void> {
-  const chatApp = getApp(CHAT_APP_NAME);
-  if (chatApp === undefined) return;
-  await runActionInPane(chatApp, CHAT_NEW_ACTION, { account_id: accountId }, null, null);
-}
-
 /** Put the title each instance has onto the tab showing it, from the inventory. */
 function syncTabTitlesFromInventory(): void {
   if (!dockview) return;
@@ -1953,12 +1909,11 @@ function relayLocationForChildFrame(frame: HTMLIFrameElement, payload: Record<st
 // 12): maximize, restore, refresh, and the interface reload. Open, focus, split, close, and move are
 // applied by the shell to this client's layout file and arrive as a ``layout_updated``.
 
-/** Resolve a layout-op address (or the literal "self") to a live dockview panel id, or null. */
-function resolveAddressToPanelId(address: string, requesterAgentId: string): string | null {
+/** Resolve a layout-op address (or the literal "self", the requester's own instance) to a live dockview panel id, or null. */
+function resolveAddressToPanelId(address: string, requester: string): string | null {
   if (!dockview) return null;
   if (address === "self") {
-    if (!requesterAgentId) return null;
-    return panelIdForAddress(addressFor(CHAT_APP_NAME, requesterAgentId));
+    return requester ? panelIdForAddress(requester) : null;
   }
   const parsed = parseAddress(address);
   if (parsed === null) return null;
@@ -1974,16 +1929,16 @@ function asString(value: unknown): string | null {
 
 function handleLayoutOp(event: LayoutOpEvent): void {
   if (!dockview) return;
-  const requesterAgentId = event.requesterAgentId;
+  const requester = event.requester;
   switch (event.op) {
     case "maximize":
-      handleMaximize(event.args, requesterAgentId);
+      handleMaximize(event.args, requester);
       return;
     case "restore":
       handleRestore();
       return;
     case "refresh":
-      handleRefresh(event.args, requesterAgentId);
+      handleRefresh(event.args, requester);
       return;
     case "reload_system_interface":
       reloadInterface();
@@ -1991,11 +1946,11 @@ function handleLayoutOp(event: LayoutOpEvent): void {
   }
 }
 
-function handleMaximize(args: Record<string, unknown>, requesterAgentId: string): void {
+function handleMaximize(args: Record<string, unknown>, requester: string): void {
   if (!dockview) return;
   const address = asString(args.address);
   if (!address) return;
-  const panelId = resolveAddressToPanelId(address, requesterAgentId);
+  const panelId = resolveAddressToPanelId(address, requester);
   if (panelId === null) return;
   const panel = dockview.panels.find((p) => p.id === panelId);
   if (panel) panel.api.maximize();
@@ -2012,12 +1967,12 @@ function handleRestore(): void {
 }
 
 /** ``refresh app:<name>`` reloads every frame of the app; an instance address reloads one. */
-function handleRefresh(args: Record<string, unknown>, requesterAgentId: string): void {
+function handleRefresh(args: Record<string, unknown>, requester: string): void {
   const address = asString(args.address);
   if (!address) return;
-  // ``self`` with no requester would read as the bare chat app and reload every chat.
-  if (address === "self" && !requesterAgentId) return;
-  const target = address === "self" ? addressFor(CHAT_APP_NAME, requesterAgentId) : address;
+  // ``self`` names the requester's own instance; with none known there is nothing to reload.
+  if (address === "self" && !requester) return;
+  const target = address === "self" ? requester : address;
   const parsed = parseAddress(target);
   if (parsed === null) return;
   if (parsed.key === "" && getApp(parsed.app)?.has_instances === true) {

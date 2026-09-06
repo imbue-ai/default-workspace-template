@@ -175,7 +175,7 @@ def _tab(page: Page, title: str | re.Pattern[str]) -> Any:
 
 def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], view: str = STARTER_PROJECT_NAME) -> None:
     """POST a layout op to the loopback ``/api/layout/broadcast`` endpoint, retrying until the client has registered."""
-    payload = json.dumps({"op": op, "args": {**args, "view": view}, "agent_id": FIXTURE_AGENT_ID}).encode()
+    payload = json.dumps({"op": op, "args": {**args, "view": view}, "requester": FIXTURE_CHAT_ADDRESS}).encode()
     request = urllib.request.Request(
         f"{base_url}/api/layout/broadcast",
         data=payload,

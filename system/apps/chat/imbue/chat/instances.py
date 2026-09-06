@@ -40,11 +40,14 @@ from imbue.chat.errors import ChatCreateRefusedError
 from imbue.chat.errors import ChatDestroyFailedError
 from imbue.chat.errors import ChatRenameFailedError
 from imbue.chat.errors import ChatTitleConflictError
+from imbue.chat.harnesses.binding import has_usable_account
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatPhase
 from imbue.imbue_common.pure import pure
 
 # The registered name of the chat app, which names the shell nudge route and the manifest.
@@ -112,14 +115,21 @@ def instance_record_for_agent(agent: AgentStateItem, is_permission_pending: bool
     )
 
 
+_STATUS_BY_PROVISIONAL_PHASE: Final[dict[ProvisionalChatPhase, InstanceStatus]] = {
+    ProvisionalChatPhase.AWAITING_ACCOUNT: InstanceStatus.ATTENTION,
+    ProvisionalChatPhase.CREATING: InstanceStatus.WORKING,
+    ProvisionalChatPhase.FAILED: InstanceStatus.ERROR,
+}
+
+
 @pure
-def instance_record_for_provisional_chat(agent_id: str, name: str) -> InstanceRecord:
-    """A chat whose ``mngr create`` is still running: the page shows its creation log."""
+def instance_record_for_provisional_chat(proto: ProvisionalChat) -> InstanceRecord:
+    """A chat that is not an agent yet: waiting for an account, being created, or failed."""
     return InstanceRecord(
-        key=InstanceKey(agent_id),
-        url=instance_url_for_key(agent_id),
-        title=InstanceTitle(name or PROVISIONAL_TITLE),
-        status=InstanceStatus.ATTENTION,
+        key=InstanceKey(proto.agent_id),
+        url=instance_url_for_key(proto.agent_id),
+        title=InstanceTitle(proto.name or PROVISIONAL_TITLE),
+        status=_STATUS_BY_PROVISIONAL_PHASE[proto.phase],
         lifetime=InstanceLifetime.REFERENCED,
         last_active=None,
         renameable=False,
@@ -196,9 +206,8 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         records = [instance_record_for_agent(agent, self.manager.has_pending_permission(agent.id)) for agent in agents]
         known_ids = {agent.id for agent in agents}
         for proto in self.manager.get_proto_agents():
-            agent_id = str(proto.get("agent_id", ""))
-            if agent_id and agent_id not in known_ids:
-                records.append(instance_record_for_provisional_chat(agent_id, str(proto.get("name", ""))))
+            if proto.agent_id not in known_ids:
+                records.append(instance_record_for_provisional_chat(proto))
         with self._lock:
             for key in [key for key in self._description_by_subagent_key if _parent_agent_id(key) not in known_ids]:
                 del self._description_by_subagent_key[key]
@@ -221,9 +230,10 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
                 return
         agent = self.manager.get_agent_by_id(key)
         if agent is None or is_primary_agent(agent):
-            # An unknown key is a no-op by contract, and so is a provisional chat: its
-            # ``mngr create`` is already running and the agent appears as an explicit
-            # instance once it lands.
+            # A provisional chat that is not being created is dropped; an unknown key is a
+            # no-op by contract, and so is a create in flight (the agent appears as an
+            # explicit instance once it lands).
+            self.manager.discard_provisional_chat(key)
             return
         try:
             self.manager.destroy_chat_agent(key)
@@ -252,17 +262,27 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         raise LocationNotTrackedError("the chat app does not track where its pages are")
 
     def _create_chat(self, params: Mapping[str, str]) -> InstanceRecord:
+        """``new``: launch a chat on ``account_id`` (the most recently used account when the
+        param is absent), or, with nothing signed in, mint one that waits for an account: its
+        page shows the provider chooser, so the tab opens either way."""
         _require_params(NEW_ACTION_ID, params, _NEW_PARAMS)
-        try:
-            created = self.manager.create_chat_agent(
-                requested_name="",
-                extra_role_templates=(),
-                project_id="",
-                account_id=params.get(ACCOUNT_ID_PARAM, ""),
-            )
-        except AgentCreationError as e:
-            raise ChatCreateRefusedError(str(e)) from e
-        return instance_record_for_provisional_chat(created.agent_id, created.display_name)
+        account_id = params.get(ACCOUNT_ID_PARAM, "")
+        if not account_id and not has_usable_account():
+            created = self.manager.reserve_chat()
+        else:
+            try:
+                created = self.manager.create_chat_agent(
+                    requested_name="",
+                    extra_role_templates=(),
+                    project_id="",
+                    account_id=account_id,
+                )
+            except AgentCreationError as e:
+                raise ChatCreateRefusedError(str(e)) from e
+        proto = self.manager.get_proto_agent(created.agent_id)
+        if proto is None:
+            raise ChatCreateRefusedError(f"chat {created.agent_id} vanished before it could be listed")
+        return instance_record_for_provisional_chat(proto)
 
     def _create_subagent(self, params: Mapping[str, str]) -> InstanceRecord:
         _require_params(SUBAGENT_ACTION_ID, params, _SUBAGENT_PARAMS)
@@ -285,7 +305,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         with self._lock:
             if key in self._description_by_subagent_key:
                 return True
-        return any(str(proto.get("agent_id", "")) == key for proto in self.manager.get_proto_agents())
+        return self.manager.get_proto_agent(key) is not None
 
     def _require_ready(self) -> None:
         if not self.manager.is_agent_list_known():

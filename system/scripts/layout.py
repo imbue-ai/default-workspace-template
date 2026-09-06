@@ -63,9 +63,10 @@ so they are sent to the target client's windows and confirm the send. ``rename``
 ``delete`` / ``replace-url`` go through the shell's relay to the app that owns the instance
 and echo the app's refusal when it gives one.
 
-All dock ops POST one body ``{op, args, agent_id}`` to a loopback-only endpoint on the
-shell. The caller's ``MNGR_AGENT_ID`` is sent both in the JSON body and as the
-``X-Mngr-Agent-Id`` request header.
+All dock ops POST one body ``{op, args, requester}`` to a loopback-only endpoint on the
+shell: ``requester`` is the caller's own chat, ``app:chat?instance=$MNGR_AGENT_ID``, which is
+what ``self`` means and how the shell attributes the op to a client (the one that last
+messaged that chat). The id is also sent as the ``X-Mngr-Agent-Id`` request header.
 
 Output for ``list`` / ``views`` / ``context`` / ``shortcuts`` is YAML by default; pass
 ``--json`` for the raw structured object. ``inspect`` and ``where`` default to a compact
@@ -162,6 +163,17 @@ def _workspace_base_url() -> str:
 
 def _mngr_agent_id() -> str:
     return os.environ.get(ENV_MNGR_AGENT_ID, "")
+
+
+def _requester_address() -> str:
+    """The caller's own chat as an address, or "" outside an agent: what ``self`` names and what
+    every op carries so the shell knows who asked."""
+    agent_id = _mngr_agent_id()
+    return (
+        f"{ADDRESS_SCHEME}chat?{ADDRESS_INSTANCE_PARAMETER}{agent_id}"
+        if agent_id
+        else ""
+    )
 
 
 def _apps_file() -> Path:
@@ -271,8 +283,8 @@ def _validate_address(address: str) -> None:
 
 
 def _resolve_address(value: str) -> str:
-    if value == _SELF_REF and _mngr_agent_id():
-        value = f"{ADDRESS_SCHEME}chat?{ADDRESS_INSTANCE_PARAMETER}{_mngr_agent_id()}"
+    if value == _SELF_REF and _requester_address():
+        value = _requester_address()
     address = _normalize_address(value)
     _validate_address(address)
     return address
@@ -366,11 +378,11 @@ def _request_json(
 def _post_layout(
     op: str, args: dict[str, Any], timeout: float = _READ_TIMEOUT_SECONDS
 ) -> tuple[int, dict[str, Any] | str]:
-    """POST {op, args, agent_id} to /api/layout/broadcast and return (status, parsed_or_raw)."""
+    """POST {op, args, requester} to /api/layout/broadcast and return (status, parsed_or_raw)."""
     return _request_json(
         "POST",
         f"{_workspace_base_url()}/api/layout/broadcast",
-        {"op": op, "args": args, "agent_id": _mngr_agent_id()},
+        {"op": op, "args": args, "requester": _requester_address()},
         timeout=timeout,
     )
 

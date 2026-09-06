@@ -60,11 +60,15 @@ class WebSocketBroadcaster(MutableModel):
     # have not registered (yet). Entries die with the connection, so "connected
     # client on view X" means exactly "an open, registered WebSocket whose latest
     # report named X".
-    _client_info_by_queue_id: dict[int, dict[str, str]] = PrivateAttr(default_factory=dict)
+    _client_info_by_queue_id: dict[int, dict[str, str]] = PrivateAttr(
+        default_factory=dict
+    )
 
     def register(self) -> queue.Queue[str | None]:
         """Register a new WebSocket client. Returns a queue to drain for messages."""
-        client_queue: queue.Queue[str | None] = queue.Queue(maxsize=_CLIENT_QUEUE_MAX_SIZE)
+        client_queue: queue.Queue[str | None] = queue.Queue(
+            maxsize=_CLIENT_QUEUE_MAX_SIZE
+        )
         with self._lock:
             self._client_queues.append(client_queue)
             self._consecutive_queue_full_by_id[id(client_queue)] = 0
@@ -102,7 +106,9 @@ class WebSocketBroadcaster(MutableModel):
         with self._lock:
             return [dict(info) for info in self._client_info_by_queue_id.values()]
 
-    def get_client_info(self, client_queue: queue.Queue[str | None]) -> dict[str, str] | None:
+    def get_client_info(
+        self, client_queue: queue.Queue[str | None]
+    ) -> dict[str, str] | None:
         """The self-reported identity of one connected client, or None if unregistered."""
         with self._lock:
             info = self._client_info_by_queue_id.get(id(client_queue))
@@ -111,7 +117,9 @@ class WebSocketBroadcaster(MutableModel):
     def connected_client_ids(self) -> set[str]:
         """The ids of every registered client with at least one open window."""
         with self._lock:
-            return {info["client_id"] for info in self._client_info_by_queue_id.values()}
+            return {
+                info["client_id"] for info in self._client_info_by_queue_id.values()
+            }
 
     def broadcast(self, message: dict[str, Any]) -> None:
         """Serialize and send a message to all connected clients. Thread-safe."""
@@ -125,7 +133,9 @@ class WebSocketBroadcaster(MutableModel):
         """
         self._broadcast_to_matching(message, target_client_id=client_id)
 
-    def _broadcast_to_matching(self, message: dict[str, Any], target_client_id: str | None) -> None:
+    def _broadcast_to_matching(
+        self, message: dict[str, Any], target_client_id: str | None
+    ) -> None:
         text = json.dumps(message)
         with self._lock:
             dead_queues: list[queue.Queue[str | None]] = []
@@ -138,7 +148,9 @@ class WebSocketBroadcaster(MutableModel):
                     client_queue.put_nowait(text)
                     self._consecutive_queue_full_by_id[id(client_queue)] = 0
                 except queue.Full:
-                    new_count = self._consecutive_queue_full_by_id.get(id(client_queue), 0) + 1
+                    new_count = (
+                        self._consecutive_queue_full_by_id.get(id(client_queue), 0) + 1
+                    )
                     self._consecutive_queue_full_by_id[id(client_queue)] = new_count
                     if new_count >= _MAX_CONSECUTIVE_QUEUE_FULL:
                         dead_queues.append(client_queue)
@@ -177,31 +189,50 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast every project after a project write (contracts.md section 8)."""
         self.broadcast({"type": "projects_updated", "projects": projects})
 
-    def broadcast_tab_rebound(self, client_id: str, view_id: str, tab_id: str, address: str) -> None:
+    def broadcast_tab_rebound(
+        self, client_id: str, view_id: str, tab_id: str, address: str
+    ) -> None:
         """Tell the owning client that one of its tabs now shows another instance (the tab route)."""
         self.broadcast(
-            {"type": "tab_rebound", "client_id": client_id, "view_id": view_id, "tab_id": tab_id, "address": address}
+            {
+                "type": "tab_rebound",
+                "client_id": client_id,
+                "view_id": view_id,
+                "tab_id": tab_id,
+                "address": address,
+            }
         )
 
-    def broadcast_layout_updated(self, view_id: str, client_id: str, save_id: str) -> None:
+    def broadcast_layout_updated(
+        self, view_id: str, client_id: str, save_id: str
+    ) -> None:
         """A client layout was written (a browser's save or the shell's own edit); the owning windows refetch it."""
-        self.broadcast({"type": "layout_updated", "view_id": view_id, "client_id": client_id, "save_id": save_id})
+        self.broadcast(
+            {
+                "type": "layout_updated",
+                "view_id": view_id,
+                "client_id": client_id,
+                "save_id": save_id,
+            }
+        )
 
     def broadcast_active_view_changed(self, client_id: str, view_id: str) -> None:
         """A client's stored active view moved; its other windows switch to it."""
-        self.broadcast({"type": "active_view_changed", "client_id": client_id, "view_id": view_id})
+        self.broadcast(
+            {"type": "active_view_changed", "client_id": client_id, "view_id": view_id}
+        )
 
     def broadcast_layout_op(
         self,
         op: str,
         args: dict[str, Any],
-        requester_agent_id: str = "",
+        requester: str = "",
         target_client_id: str | None = None,
     ) -> None:
         """Send a transient ``layout_op`` (maximize, restore, refresh, the interface reload) to the browser.
 
-        ``requester_agent_id`` is the ``MNGR_AGENT_ID`` of the agent that invoked
-        ``system/scripts/layout.py``; the frontend resolves the ``self`` address with it.
+        ``requester`` is the address of the instance that invoked ``system/scripts/layout.py``
+        (its own chat); the frontend resolves the ``self`` address with it.
         ``target_client_id`` names the client whose windows apply the op; None reaches every
         window (``refresh`` of a whole app, ``reload_system_interface``).
         """
@@ -209,7 +240,7 @@ class WebSocketBroadcaster(MutableModel):
             "type": "layout_op",
             "op": op,
             "args": args,
-            "requester_agent_id": requester_agent_id,
+            "requester": requester,
             "target_client_id": target_client_id,
         }
         if target_client_id is None:

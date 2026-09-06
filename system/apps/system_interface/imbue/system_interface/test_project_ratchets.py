@@ -10,6 +10,7 @@ test set across every project.
 """
 
 import ast
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
@@ -79,3 +80,43 @@ def test_the_shell_imports_neither_mngr_nor_the_chat_app() -> None:
 def test_prevent_mngr_subprocess_invocations() -> None:
     chunks = check_regex_ratchet(_PACKAGE, FileExtension(".py"), _MNGR_ARGV_PATTERN, _TEST_FILE_PATTERNS)
     assert len(chunks) <= snapshot(0), _MNGR_SUBPROCESS_RULE.format_failure(chunks)
+
+
+_FRONTEND_SRC = _PACKAGE.parent.parent / "frontend" / "src"
+
+_SHELL_NAMES_THE_CHAT_RULE = RatchetRuleInfo(
+    rule_name="the shell naming the chat app",
+    rule_description=(
+        "The shell knows no app by name: the chat is an app like the terminal or the files app, found "
+        "through the registry and addressed as app:<name>?instance=<key>. A literal 'chat' in the shell "
+        "package or its frontend is the shell special-casing one app; carry the address instead (a layout "
+        "op's requester, a page's own address)."
+    ),
+)
+
+# The bare app name as a string literal. Class names such as "chat-panel" and prose (``chat``
+# in a docstring) do not match.
+_CHAT_NAME_LITERAL = re.compile(r"""["']chat["']""")
+
+
+def _frontend_source_files() -> Iterator[Path]:
+    """The shell frontend's own sources: not its tests, and not the chat document under ``src/chat/``."""
+    for source_file in _FRONTEND_SRC.rglob("*.ts"):
+        if source_file.name.endswith(".test.ts") or (_FRONTEND_SRC / "chat") in source_file.parents:
+            continue
+        yield source_file
+
+
+def test_the_shell_names_no_app() -> None:
+    offenders = sorted(
+        f"{source_file.relative_to(_PACKAGE.parent.parent)}:{line_number}"
+        for source_file in (
+            *(path for path in _PACKAGE.rglob("*.py") if not _is_test_file(path)),
+            *_frontend_source_files(),
+        )
+        for line_number, line in enumerate(source_file.read_text().splitlines(), start=1)
+        if _CHAT_NAME_LITERAL.search(line)
+    )
+    assert offenders == [], (
+        _SHELL_NAMES_THE_CHAT_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)
+    )

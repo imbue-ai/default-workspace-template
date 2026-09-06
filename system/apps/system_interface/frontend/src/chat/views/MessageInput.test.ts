@@ -113,7 +113,10 @@ vi.mock("../models/HarnessCatalog", () => {
     },
   };
 });
-vi.mock("../models/AgentManager", () => ({ getAgentById: () => mocks.agent }));
+vi.mock("../models/AgentManager", () => ({
+  getAgentById: () => mocks.agent,
+  whenAgentRegistered: () => Promise.resolve(),
+}));
 vi.mock("../../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));
 vi.mock("../../views/icons", () => ({ icon: () => "", stopIcon: () => "" }));
 

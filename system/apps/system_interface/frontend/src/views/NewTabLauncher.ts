@@ -14,15 +14,10 @@
  */
 
 import m from "mithril";
-import { CHAT_APP_NAME, CHAT_NEW_ACTION } from "../models/chatApp";
 import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
 import { serviceIconMarkup } from "./components/appIcon";
 import { buttonClass } from "./components/Button";
 import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
-import { getAccounts, getSelectedAccount, openProviderChooser, selectAccount } from "../models/Providers";
-import { Portal } from "./portal";
-import { accountRow, emptyAccountRowState } from "./accountRow";
-import * as css from "./modelCardStyles";
 import { hoverTooltipAttrs } from "./components/hoverTooltip";
 import { icon } from "./components/icons";
 
@@ -162,132 +157,6 @@ export interface NewTabLauncherAttrs {
   // Open an instance into this pane (the workspace files it into the project when it is not there yet).
   onOpenRow: (row: LauncherRow) => void;
 }
-
-/** The provider half of the chat tile: WHICH new chat the button starts. */
-function ProviderPicker(): m.Component<{ onSignedIn: (accountId: string) => void }> {
-  let open = false;
-  let anchor: DOMRect | null = null;
-  const rowState = emptyAccountRowState();
-
-  function resetRows(): void {
-    rowState.confirmingRemoval = null;
-    rowState.renamingId = null;
-    rowState.renameDraft = "";
-  }
-
-  function close(): void {
-    open = false;
-    anchor = null;
-    resetRows();
-  }
-
-  function handleOutsideMousedown(event: MouseEvent): void {
-    if (!open) return;
-    if ((event.target as Element | null)?.closest?.(`[${PICKER_ATTR}]`) != null) return;
-    close();
-    m.redraw();
-  }
-
-  function placement(rect: DOMRect): string {
-    const margin = 8;
-    const left = Math.min(Math.max(rect.left, margin), Math.max(margin, window.innerWidth - margin - PICKER_WIDTH));
-    const below = window.innerHeight - rect.bottom - margin;
-    const vertical =
-      below >= PICKER_MIN_HEIGHT
-        ? `top: ${rect.bottom + 4}px; max-height: ${below - 4}px;`
-        : `bottom: ${window.innerHeight - rect.top + 4}px; max-height: ${Math.max(0, rect.top - margin - 4)}px;`;
-    return `left: ${left}px; ${vertical} width: ${PICKER_WIDTH}px;`;
-  }
-
-  return {
-    oninit() {
-      document.addEventListener("mousedown", handleOutsideMousedown);
-    },
-    onremove() {
-      document.removeEventListener("mousedown", handleOutsideMousedown);
-    },
-    view(vnode) {
-      const selected = getSelectedAccount();
-      const accounts = getAccounts();
-      const trigger = m(
-        "button",
-        {
-          type: "button",
-          class:
-            "text-secondary hover:bg-fill-hover hover:text-primary flex min-w-0 max-w-[190px] " +
-            "cursor-pointer items-center gap-1 truncate bg-transparent py-0 pr-2 pl-3 text-(length:--font-size-row) focus:outline-none",
-          "aria-label": "Provider for the new chat",
-          "aria-expanded": open ? "true" : "false",
-          [PICKER_ATTR]: "trigger",
-          onclick: (event: MouseEvent) => {
-            event.stopPropagation();
-            if (open) {
-              close();
-              return;
-            }
-            open = true;
-            anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
-            resetRows();
-          },
-        },
-        [
-          m("span", { class: "min-w-0 truncate" }, selected?.label ?? "No provider yet"),
-          m("span", { class: "shrink-0 text-faint" }, m.trust(icon("chevron-down", { size: 14 }))),
-        ],
-      );
-
-      if (!open || anchor === null) return trigger;
-
-      const menu = m(
-        "div",
-        {
-          class: css.FLYOUT,
-          [PICKER_ATTR]: "menu",
-          style: placement(anchor),
-        },
-        [
-          m(
-            "div",
-            { class: css.FLYOUT_SCROLL },
-            accounts.length === 0
-              ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
-              : accounts.map((candidate) =>
-                  accountRow({
-                    row: candidate,
-                    isCurrent: candidate.id === selected?.id,
-                    rowClass: candidate.id === selected?.id ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
-                    onSelect: () => {
-                      selectAccount(candidate.id);
-                      close();
-                    },
-                    state: rowState,
-                  }),
-                ),
-          ),
-          m(
-            "button",
-            {
-              type: "button",
-              class: css.FLYOUT_ADD,
-              onclick: (event: MouseEvent) => {
-                event.stopPropagation();
-                close();
-                openProviderChooser({ onSignedIn: (accountId) => vnode.attrs.onSignedIn(accountId) });
-              },
-            },
-            "+ Add a provider",
-          ),
-        ],
-      );
-
-      return [trigger, m(Portal, { children: menu })];
-    },
-  };
-}
-
-const PICKER_ATTR = "data-provider-picker";
-const PICKER_WIDTH = 260;
-const PICKER_MIN_HEIGHT = 120;
 
 // Marks a section's filter toggle, so the menu's outside-press listener leaves the toggle's
 // own press to the click that follows it.
@@ -453,16 +322,14 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   }
 
   function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs): m.Vnode {
-    const isChatTile = tile.app.name === CHAT_APP_NAME && tile.action.id === CHAT_NEW_ACTION;
     const isDisabled = attrs.isAwaitingCreate === true;
-    const run = (params: Record<string, string> = {}): void => attrs.onRunAction(tile.app, tile.action.id, params);
+    const run = (): void => attrs.onRunAction(tile.app, tile.action.id, {});
     return m(
       "div",
       {
         key: `${tile.app.name}:${tile.action.id}`,
         class:
-          "border-default flex h-9 items-stretch overflow-hidden rounded-lg border " +
-          (isChatTile ? "min-w-0 flex-[1.7]" : "min-w-0 flex-1") +
+          "border-default flex h-9 min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border" +
           (isDisabled ? " text-faint" : " text-primary"),
       },
       [
@@ -476,9 +343,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
               "new-tab-launcher-tile flex min-w-0 flex-1 items-center justify-center gap-2 px-4 " +
               "text-(length:--font-size-row) font-medium " +
               (isDisabled ? "cursor-not-allowed" : "hover:bg-fill-hover cursor-pointer"),
-            onclick: isDisabled
-              ? undefined
-              : () => run(isChatTile ? { account_id: getSelectedAccount()?.id ?? "" } : {}),
+            onclick: isDisabled ? undefined : run,
             ...(isDisabled ? {} : hoverTooltipAttrs(tile.action.label)),
           },
           [
@@ -486,8 +351,6 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             m("span", { class: "min-w-0 truncate" }, tile.app.display_name),
           ],
         ),
-        isChatTile ? m("span", { class: "bg-default w-px self-stretch" }) : null,
-        isChatTile ? m(ProviderPicker, { onSignedIn: (accountId) => run({ account_id: accountId }) }) : null,
       ],
     );
   }

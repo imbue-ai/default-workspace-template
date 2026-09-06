@@ -24,6 +24,8 @@ from imbue.chat.instances import AgentManagerInstanceSource
 from imbue.chat.instances import AgentManagerNudger
 from imbue.chat.instances import instance_status_for_agent
 from imbue.chat.instances import subagent_instance_key
+from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.testing import seed_agent_state
 
 
@@ -47,6 +49,12 @@ def _seed_agent(
         labels=labels if labels is not None else {"display_name": name.replace("-", " ")},
         activity_state=activity_state,
     )
+
+
+def _creating(
+    name: str, agent_id: str, phase: ProvisionalChatPhase = ProvisionalChatPhase.CREATING
+) -> ProvisionalChat:
+    return ProvisionalChat(agent_id=agent_id, name=name, phase=phase)
 
 
 def _source(agent_manager: AgentManager) -> AgentManagerInstanceSource:
@@ -117,22 +125,39 @@ def test_a_pending_permission_shows_as_attention(agent_manager: AgentManager) ->
 def test_a_chat_being_created_is_a_provisional_instance(agent_manager: AgentManager) -> None:
     provisional_id = _agent_id()
     with agent_manager._lock:
-        agent_manager._proto_agents[provisional_id] = {"agent_id": provisional_id, "name": "Chat 2"}
+        agent_manager._proto_agents[provisional_id] = _creating("Chat 2", provisional_id)
     source = _source(agent_manager)
 
     (record,) = source.list_instances()
 
     assert record.key == provisional_id
     assert record.title == "Chat 2"
-    assert record.status is InstanceStatus.ATTENTION
+    assert record.status is InstanceStatus.WORKING
     assert record.lifetime is InstanceLifetime.REFERENCED
     assert record.renameable is False
+
+
+@pytest.mark.parametrize(
+    ("phase", "status"),
+    [
+        (ProvisionalChatPhase.AWAITING_ACCOUNT, InstanceStatus.ATTENTION),
+        (ProvisionalChatPhase.FAILED, InstanceStatus.ERROR),
+    ],
+)
+def test_a_provisional_chats_status_follows_its_phase(
+    agent_manager: AgentManager, phase: ProvisionalChatPhase, status: InstanceStatus
+) -> None:
+    provisional_id = _agent_id()
+    with agent_manager._lock:
+        agent_manager._proto_agents[provisional_id] = _creating("Chat 2", provisional_id, phase)
+    (record,) = _source(agent_manager).list_instances()
+    assert record.status is status
 
 
 def test_a_provisional_record_becomes_the_agents_record_once_observed(agent_manager: AgentManager) -> None:
     chat_id = _agent_id()
     with agent_manager._lock:
-        agent_manager._proto_agents[chat_id] = {"agent_id": chat_id, "name": "Chat 2"}
+        agent_manager._proto_agents[chat_id] = _creating("Chat 2", chat_id)
     source = _source(agent_manager)
     _seed_agent(agent_manager, chat_id, "Chat-2")
 
@@ -210,11 +235,40 @@ def test_unknown_action_and_params_are_refused(agent_manager: AgentManager) -> N
         source.create_instance(ActionId("new"), {"workdir": "/tmp"})
 
 
-def test_new_without_a_signed_in_account_is_refused(agent_manager: AgentManager) -> None:
+def test_new_without_a_signed_in_account_reserves_a_chat_awaiting_one(agent_manager: AgentManager) -> None:
+    """The tab opens either way: with nothing signed in the chat waits for an account, and its
+    page shows the provider chooser."""
     # The accounts root is isolated per test and holds nothing, so the create cannot bind.
     source = _source(agent_manager)
+
+    record = source.create_instance(ActionId("new"), {})
+
+    assert record.status is InstanceStatus.ATTENTION
+    assert record.lifetime is InstanceLifetime.REFERENCED
+    assert record.title == "Chat 1"
+    proto = agent_manager.get_proto_agent(record.key)
+    assert proto is not None
+    assert proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
+    assert [candidate.key for candidate in source.list_instances()] == [record.key]
+
+
+def test_new_with_an_account_named_that_does_not_exist_is_refused(agent_manager: AgentManager) -> None:
+    source = _source(agent_manager)
     with pytest.raises(ChatCreateRefusedError):
-        source.create_instance(ActionId("new"), {})
+        source.create_instance(ActionId("new"), {"account_id": "no-such-account"})
+
+
+def test_delete_drops_a_reserved_chat_and_leaves_a_create_in_flight_alone(agent_manager: AgentManager) -> None:
+    source = _source(agent_manager)
+    reserved = source.create_instance(ActionId("new"), {})
+    creating_id = _agent_id()
+    with agent_manager._lock:
+        agent_manager._proto_agents[creating_id] = _creating("Chat 2", creating_id)
+
+    source.delete_instance(reserved.key)
+    source.delete_instance(InstanceKey(creating_id))
+
+    assert [candidate.key for candidate in source.list_instances()] == [creating_id]
 
 
 def test_delete_drops_a_subagent_record_and_ignores_unknown_keys(agent_manager: AgentManager) -> None:
@@ -259,7 +313,7 @@ def test_rename_is_refused_for_provisional_and_subagent_keys(agent_manager: Agen
     provisional_id = _agent_id()
     _seed_agent(agent_manager, parent_id, "Chat-1")
     with agent_manager._lock:
-        agent_manager._proto_agents[provisional_id] = {"agent_id": provisional_id, "name": "Chat 2"}
+        agent_manager._proto_agents[provisional_id] = _creating("Chat 2", provisional_id)
     source = _source(agent_manager)
     subagent = source.create_instance(ActionId("subagent"), {"parent": parent_id, "session": uuid4().hex})
 

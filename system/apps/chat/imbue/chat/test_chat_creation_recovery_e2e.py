@@ -7,12 +7,13 @@ agent through that registry, so the panel's first ``/events`` fetch 404s and
 latches into the "No conversation data" view.
 
 The ``proto_agent_created`` broadcast normally covers that window with the
-creation build log, but it is a transient edge event: the frontend holds the
-proto-agent only between ``proto_agent_created`` and ``proto_agent_completed``,
-so any delivery lag longer than the creation itself leaves no render in which
-the cover is up. These tests pin the two ways that happens -- the event missing
-the window entirely, and the pair arriving back-to-back -- and assert the panel
-recovers on its own once the agent resolves, with no reload and no tab switch.
+"Starting the chat" page, but it is a transient edge event: the frontend holds
+the provisional chat only between ``proto_agent_created`` and
+``proto_agent_completed``, so any delivery lag longer than the creation itself
+leaves no render in which the cover is up. These tests pin the two ways that
+happens -- the event missing the window entirely, and the pair arriving
+back-to-back -- and assert the panel recovers on its own once the agent
+resolves, with no reload and no tab switch.
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ import urllib.request
 from collections.abc import Callable
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
 
 import pytest
 from playwright.sync_api import Page
@@ -36,6 +36,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ProvisionalChat
 from imbue.chat.server import create_application
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
@@ -86,7 +87,7 @@ _PORT = 18951
 
 
 class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
-    """Withholds ``proto_agent_created`` so the build-log cover never engages.
+    """Withholds ``proto_agent_created`` so the "Starting the chat" cover never engages.
 
     ``release_on_completion`` chooses which delivery pathology is modelled: when
     False the event is dropped outright (the socket was down for the whole
@@ -103,21 +104,9 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
     _withheld: list[Callable[[], None]] = []
     _release_on_completion: bool = False
 
-    def broadcast_proto_agent_created(
-        self,
-        agent_id: str,
-        name: str,
-        creation_type: str,
-        parent_agent_id: str | None,
-    ) -> None:
+    def broadcast_proto_agent_created(self, proto: ProvisionalChat) -> None:
         def send() -> None:
-            WebSocketBroadcaster.broadcast_proto_agent_created(
-                self,
-                agent_id=agent_id,
-                name=name,
-                creation_type=creation_type,
-                parent_agent_id=parent_agent_id,
-            )
+            WebSocketBroadcaster.broadcast_proto_agent_created(self, proto)
 
         if type(self)._release_on_completion:
             type(self)._withheld.append(send)
@@ -133,12 +122,12 @@ class _ReplayHidingAgentManager(AgentManager):
 
     The chat page is its own document and connects to the agents WebSocket after its tab
     opened, so the shell's replay of in-flight proto
-    agents would cover the creation window with the build log on its own. These tests model
+    agents would cover the creation window with the starting page on its own. These tests model
     the window the replay cannot cover -- a page whose socket only comes up after the create
     finished, or that fell a whole creation window behind -- so the replay is what they hide.
     """
 
-    def get_proto_agents(self) -> list[dict[str, Any]]:
+    def get_proto_agents(self) -> list[ProvisionalChat]:
         return []
 
 

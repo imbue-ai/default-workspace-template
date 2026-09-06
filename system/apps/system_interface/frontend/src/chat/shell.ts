@@ -7,7 +7,6 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
 import { postJson } from "../models/http";
-import { CHAT_APP_NAME } from "../models/chatApp";
 import { adoptClientIdentity } from "../models/ClientIdentity";
 import { addressFor } from "../models/Inventory";
 import { createChatAgent } from "./models/AgentManager";
@@ -16,6 +15,9 @@ import { isEverythingView } from "../models/Projects";
 import { connectToShell } from "../app_contract";
 import type { ShellConnection, ShellHandshake } from "../app_contract";
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
+
+/** The chat app's registered name: what its own pages address their instances under. */
+const CHAT_APP_NAME = "chat";
 
 export function chatAddress(instanceKey: string): string {
   return addressFor(CHAT_APP_NAME, instanceKey);
@@ -125,18 +127,13 @@ export async function startChatOnAccount(accountId: string): Promise<void> {
 
 /**
  * Open the subagent view for `sessionId` of this page's chat beside it. The instance is
- * created first through the shell's relay (the chat app's `subagent` action), so the shell's
- * inventory lists it before the shell is asked to dock it.
- *
- * The relay route is reached on this page's own origin: the chat app shares the shell's
- * process, so the route is served here too.
- * CLEANUP: address the shell's own origin in phase 10 of the workspace app model, when the
- * chat app runs as its own process.
+ * created first through the chat app's own instances API (its `subagent` action, on this
+ * page's origin), which nudges the shell, so the shell lists it before it is asked to dock it.
  */
 export async function openSubagentTab(agentId: string, sessionId: string, description: string): Promise<void> {
   const key = `${agentId}.${sessionId}`;
   try {
-    await postJson(apiUrl(`/api/apps/${CHAT_APP_NAME}/instances`), {
+    await postJson(apiUrl("/_instances"), {
       action: "subagent",
       params: { parent: agentId, session: sessionId, description },
     });
