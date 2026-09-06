@@ -1364,6 +1364,9 @@ class _RecordingRunner(update_runtime.Runner):
     executables: dict[str, str] = field(default_factory=dict)
     repo_root: Path | None = None
     is_build_output_written: bool = True
+    # Apps whose bundle the emulated build leaves unwritten (a build that died after
+    # emitting the first bundle), by ``FrontendBundle.app``.
+    unwritten_bundle_apps: frozenset[str] = frozenset()
     # What the emulated build's postbuild step stamps the bundle with (None =
     # a build with no git repo, which writes no stamp).
     build_stamp: str | None = None
@@ -1418,6 +1421,9 @@ class _RecordingRunner(update_runtime.Runner):
             shutil.rmtree(self.repo_root / bundle.static_dir, ignore_errors=True)
         if is_successful and self.is_build_output_written:
             _write_bundle(self.repo_root, self.build_stamp)
+            for bundle in update_layout.FRONTEND_BUNDLES:
+                if bundle.app in self.unwritten_bundle_apps:
+                    shutil.rmtree(self.repo_root / bundle.static_dir)
 
     def argvs_starting(self, *prefix: str) -> list[list[str]]:
         return [c for c in self.calls if tuple(c[: len(prefix)]) == prefix]
@@ -2399,6 +2405,53 @@ def test_a_stale_worker_bundle_falls_back_to_a_refreshed_live_build(
     err = capsys.readouterr().err
     assert "it is stale" in err
     assert "building live instead" in err
+
+
+def test_a_stale_chat_bundle_rejects_the_worker_pair(
+    apply_repo: Path, tmp_path: Path, capsys
+) -> None:
+    # The bundles are built together from one tree, so they are installed only as a
+    # pair: a chat bundle from another source (its stamp alone stale) means a live
+    # build for both, and the note names the bundle that was rejected, not the other.
+    worker_bundles = _make_worker_bundles(tmp_path, stamp=_FRONTEND_TREE_HASH)
+    (Path(worker_bundles["chat"]) / update_layout.BUNDLE_STAMP_FILENAME).write_text(
+        "0" * 40 + "\n"
+    )
+    runner = _verifiable_runner(_FRONTEND_MANIFEST_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        worker_bundles=worker_bundles,
+    )
+
+    assert code == 0
+    assert runner.ran("npm", "run", "build")
+    assert _installed_asset(apply_repo) == "console.log('app');"
+    chat_asset = apply_repo / update_layout.CHAT_STATIC_DIR / "assets" / _ASSET_NAME
+    assert chat_asset.read_text() == "console.log('app');"
+    err = capsys.readouterr().err
+    assert "--worker-bundle chat=" in err
+    assert "it is stale" in err
+    assert "--worker-bundle system_interface=" not in err
+
+
+def test_a_build_that_writes_only_the_shell_bundle_is_a_failure(
+    apply_repo: Path, capsys
+) -> None:
+    # One build emits both bundles; a build that died after the shell's exits 0 with
+    # index.html in place and no chat page, and the index check must catch the
+    # second bundle as it does the first.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.unwritten_bundle_apps = frozenset({"chat"})
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert _bundle_exists(apply_repo)  # the pre-apply copies are back
+    assert "wrote no chat bundle" in capsys.readouterr().err
 
 
 def test_an_unstamped_worker_bundle_is_not_trusted_over_a_verifiable_tree(
