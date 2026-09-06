@@ -47,7 +47,7 @@ npm run dev
 ## Design system (optional convention for the default UI)
 
 The frontend styles in the markup: Tailwind utilities over a semantic token
-layer (`frontend/src/style.css`), with shared primitives (Button, Modal, the
+layer (`system/libs/workspace_ui/src/base.css`), with shared primitives (Button, Modal, the
 input/badge recipes) for repeated looks. When you extend or maintain the
 *default* look, prefer them over new one-offs so it stays coherent. This is a
 convention, not an enforced rule — if a user wants their interface restyled to
@@ -161,7 +161,7 @@ in the workspace tree rather than a worktree of it. It is harness-agnostic --
 `output_style` is honored by the claude, codex and pi plugins alike -- so it
 neither picks a harness nor can be relied on to.
 
-The rest is where the line departs from what
+The rest is where the line departs from what the chat app's
 `agent_manager._build_chat_create_command` passes for the same chat, in four
 places:
 
@@ -208,7 +208,7 @@ points at something that outlives it.
 The terminal's origin label is minted per workspace, so the page cannot carry
 it; the server reads it from the app registry (`data/.state/apps.toml`) at
 render time and the page's own script derives the origin from the browser's
-location, mirroring `frontend/src/origin.ts`. When there is no terminal
+location, mirroring `system/libs/workspace_ui/src/origin.ts`. When there is no terminal
 registered -- ttyd starts alongside the other services, not before them -- the
 frame stays hidden and the prose stands alone.
 

@@ -214,7 +214,7 @@ class WebSocketBroadcaster(MutableModel):
         """Send a transient ``layout_op`` (maximize, restore, refresh, the interface reload) to the browser.
 
         ``requester`` is the address of the instance that invoked ``system/scripts/layout.py``
-        (its own chat); the frontend resolves the ``self`` address with it.
+        (its own instance); the frontend resolves the ``self`` address with it.
         ``target_client_id`` names the client whose windows apply the op; None reaches every
         window (``refresh`` of a whole app, ``reload_system_interface``).
         """

@@ -327,7 +327,7 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
             f"App {name!r} has no supervised program registered, so it cannot be stopped or started from the workspace"
         )
     # A critical app is never stopped from here, and neither is any row running inside a
-    # critical app's program (the chat row shares the shell's program until phase 10).
+    # critical app's program.
     critical_programs = {
         other.row.program for other in shell.inventory.entries() if other.row.critical and other.row.program
     }
@@ -860,7 +860,7 @@ def _parse_document_arguments(args_raw: dict[str, Any]) -> DocumentOpArguments:
 
 
 def _requester_address(raw: str) -> Address | None:
-    """The requester the op names (``layout.py`` sends the caller's own chat), or None for none or an unparseable one."""
+    """The requester the op names (``layout.py`` sends the caller's own instance), or None for none or an unparseable one."""
     if not raw:
         return None
     try:
@@ -874,7 +874,10 @@ def _resolve_op_address(raw: str, requester: Address | None) -> Address:
     """An op's address argument: ``self`` is the requester's own instance; anything else must parse."""
     if raw == SELF_ADDRESS:
         if requester is None:
-            raise LayoutOpError("'self' names the requester's own chat, which needs MNGR_AGENT_ID to be set")
+            raise LayoutOpError(
+                "'self' names the requester's own instance, but this op carried no requester address "
+                "(``layout.py`` sends one when MNGR_AGENT_ID is set)"
+            )
         return requester
     if not raw:
         raise LayoutOpError("this op needs an address")
@@ -971,13 +974,13 @@ def _docking_placement(
     arguments: DocumentOpArguments,
     requester: Address | None,
 ) -> Placement:
-    """Where ``open`` and ``split`` dock: open lands beside the requester's own chat when it is docked (else beside
+    """Where ``open`` and ``split`` dock: open lands beside the requester's own instance when it is docked (else beside
     the active group), tabbing into a group already there unless ``new_group``; split follows its anchor and direction."""
     if op == "split":
         return _anchored_placement(layout, arguments, requester)
-    chat_panel = panel_id_for_address(layout, requester) if requester is not None else None
+    requester_panel = panel_id_for_address(layout, requester) if requester is not None else None
     return Placement(
-        anchor_panel_id=chat_panel,
+        anchor_panel_id=requester_panel,
         direction=Direction.RIGHT,
         ratio=arguments.ratio,
         is_new_group=arguments.new_group,
