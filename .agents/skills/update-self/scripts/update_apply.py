@@ -609,16 +609,18 @@ def _recover_running_state(
         # where the restored tree runs it as its own program: a tree from before
         # the split has no chat process to answer.
         if healthy and has_chat_program(repo_root):
+            chat_health = chat_health_url(repo_root, base_url)
             healthy = wait_healthy(
                 http,
-                chat_health_url(repo_root, base_url),
+                chat_health,
                 HEALTH_ATTEMPTS,
                 HEALTH_INTERVAL_SECONDS,
                 sleeper,
             )
             if not healthy:
                 sys.stderr.write(
-                    "recovery: the chat app did not become healthy after the restart\n"
+                    "recovery: the chat app did not become healthy after the restart "
+                    f"(probed {chat_health})\n"
                 )
     except (ApplyFailed, OSError) as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
@@ -1037,16 +1039,18 @@ def apply_update(
                 live_service_restarted=True,
             )
         # The chat app restarts with the shell (both are the services agent's) and is the
-        # process that imports mngr, so its health is the update's too.
+        # process that imports mngr, so its health is the update's too. The URL comes from
+        # the registry, so the failure names it: a stale row is a cause worth seeing.
+        chat_health = chat_health_url(repo_root, resolved_base)
         if not wait_healthy(
             http,
-            chat_health_url(repo_root, resolved_base),
+            chat_health,
             HEALTH_ATTEMPTS,
             HEALTH_INTERVAL_SECONDS,
             sleeper,
         ):
             raise ApplyFailed(
-                "the chat app did not become healthy after restart",
+                f"the chat app did not become healthy after restart (probed {chat_health})",
                 live_service_restarted=True,
             )
 
