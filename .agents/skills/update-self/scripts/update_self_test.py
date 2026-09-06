@@ -6083,3 +6083,8 @@ def test_worker_bundle_flags_are_read_per_app() -> None:
 def test_a_worker_bundle_flag_must_name_a_known_app_and_a_path(value: str) -> None:
     with pytest.raises(SystemExit):
         update_self._parse_worker_bundles([value])
+
+
+def test_a_worker_bundle_flag_may_name_each_app_only_once() -> None:
+    with pytest.raises(SystemExit, match="names chat twice"):
+        update_self._parse_worker_bundles(["chat=/w/chat", "chat=/w/other"])
