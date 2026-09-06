@@ -18,7 +18,7 @@ Four commits on the arc branch, in this order.
 - `system/config/mngr_plugins.toml` assigns the five harness plugins to `chat` beside `mngr`; the shell's tool has none.
 - The shell keeps `main.py` over a slim `SystemInterfaceState`, `config.py` (host and port), `documents.py`, `request_helpers.py`, and the `shell/` subpackage; `wsgi_dispatch.py` and the path dispatch are gone.
 - `test_project_ratchets.py` in the shell walks every non-test module's imports for `imbue.mngr*` and `imbue.chat` (an AST scan: import-linter's scanner panics on this package once external packages are included), keeps the "never runs `mngr`" regex, and forbids the literal `"chat"` in the shell package and its frontend.
-- Tests moved with the code; `imbue.chat.testing.running_workspace` is the two-process fixture (the chat app and the shell on two ports over a registry) the chat's e2e tests and the shell's `test_chat_system.py` share.
+- Tests moved with the code; `imbue.chat.testing.running_workspace` is the two-server fixture (the chat app and the shell served in-process on two ports over a registry) the chat's e2e tests and the shell's `test_chat_system.py` share.
 - The update apply's health probe polls the shell's `/api/health` and then the chat's (its URL from the registry, `http://127.0.0.1:8010` without a row); the apply plan refreshes the `chat` tool like every app's.
 - `system/scripts/default_account_args.py` and `migrate_claude_auth.py` import `imbue.chat` from the root venv rather than shimming to the tool's entry points.
 
@@ -54,8 +54,8 @@ Four commits on the arc branch, in this order.
 
 - Every moved test passes under the new package name; the shell suite runs without mngr installed in its tool.
 - `test_project_ratchets.py` in the shell: the import scan and both regex ratchets are at zero.
-- The shell's e2e suite runs over two stub apps; the chat's e2e suite boots the two-process fixture and, in this phase, covers the sign-in flow (a chat without an account offers the chooser in its own tab, a chat with one starts at once and shows its composer when it lands).
-- `test_chat_system.py` boots both processes and asserts the shell's inventory carries the chat app's instances with status, and that a rename through the relay relists.
+- The shell's e2e suite runs over two stub apps; the chat's e2e suite boots the two-server fixture and, in this phase, covers the sign-in flow (a chat without an account offers the chooser in its own tab, a chat with one starts at once and shows its composer when it lands).
+- `test_chat_system.py` serves both apps in-process on two ports and asserts the shell's inventory carries the chat app's instances with status, and that a rename through the relay relists.
 - The update apply's suite covers the second bundle, the npm root, and the per-app worker bundles.
 
 ## Manual verification
