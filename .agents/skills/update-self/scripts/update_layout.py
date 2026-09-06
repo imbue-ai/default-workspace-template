@@ -147,8 +147,9 @@ FRONTEND_BUNDLES = (
 # worker built after committing. The apply compares it against the merged
 # tree's own hashes, so a populated bundle built from some other source -- a
 # wrong --worker-bundle path, an old worker's leftovers -- falls back to a
-# live build instead of being served as if it were the merged source. A live build in the merged checkout stamps that same hash, so for it
-# the comparison is only a consistency check; the postbuild runs after any
+# live build instead of being served as if it were the merged source. A live
+# build in the merged checkout stamps that same hash, so for it the comparison
+# is only a consistency check; the postbuild runs after any
 # exit-0 build, and a build that wrote nothing is caught by the index check
 # (vite empties the output directory first), not by the stamp.
 BUNDLE_STAMP_FILENAME = ".source-tree-hash"

@@ -255,7 +255,7 @@ Retired messages: `agents_updated`, `proto_agent_*`, `terminal_session`, `load_l
 ## 10. The browser-side contract (`app_contract.js`)
 
 Served by the shell at `/_static/app_contract.js` with `Access-Control-Allow-Origin: *`, as an ES module.
-Source: `system/apps/system_interface/frontend/src/app_contract.ts`, built as a separate library entry so the served file has no other imports.
+Source: `system/libs/workspace_ui/src/app_contract.ts`, built by the shell's frontend as a separate library entry so the served file has no other imports.
 Exports: `connectToShell({onHandshake, onShown, onHidden, onCloseRequest})` returning `{focused(), location(path), open(address)}`.
 
 Trust: the shell accepts a message only when `event.source` is the `contentWindow` of an iframe it created and `event.origin` is in the workspace origin family (the same regex the minds chrome uses); the module accepts a message only when `event.source === window.parent`.
