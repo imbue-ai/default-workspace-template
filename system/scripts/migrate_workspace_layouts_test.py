@@ -306,7 +306,7 @@ def test_run_seeds_the_files_and_terminal_stores_their_apps_read(
     assert terminal.workdir is None
 
 
-def test_run_only_adds_to_stores_that_already_hold_records(
+def test_run_keeps_a_stores_own_record_and_leaves_an_unreadable_store_alone(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:
     terminal_store = tmp_path / "apps" / "terminal" / "instances.json"
