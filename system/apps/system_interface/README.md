@@ -372,7 +372,8 @@ python3 system/scripts/layout.py delete app:terminal?instance=terminal-3
 python3 system/scripts/layout.py inspect --view Everything
 ```
 
-The dock ops POST `{op, args, agent_id}` to the loopback-only
+The dock ops POST `{op, args, requester}` (the requester being the caller's own address, which
+is what `self` resolves to and what the op is attributed to a client from) to the loopback-only
 `/api/layout/broadcast` endpoint (the path is historical). The client's layout
 file is the truth of the arrangement: `open`, `focus`, `split`, `close`, and
 `move` are applied by the shell to the target client's file
