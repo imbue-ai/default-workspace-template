@@ -862,5 +862,9 @@ def test_a_failing_layout_migration_never_blocks_boot(
 
     assert len(stub.calls) == 2
     assert stub.kwargs[0]["timeout"] == _WORKSPACE_LAYOUT_MIGRATION_TIMEOUT_SECONDS
-    assert any("migration failed (rc=1)" in line for line in errors)
-    assert any("could not run" in line for line in errors)
+    assert any(
+        "Failed to migrate the workspace layouts (rc=1)" in line for line in errors
+    )
+    assert any(
+        "Failed to run the workspace layout migration" in line for line in errors
+    )
