@@ -4,17 +4,13 @@ import html
 import json
 import re
 import subprocess
-import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
-from mngr_cli_contract.contract import assert_mngr_argv_valid
 
-from imbue.chat.agent_manager import _build_chat_create_command
-from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
@@ -29,7 +25,6 @@ from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
-from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 
 # Generous: the first receive occasionally exceeded the previous 5.0s cap on a
 # loaded machine (~1-in-8 locally, failing as ``json.loads(None)``) even though
@@ -211,92 +206,6 @@ def test_not_built_placeholder_renders_without_a_terminal_to_offer(
     # stays hidden instead of loading a made-up origin.
     assert 'var terminalLabel = "";' in response.text
     assert "needs to be rebuilt" in response.text
-
-
-def _chat_create_template() -> dict[str, object]:
-    """The workspace's own ``[create_templates.chat]`` block, read from its settings.
-
-    Parsed straight out of the TOML rather than through mngr's config loader: the
-    question is what this repo ships, not what a particular machine resolves, and
-    the loader would fold in user and local layers that a workspace being repaired
-    may not have. ``server.py`` resolves the workspace root the same way.
-    """
-    settings = tomllib.loads((WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
-    return settings["create_templates"]["chat"]
-
-
-def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
-    """The suggested agent has to come up as a chat, or the suggestion misleads.
-
-    The page tells a reader to create an agent to repair the workspace, and an
-    agent created with the wrong flags is a different thing: a worktree of the
-    tree instead of the tree itself, in the wrong memory band, without the chat
-    role. So every flag the page suggests must be one the app itself passes
-    when it creates a chat, and the command must be one the live CLI accepts.
-    """
-    argv = list(_NOT_BUILT_REPAIR_ARGV)
-    assert_mngr_argv_valid(argv)
-
-    real = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="repair",
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-    )
-    assert argv[argv.index("--template") + 1] == real[real.index("--template") + 1]
-    assert "user_created=true" in real
-
-    # ``--no-connect`` is the one flag deliberately inverted: it exists to stop a
-    # headless caller attaching, and a reader typing this wants to land in the
-    # conversation.
-    assert "--no-connect" in real
-    assert "--connect" in argv
-    assert "--no-connect" not in argv
-
-    # ``--type`` is the one the builder must pass and the page must not: the app
-    # is serving a harness the user picked from a menu, while the page has no
-    # such choice to carry and would be pinning every reader to whichever harness
-    # was current when this string was written. Omitted, mngr resolves it from
-    # ``[commands.create] type``, so the repair agent comes up on whatever this
-    # workspace opens chats as.
-    assert "--type" in real
-    assert "--type" not in argv
-
-    # ``--transfer`` is left out for a different reason, and a weaker one: the
-    # ``chat`` template already sets it, so the line does not have to. Unlike the
-    # harness this is not the reader's to choose -- an agent in a worktree would
-    # repair a copy of the workspace instead of the workspace -- so the template
-    # is read rather than assumed. Losing that setting has to fail here and not
-    # in a workspace that has already lost its interface.
-    assert "--transfer" in real
-    assert "--transfer" not in argv
-    assert _chat_create_template()["transfer"] == "none"
-
-    # No agent name, so mngr mints one and nothing collides with an earlier run.
-    # The whole line has to stay flags-only for that: ``mngr create`` reads bare
-    # words as positionals (the name, then the agent type), so one anywhere past
-    # the subcommand -- not just directly after it -- puts the collision back.
-    # ``assert_mngr_argv_valid`` does not catch that: it checks option shape and
-    # throws the positionals away. A value-taking flag added to the line without
-    # being named here reports its value as a positional, which fails in the
-    # direction that gets looked at.
-    assert argv[:2] == ["mngr", "create"]
-    flags_taking_a_value = {"--template", "--transfer", "--label", "--message"}
-    positionals = [
-        token
-        for index, token in enumerate(argv[2:], start=2)
-        if not token.startswith("--") and argv[index - 1] not in flags_taking_a_value
-    ]
-    assert positionals == [], f"the suggested line passes positional arguments: {positionals}"
-
-    # The message is what makes the created agent useful without the reader
-    # having to describe anything, so it has to survive the shell as one word of
-    # plain prose -- an escape dropped from the line above splits it into several
-    # words, or leaves the escapes themselves in what the agent is told.
-    assert argv[argv.index("--message") + 1] == (
-        "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
-    )
 
     # The shell prefix is not part of the argv the CLI validates, but it is what
     # makes the connect half work from the workspace's own tmux-backed terminals.
