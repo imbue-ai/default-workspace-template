@@ -385,6 +385,23 @@ def test_run_keeps_a_stores_own_record_and_leaves_an_unreadable_store_alone(
     assert files_store.read_text() == "{corrupt"
 
 
+def test_run_leaves_a_store_of_another_version_alone(
+    legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
+) -> None:
+    terminal_store = tmp_path / "apps" / "terminal" / "instances.json"
+    terminal_store.parent.mkdir(parents=True)
+    terminal_store.write_text('{"version": 2, "sessions": []}')
+    files_store = tmp_path / "apps" / "files" / "instances.json"
+    files_store.parent.mkdir(parents=True)
+    files_store.write_text('{"version": 0, "instances": []}')
+
+    _run(legacy_layout_dir, tmp_path, migration_registry)
+
+    # Neither gains the record it would otherwise get, nor is re-stamped.
+    assert terminal_store.read_text() == '{"version": 2, "sessions": []}'
+    assert files_store.read_text() == '{"version": 0, "instances": []}'
+
+
 def test_run_writes_the_marker_and_a_second_run_changes_nothing(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:
