@@ -1229,9 +1229,13 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
     disconnect_reason = "handler exited"
     try:
-        websocket.send(json.dumps({"type": "agents_updated", "agents": agent_manager.get_agents_serialized()}))
+        # The connect-time replay: every provisional chat this process holds, then the agent
+        # list. The list comes last on purpose -- it is how a page knows the replay is over,
+        # so a record it still holds that this process did not replay (a create the previous
+        # process was running) can be dropped rather than waited on forever.
         for proto in agent_manager.get_proto_agents():
             websocket.send(json.dumps(proto_agent_created_message(proto)))
+        websocket.send(json.dumps({"type": "agents_updated", "agents": agent_manager.get_agents_serialized()}))
         shutdown = False
         while not shutdown:
             # The pages send nothing; anything that arrives is drained and ignored.
