@@ -181,7 +181,7 @@ def _build_chat_create_command(
         "--type",
         harness,
         "--template",
-        "chat",
+        CHAT_ROLE_TEMPLATE,
         *[arg for role in extra_role_templates for arg in ("--template", role)],
         # Tags this as a user-created agent so the OOM launch wrapper puts it in the
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
