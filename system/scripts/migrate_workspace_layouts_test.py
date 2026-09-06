@@ -112,6 +112,15 @@ def test_address_for_ref_maps_every_old_spelling(ref: str, address: str | None) 
         ),
         ({"panelType": "chat"}, None),
         ({"panelType": "launcher", "agentId": "agent-aaa"}, None),
+        (
+            {"panelType": "iframe", "serviceName": "browser", "url": "/?session=b-1"},
+            "service:browser?session=b-1",
+        ),
+        # Only the browser named its instance by a session parameter.
+        (
+            {"panelType": "iframe", "serviceName": "docs", "url": "/?session=b-1"},
+            "service:docs",
+        ),
     ],
 )
 def test_ref_for_panel_reads_the_old_panel_shapes(
