@@ -27,9 +27,16 @@ _PACKAGE = Path(__file__).parent
 
 pytestmark = pytest.mark.xdist_group(name="ratchets")
 
-# What the shell must never import: mngr and its plugins (agents are the chat app's business)
-# and the chat app itself (an app the shell knows only through the registry and its APIs).
-_FORBIDDEN_IMPORT_PREFIXES: Final[tuple[str, ...]] = ("imbue.mngr", "imbue.chat")
+# What the shell must never import: mngr and its plugins (agents are the chat app's business;
+# every one of them is a module whose name starts with ``imbue.mngr``: ``imbue.mngr``,
+# ``imbue.mngr_claude``, ...) and the chat app itself (an app the shell knows only through the
+# registry and its APIs).
+_FORBIDDEN_MODULE_FAMILY_PREFIX: Final[str] = "imbue.mngr"
+_FORBIDDEN_PACKAGES: Final[tuple[str, ...]] = ("imbue.chat",)
+
+# The directory the top-level ``imbue`` package lives in: what a module's absolute name is
+# spelled relative to.
+_PACKAGE_ROOT = _PACKAGE.parent.parent
 
 _TEST_FILE_PATTERNS: Final[tuple[str, ...]] = ("*_test.py", "test_*.py", "testing.py", "conftest.py")
 
@@ -52,17 +59,42 @@ def _is_test_file(path: Path) -> bool:
     return any(path.match(pattern) for pattern in _TEST_FILE_PATTERNS)
 
 
-def _imported_module_names(source_file: Path) -> Iterator[str]:
+def _import_from_base(source_file: Path, package_root: Path, node: ast.ImportFrom) -> str:
+    """The absolute module a ``from ... import`` names: a relative import is resolved from the
+    importing file's own package (``package_root`` holds the top-level ``imbue`` package)."""
+    if node.level == 0:
+        return node.module or ""
+    package_parts = list(source_file.relative_to(package_root).with_suffix("").parts[:-1])
+    base_parts = package_parts[: len(package_parts) - (node.level - 1)]
+    if node.module:
+        base_parts.append(node.module)
+    return ".".join(base_parts)
+
+
+def _imported_module_names(source_file: Path, package_root: Path = _PACKAGE_ROOT) -> Iterator[str]:
+    """Every absolute name a module's import statements reach: the module of an ``import``, and
+    for a ``from`` import both its base and ``base.name`` per imported name (so ``from imbue
+    import chat`` is seen as ``imbue.chat``)."""
     for node in ast.walk(ast.parse(source_file.read_text())):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            yield node.module
+        elif isinstance(node, ast.ImportFrom):
+            base = _import_from_base(source_file, package_root, node)
+            if base:
+                yield base
+            for alias in node.names:
+                yield f"{base}.{alias.name}" if base else alias.name
 
 
 def _is_forbidden(module_name: str) -> bool:
-    return any(module_name == prefix or module_name.startswith(f"{prefix}.") for prefix in _FORBIDDEN_IMPORT_PREFIXES)
+    if module_name.startswith(_FORBIDDEN_MODULE_FAMILY_PREFIX):
+        return True
+    return any(module_name == package or module_name.startswith(f"{package}.") for package in _FORBIDDEN_PACKAGES)
+
+
+def _forbidden_imports(source_file: Path, package_root: Path = _PACKAGE_ROOT) -> set[str]:
+    return {name for name in _imported_module_names(source_file, package_root) if _is_forbidden(name)}
 
 
 def test_the_shell_imports_neither_mngr_nor_the_chat_app() -> None:
@@ -71,10 +103,33 @@ def test_the_shell_imports_neither_mngr_nor_the_chat_app() -> None:
         f"{source_file.relative_to(_PACKAGE)}: {module_name}"
         for source_file in _PACKAGE.rglob("*.py")
         if not _is_test_file(source_file)
-        for module_name in _imported_module_names(source_file)
-        if _is_forbidden(module_name)
+        for module_name in _forbidden_imports(source_file)
     )
     assert offenders == [], "the shell imports what it must not:\n" + "\n".join(f"  - {line}" for line in offenders)
+
+
+def test_the_import_scan_sees_every_spelling_of_a_forbidden_import(tmp_path: Path) -> None:
+    """The plugins (``imbue.mngr_*``), ``from imbue import ...``, and relative imports are all caught;
+    the shared library and a sibling module are not."""
+    module = tmp_path / "imbue" / "system_interface" / "shell" / "offender.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        "from imbue.mngr_codex.app_server_client import CodexModel\n"
+        "from imbue import chat\n"
+        "from ...chat import models\n"
+        "import imbue.mngr.primitives\n"
+        "from imbue.imbue_common.pure import pure\n"
+        "from . import layout_ops\n"
+        "from ..config import Config\n"
+    )
+
+    assert _forbidden_imports(module, tmp_path) == {
+        "imbue.chat",
+        "imbue.chat.models",
+        "imbue.mngr.primitives",
+        "imbue.mngr_codex.app_server_client",
+        "imbue.mngr_codex.app_server_client.CodexModel",
+    }
 
 
 def test_prevent_mngr_subprocess_invocations() -> None:
