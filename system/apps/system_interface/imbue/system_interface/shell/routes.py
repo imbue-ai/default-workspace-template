@@ -714,7 +714,8 @@ def _resolve_client(shell: ShellState, args_raw: dict[str, Any], requester: Addr
         if not _is_known_client(shell, client_id):
             raise ClientNotFoundError(f"No client {client_id!r}: see `layout.py context` for the known clients")
         return client_id
-    if requester is not None:
+    # Only an instance has a client that last messaged it; a bare app names none.
+    if requester is not None and requester.key is not None:
         attributed = find_client_id_for_instance(shell.activity.read_events(), str(requester.app), str(requester.key))
         if attributed is not None and _is_known_client(shell, attributed):
             return ClientId(attributed)
