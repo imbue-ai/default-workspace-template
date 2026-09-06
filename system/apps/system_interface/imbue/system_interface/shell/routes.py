@@ -519,7 +519,9 @@ def layout_broadcast() -> ResponseReturnValue:
         return _detail("Request body must be a JSON object", HTTP_BAD_REQUEST)
     op = body.get("op")
     args_raw = body.get("args", {})
-    raw_requester = body.get("requester") or ""
+    raw_requester = body.get("requester")
+    if raw_requester is None:
+        raw_requester = ""
     if not isinstance(raw_requester, str):
         return _detail("``requester`` must be an address", HTTP_BAD_REQUEST)
     try:

@@ -512,7 +512,11 @@ def test_the_broadcast_endpoint_validates_its_input(client: FlaskClient) -> None
     refused = client.post("/api/layout/broadcast", json={"op": "context", "requester": "chat:agent-1"})
     assert refused.status_code == 400
     assert "requester" in refused.get_json()["detail"]
-    assert client.post("/api/layout/broadcast", json={"op": "context", "requester": 7}).status_code == 400
+    for not_an_address in (7, 0, False, []):
+        assert (
+            client.post("/api/layout/broadcast", json={"op": "context", "requester": not_an_address}).status_code
+            == 400
+        )
 
 
 def test_the_read_ops_answer_from_the_state_files_and_the_activity_log(client: FlaskClient, app: Flask) -> None:
