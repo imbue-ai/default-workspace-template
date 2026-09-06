@@ -1138,6 +1138,33 @@ def _add_records_to_store(
         _log(f"added {merged.added_count} record(s) to {store_path}")
 
 
+def _write_projects_file(plan: MigrationPlan, state_dir: Path) -> None:
+    """Write the projects file the plan holds, or log why the existing one is kept."""
+    if plan.is_projects_skipped:
+        _log(f"kept the existing {state_dir / PROJECTS_FILENAME}: {plan.projects_note}")
+        return
+    _write_json_atomic(
+        state_dir / PROJECTS_FILENAME,
+        {
+            "version": PROJECTS_FILE_VERSION,
+            "projects": [project.document for project in plan.projects],
+        },
+    )
+    _log(f"wrote {len(plan.projects)} project(s) to {state_dir / PROJECTS_FILENAME}")
+
+
+def _write_seeds(seeds: Sequence[SeedPlan]) -> None:
+    """Write every seed the plan holds a layout for; log each one skipped and why."""
+    for seed in seeds:
+        if seed.is_skipped or seed.layout is None:
+            _log(f"skipped the {seed.device} seed of {seed.view_id!r}: {seed.note}")
+            continue
+        _write_json_atomic(seed.path, seed.layout)
+        _log(
+            f"wrote the {seed.device} seed of {seed.view_id!r} with {len(seed.addresses)} tab(s)"
+        )
+
+
 def apply_plan(
     plan: MigrationPlan, state_dir: Path, apps_data_dir: Path, now_iso: str
 ) -> None:
@@ -1145,29 +1172,8 @@ def apply_plan(
     for note in plan.notes:
         _log(note)
     if plan.is_source_present:
-        if plan.is_projects_skipped:
-            _log(
-                f"kept the existing {state_dir / PROJECTS_FILENAME}: {plan.projects_note}"
-            )
-        else:
-            _write_json_atomic(
-                state_dir / PROJECTS_FILENAME,
-                {
-                    "version": PROJECTS_FILE_VERSION,
-                    "projects": [project.document for project in plan.projects],
-                },
-            )
-            _log(
-                f"wrote {len(plan.projects)} project(s) to {state_dir / PROJECTS_FILENAME}"
-            )
-        for seed in plan.seeds:
-            if seed.is_skipped or seed.layout is None:
-                _log(f"skipped the {seed.device} seed of {seed.view_id!r}: {seed.note}")
-                continue
-            _write_json_atomic(seed.path, seed.layout)
-            _log(
-                f"wrote the {seed.device} seed of {seed.view_id!r} with {len(seed.addresses)} tab(s)"
-            )
+        _write_projects_file(plan, state_dir)
+        _write_seeds(plan.seeds)
         for app, records_key, identity_key, records in (
             ("files", "instances", "key", plan.files_records),
             ("terminal", "sessions", "name", plan.terminal_records),
