@@ -209,6 +209,66 @@ def test_plan_prunes_panels_that_map_to_nothing_and_skips_empty_views(
     assert any("research.mobile.json" in note for note in plan.notes)
 
 
+def test_migrate_layout_content_points_a_pruned_active_group_at_a_surviving_one() -> (
+    None
+):
+    # The focused group held only the launcher, which maps to nothing; the seed must not name
+    # a group the grid no longer has.
+    launcher_params = {"panelType": "launcher", "agentId": "agent-primary"}
+    chat_params = {"panelType": "chat", "chatAgentId": "agent-aaa", "title": "Planning"}
+    content = {
+        "dockview": {
+            "grid": {
+                "root": {
+                    "type": "branch",
+                    "data": [
+                        {
+                            "type": "leaf",
+                            "data": {
+                                "views": ["new-tab-1"],
+                                "activeView": "new-tab-1",
+                                "id": "g-launcher",
+                            },
+                            "size": 600,
+                        },
+                        {
+                            "type": "leaf",
+                            "data": {
+                                "views": ["chat-agent-aaa"],
+                                "activeView": "chat-agent-aaa",
+                                "id": "g-chat",
+                            },
+                            "size": 600,
+                        },
+                    ],
+                    "size": 800,
+                },
+                "width": 1200,
+                "height": 800,
+                "orientation": "HORIZONTAL",
+            },
+            "panels": {
+                "new-tab-1": {"id": "new-tab-1", "params": launcher_params},
+                "chat-agent-aaa": {"id": "chat-agent-aaa", "params": chat_params},
+            },
+            "activeGroup": "g-launcher",
+        },
+        "panelParams": {"new-tab-1": launcher_params, "chat-agent-aaa": chat_params},
+    }
+
+    migrated = migrate.migrate_layout_content(
+        content, "desktop", {}, _NOW, migrate.mint_tab_id
+    )
+
+    assert migrated.record is not None
+    assert migrated.dropped_panel_ids == ("new-tab-1",)
+    assert migrated.record["dockview"]["activeGroup"] == "g-chat"
+    assert [
+        group["data"]["id"]
+        for group in migrated.record["dockview"]["grid"]["root"]["data"]
+    ] == ["g-chat"]
+
+
 def test_run_writes_seeds_the_shell_reads_and_the_editor_can_edit(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:

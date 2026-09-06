@@ -537,6 +537,29 @@ def _rename_panel_in_grid_node(node: Any, old_id: str, new_id: str) -> None:
             _rename_panel_in_grid_node(child, old_id, new_id)
 
 
+def _leaf_group_ids(node: Any) -> list[str]:
+    """The ids of a grid's leaf groups, in tree order."""
+    if not isinstance(node, dict):
+        return []
+    data = node.get("data")
+    if node.get("type") == "leaf":
+        group_id = data.get("id") if isinstance(data, dict) else None
+        return [group_id] if isinstance(group_id, str) and group_id else []
+    if isinstance(data, list):
+        return [group_id for child in data for group_id in _leaf_group_ids(child)]
+    return []
+
+
+def _with_repaired_active_group(dockview: dict[str, Any]) -> dict[str, Any]:
+    """The document with ``activeGroup`` pointed at the first surviving group when the one it
+    names was pruned away (the shell's rule after a strip); unchanged otherwise."""
+    grid = dockview.get("grid")
+    group_ids = _leaf_group_ids(grid.get("root") if isinstance(grid, dict) else None)
+    if not group_ids or dockview.get("activeGroup") in group_ids:
+        return dockview
+    return {**dockview, "activeGroup": group_ids[0]}
+
+
 def _panel_title(entry: dict[str, Any], params: dict[str, Any], address: str) -> str:
     for candidate in (
         params.get("customTitle"),
@@ -570,7 +593,8 @@ def migrate_layout_content(
     The grid is kept as dockview saved it; every panel that maps to an address is renamed to a
     fresh tab id and its entry rebuilt in the frontend's current shape; every other panel (a
     launcher, a subagent view, an ad-hoc URL page, a second panel of an address already kept)
-    is pruned.
+    is pruned, and an active group that pruning collapsed away gives way to the first that
+    survived.
     """
     dockview = content.get("dockview")
     if not isinstance(dockview, dict) or not isinstance(dockview.get("panels"), dict):
@@ -621,7 +645,7 @@ def migrate_layout_content(
             record=None, addresses=(), dropped_panel_ids=tuple(dropped)
         )
     record = {
-        "dockview": document,
+        "dockview": _with_repaired_active_group(document),
         "tabs": tabs,
         "device_kind": device,
         "updated_at": now_iso,
