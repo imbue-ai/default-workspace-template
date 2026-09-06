@@ -154,7 +154,8 @@ An app whose fetch fails keeps its last known list with every instance's status 
 
 ## 6. Shell routes the browser calls
 
-Unchanged routes: `GET /` and the SPA catch-all, `/assets/<path>`, `/plugins/<basename>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, `/api/ws`.
+Unchanged routes: `GET /` and the SPA catch-all, `/assets/<path>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, `/api/ws`.
+`/plugins/<basename>` is the chat app's route since phase 10, served from the chat's own origin.
 `POST /api/layout/broadcast` keeps its path and is the agent-facing op route of section 12 (loopback only).
 
 Instance verbs are relayed by the shell, so browsers never reach an `instances_url`:
