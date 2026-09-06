@@ -352,7 +352,9 @@ def test_broadcast_to_client_reaches_every_window_of_that_client_only() -> None:
     broadcaster.set_client_info(second_window, "client-1", "project-1", "desktop")
     broadcaster.set_client_info(other_client, "client-2", "project-1", "mobile")
 
-    broadcaster.broadcast_layout_op("maximize", {"address": "app:files"}, "agent-1", target_client_id="client-1")
+    broadcaster.broadcast_layout_op(
+        "maximize", {"address": "app:files"}, "app:chat?instance=agent-1", target_client_id="client-1"
+    )
 
     for window in (first_window, second_window):
         message = json.loads(_get_message(window))

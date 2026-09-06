@@ -53,9 +53,7 @@ class ShellState(MutableModel):
     layouts: LayoutStore = Field(frozen=True, description="The per-client layouts and seeds")
     clients: ClientStore = Field(frozen=True, description="clients.json")
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
-    broadcaster: WebSocketBroadcaster = Field(
-        frozen=True, description="The WebSocket fan-out, shared with the chat app"
-    )
+    broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     http_client: httpx.Client = Field(frozen=True, description="The client the relay uses to reach the apps")
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"

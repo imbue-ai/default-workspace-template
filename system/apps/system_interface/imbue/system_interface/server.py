@@ -69,7 +69,7 @@ def _terminal_origin_label() -> str | None:
 _NOT_BUILT_POLL_SECONDS = 10
 
 # The ``mngr`` invocation the placeholder offers for standing up an agent to
-# repair the workspace. It mirrors what ``agent_manager._build_chat_create_command``
+# repair the workspace. It mirrors what the chat app's ``_build_chat_create_command``
 # runs for a chat -- ``--template chat`` for the shared work directory, the output
 # style, and running in the workspace tree rather than a worktree of it, plus the
 # ``user_created`` label that puts the agent in the dynamic chat memory band.

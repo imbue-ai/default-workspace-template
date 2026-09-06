@@ -74,9 +74,9 @@ _IRRELEVANT_PATHS = (
         ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", False),
         # A workspace library this process does not import.
         ("system/libs/bootstrap/src/bootstrap/manager.py", False),
-        # The vendored mngr, imported in-process and shelled out to. Broader
-        # than `.py` on purpose: this process reads that tree at runtime
-        # through more than its Python.
+        # The vendored mngr tree, which counts as a whole (this process imports
+        # only its shared libraries, but stays generic over mngr's data). Broader
+        # than `.py` on purpose.
         ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py", True),
         ("system/vendor/mngr/libs/mngr/imbue/mngr/help/topics.toml", True),
         # ... except its documentation and its tests, which nothing holds in

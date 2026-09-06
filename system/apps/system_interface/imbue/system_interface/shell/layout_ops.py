@@ -37,7 +37,7 @@ ADDRESSED_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "clo
 CREATING_OPS: Final[frozenset[str]] = frozenset({"open", "split"})
 
 # The one non-address an addressed op accepts: the requester's own instance, which the op's
-# ``requester`` names (``layout.py`` sends the caller's chat).
+# ``requester`` names.
 SELF_ADDRESS: Final[str] = "self"
 
 
@@ -69,7 +69,9 @@ def is_creating_op(op: str) -> bool:
 class DocumentOpArguments(FrozenModel):
     """The arguments of a document op, as ``layout.py`` posts them (contracts.md section 12)."""
 
-    address: str = Field(default="", description="The instance or app the op names; ``self`` for the requester's chat")
+    address: str = Field(
+        default="", description="The instance or app the op names; ``self`` for the requester's own instance"
+    )
     relative_to: str = Field(default=SELF_ADDRESS, description="The anchor of a split or a move")
     direction: Direction = Field(default=Direction.RIGHT, description="Where a split or a move lands")
     ratio: float = Field(default=DEFAULT_SPLIT_RATIO, description="The share of the anchor a split takes")
