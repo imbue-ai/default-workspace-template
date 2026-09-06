@@ -696,6 +696,10 @@ def _ms_to_iso(at_ms: int) -> str:
     return datetime.fromtimestamp(at_ms / 1000, tz=timezone.utc).isoformat()
 
 
+def _iso_to_ms(at_iso: str) -> int:
+    return int(datetime.fromisoformat(at_iso).timestamp() * 1000)
+
+
 def _is_location(path: str) -> bool:
     """Whether the instances library accepts ``path`` as an instance URL (its rules, restated)."""
     return (
@@ -718,15 +722,18 @@ def files_record(
     location = location_by_ref.get(ref, "")
     match = FILES_KEY_NUMBER_PATTERN.fullmatch(key)
     last_used_ms = last_used_ms_by_ref.get(ref)
+    # The old store's rule, which also keeps a hand-edited value convertible: a stamp ahead of
+    # the clock reads as now.
+    last_active = now_iso
+    if isinstance(last_used_ms, int) and 0 < last_used_ms < _iso_to_ms(now_iso):
+        last_active = _ms_to_iso(last_used_ms)
     return {
         "key": key,
         "url": location.strip() if _is_location(location.strip()) else "/",
         "title": f"File Viewer {match.group(1)}" if match else key,
         "status": "idle",
         "lifetime": "referenced",
-        "last_active": _ms_to_iso(last_used_ms)
-        if isinstance(last_used_ms, int) and last_used_ms > 0
-        else now_iso,
+        "last_active": last_active,
         "renameable": False,
     }
 
