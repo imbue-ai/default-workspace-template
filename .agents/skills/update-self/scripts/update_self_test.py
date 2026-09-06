@@ -5773,9 +5773,7 @@ def test_apply_runs_the_layout_migration_from_the_merged_tree_before_the_restart
     assert code == 0
     migration_argv = ["python3", update_layout.LAYOUT_MIGRATION_SCRIPT, "run"]
     assert migration_argv in runner.calls
-    restart_index = runner.calls.index(
-        ["mngr", "start", "--restart", "system-services"]
-    )
+    restart_index = runner.calls.index(list(_RESTART))
     assert runner.calls.index(migration_argv) < restart_index
 
 
