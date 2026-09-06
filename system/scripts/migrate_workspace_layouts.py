@@ -238,8 +238,20 @@ def address_for_ref(ref: str) -> str | None:
 
 
 def is_app_pin_ref(ref: str) -> bool:
-    """Whether a member ref is an app's pin (a bare ``service:<name>``), which becomes a shortcut."""
-    return ref.startswith("service:") and "?" not in ref and len(ref) > len("service:")
+    """Whether a member ref is an app's pin (a bare ``service:<name>``), which becomes a shortcut.
+
+    A bare ref of one of the built-in apps is not a pin (their rail rows were never members;
+    such a ref named the old sessionless viewer) and maps to nothing, like a bare ref whose
+    name is not an app name at all.
+    """
+    scheme, separator, name = ref.partition(":")
+    return (
+        scheme == "service"
+        and bool(separator)
+        and "?" not in name
+        and _is_app_name(name)
+        and name not in INSTANCE_ONLY_APPS
+    )
 
 
 def _browser_session_from_url(url: Any) -> str | None:
@@ -612,9 +624,7 @@ def derive_shortcuts(
         if not is_app_pin_ref(member):
             continue
         app = member[len("service:") :]
-        if not _is_app_name(app) or any(
-            shortcut["app"] == app for shortcut in shortcuts
-        ):
+        if any(shortcut["app"] == app for shortcut in shortcuts):
             continue
         pin = _pin_shortcut(app, registry_rows)
         if pin is None:
