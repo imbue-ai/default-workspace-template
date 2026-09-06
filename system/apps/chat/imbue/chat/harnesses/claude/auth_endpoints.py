@@ -1,18 +1,12 @@
-"""HTTP endpoint handlers for `/api/claude-auth/*`.
+"""HTTP endpoint handlers for `/api/claude-auth/*`: the auth status and the pasted-credential submit.
 
 Kept in a separate module from server.py so server.py doesn't grow with
-the modal-specific logic. Every successful auth path hands the welcome
-resender's `check_and_resend_welcome` to the service as the completion
-hook, so the welcome-resend check runs exactly once per successful login
--- after the restarted chat agent is back up (or inline on the no-restart
-subscription fast path).
-
-The `ClaudeAuthService` (which holds the in-flight PTY auth subprocess)
-is created once in `main.build_production_state` (or by the test state builder) and
-stored on the app's `ChatState`; each handler reads them via
-`get_state()` so the subprocess survives between the `/setup-token/start`
-call and the subsequent `/setup-token/poll` / `/setup-token/submit-code`
-calls.
+the modal-specific logic. The status route reads the `ClaudeAuthService`
+(read-only: it reports claude's auth state and changes nothing); the
+submit route hands the pasted credential to the `AuthFlowService`, which
+adopts it as an account. Both are created once in
+`main.build_production_state` (or by the test state builder) and stored
+on the app's `ChatState`, which each handler reads via `get_state()`.
 """
 
 from __future__ import annotations
