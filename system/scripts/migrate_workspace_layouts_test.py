@@ -352,6 +352,25 @@ def test_files_record_keeps_only_a_location_the_files_app_reads_back(
     assert record["url"] == url
 
 
+@pytest.mark.parametrize(
+    ("last_used_ms", "last_active"),
+    [
+        (1700000001000, "2023-11-14T22:13:21+00:00"),
+        # A stamp ahead of the migration time reads as the migration time, as the old store
+        # read one ahead of its clock; so does one no clock could have produced.
+        (1800000000000, _NOW),
+        (10**30, _NOW),
+        (0, _NOW),
+    ],
+)
+def test_files_record_reads_a_stamp_ahead_of_the_migration_as_the_migration_time(
+    last_used_ms: int, last_active: str
+) -> None:
+    ref = "service:files?instance=files-2"
+    record = migrate.files_record("files-2", {}, {ref: last_used_ms}, _NOW)
+    assert record["last_active"] == last_active
+
+
 def test_run_keeps_a_stores_own_record_and_leaves_an_unreadable_store_alone(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:
