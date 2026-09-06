@@ -19,6 +19,7 @@ from oom_priority import bands
 
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
+from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import _build_chat_create_command
@@ -299,6 +300,71 @@ def test_create_chat_agent_refuses_launching_an_id_it_did_not_reserve(agent_mana
     with pytest.raises(AgentCreationError):
         agent_manager.create_chat_agent("", agent_id="proto-1")
     agent_manager.stop()
+
+
+def _seed_failed_chat(
+    agent_manager: AgentManager, agent_id: str, name: str, account_id: str = "acct-1"
+) -> ProvisionalChat:
+    proto = ProvisionalChat(
+        agent_id=agent_id,
+        name=name,
+        account_id=account_id,
+        phase=ProvisionalChatPhase.FAILED,
+        error="mngr create exited with code 3",
+    )
+    with agent_manager._lock:
+        agent_manager._proto_agents[agent_id] = proto
+    return proto
+
+
+def test_create_chat_agent_relaunches_a_failed_chat_under_its_id_and_name(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The page's "Try again": the failed record is launched again on its account, keeping the id
+    the tab was docked under and the name it was minted with, with its reason cleared. The
+    record is read off the push the launch sends before its create thread runs (the fake
+    ``mngr`` of this fixture fails at once, which would settle it again)."""
+    # The account the conftest signed in: what the failed record binds to and the retry names.
+    (signed_in,) = read_index().accounts
+    failed = _seed_failed_chat(agent_manager, "failed-1", "Chat 1", account_id=signed_in.id)
+    q = broadcaster.register()
+
+    created = agent_manager.create_chat_agent("", agent_id="failed-1", account_id=failed.account_id)
+    agent_manager.stop()
+
+    assert created.agent_id == "failed-1"
+    assert created.display_name == "Chat 1"
+    raw = q.get_nowait()
+    assert raw is not None
+    assert json.loads(raw) == {
+        "type": "proto_agent_created",
+        "agent_id": "failed-1",
+        "name": "Chat 1",
+        "project_id": "",
+        "account_id": signed_in.id,
+        "phase": "creating",
+        "error": None,
+    }
+    assert [proto.agent_id for proto in agent_manager.get_proto_agents()] == ["failed-1"]
+
+
+def test_discard_provisional_chat_drops_a_failed_chat(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    _seed_failed_chat(agent_manager, "failed-1", "Chat 1")
+    q = broadcaster.register()
+
+    assert agent_manager.discard_provisional_chat("failed-1") is True
+
+    assert agent_manager.get_proto_agent("failed-1") is None
+    raw = q.get_nowait()
+    assert raw is not None
+    assert json.loads(raw) == {
+        "type": "proto_agent_completed",
+        "agent_id": "failed-1",
+        "success": False,
+        "error": None,
+    }
 
 
 def test_discard_provisional_chat_drops_a_reserved_chat_but_not_a_create_in_flight(

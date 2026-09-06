@@ -271,6 +271,18 @@ def test_delete_drops_a_reserved_chat_and_leaves_a_create_in_flight_alone(agent_
     assert [candidate.key for candidate in source.list_instances()] == [creating_id]
 
 
+def test_delete_drops_a_failed_chat(agent_manager: AgentManager) -> None:
+    source = _source(agent_manager)
+    failed_id = _agent_id()
+    with agent_manager._lock:
+        agent_manager._proto_agents[failed_id] = _creating("Chat 3", failed_id, ProvisionalChatPhase.FAILED)
+    assert [candidate.status for candidate in source.list_instances()] == [InstanceStatus.ERROR]
+
+    source.delete_instance(InstanceKey(failed_id))
+
+    assert source.list_instances() == []
+
+
 def test_delete_drops_a_subagent_record_and_ignores_unknown_keys(agent_manager: AgentManager) -> None:
     parent_id = _agent_id()
     _seed_agent(agent_manager, parent_id, "Chat-1")
