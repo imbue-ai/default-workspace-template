@@ -40,7 +40,7 @@ class ReflectClientSubprotocols:
     Chrome aborts a WebSocket handshake (close 1006) if the client offered a
     subprotocol and the 101 response echoes none, so any future WS route that
     negotiates a subprotocol works without touching this list. Today's own
-    endpoints (the ``/api/ws`` broadcaster and the proto-agent-logs stream)
+    endpoint (the ``/api/ws`` broadcaster)
     offer no subprotocol, so the negotiation loop never runs and no
     subprotocol is echoed -- the passthrough is inert for them but keeps the
     server permissive for subprotocol-bearing clients.

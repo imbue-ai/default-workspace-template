@@ -44,7 +44,7 @@ dev = [
     "imbue-mngr",
     # The chat app, for the system tests that boot the shell and the chat together
     # (``test_chat_system.py``); the shell's own code never imports it (the import
-    # contract below holds that).
+    # ratchet holds that).
     "chat",
     "ruff~=0.12.8",
     # Used by check_no_type_errors in test_ratchets.py. Pinned to 0.0.24 because

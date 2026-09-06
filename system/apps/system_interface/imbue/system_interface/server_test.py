@@ -376,7 +376,7 @@ def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     # Non-GET probes are the observable cases: the SPA catch-all intentionally
     # serves the frontend for any unknown GET, so those return 200 by design.
     assert client.post("/api/definitely-not-a-route").status_code == 405
-    assert client.put("/api/agents/x/destroy").status_code == 405
+    assert client.put("/api/layout/broadcast").status_code == 405
 
 
 @pytest.mark.flaky
