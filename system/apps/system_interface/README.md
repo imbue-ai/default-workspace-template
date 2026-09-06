@@ -1,29 +1,27 @@
 # System Interface
 
-The workspace's shell (its window manager and app management) and, until phase
-10 of the workspace app model, the chat app it embeds: live conversations with
-mngr-managed agents, with real-time updates via Server-Sent Events.
+The workspace's shell: its window manager and app management. It serves one
+document (`/`, the dockview UI) that arranges tabs, keeps projects, and
+manages apps, and it knows every app, the chat app included, only through
+the workspace app model (`docs/system/blueprint/workspace-app-model/`): a
+manifest, a registry row, an instances API, and the browser-side contract.
+Chats are the chat app's business (`system/apps/chat/`, its own package and
+supervised program since phase 10 of that model); this package imports
+nothing from mngr or from the chat app, and never runs the `mngr` binary
+(`test_project_ratchets.py` holds both).
 
-## Two documents from one process
-
-The process serves two documents. The shell document (`/`, the dockview UI)
-arranges tabs, keeps projects, and manages apps. The chat document
-(`/<agent-id>`, and `/<agent-id>.<session-id>` for a subagent view) is one
-page per chat, which the shell frames as an ordinary app tab at the
-registered `chat` origin; its manifest is `system/apps/chat/app.toml`, and the
-shell's supervisord line registers that row beside its own at the same port.
-Requests are dispatched to the chat app by path (`wsgi_dispatch.py`), never
-by origin label, so loopback callers such as `curl
-http://127.0.0.1:8000/api/agents/<id>/events` keep working. The chat app
-serves the instances API of the workspace app model at `/_instances`
-(`chat_instances.py`, over the agent manager) and the presence route its
-pages report through; the shell serves `/api/health` and the browser-side
-contract module at `/_static/app_contract.js`. The frontend is two entries of
-one vite build: `index.html` (the shell) and `chat.html` (`src/chat/`, which
-the shell bundle never imports), plus the contract library
-(`vite.contract.config.ts`). The chat page talks to the shell only through
-that contract (`src/app_contract.ts`; the shell's side is `src/relay.ts`,
-which also relays the chat pages' permission cards to the minds chrome).
+Beside the document the process serves `/api/health`
+(`{"status", "is_frontend_built"}`, the probe the update apply polls), the
+browser-side contract module at `/_static/app_contract.js`, the shell's
+routes (apps, instances relay, projects, layouts, tabs, client activity),
+and the WebSocket (`/api/ws`: `apps_updated`, `projects_updated`,
+`layout_op`, `tab_rebound`). The frontend (`frontend/`, one member of the
+npm workspace rooted at `system/package.json`) builds `index.html` and the
+contract library into `imbue/system_interface/static/`; the design system,
+the base helpers, and the contract modules it shares with the chat page live
+in `system/libs/workspace_ui`. The shell's side of the contract is
+`src/relay.ts`, which also relays the chat pages' permission cards to the
+minds chrome.
 
 ## Usage
 
@@ -119,8 +117,9 @@ tool environments) -- so a rollback restores a *copy* rather than re-running
 the build that just failed, and a broken build environment cannot take the UI
 down with it. And it **checks that the frontend actually serves**, not just
 that the backend answers: the "not built" placeholder and an unserved
-`/assets` path are both HTTP 200s to `/api/agents`, so the probe confirms the
-app shell is the real app and that its module script comes back as JavaScript.
+`/assets` path are both HTTP 200s, so the probe reads `is_frontend_built`
+from the shell's `/api/health` and the chat app's, and checks that the shell's
+module script comes back as JavaScript.
 
 The apply's reload of every open view is delegated to
 `system/scripts/refresh_workspace_view.py`, the shared
@@ -276,7 +275,8 @@ with a manifest (`app.toml`), a row in the registry (`data/.state/apps.toml`),
 and an instances API (`GET /_instances` at the app's URL) that lists the
 app's **instances** with their titles, statuses, and what verbs they accept.
 The backend for all of this is the `imbue/system_interface/shell/`
-subpackage; the chat modules stay at the package root until phase 10.
+subpackage; the package root holds the process (`main.py`, `server.py`), its
+state, and the update-staleness check.
 
 Everything is addressed as `app:<name>` (a single-instance app, or the app
 itself) or `app:<name>?instance=<key>` (one instance). The shell keeps an
@@ -336,13 +336,10 @@ the only empty state: tiles for every app's primary action, "In this
 project" (the tab set), and "On this machine" (everything else), each with an
 app filter and a last-active column.
 
-Until phase 10 the chat app keeps two marked exceptions in the shell: its
-`new` action takes the provider account picked beside its launcher tile (and
-opens the chooser when nothing is signed in), and the shell's WebSocket still
-carries `agents_updated` and the proto-agent messages for the chat pages.
-Chat sends and view switches are logged to
-`data/.state/system_interface/events/client_activity/events.jsonl` so
-agents can attribute a request to a client via `layout.py context`.
+An app page's sends (the chat's messages) and a client's view switches are
+logged to `data/.state/system_interface/events/client_activity/events.jsonl`
+so agents can attribute a request to a client via `layout.py context`; the
+shell records the reporting page's address and never names an app.
 
 ## Driving the workspace layout from an agent
 

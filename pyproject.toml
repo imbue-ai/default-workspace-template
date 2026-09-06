@@ -37,8 +37,8 @@ dev = [
     # entry points, so settings.toml fields like `isolate_local_config_dir`,
     # `auto_allow_permissions`, etc. fail to parse as "Unknown fields".
     # Keeping the venv's mngr in lockstep with the tool-installed mngr
-    # (which has --with-editable mngr_claude on the system_interface tool
-    # install) avoids a cwd-dependent divergence.
+    # (which has --with-editable mngr_claude on the chat app's tool install)
+    # avoids a cwd-dependent divergence.
     "imbue-mngr-claude",
     # imbue-mngr-codex: same rationale as imbue-mngr-claude above -- registers the
     # codex plugin in the workspace root .venv so `uv run mngr` parses agent_types.codex
@@ -79,11 +79,6 @@ package = false
 # every environment on the same versions; an app's own tool environment keeps
 # it running while this venv is rewritten or broken.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
-# CLEANUP: drop this exclusion in phase 10 of the workspace app model, when the chat app
-# gets its own pyproject; until then system/apps/chat holds only a manifest and an icon
-# (its code runs inside system_interface), and the member glob needs a pyproject in
-# every directory it matches.
-exclude = ["system/apps/chat"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
@@ -97,6 +92,10 @@ tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
 app-instances = { workspace = true }
+# The two apps other members name: the chat's test suite boots the shell beside it (the
+# chat is framed by the shell), and the shell's system tests boot the chat.
+system-interface = { workspace = true }
+chat = { workspace = true }
 imbue-common = { path = "system/vendor/mngr/libs/imbue_common", editable = true }
 imbue-mngr = { path = "system/vendor/mngr/libs/mngr", editable = true }
 imbue-mngr-claude = { path = "system/vendor/mngr/libs/mngr_claude", editable = true }
@@ -142,9 +141,11 @@ addopts = [
     "--timeout=10",
     "--ignore=system/vendor/mngr",
     "--ignore=system/vendor/tk",
-    # system/apps/system_interface has its own pytest config (coverage, slow-test reporting,
-    # ratchets) that conflicts with the root config; it is run from inside its own dir.
+    # system/apps/system_interface and system/apps/chat have their own pytest config (coverage,
+    # slow-test reporting, ratchets) that conflicts with the root config; each is run from
+    # inside its own dir.
     "--ignore=system/apps/system_interface",
+    "--ignore=system/apps/chat",
     # The top-level apps and skills symlinks (discoverability shortcuts to
     # system/apps/ and .agents/skills/) would otherwise make pytest collect
     # every test under them a second time via the symlink path.
@@ -154,7 +155,7 @@ addopts = [
 
 [tool.ruff]
 target-version = "py311"
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface"]
+exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface", "system/apps/chat"]
 
 [tool.ruff.lint]
 select = ["F", "I", "UP006", "UP007"]
@@ -163,4 +164,4 @@ select = ["F", "I", "UP006", "UP007"]
 pythonVersion = "3.11"
 # apps and skills are the top-level discoverability symlinks; excluding them
 # keeps pyright from analyzing the same files twice via the symlink paths.
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface", "apps", "skills"]
+exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface", "system/apps/chat", "apps", "skills"]

@@ -1,27 +1,25 @@
-"""End-to-end tests for System Interface using Playwright.
+"""End-to-end tests for the workspace shell using Playwright.
 
-These tests start a real Flask server (threaded Werkzeug) over a registry of two apps -- the
-chat app at the shell's own URL, with mocked agent discovery behind it, and a stub app served
-by ``app_instances``' in-memory source over loopback -- then use Playwright to drive the shell
-exactly as a user would. Every open goes through the New Tab page or a rail row, every verb
-through the shell's relay, and every assertion on state reads the shell's own API or files.
+These tests start a real Flask server (threaded Werkzeug) over a registry of stub apps served by
+``app_instances``' in-memory source over loopback, then use Playwright to drive the shell exactly
+as a user would. Every open goes through the New Tab page or a rail row, every verb through the
+shell's relay, and every assertion on state reads the shell's own API or files. The shell knows no
+app by name, so a stub app is every app; the chat app's own pages are driven by the chat package's
+suite, which frames them through this same shell.
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
-import os
 import re
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 from typing import Generator
-from unittest.mock import patch
 
 import pytest
 from app_instances.blueprint import build_instances_app
@@ -31,29 +29,20 @@ from app_instances.testing import LOOPBACK_HOST
 from app_instances.testing import StubInstanceSource
 from app_instances.testing import free_port
 from app_manifest.primitives import AppName
-from playwright.sync_api import Frame
-from playwright.sync_api import FrameLocator
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.accounts import commit_account
-from imbue.system_interface.accounts import mint_account_dir
-from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
-from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_ID
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
-from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import is_e2e_browser_installed
-from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
 
@@ -88,22 +77,26 @@ pytestmark = [
 _PORT = 18765
 _BASE_URL = f"http://127.0.0.1:{_PORT}"
 
-# The fixture chat's agent id (``_make_agent_fixture``'s default) and its address.
-_FIXTURE_AGENT_ID = "agent-test-123"
-_FIXTURE_AGENT_NAME = "test-agent"
-_FIXTURE_CHAT_ADDRESS = f"app:chat?instance={_FIXTURE_AGENT_ID}"
-
 # The one project every server starts with unless a test asks for none: what a migrated
 # workspace has, and where a fresh browser lands (the first project, before Everything).
 STARTER_PROJECT_NAME = "Project 1"
 STARTER_PROJECT_ID = "project-1"
 EVERYTHING_VIEW_NAME = "Everything"
 
-# The stub app the machine offers when a test asks for one: a multi-instance app whose
-# instances live in memory, created by its ``new`` action and titled "Stub N".
+# The stub app the machine offers: a multi-instance app whose instances live in memory,
+# created by its ``new`` action and titled "Stub N". Every server seeds it with the fixture
+# instance, the one the tests open first.
 _STUB_APP_NAME = "docs"
 _STUB_APP_DISPLAY_NAME = "Docs"
 _STUB_NEW_ACTION_LABEL = "New docs"
+_FIXTURE_KEY = "stub-1"
+_FIXTURE_TITLE = "Stub 1"
+_FIXTURE_ADDRESS = f"app:{_STUB_APP_NAME}?instance={_FIXTURE_KEY}"
+
+# A second stub app, offered when a test needs two apps on the machine (the launcher's filter).
+_SECOND_APP_NAME = "notes"
+_SECOND_APP_DISPLAY_NAME = "Notes"
+_SECOND_APP_ADDRESS = f"app:{_SECOND_APP_NAME}?instance=stub-1"
 
 # What a stub tab reads, and what a fresh stub instance's address looks like.
 _STUB_TAB_TITLE_RE = re.compile(r"^Stub \d+$")
@@ -111,105 +104,16 @@ _STUB_TAB_TITLE_RE = re.compile(r"^Stub \d+$")
 _TRIGGER_TIMEOUT_MS = 20000
 
 
-def _chat(page: Page, agent_id: str = _FIXTURE_AGENT_ID) -> FrameLocator:
-    """The chat's page, framed at the chat origin under the instance's address.
-
-    Every chat assertion goes through it: the shell document holds no chat markup, only
-    the iframe the panel showing that address owns.
-    """
-    return page.frame_locator(f'iframe[data-address="app:chat?instance={agent_id}"]')
-
-
-def _chat_frame(page: Page, agent_id: str = _FIXTURE_AGENT_ID) -> Frame:
-    """The chat page's own frame, for the evaluate and wait calls that need its document.
-
-    Polled through Playwright's own wait rather than ``wait_for``: the sync API only
-    processes the events that attach a frame while a Playwright call is running, so a
-    ``time.sleep`` loop would never see the frame arrive.
-    """
-    deadline = time.monotonic() + 15.0
-    while time.monotonic() < deadline:
-        for frame in page.frames:
-            if frame.url.rstrip("/").endswith(f"/{agent_id}"):
-                return frame
-        page.wait_for_timeout(100)
-    raise TimeoutError(f"the chat page for {agent_id} never loaded in a frame")
-
-
-def _make_session_file(projects_dir: Path, session_id: str, events: list[dict[str, Any]]) -> Path:
-    """Create a session JSONL file with the given events."""
-    session_dir = projects_dir / "hash123"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    session_file = session_dir / f"{session_id}.jsonl"
-    session_file.write_text("\n".join(json.dumps(e) for e in events) + "\n")
-    return session_file
-
-
-def _make_agent_fixture(
-    tmp_path: Path,
-    agent_id: str = _FIXTURE_AGENT_ID,
-    agent_name: str = _FIXTURE_AGENT_NAME,
-    session_events: list[dict[str, Any]] | None = None,
-) -> tuple[AgentInfo, Path]:
-    """Set up a mock agent with session files. Returns (agent_info, session_file_path)."""
-    agent_state_dir = tmp_path / "agents" / agent_id
-    agent_state_dir.mkdir(parents=True)
-
-    claude_config_dir = tmp_path / "claude_config"
-    projects_dir = claude_config_dir / "projects"
-    projects_dir.mkdir(parents=True, exist_ok=True)
-
-    session_id = "e2e-session-001"
-    (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
-    # The session endpoint resolves an agent's CLAUDE_CONFIG_DIR from this per-agent env
-    # file, so pin it at the fixture's config dir; without it the watcher falls back to the
-    # real ~/.claude and the fixture transcript never loads.
-    (agent_state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
-
-    if session_events is None:
-        session_events = [
-            {
-                "type": "user",
-                "uuid": "uuid-e2e-1",
-                "timestamp": "2026-01-01T00:00:00Z",
-                "message": {"role": "user", "content": "Hello agent!"},
-            },
-            {
-                "type": "assistant",
-                "uuid": "uuid-e2e-2",
-                "timestamp": "2026-01-01T00:00:01Z",
-                "message": {
-                    "role": "assistant",
-                    "model": "claude-opus-4-6",
-                    "content": [{"type": "text", "text": "Hello! How can I help you?"}],
-                    "stop_reason": "end_turn",
-                    "usage": {"input_tokens": 10, "output_tokens": 8},
-                },
-            },
-        ]
-
-    session_file = _make_session_file(projects_dir, session_id, session_events)
-    agent_info = AgentInfo(
-        id=agent_id,
-        name=agent_name,
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-    )
-    return agent_info, session_file
-
-
 class E2EServer(FrozenModel):
-    """One running workspace under test: where it is, what it holds, and where the shell keeps its state."""
+    """Handle to a running e2e server and its fixtures."""
 
     model_config = {"arbitrary_types_allowed": True}
 
     base_url: str = Field(description="The shell's loopback URL")
-    agent_info: AgentInfo = Field(description="The fixture agent")
-    session_file: Path = Field(description="The fixture agent's transcript file")
     state_dir: Path = Field(description="The shell's state directory")
-    stub_source: StubInstanceSource | None = Field(description="The stub app's instances, when the machine has one")
-    stub_url: str | None = Field(description="The stub app's loopback URL, when the machine has one")
+    stub_source: StubInstanceSource = Field(description="The stub app's in-memory instances")
+    stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
+    second_source: StubInstanceSource | None = Field(description="The second stub app's instances, when offered")
 
 
 def _post_json(url: str, body: dict[str, Any]) -> Any:
@@ -217,8 +121,7 @@ def _post_json(url: str, body: dict[str, Any]) -> Any:
         url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST"
     )
     with urllib.request.urlopen(request, timeout=5) as response:
-        raw = response.read()
-    return json.loads(raw) if raw else None
+        return json.loads(response.read())
 
 
 def _get_json(url: str) -> Any:
@@ -230,140 +133,78 @@ def _get_json(url: str) -> Any:
 def _running_e2e_server(
     tmp_path: Path,
     port: int,
-    session_events: list[dict[str, Any]] | None = None,
-    additional_agents: tuple[tuple[str, str], ...] = (),
-    is_stub_app_offered: bool = False,
-    stub_instances: tuple[str, ...] = (),
+    stub_instances: tuple[str, ...] = (_FIXTURE_KEY,),
+    is_second_app_offered: bool = False,
     project_names: tuple[str, ...] = (STARTER_PROJECT_NAME,),
 ) -> Generator[E2EServer, None, None]:
-    """Run the web server with a mock agent (plus any ``additional_agents``), ready for Playwright + layout ops.
+    """Run the shell with a stub app whose ``stub_instances`` are seeded as records titled after their keys.
 
-    The registry the shell reads holds the chat app at the server's own URL and, when
-    ``is_stub_app_offered``, a stub app over loopback whose ``stub_instances`` are seeded as
-    records titled after their keys. ``project_names`` are created through the shell's API
-    before the browser lands, so the client's first view is the first of them (or Everything
-    when there are none). Nothing is auto-opened: the first landing is the New Tab page.
-
-    ``additional_agents`` is a tuple of ``(agent_id, agent_name)`` for extra agents that
-    exist; they carry no transcript, a bare state dir plus a manager entry is enough for
-    the chat app to list them as instances.
+    ``project_names`` are created through the shell's API before the browser lands, so the
+    client's first view is the first of them (or Everything when there are none). Nothing is
+    auto-opened: the first landing is the New Tab page.
     """
     base_url = f"http://127.0.0.1:{port}"
-    agent_info, session_file = _make_agent_fixture(tmp_path, session_events=session_events)
-    extra_infos: list[AgentInfo] = []
-    for extra_id, extra_name in additional_agents:
-        extra_state_dir = tmp_path / "agents" / extra_id
-        extra_state_dir.mkdir(parents=True, exist_ok=True)
-        extra_infos.append(
-            AgentInfo(
-                id=extra_id,
-                name=extra_name,
-                state="RUNNING",
-                agent_state_dir=extra_state_dir,
-                claude_config_dir=agent_info.claude_config_dir,
-            )
-        )
-    agents = [agent_info, *extra_infos]
-
-    # A fake logged-in `claude` on PATH: the workspace UI auto-opens the sign-in modal
-    # whenever the status probe reports logged-out (as it would here, with no real claude
-    # binary), and the modal's overlay would then swallow every click these tests make.
-    fake_bin_dir = tmp_path / "fake-bin"
-    fake_bin_dir.mkdir(exist_ok=True)
-    fake_claude = fake_bin_dir / "claude"
-    fake_claude.write_text(
-        '#!/bin/sh\necho \'{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "Max"}\'\n'
-    )
-    fake_claude.chmod(0o755)
-    # A fake `mngr` for the paths that shell out to it: renaming a chat renames its mngr
-    # agent before the chat app lists the new title, and the fixture's agents are injected
-    # fakes with no real mngr behind them. Exiting 0 stands in for "mngr accepted it".
-    fake_mngr = fake_bin_dir / "mngr"
-    fake_mngr.write_text("#!/bin/sh\nexit 0\n")
-    fake_mngr.chmod(0o755)
-
     registry_path = tmp_path / "registry" / "apps.toml"
-    stub_source: StubInstanceSource | None = None
-    stub_url: str | None = None
+    stub_source = StubInstanceSource()
+    for key in stub_instances:
+        stub_source.records.append(instance_record(key, title=f"Stub {key.removeprefix('stub-')}"))
+    stub_port = free_port()
+    stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
     rows = [
         registry_row_toml(
-            "chat",
-            base_url,
+            _STUB_APP_NAME,
+            stub_url,
             is_multi_instance=True,
-            is_critical=True,
-            actions=(("new", "New Chat"), ("subagent", "Open subagent")),
-            default_shortcut=("new", "new"),
-            display_name="Chat",
-        ),
+            actions=(("new", _STUB_NEW_ACTION_LABEL),),
+            default_shortcut=("new", "focus"),
+            display_name=_STUB_APP_DISPLAY_NAME,
+        )
     ]
-    stub_port = free_port()
-    if is_stub_app_offered:
-        stub_source = StubInstanceSource()
-        for key in stub_instances:
-            stub_source.records.append(instance_record(key, title=f"Stub {key.removeprefix('stub-')}"))
-        stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
+    second_source: StubInstanceSource | None = None
+    second_port = free_port()
+    if is_second_app_offered:
+        second_source = StubInstanceSource()
+        second_source.records.append(instance_record("stub-1", title="Note 1"))
         rows.append(
             registry_row_toml(
-                _STUB_APP_NAME,
-                stub_url,
+                _SECOND_APP_NAME,
+                f"http://{LOOPBACK_HOST}:{second_port}",
                 is_multi_instance=True,
-                actions=(("new", _STUB_NEW_ACTION_LABEL),),
+                actions=(("new", "New notes"),),
                 default_shortcut=("new", "focus"),
-                display_name=_STUB_APP_DISPLAY_NAME,
+                display_name=_SECOND_APP_DISPLAY_NAME,
             )
         )
     write_registry(registry_path, *rows)
 
-    with (
-        patch.dict(
-            os.environ,
-            {
-                "MNGR_HOST_DIR": str(tmp_path),
-                "MNGR_AGENT_ID": "",
-                "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
-                "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
-                "MINDS_APPS_FILE": str(registry_path),
-                "MINDS_WORKSPACE_SERVER_URL": base_url,
-            },
-        ),
-        patch("imbue.system_interface.chat_document.discover_agents", return_value=agents),
-    ):
-        # A signed-in provider: creating a chat opens the chooser instead when there is
-        # none, which would leave a modal over the rail these tests click through.
-        account_id, _ = mint_account_dir()
-        commit_account(account_id, "anthropic", "Anthropic")
-
-        # Seed the agents into a manager that is never started, so no background mngr
-        # discovery runs; its messenger is a recording fake so sends succeed offline.
-        broadcaster = WebSocketBroadcaster()
-        manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())
-        with manager._lock:
-            for info in agents:
-                manager._agents[info.id] = AgentStateItem(
-                    id=info.id, name=info.name, state="RUNNING", labels={}, work_dir=str(tmp_path / "work")
-                )
-        for info in agents:
-            manager._ensure_activity_tracking(info.id)
-        manager.note_agent_list_known()
-
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
+        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         state_dir = tmp_path / "shell-state"
         config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
-        state = build_test_state(config=config, agent_manager=manager, shell_state_directory=state_dir)
+        state = build_test_state(config=config, shell_state_directory=state_dir)
         app = create_application(state)
 
         server = make_threaded_server("127.0.0.1", port, app)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        stub_server = (
+        stub_server = serve_in_background(
+            LOOPBACK_HOST,
+            stub_port,
+            build_instances_app(stub_source, ShellNudger(app_name=AppName(_STUB_APP_NAME), shell_url=base_url)),
+        )
+        second_server = (
             serve_in_background(
                 LOOPBACK_HOST,
-                stub_port,
-                build_instances_app(stub_source, ShellNudger(app_name=AppName(_STUB_APP_NAME), shell_url=base_url)),
+                second_port,
+                build_instances_app(
+                    second_source, ShellNudger(app_name=AppName(_SECOND_APP_NAME), shell_url=base_url)
+                ),
             )
-            if stub_source is not None
+            if second_source is not None
             else contextlib.nullcontext()
         )
-        with stub_server:
+        with stub_server, second_server:
             try:
                 wait_for(
                     lambda: _server_is_up(base_url),
@@ -373,17 +214,15 @@ def _running_e2e_server(
                 )
                 for name in project_names:
                     _post_json(f"{base_url}/api/projects", {"name": name, "color": "#3B82F6", "glyph": 1})
-                # Started only once the apps are serving: the first instance fetch must find
-                # the chat app (this server) and the stub app answering.
+                # Started only once the apps are serving: the first instance fetch must find them answering.
                 state.shell.start()
                 try:
                     yield E2EServer(
                         base_url=base_url,
-                        agent_info=agent_info,
-                        session_file=session_file,
                         state_dir=state_dir,
                         stub_source=stub_source,
                         stub_url=stub_url,
+                        second_source=second_source,
                     )
                 finally:
                     state.shell.stop()
@@ -404,7 +243,7 @@ def _server_is_up(base_url: str) -> bool:
 
 @pytest.fixture
 def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
-    """Start the web server with the fixture agent and the starter project."""
+    """Start the shell with the fixture instance and the starter project."""
     with _running_e2e_server(tmp_path, _PORT) as server:
         yield server
 
@@ -472,10 +311,11 @@ def _open_from_launcher(page: Page, address: str) -> None:
     row.first.click()
 
 
-def _open_fixture_chat(page: Page) -> None:
-    """Open the fixture chat from the New Tab page and wait for its transcript."""
-    _open_from_launcher(page, _FIXTURE_CHAT_ADDRESS)
-    expect(_chat(page).locator(".message-list").first).to_be_visible(timeout=15000)
+def _open_fixture_instance(page: Page) -> None:
+    """Open the fixture instance from the New Tab page and wait for its tab and frame."""
+    _open_from_launcher(page, _FIXTURE_ADDRESS)
+    expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
+    expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(1, timeout=15000)
 
 
 def _tab(page: Page, title: str | re.Pattern[str]) -> Any:
@@ -489,7 +329,7 @@ def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], view: str
     exercises the real frontend handler. Mutating ops are view-targeted and only succeed
     once the page's ``client_state`` registration has landed, so a 412 is retried.
     """
-    payload = json.dumps({"op": op, "args": {**args, "view": view}, "agent_id": _FIXTURE_AGENT_ID}).encode()
+    payload = json.dumps({"op": op, "args": {**args, "view": view}, "agent_id": "agent-e2e"}).encode()
     request = urllib.request.Request(
         f"{base_url}/api/layout/broadcast",
         data=payload,
@@ -545,7 +385,6 @@ _FRAMED_PAGE_HTML = "<!doctype html><html><body><input id='held' value='' /></bo
 
 
 def _serve_stub_pages(page: Page, server: E2EServer) -> None:
-    assert server.stub_url is not None
     page.route(
         f"{server.stub_url}/**",
         lambda route: route.fulfill(status=200, content_type="text/html", body=_FRAMED_PAGE_HTML),
@@ -612,8 +451,8 @@ def test_first_landing_is_the_new_tab_page_offering_the_machine(e2e_server: E2ES
     """A fresh browser lands on the starter project's New Tab page; nothing is opened for it.
 
     The dock is never empty: a view with nothing to mount shows the launcher as its one
-    "New tab" tab. The machine's chat is offered in the "On this machine" table (the
-    project's own tab set is empty), and no chat frame exists until someone opens one.
+    "New tab" tab. The machine's instance is offered in the "On this machine" table (the
+    project's own tab set is empty), and no frame exists until someone opens one.
     """
     page.goto(e2e_server.base_url)
     _wait_for_view(page, STARTER_PROJECT_ID)
@@ -621,10 +460,10 @@ def test_first_landing_is_the_new_tab_page_offering_the_machine(e2e_server: E2ES
     expect(page.locator(".dv-default-tab-content")).to_have_count(1)
     expect(page.locator(".dv-default-tab-content").first).to_have_text("New tab")
     row = page.locator(".new-tab-launcher-section[data-section='on-machine']").locator(
-        f'.new-tab-launcher-row[data-address="{_FIXTURE_CHAT_ADDRESS}"]'
+        f'.new-tab-launcher-row[data-address="{_FIXTURE_ADDRESS}"]'
     )
     expect(row).to_have_count(1, timeout=15000)
-    expect(row).to_contain_text(_FIXTURE_AGENT_NAME)
+    expect(row).to_contain_text(_FIXTURE_TITLE)
     expect(page.locator("iframe[data-address]")).to_have_count(0)
 
 
@@ -638,16 +477,17 @@ def test_opening_a_row_files_it_into_the_project_and_shows_its_page(e2e_server: 
     """
     page.goto(e2e_server.base_url)
     _wait_for_view(page, STARTER_PROJECT_ID)
-    _open_fixture_chat(page)
+    _serve_stub_pages(page, e2e_server)
+    _open_fixture_instance(page)
 
-    expect(_tab(page, _FIXTURE_AGENT_NAME)).to_be_visible(timeout=15000)
-    expect(page.locator(f'iframe[data-address="{_FIXTURE_CHAT_ADDRESS}"]')).to_have_count(1)
-    expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+    expect(page.frame_locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]').locator("#held")).to_be_visible(
+        timeout=15000
+    )
     wait_for(
-        lambda: _FIXTURE_CHAT_ADDRESS in _project_tabs(e2e_server.base_url),
+        lambda: _FIXTURE_ADDRESS in _project_tabs(e2e_server.base_url),
         timeout=15.0,
         poll_interval=0.1,
-        error_message="opening the chat never filed it into the starter project",
+        error_message="opening the instance never filed it into the starter project",
     )
     # And the launcher that was in the pane made way for it.
     expect(page.locator(".new-tab-launcher")).to_have_count(0)
@@ -661,73 +501,7 @@ def test_no_projects_lands_on_everything(tmp_path: Path, page: Page) -> None:
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
         expect(page.locator(".new-tab-launcher-section[data-section='in-project']")).to_have_count(0)
-        expect(_launcher_row(page, _FIXTURE_CHAT_ADDRESS)).to_have_count(1, timeout=15000)
-
-
-# ---------- the chat page ----------
-
-
-@pytest.mark.timeout(60, func_only=False)
-def test_chat_transcript_area_is_pure_white(e2e_server: E2EServer, page: Page) -> None:
-    """The chat conversation panel renders on a pure-white background, scoped to the chat token."""
-    page.goto(e2e_server.base_url)
-    _open_fixture_chat(page)
-
-    content = _chat(page).locator(".app-content")
-    expect(content).to_be_visible(timeout=15000)
-    expect(content.locator(".message-list")).to_have_count(1)
-
-    content_bg = _chat_frame(page).eval_on_selector(".app-content", "e => getComputedStyle(e).backgroundColor")
-    assert content_bg == "rgb(255, 255, 255)", f"chat transcript area should be pure white, got {content_bg}"
-    footer_bg = _chat_frame(page).eval_on_selector(".app-footer", "e => getComputedStyle(e).backgroundColor")
-    assert footer_bg == "rgb(255, 255, 255)", f"composer footer should be pure white, got {footer_bg}"
-    shell_bg = page.eval_on_selector("html", "e => getComputedStyle(e).getPropertyValue('--color-bg').trim()")
-    assert shell_bg not in ("#ffffff", "#fff", "rgb(255, 255, 255)"), (
-        f"shared shell --color-bg should stay off-white, got {shell_bg}"
-    )
-
-
-@pytest.mark.timeout(60, func_only=False)
-def test_conversation_and_composer_render(e2e_server: E2EServer, page: Page) -> None:
-    """The opened chat shows both sides of its conversation and a composer whose send button follows the text."""
-    page.goto(e2e_server.base_url)
-    _open_fixture_chat(page)
-
-    expect(_chat(page).locator(".message-user").first).to_contain_text("Hello agent!")
-    expect(_chat(page).locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
-
-    textarea = _chat(page).locator(".message-input-textbox")
-    expect(textarea).to_be_visible(timeout=15000)
-    send_button = _chat(page).locator(".message-input-send-button")
-    expect(send_button).to_have_count(0)
-    textarea.fill("test message")
-    expect(send_button).to_be_visible()
-
-
-@pytest.mark.timeout(60, func_only=False)
-def test_composer_bar_survives_a_shorter_window(e2e_server: E2EServer, page: Page) -> None:
-    """A window that gets shorter keeps the whole composer on screen.
-
-    Everything below the dock is positioned in pixels -- the panes, and the live surfaces
-    mirroring them -- so a row that grows with the viewport but cannot shrink back leaves
-    the chat laid out at the old height with the model bar below the bottom edge.
-    """
-    page.set_viewport_size({"width": 1200, "height": 900})
-    page.goto(e2e_server.base_url)
-    _open_fixture_chat(page)
-
-    under_bar = _chat(page).locator(".composer-under-bar")
-    expect(under_bar).to_be_visible(timeout=15000)
-
-    page.set_viewport_size({"width": 1200, "height": 848})
-    expect(under_bar).to_be_visible()
-    wait_for(
-        lambda: _chat_frame(page).eval_on_selector(
-            ".composer-under-bar", "e => e.getBoundingClientRect().bottom <= window.innerHeight"
-        ),
-        timeout=10.0,
-        error_message="the composer's model bar stayed below the bottom of the shortened window",
-    )
+        expect(_launcher_row(page, _FIXTURE_ADDRESS)).to_have_count(1, timeout=15000)
 
 
 _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
@@ -762,46 +536,6 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
         },
     },
 ]
-
-
-@pytest.mark.timeout(60, func_only=False)
-def test_tool_calls_render_as_collapsible(tmp_path: Path, page: Page) -> None:
-    """Tool calls render as collapsible blocks that expand to show input/output."""
-    with _running_e2e_server(tmp_path, _PORT + 1, session_events=_TOOL_CALL_SESSION_EVENTS) as server:
-        page.goto(server.base_url)
-        _open_fixture_chat(page)
-
-        expect(_chat(page).locator(".message-assistant").first).to_be_visible(timeout=15000)
-        tool_block = _chat(page).locator(".tool-call-block").first
-        expect(tool_block).to_be_visible(timeout=10000)
-        expect(tool_block).to_contain_text("Read")
-
-        tool_details = _chat(page).locator(".tool-call-details").first
-        expect(tool_details).to_be_hidden()
-        _chat(page).locator(".tool-call-header").first.click()
-        expect(tool_details).to_be_visible()
-        expect(tool_details).to_contain_text("file contents here")
-
-
-@pytest.mark.timeout(60, func_only=False)
-def test_live_stream_delivers_new_events(e2e_server: E2EServer, page: Page) -> None:
-    """New events written to the session file appear in the UI as they stream in."""
-    page.goto(e2e_server.base_url)
-    _open_fixture_chat(page)
-    expect(_chat(page).locator(".message-user").first).to_be_visible(timeout=15000)
-
-    new_event = {
-        "type": "user",
-        "uuid": "uuid-new-1",
-        "timestamp": "2026-01-01T00:01:00Z",
-        "message": {"role": "user", "content": "This is a new streamed message!"},
-    }
-    with open(e2e_server.session_file, "a") as f:
-        f.write(json.dumps(new_event) + "\n")
-
-    expect(_chat(page).locator(".message-user", has_text="This is a new streamed message!")).to_be_visible(
-        timeout=10000
-    )
 
 
 # A conversation whose transcript ends with an unresolved enqueue, so the Claude queue
@@ -841,51 +575,6 @@ _QUEUED_SESSION_EVENTS: list[dict[str, Any]] = [
 ]
 
 
-@pytest.mark.timeout(60, func_only=False)
-def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -> None:
-    """A harness-queued message renders as a distinct group with the shoulder-tap action."""
-    with _running_e2e_server(tmp_path, _PORT + 5, session_events=_QUEUED_SESSION_EVENTS) as server:
-        page.goto(server.base_url)
-        _open_fixture_chat(page)
-
-        expect(_chat(page).locator(".message-user", has_text="Kick off the big refactor").first).to_be_visible(
-            timeout=15000
-        )
-        group = _chat(page).locator(".queued-group")
-        expect(group).to_be_visible(timeout=15000)
-        expect(_chat(page).locator(".queued-message .message-user-bubble .message-content")).to_contain_text(
-            "actually also update the changelog"
-        )
-        expect(_chat(page).locator(".queued-header-label")).to_contain_text("Queued messages")
-        flush_button = _chat(page).locator(".queued-action--flush")
-        expect(flush_button).to_be_visible()
-        expect(flush_button).to_contain_text("Shoulder tap")
-        expect(_chat(page).locator(".queued-action--interrupt")).to_have_count(0)
-
-
-@pytest.mark.timeout(60, func_only=False)
-def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page) -> None:
-    """A chat whose transcript fetch failed recovers on Refresh, without reloading the page."""
-    with _running_e2e_server(tmp_path, _PORT + 6) as server:
-        events_url = "**/api/agents/*/events"
-        page.route(
-            events_url,
-            lambda route: route.fulfill(status=503, content_type="text/plain", body="Backend not yet available"),
-        )
-        page.goto(server.base_url)
-        _open_from_launcher(page, _FIXTURE_CHAT_ADDRESS)
-
-        error = _chat(page).locator(".message-list-error")
-        expect(error).to_be_visible(timeout=15000)
-        expect(error.locator("p")).to_have_text("Error: request failed (HTTP 503)")
-
-        page.unroute(events_url)
-        error.locator(".message-list-reload").click()
-
-        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        expect(_chat(page).locator(".message-list-error")).to_have_count(0)
-
-
 # ---------- layout ops ----------
 
 
@@ -897,30 +586,30 @@ def test_new_tab_opens_in_clicked_split(tmp_path: Path, page: Page) -> None:
     "add to the active group" would land a new tab on the left), then click the RIGHT
     split's "+" and create an instance from the launcher. It must land in the RIGHT split.
     """
-    with _running_e2e_server(tmp_path, _PORT + 3, is_stub_app_offered=True, stub_instances=("stub-1",)) as server:
+    with _running_e2e_server(tmp_path, _PORT + 3, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
+        _open_fixture_instance(page)
         add_buttons = page.locator(".dockview-add-tab-button")
         expect(add_buttons).to_have_count(1)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
 
         _broadcast_layout_op(
             server.base_url,
             "split",
             {
-                "address": _stub_address("stub-1"),
-                "relative_to": _FIXTURE_CHAT_ADDRESS,
+                "address": _stub_address("stub-2"),
+                "relative_to": _FIXTURE_ADDRESS,
                 "direction": "right",
                 "new_group": True,
             },
         )
         expect(add_buttons).to_have_count(2, timeout=10000)
-        expect(_tab(page, "Stub 1")).to_be_visible(timeout=10000)
+        expect(_tab(page, "Stub 2")).to_be_visible(timeout=10000)
 
-        _tab(page, _FIXTURE_AGENT_NAME).click()
+        _tab(page, _FIXTURE_TITLE).click()
         left_group = page.locator(
-            ".dv-groupview", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME)
+            ".dv-groupview", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)
         )
         expect(left_group).to_have_class(re.compile(r"\bdv-active-group\b"))
 
@@ -932,7 +621,7 @@ def test_new_tab_opens_in_clicked_split(tmp_path: Path, page: Page) -> None:
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
         page.locator(f'.new-tab-launcher-tile:visible[data-launch="{_STUB_APP_NAME}:new"]').click()
 
-        expect(_tab(page, "Stub 2")).to_be_visible(timeout=15000)
+        expect(_tab(page, "Stub 3")).to_be_visible(timeout=15000)
         placement = page.evaluate(
             """
             (title) => {
@@ -947,151 +636,13 @@ def test_new_tab_opens_in_clicked_split(tmp_path: Path, page: Page) -> None:
               };
             }
             """,
-            "Stub 2",
+            "Stub 3",
         )
         assert placement["count"] == 2, f"new tab should join the right split, not create a third group: {placement}"
         assert placement["inRight"], f"new tab should be in the right split: {placement}"
         assert not placement["inLeft"], f"new tab leaked into the left split: {placement}"
         # The create went through the relay to the app, which minted the instance.
-        assert server.stub_source is not None
-        assert [str(record.key) for record in server.stub_source.records] == ["stub-1", "stub-2"]
-
-
-def _make_long_conversation_events(pair_count: int) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    for i in range(pair_count):
-        events.append(
-            {
-                "type": "user",
-                "uuid": f"long-u-{i}",
-                "timestamp": "2026-01-01T00:00:00Z",
-                "message": {"role": "user", "content": f"msg-{i}"},
-            }
-        )
-        events.append(
-            {
-                "type": "assistant",
-                "uuid": f"long-a-{i}",
-                "timestamp": "2026-01-01T00:00:01Z",
-                "message": {
-                    "role": "assistant",
-                    "model": "claude-opus-4-6",
-                    "content": [{"type": "text", "text": f"reply-{i}"}],
-                    "stop_reason": "end_turn",
-                    "usage": {"input_tokens": 1, "output_tokens": 1},
-                },
-            }
-        )
-    return events
-
-
-def _visible_user_messages(page: Page) -> list[str]:
-    return _chat_frame(page).evaluate(
-        "() => Array.from(document.querySelectorAll('.message-user')).map((e) => (e.textContent || '').trim())"
-    )
-
-
-def _min_message_index(messages: list[str]) -> int:
-    indices = [int(m[len("msg-") :]) for m in messages if m.startswith("msg-") and m[len("msg-") :].isdigit()]
-    return min(indices) if indices else -1
-
-
-@pytest.mark.timeout(120, func_only=False)
-def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
-    """Hiding a chat tab (and showing it again) must not move its loaded window.
-
-    Regression test for the scroll-jump bug: an inactive tab stays mounted while hidden with
-    ``display: none``, its scroll element reports every metric as 0, and the paging logic
-    used to map that to a jump to the very start of the conversation.
-    """
-    events = _make_long_conversation_events(150)
-    probe = _stub_address("stub-1")
-    with _running_e2e_server(
-        tmp_path, _PORT + 4, session_events=events, is_stub_app_offered=True, stub_instances=("stub-1",)
-    ) as server:
-        _serve_stub_pages(page, server)
-        page.goto(server.base_url)
-        _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
-        _chat_frame(page).wait_for_function(
-            "() => { const el = document.querySelector('.app-content'); return el && el.scrollHeight > el.clientHeight * 2; }",
-            timeout=15000,
-        )
-
-        # A sibling tab in the SAME group, so hiding the chat is a pure tab switch. The shell edits the
-        # client's saved arrangement, so the chat the browser just opened has to be saved first.
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
-        _broadcast_layout_op(server.base_url, "open", {"address": probe, "new_group": True})
-        expect(_tab(page, "Stub 1")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
-        _broadcast_layout_op(
-            server.base_url,
-            "move",
-            {"address": probe, "relative_to": _FIXTURE_CHAT_ADDRESS, "direction": "within"},
-        )
-        page.wait_for_function(
-            "() => document.querySelectorAll('.dv-groupview').length === 1", timeout=_TRIGGER_TIMEOUT_MS
-        )
-        _broadcast_layout_op(server.base_url, "focus", {"address": _FIXTURE_CHAT_ADDRESS})
-        _chat_frame(page).wait_for_function(
-            "() => { const el = document.querySelector('.app-content'); return el && el.clientHeight > 0; }",
-            timeout=_TRIGGER_TIMEOUT_MS,
-        )
-        page.wait_for_timeout(1000)
-
-        _chat_frame(page).evaluate(
-            "() => { const el = document.querySelector('.app-content'); el.scrollTop = el.scrollHeight - el.clientHeight - 1500; }"
-        )
-        page.wait_for_timeout(1000)
-        before_hidden = _visible_user_messages(page)
-        scroll_top_before = _chat_frame(page).evaluate("() => document.querySelector('.app-content').scrollTop")
-        assert before_hidden, "expected user messages to be rendered after scrolling up"
-        assert "msg-0" not in before_hidden, f"setup should not be at the start: {before_hidden[:3]}"
-        anchor_message = before_hidden[0]
-        assert _min_message_index(before_hidden) >= 50, f"setup should be reading mid-history: {before_hidden[:3]}"
-
-        _broadcast_layout_op(server.base_url, "focus", {"address": probe})
-        _chat_frame(page).wait_for_function(
-            "() => { const el = document.querySelector('.app-content'); return el && el.clientHeight === 0; }",
-            timeout=_TRIGGER_TIMEOUT_MS,
-        )
-
-        with open(server.session_file, "a") as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "type": "user",
-                        "uuid": "long-u-streamed",
-                        "timestamp": "2026-01-01T00:02:00Z",
-                        "message": {"role": "user", "content": "streamed-while-hidden"},
-                    }
-                )
-                + "\n"
-            )
-        page.wait_for_timeout(3000)
-
-        during_hidden = _visible_user_messages(page)
-        assert anchor_message in during_hidden, (
-            f"hidden tab lost its place: anchor {anchor_message!r} no longer rendered ({during_hidden[:3]}...)"
-        )
-        assert "msg-0" not in during_hidden, f"hidden tab jumped to the start of the conversation: {during_hidden[:3]}"
-
-        _broadcast_layout_op(server.base_url, "focus", {"address": _FIXTURE_CHAT_ADDRESS})
-        _chat_frame(page).wait_for_function(
-            "() => { const el = document.querySelector('.app-content'); return el && el.clientHeight > 0; }",
-            timeout=_TRIGGER_TIMEOUT_MS,
-        )
-        page.wait_for_timeout(1000)
-        after_restore = _visible_user_messages(page)
-        scroll_top_after = _chat_frame(page).evaluate("() => document.querySelector('.app-content').scrollTop")
-        assert "msg-0" not in after_restore, (
-            f"after showing the tab again the window jumped to the start: {after_restore[:3]}"
-        )
-        assert anchor_message in after_restore, (
-            f"after showing the tab again the reader was not returned to their place: {after_restore[:3]}"
-        )
-        assert abs(scroll_top_after - scroll_top_before) < 50, (
-            f"scroll position drifted across hide/show: {scroll_top_before} -> {scroll_top_after}"
-        )
+        assert [str(record.key) for record in server.stub_source.records] == ["stub-1", "stub-2", "stub-3"]
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1140,8 +691,8 @@ def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
+        _open_fixture_instance(page)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
 
         _open_rail_switcher(page)
         page.locator(".project-rail-menu [role='menuitem']", has_text="New project").click()
@@ -1162,38 +713,8 @@ def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
         page.locator(".destroy-dialog-btn-destroy", has_text="Delete project").click()
         _wait_for_view(page, STARTER_PROJECT_ID)
         assert "project-2" not in _projects(server.base_url)
-        # Back on the starter project, the chat it holds is restored from its saved layout.
-        expect(_tab(page, _FIXTURE_AGENT_NAME)).to_be_visible(timeout=15000)
-
-
-@pytest.mark.timeout(120, func_only=False)
-def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -> None:
-    """A chat pane restored by a view switch still shows its own transcript.
-
-    Everything lists the machine's agent whatever project shows it, so opening it there
-    leaves it open in the starter project too. Switching back restores the starter
-    project's layout, whose panel must bind to the same instance.
-    """
-    with _running_e2e_server(tmp_path, _PORT + 9) as server:
-        page.on("dialog", lambda dialog: dialog.accept())
-        page.goto(server.base_url)
-        _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
-        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
-
-        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
-        _wait_for_view(page, EVERYTHING_VIEW_ID)
-        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
-        _open_from_launcher(page, _FIXTURE_CHAT_ADDRESS)
-        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        _wait_for_layout_saved(server.state_dir, EVERYTHING_VIEW_ID, containing=_FIXTURE_CHAT_ADDRESS)
-
-        _switch_view_via_rail(page, STARTER_PROJECT_NAME)
-        _wait_for_view(page, STARTER_PROJECT_ID)
-        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        expect(_chat(page).locator(".message-list-empty")).to_have_count(0)
-        expect(_chat(page).locator(".message-list-not-found")).to_have_count(0)
+        # Back on the starter project, the instance it holds is restored from its saved layout.
+        expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1208,7 +729,7 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
     """
     address = _stub_address("stub-1")
     frame_selector = f'iframe[data-address="{address}"]'
-    with _running_e2e_server(tmp_path, _PORT + 10, is_stub_app_offered=True, stub_instances=("stub-1",)) as server:
+    with _running_e2e_server(tmp_path, _PORT + 10) as server:
         _serve_stub_pages(page, server)
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(server.base_url)
@@ -1277,7 +798,7 @@ def test_a_tab_opened_right_before_a_view_switch_is_saved_into_the_view_it_was_o
     instance opened that way would be left with nothing referencing it).
     """
     address = _stub_address("stub-1")
-    with _running_e2e_server(tmp_path, _PORT + 21, is_stub_app_offered=True, stub_instances=("stub-1",)) as server:
+    with _running_e2e_server(tmp_path, _PORT + 21) as server:
         _serve_stub_pages(page, server)
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
@@ -1296,26 +817,26 @@ def test_a_tab_opened_right_before_a_view_switch_is_saved_into_the_view_it_was_o
 def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, page: Page) -> None:
     """An instance shown by two views is ONE element, shown twice -- never two."""
     with _running_e2e_server(tmp_path, _PORT + 11) as server:
+        _serve_stub_pages(page, server)
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
-        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        _open_fixture_instance(page)
         page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
-        in_project = _surface_report(page, _FIXTURE_CHAT_ADDRESS, "the-original-element")
-        assert in_project["count"] == 1, f"the starter project should hold exactly one chat page: {in_project}"
-        assert in_project["shownCount"] == 1, f"the starter project's chat page should be on screen: {in_project}"
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
+        in_project = _surface_report(page, _FIXTURE_ADDRESS, "the-original-element")
+        assert in_project["count"] == 1, f"the starter project should hold exactly one page: {in_project}"
+        assert in_project["shownCount"] == 1, f"the starter project's page should be on screen: {in_project}"
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
 
         _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
-        _open_from_launcher(page, _FIXTURE_CHAT_ADDRESS)
-        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        _open_from_launcher(page, _FIXTURE_ADDRESS)
+        expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
 
-        in_everything = _surface_report(page, _FIXTURE_CHAT_ADDRESS)
-        assert in_everything["count"] == 1, f"opening the chat in Everything forked its page: {in_everything}"
-        assert in_everything["shownCount"] == 1, f"Everything is not showing the chat page: {in_everything}"
+        in_everything = _surface_report(page, _FIXTURE_ADDRESS)
+        assert in_everything["count"] == 1, f"opening the instance in Everything forked its page: {in_everything}"
+        assert in_everything["shownCount"] == 1, f"Everything is not showing the page: {in_everything}"
         assert in_everything["stamps"] == ["the-original-element"], (
             f"Everything is showing a different element than the starter project: {in_everything}"
         )
@@ -1323,11 +844,11 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
 
         _switch_view_via_rail(page, STARTER_PROJECT_NAME)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        back_in_project = _surface_report(page, _FIXTURE_CHAT_ADDRESS)
-        assert back_in_project["count"] == 1, f"switching back forked the chat page: {back_in_project}"
+        expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
+        back_in_project = _surface_report(page, _FIXTURE_ADDRESS)
+        assert back_in_project["count"] == 1, f"switching back forked the page: {back_in_project}"
         assert back_in_project["stamps"] == ["the-original-element"], (
-            f"switching back re-created the chat's element: {back_in_project}"
+            f"switching back re-created the page's element: {back_in_project}"
         )
         assert back_in_project["removals"] == 0, (
             f"a live surface left the DOM during the round trip: {back_in_project}"
@@ -1338,36 +859,36 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_double_click_renames_a_chat_and_the_name_survives_a_reload(tmp_path: Path, page: Page) -> None:
-    """Double-clicking a chat tab's title renames the instance through its app, and the name is kept.
+def test_double_click_renames_an_instance_and_the_name_survives_a_reload(tmp_path: Path, page: Page) -> None:
+    """Double-clicking a tab's title renames the instance through its app, and the name is kept.
 
-    The rename goes through the shell's relay to the chat app, which renames the mngr agent
-    (the fixture's stub accepts it) and lists the new title; the tab re-derives its title
-    from the inventory, so a reload proves the name stuck to the instance, not the tab.
+    The rename goes through the shell's relay to the app, which records the new title and
+    lists it; the tab re-derives its title from the inventory, so a reload proves the name
+    stuck to the instance, not the tab.
     """
     with _running_e2e_server(tmp_path, _PORT + 12) as server:
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
-        tab_title = _tab(page, _FIXTURE_AGENT_NAME)
+        _open_fixture_instance(page)
+        tab_title = _tab(page, _FIXTURE_TITLE)
         expect(tab_title).to_be_visible(timeout=15000)
 
         tab_title.dblclick()
         editor = page.locator(".dv-custom-tab-title-input:visible")
         expect(editor).to_be_visible(timeout=5000)
-        expect(editor).to_have_value(_FIXTURE_AGENT_NAME)
+        expect(editor).to_have_value(_FIXTURE_TITLE)
         editor.fill("Design notes")
         editor.press("Enter")
 
         expect(_tab(page, "Design notes")).to_be_visible(timeout=10000)
         expect(page.locator(".dv-custom-tab-title-input:visible")).to_have_count(0)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
 
         page.reload()
         expect(_tab(page, "Design notes")).to_be_visible(timeout=15000)
-        expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME)).to_have_count(0)
+        assert [str(record.title) for record in server.stub_source.records] == ["Design notes"]
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(0)
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1378,9 +899,8 @@ def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: P
     project's tab. The app's records lose it, the tab leaves the mounted view, the address
     leaves the project's tab set, and mounting Everything afterwards restores no tab for it.
     """
-    address = _stub_address("stub-1")
-    with _running_e2e_server(tmp_path, _PORT + 13, is_stub_app_offered=True, stub_instances=("stub-1",)) as server:
-        assert server.stub_source is not None
+    address = _FIXTURE_ADDRESS
+    with _running_e2e_server(tmp_path, _PORT + 13) as server:
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
@@ -1406,7 +926,7 @@ def test_deleting_an_instance_removes_it_from_the_app_and_every_view(tmp_path: P
 
         expect(page.locator(".dv-default-tab-content", has_text="Stub 1")).to_have_count(0, timeout=10000)
         wait_for(
-            lambda: server.stub_source is not None and server.stub_source.records == [],
+            lambda: server.stub_source.records == [],
             timeout=10.0,
             poll_interval=0.1,
             error_message="the delete never reached the app",
@@ -1439,23 +959,23 @@ def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_pa
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
+        _open_fixture_instance(page)
         wait_for(
-            lambda: _FIXTURE_CHAT_ADDRESS in _project_tabs(server.base_url),
+            lambda: _FIXTURE_ADDRESS in _project_tabs(server.base_url),
             timeout=15.0,
             poll_interval=0.1,
-            error_message="the fixture chat was never filed into the starter project",
+            error_message="the fixture instance was never filed into the starter project",
         )
 
         page.locator(".machine-sidebar").hover()
-        chat_row = page.locator(f'.project-rail-tab[data-address="{_FIXTURE_CHAT_ADDRESS}"]')
-        expect(chat_row).to_have_count(1)
-        chat_row.click(button="right")
+        fixture_row = page.locator(f'.project-rail-tab[data-address="{_FIXTURE_ADDRESS}"]')
+        expect(fixture_row).to_have_count(1)
+        fixture_row.click(button="right")
         page.locator(".project-rail-menu [role='menuitem']", has_text="Remove from project").click()
 
-        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME)).to_have_count(0, timeout=10000)
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)).to_have_count(0, timeout=10000)
         wait_for(
-            lambda: _FIXTURE_CHAT_ADDRESS not in _project_tabs(server.base_url),
+            lambda: _FIXTURE_ADDRESS not in _project_tabs(server.base_url),
             timeout=15.0,
             poll_interval=0.1,
             error_message="Remove from project never took the address out of the tab set",
@@ -1465,7 +985,7 @@ def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_pa
         _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
-        expect(_launcher_row(page, _FIXTURE_CHAT_ADDRESS)).to_have_count(1, timeout=15000)
+        expect(_launcher_row(page, _FIXTURE_ADDRESS)).to_have_count(1, timeout=15000)
 
 
 def _open_all_apps(page: Page) -> None:
@@ -1486,7 +1006,7 @@ def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: 
     shortcut list, grows a rail row, and drops the app from the popover (which lists only
     what the view has NOT pinned); the rail row's own pin icon undoes all three.
     """
-    with _running_e2e_server(tmp_path, _PORT + 15, is_stub_app_offered=True) as server:
+    with _running_e2e_server(tmp_path, _PORT + 15, stub_instances=()) as server:
         page.on("dialog", lambda dialog: dialog.accept())
         # The project was created before the shell read the registry, so its rail was
         # seeded with nothing: the stub is there to pin.
@@ -1532,8 +1052,7 @@ def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp
     sits at the same y whether collapsed or expanded; and picking a row inside the
     still-hovered rail leaves it open, since only the pointer leaving closes it.
     """
-    with _running_e2e_server(tmp_path, _PORT + 16, is_stub_app_offered=True, project_names=()) as server:
-        assert server.stub_source is not None
+    with _running_e2e_server(tmp_path, _PORT + 16, stub_instances=(), project_names=()) as server:
         page.goto(server.base_url)
         _wait_for_view(page, EVERYTHING_VIEW_ID)
 
@@ -1573,32 +1092,26 @@ def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp
 @pytest.mark.timeout(120, func_only=False)
 def test_launcher_app_filter_hides_an_app_and_reset_restores_it(tmp_path: Path, page: Page) -> None:
     """Unchecking an app in a table's filter hides its rows; Reset re-checks all."""
-    with _running_e2e_server(
-        tmp_path,
-        _PORT + 17,
-        additional_agents=(("agent-filter-999", "filter-agent"),),
-        is_stub_app_offered=True,
-        stub_instances=("stub-1",),
-    ) as server:
+    with _running_e2e_server(tmp_path, _PORT + 17, is_second_app_offered=True) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
 
         section = page.locator(".new-tab-launcher-section[data-section='on-machine']")
-        chat_row = section.locator('.new-tab-launcher-row[data-address="app:chat?instance=agent-filter-999"]')
-        stub_row = section.locator(f'.new-tab-launcher-row[data-address="{_stub_address("stub-1")}"]')
-        expect(chat_row).to_have_count(1, timeout=15000)
+        notes_row = section.locator(f'.new-tab-launcher-row[data-address="{_SECOND_APP_ADDRESS}"]')
+        stub_row = section.locator(f'.new-tab-launcher-row[data-address="{_FIXTURE_ADDRESS}"]')
+        expect(notes_row).to_have_count(1, timeout=15000)
         expect(stub_row).to_have_count(1, timeout=15000)
 
         section.locator("button[aria-expanded]").click()
-        chat_checkbox = section.locator("label", has_text="Chat")
-        expect(chat_checkbox).to_be_visible(timeout=5000)
-        chat_checkbox.click()
-        expect(chat_row).to_have_count(0)
+        notes_checkbox = section.locator("label", has_text=_SECOND_APP_DISPLAY_NAME)
+        expect(notes_checkbox).to_be_visible(timeout=5000)
+        notes_checkbox.click()
+        expect(notes_row).to_have_count(0)
         expect(stub_row).to_have_count(1)
 
         section.locator("button", has_text="Reset filters").click()
-        expect(chat_row).to_have_count(1)
+        expect(notes_row).to_have_count(1)
         expect(stub_row).to_have_count(1)
 
 
@@ -1612,24 +1125,24 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
     While the dropdown is open, two live renderer instances exist for one panel -- the
     strip's and the row's -- and only the strip's may own the panel's handle and controls.
     """
-    keys = tuple(f"stub-{n}" for n in range(1, 9))
-    with _running_e2e_server(tmp_path, _PORT + 18, is_stub_app_offered=True, stub_instances=keys) as server:
+    keys = tuple(f"stub-{n}" for n in range(2, 10))
+    with _running_e2e_server(tmp_path, _PORT + 18, stub_instances=(_FIXTURE_KEY, *keys)) as server:
         page.set_viewport_size({"width": 900, "height": 700})
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
+        _open_fixture_instance(page)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
 
         for key in keys:
             _broadcast_layout_op(server.base_url, "open", {"address": _stub_address(key), "new_group": False})
-        expect(_tab(page, "Stub 8")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
+        expect(_tab(page, "Stub 9")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
 
         overflow_control = page.locator(".dv-tabs-overflow-dropdown-default")
         wait_for(
             lambda: overflow_control.is_visible(),
             timeout=5.0,
             poll_interval=0.1,
-            error_message="the strip never overflowed: a chat plus 8 tabs all fit at 900px wide",
+            error_message="the strip never overflowed: 9 tabs all fit at 900px wide",
         )
 
         overflow_control.click()
@@ -1688,17 +1201,17 @@ def _drop_overlay_styles(page: Page) -> dict[str, Any] | None:
 @pytest.mark.timeout(180, func_only=False)
 def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Path, page: Page) -> None:
     """A drop onto a tab is a seam (a thin insertion line); a drop onto a pane is a region (a wash)."""
-    with _running_e2e_server(tmp_path, _PORT + 19, is_stub_app_offered=True, stub_instances=("stub-1",)) as server:
+    with _running_e2e_server(tmp_path, _PORT + 19, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        _open_fixture_chat(page)
-        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_CHAT_ADDRESS)
-        _broadcast_layout_op(server.base_url, "open", {"address": _stub_address("stub-1"), "new_group": False})
-        expect(_tab(page, "Stub 1")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
+        _open_fixture_instance(page)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        _broadcast_layout_op(server.base_url, "open", {"address": _stub_address("stub-2"), "new_group": False})
+        expect(_tab(page, "Stub 2")).to_be_visible(timeout=_TRIGGER_TIMEOUT_MS)
 
-        dragged = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 1")).first
+        dragged = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 2")).first
         target_tab = page.locator(
-            ".dv-tab", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME)
+            ".dv-tab", has=page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE)
         ).first
         source_box = dragged.bounding_box()
         assert source_box is not None, "the dragged tab has no box"
@@ -1765,8 +1278,8 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
         try:
             mobile_page = context.new_page()
             mobile_page.goto(server.base_url)
-            _open_from_launcher(mobile_page, _FIXTURE_CHAT_ADDRESS)
-            expect(mobile_page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME).first).to_be_visible(
+            _open_from_launcher(mobile_page, _FIXTURE_ADDRESS)
+            expect(mobile_page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(
                 timeout=15000
             )
             seeds_dir = server.state_dir / "layouts" / STARTER_PROJECT_ID
@@ -1798,10 +1311,10 @@ def test_two_windows_of_one_client_mirror_a_server_made_arrangement(tmp_path: Pa
             _wait_for_view(second, STARTER_PROJECT_ID)
             expect(second.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
 
-            _broadcast_layout_op(server.base_url, "open", {"address": _FIXTURE_CHAT_ADDRESS})
+            _broadcast_layout_op(server.base_url, "open", {"address": _FIXTURE_ADDRESS})
 
             for window in (page, second):
-                expect(window.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME).first).to_be_visible(
+                expect(window.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(
                     timeout=15000
                 )
             layout_files = _client_layout_files(server.state_dir, STARTER_PROJECT_ID)
@@ -1811,13 +1324,11 @@ def test_two_windows_of_one_client_mirror_a_server_made_arrangement(tmp_path: Pa
             # The windows applied the file rather than saving their own copies over it: the stamp holds.
             second.wait_for_timeout(3000)
             assert json.loads(layout_files[0].read_text())["updated_at"] == stamp
-            assert [tab["address"] for tab in stored["tabs"].values()] == [_FIXTURE_CHAT_ADDRESS]
+            assert [tab["address"] for tab in stored["tabs"].values()] == [_FIXTURE_ADDRESS]
         finally:
             second.close()
 
 
-# The chat's instance list can arrive late on a fresh shell, and the first tab expectation then misses it.
-@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, page: Page) -> None:
     """``/?view=<id>&open=<address>`` switches the requesting client to the view, docks the instance, and leaves
@@ -1825,16 +1336,14 @@ def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, pa
     with _running_e2e_server(tmp_path, _PORT + 22) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        # The machine lists the chat before the deep link asks for it, as a switcher entry would find it.
-        expect(_launcher_row(page, _FIXTURE_CHAT_ADDRESS).first).to_be_visible(timeout=15000)
+        # The machine lists the instance before the deep link asks for it, as a switcher entry would find it.
+        expect(_launcher_row(page, _FIXTURE_ADDRESS).first).to_be_visible(timeout=15000)
 
-        address = urllib.parse.quote(_FIXTURE_CHAT_ADDRESS, safe="")
+        address = urllib.parse.quote(_FIXTURE_ADDRESS, safe="")
         page.goto(f"{server.base_url}/?view={EVERYTHING_VIEW_ID}&open={address}&follow=nobody")
 
         _wait_for_view(page, EVERYTHING_VIEW_ID)
-        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME).first).to_be_visible(
-            timeout=15000
-        )
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(timeout=15000)
         page.wait_for_function("!window.location.search.includes('view=')", timeout=15000)
         assert "open=" not in page.url and "follow=" not in page.url
         # The client record follows the deep link, so the next plain load lands on Everything too.
@@ -1848,9 +1357,7 @@ def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, pa
             error_message="the client record never recorded the deep link's view",
         )
         # The docked tab is autosaved into Everything's file before the next load, which then restores it.
-        _wait_for_layout_saved(server.state_dir, EVERYTHING_VIEW_ID, containing=_FIXTURE_CHAT_ADDRESS)
+        _wait_for_layout_saved(server.state_dir, EVERYTHING_VIEW_ID, containing=_FIXTURE_ADDRESS)
         page.goto(f"{server.base_url}/?open=app%3Anowhere%3Finstance%3Dgone")
         _wait_for_view(page, EVERYTHING_VIEW_ID)
-        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_AGENT_NAME).first).to_be_visible(
-            timeout=15000
-        )
+        expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(timeout=15000)

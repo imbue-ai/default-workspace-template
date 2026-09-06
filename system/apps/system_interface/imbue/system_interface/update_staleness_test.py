@@ -61,16 +61,17 @@ _IRRELEVANT_PATHS = (
         ("pyproject.toml", True),
         ("uv.lock", True),
         ("system/apps/system_interface/pyproject.toml", True),
-        ("system/services/oom_priority/pyproject.toml", True),
-        ("system/libs/tk_command_parsing/pyproject.toml", True),
+        # ... but not the manifests of the chat app's own dependencies, which another process runs.
+        ("system/services/oom_priority/pyproject.toml", False),
+        ("system/libs/tk_command_parsing/pyproject.toml", False),
         # The backend this process is running.
         ("system/apps/system_interface/imbue/system_interface/server.py", True),
         # ... but not its tests, which no running process holds.
         ("system/apps/system_interface/imbue/system_interface/server_test.py", False),
         ("system/apps/system_interface/imbue/system_interface/test_layout_pipeline.py", False),
-        # Workspace libraries imported in-process through editable installs.
-        ("system/services/oom_priority/src/oom_priority/bands.py", True),
-        ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", True),
+        # Workspace libraries the chat app imports and this process does not.
+        ("system/services/oom_priority/src/oom_priority/bands.py", False),
+        ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", False),
         # A workspace library this process does not import.
         ("system/libs/bootstrap/src/bootstrap/manager.py", False),
         # The vendored mngr, imported in-process and shelled out to. Broader

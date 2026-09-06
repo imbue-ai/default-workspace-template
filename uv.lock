@@ -31,6 +31,7 @@ members = [
     "bootstrap",
     "browser",
     "caretaker",
+    "chat",
     "default-workspace-template",
     "env-converge",
     "files-app",
@@ -658,6 +659,89 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/80/3f/bd97d3d9c613013d07cb7733d299385b41df37f0471310f5a73dc359f0b8/charset_normalizer-3.4.9-cp314-cp314t-win_amd64.whl", hash = "sha256:9b8e0f3107e2200b76f6054de99016eac3ee6762713587b36baaa7e4bd2ae177", size = 167620, upload-time = "2026-07-07T14:34:33.438Z" },
     { url = "https://files.pythonhosted.org/packages/3d/c6/eee9dca4439b1061f76373f06ea855678cc4a64c1c3c90b50e479edbb8eb/charset_normalizer-3.4.9-cp314-cp314t-win_arm64.whl", hash = "sha256:19ac87f93086ce37b86e098888555c4b4bc48102279bae3350098c0ed664b501", size = 158037, upload-time = "2026-07-07T14:34:35.018Z" },
     { url = "https://files.pythonhosted.org/packages/98/2b/f97f1c193fb855c345d678f5077d6926034db0722df74c8f057020e05a25/charset_normalizer-3.4.9-py3-none-any.whl", hash = "sha256:68e5f26a1ad57ded6d1cfb85331d1c1a195314756471d97758c48498bb4dcdf5", size = 64538, upload-time = "2026-07-07T14:34:56.993Z" },
+]
+
+[[package]]
+name = "chat"
+version = "0.1.0"
+source = { editable = "system/apps/chat" }
+dependencies = [
+    { name = "app-instances" },
+    { name = "app-manifest" },
+    { name = "flask" },
+    { name = "flask-sock" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "imbue-mngr" },
+    { name = "imbue-mngr-antigravity" },
+    { name = "imbue-mngr-claude" },
+    { name = "imbue-mngr-codex" },
+    { name = "imbue-mngr-opencode" },
+    { name = "imbue-mngr-pi-coding" },
+    { name = "oom-priority" },
+    { name = "pexpect" },
+    { name = "pydantic-settings" },
+    { name = "pyte" },
+    { name = "simple-websocket" },
+    { name = "tk-command-parsing" },
+    { name = "watchdog" },
+    { name = "werkzeug" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "coverage" },
+    { name = "inline-snapshot" },
+    { name = "mngr-cli-contract" },
+    { name = "playwright" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-playwright" },
+    { name = "pytest-timeout" },
+    { name = "resource-guards" },
+    { name = "ruff" },
+    { name = "system-interface" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-instances", editable = "system/libs/app_instances" },
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "flask-sock", specifier = ">=0.7" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
+    { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
+    { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
+    { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
+    { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
+    { name = "imbue-mngr-pi-coding", editable = "system/vendor/mngr/libs/mngr_pi_coding" },
+    { name = "oom-priority", editable = "system/services/oom_priority" },
+    { name = "pexpect", specifier = ">=4.9" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "pyte", specifier = ">=0.8" },
+    { name = "simple-websocket", specifier = ">=1.0" },
+    { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
+    { name = "watchdog", specifier = ">=4.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "coverage" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
+    { name = "playwright", specifier = ">=1.40" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-playwright", specifier = ">=0.4" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "resource-guards", editable = "system/vendor/mngr/libs/resource_guards" },
+    { name = "ruff", specifier = "~=0.12.8" },
+    { name = "system-interface", editable = "system/apps/system_interface" },
+    { name = "ty", specifier = "==0.0.24" },
 ]
 
 [[package]]
@@ -3292,26 +3376,17 @@ dependencies = [
     { name = "flask-sock" },
     { name = "httpx" },
     { name = "imbue-common" },
-    { name = "imbue-mngr" },
-    { name = "imbue-mngr-antigravity" },
-    { name = "imbue-mngr-claude" },
-    { name = "imbue-mngr-codex" },
-    { name = "imbue-mngr-opencode" },
-    { name = "imbue-mngr-pi-coding" },
-    { name = "oom-priority" },
-    { name = "pexpect" },
     { name = "pydantic-settings" },
-    { name = "pyte" },
     { name = "simple-websocket" },
-    { name = "tk-command-parsing" },
     { name = "watchdog" },
     { name = "werkzeug" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "chat" },
     { name = "coverage" },
-    { name = "import-linter" },
+    { name = "imbue-mngr" },
     { name = "inline-snapshot" },
     { name = "mngr-cli-contract" },
     { name = "playwright" },
@@ -3332,26 +3407,17 @@ requires-dist = [
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
-    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
-    { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
-    { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
-    { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
-    { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
-    { name = "imbue-mngr-pi-coding", editable = "system/vendor/mngr/libs/mngr_pi_coding" },
-    { name = "oom-priority", editable = "system/services/oom_priority" },
-    { name = "pexpect", specifier = ">=4.9" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
-    { name = "pyte", specifier = ">=0.8" },
     { name = "simple-websocket", specifier = ">=1.0" },
-    { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "chat", editable = "system/apps/chat" },
     { name = "coverage" },
-    { name = "import-linter", specifier = ">=2.0" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "playwright", specifier = ">=1.40" },

@@ -169,10 +169,6 @@ class WebSocketBroadcaster(MutableModel):
             _MAX_CONSECUTIVE_QUEUE_FULL,
         )
 
-    def broadcast_agents_updated(self, agents: list[dict[str, Any]]) -> None:
-        """Broadcast an agents_updated event."""
-        self.broadcast({"type": "agents_updated", "agents": agents})
-
     def broadcast_apps_updated(self, apps: Sequence[Mapping[str, Any]]) -> None:
         """Broadcast the whole inventory (contracts.md section 8): every app with its instances."""
         self.broadcast({"type": "apps_updated", "apps": apps})
@@ -194,35 +190,6 @@ class WebSocketBroadcaster(MutableModel):
     def broadcast_active_view_changed(self, client_id: str, view_id: str) -> None:
         """A client's stored active view moved; its other windows switch to it."""
         self.broadcast({"type": "active_view_changed", "client_id": client_id, "view_id": view_id})
-
-    def broadcast_proto_agent_created(
-        self,
-        agent_id: str,
-        name: str,
-        creation_type: str,
-        parent_agent_id: str | None,
-    ) -> None:
-        """Broadcast a proto_agent_created event."""
-        self.broadcast(
-            {
-                "type": "proto_agent_created",
-                "agent_id": agent_id,
-                "name": name,
-                "creation_type": creation_type,
-                "parent_agent_id": parent_agent_id,
-            }
-        )
-
-    def broadcast_proto_agent_completed(self, agent_id: str, success: bool, error: str | None) -> None:
-        """Broadcast a proto_agent_completed event."""
-        self.broadcast(
-            {
-                "type": "proto_agent_completed",
-                "agent_id": agent_id,
-                "success": success,
-                "error": error,
-            }
-        )
 
     def broadcast_layout_op(
         self,

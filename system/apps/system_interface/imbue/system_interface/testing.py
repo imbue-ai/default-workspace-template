@@ -1,20 +1,13 @@
 """Shared test fakes for the system_interface package.
 
-Houses deterministic stand-ins for outside-world dependencies that
-`ClaudeAuthService` takes as constructor-injected callables
-(`command_runner`, `pexpect_spawner`). Both `claude_auth_test.py` and
-`harnesses/claude/auth_endpoints_test.py` need the same fakes, so they live here
-rather than being copy-pasted into each test module.
-
-Also houses `build_test_state`, the test-side composition root: it builds a
-`SystemInterfaceState` with fakes for whichever collaborators a test overrides
-and cheap real instances for the rest, mirroring `main.build_production_state`
-without ever starting the agent manager.
+Houses the supervisord-shaped fake the liveness tests and the stop/start routes run
+against, the loopback server the WebSocket tests need, and `build_test_state`, the
+test-side composition root: it builds a `SystemInterfaceState` over a fresh state
+directory, mirroring `main.build_production_state` without ever starting the shell.
 """
 
 from __future__ import annotations
 
-import fcntl
 import os
 import socket
 import socketserver
@@ -23,40 +16,20 @@ import tempfile
 import threading
 import time
 import xmlrpc.client
-from collections.abc import Generator
 from collections.abc import Iterator
-from collections.abc import Mapping
-from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 from typing import Final
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 
-import httpx
-import pexpect
 import simple_websocket
 from app_manifest.registry import registry_path
 from flask import Flask
-from flask import request
 
-from imbue.mngr.api.find import AgentMatch
-from imbue.mngr.primitives import AgentId
-from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.agent_discovery import MngrMessenger
-from imbue.system_interface.agent_discovery import SendFailure
-from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
-from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.harnesses.auth_flows import AuthFlowService
-from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
-from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
-from imbue.system_interface.harnesses.signed_in import SignedIn
-from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -155,26 +128,6 @@ class FakeSupervisorServer:
         return True
 
 
-@contextmanager
-def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
-    """Hold mngr's per-agent ``message.lock`` for the duration of the block (blocking acquire).
-
-    A test-only helper: the conservation storms stage a completed in-flight send by taking the
-    same exclusive flock mngr's send holds (``BaseAgent._message_lock`` -- same filename, same
-    agent state dir) so a stop/flush executor under test contends with it exactly as it would in
-    production. Nothing in production takes this blocking lock (the executors use the bounded
-    ``try_hold_message_lock``), which is why it lives here rather than in the harness code.
-    """
-    lock_path = agent_state_dir / MESSAGE_LOCK_FILENAME
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
 def is_e2e_browser_installed() -> bool:
     """True when a Chromium the e2e suite can launch is present on this host.
 
@@ -195,73 +148,6 @@ def is_e2e_browser_installed() -> bool:
     return cache_dir.exists() and any(cache_dir.iterdir())
 
 
-def seed_agent_state(
-    manager: AgentManager,
-    agent_id: str,
-    *,
-    name: str,
-    state: str = "RUNNING",
-    labels: Mapping[str, str] | None = None,
-    harness: HarnessType = HarnessType.CLAUDE,
-    activity_state: ActivityState | None = None,
-) -> None:
-    """Insert an ``AgentStateItem`` straight into the manager's tracked map, bypassing discovery."""
-    with manager._lock:
-        manager._agents[agent_id] = AgentStateItem(
-            id=agent_id,
-            name=name,
-            state=state,
-            labels=dict(labels) if labels is not None else {},
-            work_dir=None,
-            harness=harness,
-            activity_state=activity_state,
-        )
-
-
-class RecordingMngrMessenger(MngrMessenger):
-    """A `MngrMessenger` that records sends and key-chord presses and never contacts mngr.
-
-    Overrides `send_to_agent` (records each `(agent_id, message)`) and
-    `press_key_chord_to_agent` (records each `(agent_id, key)`), returning fixed
-    results, so a test exercises the manager's send / keypress paths without building a
-    real mngr context or hitting the network. Inject via
-    `AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())`.
-    """
-
-    sent: list[tuple[str, str]] = []
-    pressed: list[tuple[str, str]] = []
-    succeeds: bool = True
-    # What a non-succeeding send reports, in place of a harness's own words and mngr's kind.
-    failure_reason: str = "The agent could not be reached."
-    failure_kind: str = "unknown"
-    press_succeeds: bool = True
-
-    def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
-        self.sent.append((str(agent_id), message))
-        return None if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
-
-    def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
-        self.pressed.append((str(agent_id), key))
-        return self.press_succeeds
-
-
-class RecordingClientActivityShell:
-    """A stand-in shell that records every body posted to ``/api/client-activity``."""
-
-    def __init__(self) -> None:
-        self.received: list[dict[str, Any]] = []
-        self.application = Flask("recording-shell")
-        self.application.add_url_rule(
-            "/api/client-activity", view_func=self._accept, methods=["POST"], endpoint="client_activity"
-        )
-
-    def _accept(self) -> tuple[str, int]:
-        self.received.append(request.get_json())
-        return "", 204
-
-
 # The directories minted for states built without a ``shell_state_directory``; each is removed
 # by its finalizer when the test process exits, so a run leaves nothing under the temp root.
 _MINTED_SHELL_STATE_DIRECTORIES: Final[list[tempfile.TemporaryDirectory[str]]] = []
@@ -276,149 +162,24 @@ def _fresh_shell_state_directory() -> Path:
 def build_test_state(
     *,
     config: Config | None = None,
-    agent_manager: AgentManager | None = None,
-    claude_auth_service: ClaudeAuthService | None = None,
-    auth_flows: AuthFlowService | None = None,
-    latchkey_http_client: httpx.Client | None = None,
+    broadcaster: WebSocketBroadcaster | None = None,
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
-    Every collaborator left unset gets a cheap default production instance;
-    pass one to substitute a fake. The agent manager is built but never started,
-    so no `mngr observe` pipeline is spawned, and the shell state is built but
-    never started, so no registry watch or inventory sweep runs. The state's
-    broadcaster is derived from the agent manager, so injecting `agent_manager`
-    (often built with a fake `MngrMessenger`) repoints the broadcaster too.
-
-    ``shell_state_directory`` is where the shell's state files go (a fresh temp
-    directory by default); ``inventory`` substitutes an inventory built over a
-    fake fetcher.
+    The shell state is built but never started, so no registry watch or inventory sweep
+    runs. ``shell_state_directory`` is where the shell's state files go (a fresh temp
+    directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
+    and ``broadcaster`` the fan-out the inventory and the routes share.
     """
-    manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
-    event_queues = AgentEventQueues()
-    # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
-    manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     shell = build_shell_state(
         state_directory=shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory(),
         registry_path=registry_path(),
-        broadcaster=manager.broadcaster,
+        broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
         inventory=inventory,
     )
-    state = SystemInterfaceState(
-        # Never the production probe: it shells out to whatever claude/codex/agy/pi this
-        # machine happens to have, over the network, from any test that reaches a sign-in
-        # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
-        # that cares about the verdict injects its own service.
-        auth_flows=auth_flows
-        if auth_flows is not None
-        else AuthFlowService.create(probe=lambda *_args: SignedIn.UNKNOWN),
-        config=config if config is not None else Config(),
-        provider_names=None,
-        include_filters=(),
-        exclude_filters=(),
-        agent_manager=manager,
-        event_queues=event_queues,
-        shell=shell,
-        claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        http_client=httpx.Client(follow_redirects=False, timeout=30.0),
-        latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
-    )
-    # Match production: eviction drops a destroyed/stopped agent's watcher.
-    manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
-    return state
-
-
-class FakeFinishedProcess:
-    """Minimal stand-in for a `FinishedProcess` returned by `command_runner`.
-
-    The real subprocess runner produces an object with `stdout`, `stderr`,
-    and `returncode`; this class exposes just those three so tests can
-    drive every branch the `claude_auth` callers care about.
-    """
-
-    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
-
-
-class FakePexpectProcess:
-    """Scripted stand-in for a `pexpect.spawn` in the PTY auth flows.
-
-    `expect_script` is a sequence of `(return_index, output_chunk)` pairs:
-    each `expect()` call consumes the next entry (the final entry repeats
-    once the script is exhausted), returns `return_index`, and exposes
-    `output_chunk` through `before`/`after` the way pexpect does after a
-    match (index 0: chunk in `after`) or a non-match (chunk in `before`).
-    The return indexes are positions in the pattern list the production
-    code passes to `expect`, so a test scripting e.g. the token pump must
-    use that pump's pattern order.
-
-    `read_nonblocking` (used by the production drain loop after a trigger
-    match) yields `drain_chunks` one call at a time and then raises
-    `pexpect.EOF`, so drains terminate immediately instead of spinning
-    against their wall-clock deadline.
-    """
-
-    def __init__(
-        self,
-        expect_script: Sequence[tuple[int, str]],
-        drain_chunks: Sequence[str] = (),
-        is_alive: bool = True,
-    ) -> None:
-        assert expect_script, "expect_script must have at least one entry"
-        self._script = list(expect_script)
-        # Hardcoding this True made every "the CLI has exited" arm unreachable from tests --
-        # including the only success signal codex's device flow has, which is process exit.
-        self._is_alive = is_alive
-        self._call_idx = 0
-        self._drain_chunks = list(drain_chunks)
-        self.sendline_calls: list[str] = []
-        self.send_calls: list[str] = []
-        self.terminate_calls = 0
-        self.close_calls = 0
-        self.timeout: float | None = None
-        self.before = ""
-        self.after: str = ""
-
-    def expect(self, _patterns: object, timeout: float | None = None) -> int:
-        entry_idx = min(self._call_idx, len(self._script) - 1)
-        self._call_idx += 1
-        return_index, chunk = self._script[entry_idx]
-        if return_index == 0:
-            self.before = ""
-            self.after = chunk
-        else:
-            self.before = chunk
-            self.after = ""
-        return return_index
-
-    def read_nonblocking(self, size: int = 65536, timeout: float | None = None) -> str:
-        if self._drain_chunks:
-            return self._drain_chunks.pop(0)
-        raise pexpect.EOF("fake stream exhausted")
-
-    def sendline(self, s: str) -> None:
-        self.sendline_calls.append(s)
-
-    def send(self, s: str) -> None:
-        self.send_calls.append(s)
-
-    def isalive(self) -> bool:
-        return self._is_alive
-
-    def exit(self) -> None:
-        """Let the scripted CLI finish. `terminate` does not: the production teardown calls
-        it on paths where the process was already gone, so it cannot mean "now exited"."""
-        self._is_alive = False
-
-    def terminate(self, force: bool = False) -> None:
-        self.terminate_calls += 1
-
-    def close(self) -> None:
-        self.close_calls += 1
+    return SystemInterfaceState(config=config if config is not None else Config(), shell=shell)
 
 
 def _find_free_port() -> int:

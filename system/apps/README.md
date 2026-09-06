@@ -11,10 +11,11 @@ Built-in apps:
   tabs the other apps render in, so it is an app that also serves as the
   workspace chrome. Do not use it as a template for new apps.
 - `chat/` - The chat app: the agent harness UI, one page per chat, rendered
-  inside a tab's iframe at its own origin. Only its manifest and icon live
-  here for now; its code runs inside `system_interface`'s process, which
-  registers the chat row beside its own (phase 6 of the workspace app model),
-  until phase 10 gives it a package and program of its own.
+  inside a tab's iframe at its own origin. The `chat` package (`chat-app`)
+  runs `mngr observe` over the workspace's agents, serves the chat pages,
+  their API, and the instances API on port 8010, and owns the provider
+  accounts. Its frontend and the shell's are two builds of one npm workspace
+  (`system/package.json`) sharing the `system/libs/workspace_ui` library.
 - `terminal/` - The terminal tab (ttyd over the web), including its named
   persistent sessions; a Python package (`terminal-app`) that runs ttyd and
   serves the instances API over the workspace's tmux sessions.

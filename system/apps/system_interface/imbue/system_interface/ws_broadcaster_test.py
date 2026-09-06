@@ -54,18 +54,6 @@ def test_unregister_nonexistent_is_safe() -> None:
     broadcaster.unregister(other_queue)
 
 
-def test_broadcast_agents_updated() -> None:
-    broadcaster = WebSocketBroadcaster()
-    q = broadcaster.register()
-
-    agents = [{"id": "a1", "name": "agent-1", "state": "RUNNING"}]
-    broadcaster.broadcast_agents_updated(agents)
-
-    msg = json.loads(_get_message(q))
-    assert msg["type"] == "agents_updated"
-    assert msg["agents"] == agents
-
-
 def test_broadcast_apps_updated() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
@@ -76,33 +64,6 @@ def test_broadcast_apps_updated() -> None:
     msg = json.loads(_get_message(q))
     assert msg["type"] == "apps_updated"
     assert msg["apps"] == apps
-
-
-def test_broadcast_proto_agent_created() -> None:
-    broadcaster = WebSocketBroadcaster()
-    q = broadcaster.register()
-
-    broadcaster.broadcast_proto_agent_created(
-        agent_id="a1", name="test", creation_type="worktree", parent_agent_id=None
-    )
-
-    msg = json.loads(_get_message(q))
-    assert msg["type"] == "proto_agent_created"
-    assert msg["agent_id"] == "a1"
-    assert msg["creation_type"] == "worktree"
-    assert msg["parent_agent_id"] is None
-
-
-def test_broadcast_proto_agent_completed() -> None:
-    broadcaster = WebSocketBroadcaster()
-    q = broadcaster.register()
-
-    broadcaster.broadcast_proto_agent_completed(agent_id="a1", success=True, error=None)
-
-    msg = json.loads(_get_message(q))
-    assert msg["type"] == "proto_agent_completed"
-    assert msg["success"] is True
-    assert msg["error"] is None
 
 
 def test_broadcast_layout_op_open() -> None:

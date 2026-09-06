@@ -9,23 +9,23 @@
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_claude"
-tools = ["mngr", "system_interface"]
+tools = ["mngr", "chat"]
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_codex"
-tools = ["mngr", "system_interface"]
+tools = ["mngr", "chat"]
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_pi_coding"
-tools = ["mngr", "system_interface"]
+tools = ["mngr", "chat"]
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_opencode"
-tools = ["mngr", "system_interface"]
+tools = ["mngr", "chat"]
 
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_antigravity"
-tools = ["mngr", "system_interface"]
+tools = ["mngr", "chat"]
 
 # The wait plugin only adds a CLI command, so no app's tool has a use for it.
 [[plugins]]
