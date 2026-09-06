@@ -4,7 +4,7 @@ import { buildAgentTerminalUrl } from "./AgentManager";
 
 describe("buildAgentTerminalUrl", () => {
   function stubPage(terminalLabel: string | null): void {
-    // The terminal app's origin is derived from the page's own location (see src/origin.ts) and
+    // The terminal app's origin is derived from the page's own location (the library's origin.ts) and
     // the label the chat app read out of the registry into the page's meta tag.
     vi.stubGlobal("window", {
       location: { host: "chat-1a2b.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421", protocol: "http:" },

@@ -5,11 +5,10 @@ import path from "path";
 
 export default defineConfig({
   // `dist/` is not part of this project's output -- the bundle goes to
-  // `build.outDir` below, and nothing reads `dist/`. It exists only where a
-  // checkout still has the emit an older `build` script left behind, and
-  // vitest's default include would then collect the compiled COPY of every
-  // test beside its source: the same suite twice, with one half frozen at
-  // whenever that build ran. Excluded so a stale directory cannot quietly
+  // `build.outDir` below, and nothing reads `dist/`. Were a stray build ever
+  // to emit one, vitest's default include would collect the compiled COPY of
+  // every test beside its source: the same suite twice, with one half frozen
+  // at whenever that build ran. Excluded so a stale directory cannot quietly
   // double the count or report passes from code that is no longer there.
   //
   // Added TO vitest's own defaults rather than written out beside them:

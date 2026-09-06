@@ -6,8 +6,11 @@ alongside the base `docs/system/style_guide.md` (which covers Python/backend
 conventions and does not cover the frontend). This file governs the CSS and the
 **design system** — the single most important convention for UI work here.
 
-Styling lives in the markup as Tailwind utilities; `src/style.css` is a token
-file plus a small set of escape hatches, not a stylesheet of component classes.
+Styling lives in the markup as Tailwind utilities; the shared
+`system/libs/workspace_ui/src/base.css` is the token file, and each app's
+`src/style.css` (which imports it) holds a small set of escape hatches, not a
+stylesheet of component classes. This guide governs every frontend of the npm
+workspace: the library, the shell, and the chat app.
 
 ---
 
@@ -16,18 +19,18 @@ file plus a small set of escape hatches, not a stylesheet of component classes.
 **Utilities in the markup are the default.** A view styles its own elements with
 Tailwind utility classes in its `m(...)` class strings — layout, spacing, color,
 type, borders, states (`hover:`, `focus-visible:`, `disabled:`) included. Do not
-add a new `.feature-*` class to `style.css` for something a utility string can
+add a new `.feature-*` class to an app's `style.css` for something a utility string can
 say at the call site.
 
 - **Colors** come from the semantic utility layer (`text-primary`,
   `text-secondary`, `text-faint`, `bg-page`, `bg-surface`, `bg-fill-hover`,
   `border-default`, `text-accent`, `bg-danger-surface`, …) — see the
-  `@theme inline` block in `src/style.css`. Raw palette values live once, as
+  `@theme inline` block in the library's `base.css`. Raw palette values live once, as
   `--c-*` on `:root`; hand-written CSS references those directly
   (`var(--c-accent)`), never a hex.
   - One name per token, with no aliases. Design work imported from elsewhere
     gets translated into these names on the way in, not registered under its own
-    (`views/style-modules.test.ts` asserts every colour and `type-*` role the
+    (the chat frontend's `views/style-modules.test.ts` asserts every colour and `type-*` role the
     shared class-string modules use actually resolves — Tailwind v4 emits
     nothing for an unknown utility, so a stray name fails silently).
 - **Type roles** are the `type-*` utilities (`type-heading-lg`, `type-heading`,
@@ -40,13 +43,14 @@ say at the call site.
   needs them (`h-[34px]`), as deliberate exceptions.
 - **Radius/elevation**: `rounded-sm/md/lg/xl` (4/6/8/16) and `shadow-raised` /
   `shadow-overlay`.
-**Shared, reusable primitives live in `src/views/components/`**; feature
-screens and feature-specific helpers stay directly in `src/views/`. A primitive is a generic building block
+**Shared, reusable primitives live in the library's `src/components/`**
+(`system/libs/workspace_ui`); feature screens and feature-specific helpers stay
+in the owning app's `src/views/`. A primitive is a generic building block
 with no feature knowledge (the Button and Modal components, the input/badge
 recipes, the tooltip mechanism, the icon set); when a look starts being reused
 across features, it belongs here.
 
-- **Buttons are the `Button` component** in `src/views/components/Button.ts`:
+- **Buttons are the `Button` component** in the library's `src/components/Button.ts`:
   `m(Button, {variant, sm, xs, icon, round, selected, readonly, quiet, block,
 extra, ...attrs}, children)` renders a real `<button type="button">`, applies
   the shared recipe, and passes through every attr it doesn't consume
@@ -59,11 +63,10 @@ extra, ...attrs}, children)` renders a real `<button type="button">`, applies
   `secondary` default; a destructive confirm is `"destructive"` (ghost form:
   `"ghost-destructive"`).
 - **Other shared recipes** (a look used by more than one file) live one file
-  per primitive under `components/`: `inputClass()` in
-  `src/views/components/Input.ts`, `badgeClass()` in
-  `src/views/components/Badge.ts`, and the `MODAL_*_CLASS` shell beside the
-  Modal component in `src/views/components/Modal.ts` (shared type-size
-  fragments: `src/views/components/typography.ts`). Feature-local sharing is an
+  per primitive under the library's `src/components/`: `inputClass()` in
+  `Input.ts`, `badgeClass()` in `Badge.ts`, and the `MODAL_*_CLASS` shell beside
+  the Modal component in `Modal.ts` (shared type-size fragments:
+  `typography.ts`). Feature-local sharing is an
   exported constant next to the owning view. Extend these rather than
   hand-rolling a lookalike. Input and badge stay class builders deliberately (a
   handful of call sites, no invariants a wrapper would enforce); promote one to
@@ -75,16 +78,17 @@ readable identity class (`queued-header`, `subagent-card--done`, `btn`,
 no styling; they are hooks for the vitest suites, the Python e2e tests, JS
 queries, and the inspector. Never drop one without checking all three.
 
-**The scanner must see every utility literally.** `style.css` uses
-`source(none)` + `@source "./**/*.ts"`, and the scanner cannot evaluate code:
+**The scanner must see every utility literally.** Each app's `style.css` uses
+`source(none)` + `@source` over its own sources and the library's, and the scanner cannot evaluate code:
 never build a utility name by string interpolation (markers are fine to
 interpolate). If a utility genuinely cannot appear as a contiguous literal,
 safelist it with `@source inline("...")`.
 
-## What still belongs in `src/style.css`
+## What still belongs in a stylesheet
 
 - **Tokens**: the `--c-*` value table, the `@theme` blocks, and the `type-*`
-  `@utility` roles.
+  `@utility` roles (in the library's `base.css`; the rest below in the owning
+  app's `src/style.css`).
 - **Vendor DOM you don't render**: the dockview theme overrides (`.dv-*`),
   xterm, scrollbars.
 - **Rendered content you don't render per-element**: markdown output
