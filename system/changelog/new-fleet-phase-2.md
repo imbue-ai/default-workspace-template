@@ -1,0 +1,1 @@
+host_backup no longer keeps a btrfs snapshot between backup ticks and the `max_local_snapshots` setting is removed (mngr-internal `new-fleet-phase-2`, slice-fleet cutover phase 2); see `system/services/host_backup/changelog/new-fleet-phase-2.md`.
