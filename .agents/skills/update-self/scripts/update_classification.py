@@ -275,10 +275,11 @@ def classify_merge(
 def _is_backend_manifest(path: str) -> bool:
     """Whether ``path`` can change what the backend's environment resolves to.
 
-    Not just the app's own manifest: the backend imports the vendored mngr and
+    Not just the shell's own manifest: the chat app imports the vendored mngr and
     shells out to it, both as editable installs, so a vendored package's
-    ``pyproject.toml`` moves their dependency closure exactly as the app's own
-    does. Both workspace roots count; the vendored root is the one ``uv tool
+    ``pyproject.toml`` moves their dependency closure exactly as the shell's own
+    does (the chat's own manifest is covered by the lockfile it always moves and
+    by the per-app tool refresh). Both workspace roots count; the vendored root is the one ``uv tool
     install -e system/vendor/mngr/libs/mngr`` resolves through.
 
     The plugin manifest counts for the same reason without being a Python

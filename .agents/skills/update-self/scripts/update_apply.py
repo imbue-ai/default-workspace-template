@@ -1001,9 +1001,9 @@ def apply_update(
             )
 
         # Every apply restarts the services agent, whatever the diff: the
-        # running system interface imports the vendored mngr and the
-        # workspace libraries in-process and re-reads ``.mngr/settings.toml``
-        # per request, and every other supervisord program runs whatever
+        # running chat app imports the vendored mngr in-process, the shell and
+        # the chat both import the workspace libraries and re-read
+        # ``.mngr/settings.toml`` per request, and every other supervisord program runs whatever
         # code was on disk when it started -- so a restart is the only way
         # to make "the merged tree is live" true for all of them at once,
         # and deciding it per path is a list nobody keeps complete.
