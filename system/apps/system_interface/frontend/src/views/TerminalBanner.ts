@@ -16,6 +16,8 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { Button } from "./components/Button";
+import { bannerClass } from "./components/banner";
 
 const PERSISTENCE_DOC_URL = "https://github.com/imbue-ai/mngr/blob/main/apps/minds/docs/persistent-terminals.md";
 
@@ -58,36 +60,49 @@ export function TerminalBanner(): m.Component {
     },
     view() {
       if (hidden) return null;
-      return m("div.terminal-banner", [
-        m("span.terminal-banner-text", [
-          "This terminal lives in memory. It survives closing the tab, reloading, and terminal-service restarts, but not a container restart. ",
-          m(
-            "a.terminal-banner-link",
-            { href: PERSISTENCE_DOC_URL, target: "_blank", rel: "noopener noreferrer" },
-            "Learn how to persist terminal state.",
-          ),
-        ]),
-        m("span.terminal-banner-actions", [
-          m(
-            "button.terminal-banner-btn",
-            {
-              onclick: () => {
-                hidden = true;
+      return m(
+        "div",
+        {
+          class: bannerClass("terminal-banner", "neutral"),
+        },
+        [
+          m("span", { class: "terminal-banner-text min-w-0" }, [
+            "This terminal lives in memory. It survives closing the tab, reloading, and terminal-service restarts, but not a container restart. ",
+            m(
+              "a",
+              {
+                class: "terminal-banner-link text-accent underline",
+                href: PERSISTENCE_DOC_URL,
+                target: "_blank",
+                rel: "noopener noreferrer",
               },
-            },
-            "Dismiss",
-          ),
-          m(
-            "button.terminal-banner-btn",
-            {
-              onclick: () => {
-                void persistNeverShowAgain();
+              "Learn how to persist terminal state.",
+            ),
+          ]),
+          m("span", { class: "terminal-banner-actions flex flex-none gap-1.5" }, [
+            m(
+              Button,
+              {
+                sm: true,
+                onclick: () => {
+                  hidden = true;
+                },
               },
-            },
-            "Never show again",
-          ),
-        ]),
-      ]);
+              "Dismiss",
+            ),
+            m(
+              Button,
+              {
+                sm: true,
+                onclick: () => {
+                  void persistNeverShowAgain();
+                },
+              },
+              "Never show again",
+            ),
+          ]),
+        ],
+      );
     },
   };
 }

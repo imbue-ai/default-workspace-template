@@ -15,29 +15,30 @@ import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
 import { classifyUserMessage } from "./message-classification";
-import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
+import { renderToolBlock } from "./components/ToolCallBlock";
+
+/** The user rail's shared recipes, owned here and composed by the queued and
+ *  outgoing variants (QueuedMessageView / OutgoingMessageView). `message`,
+ *  `message-user` and `message-user-bubble` are bare markers -- the Python e2e
+ *  suite locates chat rows by them -- and the styling is the utilities beside
+ *  them. The row recipe carries no bottom margin: each caller sets its own
+ *  rhythm. */
+export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-end";
+
+/** wrap-break-word: long unbreakable tokens (API keys, URLs) wrap inside the
+ *  bubble instead of overflowing past its edge. Code inside a bubble is
+ *  markdown-rendered content and takes .markdown-content's own rules. */
+export const USER_BUBBLE_CLASS =
+  "message-user-bubble max-w-[80%] rounded-xl rounded-br-sm bg-user-bubble px-[18px] py-3 " +
+  "text-(length:--font-size-body) leading-normal text-primary wrap-break-word";
 
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
- *  of source; only the label and body differ. */
+ *  of source; only the label and body differ. Width-capped like the user
+ *  bubbles on its rail (the assistant flow's blocks run full-width instead). */
 function renderSystemChip(label: string, body: string, expansionKey: string): m.Vnode {
-  return m("div", { class: `tool-call-block${isBlockExpanded(expansionKey) ? " tool-call-block--expanded" : ""}` }, [
-    m(
-      "div",
-      {
-        class: "tool-call-header",
-        onclick(e: Event) {
-          const block = (e.currentTarget as HTMLElement).parentElement;
-          if (block) {
-            setBlockExpanded(expansionKey, block.classList.toggle("tool-call-block--expanded"));
-          }
-        },
-      },
-      [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
-    ),
-    m("div", { class: "tool-call-details" }, [m("div", { class: "tool-call-input" }, [m("pre", m("code", body))])]),
-  ]);
+  return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]", expansionKey });
 }
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
@@ -69,7 +70,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      return m("div", { class: "message-user-bubble" }, bubbleChildren);
+      return m("div", { class: USER_BUBBLE_CLASS }, bubbleChildren);
     },
   };
 }
@@ -88,7 +89,9 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
     return null;
   }
   const messageClass =
-    kind === UserMessageKind.SystemChip ? "message message-system-collapsed" : "message message-user";
+    kind === UserMessageKind.SystemChip
+      ? "message message-system-collapsed mb-1 flex flex-col items-end"
+      : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
   return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [m(StableUserMessage, { event })]);

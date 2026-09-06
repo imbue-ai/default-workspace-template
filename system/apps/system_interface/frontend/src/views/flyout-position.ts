@@ -2,7 +2,7 @@
  * Pure geometry for the combo card's side flyout.
  *
  * The flyout's BASE sits level with the row that opened it and the list grows UPWARD. That is
- * not the mockup's rule (it top-aligns and caps downward), and the reason is that this card
+ * not the ordinary top-align-and-cap-downward rule, and the reason is that this card
  * opens from the composer at the BOTTOM of the panel: a list capped by the space below its row
  * had roughly three rows to work with, which is what pi's thousand-model catalog was being
  * squeezed into. Growing up gives it the whole window instead.

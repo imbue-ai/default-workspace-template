@@ -137,6 +137,39 @@ describe("the card without a hand-cranked redraw", () => {
     expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
   });
 
+  it("moves the effort label with the thumb, on the portal's own redraw", async () => {
+    // The label lives inside the portal, and the portal's `input` -> redraw is the only thing
+    // that can repaint it mid-drag -- `m.render` wires no auto-redraw of its own. A test that
+    // hand-cranks a render (ModelBar.test.ts) supplies exactly the redraw in question, so only
+    // this file can say whether a real drag actually changes the word on screen.
+    const model = {
+      ...OPUS,
+      efforts: [
+        { level: "low", in_picker: true },
+        { level: "medium", in_picker: true },
+        { level: "high", in_picker: true },
+      ],
+    };
+    catalogState.catalog = { ...(catalogState.catalog as Record<string, unknown>), options: [model] };
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "low", fast: false },
+      matched: model,
+      pending: null,
+    };
+    await press(".model-selector-trigger");
+
+    const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider === null) throw new Error("no slider on screen");
+    const row = (): string => document.querySelector('[data-card-row="effort"]')?.textContent ?? "";
+    expect(row()).toContain("Low");
+
+    slider.value = "2";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+
+    expect(row()).toContain("High");
+  });
+
   it("opens the removal dialog on a trash press instead of closing the picker", async () => {
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');

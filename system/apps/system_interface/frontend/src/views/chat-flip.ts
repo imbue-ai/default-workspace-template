@@ -2,8 +2,7 @@
  * The chat card: one conversation, two renderings, and the switch that turns it over.
  *
  * A chat and its agent's terminal are the same conversation shown two ways, so they are the
- * front and back of one surface rather than two places to be. Ported from the mockup's
- * `FlipSurface` (`prototypes/minds-harness`, `ClaudeCodeView.tsx`).
+ * front and back of one surface rather than two places to be.
  *
  * Kept out of `ChatPanel` because the two rules below are the whole risk of this feature and
  * both are invisible in review -- a card assembled inline would have them buried in six hundred

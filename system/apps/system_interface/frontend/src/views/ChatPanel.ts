@@ -55,6 +55,7 @@ import { ActivityIndicator } from "./ActivityIndicator";
 import { requestTerminalFocus } from "./terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { Button } from "./components/Button";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -382,10 +383,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     });
   }
 
-  const RELOAD_BUTTON_CLASS =
-    "message-list-reload cursor-pointer rounded-md border border-border px-3 py-1 text-sm " +
-    "text-text-primary hover:bg-bg-hover";
-
   function manageStreamConnection(agentId: string): void {
     if (!isConversationNotFound(agentId)) {
       connectToStream(agentId);
@@ -481,10 +478,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (isConversationNotFound(agentId)) {
       fetchScreenCapture(agentId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
-        m("p", { class: "text-lg font-semibold text-text-primary" }, "No conversation data"),
-        m("p", { class: "text-text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
+        m("p", { class: "type-heading text-primary" }, "No conversation data"),
+        m("p", { class: "text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
         screenLoading
-          ? m("p", { class: "text-text-secondary" }, "Loading terminal output...")
+          ? m("p", { class: "text-secondary" }, "Loading terminal output...")
           : screenContent
             ? m(
                 "pre",
@@ -495,7 +492,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 screenContent,
               )
             : screenError
-              ? m("p", { class: "text-text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
+              ? m("p", { class: "text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
               : null,
       ]);
     }
@@ -520,14 +517,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       return m(
         "div",
         { class: "message-list-loading flex items-center justify-center h-full" },
-        m("p", { class: "text-text-secondary" }, "Loading events..."),
+        m("p", { class: "text-secondary" }, "Loading events..."),
       );
     }
 
     if (hasNothingToShow && load.error !== null) {
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
-        m("p", { class: "text-red-500" }, `Error: ${load.error}`),
-        m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+        m("p", { class: "text-danger" }, `Error: ${load.error}`),
+        m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
       ]);
     }
 
@@ -540,10 +537,18 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const failedReloadNotice =
       load.error === null
         ? null
-        : m("div", { class: "message-list-stale-notice flex items-center gap-3 border-b border-border px-3 py-1.5" }, [
-            m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
-            m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
-          ]);
+        : m(
+            "div",
+            { class: "message-list-stale-notice flex items-center gap-3 border-b border-default px-3 py-1.5" },
+            [
+              m("span", { class: "text-sm text-danger" }, `Couldn't refresh this conversation: ${load.error}`),
+              m(
+                Button,
+                { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) },
+                "Refresh",
+              ),
+            ],
+          );
 
     const events = getEventsForAgent(agentId);
 
@@ -554,7 +559,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         return m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
+          m("p", { class: "text-secondary" }, "No events yet for this agent."),
         );
       }
       return m("div", { class: "message-list-wrapper" }, [
@@ -673,8 +678,23 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           isFileDragActive && acceptsFileDrops
             ? m(
                 "div",
-                { class: "chat-drop-overlay absolute inset-0 flex items-center justify-center pointer-events-none" },
-                m("div", { class: "chat-drop-overlay-label" }, "Drop files to attach"),
+                {
+                  // z-50: design-system-exception -- a mid-layer overlay above
+                  // chat content but below the modal stack; the z scale has no
+                  // name for it.
+                  class:
+                    "chat-drop-overlay absolute inset-0 z-50 m-2 flex items-center justify-center rounded-lg " +
+                    "border-2 border-dashed border-accent bg-accent-light/70 pointer-events-none",
+                },
+                m(
+                  "div",
+                  {
+                    class:
+                      "chat-drop-overlay-label rounded-full border border-accent bg-surface px-4.5 py-2.5 " +
+                      "text-(length:--font-size-body) font-medium text-accent shadow-overlay",
+                  },
+                  "Drop files to attach",
+                ),
               )
             : null,
           chatFlipCard({
@@ -694,7 +714,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 m(
                   "main",
                   {
-                    class: "app-content transcript-scroll flex-1 overflow-y-auto px-8 py-6",
+                    class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-8 py-6",
                     // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
                     // works; the engine's listeners classify the input source.
                     tabindex: 0,
@@ -719,7 +739,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                         class:
                           "message-list-window-loading absolute inset-0 flex items-center justify-center p-6 pointer-events-none",
                       },
-                      m("p", { class: "text-text-secondary" }, "Loading messages..."),
+                      m("p", { class: "text-secondary" }, "Loading messages..."),
                     )
                   : null,
               ]),
@@ -727,7 +747,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               // build log uses, so the composer arrives with the transcript rather than after it.
               isStillBeingCreated(agentId)
                 ? null
-                : m("footer", { class: "app-footer" }, [
+                : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
                     m(EmptySlot, { name: "conversation-before-input" }),
                     isConversationNotFound(agentId)
                       ? null
@@ -745,31 +765,43 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
           // the flip would be one-way. Everything here describes the conversation rather than
           // either rendering of it, which is the same reason it belongs to neither face.
+          // Carries the bottom gutter the footer used to supply, so the 24px sits under the
+          // under-bar rather than between the composer and it.
           isStillBeingCreated(agentId)
             ? null
             : m(
                 "div",
-                { class: "chat-under-bar" },
-                m("div", { class: "composer-under-bar" }, [
-                  m(ModelBar, { agentId }),
-                  m("div", { class: "composer-under-bar-actions" }, [
-                    m(TerminalViewToggle, {
-                      on: isFlipped,
-                      onToggle: (event: Event) => {
-                        isFlipped = !isFlipped;
-                        // Turning the card over is the user navigating TO the terminal,
-                        // so the host grants it focus -- the embedded ttyd client never
-                        // takes focus on its own (see terminalFocus.ts). Redraw first so
-                        // a first flip has mounted the back face before the ask.
-                        if (isFlipped) {
-                          const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
-                          m.redraw.sync();
-                          requestTerminalFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
-                        }
-                      },
-                    }),
-                  ]),
-                ]),
+                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-6" },
+                m(
+                  "div",
+                  {
+                    // Same max-width as the composer card above it; relative as
+                    // the containing block for centered overlays.
+                    class:
+                      "composer-under-bar relative mx-auto mt-1 flex w-full " +
+                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
+                  },
+                  [
+                    m(ModelBar, { agentId }),
+                    m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
+                      m(TerminalViewToggle, {
+                        on: isFlipped,
+                        onToggle: (event: Event) => {
+                          isFlipped = !isFlipped;
+                          // Turning the card over is the user navigating TO the terminal,
+                          // so the host grants it focus -- the embedded ttyd client never
+                          // takes focus on its own (see terminalFocus.ts). Redraw first so
+                          // a first flip has mounted the back face before the ask.
+                          if (isFlipped) {
+                            const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
+                            m.redraw.sync();
+                            requestTerminalFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
+                          }
+                        },
+                      }),
+                    ]),
+                  ],
+                ),
               ),
         ],
       );

@@ -3,27 +3,23 @@
  * next to its target, positioned (fixed) under the target after a hover-intent
  * delay.
  *
- * Tab content in dockview can use neither of the app's usual tooltip
- * mechanisms. Native ``title`` is suppressed: dockview marks every tab
- * ``draggable`` (tab.js sets ``element.draggable = true``, plus
+ * Tab content in dockview can use neither of the usual tooltip mechanisms.
+ * Native ``title`` is suppressed: dockview marks every tab ``draggable``
+ * (tab.js sets ``element.draggable = true``, plus
  * ``-webkit-user-drag: element``), and Chromium hides ``title`` tooltips on
- * draggable elements and their descendants. A CSS ``::after`` bubble (the
- * ``data-tooltip`` pattern used elsewhere) is clipped by the tab strip's
- * overflow -- ``.dv-tabs-container`` is ``overflow: auto`` and ``.dv-groupview``
- * is ``overflow: hidden``. A body-level, fixed-position element driven by our
- * own listeners avoids both: it is not a native tooltip, and it is not inside
- * the clipping container.
+ * draggable elements and their descendants. A CSS ``::after`` bubble is
+ * clipped by the tab strip's overflow (``.dv-tabs-container`` is
+ * ``overflow: auto`` and ``.dv-groupview`` is ``overflow: hidden``). A
+ * body-level, fixed-position element driven by our own listeners avoids both:
+ * it is not a native tooltip, and it is not inside the clipping container.
  *
  * That being the only mechanism that works everywhere in the workspace, it is
- * the one every workspace tooltip uses, and its look and timing are the minds
- * shell's ``.minds-tooltip`` (250ms hover-intent delay, keyboard focus too, no
- * fade, centered under the trigger with a 6px gap, flipped above on bottom
- * overflow, clamped to the viewport, dropped on leave / blur / click / scroll /
- * resize) so a tooltip here is indistinguishable from one in the surrounding
- * chrome. The measuring dance in ``showBubble`` mirrors the shell's
- * ``tooltip_triggers.js`` for the same reason. That centered-below placement
- * is therefore the default everywhere and callers should not opt out of it
- * lightly -- it is what keeps this tooltip visually identical to the shell's.
+ * the one every workspace tooltip uses: 250ms hover-intent delay, keyboard
+ * focus too, no fade, centered under the trigger with a 6px gap, flipped above
+ * on bottom overflow, clamped to the viewport, dropped on leave / blur /
+ * click / scroll / resize. The centered-below placement is the default
+ * everywhere and callers should not opt out of it lightly -- one placement is
+ * what keeps every tooltip in the workspace reading as the same tooltip.
  *
  * The one deliberate exception is the project rail: a rail row sits directly
  * above the row it is being compared against (e.g. the shortcut a hover is
@@ -41,6 +37,16 @@ const TOOLTIP_DELAY_MS = 250;
 const TOOLTIP_GAP = 6;
 /** Minimum gap from the window edges. */
 const TOOLTIP_MARGIN = 6;
+
+/** The bubble's skin, as design-system utilities (`hover-tooltip` is a bare
+ * marker for tests and devtools, with no CSS attached). One literal string so
+ * Tailwind's source scan sees every class. `hidden` is the resting state --
+ * ``showBubble`` toggles `display` inline -- and there is deliberately no
+ * transition. The colour tokens don't flip with the scheme, so dark mode is
+ * spelled out as `dark:` variants off `prefers-color-scheme`. `z-(--z-tooltip)`
+ * clears the modal overlays. */
+const TOOLTIP_CLASS =
+  "hover-tooltip type-helper pointer-events-none fixed z-(--z-tooltip) hidden max-w-[480px] items-center gap-1.5 rounded-md bg-inverse px-2 py-1 text-center whitespace-normal text-on-accent shadow-overlay dark:bg-surface dark:text-primary";
 
 export interface HoverTooltip {
   /** Set the text shown on hover, or ``null`` to disable the tooltip. */
@@ -99,10 +105,7 @@ function placeTooltipBelow(anchor: TooltipAnchor, bubble: TooltipSize, viewport:
  * when it would otherwise overflow the right edge (and there is room over
  * there). Unlike the below/above flip, both axes get the full min-and-max
  * clamp here rather than only the near-edge one: a rail row's tooltip must
- * never run off the right edge of the viewport (the one direction "below"
- * tolerates overflowing, in the pathological case of a trigger taller than
- * the viewport, has no equivalent excuse on this axis), so this clamps hard
- * both ways instead of reproducing that allowance.
+ * never run off the right edge of the viewport.
  */
 function placeTooltipRight(anchor: TooltipAnchor, bubble: TooltipSize, viewport: TooltipSize): TooltipPosition {
   const verticalCenter = anchor.top + (anchor.bottom - anchor.top) / 2 - bubble.height / 2;
@@ -147,7 +150,7 @@ let isWindowWired = false;
 function ensureBubble(): HTMLDivElement {
   if (bubbleElement === null) {
     bubbleElement = document.createElement("div");
-    bubbleElement.className = "minds-tooltip";
+    bubbleElement.className = TOOLTIP_CLASS;
     bubbleElement.setAttribute("role", "tooltip");
     document.body.appendChild(bubbleElement);
   }
