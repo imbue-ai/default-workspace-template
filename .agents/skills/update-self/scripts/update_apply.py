@@ -489,13 +489,18 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     frontend: its one bundle builds from the shell's own frontend directory, with the
     node_modules there. The forward apply never asks this (the merged tree always has the
     workspace), but a rollback lands on whatever tree the workspace ran before.
+
+    A frontend is told by its tracked manifest, not its directory: the rollback removes the
+    tracked files, but the forward build leaves ignored files under a frontend's
+    ``node_modules`` (vite's own temp files), and git cannot remove a directory that still
+    holds them, so the chat frontend's directory outlives its removal.
     """
     if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
         return _RestoredFrontend(repo_root / NPM_ROOT_DIR, FRONTEND_BUNDLES, True)
     served = tuple(
         bundle
         for bundle in FRONTEND_BUNDLES
-        if (repo_root / bundle.frontend_dir).is_dir()
+        if (repo_root / bundle.frontend_dir / "package.json").is_file()
     )
     return _RestoredFrontend(repo_root / FRONTEND_DIR, served, False)
 

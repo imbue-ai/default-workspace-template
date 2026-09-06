@@ -1303,6 +1303,7 @@ def _make_apply_repo(tmp_path: Path) -> Path:
     """A repo root shaped like the live tree: the npm workspace at ``system/`` over the shell's frontend."""
     repo_root = tmp_path / "repo"
     (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
+    (repo_root / update_layout.FRONTEND_DIR / "package.json").write_text("{}")
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
     for package, tool_name, executable, is_critical in _APP_FIXTURES:
         _write_app(repo_root, package, tool_name, executable, is_critical)
@@ -4671,6 +4672,32 @@ def test_a_rollback_into_a_pre_split_tree_restores_the_shell_bundle_without_a_re
     # and that is every bundle the restored tree serves -- so recovery puts it back
     # and rebuilds nothing, rather than running npm at a root the tree does not have.
     _make_pre_split_tree(apply_repo)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert (
+        len(runner.argvs_starting("npm", "run", "build")) == 1
+    )  # the forward build only
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
+    assert not (apply_repo / update_layout.CHAT_STATIC_DIR).exists()
+
+
+def test_a_rollback_into_a_pre_split_tree_ignores_the_chat_frontend_directory_git_left_behind(
+    apply_repo: Path,
+) -> None:
+    # The forward build leaves ignored vite temp files under the chat frontend's
+    # node_modules, and `git rm` cannot take a directory that still holds them, so the
+    # rollback leaves `system/apps/chat/frontend/` standing with nothing tracked in it.
+    # That is no chat frontend: recovery must not count a chat bundle the restored tree
+    # cannot build, which would rebuild where restoring the shell's copy was the whole
+    # job and then fail on the chat bundle that never comes.
+    _make_pre_split_tree(apply_repo)
+    (apply_repo / update_layout.CHAT_FRONTEND_DIR / "node_modules" / ".vite-temp").mkdir(
+        parents=True
+    )
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
 
