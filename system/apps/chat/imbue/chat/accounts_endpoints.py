@@ -3,7 +3,7 @@
 Kept out of server.py for the same reason the claude-auth handlers are: the modal's logic
 does not belong in the router.
 
-The `AuthFlowService` holds the live PTY, so it is created once in `create_application` and
+The `AuthFlowService` holds the live PTY, so it is created once in `main.build_production_state` and
 read back through `get_state()` here -- the subprocess has to survive between the POST that
 starts a flow and the polls that advance it.
 """
@@ -11,12 +11,10 @@ starts a flow and the polls that advance it.
 from __future__ import annotations
 
 import json
-from typing import Any
 from typing import Final
 
 from flask import Flask
 from flask import Response
-from flask import request
 from loguru import logger as _loguru_logger
 
 from imbue.chat import accounts
@@ -31,6 +29,7 @@ from imbue.chat.harnesses.lanes import account_label
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import numbered_provider
 from imbue.chat.models import ErrorResponse
+from imbue.chat.request_helpers import parse_json_object_body
 from imbue.chat.state import get_state
 
 logger = _loguru_logger
@@ -146,28 +145,8 @@ def list_accounts() -> Response:
     return _json_response({"accounts": rows, "mru": index.mru})
 
 
-def _json_object_body() -> dict[str, Any] | Response:
-    """The request body as a JSON object, or a 400.
-
-    `request.get_json(silent=True) or {}` only rescues a FALSY body, so a non-empty array,
-    string or number is truthy and `payload.get(...)` raises AttributeError -- a 500 for a
-    malformed request. A twin of `server._parse_json_object_body` rather than a shared import:
-    `server` imports this module to register its routes, so importing back is a cycle.
-    """
-    try:
-        body = json.loads(request.get_data())
-    except (json.JSONDecodeError, ValueError) as e:
-        # Logged, not just answered: a 400 tells the caller, and this tells us. Swallowing a
-        # decode error without a trace is the thing the ratchet exists to stop.
-        logger.warning("Request to {} carried invalid JSON: {}", request.path, e)
-        return _error_response("Invalid JSON in request body")
-    if not isinstance(body, dict):
-        return _error_response("Request body must be a JSON object")
-    return body
-
-
 def start_flow() -> Response:
-    payload = _json_object_body()
+    payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
     lane_id = str(payload.get("lane_id", ""))
@@ -195,7 +174,7 @@ def poll_flow(flow_id: str) -> Response:
 
 def submit_flow(flow_id: str) -> Response:
     """Accept whatever the flow's shape asks the user for: a pasted code, or a key."""
-    payload = _json_object_body()
+    payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
     service = get_state().auth_flows
@@ -245,7 +224,7 @@ def delete_account(account_id: str) -> Response:
 
 def rename_account(account_id: str) -> Response:
     """Set or clear an account's user-chosen name. Display only -- see `accounts.rename_account`."""
-    payload = _json_object_body()
+    payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
     raw_name = payload.get("name", "")
@@ -266,8 +245,8 @@ def rename_account(account_id: str) -> Response:
 def register_routes(application: Flask) -> None:
     """Wire the chooser's endpoints onto the Flask application.
 
-    `create_application` is responsible for putting an `AuthFlowService` on the app state
-    before any of these serve a request.
+    `main.build_production_state` (or the test state builder) puts an `AuthFlowService` on the
+    app state before any of these serve a request.
     """
     application.add_url_rule("/api/lanes", view_func=list_lanes, methods=["GET"])
     application.add_url_rule("/api/accounts", view_func=list_accounts, methods=["GET"])
