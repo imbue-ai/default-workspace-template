@@ -952,9 +952,11 @@ def _get_screen_capture(agent_id: str) -> Response:
 def _create_chat_agent() -> Response:
     """Create a new chat agent in the primary agent's work directory.
 
-    One endpoint for every harness: the ``chat`` role is the same, and the request's
-    ``harness`` field (validated against :class:`HarnessType`, claude by default) picks
-    which harness template the server stacks under it.
+    One endpoint for every harness: the ``chat`` role is the same, and the account the
+    chat is bound to (the request's ``account_id``, else the most recently used one)
+    decides which harness template the server stacks under it. A request naming an
+    ``agent_id`` launches a chat minted earlier -- one that waited for an account, or one
+    whose create failed -- under that id, keeping the name it was minted with.
 
     The chat's display name is minted here (server-side) when the request names
     none: the first free "<word> N" for the harness, counted against every name
