@@ -35,8 +35,9 @@ Opens at http://127.0.0.1:8000 by default.
 ## Development
 
 ```bash
-# Backend
-cd system/apps/system_interface
+# Backend, from the repo root (the registry path and the state directory
+# default are relative to it; run elsewhere, the shell finds no registry and
+# lists no apps)
 uv run system-interface
 
 # Frontend (with hot reload)
