@@ -61,8 +61,10 @@ The root venv belongs to the background services, agents, skills, and scripts, s
 The build installs one tool per Python app directory, the update apply refreshes only the tool environments whose app changed, and the `build-app` scaffold installs a tool for a user-built app.
 An app's supervisord program line runs the tool's own entry point rather than `uv run`; services keep `uv run`.
 The terminal and files apps are small Python launchers around ttyd and dufs, so they are tools too.
-The manifest is what marks an app as running this way: an app scaffolded before this arc has a `pyproject.toml` but no `app.toml`, keeps its `uv run <name>` program line and its root-venv install, and is left alone by the build and the apply until the migration (section 9) rewrites it to the manifest form, so there are never two live code paths for one app.
-Until that migration lands, `system/apps/*` stays a member glob of the root uv workspace so a pre-manifest app's root-pyproject entries keep resolving; the migration then takes apps out of the workspace.
+The manifest is what marks an app as running this way: an app scaffolded before this arc has a `pyproject.toml` but no `app.toml`, keeps its `uv run <name>` program line and its root-venv install, and is left alone by the build and the apply.
+Both forms are supported indefinitely (decided in phase 9: rewriting a user's committed app during an unattended update buys nothing the user can see), and every app, built-in or user-built, stays a member of the root uv workspace's `system/apps/*` glob: one repo, one lockfile, one set of build and test commands.
+Membership and isolation answer different questions: the lock keeps every environment on the same versions, and an app's own tool environment keeps it running while the root venv is rewritten or broken.
+Converting an old app to the manifest form is something the update-app skill may offer the next time the user edits that app, with the user present.
 
 ### 3.2 Instances
 
@@ -155,7 +157,7 @@ label = "New File Viewer"      # every action is a create: POST /_instances with
 
 An app with `instances = false` declares no actions; the shell synthesizes its one action, `open`, which focuses the app's tab.
 `forward_port.py` gains `--manifest <path>` and reads every static field from it, keeping `--name` and `--url` for the runtime facts and `--remove` for teardown; it becomes stdlib-only so registration never depends on the root venv.
-`--icon-file` and `--program` are removed in the cleanup phase once every app carries a manifest; `build-app` scaffolds a manifest and the manifest-driven registration line.
+`--icon-file` and `--program` stay, since a pre-manifest app registers with them for as long as it exists (phase 9); `build-app` scaffolds a manifest and the manifest-driven registration line.
 `--internal` and `--no-icon` stay for registrations that have no app directory: owner-exec, the VM exec service, preview instances, and isolated test servers.
 
 ### 4.2 Registry rows
@@ -378,8 +380,9 @@ The detailed spec carries a table of every such caller and its new target; the m
 
 ## 9. Migration
 
-One script, `system/scripts/migrate_workspace_layouts.py`, runs once per workspace, from bootstrap on the first boot after the update and from the update apply, guarded by a marker.
-It is deterministic:
+One script, `system/scripts/migrate_workspace_layouts.py`, runs once per workspace, from bootstrap at every boot (best-effort, behind its marker) and from the update apply before the restart (warning-only), guarded by a marker.
+It is deterministic, and never destructive: the old files are untouched, an output that already exists is kept, and the two app stores only ever gain records.
+The exact rules are in [phase_09_migration.md](phase_09_migration.md):
 
 | Old | New |
 |---|---|
@@ -387,15 +390,16 @@ It is deterministic:
 | `terminal:<name>` | `app:terminal?instance=<name>` |
 | `service:browser?session=<name>` | `app:browser?instance=<name>` |
 | `service:files?instance=<key>` | `app:files?instance=<key>`, with the key and its saved path imported into the files app's store |
-| `service:<name>` (an app pin) | a `(app, new)` shortcut on that project |
+| `service:<name>` (an app pin) | an `(app, open)` shortcut on that project for a single-instance app, the app's default action for one with instances |
 | `service:<name>` panel of another app | `app:<name>` |
 | `url:<hash>` panels | dropped; opening a URL now means a browser instance |
 | `subagent:<session-id>` panels | dropped; the chat app lists subagents as instances again when their parent's transcript is read |
-| the registry's last-active project id | the initial active view of every client |
+| the registry's last-active project id | dropped; the active view lives on each client's record, and a first-visiting client lands on the first project |
 | `unpinned_shortcuts` and `shortcut_overrides` | the project's `shortcuts` list |
 | `projects/<id>.json` and `<id>.mobile.json` | `layouts/<id>/seed.desktop.json` and `seed.mobile.json` |
 | `member_last_used.json` | `last_focused_ms` on the matching seed-layout tabs |
-| `member_titles.json` | terminal titles become tmux renames; the rest are dropped, since chats already carry theirs |
+| every terminal found | a record in the terminal app's store, so the terminal is listed before its tmux session exists again and its tabs survive the first observation |
+| `member_titles.json` | terminal titles become the terminal record's title; the rest are dropped, since chats already carry theirs |
 | `member_locations.json` | imported into the files app's store |
 
 The old files are left in place and ignored, and are deleted in a later release.
@@ -414,7 +418,7 @@ Tests follow the code: the instances library and each app backend get unit tests
 6. **Chat as a document.** The chat pages and their bundle become a separate document served by the system-interface process at a registered `chat` origin whose registry URL is the shell's own port (requests dispatched by Host label and by the `/_instances` path), with the instances API implemented over the existing agent manager, the browser-side contract module, and the embedder relay (permission cards live in chat pages, which are child frames from here on). Nothing moves between packages yet. Verify: every chat opens as an iframe at the chat origin and behaves as before; the shell's own bundle carries no chat views; a permission card reaches the minds inbox.
 7. **Shell core.** Addresses, the app-agnostic inventory, the verb definition, the location relay, shortcuts as data, the New Tab page as the only empty state, the state files of 6.1, and deletion of the per-kind code and side stores; chat is already an ordinary iframe app, so the shell has no special case. Verify: every verb on every app from both the tab and the rail.
 8. **Client-scoped layouts.** Client-tagged broadcasts with save ids and `layout_updated` first (the seam phase 7's review left open), then the layout file as the truth: the shell applies agent ops to the target client's file and broadcasts, replacing phase 7's browser-applied ops, their mutex, and the connected-browser requirement; then the per-client active view across a client's windows, the inventory endpoint and deep links (6.7), and the rest of `layout.py` (`--client`, `--action`, `--param`, the bare-URL open). The tab route, pruning, referenced-lifetime deletion, the address grammar, and the skill rewrites landed in phase 7. Verify: two browsers on one workspace arrange independently and share projects; two windows of one browser mirror each other; an agent op lands with no browser connected; closing the last file-browser tab everywhere removes the instance; a deep link lands on the named view and instance.
-9. **Migration.** The script, its marker, and its wiring into bootstrap and the apply; and the migration of pre-manifest apps to the manifest form (a generated `app.toml`, a tool install, the rewritten program line, the root-pyproject entries dropped) followed by `system/apps/*` leaving the root workspace's member glob. Verify: a workspace created before this arc upgrades with its projects, tabs, and folder paths intact, and a user-built app from before the arc runs from its own tool afterwards.
+9. **Migration.** The layout migration script, its marker, and its wiring into bootstrap (best-effort at every boot) and the apply (warning-only, before the restart). The rewrite of pre-manifest apps and the removal of the `system/apps/*` member glob were dropped from the phase (3.1): both app forms stay supported and every app stays a workspace member. Verify: a workspace created before this arc upgrades with its projects, tabs, terminal titles, and folder paths intact.
 10. **Chat app.** The move of the chat package and process to `system/apps/chat` with its own tool environment, program, manifest, and registry row, the provisional-instance create flow, subagent instances, the first-chat claim, and the shell's mngr-free invariant landing as an import contract and a ratchet. Verify: chats create, rename, delete, stop, and show status; permission cards reach the minds inbox through the relay; a fresh workspace lands on New Tab.
 11. **Updates, sharing, and cleanup.** The apply changes, the external-caller retargeting (8.4), the sharing note in the share-gateway docs, the service-to-app rename across shell code and docs, deletion of the old stores, README and skill rewrites, and changelog entries.
 
@@ -430,6 +434,8 @@ After phase 11, an existing workspace is upgraded through update-self and exerci
 - Read-only sharing of one chat.
 - Chat-internal cleanups from the old plan (per-chat channel consolidation, chooser refactoring, proto-agent broadcasts), which are invisible to the shell once chat is an app.
 - Full per-app generalization of the update apply.
+- Converting a pre-manifest user app to the manifest form (an offer the update-app skill can make with the user present, never an unattended update), and taking apps out of the root uv workspace, which one lockfile and one set of commands argue against.
+- Pinning each app's tool environment to the root lock's versions (a constraints file exported from `uv.lock` at install time), so a tool environment cannot drift ahead of the lock by a patch version.
 - Migrating the terminal, browser, and files instance sources onto a common implementation beyond the library.
 
 ## 12. Open questions

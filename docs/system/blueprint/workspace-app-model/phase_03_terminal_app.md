@@ -36,7 +36,7 @@ Modified:
 
 - `system/supervisord.conf`: `[program:terminal]` runs `terminal-app`.
 - `system/apps/terminal/README.md`; `.mngr/settings.toml` is untouched (the conf it sources did not move).
-- `pyproject.toml` (root): the terminal leaves the workspace `exclude` list; it is a member like the other manifest apps until phase 9, and a tool.
+- `pyproject.toml` (root): the terminal leaves the workspace `exclude` list; it is a member like the other manifest apps (phase 9 decided apps stay members), and a tool.
 - `system/libs/app_instances`: `run_sidecar_app(manifest_path, app_url, instances_url, child_argv, build_app)` is the seam an app with routes of its own uses (`run_sidecar` wraps it); `read_json_document` and `write_json_document` are the store's file handling made public; `canonical_name_from_title` and `is_name_conflict` are the shell's naming rule, shared.
 - `system/apps/system_interface/.../server.py`: `POST /api/terminals/notify` uses a `terminal_id` in the body when the terminal app resolved one (the pty-to-tab files live in the terminal's state directory now, which the shell does not read); `# CLEANUP:` phase 7.
 - `system/test_app_manifests.py`: a program whose command ends in an app's console script registers with the `MANIFEST_PATH` constant that script's module exports.

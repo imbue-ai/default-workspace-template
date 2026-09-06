@@ -19,6 +19,7 @@ from bootstrap.manager import (
     UPDATE_APPLY_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
     UPDATE_RECOVER_EXIT_EMERGENCY,
+    WORKSPACE_LAYOUT_MIGRATION_SCRIPT,
     WORKSPACE_ROOT_DIR,
     TimezoneFetchError,
     _apply_container_timezone,
@@ -27,6 +28,7 @@ from bootstrap.manager import (
     _fetch_user_timezone,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
+    _migrate_workspace_layouts_best_effort,
     _parse_timezone_response,
     _read_host_name,
     _read_update_marker_dri_agent,
@@ -256,7 +258,10 @@ def test_ensure_git_identity_sets_one_when_absent(
 
     _ensure_git_identity()
 
-    assert _git_in(work_dir, "config", "user.email").stdout.strip() == "bootstrap@minds.local"
+    assert (
+        _git_in(work_dir, "config", "user.email").stdout.strip()
+        == "bootstrap@minds.local"
+    )
 
 
 def test_ensure_git_identity_never_overwrites_the_users_own(
@@ -799,3 +804,59 @@ def test_recover_names_nobody_when_the_marker_recorded_no_agent(
 
     assert len(stub.calls) == 1  # the recover invocation, and no mngr calls
     assert not UPDATE_APPLY_MARKER.exists()
+
+
+def test_main_migrates_workspace_layouts_after_the_rollback_and_before_supervisord(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The migration must see the restored tree (so it runs after the rollback)
+    # and must have written the shell's state files before supervisord starts
+    # the shell that reads them.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    _write_apply_marker("agent-omega")
+    stub = _StubSubprocess()
+    stub.on_command = _clear_marker_on_recover
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    order: list[str] = []
+    for name in (
+        "_migrate_legacy_claude_state_best_effort",
+        "_write_update_recovery_cron_entry",
+        "_ensure_supervisor_log_dir",
+    ):
+        monkeypatch.setattr(f"bootstrap.manager.{name}", lambda: None)
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda: order.append("supervisord")
+    )
+    monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
+
+    main()
+
+    migration_argv = ["python3", str(WORKSPACE_LAYOUT_MIGRATION_SCRIPT), "run"]
+    recover_index = next(
+        index for index, argv in enumerate(stub.calls) if "recover" in argv
+    )
+    migration_index = stub.calls.index(migration_argv)
+    assert recover_index < migration_index
+    assert order == ["supervisord"]
+
+
+def test_a_failing_layout_migration_never_blocks_boot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    stub = _StubSubprocess(returncode=1)
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    errors: list[str] = []
+    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        _migrate_workspace_layouts_best_effort()
+        stub.raise_on = {"run": FileNotFoundError("python3: not found")}
+        _migrate_workspace_layouts_best_effort()
+    finally:
+        logger.remove(sink)
+
+    assert len(stub.calls) == 2
+    assert stub.kwargs[0]["timeout"] == 60.0
+    assert any("migration failed (rc=1)" in line for line in errors)
+    assert any("could not run" in line for line in errors)

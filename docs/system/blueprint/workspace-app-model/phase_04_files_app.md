@@ -36,7 +36,7 @@ Done at the start of this phase, as its own commit: contracts section 17 (where 
 ## Behaviour
 
 - Until phase 7 the shell still stores locations in its own store and still mints `files-<N>` through its allocator; both keep working because the dufs origin and the beacon shape are unchanged apart from the type string, and the shell's beacon listener accepts both `minds-location` and `shell:location` from this phase on.
-  `# CLEANUP:` the old type and the shell's store go in phase 7; the migration in phase 9 imports the store into the sidecar's JSON file.
+  `# CLEANUP:` the old type and the shell's store go in phase 7; the migration in phase 9 imports the old locations into the sidecar's JSON file.
 - From this phase both the shell's allocator and the sidecar's store exist, and only the sidecar's is reachable through `/_instances`; the sidecar's list is authoritative from phase 7 on: an instance is a key plus the path it was last at.
 - The `build-app` scaffold keeps telling a user-built app to post `minds-location`: the spec scopes the rename to the dufs beacon, a single-instance app has no location route for the relay to reach after phase 7 anyway, and phase 11's skill rewrites move the scaffold onto `app_contract.js`.
 

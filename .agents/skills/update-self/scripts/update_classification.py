@@ -335,7 +335,7 @@ def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
     and an ``app.toml`` runs from its own uv tool environment (the build, the
     scaffold, and this apply all install it that way), while an app scaffolded
     before manifests existed has no ``app.toml``, still runs ``uv run <name>``
-    from the root venv, and is left alone until the migration rewrites it.
+    from the root venv, and is left alone (both forms are supported for good).
 
     Read off the tree being applied (the merged tree, or the restored one on
     rollback), so an app a release adds is refreshed as it ships. An app whose
@@ -365,12 +365,16 @@ def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
             _warn_app_skipped(directory, "its pyproject.toml names no project")
             continue
         if not isinstance(scripts, dict) or not scripts:
-            _warn_app_skipped(directory, "its pyproject.toml declares no console script")
+            _warn_app_skipped(
+                directory, "its pyproject.toml declares no console script"
+            )
             continue
         try:
             manifest = tomllib.loads(manifest_path.read_text())
         except (OSError, tomllib.TOMLDecodeError) as exc:
-            _warn_app_skipped(directory, f"its {MANIFEST_FILENAME} could not be read: {exc}")
+            _warn_app_skipped(
+                directory, f"its {MANIFEST_FILENAME} could not be read: {exc}"
+            )
             continue
         name = manifest.get("name")
         if not isinstance(name, str) or not name:
@@ -402,7 +406,9 @@ def _is_app_environment_path(path: str, app: AppTool) -> bool:
     return not _APP_ENVIRONMENT_EXCLUDED_PARTS.intersection(directory_parts)
 
 
-def app_tools_touched_by(paths: Sequence[str], app_tools: Sequence[AppTool]) -> tuple[AppTool, ...]:
+def app_tools_touched_by(
+    paths: Sequence[str], app_tools: Sequence[AppTool]
+) -> tuple[AppTool, ...]:
     """The apps whose tool environment the changed ``paths`` mean must be reinstalled.
 
     Any change under an app's directory counts, except under its ``frontend/``
@@ -412,7 +418,9 @@ def app_tools_touched_by(paths: Sequence[str], app_tools: Sequence[AppTool]) -> 
     apart per file is not worth a wrong guess.
     """
     return tuple(
-        app for app in app_tools if any(_is_app_environment_path(path, app) for path in paths)
+        app
+        for app in app_tools
+        if any(_is_app_environment_path(path, app) for path in paths)
     )
 
 
@@ -492,5 +500,7 @@ def plan_apply(
         backend_src=backend_src,
         backend_manifest=backend_manifest,
         provisioner=provisioner,
-        app_tools=tuple(app_tools) if backend_manifest else app_tools_touched_by(paths, app_tools),
+        app_tools=tuple(app_tools)
+        if backend_manifest
+        else app_tools_touched_by(paths, app_tools),
     )

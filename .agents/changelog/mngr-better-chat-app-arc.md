@@ -40,3 +40,9 @@ Phase 8 of the workspace app model (the layout file is the truth):
 - `manage-layout` describes the new model: every op targets exactly one client (`--client`), ops land with no browser connected and answer at once, `--view` edits a view and switches the client to it, `open` takes `--action` and `--param` and a bare URL, and the exit codes (a 3 is now the app refusing for now, not a mutex).
 
 - `update-system-interface`'s `reveal_system_interface.py` probes the shell's `/api/health` rather than the chat's `/api/agents`.
+
+Phase 9 of the workspace app model (the migration):
+
+- The update-self apply runs `system/scripts/migrate_workspace_layouts.py run` from the merged tree after the pre-flight and before the services restart, so the restarted shell reads a pre-app-model workspace's migrated projects and layouts at once. A failure (or a script that cannot be spawned) is a warning, never a rollback: the migration writes only state files that do not exist yet and runs again at the next boot.
+
+- The comments in the apply's classification and layout modules no longer promise that a migration rewrites pre-manifest apps: an app scaffolded before manifests keeps running `uv run <name>` from the root venv for as long as it exists, beside the manifest apps' tool environments.

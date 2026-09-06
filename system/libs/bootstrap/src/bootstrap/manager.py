@@ -56,6 +56,13 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # is visible here at the next boot.
 UPDATE_APPLY_MARKER = STATE_DIR / "update-apply" / "marker.json"
 UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
+# The one-shot carry-over of a pre-workspace-app-model workspace's projects and layouts into
+# the shell's state files (docs/system/blueprint/workspace-app-model/phase_09_migration.md).
+# Standard-library only, guarded by its own marker, and never destructive, so it runs at
+# every boot and costs nothing once done.
+WORKSPACE_LAYOUT_MIGRATION_SCRIPT = Path("system/scripts/migrate_workspace_layouts.py")
+# The migration reads and writes a handful of small JSON files; anything past this is a hang.
+_WORKSPACE_LAYOUT_MIGRATION_TIMEOUT_SECONDS = 60.0
 # The fixed workspace root every supervised service assumes. Needed in absolute
 # form only for the recovery cron line below, which runs with cron's cwd rather
 # than this process's.
@@ -145,22 +152,10 @@ def _read_host_name() -> str | None:
     return name
 
 
-
-
-
-
-
-
-
-
-
-
 def _touch(signal: Path) -> None:
     """Create a signal file (and its parent), marking a once-per-workspace step done."""
     signal.parent.mkdir(parents=True, exist_ok=True)
     signal.touch()
-
-
 
 
 def _ensure_git_identity() -> None:
@@ -221,7 +216,9 @@ def _initialize_workspace_main_branch() -> None:
     template shouldn't gate boot.
     """
     if MAIN_BRANCH_SIGNAL.exists() or _LEGACY_MAIN_BRANCH_SIGNAL.exists():
-        logger.debug("Signal file {} present; work_dir is already on main", MAIN_BRANCH_SIGNAL)
+        logger.debug(
+            "Signal file {} present; work_dir is already on main", MAIN_BRANCH_SIGNAL
+        )
         return
     work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
     if not work_dir:
@@ -274,10 +271,6 @@ def _initialize_workspace_main_branch() -> None:
     # Written whichever way the rename went: a failed rename is not worth re-committing the
     # user's working tree over on every subsequent boot.
     _touch(MAIN_BRANCH_SIGNAL)
-
-
-
-
 
 
 def _configure_git_global() -> None:
@@ -788,6 +781,37 @@ def _recover_interrupted_update() -> str:
     return dri_agent
 
 
+def _migrate_workspace_layouts_best_effort() -> None:
+    """Carry a pre-workspace-app-model workspace's projects and layouts into the shell's state
+    files, before the shell starts and reads them.
+
+    Best-effort: a failure is logged loudly but never blocks boot. The shell then lands on
+    its New Tab page with every chat still listed in Everything, the old files are untouched,
+    and the next boot (or a hand run of the script) tries again.
+    """
+    try:
+        result = subprocess.run(
+            ["python3", str(WORKSPACE_LAYOUT_MIGRATION_SCRIPT), "run"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_WORKSPACE_LAYOUT_MIGRATION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.error(
+            "The workspace layout migration could not run ({}); continuing boot", e
+        )
+        return
+    if result.returncode != 0:
+        logger.error(
+            "The workspace layout migration failed (rc={}); continuing boot: {}",
+            result.returncode,
+            (result.stderr or result.stdout).strip()[-500:],
+        )
+        return
+    logger.info("Workspace layout migration checked: {}", result.stderr.strip()[-300:])
+
+
 def _migrate_legacy_claude_state_best_effort() -> None:
     """Heal pre-/home/user-layout workspaces whose claude state is root-homed.
 
@@ -821,6 +845,11 @@ def main() -> None:
     # before any service or agent starts from half-applied state. The agent to
     # re-engage afterwards is woken further down, once the venv is converged.
     update_dri_agent = _recover_interrupted_update()
+
+    # Carry a pre-workspace-app-model workspace's projects and layouts into the shell's
+    # state files, AFTER the rollback (the restored tree's script is the one to run) and
+    # before supervisord starts the shell that reads them.
+    _migrate_workspace_layouts_best_effort()
 
     # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the
     # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.

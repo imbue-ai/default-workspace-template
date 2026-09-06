@@ -12,7 +12,7 @@ Modified:
 
 - `.agents/skills/update-self/scripts/update_apply.py` and `update_environment.py`: `supervisorctl reread && supervisorctl update` after the merge and before the health probes; the health probes use `/api/health` on the shell and `GET /_instances` on every `critical` app with `instances = true`; snapshot and restore cover the tool directory and bundle of every `critical` app.
 - `.agents/skills/update-self/scripts/update_probes.py`, `.agents/skills/update-system-interface/scripts/reveal_system_interface.py`: `/api/health`.
-- `system/scripts/forward_port.py`: `--icon-file` and `--program` removed; every remaining caller (owner-exec, vm-exec, previews, isolated test servers) uses `--name --url` with `--internal` or `--no-icon`.
+- `system/scripts/forward_port.py`: unchanged. `--icon-file` and `--program` stay: a pre-manifest app registers with them for as long as it exists (phase 9 decided both app forms are supported indefinitely).
 - `system/services/share_gateway/README.md`: the chat origin under workspace-level grants and the `[services.chat]` narrowing; the grants example gains it.
 - `system/apps/system_interface/README.md`: rewritten around the glossary (the Projects section goes; a Model section points at the meta spec), the not-built and staleness sections kept.
 - `docs/system/workspace-internals.md`, `system/apps/README.md`, `system/libs/README.md`, `system/services/README.md`, `README.md` (root), `CLAUDE.md`: apps, instances, manifests, tool environments.
@@ -32,7 +32,6 @@ Deleted: `system/apps/system_interface/imbue/system_interface/agent_discovery.py
 ## Tests
 
 - Apply tests for the reread step, the per-app probes, and the per-app snapshot and restore.
-- `forward_port_test.py` for the removed flags.
 - A repo-wide ratchet in `system/test_meta_ratchets.py` counting `service` in shell identifiers, set to the residue and never rising.
 
 ## Changelog entries

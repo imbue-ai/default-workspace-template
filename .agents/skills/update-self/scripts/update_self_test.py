@@ -5758,3 +5758,55 @@ def test_a_failed_preflight_rejects_the_merge_before_the_bundle_is_touched(
     assert not runner.ran("npm", "run", "build")
     assert not runner.ran(*_RESTART)
     assert _bundle_exists(apply_repo)
+
+
+# --- the workspace layout migration -------------------------------------------
+
+
+def test_apply_runs_the_layout_migration_from_the_merged_tree_before_the_restart(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    migration_argv = ["python3", update_layout.LAYOUT_MIGRATION_SCRIPT, "run"]
+    assert migration_argv in runner.calls
+    restart_index = runner.calls.index(
+        ["mngr", "start", "--restart", "system-services"]
+    )
+    assert runner.calls.index(migration_argv) < restart_index
+
+
+def test_a_failed_layout_migration_is_a_warning_not_a_rollback(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(
+        ("python3", update_layout.LAYOUT_MIGRATION_SCRIPT),
+        _Result(returncode=1, stderr="migrate_workspace_layouts: boom"),
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "migrate_workspace_layouts.py failed (exit 1)" in err
+    assert "boom" in err
+    assert not runner.ran("git", "checkout", _ROLLBACK, "--")
+
+
+def test_a_layout_migration_that_cannot_be_spawned_is_a_warning_not_a_traceback(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(
+        ("python3", update_layout.LAYOUT_MIGRATION_SCRIPT),
+        FileNotFoundError("python3: not found"),
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert "could not be run" in capsys.readouterr().err

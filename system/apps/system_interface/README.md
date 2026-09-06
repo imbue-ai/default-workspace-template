@@ -306,7 +306,14 @@ lives on the client record (`clients.json`), read on boot and pushed as
 longer lists is pruned on the next observation. An instance whose
 record says `lifetime = "referenced"` is deleted through its app once nothing
 references it any more. First landing after a fresh install is the New Tab
-page; there is no starter project until phase 9's migration creates one.
+page with no project. A workspace that predates the app model is carried over
+once by `system/scripts/migrate_workspace_layouts.py`, which bootstrap runs at
+every boot behind its marker (`data/.state/system_interface/migrated.json`)
+and the update apply runs before its restart: it writes `projects.json` and
+each view's per-device seeds from the old `workspace_layout/` store, seeds the
+files and terminal apps' stores so those tabs stay listed, and never touches
+the old files or an output that already exists. `plan --json` shows what a run
+would write; `--force run` rewrites the projects file and the seeds.
 
 Verbs go through the shell's **relay** to the app that owns the instance:
 create (`POST /api/apps/<name>/instances`), rename, delete, and the location
