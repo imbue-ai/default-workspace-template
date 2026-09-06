@@ -44,7 +44,9 @@ _RELATIVE_IMPORT = re.compile(r"""(?<![\w.])(?:from|import|vi\.mock)\s*\(?\s*["'
 _TYPE_ONLY_IMPORT = re.compile(r"""^\s*import\s+type\b""")
 # The shared library's modules, as the apps import them.
 _LIBRARY_SPECIFIER = "@imbue/workspace-ui/src/"
-_LIBRARY_IMPORT = re.compile(r"""(?<![\w.])(?:from|import|vi\.mock)\s*\(?\s*["'](@imbue/workspace-ui/src/[^"']+)["']""")
+_LIBRARY_IMPORT = re.compile(
+    r"""(?<![\w.])(?:from|import|vi\.mock)\s*\(?\s*["'](@imbue/workspace-ui/src/[^"']+)["']"""
+)
 
 pytestmark = pytest.mark.xdist_group(name="ratchets")
 
@@ -134,9 +136,7 @@ def _shell_bundle_files() -> set[Path]:
 
 def test_the_shell_bundle_imports_nothing_from_the_chat_frontend() -> None:
     offenders = sorted(
-        str(source_file)
-        for source_file in _shell_bundle_files()
-        if _CHAT_FRONTEND.resolve() in source_file.parents
+        str(source_file) for source_file in _shell_bundle_files() if _CHAT_FRONTEND.resolve() in source_file.parents
     )
     assert offenders == [], (
         f"{_SHELL_IMPORTS_CHAT_RULE.rule_name}: {offenders}\n\n{_SHELL_IMPORTS_CHAT_RULE.rule_description}"

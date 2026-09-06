@@ -70,9 +70,7 @@ def test_broadcast_layout_op_open() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    broadcaster.broadcast_layout_op(
-        "open", {"ref": "service:web"}, requester="app:chat?instance=agent-1"
-    )
+    broadcaster.broadcast_layout_op("open", {"ref": "service:web"}, requester="app:chat?instance=agent-1")
 
     msg = json.loads(_get_message(q))
     assert msg == {
@@ -95,9 +93,7 @@ def test_broadcast_layout_op_passes_args_through_unchanged() -> None:
         "direction": "right",
         "ratio": 0.5,
     }
-    broadcaster.broadcast_layout_op(
-        "split", payload, requester="app:chat?instance=agent-2"
-    )
+    broadcaster.broadcast_layout_op("split", payload, requester="app:chat?instance=agent-2")
 
     msg = json.loads(_get_message(q))
     assert msg == {
@@ -155,9 +151,7 @@ def test_broadcast_disconnects_client_after_consecutive_queue_full_threshold() -
 
     # The live client got every broadcast -- the eviction did not interrupt it.
     assert len(received_by_live_client) == _BROADCASTS_TO_TRIGGER_DISCONNECT
-    assert received_by_live_client[-1] == {
-        "index": _BROADCASTS_TO_TRIGGER_DISCONNECT - 1
-    }
+    assert received_by_live_client[-1] == {"index": _BROADCASTS_TO_TRIGGER_DISCONNECT - 1}
 
 
 def test_broadcast_does_not_disconnect_below_consecutive_threshold() -> None:
@@ -236,9 +230,7 @@ def test_broadcast_warns_once_per_disconnect_not_per_dropped_message(
     for index in range(_BROADCASTS_TO_TRIGGER_DISCONNECT * 2):
         broadcaster.broadcast({"index": index})
 
-    queue_full_warnings = [
-        r for r in loguru_records if "Disconnected unresponsive" in r
-    ]
+    queue_full_warnings = [r for r in loguru_records if "Disconnected unresponsive" in r]
     assert len(queue_full_warnings) == 1
 
 
@@ -274,9 +266,7 @@ def test_broadcast_projects_updated_and_tab_rebound_are_typed_events() -> None:
     client_queue = broadcaster.register()
 
     broadcaster.broadcast_projects_updated([{"id": "p1"}])
-    broadcaster.broadcast_tab_rebound(
-        "client-1", "everything", "tab-0123456789abcdef", "app:terminal?instance=k"
-    )
+    broadcaster.broadcast_tab_rebound("client-1", "everything", "tab-0123456789abcdef", "app:terminal?instance=k")
 
     assert json.loads(_get_message(client_queue)) == {
         "type": "projects_updated",
@@ -318,9 +308,7 @@ def test_set_client_info_and_view_lookup() -> None:
 
     assert broadcaster.connected_client_ids() == {"client-1"}
     infos = broadcaster.get_connected_client_infos()
-    assert infos == [
-        {"client_id": "client-1", "active_view": "everything", "device_kind": "desktop"}
-    ]
+    assert infos == [{"client_id": "client-1", "active_view": "everything", "device_kind": "desktop"}]
 
 
 def test_set_client_info_ignores_unregistered_queue() -> None:
@@ -364,9 +352,7 @@ def test_broadcast_to_client_reaches_every_window_of_that_client_only() -> None:
     broadcaster.set_client_info(second_window, "client-1", "project-1", "desktop")
     broadcaster.set_client_info(other_client, "client-2", "project-1", "mobile")
 
-    broadcaster.broadcast_layout_op(
-        "maximize", {"address": "app:files"}, "agent-1", target_client_id="client-1"
-    )
+    broadcaster.broadcast_layout_op("maximize", {"address": "app:files"}, "agent-1", target_client_id="client-1")
 
     for window in (first_window, second_window):
         message = json.loads(_get_message(window))
@@ -380,9 +366,7 @@ def test_layout_updated_and_active_view_changed_are_typed_events() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
 
-    broadcaster.broadcast_layout_updated(
-        "project-1", "client-1", "save-0123456789abcdef"
-    )
+    broadcaster.broadcast_layout_updated("project-1", "client-1", "save-0123456789abcdef")
     broadcaster.broadcast_active_view_changed("client-1", "project-1")
 
     assert json.loads(_get_message(client_queue)) == {
