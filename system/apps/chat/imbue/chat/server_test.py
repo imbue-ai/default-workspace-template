@@ -41,6 +41,7 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
@@ -2082,6 +2083,41 @@ def test_create_chat_launches_a_reserved_chat_under_its_id(
     body = response.get_json()
     assert body["agent_id"] == reserved.agent_id
     assert body["display_name"] == reserved.display_name
+
+
+def test_create_chat_relaunches_a_failed_chat_under_its_id(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page's "Try again" launches a chat whose create failed by naming its id: the record
+    keeps its id and name and goes back to the creating phase."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+    failed = agent_manager.reserve_chat()
+    with agent_manager._lock:
+        agent_manager._mark_creation_failed_locked(failed.agent_id, "mngr create exited with code 1")
+    failed_record = agent_manager.get_proto_agent(failed.agent_id)
+    assert failed_record is not None and failed_record.phase is ProvisionalChatPhase.FAILED
+    pushes = agent_manager.broadcaster.register()
+
+    response = client.post("/api/agents/create-chat", json={"agent_id": failed.agent_id})
+
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["agent_id"] == failed.agent_id
+    assert body["display_name"] == failed.display_name
+    # The relaunch is pushed to every page before the creation thread can settle it, so the
+    # push is what says the record went back to the creating phase.
+    pushed = []
+    while not pushes.empty():
+        pushed.append(json.loads(pushes.get_nowait()))
+    assert any(
+        push["type"] == "proto_agent_created"
+        and push["agent_id"] == failed.agent_id
+        and push["phase"] == ProvisionalChatPhase.CREATING.value
+        for push in pushed
+    )
 
 
 def test_create_chat_refuses_an_id_that_was_never_reserved(
