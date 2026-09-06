@@ -60,5 +60,5 @@ def test_prevent_raw_post_message_outside_the_shared_boundaries() -> None:
 
 
 def test_prevent_retired_address_spellings() -> None:
-    chunks = check_regex_ratchet(_FRONTEND_SRC, FileExtension(".ts"), _RETIRED_ADDRESS_PATTERN, ("*.test.ts",))
+    chunks = check_regex_ratchet(_FRONTEND_SRC, FileExtension(".ts"), _RETIRED_ADDRESS_PATTERN, _ALLOWED_FILES)
     assert len(chunks) <= snapshot(0), _RETIRED_ADDRESS_RULE.format_failure(chunks)
