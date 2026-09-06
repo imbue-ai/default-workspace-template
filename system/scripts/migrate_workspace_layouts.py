@@ -617,6 +617,17 @@ def _pin_shortcut(
     return OPEN_ACTION_ID, "focus"
 
 
+def _shortcut(
+    app: str, action: str, mode_override: Any, default_mode: str
+) -> dict[str, str]:
+    """One rail row, in its stored mode override when that names a mode, else the default."""
+    return {
+        "app": app,
+        "action": action,
+        "mode": mode_override if mode_override in SHORTCUT_MODES else default_mode,
+    }
+
+
 def derive_shortcuts(
     project: LegacyProject, registry_rows: Sequence[dict[str, Any]]
 ) -> list[dict[str, str]]:
@@ -627,14 +638,7 @@ def derive_shortcuts(
         override = project.overrides.get(app, {})
         if override.get("is_pinned") is False:
             continue
-        mode = override.get("mode")
-        shortcuts.append(
-            {
-                "app": app,
-                "action": action,
-                "mode": mode if mode in SHORTCUT_MODES else default_mode,
-            }
-        )
+        shortcuts.append(_shortcut(app, action, override.get("mode"), default_mode))
     for member in project.members:
         if not is_app_pin_ref(member):
             continue
@@ -645,16 +649,8 @@ def derive_shortcuts(
         if pin is None:
             continue
         action, default_mode = pin
-        mode = project.overrides.get(f"{LEGACY_APP_SHORTCUT_PREFIX}{app}", {}).get(
-            "mode"
-        )
-        shortcuts.append(
-            {
-                "app": app,
-                "action": action,
-                "mode": mode if mode in SHORTCUT_MODES else default_mode,
-            }
-        )
+        override = project.overrides.get(f"{LEGACY_APP_SHORTCUT_PREFIX}{app}", {})
+        shortcuts.append(_shortcut(app, action, override.get("mode"), default_mode))
     return shortcuts
 
 
