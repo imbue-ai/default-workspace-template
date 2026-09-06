@@ -3,3 +3,5 @@
 The backstop event listener resolves a program's band through the app registry: it re-reads `data/.state/apps.toml` (or `MINDS_APPS_FILE`) on every `PROCESS_STATE_RUNNING` event with the new stdlib-only `oom_priority.app_registry` module and maps the program to the `priority` its app's manifest declared (a `SERVICE_BANDS` key; `user` or an unknown band name is the user-service band). A program with no registry row (the services that never register) still resolves by program name exactly as before. `bands.supervisord_program_band` takes the registry's program-to-priority view as a second argument.
 
 The dynamic chat band's comment names the chat app's `ChatOomPrioritizer`.
+
+The README names the chat app's presence route and its message sends as the prioritizer's engagement events in place of the removed `/api/activity`.
