@@ -113,6 +113,8 @@ ADDRESS_SCHEME = "app:"
 # The built-in apps whose every tab is an instance: a bare ``service:<name>`` of one of these
 # named the old sessionless viewer (or a pin), never something a tab can show now.
 INSTANCE_ONLY_APPS = frozenset({"chat", "terminal", "files", "browser"})
+# The one app whose old panels named their instance by a ``?session=`` parameter of the URL.
+BROWSER_APP = "browser"
 
 
 class LegacyProject(NamedTuple):
@@ -236,7 +238,7 @@ def address_for_ref(ref: str) -> str | None:
         return None
     if parameter == "instance":
         return _address(name, value)
-    if parameter == "session" and name == "browser":
+    if parameter == "session" and name == BROWSER_APP:
         return _address(name, value)
     return None
 
@@ -288,7 +290,11 @@ def ref_for_panel(params: dict[str, Any]) -> str | None:
     if isinstance(service_name, str) and service_name:
         if isinstance(service_instance_id, str) and service_instance_id:
             return f"service:{service_name}?instance={service_instance_id}"
-        session = _browser_session_from_url(params.get("url"))
+        session = (
+            _browser_session_from_url(params.get("url"))
+            if service_name == BROWSER_APP
+            else None
+        )
         if session is not None:
             return f"service:{service_name}?session={session}"
         return f"service:{service_name}"
