@@ -99,6 +99,8 @@ VIEW_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 MAX_INSTANCE_TITLE_LENGTH = 256
 MAX_LOCATION_LENGTH = 2048
+# The instances library lets a URL carry the tab placeholder at most once.
+TAB_PLACEHOLDER = "{tab}"
 FILES_KEY_NUMBER_PATTERN = re.compile(r"^files-([1-9][0-9]*)$")
 
 # The frontend's panel components, as its ``createComponent`` names them (the shell's
@@ -695,11 +697,13 @@ def _ms_to_iso(at_ms: int) -> str:
 
 
 def _is_location(path: str) -> bool:
+    """Whether the instances library accepts ``path`` as an instance URL (its rules, restated)."""
     return (
         path.startswith("/")
         and not path.startswith("//")
         and len(path) <= MAX_LOCATION_LENGTH
         and not any(character < " " or character == "\x7f" for character in path)
+        and path.count(TAB_PLACEHOLDER) <= 1
     )
 
 

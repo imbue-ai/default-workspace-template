@@ -333,6 +333,25 @@ def test_run_seeds_the_files_and_terminal_stores_their_apps_read(
     assert terminal.workdir is None
 
 
+@pytest.mark.parametrize(
+    ("location", "url"),
+    [
+        ("/data/notes", "/data/notes"),
+        (" /data/{tab} ", "/data/{tab}"),
+        ("/data/{tab}/{tab}", "/"),
+        ("//host/path", "/"),
+        ("relative", "/"),
+        ("/bad\nline", "/"),
+    ],
+)
+def test_files_record_keeps_only_a_location_the_files_app_reads_back(
+    location: str, url: str
+) -> None:
+    ref = "service:files?instance=files-2"
+    record = migrate.files_record("files-2", {ref: location}, {}, _NOW)
+    assert record["url"] == url
+
+
 def test_run_keeps_a_stores_own_record_and_leaves_an_unreadable_store_alone(
     legacy_layout_dir: Path, tmp_path: Path, migration_registry: Path
 ) -> None:
