@@ -247,7 +247,7 @@ def test_derive_shortcuts_maps_a_pin_through_its_registry_row(
         color=migrate.DEFAULT_PROJECT_COLOR,
         glyph=migrate.DEFAULT_PROJECT_GLYPH,
         members=("service:notes",),
-        overrides={}
+        override_by_shortcut_id={}
         if mode_override is None
         else {"app:notes": {"mode": mode_override}},
     )

@@ -145,7 +145,7 @@ class LegacyProject(NamedTuple):
     # The old overrides map: a built-in name or ``app:<name>`` to its deviations from the
     # defaults (``is_pinned`` False, or a ``mode``); the legacy ``unpinned_shortcuts`` list is
     # folded in as ``is_pinned`` False.
-    overrides: dict[str, dict[str, Any]]
+    override_by_shortcut_id: dict[str, dict[str, Any]]
 
 
 class MigratedLayout(NamedTuple):
@@ -445,7 +445,7 @@ def read_legacy_projects(meta: dict[str, Any], notes: list[str]) -> list[LegacyP
                 )
                 if isinstance(members, list)
                 else (),
-                overrides=_legacy_overrides(entry),
+                override_by_shortcut_id=_legacy_overrides(entry),
             )
         )
     return projects
@@ -717,7 +717,7 @@ def derive_shortcuts(
     then one row per pinned app in member order."""
     shortcuts: list[dict[str, str]] = []
     for app, action, default_mode in BUILT_IN_SHORTCUTS:
-        override = project.overrides.get(app, {})
+        override = project.override_by_shortcut_id.get(app, {})
         if override.get("is_pinned") is False:
             continue
         shortcuts.append(_shortcut(app, action, override.get("mode"), default_mode))
@@ -731,7 +731,9 @@ def derive_shortcuts(
         if pin is None:
             continue
         action, default_mode = pin
-        override = project.overrides.get(f"{LEGACY_APP_SHORTCUT_PREFIX}{app}", {})
+        override = project.override_by_shortcut_id.get(
+            f"{LEGACY_APP_SHORTCUT_PREFIX}{app}", {}
+        )
         shortcuts.append(_shortcut(app, action, override.get("mode"), default_mode))
     return shortcuts
 
