@@ -49,7 +49,7 @@ import tomllib
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypeVar
 
 # Where the shell and the apps keep their state, relative to the repo root every supervised
 # program and the bootstrap run from (contracts.md sections 7 and 17).
@@ -132,6 +132,9 @@ ADDRESS_SCHEME = "app:"
 INSTANCE_ONLY_APPS = frozenset({"chat", "terminal", "files", "browser"})
 # The one app whose old panels named their instance by a ``?session=`` parameter of the URL.
 BROWSER_APP = "browser"
+
+# The value type one of the old per-ref side stores holds (a title, a location, a stamp).
+_RefValueT = TypeVar("_RefValueT")
 
 
 class LegacyProject(NamedTuple):
@@ -374,8 +377,8 @@ def _read_json_object(path: Path, notes: list[str]) -> dict[str, Any] | None:
 
 
 def _read_ref_map(
-    path: Path, key: str, value_type: type, notes: list[str]
-) -> dict[str, Any]:
+    path: Path, key: str, value_type: type[_RefValueT], notes: list[str]
+) -> dict[str, _RefValueT]:
     stored = _read_json_object(path, notes)
     raw = stored.get(key) if stored is not None else None
     if not isinstance(raw, dict):
