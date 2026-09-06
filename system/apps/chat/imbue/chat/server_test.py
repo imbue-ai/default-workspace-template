@@ -2111,7 +2111,9 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     # push is what says the record went back to the creating phase.
     pushed = []
     while not pushes.empty():
-        pushed.append(json.loads(pushes.get_nowait()))
+        message = pushes.get_nowait()
+        assert message is not None, "the broadcaster evicted the test's client"
+        pushed.append(json.loads(message))
     assert any(
         push["type"] == "proto_agent_created"
         and push["agent_id"] == failed.agent_id
