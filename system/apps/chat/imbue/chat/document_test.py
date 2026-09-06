@@ -1,4 +1,4 @@
-"""The chat document over the shell's real Flask app: the dispatcher, the page, and the instances API."""
+"""The chat document over the chat app's real Flask app: the page, its probe route, and the instances API."""
 
 from pathlib import Path
 from uuid import uuid4
@@ -43,10 +43,7 @@ def _state_with_chat(static_directory: Path, chat_id: str) -> tuple[ChatState, A
 
 def _write_bundle(static_directory: Path) -> None:
     static_directory.mkdir(parents=True, exist_ok=True)
-    (static_directory / "index.html").write_text("<html><head></head><body>shell</body></html>")
     (static_directory / "chat.html").write_text("<html><head></head><body>chat</body></html>")
-    (static_directory / "_static").mkdir(exist_ok=True)
-    (static_directory / "_static" / "app_contract.js").write_text("export function connectToShell() {}\n")
 
 
 def _client(tmp_path: Path, chat_id: str) -> tuple[FlaskClient, AgentManager]:
