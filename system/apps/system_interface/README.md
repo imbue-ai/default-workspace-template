@@ -121,9 +121,10 @@ tool environments) -- so a rollback restores a *copy* rather than re-running
 the build that just failed, and a broken build environment cannot take the UI
 down with it. And it **checks that the frontend actually serves**, not just
 that the backend answers: the "not built" placeholder and an unserved
-`/assets` path are both HTTP 200s, so the probe reads `is_frontend_built`
-from the shell's `/api/health` and the chat app's, and checks that the shell's
-module script comes back as JavaScript.
+`/assets` path are both HTTP 200s, so after the shell's `/api/health` and the
+chat app's both answer 200 the probe reads the `X-Frontend-Built` header the
+shell sends with `/` and checks that the shell's module script comes back as
+JavaScript.
 
 The apply's reload of every open view is delegated to
 `system/scripts/refresh_workspace_view.py`, the shared
