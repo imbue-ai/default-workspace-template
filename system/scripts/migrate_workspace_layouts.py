@@ -104,6 +104,9 @@ OPEN_ACTION_ID = "open"
 # The address grammar (contracts.md section 1) and the rules the stores hold their values to.
 APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 MAX_APP_NAME_LENGTH = 32
+# The names an app may not take: the origin labels the workspace keeps for itself.
+RESERVED_APP_NAMES = frozenset({"localhost", "auth"})
+RESERVED_APP_NAME_PREFIXES = ("host-", "agent-")
 INSTANCE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 TMUX_SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 VIEW_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
@@ -245,6 +248,8 @@ def _is_app_name(name: str) -> bool:
     return (
         0 < len(name) <= MAX_APP_NAME_LENGTH
         and APP_NAME_PATTERN.fullmatch(name) is not None
+        and name not in RESERVED_APP_NAMES
+        and not name.startswith(RESERVED_APP_NAME_PREFIXES)
     )
 
 

@@ -94,6 +94,8 @@ def _plan(legacy_layout_dir: Path, tmp_path: Path, registry: Path) -> Any:
         ("terminal:bad.name", None),
         ("chat:has space", None),
         ("service:Not-An-App", None),
+        ("service:auth", None),
+        ("service:agent-1", None),
         ("service:browser?tab=1", None),
         ("", None),
     ],
