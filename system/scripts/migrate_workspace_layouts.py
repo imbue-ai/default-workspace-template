@@ -792,17 +792,19 @@ def files_record(
 ) -> dict[str, Any]:
     """One file viewer as the files app's store lists it (an ``InstanceRecord`` of the instances library)."""
     ref = f"service:files?instance={key}"
-    location = location_by_ref.get(ref, "")
+    location = location_by_ref.get(ref, "").strip()
     match = FILES_KEY_NUMBER_PATTERN.fullmatch(key)
     last_used_ms = last_used_ms_by_ref.get(ref)
     # The old store's rule, which also keeps a hand-edited value convertible: a stamp ahead of
     # the clock reads as now.
-    last_active = now_iso
-    if isinstance(last_used_ms, int) and 0 < last_used_ms < _iso_to_ms(now_iso):
-        last_active = _ms_to_iso(last_used_ms)
+    last_active = (
+        _ms_to_iso(last_used_ms)
+        if isinstance(last_used_ms, int) and 0 < last_used_ms < _iso_to_ms(now_iso)
+        else now_iso
+    )
     return {
         "key": key,
-        "url": location.strip() if _is_location(location.strip()) else "/",
+        "url": location if _is_location(location) else "/",
         "title": f"File Viewer {match.group(1)}" if match else key,
         "status": "idle",
         "lifetime": "referenced",
