@@ -799,17 +799,17 @@ def _migrate_workspace_layouts_best_effort() -> None:
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.error(
-            "The workspace layout migration could not run ({}); continuing boot", e
+            "Failed to run the workspace layout migration ({}); continuing boot", e
         )
         return
     if result.returncode != 0:
         logger.error(
-            "The workspace layout migration failed (rc={}); continuing boot: {}",
+            "Failed to migrate the workspace layouts (rc={}); continuing boot: {}",
             result.returncode,
             (result.stderr or result.stdout).strip()[-500:],
         )
         return
-    logger.info("Workspace layout migration checked: {}", result.stderr.strip()[-300:])
+    logger.info("Ran the workspace layout migration: {}", result.stderr.strip()[-300:])
 
 
 def _migrate_legacy_claude_state_best_effort() -> None:
