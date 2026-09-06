@@ -45,7 +45,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": "http://localhost:8010",
+      "/api": { target: "http://localhost:8010", ws: true },
     },
   },
 });
