@@ -15,8 +15,8 @@
  */
 
 import m from "mithril";
-import { Button } from "./components/Button";
-import { MODAL_MESSAGE_CLASS, Modal } from "./components/Modal";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import type { ProjectInfo } from "../models/Inventory";
 import { squiggleMarkup } from "./squiggles";
 

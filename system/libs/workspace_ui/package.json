@@ -1,0 +1,26 @@
+{
+  "name": "@imbue/workspace-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The workspace frontends' shared library: the design system, the base helpers, and the browser-side contract modules (source only; each app's build compiles it).",
+  "scripts": {
+    "lint": "tsc --noEmit && eslint src/",
+    "format": "prettier --write 'src/**/*.{ts,css}' '*.ts'",
+    "format:check": "prettier --check 'src/**/*.{ts,css}' '*.ts'",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "dompurify": "^3.3.3",
+    "mithril": "^2.2.7"
+  },
+  "devDependencies": {
+    "@types/dompurify": "^3.0.5",
+    "@types/mithril": "^2.2.7",
+    "@types/node": "^25.4.0",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.7.0",
+    "vite": "^6.2.0",
+    "vitest": "^4.1.0"
+  }
+}

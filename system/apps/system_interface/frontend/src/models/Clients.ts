@@ -5,7 +5,7 @@
  * and land on the same view).
  */
 
-import { apiUrl } from "../base-path";
+import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 
 export interface ClientRecord {
   id: string;

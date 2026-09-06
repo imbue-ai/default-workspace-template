@@ -13,7 +13,7 @@ vi.hoisted(() => {
 // apiUrl reads the base path from a <meta> tag, which vitest's node
 // environment has no document for; identity keeps the asserted URLs the bare
 // /api paths (mirrors Projects.test.ts).
-vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
+vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 
 import type { ProjectInfo } from "../models/Inventory";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";

@@ -18,8 +18,8 @@ import m from "mithril";
 import type { AppAction, AppRecord } from "../models/Inventory";
 import { appStoppedDetail, getOpenableApps, primaryActionForApp } from "../models/Inventory";
 import { appIconMarkup } from "./components/appIcon";
-import { hoverTooltipAttrs } from "./components/hoverTooltip";
-import { icon } from "./components/icons";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { icon } from "@imbue/workspace-ui/src/components/icons";
 
 const FILTER_ROW_THRESHOLD = 8;
 const ROW_GLYPH_SIZE = 14;

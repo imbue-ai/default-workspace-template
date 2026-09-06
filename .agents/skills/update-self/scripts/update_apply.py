@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 import traceback
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable, Collection, NamedTuple, Sequence
 
@@ -73,11 +74,13 @@ from update_layout import (
     BUNDLE_STAMP_FILENAME,
     DEFAULT_WORKSPACE_URL,
     ENV_WORKSPACE_URL,
-    FRONTEND_BUILD_INDEX,
-    FRONTEND_DIR,
+    FRONTEND_BUNDLES,
+    FRONTEND_LIB_DIR,
     LAYOUT_MIGRATION_SCRIPT,
+    NPM_LOCKFILE,
+    NPM_ROOT_DIR,
     PROVISIONER_SCRIPT,
-    STATIC_DIR,
+    FrontendBundle,
 )
 from update_ledger import LedgerCommitError, write_version_history_entry
 from update_probes import (
@@ -233,12 +236,22 @@ def _has_rollback_since(merge_ref: str, repo_root: Path, runner: Runner) -> bool
     return any(line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines())
 
 
-def _expected_frontend_tree_hash(repo_root: Path, runner: Runner) -> str | None:
-    """The merged tree's frontend-source tree hash, or ``None`` when git cannot
-    answer (verification then degrades to the index-only check with a warning
-    rather than blocking an apply over a read failure)."""
+def _expected_frontend_tree_hash(
+    repo_root: Path, runner: Runner, bundle: FrontendBundle
+) -> str | None:
+    """The merged tree's source hashes for one bundle (its frontend directory,
+    the shared library, the npm lockfile: what its postbuild stamps), or
+    ``None`` when git cannot answer (verification then degrades to the
+    index-only check with a warning rather than blocking an apply over a read
+    failure)."""
     result = runner.run(
-        ["git", "rev-parse", f"HEAD:{FRONTEND_DIR}"],
+        [
+            "git",
+            "rev-parse",
+            f"HEAD:{bundle.frontend_dir}",
+            f"HEAD:{FRONTEND_LIB_DIR}",
+            f"HEAD:{NPM_LOCKFILE}",
+        ],
         cwd=str(repo_root),
         capture_output=True,
         text=True,
@@ -257,9 +270,9 @@ def _read_bundle_stamp(bundle_dir: Path) -> str | None:
 
 
 def _worker_bundle_reject_reason(
-    worker_bundle: str | None, expected_hash: str | None
+    worker_bundle: str | None, expected_hash: str | None, bundle: FrontendBundle
 ) -> str | None:
-    """Why a ``--worker-bundle`` cannot be installed as-is, or ``None``.
+    """Why one app's ``--worker-bundle`` cannot be installed as-is, or ``None``.
 
     The stamp check is what keeps a stale-but-populated directory from being
     copied over the live UI while the source says otherwise -- the "source
@@ -269,10 +282,11 @@ def _worker_bundle_reject_reason(
     what ships" guarantee is lost, which the caller's note says).
     """
     if worker_bundle is None:
-        return None
+        return f"names no bundle for {bundle.app}"
     source = Path(worker_bundle)
-    if not (source / "index.html").exists():
-        return "holds no built bundle (index.html missing)"
+    index_name = Path(bundle.index_path).name
+    if not (source / index_name).exists():
+        return f"holds no built bundle ({index_name} missing)"
     if expected_hash is None:
         # Cannot verify (git could not resolve the merged frontend tree); the
         # index-only acceptance is all there is.
@@ -291,10 +305,13 @@ def _worker_bundle_reject_reason(
     return None
 
 
-def _assert_bundle_built(
-    repo_root: Path, expected_hash: str | None, *, live_service_restarted: bool
+def _assert_bundles_built(
+    repo_root: Path,
+    expected_hashes: Mapping[str, str | None] | None,
+    *,
+    live_service_restarted: bool,
 ) -> None:
-    """Raise unless the build actually left a servable bundle of the merged
+    """Raise unless the build actually left every servable bundle of the merged
     source behind.
 
     A build tool that empties its output directory and then exits 0 without
@@ -302,67 +319,76 @@ def _assert_bundle_built(
     check catches that. The stamp comparison is the consistency check on top:
     whatever is installed (a copied worker bundle, or a live build whose
     postbuild stamped it) must have been built from the merged tree's frontend
-    source. It is skipped when ``expected_hash`` is ``None`` (recovery rebuilds
-    on a rolled-back tree, where the pre-stamp build is normal) and degrades to
-    a warning when the bundle simply carries no stamp (a build without a git
-    repo writes none).
+    source. It is skipped when ``expected_hashes`` is ``None`` (recovery
+    rebuilds on a rolled-back tree, where the pre-stamp build is normal) and
+    degrades to a warning when a bundle simply carries no stamp (a build
+    without a git repo writes none).
     """
-    index = repo_root / FRONTEND_BUILD_INDEX
-    if not index.exists():
-        raise ApplyFailed(
-            f"the frontend build reported success but wrote no bundle ({index} is missing)",
-            live_service_restarted=live_service_restarted,
+    for bundle in FRONTEND_BUNDLES:
+        index = repo_root / bundle.index_path
+        if not index.exists():
+            raise ApplyFailed(
+                f"the frontend build reported success but wrote no {bundle.app} bundle "
+                f"({index} is missing)",
+                live_service_restarted=live_service_restarted,
+            )
+        expected_hash = (
+            None if expected_hashes is None else expected_hashes.get(bundle.app)
         )
-    if expected_hash is None:
-        return
-    stamp = _read_bundle_stamp(repo_root / STATIC_DIR)
-    if stamp is None:
-        sys.stderr.write(
-            f"note: the installed bundle carries no {BUNDLE_STAMP_FILENAME} stamp, "
-            "so it could not be verified against the merged source.\n"
-        )
-        return
-    if stamp != expected_hash:
-        raise ApplyFailed(
-            f"the installed bundle does not correspond to the merged source (built "
-            f"from frontend tree {stamp}, merged tree is {expected_hash})",
-            live_service_restarted=live_service_restarted,
-        )
+        if expected_hash is None:
+            continue
+        stamp = _read_bundle_stamp(repo_root / bundle.static_dir)
+        if stamp is None:
+            sys.stderr.write(
+                f"note: the installed {bundle.app} bundle carries no {BUNDLE_STAMP_FILENAME} "
+                "stamp, so it could not be verified against the merged source.\n"
+            )
+            continue
+        if stamp != expected_hash:
+            raise ApplyFailed(
+                f"the installed {bundle.app} bundle does not correspond to the merged source "
+                f"(built from {_one_line(stamp)}, merged tree is {_one_line(expected_hash)})",
+                live_service_restarted=live_service_restarted,
+            )
 
 
-def _install_or_build_bundle(
-    worker_bundle: str | None,
+def _one_line(stamp: str) -> str:
+    """A stamp's tree hashes on one line, for a message."""
+    return " ".join(stamp.split())
+
+
+def _install_or_build_bundles(
+    worker_bundles: Mapping[str, str] | None,
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
-    timeout: float | None = None,
+    timeout: float,
 ) -> None:
-    """Put the merged frontend's bundle in place.
+    """Put the merged source's bundles in place: the worker's, or a live build.
 
-    ``worker_bundle`` is the worker's already-built ``static/`` once the caller
-    has verified it against the merged source (:func:`_worker_bundle_reject_reason`)
-    -- the artifact the worker validated, and installing it is a plain copy that
-    needs neither npm nor a registry. ``None`` means build live, tagged
-    expendable: a shed build is an ordinary failure the rollback absorbs.
+    ``worker_bundles`` is every app's already-built ``static/`` once the caller has
+    verified each against the merged source (:func:`_worker_bundle_reject_reason`);
+    each is copied over the app's served directory as-is, so what the worker
+    validated is exactly what ships. Otherwise one ``npm run build`` at the npm
+    root emits them all.
     """
-    if worker_bundle is not None:
-        source = Path(worker_bundle)
-        destination = repo_root / STATIC_DIR
-        try:
-            if destination.exists():
-                shutil.rmtree(destination)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, destination)
-        except OSError as exc:
-            raise ApplyFailed(
-                f"installing the worker's built bundle from {source} failed "
-                f"({type(exc).__name__}: {exc})"
-            ) from exc
+    if worker_bundles is not None:
+        for bundle in FRONTEND_BUNDLES:
+            source = Path(worker_bundles[bundle.app])
+            destination = repo_root / bundle.static_dir
+            try:
+                shutil.rmtree(destination, ignore_errors=True)
+                shutil.copytree(source, destination)
+            except OSError as exc:
+                raise ApplyFailed(
+                    f"installing the worker's built {bundle.app} bundle from {source} failed "
+                    f"({type(exc).__name__}: {exc})"
+                ) from exc
         return
     run_checked(
         runner,
         expend(["npm", "run", "build"]),
-        repo_root / FRONTEND_DIR,
+        repo_root / NPM_ROOT_DIR,
         "npm run build",
         timeout=timeout,
     )
@@ -488,20 +514,22 @@ def _recover_running_state(
                     "ahead of the tree. The rollback still counts as recovered -- re-run "
                     f"`bash {PROVISIONER_SCRIPT}` once the cause (often no network) is fixed.\n"
                 )
-        if plan.frontend and "bundle" not in restored:
+        if plan.frontend and any(
+            bundle.snapshot_name not in restored for bundle in FRONTEND_BUNDLES
+        ):
             # No copy to put back: compile from source. node_modules likewise
             # has to match the restored lockfile when its own copy is gone.
             if plan.frontend_manifest and "node_modules" not in restored:
-                run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
+                run_checked(runner, ["npm", "ci"], repo_root / NPM_ROOT_DIR, "npm ci")
             run_checked(
                 runner,
                 ["npm", "run", "build"],
-                repo_root / FRONTEND_DIR,
+                repo_root / NPM_ROOT_DIR,
                 "npm run build",
             )
             # No stamp comparison here: the tree is rolled back, and an older
             # tree's build may predate the stamping postbuild step.
-            _assert_bundle_built(repo_root, None, live_service_restarted=False)
+            _assert_bundles_built(repo_root, None, live_service_restarted=False)
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(repo_root, runner, keep_protected)
         rebuildable_app_tools = _app_tools_to_rebuild(
@@ -596,13 +624,14 @@ def _report_emergency(
     # out of exactly the failure that gets here. Only pointed at when the apply
     # touched the frontend -- after a backend-only apply the bundle copy is
     # byte-identical to what is already being served.
-    bundle_copy = snapshots_root(repo_root) / "bundle"
-    if plan.frontend and bundle_copy.exists():
-        sys.stderr.write(
-            f"the pre-apply frontend bundle was kept at {bundle_copy} -- copying it over "
-            f"{repo_root / STATIC_DIR} restores the UI without needing npm or a registry. "
-            "Delete it once you have.\n"
-        )
+    for bundle in FRONTEND_BUNDLES:
+        bundle_copy = snapshots_root(repo_root) / bundle.snapshot_name
+        if plan.frontend and bundle_copy.exists():
+            sys.stderr.write(
+                f"the pre-apply {bundle.app} bundle was kept at {bundle_copy} -- copying it over "
+                f"{repo_root / bundle.static_dir} restores the UI without needing npm or a "
+                "registry. Delete it once you have.\n"
+            )
 
 
 def apply_update(
@@ -610,7 +639,7 @@ def apply_update(
     repo_root: Path,
     *,
     ff_only: bool,
-    worker_bundle: str | None,
+    worker_bundles: Mapping[str, str] | None,
     target_ref: str | None,
     runner: Runner,
     http: HttpClient,
@@ -664,7 +693,7 @@ def apply_update(
         # corrected --worker-bundle path) must not be silently ignored.
         marker.ff_only = ff_only
         marker.target_ref = target_ref
-        marker.worker_bundle = worker_bundle
+        marker.worker_bundles = None if worker_bundles is None else dict(worker_bundles)
         # A kill inside ``git merge`` leaves the merge staged but uncommitted.
         # That half-motion is this apply's own, so undo it and re-merge from a
         # clean tree rather than refusing on the dirt it left. Only here: on a
@@ -681,7 +710,7 @@ def apply_update(
             merge_ref=merge_ref,
             target_ref=target_ref,
             ff_only=ff_only,
-            worker_bundle=worker_bundle,
+            worker_bundles=None if worker_bundles is None else dict(worker_bundles),
             phase=PHASE_STARTED,
             pid=os.getpid(),
             started_at=now(),
@@ -778,38 +807,52 @@ def apply_update(
     # makes this decision trustworthy -- an unverifiable or stale bundle is
     # rejected here, so the live-build fallback (and its npm refresh) still
     # runs for it.
-    expected_bundle_hash: str | None = None
-    usable_worker_bundle: str | None = None
+    expected_bundle_hashes: dict[str, str | None] | None = None
+    usable_worker_bundles: dict[str, str] | None = None
     if plan.frontend:
-        expected_bundle_hash = _expected_frontend_tree_hash(repo_root, runner)
-        if expected_bundle_hash is None:
-            sys.stderr.write(
-                f"note: could not resolve the merged tree's {FRONTEND_DIR} hash, so "
-                "the bundle cannot be verified against the merged source; accepting "
-                "it on its index alone.\n"
-            )
-        bundle_reject = _worker_bundle_reject_reason(
-            marker.worker_bundle, expected_bundle_hash
-        )
-        if marker.worker_bundle is not None:
-            if bundle_reject is None:
-                usable_worker_bundle = marker.worker_bundle
-            else:
+        expected_bundle_hashes = {
+            bundle.app: _expected_frontend_tree_hash(repo_root, runner, bundle)
+            for bundle in FRONTEND_BUNDLES
+        }
+        for bundle in FRONTEND_BUNDLES:
+            if expected_bundle_hashes[bundle.app] is None:
                 sys.stderr.write(
-                    f"note: --worker-bundle {marker.worker_bundle} "
-                    f"{bundle_reject}; building live instead.\n"
+                    f"note: could not resolve the merged tree's {bundle.frontend_dir} hash, so "
+                    f"the {bundle.app} bundle cannot be verified against the merged source; "
+                    "accepting it on its index alone.\n"
                 )
+        if marker.worker_bundles is not None:
+            # All or nothing: the bundles are built together from one tree, and a
+            # live build emits them all, so one that cannot be installed means a
+            # live build for both.
+            rejections = {
+                bundle.app: _worker_bundle_reject_reason(
+                    marker.worker_bundles.get(bundle.app),
+                    expected_bundle_hashes[bundle.app],
+                    bundle,
+                )
+                for bundle in FRONTEND_BUNDLES
+            }
+            if all(reason is None for reason in rejections.values()):
+                usable_worker_bundles = dict(marker.worker_bundles)
+            else:
+                for app, reason in rejections.items():
+                    if reason is not None:
+                        sys.stderr.write(
+                            f"note: --worker-bundle {app}={marker.worker_bundles.get(app, '')} "
+                            f"{reason}; building live instead.\n"
+                        )
 
     failure: ApplyFailed | None = None
     try:
         marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
         _advance(PHASE_SNAPSHOTTED)
 
-        if plan.frontend_manifest and usable_worker_bundle is None:
+        if plan.frontend_manifest and usable_worker_bundles is None:
             run_checked(
                 runner,
                 expend(["npm", "ci"]),
-                repo_root / FRONTEND_DIR,
+                repo_root / NPM_ROOT_DIR,
                 "npm ci",
                 timeout=_NPM_CI_TIMEOUT_SECONDS,
             )
@@ -870,15 +913,15 @@ def apply_update(
             )
 
         if plan.frontend:
-            _install_or_build_bundle(
-                usable_worker_bundle,
+            _install_or_build_bundles(
+                usable_worker_bundles,
                 repo_root,
                 runner,
                 expend,
                 _FRONTEND_BUILD_TIMEOUT_SECONDS,
             )
-            _assert_bundle_built(
-                repo_root, expected_bundle_hash, live_service_restarted=False
+            _assert_bundles_built(
+                repo_root, expected_bundle_hashes, live_service_restarted=False
             )
             _advance(PHASE_BUILT)
 

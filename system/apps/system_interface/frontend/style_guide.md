@@ -1,6 +1,6 @@
 # System Interface frontend style guide
 
-Project-specific style guide for `system/apps/system_interface/frontend` (the web
+Project-specific style guide for the workspace frontends: `system/apps/system_interface/frontend` (the web
 workspace UI: TypeScript + Vite + Tailwind v4 + mithril/dockview). Read it
 alongside the base `docs/system/style_guide.md` (which covers Python/backend
 conventions and does not cover the frontend). This file governs the CSS and the

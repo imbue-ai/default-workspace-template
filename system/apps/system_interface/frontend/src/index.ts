@@ -1,4 +1,4 @@
-import { getBasePath } from "./base-path";
+import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { initInventory } from "./models/Inventory";
 import { initEmbedderRelay } from "./relay";
 import m from "mithril";

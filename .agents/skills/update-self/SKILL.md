@@ -397,9 +397,11 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     --merge-ref mngr/update-self --ff-only --target-ref "$REF"
 ```
 
-When the report names the worker's **built system-interface bundle**, append
-`--worker-bundle <that path>` so the exact build the worker validated is
-installed instead of a live build.
+When the report names the worker's **built frontend bundles** (the shell's
+`static/` and the chat app's), append `--worker-bundle system_interface=<path>
+--worker-bundle chat=<path>` so the exact builds the worker validated are
+installed instead of a live build; the apply installs them only as a pair (one
+`npm run build` emits both), and builds live when either is missing or stale.
 
 That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the

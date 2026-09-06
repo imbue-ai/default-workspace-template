@@ -5,6 +5,8 @@ the apply re-runs.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 # The pinned-toolchain provisioner: the one script every provider runs to
 # install the global toolchain (system packages, language runtimes, pinned
 # CLIs). Its effects land at image-build / workspace-create time rather than at
@@ -20,6 +22,42 @@ PROVISIONER_SCRIPT = "system/scripts/setup_system.sh"
 SYSTEM_INTERFACE_DIR = "system/apps/system_interface"
 
 FRONTEND_DIR = f"{SYSTEM_INTERFACE_DIR}/frontend"
+
+# The chat app: the workspace's second frontend, built beside the shell's.
+CHAT_DIR = "system/apps/chat"
+
+CHAT_FRONTEND_DIR = f"{CHAT_DIR}/frontend"
+
+# The frontends' shared library (source only: each app's build compiles what it imports) and
+# the npm workspace every frontend belongs to -- one ``npm ci`` at its root, one lockfile.
+FRONTEND_LIB_DIR = "system/libs/workspace_ui"
+
+NPM_ROOT_DIR = "system"
+
+NPM_LOCKFILE = f"{NPM_ROOT_DIR}/package-lock.json"
+
+# The manifests whose change means the frontends' dependencies moved (an ``npm ci``).
+NPM_MANIFEST_PATHS = frozenset(
+    {
+        f"{NPM_ROOT_DIR}/package.json",
+        NPM_LOCKFILE,
+        f"{FRONTEND_DIR}/package.json",
+        f"{CHAT_FRONTEND_DIR}/package.json",
+        f"{FRONTEND_LIB_DIR}/package.json",
+    }
+)
+
+# The tooling every frontend shares; a change re-emits every bundle like a source change.
+FRONTEND_TOOLING_PATHS = frozenset(
+    {
+        f"{NPM_ROOT_DIR}/eslint.config.js",
+        f"{NPM_ROOT_DIR}/.prettierrc",
+        f"{NPM_ROOT_DIR}/tsconfig.base.json",
+    }
+)
+
+# Every directory whose change re-emits a bundle: the two frontends and the library they share.
+FRONTEND_SOURCE_DIRS = (FRONTEND_DIR, CHAT_FRONTEND_DIR, FRONTEND_LIB_DIR)
 
 # The vendored mngr the workspace runs on, and the uv tool built from it. An
 # editable install pins the *source path*, not the dependency closure -- so the
@@ -65,17 +103,51 @@ STATIC_DIR = f"{SYSTEM_INTERFACE_DIR}/imbue/system_interface/static"
 
 FRONTEND_BUILD_INDEX = f"{STATIC_DIR}/index.html"
 
-# The identity stamp the frontend build writes into the bundle: the git tree
-# hash of the frontend source directory at the checkout's HEAD commit (an npm
-# `postbuild` step in frontend/package.json running `git rev-parse HEAD:./`;
-# best-effort, absent when the build ran with no git repo). It names the
-# committed tree, not the working tree: uncommitted frontend edits at build
-# time are not reflected in it, so a worker's bundle only describes its source
-# when the worker built after committing. The apply compares it against the
-# merged tree's own frontend tree hash, so a populated bundle built from some
-# other source -- a wrong --worker-bundle path, an old worker's leftovers --
-# falls back to a live build instead of being served as if it were the merged
-# source. A live build in the merged checkout stamps that same hash, so for it
+CHAT_STATIC_DIR = f"{CHAT_DIR}/imbue/chat/static"
+
+CHAT_FRONTEND_BUILD_INDEX = f"{CHAT_STATIC_DIR}/chat.html"
+
+
+class FrontendBundle(NamedTuple):
+    """One frontend's build: the app it belongs to, its sources, and the bundle its backend serves.
+
+    ``snapshot_name`` names its pre-apply copy; ``index_path`` is the document whose presence
+    says the build wrote a bundle at all.
+    """
+
+    app: str
+    snapshot_name: str
+    frontend_dir: str
+    static_dir: str
+    index_path: str
+
+
+# Every bundle the apply builds, installs, snapshots and verifies. One ``npm run build`` at
+# the npm root emits them all.
+FRONTEND_BUNDLES = (
+    FrontendBundle(
+        "system_interface", "bundle", FRONTEND_DIR, STATIC_DIR, FRONTEND_BUILD_INDEX
+    ),
+    FrontendBundle(
+        "chat",
+        "chat_bundle",
+        CHAT_FRONTEND_DIR,
+        CHAT_STATIC_DIR,
+        CHAT_FRONTEND_BUILD_INDEX,
+    ),
+)
+
+# The identity stamp each frontend build writes into its bundle: the git tree
+# hashes, one per line, of the app's frontend directory, the shared library
+# and the npm lockfile at the checkout's HEAD commit (an npm `postbuild` step
+# in the app's package.json running `git rev-parse` on the three; best-effort,
+# absent when the build ran with no git repo). It names the committed trees,
+# not the working tree: uncommitted frontend edits at build time are not
+# reflected in it, so a worker's bundle only describes its source when the
+# worker built after committing. The apply compares it against the merged
+# tree's own hashes, so a populated bundle built from some other source -- a
+# wrong --worker-bundle path, an old worker's leftovers -- falls back to a
+# live build instead of being served as if it were the merged source. A live build in the merged checkout stamps that same hash, so for it
 # the comparison is only a consistency check; the postbuild runs after any
 # exit-0 build, and a build that wrote nothing is caught by the index check
 # (vite empties the output directory first), not by the stamp.

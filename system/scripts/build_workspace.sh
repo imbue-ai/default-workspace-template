@@ -40,8 +40,9 @@ cd "$REPO_ROOT"
 # refuse on an ownership mismatch.
 git config --global --add safe.directory "$REPO_ROOT"
 
-# Build the system_interface frontend (deps installed by install_dependencies.sh).
-( cd "$REPO_ROOT/system/apps/system_interface/frontend" && npm run build )
+# Build every frontend of the npm workspace (deps installed by install_dependencies.sh): the
+# shell's and the chat app's, each into the static/ directory its backend serves.
+( cd "$REPO_ROOT/system" && npm run build )
 
 # Install mngr as a tool, then every Python app (each system/apps/<package>/
 # with both a pyproject.toml and an app.toml manifest) as its own tool from its

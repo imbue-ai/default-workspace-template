@@ -22,7 +22,7 @@ import {
   whenAppsLoaded,
 } from "./Inventory";
 import type { AppRecord, InstanceRecord } from "./Inventory";
-import { getClientId } from "./ClientIdentity";
+import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { appRecord, instanceRecord } from "../testing/records";
 
 function instance(key: string, title: string, url: string = "/"): InstanceRecord {

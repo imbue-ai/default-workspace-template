@@ -578,6 +578,12 @@ def test_classify_path_project_mapping() -> None:
         == "system/apps/system_interface"
     )
     assert (
+        update_classification.classify_path(
+            "system/apps/chat/imbue/chat/server.py"
+        ).project
+        == "system/apps/chat"
+    )
+    assert (
         update_classification.classify_path("system/vendor/mngr/x.py").project
         == "system/vendor/mngr"
     )
@@ -1246,19 +1252,24 @@ _TODAY = "2026-08-19"
 
 
 def _write_bundle(repo_root: Path, stamp: str | None = None) -> None:
-    static = repo_root / update_layout.STATIC_DIR
-    (static / "assets").mkdir(parents=True, exist_ok=True)
-    (static / "index.html").write_text(
-        f'<!doctype html><html><head><script type="module" src="/assets/{_ASSET_NAME}">'
-        "</script></head><body></body></html>"
-    )
-    (static / "assets" / _ASSET_NAME).write_text("console.log('app');")
-    if stamp is not None:
-        (static / update_layout.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
+    """Write every bundle the apply serves (the shell's and the chat's), as one build does."""
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        static = repo_root / bundle.static_dir
+        (static / "assets").mkdir(parents=True, exist_ok=True)
+        (repo_root / bundle.index_path).write_text(
+            f'<!doctype html><html><head><script type="module" src="/assets/{_ASSET_NAME}">'
+            "</script></head><body></body></html>"
+        )
+        (static / "assets" / _ASSET_NAME).write_text("console.log('app');")
+        if stamp is not None:
+            (static / update_layout.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
 
 
 def _bundle_exists(repo_root: Path) -> bool:
-    return (repo_root / update_layout.FRONTEND_BUILD_INDEX).exists()
+    return all(
+        (repo_root / bundle.index_path).exists()
+        for bundle in update_layout.FRONTEND_BUNDLES
+    )
 
 
 def _installed_stamp(repo_root: Path) -> str | None:
@@ -1395,10 +1406,10 @@ class _RecordingRunner(update_runtime.Runner):
 
     def _emulate_build(self, is_successful: bool) -> None:
         assert self.repo_root is not None
-        static = self.repo_root / update_layout.STATIC_DIR
-        # vite's `emptyOutDir: true` -- the output is destroyed before any new
-        # output is written, so a failure part-way through leaves nothing.
-        shutil.rmtree(static, ignore_errors=True)
+        # vite's `emptyOutDir: true` -- each bundle's output is destroyed before any
+        # new output is written, so a failure part-way through leaves nothing.
+        for bundle in update_layout.FRONTEND_BUNDLES:
+            shutil.rmtree(self.repo_root / bundle.static_dir, ignore_errors=True)
         if is_successful and self.is_build_output_written:
             _write_bundle(self.repo_root, self.build_stamp)
 
@@ -1543,7 +1554,7 @@ def _apply(
     *,
     merge_ref: str = _MERGE_REF,
     ff_only: bool = True,
-    worker_bundle: str | None = None,
+    worker_bundles: dict[str, str] | None = None,
     target_ref: str | None = None,
     is_pid_live: Callable[[int], bool] = lambda pid: False,
     expend: Callable[[Sequence[str]], list[str]] = _tagging_expend,
@@ -1552,7 +1563,7 @@ def _apply(
         merge_ref,
         repo_root,
         ff_only=ff_only,
-        worker_bundle=worker_bundle,
+        worker_bundles=worker_bundles,
         target_ref=target_ref,
         runner=runner,
         http=http,
@@ -1630,7 +1641,7 @@ def _plant_marker(
         merge_ref=merge_ref,
         target_ref=None,
         ff_only=True,
-        worker_bundle=None,
+        worker_bundles=None,
         phase=phase,
         pid=pid,
         started_at=updated_at - 10,
@@ -1804,7 +1815,10 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
             update_layout.PLUGIN_MANIFEST_PATH,
             {"system-interface", "chat", "browser", "terminal-app", "files-app"},
         ),
-        ("uv.lock", {"system-interface", "chat", "browser", "terminal-app", "files-app"}),
+        (
+            "uv.lock",
+            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
+        ),
     ],
 )
 def test_plan_apply_refreshes_the_tool_of_every_changed_app_directory(
@@ -1889,11 +1903,31 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
         "system/apps/system_interface/frontend/vite.config.ts",
         "system/apps/system_interface/frontend/tsconfig.json",
         "system/apps/system_interface/frontend/public/logo.svg",
+        # The chat app's frontend and the library both compile into a bundle; so does
+        # the tooling every build reads.
+        "system/apps/chat/frontend/src/index.ts",
+        "system/apps/chat/frontend/chat.html",
+        "system/libs/workspace_ui/src/base.css",
+        "system/tsconfig.base.json",
     ],
 )
 def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
     plan = _plan([path])
     assert plan.frontend_src and not plan.frontend_manifest
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "system/package.json",
+        "system/package-lock.json",
+        "system/apps/chat/frontend/package.json",
+        "system/libs/workspace_ui/package.json",
+    ],
+)
+def test_plan_apply_reads_every_npm_manifest_of_the_workspace(path: str) -> None:
+    plan = _plan([path])
+    assert plan.frontend_manifest and not plan.frontend_src
 
 
 @pytest.mark.parametrize(
@@ -2197,15 +2231,10 @@ def test_apply_unresolvable_merge_ref_leaves_no_marker_behind(
 # --- apply: worker bundle -------------------------------------------------------
 
 
-def test_apply_installs_the_workers_bundle_instead_of_building(
+def test_apply_installs_the_workers_bundles_instead_of_building(
     apply_repo: Path, tmp_path: Path
 ) -> None:
-    worker_bundle = tmp_path / "worker-static"
-    (worker_bundle / "assets").mkdir(parents=True)
-    (worker_bundle / "index.html").write_text(
-        f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>'
-    )
-    (worker_bundle / "assets" / _ASSET_NAME).write_text("console.log('worker');")
+    worker_bundles = _make_worker_bundles(tmp_path, stamp=None)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     code = _apply(
@@ -2213,19 +2242,20 @@ def test_apply_installs_the_workers_bundle_instead_of_building(
         _FakeHttp(_all_healthy),
         _FakeSpawner(),
         apply_repo,
-        worker_bundle=str(worker_bundle),
+        worker_bundles=worker_bundles,
     )
 
     assert code == 0
-    # The worker's validated artifact is installed as-is; no live build runs.
+    # The worker's validated artifacts are installed as-is; no live build runs.
     assert not runner.ran("npm", "run", "build")
-    installed = (
-        apply_repo / update_layout.STATIC_DIR / "assets" / _ASSET_NAME
-    ).read_text()
-    assert installed == "console.log('worker');"
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        installed = (
+            apply_repo / bundle.static_dir / "assets" / _ASSET_NAME
+        ).read_text()
+        assert installed == "console.log('worker');"
 
 
-def test_apply_falls_back_to_a_live_build_when_the_bundle_path_is_empty(
+def test_apply_falls_back_to_a_live_build_when_a_bundle_path_is_empty(
     apply_repo: Path, tmp_path: Path
 ) -> None:
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
@@ -2235,37 +2265,68 @@ def test_apply_falls_back_to_a_live_build_when_the_bundle_path_is_empty(
         _FakeHttp(_all_healthy),
         _FakeSpawner(),
         apply_repo,
-        worker_bundle=str(tmp_path / "not-built"),
+        worker_bundles={
+            "system_interface": str(tmp_path / "not-built"),
+            "chat": str(tmp_path / "not-built"),
+        },
     )
 
     assert code == 0
     assert runner.ran("npm", "run", "build")
 
 
+def test_apply_builds_live_when_the_worker_names_only_one_of_the_bundles(
+    apply_repo: Path, tmp_path: Path, capsys
+) -> None:
+    # The bundles are built together from one tree, so the shell's alone is not
+    # installed over a chat bundle nothing vouches for: one live build emits both.
+    worker_bundles = _make_worker_bundles(tmp_path, stamp=None)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        worker_bundles={"system_interface": worker_bundles["system_interface"]},
+    )
+
+    assert code == 0
+    assert runner.ran("npm", "run", "build")
+    assert "names no bundle for chat" in capsys.readouterr().err
+
+
 _FRONTEND_TREE_HASH = "f1e2d3c4b5a6978877665544332211ffeeddccbb"
 
 
-def _make_worker_bundle(tmp_path: Path, stamp: str | None) -> Path:
-    worker_bundle = tmp_path / "worker-static"
-    (worker_bundle / "assets").mkdir(parents=True)
-    (worker_bundle / "index.html").write_text(
-        f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>'
-    )
-    (worker_bundle / "assets" / _ASSET_NAME).write_text("console.log('worker');")
-    if stamp is not None:
-        (worker_bundle / update_layout.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
-    return worker_bundle
+def _make_worker_bundles(tmp_path: Path, stamp: str | None) -> dict[str, str]:
+    """A worker's built static/ directory per app, keyed the way ``--worker-bundle`` is."""
+    bundles: dict[str, str] = {}
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        worker_bundle = tmp_path / f"worker-{bundle.app}-static"
+        (worker_bundle / "assets").mkdir(parents=True)
+        (worker_bundle / Path(bundle.index_path).name).write_text(
+            f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>'
+        )
+        (worker_bundle / "assets" / _ASSET_NAME).write_text("console.log('worker');")
+        if stamp is not None:
+            (worker_bundle / update_layout.BUNDLE_STAMP_FILENAME).write_text(
+                stamp + "\n"
+            )
+        bundles[bundle.app] = str(worker_bundle)
+    return bundles
 
 
 def _verifiable_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
-    """An apply runner whose git can resolve the merged tree's frontend hash,
+    """An apply runner whose git can resolve the merged tree's frontend hashes,
     so bundle stamps are actually compared (and whose emulated build stamps
     its output like the real postbuild step)."""
     runner = _apply_runner(name_status, repo_root)
-    runner.respond(
-        ("git", "rev-parse", f"HEAD:{update_layout.FRONTEND_DIR}"),
-        _Result(stdout=_FRONTEND_TREE_HASH + "\n"),
-    )
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        runner.respond(
+            ("git", "rev-parse", f"HEAD:{bundle.frontend_dir}"),
+            _Result(stdout=_FRONTEND_TREE_HASH + "\n"),
+        )
     runner.build_stamp = _FRONTEND_TREE_HASH
     return runner
 
@@ -2281,7 +2342,7 @@ def test_a_verified_worker_bundle_is_installed_without_the_npm_refresh(
     # node_modules, so with a manifest change in the plan the `npm ci` --
     # the slowest, most memory-hungry step, and one whose shed rolls the
     # whole update back -- is dead work on the critical path and must not run.
-    worker_bundle = _make_worker_bundle(tmp_path, stamp=_FRONTEND_TREE_HASH)
+    worker_bundles = _make_worker_bundles(tmp_path, stamp=_FRONTEND_TREE_HASH)
     runner = _verifiable_runner(_FRONTEND_MANIFEST_DIFF, apply_repo)
 
     code = _apply(
@@ -2289,7 +2350,7 @@ def test_a_verified_worker_bundle_is_installed_without_the_npm_refresh(
         _FakeHttp(_all_healthy),
         _FakeSpawner(),
         apply_repo,
-        worker_bundle=str(worker_bundle),
+        worker_bundles=worker_bundles,
     )
 
     assert code == 0
@@ -2306,7 +2367,7 @@ def test_a_stale_worker_bundle_falls_back_to_a_refreshed_live_build(
     # the "source updated, UI didn't" state a user once caught by eye. It must
     # never be served: the live build runs instead -- with its npm refresh,
     # since the copy-only shortcut no longer applies.
-    worker_bundle = _make_worker_bundle(tmp_path, stamp="0" * 40)
+    worker_bundles = _make_worker_bundles(tmp_path, stamp="0" * 40)
     runner = _verifiable_runner(_FRONTEND_MANIFEST_DIFF, apply_repo)
 
     code = _apply(
@@ -2314,7 +2375,7 @@ def test_a_stale_worker_bundle_falls_back_to_a_refreshed_live_build(
         _FakeHttp(_all_healthy),
         _FakeSpawner(),
         apply_repo,
-        worker_bundle=str(worker_bundle),
+        worker_bundles=worker_bundles,
     )
 
     assert code == 0
@@ -2329,7 +2390,7 @@ def test_a_stale_worker_bundle_falls_back_to_a_refreshed_live_build(
 def test_an_unstamped_worker_bundle_is_not_trusted_over_a_verifiable_tree(
     apply_repo: Path, tmp_path: Path, capsys
 ) -> None:
-    worker_bundle = _make_worker_bundle(tmp_path, stamp=None)
+    worker_bundles = _make_worker_bundles(tmp_path, stamp=None)
     runner = _verifiable_runner(_FRONTEND_DIFF, apply_repo)
 
     code = _apply(
@@ -2337,7 +2398,7 @@ def test_an_unstamped_worker_bundle_is_not_trusted_over_a_verifiable_tree(
         _FakeHttp(_all_healthy),
         _FakeSpawner(),
         apply_repo,
-        worker_bundle=str(worker_bundle),
+        worker_bundles=worker_bundles,
     )
 
     assert code == 0
@@ -2369,7 +2430,7 @@ def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
     # When git cannot resolve the merged frontend tree there is nothing to
     # compare a stamp against, and an apply must not be blocked on a read
     # failure: the pre-stamp acceptance (index.html present) is what is left.
-    worker_bundle = _make_worker_bundle(tmp_path, stamp=None)
+    worker_bundles = _make_worker_bundles(tmp_path, stamp=None)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(
         ("git", "rev-parse", f"HEAD:{update_layout.FRONTEND_DIR}"),
@@ -2381,7 +2442,7 @@ def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
         _FakeHttp(_all_healthy),
         _FakeSpawner(),
         apply_repo,
-        worker_bundle=str(worker_bundle),
+        worker_bundles=worker_bundles,
     )
 
     assert code == 0
@@ -4294,9 +4355,9 @@ def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
 def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> None:
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
-    (repo_root / update_layout.FRONTEND_DIR / "node_modules").mkdir(parents=True)
+    (repo_root / update_layout.NPM_ROOT_DIR / "node_modules").mkdir(parents=True)
     (
-        repo_root / update_layout.FRONTEND_DIR / "node_modules" / "left-pad.js"
+        repo_root / update_layout.NPM_ROOT_DIR / "node_modules" / "left-pad.js"
     ).write_text("old")
     (repo_root / ".venv").mkdir()
     (repo_root / ".venv" / "marker.txt").write_text("old-venv")
@@ -4311,11 +4372,17 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
 
     snapshots = update_environment.take_snapshots(plan, repo_root, runner, [])
 
-    assert {record.name for record in snapshots} == {"bundle", "node_modules", "venv"}
+    assert {record.name for record in snapshots} == {
+        "bundle",
+        "chat_bundle",
+        "node_modules",
+        "venv",
+    }
     # Destroy the originals, as the failed forward steps would.
     shutil.rmtree(repo_root / update_layout.STATIC_DIR)
+    shutil.rmtree(repo_root / update_layout.CHAT_STATIC_DIR)
     (repo_root / ".venv" / "marker.txt").write_text("wrecked")
-    shutil.rmtree(repo_root / update_layout.FRONTEND_DIR / "node_modules")
+    shutil.rmtree(repo_root / update_layout.NPM_ROOT_DIR / "node_modules")
 
     failed = update_environment.restore_snapshots(snapshots)
 
@@ -4323,7 +4390,7 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     assert _bundle_exists(repo_root)
     assert (repo_root / ".venv" / "marker.txt").read_text() == "old-venv"
     assert (
-        repo_root / update_layout.FRONTEND_DIR / "node_modules" / "left-pad.js"
+        repo_root / update_layout.NPM_ROOT_DIR / "node_modules" / "left-pad.js"
     ).read_text() == "old"
 
 
@@ -4435,7 +4502,7 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
     # rollback restored -- and then need a registry to get it back. This
     # workspace has never built a bundle, so recovery takes the rebuild branch
     # (there is no bundle copy to restore) with node_modules already back.
-    node_modules = unbuilt_apply_repo / update_layout.FRONTEND_DIR / "node_modules"
+    node_modules = unbuilt_apply_repo / update_layout.NPM_ROOT_DIR / "node_modules"
     node_modules.mkdir(parents=True)
     (node_modules / "left-pad.js").write_text("restored")
     runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, unbuilt_apply_repo)
@@ -5351,7 +5418,7 @@ def test_recover_aborts_a_merge_killed_before_it_committed(
             merge_ref="worker",
             target_ref=None,
             ff_only=False,
-            worker_bundle=None,
+            worker_bundles=None,
             phase=update_apply_contract.PHASE_STARTED,
             pid=12345,
             started_at=1.0,
@@ -5398,7 +5465,7 @@ def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
             merge_ref="worker",
             target_ref=None,
             ff_only=True,
-            worker_bundle=None,
+            worker_bundles=None,
             phase=update_apply_contract.PHASE_STARTED,
             pid=12345,
             started_at=1.0,
@@ -5812,3 +5879,21 @@ def test_a_layout_migration_that_cannot_be_spawned_is_a_warning_not_a_traceback(
 
     assert code == 0
     assert "could not be run" in capsys.readouterr().err
+
+
+# --- apply: the worker-bundle flag ------------------------------------------------
+
+
+def test_worker_bundle_flags_are_read_per_app() -> None:
+    assert update_self._parse_worker_bundles(None) is None
+    assert update_self._parse_worker_bundles([]) is None
+    assert update_self._parse_worker_bundles(["system_interface=/w/shell", "chat=/w/chat"]) == {
+        "system_interface": "/w/shell",
+        "chat": "/w/chat",
+    }
+
+
+@pytest.mark.parametrize("value", ["/w/shell", "browser=/w/x", "chat="])
+def test_a_worker_bundle_flag_must_name_a_known_app_and_a_path(value: str) -> None:
+    with pytest.raises(SystemExit):
+        update_self._parse_worker_bundles([value])

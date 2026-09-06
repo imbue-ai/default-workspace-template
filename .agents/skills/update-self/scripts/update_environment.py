@@ -18,7 +18,7 @@ from update_apply_contract import SnapshotRecord, snapshots_root
 from update_banding import ExpendWrapper
 from update_classification import ApplyPlan, AppTool
 from update_layout import (
-    FRONTEND_DIR,
+    FRONTEND_BUNDLES,
     MNGR_DIR,
     MNGR_EXECUTABLE,
     MNGR_PLUGIN_KEY,
@@ -28,7 +28,7 @@ from update_layout import (
     PROVISIONER_PATH,
     PROVISIONER_SCRIPT,
     RECEIPT,
-    STATIC_DIR,
+    NPM_ROOT_DIR,
 )
 from update_runtime import Runner, run_checked, tail
 
@@ -118,9 +118,9 @@ def snapshot_targets(
 ) -> list[tuple[str, Path]]:
     """The state the apply's destructive steps can destroy, by plan.
 
-    Every entry is a directory restored by a plain copy: the built bundle and
-    ``node_modules`` (the build and ``npm ci`` both delete before they
-    produce), the root venv (``uv sync`` rewrites it), the mngr tool
+    Every entry is a directory restored by a plain copy: the built bundles
+    (the shell's and the chat's) and the npm workspace's ``node_modules`` (the
+    build and ``npm ci`` both delete before they produce), the root venv (``uv sync`` rewrites it), the mngr tool
     environment, and the tool environment of every *critical* app the plan
     reinstalls (``uv tool install --reinstall`` rebuilds them from scratch). A
     non-critical app's tool is not copied aside: a rollback reinstalls it from
@@ -128,14 +128,17 @@ def snapshot_targets(
     """
     targets: list[tuple[str, Path]] = []
     if plan.frontend:
-        targets.append(("bundle", repo_root / STATIC_DIR))
+        for bundle in FRONTEND_BUNDLES:
+            targets.append((bundle.snapshot_name, repo_root / bundle.static_dir))
     if plan.frontend_manifest:
-        targets.append(("node_modules", repo_root / FRONTEND_DIR / "node_modules"))
+        targets.append(("node_modules", repo_root / NPM_ROOT_DIR / "node_modules"))
     tools: list[tuple[str, str]] = []
     if plan.backend_manifest:
         targets.append(("venv", repo_root / ".venv"))
         tools.append((MNGR_TOOL_NAME, MNGR_EXECUTABLE))
-    tools.extend((app.tool_name, app.executable) for app in plan.app_tools if app.is_critical)
+    tools.extend(
+        (app.tool_name, app.executable) for app in plan.app_tools if app.is_critical
+    )
     for tool_name, executable in tools:
         tool_dir = _tool_environment_dir(executable, tool_name, runner)
         if tool_dir is None:

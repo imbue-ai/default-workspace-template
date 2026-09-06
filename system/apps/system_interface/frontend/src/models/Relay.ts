@@ -7,8 +7,8 @@
  * app spelled it.
  */
 
-import { apiUrl } from "../base-path";
-import { errorDetailFromResponse, postJson } from "./http";
+import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { errorDetailFromResponse, postJson } from "@imbue/workspace-ui/src/models/http";
 import type { InstanceRecord } from "./Inventory";
 
 function instancesUrl(appName: string, suffix: string = ""): string {

@@ -24,13 +24,13 @@
  */
 
 import m from "mithril";
-import { Modal } from "./components/Modal";
+import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { ProjectInfo } from "../models/Inventory";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
-import { Button } from "./components/Button";
-import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS } from "./components/Modal";
-import { inputClass } from "./components/Input";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS } from "@imbue/workspace-ui/src/components/Modal";
+import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 
 export interface ProjectSettingsModalAttrs {
   project: ProjectInfo;
