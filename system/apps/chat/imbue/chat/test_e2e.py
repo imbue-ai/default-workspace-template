@@ -684,7 +684,8 @@ def test_a_create_that_fails_keeps_the_tab_with_the_reason_and_a_retry(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed ``mngr create`` is a notice in the chat's own tab, with what mngr printed and a
-    "Try again" on the same account, not a tab that vanishes."""
+    "Try again" on the same account, not a tab that vanishes; the retry lands the chat under
+    the same id once mngr cooperates."""
     monkeypatch.setenv("FAKE_MNGR_CREATE_EXIT_CODE", "3")
     with _running_e2e_server(tmp_path) as server:
         page.goto(server.shell_url)
@@ -699,3 +700,9 @@ def test_a_create_that_fails_keeps_the_tab_with_the_reason_and_a_retry(
         page.reload()
         chat = page.frame_locator('iframe[data-address^="app:chat?instance="]')
         expect(chat.locator(".message-list-create-failed")).to_be_visible(timeout=15000)
+        # The retry runs the create again on the same account (the fake mngr reads its exit
+        # status per run), and the composer replaces the notice when the agent registers.
+        monkeypatch.delenv("FAKE_MNGR_CREATE_EXIT_CODE")
+        chat.locator(".message-list-create-retry").click()
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=20000)
+        expect(chat.locator(".message-list-create-failed")).to_have_count(0, timeout=15000)
