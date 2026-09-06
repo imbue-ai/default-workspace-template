@@ -1,7 +1,9 @@
 # Creation: system interface
 
-`system/apps/system_interface` -- the live web workspace UI (dockview shell, chat
-panels, progress view) and its Flask backend. This reference describes what the
+`system/apps/system_interface` -- the live web workspace UI (the dockview shell
+that docks every app's pages, the sidebar, the New Tab launcher) and its Flask
+backend. The chat pages are the chat app's (`system/apps/chat`, its own package
+and process); the shell only docks them. This reference describes what the
 system interface *is*; for how to run and test a web frontend in isolation, see
 `.agents/shared/worker/references/web-frontend-testing.md`.
 
@@ -22,7 +24,9 @@ It is what the user is looking at *right now*, so you always work against an
 ## Design system: an optional convention for the default UI
 
 The shipped **default** UI is built from a small design system — Tailwind
-utilities in the markup over a token layer in `src/style.css`. When extending
+utilities in the markup over a token layer in the shared
+`system/libs/workspace_ui/src/base.css` (each app's `src/style.css` imports it).
+When extending
 the default look, follow
 `system/apps/system_interface/frontend/style_guide.md`.
 
@@ -51,16 +55,19 @@ System-interface specifics:
   `npm run lint` and `npm test` there.
 - The Playwright harness in
   `system/apps/system_interface/imbue/system_interface/test_e2e.py` already spins up an
-  isolated threaded Werkzeug server on an alternate port, builds fake
-  agent/session fixtures via `_make_agent_fixture`, and drives it with Playwright
-  (auto-skips when browsers aren't installed). Extend it -- and use it as the
-  same instance you screenshot.
+  isolated threaded Werkzeug server on an alternate port over stub apps and
+  drives it with Playwright (auto-skips when browsers aren't installed); the
+  chat's own suite, `system/apps/chat/imbue/chat/test_e2e.py`, serves the shell
+  and the chat together with a fixture agent (`imbue.chat.testing.running_workspace`).
+  Extend the one that frames what you changed -- and use it as the same instance
+  you screenshot.
 - To drive the UI manually, launch a **throwaway** instance on an alternate port,
   e.g. `SYSTEM_INTERFACE_PORT=8137 uv run system-interface` from
-  `system/apps/system_interface/`. With `MNGR_HOST_DIR` left at its default it discovers
-  the **real** agents (this is how you open the motivating conversation named in
-  `## Real scenario` -- see below); point it at fixture data instead when you want
-  an isolated, reproducible scene for a committed test.
+  `system/apps/system_interface/`. With `MINDS_APPS_FILE` left at its default it reads
+  the live app registry and lists the **live** chat app's real chats (this is how
+  you open the motivating conversation named in `## Real scenario` -- see below);
+  point it at a registry of fixture apps instead when you want an isolated,
+  reproducible scene for a committed test.
 
 ## Leave a built frontend in your work_dir (required, even for a backend-only change)
 
@@ -80,9 +87,9 @@ exist before reporting `done`.
 
 If the task names a real motivating conversation under `## Real scenario`, **LOOK
 AT IT before you touch anything.** You are *not* cut off from that conversation.
-Boot your built instance with `MNGR_HOST_DIR` left at its default (see "Running
-and testing" above): the system interface then discovers the same real agents the
-user sees, so you can drive Playwright (`--no-sandbox`) to the named agent's
+Boot your built instance with `MINDS_APPS_FILE` left at its default (see "Running
+and testing" above): the system interface then lists the same real chats the user
+sees, docked from the live chat app, so you can drive Playwright (`--no-sandbox`) to the named agent's
 conversation and **screenshot the actual thing the user complained about** (use
 the tab bar's add-tab `+` dropdown to switch to the agent, or navigate to it
 directly). Open the screenshot and study the real rendering. Fix against *that*,

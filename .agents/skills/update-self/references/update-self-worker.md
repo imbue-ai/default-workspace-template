@@ -160,8 +160,10 @@ live-applicable, rebuild-only, or `stuck`.
   workspace can start); fix it before running anything else.
 - **Suites, lint, ratchets** for each project in `projects_to_validate`: root
   `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
-  its own `uv run pytest` (and `npm run lint && npm run test` when the
-  frontend merged); `system/vendor/mngr` its own `uv run pytest`.
+  and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
+  or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
+  test` at `system/`, the npm workspace root); `system/vendor/mngr` its own
+  `uv run pytest`.
 - **Isolated-service boots** for each impacted service, against a scratch
   data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
   `update-app`), never the live store. This runs on the host's global
