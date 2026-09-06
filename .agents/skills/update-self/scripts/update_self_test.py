@@ -5418,6 +5418,27 @@ def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
     assert not _marker_exists(apply_repo)
 
 
+def test_recover_no_restart_removes_the_bundle_a_pre_split_tree_does_not_serve(
+    apply_repo: Path,
+) -> None:
+    # The boot path lands on the same pre-split tree as the live rollback: the chat
+    # bundle the forward build wrote is neither tracked nor ignored there, so it has to
+    # go, or the rolled-back tree is dirty and every later apply is refused.
+    _make_pre_split_tree(apply_repo)
+    _plant_snapshotted_marker(apply_repo)
+    chat_static = apply_repo / update_layout.CHAT_STATIC_DIR
+    chat_static.mkdir(parents=True)
+    (chat_static / "chat.html").write_text("the bundle the forward build wrote")
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True)
+
+    assert code == 0
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
+    assert not chat_static.exists()
+    assert not _marker_exists(apply_repo)
+
+
 def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     apply_repo: Path, capsys
 ) -> None:

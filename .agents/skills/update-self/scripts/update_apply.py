@@ -505,6 +505,20 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     return _RestoredFrontend(repo_root / FRONTEND_DIR, served, False)
 
 
+def _remove_unserved_bundles(repo_root: Path, frontend: _RestoredFrontend) -> None:
+    """Remove a bundle the forward build wrote that the restored tree does not serve.
+
+    The chat's, on a rollback into a tree from before the split: it has no copy to put
+    back and nothing that tracks or ignores it there, so left standing it keeps the tree
+    dirty and every later apply refused. Both rollback paths (the live one and the boot
+    path's ``recover --no-restart``) land on such a tree the same way.
+    """
+    for bundle in FRONTEND_BUNDLES:
+        unserved_static = repo_root / bundle.static_dir
+        if bundle not in frontend.bundles and unserved_static.exists():
+            shutil.rmtree(unserved_static)
+
+
 def _is_recovery_npm_ci_needed(
     layout: _RestoredFrontend, restored: Collection[str]
 ) -> bool:
@@ -565,14 +579,7 @@ def _recover_running_state(
         # has: a rollback into a tree from before the chat's split has neither a chat
         # bundle to restore nor a workspace to build it from.
         frontend = _restored_frontend_layout(repo_root)
-        # A bundle the forward build wrote that the restored tree does not serve (the
-        # chat's, on a rollback into a tree from before the split) has no copy to put
-        # back and nothing that tracks or ignores it there: left standing, it keeps the
-        # tree dirty and every later apply refused.
-        for bundle in FRONTEND_BUNDLES:
-            unserved_static = repo_root / bundle.static_dir
-            if bundle not in frontend.bundles and unserved_static.exists():
-                shutil.rmtree(unserved_static)
+        _remove_unserved_bundles(repo_root, frontend)
         if plan.frontend and any(
             bundle.snapshot_name not in restored for bundle in frontend.bundles
         ):
@@ -1348,6 +1355,7 @@ def recover(
 
     if no_restart:
         failed = restore_snapshots(marker.snapshots)
+        _remove_unserved_bundles(repo_root, _restored_frontend_layout(repo_root))
         if marker.provisioner_ran:
             provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
             if provisioner_failure is not None:
