@@ -7,7 +7,7 @@
  * inline image (``![path](path)``) for images, a download link (``[path](path)``)
  * otherwise, each referencing the file by its absolute path on the agent VM
  * (e.g. "/code/uploads/<id>/<name>"). The line stays visible in the bubble and
- * renders through the shared markdown renderer -- the system interface serves
+ * renders through the shared markdown renderer -- the chat app serves
  * the file at that absolute path -- so the attachment is transparent to both the
  * reader and the agent (which records the same text in its transcript, and can
  * open the file at the path it names). Appending in the frontend (rather than
@@ -75,7 +75,7 @@ export function attachmentServeUrl(path: string): string {
  * Markdown for one attachment, referencing the file by its absolute on-disk
  * path. An image renders inline (``![path](path)``); any other file becomes a
  * download link (``[path](path)``). The absolute path is used as both the label
- * / alt text and the URL, so the system interface serves the file at that path
+ * / alt text and the URL, so the chat app serves the file at that path
  * and the path stays visible to the reader.
  *
  * No escaping is needed: the backend stores each upload under a hex uuid dir

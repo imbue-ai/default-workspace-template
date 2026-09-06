@@ -39,8 +39,8 @@ function ChatDocument(agentId: string, sessionId: string): m.Component {
         sessionId === ""
           ? m(ChatPanel, { agentId, isVisible: isFrameRendered() })
           : m(SubagentView, { agentId, subagentSessionId: sessionId }),
-        // The provider chooser: the model bar's "+ Add a provider" and a provider-fault
-        // notice open it from inside a chat, so the page renders it as the shell does.
+        // The provider chooser: the page of a chat awaiting an account offers it, and the model
+        // bar's "+ Add a provider" and a provider-fault notice open it from inside a chat.
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
         getFastModePromptAgentId() !== null ? m(FastModeModal) : null,
       ]);

@@ -97,13 +97,12 @@ function hasComposer(agentId: string): boolean {
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
   let currentAgentId: string | null = null;
 
-  // Whether this panel is the visible (selected) tab in its dockview group.
-  // dockview keeps an inactive tab mounted (defaultRenderer: "always") and
-  // mithril redraws globally, so the component keeps running while hidden
-  // against an element collapsed to zero size; running scroll work then would
-  // corrupt the retained scroll position. The renderer feeds dockview's
-  // authoritative visibility in via the ``isVisible`` attr (see
-  // createMithrilRenderer); the scroll hooks below skip while it is false.
+  // Whether the page's frame is on screen. The shell keeps a hidden tab's frame mounted
+  // and mithril redraws globally, so the component keeps running while hidden against an
+  // element collapsed to zero size; running scroll work then would corrupt the retained
+  // scroll position. The page feeds the shell's authoritative visibility in via the
+  // ``isVisible`` attr (see isFrameRendered in index.ts); the scroll hooks below skip
+  // while it is false.
   // Defaults to true so the panel works before the first render sets it.
   let panelVisible = true;
   // Memoized turn-grouping output. buildSections walks the whole held
@@ -688,7 +687,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     view(vnode) {
       const agentId = vnode.attrs.agentId;
-      // dockview's live visibility for this panel, fed in by the renderer. Read
+      // The shell's live visibility for this frame, fed in by the page. Read
       // it before building content / running lifecycle hooks so the scroll hooks
       // (which read this closure variable) see the current value. Undefined for a
       // mount without a panel api -- treat that as visible.

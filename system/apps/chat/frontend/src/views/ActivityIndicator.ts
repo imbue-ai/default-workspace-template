@@ -1,7 +1,7 @@
 /**
  * Activity strip that sits just above the message input -- the harness-common shell.
  *
- * The backend (system interface) is the source of truth for *which* state the agent
+ * The backend (the chat app) is the source of truth for *which* state the agent
  * is in -- IDLE / THINKING / TOOL_RUNNING -- delivered on ``activity_state`` via the
  * ``agents_updated`` WS payload. This component's job is to render a label:
  *   - IDLE / null      -> hidden

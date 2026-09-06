@@ -1,8 +1,8 @@
 /**
- * One account row in a provider flyout, shared by the new-tab picker and the chat's model card.
+ * One account row in a provider flyout: the chat's model card lists its accounts with it.
  *
- * The two menus differ in what a row CLICK does -- the picker selects, the card's rows are
- * locked -- but their trailing controls are the same three: a rename pencil, a sign-out bin,
+ * What a row CLICK does is the caller's (the card's rows are locked); the trailing controls
+ * are always the same three: a rename pencil, a sign-out bin,
  * and the tick marking the current account. Those controls carry the only fiddly logic here
  * (arming, an inline field, three ways out of an edit), so they live in one place rather than
  * being typed out twice and drifting.

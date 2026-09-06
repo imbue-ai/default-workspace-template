@@ -109,7 +109,7 @@ export function connectChatToShell(agentId: string, options: ChatShellOptions): 
  * Open a new chat on `accountId` beside this one. The combo card's provider rows call this:
  * a chat binds to its account when it is created and nothing rebinds it, so "switch
  * provider" can only mean "start a chat on that one". A chat started inside a project
- * carries that project's id, as the launcher's tile does.
+ * carries that project's id, as the shell's `new` action does for one started from its rail.
  */
 export async function startChatOnAccount(accountId: string): Promise<void> {
   const viewId = shellViewId();
