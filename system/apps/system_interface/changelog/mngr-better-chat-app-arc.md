@@ -48,3 +48,5 @@ The shell's frontend is one member of the npm workspace rooted at `system/packag
 The shell's import ratchet resolves every spelling of an import (the `imbue.mngr_*` plugins, `from imbue import ...`, relative imports); a layout op whose requester names an app and no instance is attributed to no client; `test_chat_system.py` mints its ports and pins that the shell's relay outlives a chat's `mngr destroy`.
 
 The README lists every message the shell's WebSocket carries and the three tree hashes the bundle stamp holds; the no-app-name ratchet also catches the chat named inside an address literal; the repair-command check moved into `test_chat_system.py`, the one module that imports both packages; a layout op's `requester` is pinned through the socket listener; and the WebSocket URL helper is the library's `wsUrl`.
+
+The dev-group comment in the shell's `pyproject.toml` names `test_chat_system.py` as the home of the repair-command contract test and says what the tests still import `imbue-mngr` for.
