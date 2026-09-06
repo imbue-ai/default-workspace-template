@@ -8,7 +8,7 @@ hook, so the welcome-resend check runs exactly once per successful login
 subscription fast path).
 
 The `ClaudeAuthService` (which holds the in-flight PTY auth subprocess)
-is created once in `create_application` and
+is created once in `main.build_production_state` (or by the test state builder) and
 stored on the app's `ChatState`; each handler reads them via
 `get_state()` so the subprocess survives between the `/setup-token/start`
 call and the subsequent `/setup-token/poll` / `/setup-token/submit-code`
@@ -115,8 +115,8 @@ def register_routes(application: Flask) -> None:
     """Wire `/api/claude-auth/*` endpoints onto the Flask application.
 
     The handlers read the `ClaudeAuthService` from the
-    app's `ChatState`; `create_application` is responsible for
-    placing them there before the app serves requests.
+    app's `ChatState`; `main.build_production_state` (or the test state
+    builder) places them there before the app serves requests.
     """
     application.add_url_rule("/api/claude-auth/status", view_func=get_status, methods=["GET"])
     application.add_url_rule("/api/claude-auth/submit-credentials", view_func=submit_credentials, methods=["POST"])
