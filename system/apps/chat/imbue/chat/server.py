@@ -967,12 +967,11 @@ def _create_chat_agent() -> Response:
     ``name`` + human-readable ``display_name``) beside the agent id.
 
     A chat created inside a project carries that project's id in the agent's
-    ``project`` label, which is where chat membership lives (mngr already
-    propagates the label to the agent's own children). ``project_id`` rides
+    ``project`` label, which records where it was started (mngr propagates the
+    label to the agent's own children); membership itself is the project's tab
+    list, which the shell writes when it docks the chat. ``project_id`` rides
     beside the request model rather than inside it for that reason: it is a
-    label on the created agent, not part of the chat's identity. A create with
-    no ``project_id`` leaves the chat filed in no project, which is ordinary:
-    Everything enumerates the machine, so it surfaces there anyway.
+    label on the created agent, not part of the chat's identity.
     """
     agent_manager: AgentManager = get_state().agent_manager
     body = parse_json_object_body()
