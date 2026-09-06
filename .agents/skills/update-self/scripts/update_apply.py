@@ -370,11 +370,12 @@ def _install_or_build_bundle(
 def _migrate_workspace_layouts(repo_root: Path, runner: Runner) -> str | None:
     """Run the merged tree's layout migration; return why it failed, or ``None``.
 
-    Warning-only by design: the migration writes only files that do not exist
-    yet, leaves the old store untouched, and runs again at every boot behind
-    its own marker, so a failure here is a retry later, never a reason to roll
-    an otherwise healthy update back. Never raises: a hang and a spawn failure
-    both come back as the reason.
+    Warning-only by design: the migration never overwrites an output that
+    holds anything (the app stores only gain records), leaves the old store
+    untouched, and runs again at every boot behind its own marker, so a
+    failure here is a retry later, never a reason to roll an otherwise healthy
+    update back. Never raises: a hang and a spawn failure both come back as
+    the reason.
     """
     argv = ["python3", LAYOUT_MIGRATION_SCRIPT, "run"]
     try:
@@ -887,8 +888,8 @@ def apply_update(
         if migration_failure is not None:
             sys.stderr.write(
                 f"warning: {migration_failure}\nContinuing without rolling back: "
-                "the migration writes only state files that do not exist yet and "
-                "runs again at the next boot.\n"
+                "the migration never overwrites an output that holds anything, "
+                "leaves the old store untouched, and runs again at the next boot.\n"
             )
 
         # Every apply restarts the services agent, whatever the diff: the
