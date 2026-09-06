@@ -100,8 +100,6 @@ PROVISIONER_PATH = (
 # script's own marker, so a failure here costs nothing but a retry.
 LAYOUT_MIGRATION_SCRIPT = "system/scripts/migrate_workspace_layouts.py"
 
-LAYOUT_MIGRATION_TIMEOUT_SECONDS = 60.0
-
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"

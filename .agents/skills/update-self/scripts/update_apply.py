@@ -76,7 +76,6 @@ from update_layout import (
     FRONTEND_BUILD_INDEX,
     FRONTEND_DIR,
     LAYOUT_MIGRATION_SCRIPT,
-    LAYOUT_MIGRATION_TIMEOUT_SECONDS,
     PROVISIONER_SCRIPT,
     STATIC_DIR,
 )
@@ -121,6 +120,10 @@ _FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
 _RESTART_TIMEOUT_SECONDS = 600.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
+
+# The layout migration reads and writes a handful of small JSON files; anything
+# past this is a hang.
+_LAYOUT_MIGRATION_TIMEOUT_SECONDS = 60.0
 
 
 def _restore_tree(
@@ -381,12 +384,12 @@ def _migrate_workspace_layouts(repo_root: Path, runner: Runner) -> str | None:
             capture_output=True,
             text=True,
             check=False,
-            timeout=LAYOUT_MIGRATION_TIMEOUT_SECONDS,
+            timeout=_LAYOUT_MIGRATION_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         return (
             f"python3 {LAYOUT_MIGRATION_SCRIPT} did not finish within "
-            f"{LAYOUT_MIGRATION_TIMEOUT_SECONDS:g}s"
+            f"{_LAYOUT_MIGRATION_TIMEOUT_SECONDS:g}s"
         )
     except OSError as exc:
         return f"python3 {LAYOUT_MIGRATION_SCRIPT} could not be run ({exc})"
