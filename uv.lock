@@ -3372,6 +3372,7 @@ source = { editable = "system/apps/system_interface" }
 dependencies = [
     { name = "app-instances" },
     { name = "app-manifest" },
+    { name = "concurrency-group" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
@@ -3403,6 +3404,7 @@ dev = [
 requires-dist = [
     { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
