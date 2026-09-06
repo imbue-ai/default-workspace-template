@@ -184,9 +184,14 @@ function handleEvent(event: WsEvent): void {
     }
     case "proto_agent_created": {
       // Also how a chat moves between phases (a reserved chat launched, a failed one retried):
-      // the backend pushes the whole record again.
+      // the backend pushes the whole record again. A reconnect replays every provisional chat
+      // this way too, so a failed record seen here settles a send held for it as the
+      // completion message would have.
       const { type: _type, ...proto } = event;
       protoAgents = [...protoAgents.filter((p) => p.agent_id !== proto.agent_id), proto];
+      if (proto.phase === "failed") {
+        settleRegistration(proto.agent_id, new Error(proto.error ?? "The chat could not be started"));
+      }
       break;
     }
     case "proto_agent_completed":
