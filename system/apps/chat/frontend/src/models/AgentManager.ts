@@ -234,8 +234,9 @@ function settleRegistration(agentId: string, error: Error | null): void {
 /**
  * Resolves once ``agentId`` is an agent the app lists: at once for one it already lists, and
  * for a chat still being created when its create lands. Rejects, with the reason, when the
- * create fails or the chat is discarded first. What a send typed into a chat that does not
- * exist yet waits on.
+ * create fails or the chat is discarded first -- at once for a chat whose create has already
+ * failed, since nothing but a retry could ever land it. What a send typed into a chat that
+ * does not exist yet waits on.
  *
  * A chat the app neither lists nor holds a provisional record for (destroyed while its page
  * was open, a stale URL) resolves at once too: no push is coming that could settle it, and the
@@ -243,7 +244,9 @@ function settleRegistration(agentId: string, error: Error | null): void {
  * reconnect's replay turns out not to carry the chat's record any more.
  */
 export function whenAgentRegistered(agentId: string): Promise<void> {
-  if (getAgentById(agentId) !== undefined || getProtoAgent(agentId) === undefined) return Promise.resolve();
+  const proto = getProtoAgent(agentId);
+  if (getAgentById(agentId) !== undefined || proto === undefined) return Promise.resolve();
+  if (proto.phase === "failed") return Promise.reject(new Error(proto.error ?? "The chat could not be started"));
   return new Promise((resolve, reject) => {
     const waiters = registrationWaiters.get(agentId) ?? [];
     waiters.push({ resolve, reject });

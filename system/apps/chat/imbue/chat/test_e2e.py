@@ -695,6 +695,8 @@ def test_a_create_that_fails_keeps_the_tab_with_the_reason_and_a_retry(
         expect(failed).to_contain_text("exited with code 3")
         expect(failed).to_contain_text("create failed on purpose")
         expect(failed.locator(".message-list-create-retry")).to_be_visible()
+        # The composer stays under the notice: a message held through the failure is back in it.
+        expect(chat.locator(".message-input-textbox")).to_be_visible()
         # The instance stays listed, in the error state, so the tab survives a reload.
         _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing="app:chat?instance=")
         page.reload()
