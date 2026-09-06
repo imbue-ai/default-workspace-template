@@ -382,9 +382,12 @@ container build/launch parameter a running container cannot adopt: say it
 stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
-**When the update touches `system/apps/system_interface/` at all**, also take
-the `editing service system_interface` lease through the apply, as
-`update-system-interface` does: check `tk ready` for a foreign one (surface
+**When the update touches `system/apps/system_interface/`,
+`system/apps/chat/frontend/`, `system/libs/workspace_ui/`, or
+`system/package.json` / `system/package-lock.json` at all** (the trees the
+shell's bundle is stamped over, the same set `update-system-interface`'s
+freshness check names), also take the `editing service system_interface` lease
+through the apply, as `update-system-interface` does: check `tk ready` for a foreign one (surface
 instead of proceeding), then `tk create "editing service system_interface" -t
 chore` and `tk start` it, each as its own command. Release it afterwards.
 
