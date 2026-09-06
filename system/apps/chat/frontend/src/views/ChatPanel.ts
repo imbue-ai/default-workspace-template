@@ -313,9 +313,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       if (account !== null && !launchInFlight && launchError === null && launchedFor !== agentId) {
         closeProviderChooser();
         launch(agentId, account.id);
-      } else if (chooserOfferedFor !== agentId) {
+      } else if (account === null && chooserOfferedFor !== agentId) {
         // Offered once per chat, on the page's first render of this phase: the user may
-        // dismiss it and come back through the button.
+        // dismiss it and come back through the button. With an account signed in the page
+        // launched on it instead, and a refusal is shown here with a retry on that account
+        // rather than a chooser over it.
         chooserOfferedFor = agentId;
         offerProviderChooser(agentId);
       }
@@ -325,11 +327,29 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         [
           m("p", { class: "type-heading text-primary" }, "Sign in to a provider to start this chat"),
           launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
-          m(
-            Button,
-            { variant: "primary", readonly: launchInFlight, onclick: () => offerProviderChooser(agentId) },
-            "Choose a provider",
-          ),
+          m("div", { class: "flex gap-2" }, [
+            account !== null && launchError !== null
+              ? m(
+                  Button,
+                  {
+                    variant: "primary",
+                    extra: "message-list-launch-retry",
+                    readonly: launchInFlight,
+                    onclick: () => launch(agentId, account.id),
+                  },
+                  launchInFlight ? "Starting…" : "Try again",
+                )
+              : null,
+            m(
+              Button,
+              {
+                variant: account !== null && launchError !== null ? "secondary" : "primary",
+                readonly: launchInFlight,
+                onclick: () => offerProviderChooser(agentId),
+              },
+              "Choose a provider",
+            ),
+          ]),
         ],
       );
     }
