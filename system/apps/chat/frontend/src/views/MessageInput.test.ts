@@ -47,7 +47,7 @@ const mocks = vi.hoisted(() => {
     openProviderChooser: vi.fn(),
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
-    whenAgentRegistered: vi.fn(async () => {}),
+    whenAgentRegistered: vi.fn(async (_agentId: string) => {}),
     listeners,
     agent,
   };
@@ -428,7 +428,7 @@ describe("MessageInput send to a chat still being created", () => {
   });
 
   afterEach(() => {
-    mocks.whenAgentRegistered.mockImplementation(async () => {});
+    mocks.whenAgentRegistered.mockImplementation(async (_agentId: string) => {});
   });
 
   it("holds the send until the agent registers, then sends it", async () => {
@@ -447,8 +447,9 @@ describe("MessageInput send to a chat still being created", () => {
     await sending;
 
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.sendMessage.mock.calls[0]?.[0]).toBe("agent-1");
-    expect(String(mocks.sendMessage.mock.calls[0]?.[1])).toContain("hello");
+    const [calledAgentId, calledText] = mocks.sendMessage.mock.calls[0] as unknown as [string, string];
+    expect(calledAgentId).toBe("agent-1");
+    expect(calledText).toContain("hello");
   });
 
   it("returns the message to the composer with the reason when the create fails", async () => {
