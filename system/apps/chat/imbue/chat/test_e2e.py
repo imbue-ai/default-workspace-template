@@ -36,6 +36,7 @@ from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_ID
+from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_NAME
 
 
 def _playwright_browsers_installed() -> bool:
@@ -58,9 +59,6 @@ pytestmark = [
         reason="The chat or shell frontend is not built (run `npm run build` in system/); skipping e2e.",
     ),
 ]
-
-# The shell's port and the chat's, one pair per test that runs its own workspace.
-EVERYTHING_VIEW_NAME = "Everything"
 
 _TRIGGER_TIMEOUT_MS = 20000
 
