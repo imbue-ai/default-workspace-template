@@ -300,8 +300,8 @@ def _worker_bundle_reject_reason(
         )
     if stamp != expected_hash:
         return (
-            f"was built from frontend source tree {stamp}, but the merged tree's "
-            f"frontend is {expected_hash} -- it is stale"
+            f"was built from frontend source trees {_one_line(stamp)}, but the merged "
+            f"tree's are {_one_line(expected_hash)} -- it is stale"
         )
     return None
 
