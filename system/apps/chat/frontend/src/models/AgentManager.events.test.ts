@@ -120,6 +120,29 @@ describe("the provisional chats over the socket", () => {
     });
   });
 
+  it("keeps a held send waiting after a successful completion until the agent list names the chat", async () => {
+    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    const registered = manager.whenAgentRegistered("agent-1");
+
+    push({ type: "proto_agent_completed", agent_id: "agent-1", success: true, error: null });
+
+    // The record is gone, but the send has nothing to reach until the list carries the agent.
+    expect(manager.getProtoAgent("agent-1")).toBeUndefined();
+    expect(await settledState(registered)).toBe("pending");
+    push({ type: "agents_updated", agents: [agent("agent-1")] });
+    await expect(registered).resolves.toBeUndefined();
+  });
+
+  it("lets the agent list win over a record replayed after the chat registered", async () => {
+    push({ type: "agents_updated", agents: [agent("agent-1")] });
+    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+
+    // A late record does not unlist the agent, and a send reaches it at once: the record is
+    // what the page's provisionalRecord discards while the list names the chat.
+    expect(manager.getAgentById("agent-1")?.id).toBe("agent-1");
+    await expect(manager.whenAgentRegistered("agent-1")).resolves.toBeUndefined();
+  });
+
   it("drops a discarded chat and rejects a held send", async () => {
     push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
     const registered = manager.whenAgentRegistered("agent-1");
