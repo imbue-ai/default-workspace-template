@@ -22,12 +22,12 @@ _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
 pytestmark = pytest.mark.xdist_group(name="meta_ratchets")
 
 
-# system_interface runs its own pytest config (the root config ignores it) and
-# carries the mngr-monorepo-style test_ratchets.py rather than the dwt-standard
-# test_<name>_ratchets.py set, so it is exempt from the meta checks here --
-# exactly as it was when it lived under apps/ (which the old scan never
-# visited).
-_META_EXEMPT_PROJECTS = frozenset({"system_interface"})
+# system_interface and chat run their own pytest config (the root config ignores
+# them) and carry the mngr-monorepo-style test_ratchets.py rather than the
+# dwt-standard test_<name>_ratchets.py set, so they are exempt from the meta
+# checks here -- exactly as the system interface was when it lived under apps/
+# (which the old scan never visited).
+_META_EXEMPT_PROJECTS = frozenset({"system_interface", "chat"})
 
 
 def _get_all_project_dirs() -> list[Path]:

@@ -6,11 +6,11 @@ Exercises the full backend path the agent-facing helper depends on:
 relay verbs (``rename``, ``delete``) -> ``POST /api/apps/<app>/instances/...``
 -> the app's own instances API. The WS-to-DOM step is ``test_e2e.py``'s.
 
-The machine the script sees is a registry with two rows: the chat app at the
-shell's own URL (so the seeded agent lists as ``app:chat?instance=<id>``) and a
-stub app served by ``app_instances``' in-memory source over loopback (so the
-relay has a real instances API to reach). Broadcaster output is observed via
-the broadcaster's own queue-registration API rather than a live WebSocket.
+The machine the script sees is a registry with two rows, both stub apps served
+by ``app_instances``' in-memory source over loopback (so the relay has a real
+instances API to reach): one seeded with an instance, one empty. Broadcaster
+output is observed via the broadcaster's own queue-registration API rather than
+a live WebSocket.
 """
 
 from __future__ import annotations
@@ -37,9 +37,7 @@ from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
-from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
@@ -53,9 +51,13 @@ pytestmark = pytest.mark.acceptance
 
 _PORT = 18766
 _BASE_URL = f"http://127.0.0.1:{_PORT}"
+# The seeded app: one instance the script can open, close, and rename.
+_SEEDED_APP_NAME = "chat"
+_SEEDED_KEY = "stub-1"
+_SEEDED_TITLE = "alice"
+_SEEDED_ADDRESS = f"app:{_SEEDED_APP_NAME}?instance={_SEEDED_KEY}"
+# The requesting agent, which the script resolves ``self`` and its attribution against.
 _AGENT_ID = "agent-test-alice"
-_AGENT_NAME = "alice"
-_CHAT_ADDRESS = f"app:chat?instance={_AGENT_ID}"
 _STUB_APP_NAME = "docs"
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -74,33 +76,35 @@ def _server_is_up(url: str) -> bool:
 
 
 class PipelineHarness(FrozenModel):
-    """What one test gets: the shell's URL, its broadcaster, the registry file, and the stub app's source."""
+    """What one test gets: the shell's URL, its broadcaster, the registry file, and the stub apps' sources."""
 
     model_config = {"arbitrary_types_allowed": True}
 
     base_url: str = Field(description="The shell's loopback URL")
     broadcaster: WebSocketBroadcaster = Field(description="The shell's broadcaster, for fake clients")
     registry_path: Path = Field(description="The registry file the shell and the script read")
-    stub_source: StubInstanceSource = Field(description="The stub app's in-memory instances")
+    seeded_source: StubInstanceSource = Field(description="The seeded app's in-memory instances")
+    stub_source: StubInstanceSource = Field(description="The empty stub app's in-memory instances")
 
 
 @pytest.fixture
 def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[PipelineHarness, None, None]:
-    """A workspace server over a registry of two apps, with one seeded agent and a started shell."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
-    monkeypatch.setenv("MNGR_AGENT_ID", "")
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    """A workspace server over a registry of two stub apps, one seeded with an instance, and a started shell."""
     registry_path = tmp_path / "apps.toml"
     monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
+    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", _BASE_URL)
 
+    seeded_source = StubInstanceSource()
+    seeded_source.records.append(instance_record(_SEEDED_KEY, _SEEDED_TITLE))
+    seeded_port = free_port()
     stub_source = StubInstanceSource()
     stub_port = free_port()
     stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
     write_registry(
         registry_path,
         registry_row_toml(
-            "chat",
-            _BASE_URL,
+            _SEEDED_APP_NAME,
+            f"http://{LOOPBACK_HOST}:{seeded_port}",
             is_multi_instance=True,
             is_critical=True,
             actions=(("new", "New Chat"), ("subagent", "Open subagent")),
@@ -110,24 +114,17 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
     )
 
     broadcaster = WebSocketBroadcaster()
-    manager = AgentManager.build(broadcaster)
-    manager._agents[_AGENT_ID] = AgentStateItem(
-        id=_AGENT_ID,
-        name=_AGENT_NAME,
-        state="running",
-        labels={},
-        work_dir=str(tmp_path / "work"),
-    )
-    manager.note_agent_list_known()
-
     config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT)
-    state = build_test_state(config=config, agent_manager=manager, shell_state_directory=tmp_path / "shell")
+    state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
     app = create_application(state)
 
     server = make_threaded_server("127.0.0.1", _PORT, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    with serve_in_background(LOOPBACK_HOST, stub_port, build_instances_app(stub_source, RecordingNudger())):
+    with (
+        serve_in_background(LOOPBACK_HOST, seeded_port, build_instances_app(seeded_source, RecordingNudger())),
+        serve_in_background(LOOPBACK_HOST, stub_port, build_instances_app(stub_source, RecordingNudger())),
+    ):
         try:
             wait_for(
                 lambda: _server_is_up(_BASE_URL),
@@ -138,7 +135,11 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
             state.shell.start()
             try:
                 yield PipelineHarness(
-                    base_url=_BASE_URL, broadcaster=broadcaster, registry_path=registry_path, stub_source=stub_source
+                    base_url=_BASE_URL,
+                    broadcaster=broadcaster,
+                    registry_path=registry_path,
+                    seeded_source=seeded_source,
+                    stub_source=stub_source,
                 )
             finally:
                 state.shell.stop()
@@ -229,25 +230,23 @@ def test_inspect_and_context_round_trip_through_script_and_endpoint(
 
 def test_an_op_with_no_client_to_target_fails_with_412(layout_server: PipelineHarness, tmp_path: Path) -> None:
     """With no client connected or recorded, there is nobody's arrangement to edit, and the script says so."""
-    result = _run_layout_script(["close", _CHAT_ADDRESS, "--view", "Everything"], layout_server, _sandbox(tmp_path))
+    result = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, _sandbox(tmp_path))
 
     assert result.returncode == 1
     assert "Could not tell which client" in result.stderr and "--client" in result.stderr
 
 
-def test_list_shows_every_app_with_the_seeded_agent_as_a_chat_instance(
-    layout_server: PipelineHarness, tmp_path: Path
-) -> None:
-    """``list --json`` is the inventory: the chat app with the agent's address, and the stub app with none yet."""
+def test_list_shows_every_app_with_the_seeded_instance(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``list --json`` is the inventory: the seeded app with its instance's address, and the stub app with none yet."""
     sandbox = _sandbox(tmp_path)
-    _wait_for_instance_listed(layout_server, sandbox, "chat", _CHAT_ADDRESS)
+    _wait_for_instance_listed(layout_server, sandbox, _SEEDED_APP_NAME, _SEEDED_ADDRESS)
 
     listing = _listing(layout_server, sandbox)
-    chat = listing["chat"]
-    assert [instance["title"] for instance in chat["instances"] if instance["address"] == _CHAT_ADDRESS] == [
-        _AGENT_NAME
+    seeded = listing[_SEEDED_APP_NAME]
+    assert [instance["title"] for instance in seeded["instances"] if instance["address"] == _SEEDED_ADDRESS] == [
+        _SEEDED_TITLE
     ]
-    assert [action["id"] for action in chat["actions"]] == ["new", "subagent"]
+    assert [action["id"] for action in seeded["actions"]] == ["new", "subagent"]
     assert listing[_STUB_APP_NAME]["instances"] == []
     assert listing[_STUB_APP_NAME]["is_running"] is True
 
@@ -289,21 +288,21 @@ def test_open_and_close_of_an_instance_address_edit_the_clients_file(
     """``open`` docks a listed instance and ``close`` removes it, whether or not a window is open: the client only
     has to be one the shell knows."""
     sandbox = _sandbox(tmp_path)
-    _wait_for_instance_listed(layout_server, sandbox, "chat", _CHAT_ADDRESS)
+    _wait_for_instance_listed(layout_server, sandbox, _SEEDED_APP_NAME, _SEEDED_ADDRESS)
     client_queue = layout_server.broadcaster.register()
     layout_server.broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
     try:
-        open_result = _run_layout_script(["open", _CHAT_ADDRESS, "--view", "Everything"], layout_server, sandbox)
+        open_result = _run_layout_script(["open", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
         assert open_result.returncode == 0, f"stderr={open_result.stderr!r}"
-        assert f"opened {_CHAT_ADDRESS}" in open_result.stderr
-        assert _inspect_addresses(layout_server, sandbox, "client-1") == [_CHAT_ADDRESS]
+        assert f"opened {_SEEDED_ADDRESS}" in open_result.stderr
+        assert _inspect_addresses(layout_server, sandbox, "client-1") == [_SEEDED_ADDRESS]
 
-        close_result = _run_layout_script(["close", _CHAT_ADDRESS, "--view", "Everything"], layout_server, sandbox)
+        close_result = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
         assert close_result.returncode == 0, f"stderr={close_result.stderr!r}"
         assert _inspect_addresses(layout_server, sandbox, "client-1") == []
         # Closing what is not open is a 404 with the address named.
-        missing = _run_layout_script(["close", _CHAT_ADDRESS, "--view", "Everything"], layout_server, sandbox)
-        assert missing.returncode == 1 and _CHAT_ADDRESS in missing.stderr
+        missing = _run_layout_script(["close", _SEEDED_ADDRESS, "--view", "Everything"], layout_server, sandbox)
+        assert missing.returncode == 1 and _SEEDED_ADDRESS in missing.stderr
     finally:
         layout_server.broadcaster.unregister(client_queue)
 
@@ -311,7 +310,7 @@ def test_open_and_close_of_an_instance_address_edit_the_clients_file(
 @pytest.mark.parametrize(
     ("spelling", "expected_hint"),
     [
-        (f"chat:{_AGENT_NAME}", f"the one titled {_AGENT_NAME!r}"),
+        (f"chat:{_SEEDED_TITLE}", f"the one titled {_SEEDED_TITLE!r}"),
         ("service:docs?instance=docs-1", "app:docs?instance=docs-1"),
         ("terminal:terminal-1", "app:terminal?instance=terminal-1"),
     ],

@@ -107,3 +107,7 @@ jobs:
       - name: Run system/apps/system_interface tests
         working-directory: system/apps/system_interface
         run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest
+
+      - name: Run system/apps/chat tests
+        working-directory: system/apps/chat
+        run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest

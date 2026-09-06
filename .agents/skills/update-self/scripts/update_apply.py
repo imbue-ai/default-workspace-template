@@ -84,6 +84,7 @@ from update_probes import (
     HEALTH_ATTEMPTS,
     HEALTH_INTERVAL_SECONDS,
     HEALTH_PATH,
+    chat_health_url,
     describe_frontend_failure,
     preflight,
     refresh_workspace_view,
@@ -921,6 +922,19 @@ def apply_update(
         ):
             raise ApplyFailed(
                 "backend did not become healthy after restart",
+                live_service_restarted=True,
+            )
+        # The chat app restarts with the shell (both are the services agent's) and is the
+        # process that imports mngr, so its health is the update's too.
+        if not wait_healthy(
+            http,
+            chat_health_url(repo_root),
+            HEALTH_ATTEMPTS,
+            HEALTH_INTERVAL_SECONDS,
+            sleeper,
+        ):
+            raise ApplyFailed(
+                "the chat app did not become healthy after restart",
                 live_service_restarted=True,
             )
 

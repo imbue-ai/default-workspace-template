@@ -1773,10 +1773,14 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
             {"system-interface"},
         ),
         ("system/apps/system_interface/app.toml", {"system-interface"}),
+        ("system/apps/chat/imbue/chat/server.py", {"chat"}),
+        ("system/apps/chat/app.toml", {"chat"}),
         ("system/apps/browser/src/browser/runner.py", {"browser"}),
         ("system/apps/browser/pyproject.toml", {"browser"}),
         # The frontend bundle and served assets never change what the tool resolves to.
         ("system/apps/system_interface/frontend/src/App.ts", set()),
+        ("system/apps/chat/frontend/src/index.ts", set()),
+        ("system/apps/chat/imbue/chat/static/chat.html", set()),
         ("system/apps/browser/src/browser/static/app.js", set()),
         ("system/apps/terminal/src/terminal_app/main.py", {"terminal-app"}),
         ("system/apps/terminal/terminal_tmux.conf", {"terminal-app"}),
@@ -1790,17 +1794,17 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         # that assigns plugins to its tool.
         (
             "system/apps/system_interface/pyproject.toml",
-            {"system-interface", "browser", "terminal-app", "files-app"},
+            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
         ),
         (
             "system/vendor/mngr/libs/mngr/pyproject.toml",
-            {"system-interface", "browser", "terminal-app", "files-app"},
+            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
         ),
         (
             update_layout.PLUGIN_MANIFEST_PATH,
-            {"system-interface", "browser", "terminal-app", "files-app"},
+            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
         ),
-        ("uv.lock", {"system-interface", "browser", "terminal-app", "files-app"}),
+        ("uv.lock", {"system-interface", "chat", "browser", "terminal-app", "files-app"}),
     ],
 )
 def test_plan_apply_refreshes_the_tool_of_every_changed_app_directory(

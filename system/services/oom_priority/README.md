@@ -23,7 +23,7 @@ into one of a few bands.
   band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
-  The system_interface prioritizer moves a chat within that range from live
+  The chat app's prioritizer moves a chat within that range from live
   engagement and elapsed idle time (see "Dynamic chat band" below).
   Bands are positive-only: a negative value (true "never kill")
   needs `CAP_SYS_RESOURCE`, which the container does not have, so the never-kill
@@ -172,7 +172,7 @@ Every agent's band is set once at launch and never changes -- with one exception
 **chat agents**. A chat is a user-facing agent (`user_created` label), and how
 expendable it should be depends on how engaged the user is with it, which is only
 known at runtime. So the launch wrapper tags a chat at `CHAT_AGENT_BASE` (560),
-and the system_interface `ChatOomPrioritizer` moves it in both directions from
+and the chat app's `ChatOomPrioritizer` moves it in both directions from
 there: down toward `CHAT_AGENT_FLOOR` (300) as the user engages with it, and up
 toward `CHAT_AGENT_STALE_CEILING` (800) as it is left alone.
 

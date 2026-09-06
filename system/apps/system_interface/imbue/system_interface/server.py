@@ -5,7 +5,6 @@ import re
 import shlex
 from datetime import datetime
 from datetime import timezone
-from pathlib import Path
 from typing import Any
 from typing import Final
 
@@ -19,18 +18,13 @@ from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 
-from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.chat_document import create_chat_application
-from imbue.system_interface.config import Config
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
 from imbue.system_interface.documents import inject_meta_tag
-from imbue.system_interface.documents import inject_plugin_script_tags
-from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
@@ -40,7 +34,6 @@ from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.wsgi import build_sock
-from imbue.system_interface.wsgi_dispatch import PathDispatchingFlask
 
 # The browser-side contract module (contracts.md section 10): built as its own library
 # entry into ``static/_static/`` and served with a permissive CORS header, since every
@@ -343,13 +336,10 @@ def _index() -> Response:
     index_path = get_state().static_directory / "index.html"
     if index_path.exists():
         staleness = _shell_update_staleness()
-        config: Config = get_state().config
         root_path = (request.script_root or "").rstrip("/")
         html_content = index_path.read_text()
         html_content = inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
-        if config.javascript_plugin_basenames:
-            html_content = inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return document_response(html_content, is_frontend_built=True)
     return _frontend_not_built_response()
 
@@ -405,13 +395,7 @@ def _frontend_not_built_response() -> Response:
 
 
 def _index_catch_all(path: str) -> Response:
-    # An agent-authored file is addressed by its absolute on-disk path, which
-    # lands here as a catch-all path; serve it (image inline, any other existing
-    # file as a download) before falling through to the single-page-app shell.
-    # Paths that match no file are client-side routes and render the app as before.
-    file_response = try_serve_file(path)
-    if file_response is not None:
-        return file_response
+    # Every other path is a client-side route and renders the app shell.
     return _index()
 
 
@@ -451,21 +435,9 @@ def _serve_asset(filename: str) -> Response:
         return Response(status=404)
 
 
-def _serve_static_file(basename: str) -> Response:
-    config: Config = get_state().config
-    file_path_string = config.static_file_basename_to_path.get(basename)
-    if file_path_string is None:
-        return json_response({"detail": f"Static file '{basename}' not found"}, status_code=404)
-    file_path = Path(file_path_string)
-    if not file_path.is_file():
-        return json_response({"detail": f"Static file not found on disk: {file_path}"}, status_code=404)
-    return send_file(file_path)
-
-
 def _ws_endpoint(websocket: Any) -> None:
     """The one WebSocket per window (contracts.md section 8)."""
-    state = get_state()
-    _run_ws_broadcast_loop(websocket=websocket, shell=state.shell, agent_manager=state.agent_manager)
+    _run_ws_broadcast_loop(websocket=websocket, shell=get_state().shell)
 
 
 def _handle_client_state_message(
@@ -536,7 +508,7 @@ def _handle_client_state_message(
     return True
 
 
-def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, agent_manager: AgentManager) -> None:
+def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
     """Stream the shell broadcaster's messages to ``websocket`` until the client disconnects.
 
     Each WebSocket connection owns its own thread (flask-sock + the threaded WSGI server), so
@@ -560,13 +532,6 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, agent_manager: Age
                 }
             )
         )
-        # The chat pages read their live state (activity, model choice, queued messages,
-        # creation logs) from this same socket while the chat app shares the shell's process.
-        # CLEANUP: drop these two sends and the agent manager parameter in phase 10 of the
-        # workspace app model, when the chat app's own process serves its own socket.
-        websocket.send(json.dumps({"type": "agents_updated", "agents": agent_manager.get_agents_serialized()}))
-        for proto in agent_manager.get_proto_agents():
-            websocket.send(json.dumps({"type": "proto_agent_created", **proto}))
 
         is_client_registered = False
         shutdown = False
@@ -606,12 +571,11 @@ def create_application(state: SystemInterfaceState) -> Flask:
     Pure assembler: it wires routes and error handling onto the app and attaches the injected
     ``state``. It constructs no collaborators and starts nothing. The composition root
     (``main.build_production_state`` plus ``main.main``) builds the real object graph and
-    starts the agent manager and the shell; tests build a state with fakes via
-    ``testing.build_test_state`` and pass it here.
+    starts the shell; tests build a state via ``testing.build_test_state`` and pass it here.
     """
     # static_folder=None disables Flask's default /static route; the shell serves its own
     # static assets explicitly below.
-    application = PathDispatchingFlask(__name__, static_folder=None)
+    application = Flask(__name__, static_folder=None)
     attach_state(application, state)
     application.register_error_handler(Exception, handle_unhandled_exception)
     sock = build_sock(application)
@@ -622,17 +586,10 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(APP_CONTRACT_PATH, view_func=_serve_app_contract, methods=["GET"])
     register_shell_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
-    application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
 
     # Registered unconditionally, even when the bundle is absent at startup: the directory can
     # appear later (a rebuild), and a route decided at construction time can never notice.
     application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
-
-    # The chat document is a second Flask app over the same state, picked per request by
-    # the path it alone serves (see wsgi_dispatch); the shell app stays the object callers hold.
-    # CLEANUP: drop the dispatch once phase 10 of the workspace app model moves the chat app
-    # into its own process.
-    application.chat_application = create_chat_application(state)
 
     return application

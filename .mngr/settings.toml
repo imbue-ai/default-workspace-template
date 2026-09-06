@@ -122,9 +122,9 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # type, so they all inherit it. Fast mode buys latency at a higher per-token
 # price, which is worth it only when a human is waiting on the reply.
 # User-facing chat agents override it per create:
-# the system interface and the bootstrap both pass
+# the chat app and the bootstrap both pass
 # `-S agent_types.claude.settings_overrides.fastMode=<bool>`, resolved from the
-# workspace's fast-mode decision (see system_interface's fast_mode_policy.py).
+# workspace's fast-mode decision (see the chat app's harnesses/claude/model.py).
 #
 # That override targets `claude` rather than `chat` because a `-S` is parsed as
 # its own config layer, without the `parent_type = "claude"` this file gives

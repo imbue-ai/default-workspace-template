@@ -102,4 +102,7 @@ LAYOUT_MIGRATION_SCRIPT = "system/scripts/migrate_workspace_layouts.py"
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 
+# The app registry the shell reads and every app registers into (contracts section 3).
+APPS_REGISTRY_PATH = "data/.state/apps.toml"
+
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"

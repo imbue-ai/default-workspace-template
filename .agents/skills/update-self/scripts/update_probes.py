@@ -9,11 +9,12 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Callable
 
 from update_banding import ExpendWrapper, as_expendable
-from update_layout import SYSTEM_INTERFACE_DIR, TOOL_NAME
+from update_layout import APPS_REGISTRY_PATH, SYSTEM_INTERFACE_DIR, TOOL_NAME
 from update_runtime import (
     FrontendProbe,
     HttpClient,
@@ -37,10 +38,19 @@ FRONTEND_BUILT_HEADER = "x-frontend-built"
 # real app shell from the placeholder even on a backend too old for the header.
 _ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 
-# Endpoints used to probe liveness. ``/api/agents`` exercises the mngr plugin
-# discovery path -- exactly what a missing backend dependency or a broken
-# plugin-config parse would take down.
-HEALTH_PATH = "/api/agents"
+# The shell's probe route (the workspace app model, contracts section 5): alive,
+# and whether the built frontend is being served.
+HEALTH_PATH = "/api/health"
+
+# The chat app's own probe route, polled after the restart beside the shell's:
+# the chat is the process that imports mngr and its harness plugins, so a missing
+# backend dependency or a broken plugin-config parse takes IT down, and a shell
+# that came up fine over a chat that did not is still a broken workspace.
+CHAT_HEALTH_PATH = "/api/health"
+CHAT_APP_NAME = "chat"
+# Where the chat app listens when the registry does not say (the manifest's app
+# URL; the registry row is authoritative once the chat has registered).
+DEFAULT_CHAT_URL = "http://127.0.0.1:8010"
 
 SERVE_PATH = "/"
 
@@ -84,6 +94,24 @@ def wait_healthy(
         if index < attempts - 1:
             sleeper(interval)
     return False
+
+
+def chat_health_url(repo_root: Path) -> str:
+    """The chat app's health URL: its registry row's ``url``, else the default port.
+
+    Read off the registry rather than assumed, so a workspace whose chat listens
+    elsewhere is probed where it actually is; an unreadable registry (a fresh
+    workspace, a hand edit) degrades to the default rather than failing the apply.
+    """
+    registry_path = repo_root / APPS_REGISTRY_PATH
+    try:
+        rows = tomllib.loads(registry_path.read_text()).get("apps", [])
+    except (OSError, tomllib.TOMLDecodeError):
+        return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
+    for row in rows:
+        if isinstance(row, dict) and row.get("name") == CHAT_APP_NAME and isinstance(row.get("url"), str):
+            return f"{row['url'].rstrip('/')}{CHAT_HEALTH_PATH}"
+    return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
 
 
 def preflight(
