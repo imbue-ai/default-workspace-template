@@ -9,7 +9,6 @@ vi.mock("mithril", () => ({ default: { redraw: vi.fn(), request: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   apiUrl: (path: string) => path,
   wsUrl: (path: string) => `ws://test${path}`,
-  getTerminalOriginLabel: () => "",
 }));
 
 import type { AgentState, ProtoAgent } from "./AgentManager";
