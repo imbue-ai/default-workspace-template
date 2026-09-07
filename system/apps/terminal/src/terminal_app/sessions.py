@@ -56,6 +56,36 @@ def is_agent_session(name: str, agent_session_prefix: str) -> bool:
 
 
 @pure
+def is_same_session(record: TerminalSessionRecord, session: TmuxSession) -> bool:
+    """Whether the live session is the one the record remembers: the same id, created at the same time.
+
+    tmux hands ids out afresh on every server, so a record's id alone would bind it to whatever
+    session a later server gave that number; the creation time tells the two apart. A side that
+    knows no creation time (a record from before it was kept, a tmux that printed none) matches
+    on the id alone.
+    """
+    if record.session_id is None or record.session_id != session.session_id:
+        return False
+    if record.session_created is None or session.created_epoch is None:
+        return True
+    return record.session_created == session.created_epoch
+
+
+@pure
+def _find_record_of_session(
+    session: TmuxSession, records: Sequence[TerminalSessionRecord]
+) -> TerminalSessionRecord | None:
+    return next((record for record in records if is_same_session(record, session)), None)
+
+
+@pure
+def _find_session_of_record(
+    record: TerminalSessionRecord, live_sessions: Sequence[TmuxSession]
+) -> TmuxSession | None:
+    return next((session for session in live_sessions if is_same_session(record, session)), None)
+
+
+@pure
 def _live_instance_record(
     session: TmuxSession, record: TerminalSessionRecord | None
 ) -> InstanceRecord:
@@ -94,7 +124,13 @@ def _fresh_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
             f"terminal {record.name!r} has no session id although its session was just created"
         )
     return _live_instance_record(
-        TmuxSession(name=record.name, session_id=record.session_id, last_activity=None), record
+        TmuxSession(
+            name=record.name,
+            session_id=record.session_id,
+            created_epoch=record.session_created,
+            last_activity=None,
+        ),
+        record,
     )
 
 
@@ -111,21 +147,17 @@ def match_live_sessions(
     carrying the old name of a terminal whose own session is live is skipped, whichever tmux
     lists first.
     """
-    # Keyed by plain strings: a live session's id and name arrive from tmux unvalidated.
-    record_by_id: dict[str, TerminalSessionRecord] = {
-        str(record.session_id): record for record in records if record.session_id
-    }
+    # Keyed by a plain string: a live session's name arrives from tmux unvalidated.
     record_by_name: dict[str, TerminalSessionRecord] = {
         str(record.name): record for record in records
     }
-    live_ids = {session.session_id for session in live_sessions}
     matched: set[TmuxSessionName] = set()
     instances: list[InstanceRecord] = []
     for session in live_sessions:
-        record = record_by_id.get(session.session_id)
+        record = _find_record_of_session(session, records)
         if record is None:
             record = record_by_name.get(session.name)
-            if record is not None and record.session_id in live_ids:
+            if record is not None and _find_session_of_record(record, live_sessions) is not None:
                 # The record's own session is live under another name; this one only reuses its old name.
                 logger.debug(
                     "Skipped tmux session {!r} ({}): terminal {!r} is backed by session {}",
@@ -259,7 +291,9 @@ class TmuxSessionSource(InstanceSourceInterface):
             )
         with self._lock:
             record = self._record_named(name)
-            self._kill_session_of(name, record)
+            live = self._live_session_of(name, record, self._user_sessions())
+            if live is not None:
+                self.tmux.kill_session(TmuxSessionId(live.session_id))
             self.store.remove_record(name)
             self._remove_session_id_file(name)
 
@@ -283,21 +317,21 @@ class TmuxSessionSource(InstanceSourceInterface):
                 )
             existing = next((record for record in records if record.name == name), None)
             live_session = self._live_session_of(name, existing, live_sessions)
-            session_id = (
-                TmuxSessionId(live_session.session_id)
-                if live_session is not None
-                else (existing.session_id if existing else None)
-            )
             retitled = TerminalSessionRecord(
                 name=name,
                 title=title,
                 workdir=existing.workdir if existing else None,
-                session_id=session_id,
+                session_id=TmuxSessionId(live_session.session_id)
+                if live_session is not None
+                else (existing.session_id if existing else None),
+                session_created=live_session.created_epoch
+                if live_session is not None
+                else (existing.session_created if existing else None),
                 is_stopped=existing.is_stopped if existing else False,
             )
             self.store.save_record(retitled)
-            if session_id is not None and (existing is None or existing.session_id != session_id):
-                self._write_session_id_file(name, session_id)
+            if live_session is not None and (existing is None or not is_same_session(existing, live_session)):
+                self._write_session_id_file(retitled)
         if live_session is None:
             return _stopped_instance_record(retitled)
         return _live_instance_record(live_session, retitled)
@@ -321,6 +355,7 @@ class TmuxSessionSource(InstanceSourceInterface):
                 title=record.title if record else None,
                 workdir=record.workdir if record else None,
                 session_id=None,
+                session_created=None,
                 is_stopped=True,
             )
             self.store.save_record(stopped)
@@ -335,8 +370,8 @@ class TmuxSessionSource(InstanceSourceInterface):
             record = self._record_named(name)
             live = self._live_session_of(name, record, live_sessions)
             if live is not None:
-                if record is not None and record.session_id != live.session_id:
-                    self._adopt(record, TmuxSessionId(live.session_id))
+                if record is not None and not is_same_session(record, live):
+                    self._adopt(record, live)
                 return _live_instance_record(live, record)
             if record is None:
                 raise UnknownInstanceError(f"no terminal has the key {key!r}")
@@ -361,15 +396,14 @@ class TmuxSessionSource(InstanceSourceInterface):
         """
         with self._lock:
             live_sessions = self._user_sessions()
-            live_by_id = {session.session_id: session for session in live_sessions}
             live_by_name = {session.name: session for session in live_sessions}
             for record in self.store.list_records():
-                if record.session_id is not None and record.session_id in live_by_id:
-                    self._write_session_id_file(record.name, record.session_id)
+                if _find_session_of_record(record, live_sessions) is not None:
+                    self._write_session_id_file(record)
                     continue
                 live = live_by_name.get(record.name)
                 if live is not None:
-                    self._adopt(record, TmuxSessionId(live.session_id))
+                    self._adopt(record, live)
                     continue
                 if record.is_stopped:
                     self._remove_session_id_file(record.name)
@@ -394,19 +428,22 @@ class TmuxSessionSource(InstanceSourceInterface):
         if is_agent_session(session_name, self.agent_session_prefix):
             return None
         with self._lock:
+            live_sessions = self._user_sessions()
+            live = next((session for session in live_sessions if session.session_id == session_id), None)
+            if live is None:
+                # The session is gone already, or is one the listing skips (a name that cannot be a key).
+                return None
             records = self.store.list_records()
-            for record in records:
-                if record.session_id == session_id:
-                    return record.name
+            record = _find_record_of_session(live, records)
+            if record is not None:
+                return record.name
             if not _is_session_name(session_name):
                 return None
             name = TmuxSessionName(session_name)
             record = next((record for record in records if record.name == name), None)
             if record is None:
                 return name
-            if record.session_id is not None and any(
-                session.session_id == record.session_id for session in self._user_sessions()
-            ):
+            if _find_session_of_record(record, live_sessions) is not None:
                 logger.debug(
                     "Ignored tmux session {!r} ({}): terminal {!r} is backed by session {}",
                     session_name,
@@ -415,42 +452,30 @@ class TmuxSessionSource(InstanceSourceInterface):
                     record.session_id,
                 )
                 return None
-            try:
-                self._adopt(record, TmuxSessionId(session_id))
-            except InvalidTerminalValueError:
-                logger.debug("Ignored the tmux session id {!r}: not an id", session_id)
+            self._adopt(record, live)
             return name
 
     def _create_session_for(self, record: TerminalSessionRecord) -> TerminalSessionRecord:
         """Create the record's session, then remember it with the new id and its id file written; the caller holds the lock."""
-        session_id = self.tmux.create_session(
+        session = self.tmux.create_session(
             record.name, record.workdir or self.default_workdir, self.session_command
         )
-        created = record.model_copy_update(
-            to_update(record.field_ref().session_id, session_id),
-            to_update(record.field_ref().is_stopped, False),
-        )
-        self.store.save_record(created)
-        self._write_session_id_file(record.name, session_id)
-        return created
+        return self._bind(record, session)
 
-    def _adopt(self, record: TerminalSessionRecord, session_id: TmuxSessionId) -> None:
+    def _adopt(self, record: TerminalSessionRecord, session: TmuxSession) -> TerminalSessionRecord:
         """Bind a record to the live session that carries its name; the caller holds the lock."""
-        adopted = record.model_copy_update(
-            to_update(record.field_ref().session_id, session_id),
+        return self._bind(record, session)
+
+    def _bind(self, record: TerminalSessionRecord, session: TmuxSession) -> TerminalSessionRecord:
+        """Remember ``session`` as the record's, running, with its id file written."""
+        bound = record.model_copy_update(
+            to_update(record.field_ref().session_id, TmuxSessionId(session.session_id)),
+            to_update(record.field_ref().session_created, session.created_epoch),
             to_update(record.field_ref().is_stopped, False),
         )
-        self.store.save_record(adopted)
-        self._write_session_id_file(record.name, session_id)
-
-    def _kill_session_of(
-        self, name: TmuxSessionName, record: TerminalSessionRecord | None
-    ) -> None:
-        """Kill the terminal's session by its id when the record holds one, else by name."""
-        if record is not None and record.session_id is not None:
-            self.tmux.kill_session(record.session_id)
-        else:
-            self.tmux.kill_session(name)
+        self.store.save_record(bound)
+        self._write_session_id_file(bound)
+        return bound
 
     def _record_named(self, name: TmuxSessionName) -> TerminalSessionRecord | None:
         return next(
@@ -463,14 +488,11 @@ class TmuxSessionSource(InstanceSourceInterface):
         record: TerminalSessionRecord | None,
         live_sessions: Sequence[TmuxSession],
     ) -> TmuxSession | None:
-        """The live session backing the terminal: the one with the record's id, else the one with its name."""
-        if record is not None and record.session_id is not None:
-            by_id = next(
-                (session for session in live_sessions if session.session_id == record.session_id),
-                None,
-            )
-            if by_id is not None:
-                return by_id
+        """The live session backing the terminal: the record's own session, else the one with its name."""
+        if record is not None:
+            own = _find_session_of_record(record, live_sessions)
+            if own is not None:
+                return own
         return next((session for session in live_sessions if session.name == name), None)
 
     def _user_sessions(self) -> list[TmuxSession]:
@@ -496,9 +518,11 @@ class TmuxSessionSource(InstanceSourceInterface):
     def _session_id_file(self, name: TmuxSessionName) -> Path:
         return self.sessions_dir / name
 
-    def _write_session_id_file(self, name: TmuxSessionName, session_id: TmuxSessionId) -> None:
+    def _write_session_id_file(self, record: TerminalSessionRecord) -> None:
+        """The two lines the dispatch attaches by: the session id, then its creation time (blank when unknown)."""
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
-        self._session_id_file(name).write_text(f"{session_id}\n")
+        created = "" if record.session_created is None else str(record.session_created)
+        self._session_id_file(record.name).write_text(f"{record.session_id}\n{created}\n")
 
     def _remove_session_id_file(self, name: TmuxSessionName) -> None:
         self._session_id_file(name).unlink(missing_ok=True)

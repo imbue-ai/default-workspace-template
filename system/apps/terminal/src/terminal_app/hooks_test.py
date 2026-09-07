@@ -4,11 +4,17 @@ import pytest
 from app_instances.testing import RecordedShellRequests, RecordingNudger
 from flask.testing import FlaskClient
 
-from terminal_app.data_types import TerminalPaths, TmuxSession
+from terminal_app.data_types import TerminalPaths
 from terminal_app.hooks import resolve_tab_id_for_tty
 from terminal_app.primitives import ClientTty
 from terminal_app.store import JsonTerminalSessionStore
-from terminal_app.testing import FakeTmux, make_terminal_record, read_session_id_file
+from terminal_app.testing import (
+    FakeTmux,
+    expected_session_id_file,
+    make_terminal_record,
+    make_tmux_session,
+    read_session_id_file,
+)
 
 
 def _record_tab(paths: TerminalPaths, tab_id: str, tty: str) -> None:
@@ -35,10 +41,12 @@ def test_resolve_tab_id_finds_the_file_holding_the_pty(
 
 def test_session_changed_repoints_the_tab_and_nudges(
     hook_client: FlaskClient,
+    fake_tmux: FakeTmux,
     terminal_paths: TerminalPaths,
     recording_shell: RecordedShellRequests,
     recording_nudger: RecordingNudger,
 ) -> None:
+    fake_tmux.set_sessions([make_tmux_session("build", "$4")])
     _record_tab(terminal_paths, "term-a", "/dev/pts/3")
 
     response = hook_client.post(
@@ -112,7 +120,7 @@ def test_session_changed_keys_the_tab_by_the_terminal_whose_session_id_it_is(
     recording_shell: RecordedShellRequests,
 ) -> None:
     # The session was renamed inside tmux; the tab still shows terminal-1, the record's key.
-    fake_tmux.set_sessions([TmuxSession(name="my-build", session_id="$4", last_activity=None)])
+    fake_tmux.set_sessions([make_tmux_session("my-build", "$4")])
     session_store.save_record(
         make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$4")
     )
@@ -140,7 +148,7 @@ def test_session_changed_adopts_a_session_recreated_on_attach(
 ) -> None:
     # The tab of a stopped terminal was opened: the dispatch created the session by name, and
     # the switch is how the app learns its id.
-    fake_tmux.set_sessions([TmuxSession(name="terminal-1", session_id="$9", last_activity=None)])
+    fake_tmux.set_sessions([make_tmux_session("terminal-1", "$9")])
     session_store.save_record(
         make_terminal_record(name="terminal-1", title="Build", workdir="/srv", is_stopped=True)
     )
@@ -160,7 +168,7 @@ def test_session_changed_adopts_a_session_recreated_on_attach(
     assert session_store.list_records() == [
         make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$9")
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == "$9\n"
+    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$9")
 
 
 def test_session_renamed_changes_no_tab_and_only_nudges(
@@ -218,11 +226,13 @@ def test_hook_rejects_non_loopback_callers_and_malformed_bodies(
 
 def test_a_store_failure_on_the_hook_route_answers_500_with_a_detail_body(
     hook_client: FlaskClient,
+    fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     terminal_paths: TerminalPaths,
     recording_shell: RecordedShellRequests,
     recording_nudger: RecordingNudger,
 ) -> None:
+    fake_tmux.set_sessions([make_tmux_session("deploy", "$4")])
     session_store.store_path.parent.mkdir(parents=True)
     session_store.store_path.write_text("not json")
     _record_tab(terminal_paths, "term-a", "/dev/pts/3")

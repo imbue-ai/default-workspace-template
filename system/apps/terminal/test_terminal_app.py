@@ -27,13 +27,15 @@ from app_manifest.primitives import AppName
 from app_manifest.registry import read_registry
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import Field
-from terminal_app.data_types import TerminalPaths, TmuxSession
+from terminal_app.data_types import TerminalPaths
 from terminal_app.testing import (
     ENV_FAKE_TMUX_DIR,
     ENV_FAKE_TTYD_DIR,
     FakeTmux,
+    expected_session_id_file,
     install_fake_tmux,
     install_fake_ttyd,
+    make_tmux_session,
     read_fake_ttyd_argv,
 )
 
@@ -147,12 +149,8 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
     fake_tmux = install_fake_tmux(tmp_path / "fake-tmux")
     fake_tmux.set_sessions(
         [
-            TmuxSession(
-                name="terminal-2",
-                session_id="$5",
-                last_activity=datetime(2026, 9, 3, tzinfo=timezone.utc),
-            ),
-            TmuxSession(name="mngr-alice", session_id="$1", last_activity=None),
+            make_tmux_session("terminal-2", "$5", datetime(2026, 9, 3, tzinfo=timezone.utc)),
+            make_tmux_session("mngr-alice", "$1"),
         ]
     )
     fake_tmux.set_clients([])
@@ -239,7 +237,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
             "bash",
             "-l",
         ]
-        assert (app.paths.sessions_dir / "terminal-1").read_text() == "$6\n"
+        assert (app.paths.sessions_dir / "terminal-1").read_text() == expected_session_id_file("$6")
         # A create naming no workdir starts the shell where the app runs: the cwd it was
         # spawned with, which is this test's.
         default_directory = urllib.parse.quote(os.getcwd(), safe="")

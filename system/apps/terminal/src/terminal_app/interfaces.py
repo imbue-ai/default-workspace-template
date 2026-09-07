@@ -22,8 +22,8 @@ class TmuxInterface(MutableModel, ABC):
     @abstractmethod
     def create_session(
         self, name: TmuxSessionName, workdir: Workdir, command: Sequence[str]
-    ) -> TmuxSessionId:
-        """Create a detached session running ``command`` in ``workdir`` and return its id; raises TmuxCommandError when tmux refuses (a name already taken included)."""
+    ) -> TmuxSession:
+        """Create a detached session running ``command`` in ``workdir`` and return it (its id and creation time); raises TmuxCommandError when tmux refuses (a name already taken included)."""
 
     @abstractmethod
     def kill_session(self, target: TmuxSessionName | TmuxSessionId) -> None:
