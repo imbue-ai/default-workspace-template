@@ -83,7 +83,8 @@ def _notify_session_changed(client_tty: str) -> None:
 
 def _notify_session_renamed() -> None:
     # Renames are rare and carry no client context; the route only refreshes the
-    # app's list on one, so which session is posted does not matter.
+    # app's list on one, so which session is posted does not matter and one post is
+    # enough.
     output = _run_tmux(["list-sessions", "-F", "#{session_id}\t#{session_name}"])
     if output is None:
         return
@@ -100,6 +101,7 @@ def _notify_session_renamed() -> None:
                 "session_id": session_id,
             }
         )
+        return
 
 
 def main() -> None:
