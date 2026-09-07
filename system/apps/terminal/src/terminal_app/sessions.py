@@ -23,7 +23,6 @@ from app_instances.primitives import (
     is_name_conflict,
 )
 from app_manifest.primitives import ActionId
-from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from loguru import logger
@@ -54,15 +53,6 @@ def is_agent_session(name: str, agent_session_prefix: str) -> bool:
     An empty prefix means no agent prefix is configured, so nothing is an agent session.
     """
     return bool(agent_session_prefix) and name.startswith(agent_session_prefix)
-
-
-class ListedTerminals(FrozenModel):
-    """What the merge of tmux's sessions and the store came to: the records, and which record each live session backs."""
-
-    instances: tuple[InstanceRecord, ...] = Field(description="Every terminal, in list order")
-    live_record_names: frozenset[TmuxSessionName] = Field(
-        description="The remembered terminals a live session was matched to"
-    )
 
 
 @pure
@@ -99,7 +89,7 @@ def _stopped_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
 @pure
 def match_live_sessions(
     live_sessions: Sequence[TmuxSession], records: Sequence[TerminalSessionRecord]
-) -> ListedTerminals:
+) -> list[InstanceRecord]:
     """Every live user session as ``idle`` (in tmux order), then every remembered terminal tmux no longer has as ``stopped``.
 
     A live session is the terminal whose record holds its id, whatever tmux now calls it; a
@@ -139,14 +129,7 @@ def match_live_sessions(
     instances.extend(
         _stopped_instance_record(record) for record in records if record.name not in matched
     )
-    return ListedTerminals(instances=tuple(instances), live_record_names=frozenset(matched))
-
-
-@pure
-def build_instance_records(
-    live_sessions: Sequence[TmuxSession], records: Sequence[TerminalSessionRecord]
-) -> list[InstanceRecord]:
-    return list(match_live_sessions(live_sessions, records).instances)
+    return instances
 
 
 @pure
@@ -233,7 +216,7 @@ class TmuxSessionSource(InstanceSourceInterface):
         with self._lock:
             live_sessions = self._user_sessions()
             records = self.store.list_records()
-        return build_instance_records(live_sessions, records)
+        return match_live_sessions(live_sessions, records)
 
     def create_instance(
         self, action: ActionId, params: Mapping[str, str]
@@ -282,11 +265,9 @@ class TmuxSessionSource(InstanceSourceInterface):
             live_sessions = self._user_sessions()
             records = self.store.list_records()
             listed = match_live_sessions(live_sessions, records)
-            if not any(instance.key == name for instance in listed.instances):
+            if not any(instance.key == name for instance in listed):
                 raise UnknownInstanceError(f"no terminal has the key {key!r}")
-            other_titles = [
-                str(instance.title) for instance in listed.instances if instance.key != name
-            ]
+            other_titles = [str(instance.title) for instance in listed if instance.key != name]
             if is_name_conflict(title, other_titles):
                 raise InstanceConflictError(
                     f"another terminal is already named {canonical_name_from_title(title)!r}"
