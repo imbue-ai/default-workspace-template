@@ -5,8 +5,9 @@ Invoked by the workspace tmux ``client-session-changed`` and ``session-renamed``
 hooks. It gathers the affected session name/id from tmux directly (rather than
 receiving them as arguments -- a tmux session id like ``$3`` would be mangled if
 passed through the hook's ``sh -c``), then POSTs the change to the terminal
-app's loopback hook route, which re-points the affected dockview tabs through
-the shell so their titles track the live session.
+app's loopback hook route. A session switch re-points the switching client's
+dockview tab at the terminal it now shows; a rename changes no key and no
+title, so it only makes the app refresh its list.
 
 Standard library only; every network / OS / tmux error is swallowed: this runs
 inside a tmux hook and must never fail in a way that disrupts tmux.
@@ -81,8 +82,8 @@ def _notify_session_changed(client_tty: str) -> None:
 
 
 def _notify_session_renamed() -> None:
-    # Renames are rare and carry no client context, so enumerate every session
-    # and let the hook route match the affected tabs by session id.
+    # Renames are rare and carry no client context; the route only refreshes the
+    # app's list on one, so which session is posted does not matter.
     output = _run_tmux(["list-sessions", "-F", "#{session_id}\t#{session_name}"])
     if output is None:
         return
