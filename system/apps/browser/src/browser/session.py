@@ -424,14 +424,16 @@ _RESTORE_NAV_TIMEOUT = float(os.environ.get("BROWSER_RESTORE_NAV_TIMEOUT", "20")
 # so an ungraceful daemon kill loses at most this many seconds of tab changes (the
 # profile's cookies/logins persist regardless).
 _MANIFEST_CHECKPOINT_SECONDS = float(os.environ.get("BROWSER_CHECKPOINT_SECONDS", "10"))
-# Lock files Chromium leaves in a profile; a hard kill (crash/OOM/container stop)
-# orphans them and the next launch on that profile would refuse to start. Safe to
-# remove because restore is sequential and the prior Chromium for this dir is dead.
+
+
 def _stopped_hint(browser_id: str) -> str:
     """How to bring a stopped browser back, for an agent told it is stopped."""
     return f"start it from its tab, or with `layout.py start app:browser?instance={browser_id}`"
 
 
+# Lock files Chromium leaves in a profile; a hard kill (crash/OOM/container stop)
+# orphans them and the next launch on that profile would refuse to start. Safe to
+# remove because restore is sequential and the prior Chromium for this dir is dead.
 def _profile_dir(browser_id: str) -> Path:
     """The persistent Chromium ``user_data_dir`` for a browser name.
 
