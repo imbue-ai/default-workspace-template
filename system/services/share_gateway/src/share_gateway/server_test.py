@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import jwt
 from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
@@ -85,6 +86,10 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         get_label_to_name=lambda: _LABELS,
     )
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
+
+
+def _set_cookies_by_name(response: TestResponse) -> dict[str, str]:
+    return {header.split("=", 1)[0]: header for header in response.headers.getlist("Set-Cookie")}
 
 
 def _cookie_value(set_cookie_header: str) -> str:
@@ -268,7 +273,7 @@ def test_callback_sets_domain_cookie_and_redirects_to_next(tmp_path: Path) -> No
 
     assert resp.status_code == 302
     assert resp.headers["Location"] == f"https://{_WEB_HOST}/panel"
-    set_cookies = {header.split("=", 1)[0]: header for header in resp.headers.getlist("Set-Cookie")}
+    set_cookies = _set_cookies_by_name(resp)
     assert set(set_cookies) == {SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME}
     for header in set_cookies.values():
         assert f"Domain={_DOMAIN}" in header
@@ -383,7 +388,7 @@ def test_callback_owner_is_admitted_without_a_grant(tmp_path: Path) -> None:
     resp = harness.client.get(f"/_auth/callback?token={token}&state={nonce}&next=https://{_SHELL_HOST}/")
 
     assert resp.status_code == 302
-    plain_header = next(h for h in resp.headers.getlist("Set-Cookie") if h.startswith(f"{SESSION_COOKIE_NAME}="))
+    plain_header = _set_cookies_by_name(resp)[SESSION_COOKIE_NAME]
     harness.client.set_cookie(SESSION_COOKIE_NAME, _cookie_value(plain_header))
     verified = harness.client.get("/_auth/verify", headers=_verify_headers())
     assert verified.status_code == 200
