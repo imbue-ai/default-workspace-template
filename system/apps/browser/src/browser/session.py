@@ -570,9 +570,13 @@ class LiveBrowser(MutableModel):
     # finishes/aborts first and observes _closed. None once create's launch isn't pending.
     _launch_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     _closed: bool = PrivateAttr(default=False)
-    # The tabs a create asked this browser to open on, reported as its tabs until Chromium is up
-    # and can be asked, so a daemon crash mid-launch restores the browser to that page.
-    _start_tabs: list[str] = PrivateAttr(default_factory=list)
+    # The tabs this browser is known to have: the pages a create or a restore asked it to open
+    # until Chromium is up and can be asked, then whatever the last successful targets query
+    # returned. Reported whenever Chromium cannot answer (not launched yet, dying under a
+    # stop, crashed), so a checkpoint taken then keeps the last good list rather than
+    # recording an empty one and restoring the browser to a blank page.
+    _last_known_tabs: list[str] = PrivateAttr(default_factory=list)
+    _last_known_active_tab: int = PrivateAttr(default=0)
     # Serializes direct browser actions + active-tab foregrounding (slow CDP work).
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
     # Serializes ALL ownership changes -- the single mutual-exclusion primitive.
@@ -698,7 +702,11 @@ class LiveBrowser(MutableModel):
         else:
             os.environ.pop("PULSE_SINK", None)
             self._audio_sink = ""
-        first_url = next((u for u in (restore_tabs or []) if _is_restorable_url(u)), _HOME_URL)
+        restorable_tabs = [u for u in (restore_tabs or []) if _is_restorable_url(u)]
+        if restorable_tabs:
+            self._last_known_tabs = restorable_tabs
+            self._last_known_active_tab = active_tab if 0 <= active_tab < len(restorable_tabs) else 0
+        first_url = restorable_tabs[0] if restorable_tabs else _HOME_URL
         try:
             self._chrome = await asyncio.to_thread(
                 lambda: chrome_launcher.launch_with_sandbox_retry(
@@ -912,14 +920,18 @@ class LiveBrowser(MutableModel):
 
     async def tab_urls(self) -> tuple[list[str], int]:
         """The restorable tab URLs + the active tab's index, for the manifest. The
-        checkpoint runs it every ~10s on the loop, which is fine (a light targets query)."""
+        checkpoint runs it every ~10s on the loop, which is fine (a light targets query).
+
+        When Chromium cannot answer (not up yet, mid-teardown, crashed) the last known list is
+        reported instead: a failed query is not evidence that the browser has no tabs, and a
+        checkpoint that recorded one as empty would restore it to a blank page."""
         if self._cdp is None:
-            return list(self._start_tabs), 0
+            return self.last_known_tabs()
         try:
             targets = await self._cdp.page_targets()
         except Exception as e:  # noqa: BLE001
-            logger.debug("tab_urls ignored ({})", e)
-            return [], 0
+            logger.debug("tab_urls kept the last known tabs of {} ({})", self.browser_id, e)
+            return self.last_known_tabs()
         active_target = self._active_target()
         urls: list[str] = []
         active = 0
@@ -928,7 +940,13 @@ class LiveBrowser(MutableModel):
                 if t["targetId"] == active_target:
                     active = len(urls)
                 urls.append(t["url"])
+        self._last_known_tabs = list(urls)
+        self._last_known_active_tab = active
         return urls, active
+
+    def last_known_tabs(self) -> tuple[list[str], int]:
+        """The tab list the last successful query (or the create or restore) established, and its active index."""
+        return list(self._last_known_tabs), self._last_known_active_tab
 
     async def _keepalive_loop(self) -> None:
         """Ping cast (control) sockets periodically so a quiet browser doesn't let the
@@ -2002,7 +2020,7 @@ class BrowserSessionManager(MutableModel):
                     )
             session = self._register_init_locked(name)
             if start_url is not None:
-                session._start_tabs = [start_url]
+                session._last_known_tabs = [start_url]
         # Persist the manifest NOW, while the browser is still ``init`` (finding [5]):
         # the Chromium launch is multi-second, and a daemon crash in that window would
         # otherwise lose a browser the user just asked for. The init entry carries the

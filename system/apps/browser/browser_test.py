@@ -1081,6 +1081,83 @@ def test_snapshot_persists_init_running_and_crashed_topology_only() -> None:
     assert set(snap.browsers[0].model_dump().keys()) == {"id", "tabs", "active_tab"}
 
 
+class _FailingTargetsCdpClient(NavigatingCdpClient):
+    """A CdpClient whose targets query fails, as it does once Chromium has gone."""
+
+    async def page_targets(self) -> list[dict[str, Any]]:
+        raise ConnectionError("Chromium is gone")
+
+
+def test_tab_urls_keeps_the_last_known_tabs_when_the_query_fails() -> None:
+    # A checkpoint that runs while Chromium cannot answer (dying under a stop, crashed, not
+    # up yet) must not record the browser as having no tabs: that empty list would be what a
+    # restart restores, landing the browser on a blank page.
+    browser = _running_browser("browser-1")
+    browser._cdp = NavigatingCdpClient(
+        [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}],
+        navigation_failure=None,
+    )
+    browser._active_target_id = "t2"
+
+    async def go() -> tuple[tuple[list[str], int], tuple[list[str], int], tuple[list[str], int]]:
+        live = await browser.tab_urls()
+        browser._cdp = _FailingTargetsCdpClient([], navigation_failure=None)
+        after_failure = await browser.tab_urls()
+        browser._cdp = None
+        after_teardown = await browser.tab_urls()
+        return live, after_failure, after_teardown
+
+    live, after_failure, after_teardown = asyncio.run(go())
+    assert live == (["https://one.example", "https://two.example"], 1)
+    assert after_failure == live
+    assert after_teardown == live
+
+
+def test_restore_seeds_the_last_known_tabs_before_chromium_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Between a restore's registration and Chromium coming up, the browser reports the tabs
+    # it was asked to reopen, so a checkpoint in that window (or a launch that never
+    # completes) preserves them rather than dropping them.
+    browser = bsession.LiveBrowser(browser_id="browser-1")
+    assert asyncio.run(browser.tab_urls()) == ([], 0)
+    browser._last_known_tabs = ["https://x", "https://y"]
+    browser._last_known_active_tab = 1
+    assert asyncio.run(browser.tab_urls()) == (["https://x", "https://y"], 1)
+
+
+def test_shutdown_checkpoints_every_browser_before_closing_any(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The final manifest must be taken from live browsers: a close tears Chromium down, and
+    # the tabs it held are only knowable before that. The fake close changes what the browser
+    # would report afterwards, so a save that ran after it would show.
+    events: list[str] = []
+
+    async def fake_close(self: bsession.LiveBrowser) -> None:
+        events.append(f"close:{self.browser_id}")
+        self._cdp = None
+        self._last_known_tabs = ["https://after-close.example"]
+
+    monkeypatch.setattr(bsession.LiveBrowser, "close", fake_close)
+    mgr = _manager()
+    for name, url in (("browser-1", "https://one.example"), ("browser-2", "https://two.example")):
+        browser = _running_browser(name)
+        browser._cdp = NavigatingCdpClient([{"targetId": f"{name}-tab", "url": url}], navigation_failure=None)
+        mgr._browsers[name] = browser
+    original_write = manifest.write_manifest
+
+    def recording_write(snapshot: manifest.Manifest) -> None:
+        events.append("save")
+        original_write(snapshot)
+
+    monkeypatch.setattr(manifest, "write_manifest", recording_write)
+    asyncio.run(mgr.shutdown())
+    assert events == ["save", "close:browser-1", "close:browser-2"]
+    saved = manifest.read_manifest()
+    assert saved is not None
+    assert {entry.id: entry.tabs for entry in saved.browsers} == {
+        "browser-1": ["https://one.example"],
+        "browser-2": ["https://two.example"],
+    }
+
+
 def test_fresh_workspace_restores_to_an_empty_fleet(monkeypatch: pytest.MonkeyPatch) -> None:
     # No manifest, no profiles on disk -> NO default browser, an EMPTY fleet. Nothing
     # is launched (no browser-0 seed); the first create() opens a browser later.
