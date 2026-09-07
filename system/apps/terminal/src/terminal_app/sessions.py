@@ -293,16 +293,21 @@ class TmuxSessionSource(InstanceSourceInterface):
                 )
             existing = next((record for record in records if record.name == name), None)
             live_session = self._live_session_of(name, existing, live_sessions)
+            session_id = (
+                TmuxSessionId(live_session.session_id)
+                if live_session is not None
+                else (existing.session_id if existing else None)
+            )
             retitled = TerminalSessionRecord(
                 name=name,
                 title=title,
                 workdir=existing.workdir if existing else None,
-                session_id=existing.session_id
-                if existing and existing.session_id
-                else (TmuxSessionId(live_session.session_id) if live_session else None),
+                session_id=session_id,
                 is_stopped=existing.is_stopped if existing else False,
             )
             self.store.save_record(retitled)
+            if session_id is not None and (existing is None or existing.session_id != session_id):
+                self._write_session_id_file(name, session_id)
         if live_session is None:
             return _stopped_instance_record(retitled)
         return _live_instance_record(live_session, retitled)
@@ -340,7 +345,7 @@ class TmuxSessionSource(InstanceSourceInterface):
             record = self._record_named(name)
             live = self._live_session_of(name, record, live_sessions)
             if live is not None:
-                if record is not None and record.session_id is None:
+                if record is not None and record.session_id != live.session_id:
                     self._adopt(record, TmuxSessionId(live.session_id))
                 return _live_instance_record(live, record)
             if record is None:

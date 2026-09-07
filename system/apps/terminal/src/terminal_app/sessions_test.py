@@ -302,6 +302,7 @@ def test_rename_of_a_live_session_the_store_never_saw_remembers_it_with_its_id(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3")])
 
@@ -310,6 +311,27 @@ def test_rename_of_a_live_session_the_store_never_saw_remembers_it_with_its_id(
     assert session_store.list_records() == [
         make_terminal_record(name="terminal-1", title="Build", workdir=None, session_id="$3")
     ]
+    assert _session_id_file(terminal_paths, "terminal-1") == "$3\n"
+
+
+def test_rename_takes_the_live_sessions_id_over_a_stale_one(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    # The session the record knew died and the dispatch recreated one by name on attach.
+    fake_tmux.set_sessions([_session("terminal-1", "$9")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$3")
+    )
+
+    session_source.rename_instance(InstanceKey("terminal-1"), InstanceTitle("Build"))
+
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Build", workdir=None, session_id="$9")
+    ]
+    assert _session_id_file(terminal_paths, "terminal-1") == "$9\n"
 
 
 def test_rename_of_a_stopped_terminal_retitles_the_record_without_touching_tmux(
@@ -563,6 +585,27 @@ def test_start_recreates_a_stopped_terminals_session_in_its_workdir(
     # Starting a running terminal changes nothing.
     assert session_source.start_instance(InstanceKey("terminal-1")).status == InstanceStatus.IDLE
     assert len(_creates(fake_tmux)) == 1
+
+
+def test_start_adopts_the_live_session_when_the_records_id_is_stale(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    fake_tmux.set_sessions([_session("terminal-1", "$9")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$3")
+    )
+
+    started = session_source.start_instance(InstanceKey("terminal-1"))
+
+    assert (started.key, started.status) == ("terminal-1", InstanceStatus.IDLE)
+    assert _creates(fake_tmux) == []
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$9")
+    ]
+    assert _session_id_file(terminal_paths, "terminal-1") == "$9\n"
 
 
 def test_stop_and_start_refuse_unknown_keys_and_agent_sessions(
