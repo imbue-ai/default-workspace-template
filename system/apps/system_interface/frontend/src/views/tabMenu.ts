@@ -57,7 +57,9 @@ export interface TabMenuActions {
  * Delete is offered only for an instance of an app that has instances: a single-instance app
  * IS its one record, and the record goes only when the app is unregistered. Stop and Start
  * of the instance are offered where its app reports it ``stoppable`` (a chat's agent, a
- * browser's Chromium, a terminal's session), and read from the instance's status. Stop and
+ * browser's Chromium, a terminal's session) and the app is running to take the verb (while
+ * it is down, every instance reads ``stopped`` and only the app itself can be started), and
+ * read from the instance's status. Stop and
  * Start of the whole app are offered only on a single-instance app's tab, where the two
  * coincide, and only for an app the workspace can honestly stop (supervised, not critical,
  * and not inside a critical app's program); a multi-instance app is stopped from the rail's
@@ -79,7 +81,7 @@ export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions
   if (actions.removeFromProject !== null) {
     closing.push({ label: "Remove from project", iconName: "minus-circle", run: actions.removeFromProject });
   }
-  if (instance.stoppable) {
+  if (instance.stoppable && app.is_running) {
     const action = instance.status === "stopped" ? "start" : "stop";
     closing.push({
       label: `${action === "stop" ? "Stop" : "Start"} ${instance.title}`,
