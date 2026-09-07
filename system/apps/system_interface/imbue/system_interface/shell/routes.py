@@ -1,6 +1,7 @@
 """The shell's HTTP routes: contracts.md sections 5, 6, 9, and the op route of section 12."""
 
 import json
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -290,49 +291,38 @@ def relay_create_route(name: str) -> ResponseReturnValue:
     return _relay_response(outcome)
 
 
-def relay_delete_route(name: str, key: str) -> ResponseReturnValue:
+def _relay_keyed(
+    name: str, key: str, send: Callable[[AppInventoryEntry], RelayOutcome]
+) -> ResponseReturnValue:
+    """One instance verb through the relay: the app's answer as it is, and a refetch of its list when it accepted."""
     entry = _entry_or_raise(name)
     _instance_key_or_raise(key)
-    outcome = relay_delete(_shell().http_client, entry, key)
+    outcome = send(entry)
     if outcome.status_code < HTTP_BAD_REQUEST:
         _shell().inventory.refetch_now(name)
     return _relay_response(outcome)
+
+
+def relay_delete_route(name: str, key: str) -> ResponseReturnValue:
+    return _relay_keyed(name, key, lambda entry: relay_delete(_shell().http_client, entry, key))
 
 
 def relay_rename_route(name: str, key: str) -> ResponseReturnValue:
-    entry = _entry_or_raise(name)
-    _instance_key_or_raise(key)
-    outcome = relay_rename(_shell().http_client, entry, key, request.get_data())
-    if outcome.status_code < HTTP_BAD_REQUEST:
-        _shell().inventory.refetch_now(name)
-    return _relay_response(outcome)
+    body = request.get_data()
+    return _relay_keyed(name, key, lambda entry: relay_rename(_shell().http_client, entry, key, body))
 
 
 def relay_location_route(name: str, key: str) -> ResponseReturnValue:
-    entry = _entry_or_raise(name)
-    _instance_key_or_raise(key)
-    outcome = relay_location(_shell().http_client, entry, key, request.get_data())
-    if outcome.status_code < HTTP_BAD_REQUEST:
-        _shell().inventory.refetch_now(name)
-    return _relay_response(outcome)
+    body = request.get_data()
+    return _relay_keyed(name, key, lambda entry: relay_location(_shell().http_client, entry, key, body))
 
 
 def relay_stop_route(name: str, key: str) -> ResponseReturnValue:
-    entry = _entry_or_raise(name)
-    _instance_key_or_raise(key)
-    outcome = relay_stop(_shell().http_client, entry, key)
-    if outcome.status_code < HTTP_BAD_REQUEST:
-        _shell().inventory.refetch_now(name)
-    return _relay_response(outcome)
+    return _relay_keyed(name, key, lambda entry: relay_stop(_shell().http_client, entry, key))
 
 
 def relay_start_route(name: str, key: str) -> ResponseReturnValue:
-    entry = _entry_or_raise(name)
-    _instance_key_or_raise(key)
-    outcome = relay_start(_shell().http_client, entry, key)
-    if outcome.status_code < HTTP_BAD_REQUEST:
-        _shell().inventory.refetch_now(name)
-    return _relay_response(outcome)
+    return _relay_keyed(name, key, lambda entry: relay_start(_shell().http_client, entry, key))
 
 
 # ---------- section 6: stop and start of an app ----------
