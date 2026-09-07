@@ -424,6 +424,11 @@ _MANIFEST_CHECKPOINT_SECONDS = float(os.environ.get("BROWSER_CHECKPOINT_SECONDS"
 # Lock files Chromium leaves in a profile; a hard kill (crash/OOM/container stop)
 # orphans them and the next launch on that profile would refuse to start. Safe to
 # remove because restore is sequential and the prior Chromium for this dir is dead.
+def _stopped_hint(browser_id: str) -> str:
+    """How to bring a stopped browser back, for an agent told it is stopped."""
+    return f"start it from its tab, or with `layout.py start app:browser?instance={browser_id}`"
+
+
 def _profile_dir(browser_id: str) -> Path:
     """The persistent Chromium ``user_data_dir`` for a browser name.
 
@@ -1244,10 +1249,7 @@ class LiveBrowser(MutableModel):
         return {
             "ok": False,
             "status": "stopped",
-            "hint": (
-                f"browser {self.browser_id} is stopped; start it from its tab, or with "
-                f"`layout.py start app:browser?instance={self.browser_id}`"
-            ),
+            "hint": f"browser {self.browser_id} is stopped; {_stopped_hint(self.browser_id)}",
             **self._control_state(),
         }
 
@@ -1301,31 +1303,34 @@ class LiveBrowser(MutableModel):
         )
 
     async def _abandon_queues_locked(self, reason: str) -> None:
-        """The browser is gone (crashed or closed): release EVERY queued agent so none
-        waits on a corpse. Caller holds ``_control_lock``.
+        """The browser is gone (crashed or closed) or stopped: release EVERY queued agent so
+        none waits on a browser that will not free. Caller holds ``_control_lock``.
 
         * ``_wait_queue`` (connection-bound task/hold waiters) are woken ungranted -> their
-          ``acquire`` falls through to the crashed/closed check and returns that status, so
-          the streaming endpoint ends with a clear "gone" instead of hanging forever on a
-          browser that will never free.
+          ``acquire`` falls through to the crashed/closed/stopped check and returns that
+          status, so the streaming endpoint ends with a clear "gone" instead of hanging
+          forever on a browser that will never free.
         * ``_resume_queue`` agents ended their turn waiting to be MESSAGED when it frees;
-          it never will, so message each that it's gone and clear the queue -- otherwise
-          they wait forever for a wake that never comes.
+          it never will, so message each that it's gone (or stopped, and how to start it)
+          and clear the queue -- otherwise they wait forever for a wake that never comes.
         """
         waiters, self._wait_queue = self._wait_queue, []
         for waiter in waiters:
             waiter.granted = False
             waiter.event.set()
         resume, self._resume_queue = self._resume_queue, []
-        for agent_id, agent_name in resume:
-            self._spawn(
-                self._message_agent(
-                    agent_id,
-                    agent_name,
-                    f"Browser {self.browser_id} is gone ({reason}) and won't come back. "
-                    f"Start a new browser with `new` if you still need one.",
-                )
+        if reason == "stopped":
+            text = (
+                f"Browser {self.browser_id} is stopped, so it holds no page until it is started: "
+                f"{_stopped_hint(self.browser_id)}, or start a new browser with `new`."
             )
+        else:
+            text = (
+                f"Browser {self.browser_id} is gone ({reason}) and won't come back. "
+                f"Start a new browser with `new` if you still need one."
+            )
+        for agent_id, agent_name in resume:
+            self._spawn(self._message_agent(agent_id, agent_name, text))
 
     async def _settle_queue_locked(self) -> None:
         """Reconcile both wait-queues with the current control state. Holds ``_control_lock``.
@@ -1423,6 +1428,7 @@ class LiveBrowser(MutableModel):
         ``"starting"`` -- the browser is still launching (``init``); driving/ownership
             only applies once running. Non-fatal -- the caller waits and retries.
         ``"crashed"`` -- Chromium died; the browser is gone.
+        ``"stopped"`` -- the user stopped it; it holds no page until it is started.
 
         With ``wait`` (the default) and another agent in control, the caller parks in
         a FIFO queue and is handed the browser the instant that agent releases.
@@ -1487,12 +1493,14 @@ class LiveBrowser(MutableModel):
             if isinstance(exc, asyncio.CancelledError):
                 raise
             return "timed_out"
-        # The browser may have died while we were parked: crash/close evicts the wait queue
-        # ungranted, so report that (not a misleading "busy_human") and the agent starts fresh.
+        # The browser may have died or been stopped while we were parked: crash/close/stop
+        # evict the wait queue ungranted, so report that (not a misleading "busy_human").
         if self._crashed:
             return "crashed"
         if self._closed:
             return "closed"
+        if self._lifecycle == "stopped":
+            return "stopped"
         return "acquired" if waiter.granted else "busy_human"
 
     async def release(self, agent_id: str) -> bool:

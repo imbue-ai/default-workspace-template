@@ -1217,6 +1217,21 @@ def test_stop_keeps_the_browser_and_its_tabs_and_start_relaunches_them(monkeypat
     assert saved_again is not None and saved_again.browsers[0].stopped is False
 
 
+def test_stop_wakes_a_parked_waiter_as_stopped() -> None:
+    browser = _running_browser("browser-1")
+    browser.controller = "agent"
+    browser.owner_agent_id = "A"
+
+    async def park_then_stop() -> str:
+        waiter = asyncio.create_task(browser.acquire("B"))
+        await asyncio.sleep(0)
+        assert [w.agent_id for w in browser._wait_queue] == ["B"]
+        await browser.stop()
+        return await waiter
+
+    assert asyncio.run(park_then_stop()) == "stopped"
+
+
 def test_stop_refuses_a_launching_browser_and_start_leaves_a_live_one_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_start(monkeypatch)
     mgr = _manager()
