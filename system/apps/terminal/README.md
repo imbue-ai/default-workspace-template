@@ -10,8 +10,10 @@ sidecar's child (`app_instances.sidecar.run_sidecar_app`):
 
 1. Writes the ttyd dispatch scripts into `data/.state/terminal/commands/`
    (`dispatch.py`): `session.sh` attaches to a `terminal-N` tmux session by the
-   id recorded under `data/.state/terminal/sessions/<key>` (falling back to
-   `tmux new-session -A` by name, which creates the session when tmux lost it)
+   id and creation time recorded under `data/.state/terminal/sessions/<key>`
+   (falling back to `tmux new-session -A` by name, which creates the session
+   when tmux lost it, when there is no record, or when the session under that
+   id is a later server's)
    and records the tab's pty under `commands/clients/<tab id>`; `workdir.sh`
    opens a shell in a directory;
    `agent.sh` attaches to an mngr agent's tmux window for the chat UI's
@@ -38,8 +40,12 @@ the names the app allocates, `terminal-N`, and never change. The list is every
 non-`mngr-` tmux session whose name can be an instance key (`idle`; a hand-made
 session with, say, a space in its name is skipped) plus every terminal the store
 remembers that tmux no longer has (`stopped`). A remembered terminal is matched
-to its live session by tmux's immutable session id, so a session renamed inside
-tmux keeps its key and its title; a session no record holds by id falls back to
+to its live session by tmux's session id together with the session's creation
+time (an id is unique only for one server's lifetime: the server a container
+restart brings up hands the same ids out again, so the creation time tells a
+terminal's session apart from a later server's under the same id; a side that
+knows no creation time matches on the id alone), so a session renamed inside
+tmux keeps its key and its title; a session no record holds falls back to
 the record of its name (one from before the app kept ids, or a session the
 dispatch created on attach), and one with no record at all lists under its own
 name. The URL is `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]`; the
@@ -56,8 +62,9 @@ lack one.
   `system/services/oom_priority/bin/oom_tag_service.py terminal-session`, which
   puts the shell and everything run in it in the `terminal-session` memory band
   (the user-service level; a pane would otherwise inherit the tmux server's
-  protected 0). The session id is recorded in the store and under
-  `data/.state/terminal/sessions/<key>`, which `session.sh` attaches by.
+  protected 0). The session id and creation time are recorded in the store and, as two
+  lines, under `data/.state/terminal/sessions/<key>`, which `session.sh`
+  attaches by.
 - At startup the app recreates the session of every remembered terminal tmux
   no longer has (a container restart clears the server), adopts a live one it
   finds by id or by name, and leaves alone a terminal the user stopped
@@ -79,7 +86,8 @@ lack one.
 The store, `data/.apps/terminal/instances.json` (`store.py`; app data, beside
 every other app's instance records, while `data/.state/terminal/` holds only
 the dispatch scripts, pty records, and session id files), holds
-`{name, title, workdir, session_id, is_stopped}` per remembered terminal and is
+`{name, title, workdir, session_id, session_created, is_stopped}` per
+remembered terminal and is
 written atomically through the `app_instances` JSON document helpers.
 
 ## tmux hooks
@@ -91,8 +99,8 @@ from `~/.tmux.conf`, which the main create template writes. Its hooks call
 `{kind, client_tty, session_name, session_id}` to `POST /tmux-hook` on 7682
 (`hooks.py`) when a client switches sessions or a session is renamed. For a
 switch, the route maps the client's pty to its tab through `commands/clients/`,
-resolves the terminal whose session the client now shows (by the session id;
-a record without one adopts the session of its name, which is how the app
+resolves the terminal whose session the client now shows (by the session id
+and creation time; a record without a session adopts the one of its name, which is how the app
 learns the id of a session `session.sh` created on attach), and re-points the
 tab through the shell's `POST /api/tabs/<tab_id>/instance` (contracts section
 5). A rename changes no key and no title (the shell tab's title is the record's)
