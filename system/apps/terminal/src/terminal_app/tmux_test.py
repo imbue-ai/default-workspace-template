@@ -92,16 +92,16 @@ def test_a_missing_tmux_binary_is_a_command_error() -> None:
         SubprocessTmux(tmux_executable="/nonexistent/tmux-binary").list_sessions()
 
 
-def test_create_session_returns_the_new_sessions_id_and_runs_the_command(
+def test_create_session_returns_the_new_sessions_id_and_creation_time_and_runs_the_command(
     fake_tmux: FakeTmux,
 ) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$3")])
 
-    session_id = SubprocessTmux().create_session(
+    created = SubprocessTmux().create_session(
         TmuxSessionName("terminal-2"), Workdir("/srv"), ["python3", "tag.py", "bash", "-l"]
     )
 
-    assert (session_id.session_id, session_id.created_epoch) == ("$4", fake_created_epoch("$4"))
+    assert (created.session_id, created.created_epoch) == ("$4", fake_created_epoch("$4"))
     assert [session.name for session in fake_tmux.sessions()] == ["terminal-1", "terminal-2"]
     assert fake_tmux.calls()[-1] == [
         "new-session",
