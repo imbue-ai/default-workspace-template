@@ -128,14 +128,18 @@ def test_the_conductors_wake_ends_the_paused_wait_at_once() -> None:
     backend = FakeCaptureBackend()
     pipe = _started_pipe(backend)
     pipe.pause()
+    waiter = threading.Thread(target=lambda: pipe.wait_while_paused(5.0), daemon=True)
 
-    def wake_soon() -> None:
-        time.sleep(0.05)
-        with pipe.condition:
-            pipe.condition.notify_all()
+    def wake_until_the_wait_ends() -> None:
+        # The conductor's wake, repeated until the waiter has returned, so the test never
+        # depends on the waiter being inside the wait before the one notify lands.
+        waiter.start()
+        while waiter.is_alive():
+            with pipe.condition:
+                pipe.condition.notify_all()
+            waiter.join(timeout=0.01)
 
-    threading.Thread(target=wake_soon, daemon=True).start()
-    assert _seconds_spent(lambda: pipe.wait_while_paused(5.0)) < 1.0
+    assert _seconds_spent(wake_until_the_wait_ends) < 1.0
     pipe.stop()
 
 
