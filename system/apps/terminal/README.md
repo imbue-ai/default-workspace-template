@@ -46,9 +46,11 @@ restart brings up hands the same ids out again, so the creation time tells a
 terminal's session apart from a later server's under the same id; a side that
 knows no creation time matches on the id alone), so a session renamed inside
 tmux keeps its key and its title; a session no record holds falls back to
-the record of its name (one from before the app kept ids, or a session the
-dispatch created on attach), and one with no record at all lists under its own
-name. The URL is `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]`; the
+the record of its name when that record's own session is not live (one from
+before the app kept ids, or a session the dispatch created on attach; a session
+that only carries the old name of a terminal whose own session is live is
+skipped, whichever tmux lists first), and one with no record at all lists under
+its own name. The URL is `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]`; the
 shell substitutes the tab id, and `session.sh` receives it as its second
 argument. A terminal created through `new` always carries a workdir: the
 `workdir` param when the create gave one, else the directory the app runs from
