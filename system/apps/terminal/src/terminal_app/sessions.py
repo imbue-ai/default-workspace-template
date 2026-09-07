@@ -393,8 +393,14 @@ class TmuxSessionSource(InstanceSourceInterface):
             live_sessions = self._user_sessions()
             live_by_name = {session.name: session for session in live_sessions}
             for record in self.store.list_records():
-                if _find_session_of_record(record, live_sessions) is not None:
-                    self._write_session_id_file(record)
+                own = _find_session_of_record(record, live_sessions)
+                if own is not None:
+                    if record.session_created == own.created_epoch:
+                        self._write_session_id_file(record)
+                    else:
+                        # A record from before creation times were kept matched on the id alone;
+                        # it learns the time here, since the dispatch attaches only by both.
+                        self._bind(record, own)
                     continue
                 live = live_by_name.get(record.name)
                 if live is not None:
@@ -515,6 +521,10 @@ class TmuxSessionSource(InstanceSourceInterface):
 
     def _write_session_id_file(self, record: TerminalSessionRecord) -> None:
         """The two lines the dispatch attaches by: the session id, then its creation time (blank when unknown)."""
+        if record.session_id is None:
+            raise InvalidTerminalValueError(
+                f"terminal {record.name!r} has no session id to write for the dispatch"
+            )
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         created = "" if record.session_created is None else str(record.session_created)
         self._session_id_file(record.name).write_text(f"{record.session_id}\n{created}\n")
