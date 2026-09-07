@@ -170,6 +170,10 @@ class FakeTmux(MutableModel):
             return []
         return [json.loads(line) for line in log_path.read_text().splitlines()]
 
+    def creates(self) -> list[list[str]]:
+        """The ``new-session`` invocations so far, as argument lists."""
+        return [call for call in self.calls() if call[0] == "new-session"]
+
 
 def _activity_field(session: TmuxSession) -> str:
     if session.last_activity is None:
@@ -222,3 +226,20 @@ def make_terminal_record(
         session_id=TmuxSessionId(session_id) if session_id is not None else None,
         is_stopped=is_stopped,
     )
+
+
+def expected_new_session_call(name: str, workdir: str) -> list[str]:
+    """The argv a test source's create hands the fake tmux for a session of this name in this directory."""
+    return ["new-session", "-d", "-s", name, "-c", workdir, "-P", "-F", "#{session_id}", *TEST_SESSION_COMMAND]
+
+
+def write_session_id_file(sessions_dir: Path, name: str, session_id: str) -> None:
+    """Record a session id under ``sessions_dir`` the way the app does, for a terminal it remembers."""
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / name).write_text(f"{session_id}\n")
+
+
+def read_session_id_file(sessions_dir: Path, name: str) -> str | None:
+    """The session id file's text for this terminal, or None when the app wrote none."""
+    path = sessions_dir / name
+    return path.read_text() if path.exists() else None
