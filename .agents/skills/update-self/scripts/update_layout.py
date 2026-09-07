@@ -72,6 +72,9 @@ MNGR_TOOL_NAME = "imbue-mngr"
 MNGR_EXECUTABLE = "mngr"
 
 TOOL_NAME = "system-interface"
+# The chat app's console script (``[project.scripts]`` of system/apps/chat), the process that
+# imports mngr and the harness plugins; the apply pre-flights it beside the shell.
+CHAT_TOOL_NAME = "chat-app"
 
 # uv records how a tool was installed here, inside the tool's own directory.
 RECEIPT = "uv-receipt.toml"

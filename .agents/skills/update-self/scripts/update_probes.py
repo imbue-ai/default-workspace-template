@@ -18,6 +18,7 @@ from update_banding import ExpendWrapper, as_expendable
 from update_layout import (
     APPS_REGISTRY_PATH,
     CHAT_DIR,
+    CHAT_TOOL_NAME,
     SYSTEM_INTERFACE_DIR,
     TOOL_NAME,
 )
@@ -177,26 +178,77 @@ def preflight(
     sleeper: Callable[[float], None],
     expend: ExpendWrapper = as_expendable,
 ) -> str | None:
-    """Boot the merged backend on a throwaway port and probe it, without
+    """Boot the merged shell backend on a throwaway port and probe it, without
     touching the live service. Returns ``None`` iff it serves a healthy
     response; otherwise what went wrong -- the tail of what the throwaway boot
     wrote, or, for a boot that could not be spawned at all, a line saying so."""
     port = find_free_port()
+    return _preflight_boot(
+        argv=[TOOL_NAME],
+        cwd=repo_root / SYSTEM_INTERFACE_DIR,
+        env_overrides={"SYSTEM_INTERFACE_HOST": "127.0.0.1", "SYSTEM_INTERFACE_PORT": str(port)},
+        health_url=f"http://127.0.0.1:{port}{HEALTH_PATH}",
+        what="the merged backend",
+        http=http,
+        spawner=spawner,
+        sleeper=sleeper,
+        expend=expend,
+    )
+
+
+def preflight_chat(
+    repo_root: Path,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None],
+    expend: ExpendWrapper = as_expendable,
+) -> str | None:
+    """Boot the merged chat app on a throwaway port in its side-effect-free mode and
+    probe it, the way :func:`preflight` boots the shell. The chat is the process that
+    imports mngr and the harness plugins, so a broken plugin table or a missing
+    dependency in its tool environment shows up here, before the live restart, rather
+    than in the post-restart probe and its rollback. ``--preflight`` keeps the boot
+    from reconciling the live account store, starting ``mngr observe``, or registering."""
+    port = find_free_port()
+    return _preflight_boot(
+        argv=[CHAT_TOOL_NAME, "--preflight"],
+        # The repo root, where supervisord runs the chat from (its paths are relative to it).
+        cwd=repo_root,
+        env_overrides={"CHAT_HOST": "127.0.0.1", "CHAT_PORT": str(port)},
+        health_url=f"http://127.0.0.1:{port}{CHAT_HEALTH_PATH}",
+        what="the merged chat app",
+        http=http,
+        spawner=spawner,
+        sleeper=sleeper,
+        expend=expend,
+    )
+
+
+def _preflight_boot(
+    argv: list[str],
+    cwd: Path,
+    env_overrides: dict[str, str],
+    health_url: str,
+    what: str,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None],
+    expend: ExpendWrapper,
+) -> str | None:
+    """Spawn a throwaway boot, wait for its health route, and always terminate it."""
     env = dict(os.environ)
-    env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
-    env["SYSTEM_INTERFACE_PORT"] = str(port)
+    env.update(env_overrides)
     # The caller is an agent, so its environment carries MNGR_AGENT_ID -- under
-    # which the throwaway boot would persist layout state as if it were that
-    # agent, clobbering the live layout.json. The preview flow
-    # (reveal_system_interface.py) drops it for the same reason; the pre-flight
-    # is just as much a throwaway boot and gets the same guard.
+    # which a throwaway boot would persist state as if it were that agent (the
+    # shell its layout.json). The preview flow (reveal_system_interface.py) drops
+    # it for the same reason; every pre-flight boot gets the same guard.
     env.pop("MNGR_AGENT_ID", None)
     with tempfile.TemporaryDirectory() as scratch:
         output_path = Path(scratch) / "preflight-boot.log"
         try:
             spawned = spawner.spawn(
-                expend([TOOL_NAME]),
-                cwd=str(repo_root / SYSTEM_INTERFACE_DIR),
+                expend(argv),
+                cwd=str(cwd),
                 env=env,
                 output_path=output_path,
             )
@@ -204,11 +256,11 @@ def preflight(
             # Not booting and failing is the same verdict as failing to boot,
             # and reaching this with the console script missing is exactly what
             # a tool reinstall that half-succeeded leaves behind.
-            return f"the merged backend could not be launched ({type(exc).__name__}: {exc})"
+            return f"{what} could not be launched ({type(exc).__name__}: {exc})"
         try:
             if wait_healthy(
                 http,
-                f"http://127.0.0.1:{port}{HEALTH_PATH}",
+                health_url,
                 _PREFLIGHT_ATTEMPTS,
                 _PREFLIGHT_INTERVAL_SECONDS,
                 sleeper,

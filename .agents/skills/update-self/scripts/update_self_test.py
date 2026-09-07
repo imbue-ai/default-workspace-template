@@ -1519,6 +1519,10 @@ class _FakeSpawner(update_runtime.Spawner):
     last: _FakeSpawned | None = None
     # A boot that never starts, as subprocess reports one: not an exit code.
     spawn_error: OSError | None = None
+    # When set, only the boot whose argv starts with this executable has exited
+    # (with ``output``); every other boot stays up, as the shell's does while the
+    # chat's fails.
+    exited_argv0: str | None = None
 
     def spawn(
         self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
@@ -1526,9 +1530,13 @@ class _FakeSpawner(update_runtime.Spawner):
         if self.spawn_error is not None:
             raise self.spawn_error
         self.raw_spawns.append(list(argv))
-        self.spawns.append(_unwrap_expendable(list(argv)))
+        unwrapped = _unwrap_expendable(list(argv))
+        self.spawns.append(unwrapped)
         self.envs.append(dict(env))
-        self.last = _FakeSpawned(output=self.output, exited=self.exited)
+        is_exited = self.exited
+        if self.exited_argv0 is not None:
+            is_exited = unwrapped[0] == self.exited_argv0
+        self.last = _FakeSpawned(output=self.output, exited=is_exited)
         return self.last
 
 
@@ -2004,6 +2012,74 @@ def test_apply_backend_change_preflights_restarts_and_probes(
         _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
     )
     assert not runner.ran("npm", "run", "build")
+
+
+def _write_chat_program(repo_root: Path) -> None:
+    """Give the tree a chat program of its own, the way phase 10 of the workspace app model laid it out."""
+    entry = repo_root / update_probes.CHAT_PROGRAM_ENTRY
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text("")
+
+
+def test_apply_preflights_the_chat_app_beside_the_shell_when_the_tree_runs_one(
+    apply_repo: Path, monkeypatch
+) -> None:
+    # The chat is the process that imports mngr and the harness plugins, so a
+    # merged tree whose chat cannot boot must be rejected before the restart,
+    # not rolled back after it.
+    monkeypatch.setenv("MNGR_AGENT_ID", "the-lead-agent-id")
+    _write_chat_program(apply_repo)
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner()
+
+    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
+
+    assert code == 0
+    assert spawner.spawns == [
+        [update_layout.TOOL_NAME],
+        [update_layout.CHAT_TOOL_NAME, "--preflight"],
+    ]
+    chat_env = spawner.envs[1]
+    assert chat_env["CHAT_HOST"] == "127.0.0.1"
+    assert chat_env["CHAT_PORT"].isdigit()
+    assert "MNGR_AGENT_ID" not in chat_env
+    assert runner.ran(*_RESTART)
+
+
+def test_a_failed_chat_preflight_never_restarts_the_live_service(
+    apply_repo: Path,
+) -> None:
+    _write_chat_program(apply_repo)
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner(
+        output="ModuleNotFoundError: No module named 'imbue.mngr_claude'",
+        exited_argv0=update_layout.CHAT_TOOL_NAME,
+    )
+
+    def shell_boots_and_the_chat_does_not(url: str) -> int | None:
+        if _is_live(url):
+            return 200
+        chat_port = spawner.envs[-1].get("CHAT_PORT") if spawner.envs else None
+        return None if chat_port is not None and f":{chat_port}/" in url else 200
+
+    code = _apply(runner, _FakeHttp(shell_boots_and_the_chat_does_not), spawner, apply_repo)
+
+    assert code == 2
+    assert not runner.ran(*_RESTART)
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert spawner.last is not None and spawner.last.terminated
+
+
+def test_apply_skips_the_chat_preflight_for_a_tree_without_a_chat_program(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner()
+
+    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
+
+    assert code == 0
+    assert spawner.spawns == [[update_layout.TOOL_NAME]]
 
 
 def test_apply_vendored_source_change_restarts_without_building(
